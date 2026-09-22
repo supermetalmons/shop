@@ -26,7 +26,7 @@ import {
 import { createDeliveryPackStatusProjectionOutbox } from './deliveryPackStatusOutbox.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
-import { createReadyToShipNotificationOutbox } from './readyToShipNotifications.js';
+import { createReadyToShipNotificationIntent } from './readyToShipNotifications.js';
 import { mutateSubmissionJournal } from './submissionJournal.js';
 import type { TransactionSubmissionOutcome } from './transactionSubmissionRecovery.js';
 
@@ -358,25 +358,20 @@ export async function markDeliveryReady(
     ...(result.irlClaims.length ? { irlClaims: result.irlClaims } : {}),
   };
   const readyOrder = { ...document.data, ...fields };
-  const notificationOutbox = createReadyToShipNotificationOutbox({
-    before: document.data,
-    after: readyOrder,
-    deliveryId: Number(document.key.documentId),
-    dropId: runtime.dropId,
-    nowMs: context.nowMs,
-  });
-  Object.assign(readyOrder, Object.fromEntries(
-    Object.entries(notificationOutbox.values).filter(([, value]) => !isCommerceDeleteField(value)),
-  ));
   const packStatusOutbox = createDeliveryPackStatusProjectionOutbox(runtime, readyOrder, context.nowMs);
   Object.assign(readyOrder, Object.fromEntries(
     Object.entries(packStatusOutbox).filter(([, value]) => !isCommerceDeleteField(value)),
   ));
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
-    await transaction.getMany([document.key]);
+    const current = await transaction.get(document.key);
+    const notificationOutbox = createReadyToShipNotificationIntent({
+      before: current?.data ?? {}, after: { ...current?.data, ...fields },
+      parentPath: document.key.path, deliveryId: Number(document.key.documentId),
+      dropId: runtime.dropId, nowMs: context.nowMs,
+    });
+    if (notificationOutbox) await transaction.enqueueNotificationOutbox(notificationOutbox);
     await transaction.update(document.key, {
       ...fields,
-      ...notificationOutbox.values,
       ...packStatusOutbox,
       'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
       'receiptRecovery.lastErrorCode': commerceFieldValue.delete(),

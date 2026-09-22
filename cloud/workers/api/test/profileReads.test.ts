@@ -194,6 +194,7 @@ function legacyFirestoreProfileDependencies(
       });
     };
     return {
+      notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
       queryDeliveryHistory: (args: Parameters<D1CommerceRepository['queryDeliveryHistory']>[0]) =>
         loadDocuments({ operation: 'queryDeliveryHistory', ...args }),
       queryFulfillmentOrders: (args: Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]) =>
@@ -718,6 +719,7 @@ test('profile state preserves an earlier unavailable section when its sibling ti
     profileDependencies(
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
+        notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
         queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
         queryFulfillmentOrders: async () => [],
         queryManualReviewCheckouts: async () => [],
@@ -754,6 +756,7 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       profileDependencies(
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
+          notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
           queryDeliveryHistory: async () => mode === 'stalled'
             ? new Promise<CommerceDocumentRecord[]>(() => undefined)
             : new Promise<CommerceDocumentRecord[]>((resolve) => setTimeout(() => resolve([]), 20)),
@@ -806,6 +809,7 @@ test('profile state preserves independently completed sections when D1 ignores t
     profileDependencies(
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
+        notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
         queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
         queryFulfillmentOrders: async () => [],
         queryManualReviewCheckouts: async () => [],
@@ -1250,6 +1254,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
   const dependencies = profileDependencies(
     async () => Response.json({}),
     () => ({
+      notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
       queryDeliveryHistory: async () => [],
       queryFulfillmentOrders: async () => [],
       queryManualReviewCheckouts: async () => [],
@@ -1497,6 +1502,20 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
     if (path === FULFILLMENT_ORDERS_PATH) {
       assert.doesNotMatch(JSON.stringify(payload), /buyerOrderShippedEmailState/);
     }
+  }
+  const repository = new D1CommerceRepository(harness.db);
+  for (const state of ['queued', 'failed'] as const) {
+    await repository.run(NOW_MS, (unit) => unit.replaceNotificationOutbox({
+      parentPath: commerceKeys.deliveryOrder('card_nft_2', '7').path,
+      family: 'shipped', dropId: 'card_nft_2', generation: crypto.randomUUID(), retryUntilMs: NOW_MS,
+      entries: [{ kind: 'buyer_order_shipped', jobId: crypto.randomUUID(),
+        idempotencyKey: 'card_nft_2:7:order_shipped', state }],
+    }));
+    const result = await handleProfileReadRequest(tokenRequest(FULFILLMENT_ORDERS_PATH, {
+      dropId: 'card_nft_2', limit: 2, cursor: null,
+    }), env, FULFILLMENT_ORDERS_PATH, {}, staffDependencies);
+    const payload = await result.response.json() as { orders: Array<{ buyerOrderShippedEmailState?: string }> };
+    assert.equal(payload.orders[0].buyerOrderShippedEmailState, state === 'failed' ? 'pending' : 'queued');
   }
   assert.equal(commerceCalls, 0);
 });

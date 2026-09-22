@@ -74,7 +74,6 @@ import {
   seedCommerceDocument,
   type CommerceD1CallObservation,
 } from '../cloud/workers/api/test/commerceD1Harness.ts';
-import { parseStripeTerminalNotificationOutbox } from '../cloud/workers/api/src/stripeCheckout/notificationOutboxState.ts';
 import type { StripeCheckoutCommerceContext } from '../cloud/workers/api/src/stripeCheckout/commerce.ts';
 import { StripeCheckoutFulfillmentError } from '../cloud/workers/api/src/stripeCheckout/errors.ts';
 import { stripeClientForKey } from '../cloud/workers/api/src/stripeCheckout/provider.ts';
@@ -1473,11 +1472,11 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.equal(markerCreate.data.stripeReceiptClaimCode, claimCreate.data.code);
   assert.equal(checkout?.version, 2);
   assert.ok(checkout);
-  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'));
   assert.ok(notification);
   assert.equal(checkout.data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
   assert.equal(checkout.data.fulfillmentCompletedAt, COMMERCE_NOW_MS);
-  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
   assert.equal(notification.outcome, 'fulfilled');
   assert.equal(notification.attemptCount, 0);
 });
@@ -1563,6 +1562,7 @@ test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after
       const competingCommerce: StripeCheckoutCommerceContext = {
         ...commerce,
         repository: {
+          notificationOutbox: repository.notificationOutbox,
           get: repository.get.bind(repository),
           run: (now, operation) => repository.run(now, async (unit) => {
             attempts += 1;
@@ -1744,18 +1744,18 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   assert.equal((await repository.get(markerKey))?.version, 1);
   const checkout = await repository.get(checkoutKey);
   assert.ok(checkout);
-  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'));
   assert.ok(notification);
   assert.equal(checkout.version, 2);
   assert.equal(commerceDocumentWriteBatches(calls).length, 1);
   assert.deepEqual(checkout.data.metadataIds, [1, 2]);
   assert.equal(checkout.data.quantity, 2);
-  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
   assert.equal(notification.outcome, 'fulfilled');
   assert.equal('variantKey' in markerData, false);
   assert.equal(packStatusCalls.length, 1);
   assert.equal((packStatusCalls[0] as { deliveryId: number }).deliveryId, 789);
-  const originalNotification = structuredClone(checkout.data.stripeTerminalNotification);
+  const originalNotification = structuredClone(notification);
   calls.length = 0;
   await assert.rejects(
     createOrGetStripeOffchainDeliveryOrder({
@@ -1786,7 +1786,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   assert.equal(commerceDocumentWriteBatches(calls).length, 0);
   const retried = await repository.get(checkoutKey);
   assert.equal(retried?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
-  assert.deepEqual(retried?.data.stripeTerminalNotification, originalNotification);
+  assert.deepEqual(await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'), originalNotification);
   assert.equal((await repository.get(markerKey))?.version, 1);
 });
 
@@ -2451,14 +2451,14 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
   });
   const checkout = await repository.get(checkoutKey);
   assert.ok(checkout);
-  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'));
   assert.ok(notification);
   assert.equal(result.status, 'failed');
   assert.equal(commerceDocumentWriteBatches(calls).length, 1);
   assert.equal(checkout.version, 2);
   assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(checkout.data.manualRefundReviewRequired, true);
-  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
   assert.equal(notification.outcome, 'manual_review');
 });
 
@@ -2553,7 +2553,7 @@ test('final Queue work cancellation persists manual review through the live pers
   assert.equal(checkout.data.manualRefundReviewRequired, true);
   assert.equal((checkout.data.lastFulfillmentError as Record<string, unknown>).code, 'deadline-exceeded');
   assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
-  assert.equal(parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification)?.outcome, 'manual_review');
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.outcome, 'manual_review');
 });
 
 test('a deterministic fulfillment failure wins over coincident work cancellation', async (t) => {
@@ -2634,7 +2634,7 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
 
   const checkout = await repository.get(checkoutKey);
   assert.ok(checkout);
-  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'));
   assert.ok(notification);
   assert.deepEqual(result, { status: 'failed' });
   assert.equal(commerceDocumentWriteBatches(calls).length, 1);
@@ -2642,11 +2642,11 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
   assert.deepEqual(checkout.key, checkoutKey);
   assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(checkout.data.manualRefundReviewRequired, true);
-  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
-  assert.equal(notification.version, 1);
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
+  assert.equal(notification.revision, 1);
   assert.equal(notification.outcome, 'manual_review');
   assert.equal(notification.attemptCount, 0);
-  assert.match(notification.jobIds.stripe_checkout_manual_review, /^[0-9a-f-]{36}$/);
+  assert.match(notification.entries.find((entry) => entry.kind === 'stripe_checkout_manual_review')!.jobId, /^[0-9a-f-]{36}$/);
   assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
   assert.equal(Object.hasOwn(checkout.data, 'processingLeaseExpiresAt'), false);
   assert.equal(Object.hasOwn(checkout.data, 'nextFulfillmentRetryAt'), false);
@@ -2665,8 +2665,8 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
   assert.equal(created?.data.sessionId, 'cs_test_123');
   assert.equal(created?.data.manualRefundReviewRequired, true);
   assert.equal(created?.data.failedAt, COMMERCE_NOW_MS);
-  assert.equal(created?.data.stripeTerminalNotificationState, 'pending');
-  assert.equal(parseStripeTerminalNotificationOutbox(created?.data.stripeTerminalNotification)?.outcome, 'manual_review');
+  assert.equal((await missing.repository.notificationOutbox.get(missing.checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
+  assert.equal((await missing.repository.notificationOutbox.get(missing.checkoutKey.path, 'stripe_terminal'))?.outcome, 'manual_review');
   assert.equal(commerceDocumentWriteBatches(missing.calls).length, 1);
 });
 
@@ -2710,7 +2710,7 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
 
   const checkout = await repository.get(checkoutKey);
   assert.ok(checkout);
-  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'));
   assert.ok(notification);
   assert.deepEqual(result, { status: 'fulfilled' });
   assert.equal(commerceDocumentWriteBatches(calls).length, 1);
@@ -2721,12 +2721,12 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
   assert.equal(checkout.data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
   assert.equal(checkout.data.fulfillmentCompletedAt, COMMERCE_NOW_MS);
   assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
-  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
-  assert.equal(notification.version, 1);
+  assert.equal((await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))?.state, 'pending');
+  assert.equal(notification.revision, 1);
   assert.equal(notification.outcome, 'fulfilled');
   assert.equal(notification.attemptCount, 0);
-  assert.match(notification.jobIds.buyer_order_received, /^[0-9a-f-]{36}$/);
-  assert.match(notification.jobIds.shipper_ready_to_ship, /^[0-9a-f-]{36}$/);
+  assert.match(notification.entries.find((entry) => entry.kind === 'buyer_order_received')!.jobId, /^[0-9a-f-]{36}$/);
+  assert.match(notification.entries.find((entry) => entry.kind === 'shipper_ready_to_ship')!.jobId, /^[0-9a-f-]{36}$/);
 });
 
 test('terminal checkout writes preserve queued notifications on replay without a processing attempt', async (t) => {
@@ -2739,17 +2739,16 @@ test('terminal checkout writes preserve queued notifications on replay without a
       });
 
     await complete();
-    const completed = await repository.get(checkoutKey);
-    assert.equal(completed?.data.stripeTerminalNotificationState, 'pending');
-    const notification = structuredClone(completed?.data.stripeTerminalNotification);
-    await repository.run(COMMERCE_NOW_MS, (unit) => unit.update(checkoutKey, { stripeTerminalNotificationState: 'queued' }));
+    const notification = (await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'))!;
+    assert.equal(notification.state, 'pending');
+    const queued = await repository.notificationOutbox.compareAndSet({ expected: notification, nowMs: COMMERCE_NOW_MS,
+      changes: { state: 'queued', nextAttemptAtMs: null, entries: notification.entries.map((entry) => ({ ...entry, state: 'queued' })) } });
     await complete();
 
     const replayed = await repository.get(checkoutKey);
-    assert.equal(commerceDocumentWriteBatches(calls).length, 3);
-    assert.equal(replayed?.version, 4);
-    assert.equal(replayed?.data.stripeTerminalNotificationState, 'queued');
-    assert.deepEqual(replayed?.data.stripeTerminalNotification, notification);
+    assert.equal(commerceDocumentWriteBatches(calls).length, 2);
+    assert.equal(replayed?.version, 3);
+    assert.deepEqual(await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'), queued);
   }
 });
 

@@ -1,3 +1,4 @@
+import { reconcilePendingShippedNotifications } from './buyerOrderShippedOutbox.js';
 import { cleanupExpiredAnonymousAuthSessions } from './anonymousAuth.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import { reconcilePendingDeliveryPackStatusProjections } from './deliveryPackStatusOutbox.js';
@@ -15,6 +16,7 @@ export type ScheduledReconcilers = {
   packStatus: typeof reconcilePendingDeliveryPackStatusProjections;
   stripe: typeof reconcileStaleStripeFulfillments;
   stripeNotifications: typeof reconcilePendingStripeTerminalNotifications;
+  shippedNotifications: typeof reconcilePendingShippedNotifications;
 };
 
 async function cleanupScheduledOpsState(
@@ -86,6 +88,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   packStatus: reconcilePendingDeliveryPackStatusProjections,
   stripe: reconcileStaleStripeFulfillments,
   stripeNotifications: reconcilePendingStripeTerminalNotifications,
+  shippedNotifications: reconcilePendingShippedNotifications,
 };
 
 export async function runScheduledReconciliations(
@@ -101,6 +104,7 @@ export async function runScheduledReconciliations(
   const results = await Promise.allSettled([
     reconcilers.stripe(env, signal),
     reconcilers.stripeNotifications(env, signal),
+    reconcilers.shippedNotifications(env, signal),
     reconcilers.packStatus(env, signal),
     reconcilers.notifications(env, signal),
     reconcilers.ops(env, signal),

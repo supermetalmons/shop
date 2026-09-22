@@ -1,7 +1,7 @@
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import type { D1CommerceRepository } from './commerceRepository.js';
 
-export type ProfileWriteCommerceRepository = Pick<D1CommerceRepository, 'get' | 'run'>;
+export type ProfileWriteCommerceRepository = Pick<D1CommerceRepository, 'get' | 'run' | 'notificationOutbox'>;
 
 export type FulfillmentStoreContext = {
   nowMs: number;

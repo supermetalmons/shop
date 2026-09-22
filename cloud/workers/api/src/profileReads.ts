@@ -1,3 +1,4 @@
+import { LEGACY_NOTIFICATION_FIELDS, shippedNotificationState, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
 import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
 import {
   deliveryOrderSummarySortAt,
@@ -225,7 +226,7 @@ type ProfileReadDependencies = {
   createCommerceRepository: (
     db: D1Database,
   ) => Pick<D1CommerceRepository,
-    'queryDeliveryHistory' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners'>;
+    'queryDeliveryHistory' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners' | 'notificationOutbox'>;
   loadProfileEmail: typeof loadProfileEmail;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   nowMs: () => number;
@@ -597,6 +598,7 @@ function fulfillmentOrdersFromDocuments(args: {
   dropId: string;
   limit: number;
   chargebackSessionIds: ReadonlySet<string>;
+  shippedOutboxes: ReadonlyMap<string, NotificationOutboxRecord>;
 }): { orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null } {
   const hasMore = args.documents.length > args.limit;
   const page = hasMore ? args.documents.slice(0, args.limit) : args.documents;
@@ -604,6 +606,9 @@ function fulfillmentOrdersFromDocuments(args: {
   const orders = page.flatMap((document) => {
     const parsed = fulfillmentDocumentIdentity(document, args.dropId);
     if (!parsed) return [];
+    for (const field of LEGACY_NOTIFICATION_FIELDS) delete parsed.fields[field];
+    const shippedState = shippedNotificationState(args.shippedOutboxes.get(document.key.path));
+    if (shippedState) parsed.fields.buyerOrderShippedEmailState = shippedState;
     const sessionId = fulfillmentStripeSessionId(document, args.dropId);
     const order = fulfillmentOrderFromRecord(parsed.id, parsed.fields, {
       canViewSensitiveAddress: args.canViewSensitiveAddress,
@@ -622,7 +627,7 @@ async function loadFulfillmentOrders(args: {
   cursor: FulfillmentOrdersCursor | null;
   dropId: string;
   limit: number;
-  repository: Pick<D1CommerceRepository, 'queryFulfillmentOrders'>;
+  repository: Pick<D1CommerceRepository, 'queryFulfillmentOrders' | 'notificationOutbox'>;
   db: D1Database;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   signal: AbortSignal;
@@ -645,7 +650,10 @@ async function loadFulfillmentOrders(args: {
   const chargebackSessionIds = sessionIds.length
     ? await args.loadStripeChargebackSessionIds(args.db, args.dropId, sessionIds)
     : new Set<string>();
-  return fulfillmentOrdersFromDocuments({ ...args, documents, chargebackSessionIds });
+  const shippedOutboxes = new Map((await args.repository.notificationOutbox.getMany(
+    documents.slice(0, args.limit).map((document) => document.key.path), 'shipped',
+  )).map((record) => [record.parentPath, record]));
+  return fulfillmentOrdersFromDocuments({ ...args, documents, chargebackSessionIds, shippedOutboxes });
 }
 
 async function fetchStripeSession(

@@ -1,510 +1,164 @@
 import assert from 'node:assert/strict';
-import test, { type TestContext } from 'node:test';
-import {
-  commerceFieldValue,
-  commerceKeys,
-  D1CommerceRepository,
-  type CommerceDocumentData,
-  type CommerceDocumentKey,
-} from '../src/commerceRepository.ts';
-import { stripeCheckoutWriteData, type StripeCheckoutCommerceContext } from '../src/stripeCheckout/commerce.ts';
-import { publishPendingStripeCheckoutTerminalNotifications } from '../src/stripeCheckout/notificationOutbox.ts';
-import {
-  createStripeTerminalNotificationOutboxFields,
-  parseStripeTerminalNotificationOutbox,
-  STRIPE_TERMINAL_NOTIFICATION_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD,
-  type StripeTerminalNotificationOutcome,
-} from '../src/stripeCheckout/notificationOutboxState.ts';
-import {
-  NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS,
-} from '../src/notificationOutboxPublication.ts';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
-import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
-import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+import test from 'node:test';
+import { buildStripeCheckoutDocument, createStripeCheckoutIdentity } from '../../../../shared/stripeCheckoutSession.ts';
+import { commerceKeys } from '../src/commerceRepository.ts';
+import { stripeCheckoutWriteData } from '../src/stripeCheckout/commerce.ts';
+import { applyStripeCheckoutWebhook } from '../src/stripeCheckout/sessionStore.ts';
+import { markStripeCheckoutFulfillmentFailed, releaseStripeCheckoutFulfillmentForRetry, startStripeCheckoutFulfillmentDocument } from '../src/stripeCheckout/store.ts';
+import { enqueueStripeTerminalNotifications } from '../src/stripeCheckout/notificationOutboxState.ts';
+import { notificationFixture, OUTBOX_NOW, OUTBOX_LEASE } from './notificationOutboxTestSupport.ts';
 
-const NOW_MS = 1_800_000_000_000;
-const STRIPE_TERMINAL_NOTIFICATION_LEASE_MS = 10 * 60_000;
-const STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS = 4;
-const DROP_ID = 'card_nft_2';
-const SESSION_ID = 'cs_test_terminal_outbox';
-const CHECKOUT_KEY = commerceKeys.stripeCheckout(DROP_ID, SESSION_ID);
-const ORDER_KEY = commerceKeys.deliveryOrder(DROP_ID, '7');
-type PublicationOptions = Parameters<typeof publishPendingStripeCheckoutTerminalNotifications>[0];
-
-async function fixture(context: TestContext, options: {
-  dropId?: string;
-  outcome?: StripeTerminalNotificationOutcome;
-  markerTimeMs?: number;
-  harness?: Parameters<typeof createCommerceD1Harness>[0];
-} = {}) {
-  const harness = createCommerceD1Harness(options.harness);
-  context.after(() => harness.database.close());
-  context.mock.method(console, 'log', () => undefined);
-  context.mock.method(console, 'error', () => undefined);
-  const dropId = options.dropId || DROP_ID;
-  const checkoutKey = commerceKeys.stripeCheckout(dropId, SESSION_ID);
-  const orderKey = commerceKeys.deliveryOrder(dropId, '7');
-  const outcome = options.outcome || 'fulfilled';
-  seedCommerceDocument(harness, {
-    key: checkoutKey,
-    data: {
-      status: outcome === 'fulfilled' ? 'fulfilled' : 'fulfillment_failed',
-      deliveryId: 7,
-      manualRefundReviewRequired: outcome === 'manual_review',
-      manualRefundReviewReason: 'fulfillment_failed_after_payment',
-      owner: 'anonymous:anon:terminal-outbox',
-      ownerKind: 'anonymous',
-      authSubject: 'anon:terminal-outbox',
-    },
+for (const outcome of ['fulfilled', 'manual_review'] as const) {
+  test(`Stripe ${outcome}: missing outbox initializes only for explicit replay`, async (context) => {
+    const state = await notificationFixture(context, 'stripe_terminal', { outcome, create: false });
+    const parent = await state.repository.get(state.parentKey);
+    assert.deepEqual(await state.publish(), { outcome, publication: 'none', queuedJobs: 0, reason: 'missing_outbox' });
+    assert.equal(await state.repository.notificationOutbox.get(state.parentKey.path, 'stripe_terminal'), null);
+    const result = await state.publish({ initializeMissing: true });
+    assert.deepEqual(result, { outcome, publication: 'queued', queuedJobs: outcome === 'fulfilled' ? 2 : 1 });
+    assert.deepEqual(await state.repository.get(state.parentKey), parent);
+    await state.publish({ initializeMissing: true });
+    assert.equal(state.sent.length, 1);
   });
-  seedCommerceDocument(harness, {
-    key: orderKey,
-    data: {
-      source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
-      status: 'ready_to_ship',
-      deliveryId: 7,
-      owner: 'anonymous:anon:terminal-outbox',
-      addressSnapshot: { email: 'buyer@example.com', name: 'Original Buyer' },
-      items: [{ kind: 'box', refId: 3 }],
-    },
-  });
-  let nowMs = NOW_MS;
-  const repository = new D1CommerceRepository(harness.db);
-  const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
-  await repository.run(nowMs, async (transaction) => {
-    await transaction.update(checkoutKey, stripeCheckoutWriteData(
-      createStripeTerminalNotificationOutboxFields(null, outcome, options.markerTimeMs ?? nowMs),
-    ));
-  });
-  const sent: NotificationEmailJobV1[][] = [];
-  const queue: PublicationOptions['queue'] = {
-    sendBatch: async (messages) => {
-      sent.push([...messages].map((message) => structuredClone(message.body)));
-      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
-    },
-  };
-  const read = async () => {
-    const checkout = (await repository.get(checkoutKey))?.data;
-    assert.ok(checkout);
-    return checkout;
-  };
-  const outbox = async () => {
-    const value = parseStripeTerminalNotificationOutbox((await read())[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
-    assert.ok(value);
-    return value;
-  };
-  return {
-    harness,
-    orderKey,
-    commerce,
-    repository,
-    queue,
-    sent,
-    read,
-    outbox,
-    setTime: (value: number) => { nowMs = value; },
-    publish: (overrides: Partial<PublicationOptions> = {}) => publishPendingStripeCheckoutTerminalNotifications({
-      commerce,
-      dropId,
-      sessionId: SESSION_ID,
-      queue,
-      signal: new AbortController().signal,
-      getDropName: () => 'Card NFT 2',
-      nowMs: () => nowMs,
-      ...overrides,
-    }),
-  };
 }
 
-test('failed queue publication retains the pending outbox and exact jobs for a later retry', async (context) => {
-  const state = await fixture(context);
-  const originalJobIds = (await state.outbox()).jobIds;
-  const unavailable = new Error('queue unavailable');
-  await assert.rejects(state.publish({ queue: {
-    sendBatch: async (messages) => {
-      await state.queue.sendBatch(messages);
-      throw unavailable;
-    },
-  } }), (error: unknown) => error === unavailable);
-
-  const failed = await state.outbox();
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
-  assert.equal(failed.attemptCount, 1);
-  assert.deepEqual(failed.jobIds, originalJobIds);
-  assert.deepEqual(failed.jobs, state.sent[0]);
-  assert.equal(state.sent[0].length, 2);
-  assert.deepEqual(state.sent[0].map((job) => job.jobId), [
-    originalJobIds.buyer_order_received,
-    originalJobIds.shipper_ready_to_ship,
-  ]);
-
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'busy', queuedJobs: 0 });
-  assert.equal(state.sent.length, 1);
-  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
-    await transaction.update(ORDER_KEY, {
-      addressSnapshot: { email: 'changed@example.com', name: 'Changed Buyer' },
-      items: [{ kind: 'box', refId: 99 }],
-    });
-  });
-  state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS + 1);
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
-  assert.deepEqual(state.sent[1], state.sent[0]);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
-  assert.equal((await state.outbox()).attemptCount, 2);
-});
-
-test('queued outboxes never publish again or retain email payloads', async (context) => {
-  const state = await fixture(context);
+test('Stripe manual-review jobs retain their identity and immutable checkout content', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
+  const identity = (await state.read()).entries[0];
   await state.publish();
-  state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS + 1);
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
-  assert.deepEqual(await state.publish({ initializeMissing: true }), {
-    outcome: 'fulfilled', publication: 'queued', queuedJobs: 0,
-  });
-  assert.equal(state.sent.length, 1);
-  const checkout = await state.read();
-  assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], undefined);
-  assert.equal((await state.outbox()).jobs, undefined);
-  assert.equal((await state.outbox()).claimId, undefined);
-});
-
-test('a terminal checkout without markers initializes only when explicitly requested', async (context) => {
-  const state = await fixture(context);
-  await state.repository.run(NOW_MS, (transaction) => transaction.update(CHECKOUT_KEY, {
-    [STRIPE_TERMINAL_NOTIFICATION_FIELD]: commerceFieldValue.delete(),
-    [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: commerceFieldValue.delete(),
-    [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
-  }));
-  const before = await state.read();
-  assert.deepEqual(await state.publish(), {
-    outcome: 'fulfilled', publication: 'none', queuedJobs: 0, reason: 'missing_outbox',
-  });
-  assert.deepEqual(await state.read(), before);
-  assert.equal(state.sent.length, 0);
-  assert.deepEqual(await state.publish({ initializeMissing: true }), {
-    outcome: 'fulfilled', publication: 'queued', queuedJobs: 2,
-  });
-  assert.equal((await state.outbox()).attemptCount, 1);
-});
-
-test('a terminal group with no recipients completes without sending a queue batch', async (context) => {
-  const state = await fixture(context, { dropId: 'clear_cards_devnet_v2' });
-  await state.repository.run(NOW_MS, (transaction) => transaction.update(state.orderKey, {
-    addressSnapshot: {},
-  }));
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
-  assert.equal(state.sent.length, 0);
-  const checkout = await state.read();
-  assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
-  assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], undefined);
-  assert.equal((await state.outbox()).claimId, undefined);
-  assert.equal((await state.outbox()).jobs, undefined);
-});
-
-test('a completed outcome keeps its group while a different terminal outcome creates new notifications', async (context) => {
-  const state = await fixture(context, { outcome: 'manual_review' });
-  await state.publish();
-  const before = await state.read();
-  assert.deepEqual(createStripeTerminalNotificationOutboxFields(before, 'manual_review', NOW_MS + 1), {});
-  assert.deepEqual(createStripeTerminalNotificationOutboxFields(
-    { ...before, status: 'processing' }, 'manual_review', NOW_MS + 1,
-  ), {});
-  await state.repository.run(NOW_MS + 1, (transaction) => transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
-    status: 'fulfilled',
-    manualRefundReviewRequired: false,
-    ...createStripeTerminalNotificationOutboxFields(before, 'fulfilled', NOW_MS + 1),
-  })));
-  const rearmed = await state.outbox();
-  assert.equal(rearmed.outcome, 'fulfilled');
-  assert.equal(rearmed.attemptCount, 0);
-  assert.equal(rearmed.jobIds.stripe_checkout_manual_review, undefined);
-  state.setTime(NOW_MS + 1);
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
-  assert.deepEqual(state.sent.map((jobs) => jobs.map((job) => job.kind)), [
-    ['stripe_checkout_manual_review'],
-    ['buyer_order_received', 'shipper_ready_to_ship'],
-  ]);
-  assert.equal((await state.outbox()).attemptCount, 1);
-});
-
-test('concurrent D1 publishers claim one notification batch', { timeout: 5_000 }, async (context) => {
-  const state = await fixture(context);
-  const started = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
-  const queue: PublicationOptions['queue'] = {
-    sendBatch: async (messages) => {
-      const result = await state.queue.sendBatch(messages);
-      started.resolve();
-      await release.promise;
-      return result;
-    },
-  };
-  const competingCommerce: StripeCheckoutCommerceContext = {
-    repository: new D1CommerceRepository(state.harness.db),
-    nowMs: () => NOW_MS,
-  };
-  const first = state.publish({ queue });
-  const second = state.publish({ commerce: competingCommerce, queue });
-  await started.promise;
-  try {
-    assert.deepEqual(await Promise.race([first, second]), {
-      outcome: 'fulfilled', publication: 'busy', queuedJobs: 0,
-    });
-    assert.equal(state.sent.length, 1);
-    assert.equal((await state.outbox()).attemptCount, 1);
-  } finally {
-    release.resolve();
-  }
-  const results = await Promise.all([first, second]);
-  assert.deepEqual(results.map((result) => result.queuedJobs).sort(), [0, 2]);
-  assert.deepEqual(results.map((result) => result.publication).sort(), ['busy', 'queued']);
-});
-
-test('successful queue send followed by failed D1 finalization retries the same stored jobs', async (context) => {
-  let failNextBatch = false;
-  const state = await fixture(context, { harness: {
-    observeCall: (call) => {
-      if (call.method === 'batch' && failNextBatch) {
-        failNextBatch = false;
-        throw new Error('D1 finalization unavailable');
-      }
-    },
-  } });
-  await assert.rejects(state.publish({ queue: {
-    sendBatch: async (messages) => {
-      const result = await state.queue.sendBatch(messages);
-      failNextBatch = true;
-      return result;
-    },
-  } }));
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
-  assert.deepEqual((await state.outbox()).jobs, state.sent[0]);
-
-  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
-    await transaction.update(ORDER_KEY, {
-      addressSnapshot: { email: 'changed@example.com', name: 'Changed Buyer' },
-      items: [{ kind: 'box', refId: 99 }],
-    });
-  });
-  state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS + 1);
-  await state.publish();
-  assert.equal(state.sent.length, 2);
-  assert.deepEqual(state.sent[1], state.sent[0]);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
-});
-
-test('overdue initial pending outboxes start their retry window when first claimed', async (context) => {
-  const state = await fixture(context, {
-    markerTimeMs: NOW_MS - STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS - 1,
-  });
-  assert.ok((await state.outbox()).retryUntilMs < NOW_MS);
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
-  assert.equal((await state.outbox()).retryUntilMs, NOW_MS + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS);
-  assert.equal(state.sent.length, 1);
-});
-
-test('manual-review notification publication uses its durable job ID and checkout content', async (context) => {
-  const state = await fixture(context, { outcome: 'manual_review' });
-  const jobId = (await state.outbox()).jobIds.stripe_checkout_manual_review;
-  assert.deepEqual(await state.publish(), { outcome: 'manual_review', publication: 'queued', queuedJobs: 1 });
-  const [job] = state.sent[0];
-  assert.equal(job.jobId, jobId);
+  const job = state.sent[0][0];
   assert.equal(job.kind, 'stripe_checkout_manual_review');
-  assert.equal(job.idempotencyKey, `${DROP_ID}:${SESSION_ID}:stripe_manual_review`);
-  assert.deepEqual(job.context, { dropId: DROP_ID, sessionId: SESSION_ID });
-  assert.match(job.text, /fulfillment_failed_after_payment/);
-  assert.match(job.text, /Auth subject: anon:terminal-outbox/);
-  await state.publish();
-  assert.equal(state.sent.length, 1);
+  assert.equal(job.jobId, identity.jobId);
+  assert.equal(job.idempotencyKey, 'card_nft_2:cs_notification:stripe_manual_review');
+  assert.equal(job.context.sessionId, 'cs_notification');
 });
 
-test('expired retries and exhausted attempt budgets fail without sending', async (context) => {
-  for (const exhausted of ['window', 'attempts'] as const) {
-    await context.test(exhausted, async (subcontext) => {
-      const state = await fixture(subcontext);
-      const outbox = await state.outbox();
-      await state.repository.run(state.commerce.nowMs(), async (transaction) => {
-        await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
-          [STRIPE_TERMINAL_NOTIFICATION_FIELD]: {
-            ...outbox,
-            attemptCount: exhausted === 'attempts' ? STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS : 1,
-            retryUntilMs: exhausted === 'window' ? NOW_MS : outbox.retryUntilMs,
-          },
-        }));
-      });
-      assert.deepEqual(await state.publish(), {
-        outcome: 'fulfilled', publication: 'failed', queuedJobs: 0, reason: 'manual-review-required',
-      });
-      assert.equal(state.sent.length, 0);
-      assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'failed');
-      assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], undefined);
-    });
-  }
+test('Stripe optional recipients complete unused entries without sending those jobs', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal');
+  await state.updateOrder({ addressSnapshot: {} });
+  const result = await state.publish();
+  assert.deepEqual(result, { outcome: 'fulfilled', publication: 'queued', queuedJobs: 1 });
+  assert.deepEqual(state.sent[0].map((job) => job.kind), ['shipper_ready_to_ship']);
+  assert.ok((await state.read()).entries.every((entry) => entry.state === 'queued'));
 });
 
-test('an already aborted publication does not claim or send jobs', async (context) => {
-  const state = await fixture(context);
+test('Stripe terminal outcome replacement is atomic and allocates a new generation', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
   const before = await state.read();
-  const aborted = new Error('caller cancelled');
-  const signal = AbortSignal.abort(aborted);
-  await assert.rejects(state.publish({ signal }), (error: unknown) => error === aborted);
-  assert.deepEqual(await state.read(), before);
-  assert.equal(state.sent.length, 0);
-});
-
-test('cancellation after claiming but before queue send releases its unused attempt', async (context) => {
-  const controller = new AbortController();
-  const aborted = new Error('caller cancelled before send');
-  let cancelNextCommit = false;
-  const state = await fixture(context, { harness: {
-    observeBatchAfterCommit: () => {
-      if (cancelNextCommit) {
-        cancelNextCommit = false;
-        controller.abort(aborted);
-      }
-    },
-  } });
-  cancelNextCommit = true;
-  await assert.rejects(state.publish({ signal: controller.signal }), (error: unknown) => error === aborted);
-  assert.equal(state.sent.length, 0);
-  assert.equal((await state.outbox()).attemptCount, 0);
-  assert.equal((await state.outbox()).claimId, undefined);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], NOW_MS);
-  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
-});
-
-test('cancellation after snapshot persistence restores the attempt and keeps the exact jobs', async (context) => {
-  const controller = new AbortController();
-  const aborted = new Error('cancelled after snapshot');
-  let armed = false;
-  const state = await fixture(context, { harness: {
-    observeBatchAfterCommit: () => {
-      if (!armed) return;
-      const row = state.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
-        .get(CHECKOUT_KEY.path) as { document_json: string };
-      const outbox = parseStripeTerminalNotificationOutbox(JSON.parse(row.document_json)[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
-      if (!outbox?.jobs) return;
-      armed = false;
-      controller.abort(aborted);
-    },
-  } });
-  armed = true;
-  await assert.rejects(state.publish({
-    signal: controller.signal,
-    commerce: { ...state.commerce, signal: controller.signal },
-  }), (error: unknown) => error === aborted);
-  const released = await state.outbox();
-  assert.equal(state.sent.length, 0);
-  assert.equal(released.attemptCount, 0);
-  assert.equal(released.claimId, undefined);
-  assert.equal(released.jobs?.length, 2);
-  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
-    await transaction.update(ORDER_KEY, { addressSnapshot: { email: 'changed@example.com' } });
+  await state.repository.run(OUTBOX_NOW, async (unit) => {
+    const checkout = await unit.get(state.parentKey);
+    assert.ok(checkout);
+    await enqueueStripeTerminalNotifications({ transaction: unit,
+      key: { ...state.parentKey, kind: 'stripe_checkout' }, before: checkout.data,
+      outcome: 'fulfilled', deliveryId: 7, nowMs: OUTBOX_NOW });
+    await unit.update(state.parentKey, { status: 'fulfilled', deliveryId: 7 });
   });
+  const after = await state.read();
+  assert.notEqual(after.generation, before.generation);
+  assert.equal(after.outcome, 'fulfilled');
   await state.publish();
-  assert.deepEqual(state.sent[0], released.jobs);
+  assert.deepEqual(state.sent[0].map((job) => job.kind), ['buyer_order_received', 'shipper_ready_to_ship']);
 });
 
-test('successful queue submission finalizes even when the caller is cancelled during the send', async (context) => {
-  const state = await fixture(context);
-  const controller = new AbortController();
-  const result = await state.publish({
-    signal: controller.signal,
-    commerce: { ...state.commerce, signal: controller.signal },
-    queue: { sendBatch: async (messages) => {
-      const result = await state.queue.sendBatch(messages);
-      controller.abort(new Error('caller disconnected'));
-      return result;
-    } },
-  });
-  assert.deepEqual(result, { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
-  assert.equal((await state.outbox()).jobs, undefined);
-  assert.equal((await state.outbox()).claimId, undefined);
-  assert.equal((await state.outbox()).attemptCount, 1);
-});
-
-test('an ambiguous queue failure with cancellation retains the claim and frozen jobs', async (context) => {
-  const state = await fixture(context);
-  const controller = new AbortController();
-  const queueFailure = new Error('queue response lost');
-  await assert.rejects(state.publish({
-    signal: controller.signal,
-    commerce: { ...state.commerce, signal: controller.signal },
-    queue: { sendBatch: async (messages) => {
-      await state.queue.sendBatch(messages);
-      controller.abort(new Error('caller disconnected'));
-      throw queueFailure;
-    } },
-  }), (error: unknown) => error === queueFailure);
-  const pending = await state.outbox();
-  assert.ok(pending.claimId);
-  assert.equal(pending.attemptCount, 1);
-  assert.deepEqual(pending.jobs, state.sent[0]);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
-  state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
-  await state.publish();
-  assert.deepEqual(state.sent[1], state.sent[0]);
-});
-
-test('failed snapshot persistence prevents queue submission', async (context) => {
-  let armed = false;
-  const state = await fixture(context, { harness: {
-    observeCall: (call) => {
-      if (!armed || call.method !== 'batch' || !call.statements.some(({ sql }) => sql.includes('INSERT INTO commerce_documents'))) return;
-      const row = state.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
-        .get(CHECKOUT_KEY.path) as { document_json: string };
-      const outbox = parseStripeTerminalNotificationOutbox(JSON.parse(row.document_json)[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
-      if (outbox?.claimId && !outbox.jobs) throw new Error('snapshot write unavailable');
-    },
-  } });
-  armed = true;
-  await assert.rejects(state.publish());
-  assert.equal(state.sent.length, 0);
-  assert.equal((await state.outbox()).jobs, undefined);
-  assert.equal((await state.outbox()).attemptCount, 1);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
-});
-
-test('a replaced claim cannot persist or submit an old publisher payload', async (context) => {
-  const state = await fixture(context);
-  const replacementClaimId = '00000000-0000-4000-8000-000000000999';
-  const commerce: StripeCheckoutCommerceContext = {
-    ...state.commerce,
-    repository: {
-      run: (nowMs, operation) => state.repository.run(nowMs, operation),
-      get: async <T extends CommerceDocumentData>(key: CommerceDocumentKey) => {
-        const record = await state.repository.get<T>(key);
-        if (key.path === ORDER_KEY.path) {
-          const outbox = await state.outbox();
-          await state.repository.run(state.commerce.nowMs(), async (transaction) => {
-            await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
-              [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...outbox, claimId: replacementClaimId },
-            }));
-          });
-        }
-        return record;
-      },
-    },
-  };
-  await assert.rejects(state.publish({ commerce }), /claim_lost/);
-  assert.equal(state.sent.length, 0);
-  assert.equal((await state.outbox()).claimId, replacementClaimId);
-  assert.equal((await state.outbox()).jobs, undefined);
-});
-
-test('a lease that expires during preparation blocks queue submission', async (context) => {
-  const state = await fixture(context, { outcome: 'manual_review' });
+test('Stripe preparation cannot publish an expired claim', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
   await assert.rejects(state.publish({ getDropName: () => {
-    state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
+    state.setTime(OUTBOX_NOW + OUTBOX_LEASE);
     return 'Card NFT 2';
   } }), /claim_expired/);
   assert.equal(state.sent.length, 0);
-  assert.equal((await state.outbox()).jobs?.length, 1);
-  assert.equal((await state.outbox()).attemptCount, 1);
-  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
 });
+
+test('Stripe obsolete terminal outcomes never publish', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
+  await state.repository.run(OUTBOX_NOW, (unit) => unit.update(state.parentKey, { status: 'fulfilled' }));
+  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'none', queuedJobs: 0, reason: 'obsolete_outbox' });
+  assert.equal(state.sent.length, 0);
+});
+
+test('Stripe freezes optional recipient membership before an ambiguous Queue send', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal');
+  await state.updateOrder({ addressSnapshot: {} });
+  await assert.rejects(state.publish({ queue: { sendBatch: async (messages) => {
+    await state.queue.sendBatch(messages);
+    throw new Error('queue response lost');
+  } } }));
+  await state.updateOrder({ addressSnapshot: { email: 'new@example.com' } });
+  state.setTime(OUTBOX_NOW + OUTBOX_LEASE);
+  await state.publish();
+  assert.deepEqual(state.sent[0].map((job) => job.kind), ['shipper_ready_to_ship']);
+  assert.deepEqual(state.sent[1], state.sent[0]);
+});
+
+test('Stripe empty planned batch completes without a Queue send', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { dropId: 'clear_cards_devnet_v2' });
+  await state.updateOrder({ addressSnapshot: {} });
+  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
+  assert.equal(state.sent.length, 0);
+  assert.equal((await state.read()).state, 'queued');
+  assert.equal((await state.read()).claimId, null);
+  await state.updateOrder({ addressSnapshot: { email: 'late@example.com' } });
+  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
+  assert.equal(state.sent.length, 0);
+});
+
+for (const previousSend of ['unpublished', 'ambiguous'] as const) {
+  test(`Stripe repeated paid webhook preserves ${previousSend} manual-review work through fulfillment retries`, async (context) => {
+    const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
+    const dropId = 'card_nft_2';
+    const sessionId = state.parentKey.documentId;
+    const checkoutKey = commerceKeys.stripeCheckout(dropId, sessionId);
+    const commerce = { repository: state.repository, nowMs: state.nowMs };
+    await state.repository.run(OUTBOX_NOW, (unit) => unit.update(checkoutKey, stripeCheckoutWriteData({
+      ...buildStripeCheckoutDocument({ dropId, sessionId, ...createStripeCheckoutIdentity('anon:terminal'),
+        quantity: 1, unitAmountCents: 100, createdAt: OUTBOX_NOW, updatedAt: OUTBOX_NOW }),
+      status: 'fulfillment_failed', manualRefundReviewRequired: true,
+    })));
+    if (previousSend === 'ambiguous') {
+      await assert.rejects(state.publish({ queue: { sendBatch: async (messages) => {
+        await state.queue.sendBatch(messages);
+        throw new Error('queue response lost');
+      } } }), /queue response lost/);
+    }
+    const original = await state.read();
+    const sentBeforeRetry = state.sent.length;
+    assert.equal((await applyStripeCheckoutWebhook({
+      kind: 'enqueue', checkoutKind: 'standard_pack', dropId, eventId: 'evt_repeated_paid',
+      eventType: 'checkout.session.completed', expectedLivemode: false, expectedSecretScope: 'devnet', sessionId,
+      session: { id: sessionId, livemode: false, payment_status: 'paid', metadata: {} },
+    }, commerce)).outcome, 'queued');
+    assert.deepEqual(await state.publish(), { outcome: 'not_terminal', publication: 'none', queuedJobs: 0 });
+    assert.deepEqual(await state.read(), original);
+
+    const first = await startStripeCheckoutFulfillmentDocument({ commerce, dropId, sessionId, checkoutKey, nowMs: OUTBOX_NOW });
+    assert.ok(first.started);
+    assert.deepEqual(await state.publish(), { outcome: 'not_terminal', publication: 'none', queuedJobs: 0 });
+    assert.deepEqual(await state.read(), original);
+    assert.equal((await releaseStripeCheckoutFulfillmentForRetry(commerce, checkoutKey, new Error('retryable failure'), {
+      processingAttemptId: first.processingAttemptId, summarizeError: () => ({ message: 'retryable failure' }),
+    })).status, 'released');
+    assert.deepEqual(await state.read(), original);
+    assert.deepEqual(await state.publish(), { outcome: 'not_terminal', publication: 'none', queuedJobs: 0 });
+
+    const second = await startStripeCheckoutFulfillmentDocument({ commerce, dropId, sessionId, checkoutKey, nowMs: OUTBOX_NOW });
+    assert.ok(second.started);
+    assert.equal((await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('second terminal failure'), {
+      processingAttemptId: second.processingAttemptId, summarizeError: () => ({ message: 'second terminal failure' }),
+    })).status, 'failed');
+    assert.deepEqual(await state.read(), original);
+    assert.equal(state.sent.length, sentBeforeRetry);
+    if (previousSend === 'ambiguous') {
+      assert.deepEqual(await state.publish(), { outcome: 'manual_review', publication: 'busy', queuedJobs: 0 });
+      assert.equal(state.sent.length, sentBeforeRetry);
+      state.setTime(OUTBOX_NOW + OUTBOX_LEASE);
+    }
+    assert.deepEqual(await state.publish({ initializeMissing: true }), { outcome: 'manual_review', publication: 'queued', queuedJobs: 1 });
+    const queued = await state.read();
+    assert.equal(queued.generation, original.generation);
+    assert.equal(queued.entries[0].jobId, original.entries[0].jobId);
+    assert.equal(queued.entries[0].idempotencyKey, original.entries[0].idempotencyKey);
+    assert.equal(queued.retryUntilMs, original.retryUntilMs);
+    assert.equal(queued.attemptCount, original.attemptCount + 1);
+    if (previousSend === 'ambiguous') assert.deepEqual(state.sent[1], state.sent[0]);
+  });
+}

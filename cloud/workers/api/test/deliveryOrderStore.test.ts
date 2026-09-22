@@ -8,7 +8,8 @@ import {
   readDeliveryOrder,
   updateDeliveryOrder,
 } from '../src/deliveryOrderStore.ts';
-import type { DeliveryRecoveryPatch, ReadyToShipNotificationUpdates } from '../src/deliveryOrderUpdates.ts';
+import type { NotificationOutboxMutation } from '../../../../shared/notificationOutbox.ts';
+import type { DeliveryRecoveryPatch } from '../src/deliveryOrderUpdates.ts';
 import type { FulfillmentDeliveryOrderUpdates } from '../src/fulfillmentDeliveryOrderUpdates.ts';
 import { mutateDeliveryOrder } from '../src/fulfillmentStorePersistence.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
@@ -28,9 +29,9 @@ if (false) {
   // @ts-expect-error A recovery lease must use a native timestamp transform.
   void ({ 'receiptRecovery.leaseExpiresAt': 'tomorrow' } satisfies DeliveryRecoveryPatch);
   // @ts-expect-error Notification state must be supported.
-  void ({ buyerOrderReceivedEmailState: 'sent' } satisfies ReadyToShipNotificationUpdates);
+  void ({ state: 'sent' } satisfies NotificationOutboxMutation);
   // @ts-expect-error Notification attempts must be numeric.
-  void ({ readyToShipNotificationPublishAttemptCount: '1' } satisfies ReadyToShipNotificationUpdates);
+  void ({ attemptCount: '1' } satisfies NotificationOutboxMutation);
   const common = { repository: { get: async () => null }, signal: new AbortController().signal };
   // @ts-expect-error Delivery readers must reject checkout keys.
   void readDeliveryOrder(common, commerceKeys.stripeCheckout(DROP_ID, 'session'));
@@ -79,7 +80,6 @@ test('delivery operational views preserve the envelope and raw legacy fields wit
   assert.equal(recovery.recovery.lastAttemptAtMs, NOW_MS);
   assert.deepEqual(document.data, data);
   await repository.run(NOW_MS, (unit) => updateDeliveryOrder(unit, key, {
-    buyerOrderShippedEmailState: 'pending',
     'receiptRecovery.leaseExpiresAt': commerceFieldValue.timestamp(Math.floor(NOW_MS / 1000), 0),
   }));
   const updated = await repository.get(key);
@@ -110,6 +110,7 @@ test('required delivery reads and no-op fulfillment mutations preserve the full 
       nowMs: NOW_MS,
       signal: new AbortController().signal,
       repository: {
+        notificationOutbox: repository.notificationOutbox,
         get: async () => assert.fail('Mutation must read inside its transaction'),
         run: (nowMs, operation) => repository.run(nowMs, async (unit) => {
           const reads = context.mock.method(unit, 'get', unit.get.bind(unit));
@@ -164,6 +165,7 @@ test('required delivery reads and fulfillment mutations preserve raw repository 
       nowMs: NOW_MS,
       signal: readContext.signal,
       repository: {
+        notificationOutbox: repository.notificationOutbox,
         get,
         run: (nowMs, operation) => repository.run(nowMs, (unit) => {
           context.mock.method(unit, 'get', get);

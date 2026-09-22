@@ -1,4 +1,4 @@
-import type { ReadyToShipNotificationUpdates } from './deliveryOrderUpdates.js';
+import type { NotificationOutboxCreate, NotificationOutboxEntry } from '../../../../shared/notificationOutbox.js';
 import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
@@ -24,111 +24,28 @@ import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
   isNotificationEmailJobId,
-  isNotificationEmailJobV1,
   type NotificationEmailJobV1,
 } from '../../../../shared/notificationEmailJob.js';
-import {
-  READY_NOTIFICATION_BUYER_STATE_FIELD,
-  READY_NOTIFICATION_PENDING_STATE,
-  READY_NOTIFICATION_SHIPPER_STATE_FIELD,
-} from '../../../../shared/readyToShipNotificationReconciliation.js';
-import { commerceFieldValue } from './commerceRepository.js';
 import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from './notificationOutboxPublication.js';
 
-export const READY_TO_SHIP_NOTIFICATION_PENDING = READY_NOTIFICATION_PENDING_STATE;
-export const READY_TO_SHIP_NOTIFICATION_QUEUED = 'queued' as const;
-export const READY_TO_SHIP_NOTIFICATION_FAILED = 'failed' as const;
-export const READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD = 'readyToShipNotificationRetryUntilMs';
-export const READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD = 'readyToShipNotificationPublishClaimId';
-export const READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD =
-  'readyToShipNotificationPublishClaimExpiresAtMs';
-export const READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD =
-  'readyToShipNotificationPublishAttemptCount';
-
-export const BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD = READY_NOTIFICATION_BUYER_STATE_FIELD;
-export const BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD = 'buyerOrderReceivedEmailJobId';
-export const BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD = 'buyerOrderReceivedEmailJob';
-export const BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD = 'buyerOrderReceivedEmailIdempotencyKey';
-export const BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD = 'buyerOrderReceivedEmailQueuedAt';
-export const SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD = READY_NOTIFICATION_SHIPPER_STATE_FIELD;
-export const SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD = 'shipperReadyToShipEmailJobId';
-export const SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD = 'shipperReadyToShipEmailJob';
-export const SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD = 'shipperReadyToShipEmailIdempotencyKey';
-export const SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD = 'shipperReadyToShipEmailQueuedAt';
-
+export const BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD = 'buyerOrderReceivedEmailState';
+export const SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD = 'shipperReadyToShipEmailState';
+export type ReadyToShipNotificationStateField = typeof BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD |
+  typeof SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD;
 type ReadyToShipNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship';
-
-export type ReadyToShipNotificationStateField =
-  | typeof BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD
-  | typeof SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD;
-
-export type ReadyToShipNotificationClaimState = {
-  claimId: string | null;
-  attemptCount: number | null;
-  retryUntilMs: number | null;
-  expiresAtMs: number | null;
-};
-
-function notificationNonNegativeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
-}
-
-export function parseReadyToShipNotificationClaim(order: Record<string, unknown>): ReadyToShipNotificationClaimState {
-  const claimId = order[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
-  return {
-    claimId: typeof claimId === 'string' && claimId ? claimId : null,
-    attemptCount: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]),
-    retryUntilMs: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]),
-    expiresAtMs: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]),
-  };
-}
-
-type ReadyToShipNotificationMarkerDefinition = {
+export type PendingReadyToShipNotification = {
   kind: ReadyToShipNotificationKind;
-  stateField: ReadyToShipNotificationStateField;
-  jobIdField: typeof BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD;
-  jobField: typeof BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD;
-  idempotencyKeyField: typeof BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD;
-  queuedAtField: typeof BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD;
-  idempotencySuffix: 'order_received' | 'ready_to_ship';
-};
-
-export type PendingReadyToShipNotification = ReadyToShipNotificationMarkerDefinition & {
   jobId: string;
   idempotencyKey: string;
-  job?: NotificationEmailJobV1;
 };
-
-export type ReadyToShipNotificationOutbox = {
-  values: ReadyToShipNotificationUpdates;
-  pending: PendingReadyToShipNotification[];
+type ReadyNotificationPlanOptions = {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  deliveryId: number;
+  dropId: string;
+  createJobId?: () => string;
+  nowMs?: number;
 };
-
-export type PendingReadyToShipNotificationInspection = {
-  invalidStateFields: ReadyToShipNotificationStateField[];
-  pending: PendingReadyToShipNotification[];
-};
-
-const MARKERS: readonly ReadyToShipNotificationMarkerDefinition[] = [
-  {
-    kind: 'buyer_order_received',
-    stateField: BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
-    jobIdField: BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,
-    jobField: BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD,
-    idempotencyKeyField: BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
-    queuedAtField: BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD,
-    idempotencySuffix: 'order_received',
-  },
-  {
-    kind: 'shipper_ready_to_ship',
-    stateField: SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
-    jobIdField: SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD,
-    jobField: SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD,
-    idempotencyKeyField: SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD,
-    queuedAtField: SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD,
-    idempotencySuffix: 'ready_to_ship',
-  },
-];
 
 const SHIPPER_READY_TO_SHIP_DROP_IDS = new Set([
   'little_swag_boxes',
@@ -140,13 +57,7 @@ const SHIPPER_READY_TO_SHIP_DROP_IDS = new Set([
 ]);
 const SHIPPER_READY_TO_SHIP_RECIPIENTS = ['fulfillment@mons.shop'] as const;
 
-function markerForKind(kind: ReadyToShipNotificationKind): ReadyToShipNotificationMarkerDefinition {
-  const marker = MARKERS.find((candidate) => candidate.kind === kind);
-  if (!marker) throw new Error(`Ready-to-ship notification marker is missing for ${kind}`);
-  return marker;
-}
-
-export function shipperReadyToShipRecipients(dropId: string): string[] {
+function shipperReadyToShipRecipients(dropId: string): string[] {
   return SHIPPER_READY_TO_SHIP_DROP_IDS.has(dropId)
     ? [...SHIPPER_READY_TO_SHIP_RECIPIENTS]
     : [];
@@ -172,121 +83,43 @@ function notificationDeliveryId(order: Record<string, unknown>, deliveryId: numb
   return resolved;
 }
 
-function pendingMarker(
-  marker: ReadyToShipNotificationMarkerDefinition,
-  dropId: string,
-  deliveryId: number,
-  createJobId: () => string,
-): PendingReadyToShipNotification {
-  const jobId = createJobId();
-  const idempotencyKey = `${dropId}:${deliveryId}:${marker.idempotencySuffix}`;
-  if (!isNotificationEmailJobId(jobId)) throw new Error('Ready-to-ship notification job ID is invalid');
-  if (!isNotificationEmailIdempotencyKey(idempotencyKey)) {
-    throw new Error('Ready-to-ship notification idempotency key is invalid');
-  }
-  return { ...marker, jobId, idempotencyKey };
-}
-
-export function createReadyToShipNotificationOutbox(args: {
-  before: Record<string, unknown>;
-  after: Record<string, unknown>;
-  deliveryId: number;
-  dropId: string;
-  createJobId?: () => string;
-  nowMs?: number;
-}): ReadyToShipNotificationOutbox {
+export function planReadyToShipNotifications(args: ReadyNotificationPlanOptions): PendingReadyToShipNotification[] {
   if (!shouldNotifyShippersForDeliveryReadyToShipWrite({
-    before: args.before,
-    after: args.after,
-    ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
-  })) {
-    return { values: {}, pending: [] };
-  }
+    before: args.before, after: args.after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
+  })) return [];
   const deliveryId = notificationDeliveryId(args.after, args.deliveryId);
   const plan = readyToShipNotificationPlan(args.after, args.dropId);
-  const createJobId = args.createJobId || (() => crypto.randomUUID());
-  const pending = [
-    ...(plan.buyerRecipient
-      ? [pendingMarker(markerForKind('buyer_order_received'), args.dropId, deliveryId, createJobId)]
-      : []),
-    ...(plan.shipperRecipients.length
-      ? [pendingMarker(markerForKind('shipper_ready_to_ship'), args.dropId, deliveryId, createJobId)]
-      : []),
+  const kinds: ReadyToShipNotificationKind[] = [
+    ...(plan.buyerRecipient ? ['buyer_order_received' as const] : []),
+    ...(plan.shipperRecipients.length ? ['shipper_ready_to_ship' as const] : []),
   ];
-  const values: ReadyToShipNotificationUpdates = {};
-  for (const marker of pending) {
-    values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
-    values[marker.jobIdField] = marker.jobId;
-    values[marker.jobField] = commerceFieldValue.delete();
-    values[marker.idempotencyKeyField] = marker.idempotencyKey;
-    values[marker.queuedAtField] = commerceFieldValue.delete();
-  }
-  if (pending.length) {
-    const nowMs = Number.isSafeInteger(args.nowMs) && Number(args.nowMs) >= 0
-      ? Number(args.nowMs)
-      : Date.now();
-    values[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD] = nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS;
-    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD] = 0;
-    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
-    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] = commerceFieldValue.delete();
-  }
-  return { values, pending };
-}
-
-export function isReadyToShipNotificationJob(
-  value: unknown,
-  marker: PendingReadyToShipNotification,
-): value is NotificationEmailJobV1 {
-  return isNotificationEmailJobV1(value) &&
-    value.kind === marker.kind && value.jobId === marker.jobId &&
-    value.idempotencyKey === marker.idempotencyKey &&
-    value.idempotencyKey === `${value.context.dropId}:${value.context.deliveryId}:${marker.idempotencySuffix}`;
-}
-
-export function inspectPendingReadyToShipNotifications(
-  order: Record<string, unknown>,
-  expected?: { deliveryId: number; dropId: string },
-): PendingReadyToShipNotificationInspection {
-  if (order.status !== 'ready_to_ship') return { invalidStateFields: [], pending: [] };
-  const invalidStateFields: ReadyToShipNotificationStateField[] = [];
-  const pending: PendingReadyToShipNotification[] = [];
-  for (const marker of MARKERS) {
-    if (order[marker.stateField] !== READY_TO_SHIP_NOTIFICATION_PENDING) continue;
-    const jobId = order[marker.jobIdField];
-    const idempotencyKey = order[marker.idempotencyKeyField];
-    const expectedIdempotencyKey = expected
-      ? `${expected.dropId}:${expected.deliveryId}:${marker.idempotencySuffix}`
-      : undefined;
-    if (
-      !isNotificationEmailJobId(jobId) ||
-      !isNotificationEmailIdempotencyKey(idempotencyKey) ||
-      (expectedIdempotencyKey !== undefined && idempotencyKey !== expectedIdempotencyKey)
-    ) {
-      invalidStateFields.push(marker.stateField);
-      continue;
+  return kinds.map((kind) => {
+    const jobId = args.createJobId ? args.createJobId() : crypto.randomUUID();
+    const idempotencyKey = `${args.dropId}:${deliveryId}:${kind === 'buyer_order_received' ? 'order_received' : 'ready_to_ship'}`;
+    if (!isNotificationEmailJobId(jobId) || !isNotificationEmailIdempotencyKey(idempotencyKey)) {
+      throw new Error('Ready-to-ship notification identity is invalid');
     }
-    const pendingMarker = { ...marker, jobId, idempotencyKey };
-    if (Object.hasOwn(order, marker.jobField)) {
-      const job = order[marker.jobField];
-      if (!isReadyToShipNotificationJob(job, pendingMarker)) {
-        invalidStateFields.push(marker.stateField);
-        continue;
-      }
-      pending.push({ ...pendingMarker, job });
-    } else {
-      pending.push(pendingMarker);
-    }
-  }
-  return { invalidStateFields, pending };
+    return { kind, jobId, idempotencyKey };
+  });
 }
 
-export function pendingReadyToShipNotifications(
-  order: Record<string, unknown>,
-  expected?: { deliveryId: number; dropId: string },
-): PendingReadyToShipNotification[] {
-  const inspection = inspectPendingReadyToShipNotifications(order, expected);
-  if (inspection.invalidStateFields.length) throw new Error('Pending ready-to-ship notification marker is invalid');
-  return inspection.pending;
+export function readyToShipNotificationMarker(entry: NotificationOutboxEntry): PendingReadyToShipNotification {
+  if (entry.kind !== 'buyer_order_received' && entry.kind !== 'shipper_ready_to_ship') {
+    throw new Error('Invalid ready-to-ship notification kind');
+  }
+  return { kind: entry.kind, jobId: entry.jobId, idempotencyKey: entry.idempotencyKey };
+}
+
+export function createReadyToShipNotificationIntent(args: ReadyNotificationPlanOptions & {
+  parentPath: string;
+}): NotificationOutboxCreate | null {
+  const pending = planReadyToShipNotifications(args);
+  if (!pending.length) return null;
+  return {
+    parentPath: args.parentPath, family: 'ready', dropId: args.dropId, generation: crypto.randomUUID(),
+    retryUntilMs: (args.nowMs ?? Date.now()) + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS,
+    entries: pending.map((entry) => ({ ...entry, state: 'pending' })),
+  };
 }
 
 export async function createReadyToShipNotificationJobs(args: {
@@ -302,7 +135,7 @@ export async function createReadyToShipNotificationJobs(args: {
   const dropName = drop.displayName || drop.collectionName || args.dropId;
   const jobs: NotificationEmailJobV1[] = [];
   for (const marker of args.pending) {
-    const expectedIdempotencyKey = `${args.dropId}:${deliveryId}:${marker.idempotencySuffix}`;
+    const expectedIdempotencyKey = `${args.dropId}:${deliveryId}:${(marker.kind === 'buyer_order_received' ? 'order_received' : 'ready_to_ship')}`;
     if (marker.idempotencyKey !== expectedIdempotencyKey) {
       throw new Error('Ready-to-ship notification idempotency key does not match the order');
     }

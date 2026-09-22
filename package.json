@@ -67,6 +67,7 @@
     "backfill:stripe-chargebacks": "node --import tsx scripts/ops/backfillStripeChargebacks.ts",
     "check:queue-backlogs": "node --import tsx scripts/ops/checkQueueBacklogs.ts",
     "commerce-authority-control": "node --import tsx scripts/ops/commerceAuthorityControl.ts",
+    "notification-outbox-control": "node --import tsx scripts/ops/notificationOutboxControl.ts",
     "dude-inventory-control": "node --import tsx scripts/ops/dudeInventoryControl.ts",
     "reveal-submissions-control": "node --import tsx scripts/ops/revealSubmissionsControl.ts",
     "test-resend-notification-email": "tsx scripts/ops/sendTestResendNotificationEmail.ts",

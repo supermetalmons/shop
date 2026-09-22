@@ -1,9 +1,9 @@
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { READY_NOTIFICATION_DUE_SQL } from '../../../../shared/readyNotificationDueSql.js';
 import { PROFILE_SHIPMENT_STATUSES } from '../../../../shared/deliveryOrderSummary.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
+import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -33,17 +33,25 @@ const DOCUMENT_COLUMN_NAMES = [
 ] as const;
 
 export const COMMERCE_DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+export const NOTIFICATION_OUTBOX_COLUMNS = 'parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code';
+const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
+  SELECT 1 FROM commerce_authority_control AS authority
+  CROSS JOIN commerce_notification_outbox_control AS control
+  WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+    AND control.singleton = 1 AND control.storage_mode = 'table'
+)`;
 
-const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
-  buyer: Object.freeze({
-    owner: 'commerce_delivery_orders_buyer_notifications_pending_owner_path',
-    ownerless: 'commerce_delivery_orders_buyer_notifications_pending',
-  }),
-  shipper: Object.freeze({
-    owner: 'commerce_delivery_orders_shipper_notifications_pending_owner_path',
-    ownerless: 'commerce_delivery_orders_shipper_notifications_pending',
-  }),
-});
+export function notificationOutboxDueQuery(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): CommerceSqlQuery {
+  return {
+    sql: `SELECT ${NOTIFICATION_OUTBOX_COLUMNS.split(', ').map((name) => `outbox.${name}`).join(', ')}
+      FROM commerce_notification_outbox AS outbox
+        INDEXED BY ${args.family ? 'commerce_notification_outbox_family_due' : 'commerce_notification_outbox_due'}
+      WHERE outbox.state = 'pending' AND outbox.next_attempt_at_ms <= ?${args.family ? ' AND outbox.family = ?' : ''}
+      ORDER BY outbox.next_attempt_at_ms, outbox.parent_path, outbox.family
+      LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
+    bindings: [args.dueAtMs, ...(args.family ? [args.family] : []), args.limit],
+  };
+}
 
 function qualifiedDocumentColumns(alias: string): string {
   return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
@@ -212,45 +220,27 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
   owner?: string;
   startAfterPath?: string;
 }>): CommerceSqlQuery {
-  const indexVariant = args.owner === undefined ? 'ownerless' : 'owner';
-  const buyerIndex = PENDING_READY_NOTIFICATION_INDEXES.buyer[indexVariant];
-  const shipperIndex = PENDING_READY_NOTIFICATION_INDEXES.shipper[indexVariant];
-  const ownerPredicate = args.owner === undefined ? '' : ' AND document.owner = ?';
-  const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document.document_path > ?';
-  const armBindings = [
+  const ownerPredicate = args.owner === undefined ? '' : ' AND pending.owner = ? AND document.owner = pending.owner';
+  const orderedPath = args.owner === undefined ? 'outbox.parent_path' : 'pending.parent_path';
+  const cursorPredicate = args.startAfterPath === undefined ? '' : ` AND ${orderedPath} > ?`;
+  const bindings = [
     ...(args.owner === undefined ? [] : [args.owner]),
     ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
   ];
   return {
-    sql: `WITH candidate_paths AS (
-      SELECT document.document_path
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document
-        INDEXED BY ${buyerIndex}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.status = 'ready_to_ship' AND
-        document.buyer_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-      UNION
-      SELECT document.document_path
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document
-        INDEXED BY ${shipperIndex}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.status = 'ready_to_ship' AND
-        document.shipper_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-    )
-    SELECT ${qualifiedDocumentColumns('document')}
-    FROM commerce_documents AS document
-    JOIN candidate_paths USING (document_path)
-    ORDER BY document.document_path ASC
-    LIMIT ?`,
-    bindings: [...armBindings, ...armBindings, args.limit],
+    sql: `SELECT ${qualifiedDocumentColumns('document')}
+    ${args.owner === undefined
+      ? `FROM commerce_notification_outbox AS outbox INDEXED BY commerce_notification_outbox_pending_path
+    CROSS JOIN commerce_documents AS document`
+      : `FROM commerce_notification_outbox_pending_owners AS pending INDEXED BY commerce_notification_outbox_pending_owner_path
+    CROSS JOIN commerce_notification_outbox AS outbox
+    CROSS JOIN commerce_documents AS document`}
+    WHERE outbox.parent_path = document.document_path
+      AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
+      AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}
+    ORDER BY ${orderedPath} ASC
+    LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
+    bindings: [...bindings, args.limit],
   };
 }
 
@@ -258,18 +248,15 @@ export function dueReadyNotificationsQuery(args: Readonly<{
   dueAtMs: number;
   limit: number;
 }>): CommerceSqlQuery {
-  const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY ${indexName}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        ${pendingPredicate} AND
-        (${dueAtExpression}) <= ?
-      ORDER BY (${dueAtExpression}) ASC, document_path ASC
-      LIMIT ?`,
+    sql: `SELECT ${qualifiedDocumentColumns('document')}
+      FROM commerce_notification_outbox AS outbox INDEXED BY commerce_notification_outbox_family_due
+      CROSS JOIN commerce_documents AS document
+      WHERE document.document_path = outbox.parent_path
+        AND outbox.family = 'ready' AND outbox.state = 'pending' AND outbox.next_attempt_at_ms <= ?
+        AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
+      ORDER BY outbox.next_attempt_at_ms, outbox.parent_path
+      LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
     bindings: [args.dueAtMs, args.limit],
   };
 }
@@ -320,19 +307,19 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
   limit: number;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document_kind = 'stripe_checkout' AND
-        (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
-        json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
-        CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) ASC,
-        document_path ASC
-      LIMIT ?`,
+    sql: `SELECT ${qualifiedDocumentColumns('document')}
+      FROM commerce_notification_outbox_stripe_due AS due INDEXED BY commerce_notification_outbox_stripe_due_at
+      CROSS JOIN commerce_notification_outbox AS outbox
+      CROSS JOIN commerce_documents AS document
+      WHERE due.parent_path = outbox.parent_path AND due.family = outbox.family
+        AND document.document_path = outbox.parent_path
+        AND outbox.family = 'stripe_terminal' AND outbox.state = 'pending'
+        AND due.next_attempt_at_ms <= ? AND outbox.next_attempt_at_ms = due.next_attempt_at_ms
+        AND document.document_kind = 'stripe_checkout'
+        AND ((outbox.outcome = 'fulfilled' AND document.status = 'fulfilled') OR
+          (outbox.outcome = 'manual_review' AND document.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1))
+      ORDER BY due.next_attempt_at_ms, due.parent_path
+      LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
     bindings: [args.dueAtMs, args.limit],
   };
 }

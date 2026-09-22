@@ -1,10 +1,11 @@
+import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
 import { D1CommerceRepository } from '../commerceRepository.js';
 import { getApiDrop } from '../dropConfig.js';
 import type { StripeCheckoutCommerceContext } from './commerce.js';
 import { publishPendingStripeCheckoutTerminalNotifications } from './notificationOutbox.js';
 
 export async function reconcilePendingStripeTerminalNotifications(
-  env: Pick<Env, 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE'>,
+  env: Pick<Env, 'COMMERCE_DB'> & { NOTIFICATION_EMAIL_QUEUE: Pick<Queue<NotificationEmailJobV1>, 'sendBatch'> },
   signal: AbortSignal,
   overrides: { nowMs?: () => number } = {},
 ): Promise<number> {

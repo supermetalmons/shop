@@ -17,10 +17,7 @@ import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransacti
 import { DeliveryReceiptError, runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
 import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { publishReadyToShipNotifications } from '../src/readyToShipNotificationOutbox.ts';
-import {
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-} from '../src/readyToShipNotifications.ts';
+
 import { IRL_CLAIM_CODE_NAMESPACE } from '../src/claimCodes.ts';
 import { seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';
 import {
@@ -179,8 +176,9 @@ test('native ready-to-ship persistence includes notification and pack-status out
       requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
     );
     assert.equal(ready?.data.status, 'ready_to_ship');
-    assert.equal(ready?.data.buyerOrderReceivedEmailState, 'pending');
-    assert.equal(ready?.data.shipperReadyToShipEmailState, 'pending');
+    const notification = await native.context.repository.notificationOutbox.get('drops/card_nft_2/deliveryOrders/7', 'ready');
+    assert.deepEqual(notification?.entries.map((entry) => entry.state), ['pending', 'pending']);
+    assert.equal(ready?.data.buyerOrderReceivedEmailState, undefined);
     assert.equal(ready?.data.packStatusProjectionState, 'pending');
     assert.equal(ready?.data.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS);
   }
@@ -211,8 +209,9 @@ test('native ready-notification publication claims, queues, and finalizes atomic
     requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
   );
   assert.equal(jobs.length, 1);
-  assert.equal(finalized?.data.buyerOrderReceivedEmailState, 'queued');
-  assert.equal(finalized?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
+  assert.equal((await native.context.repository.notificationOutbox.get('drops/card_nft_2/deliveryOrders/7', 'ready'))?.state, 'queued');
+  assert.equal(finalized?.data.buyerOrderReceivedEmailState, undefined);
+  assert.equal(finalized?.data.readyToShipNotificationPublishClaimId, undefined);
 });
 
 test('pre-enqueue cancellation releases the ready-notification claim and attempt', async () => {
@@ -247,8 +246,8 @@ test('pre-enqueue cancellation releases the ready-notification claim and attempt
     requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
   );
   assert.equal(queueCalls, 0);
-  assert.equal(released?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
-  assert.equal(released?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
+  assert.equal((await native.context.repository.notificationOutbox.get('drops/card_nft_2/deliveryOrders/7', 'ready'))?.attemptCount, 0);
+  assert.equal(released?.data.readyToShipNotificationPublishClaimId, undefined);
 });
 
 test('receipt submissions are persisted before broadcast and promoted idempotently', async () => {

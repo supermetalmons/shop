@@ -1,9 +1,12 @@
+import { shippedNotificationState } from '../../../../shared/notificationOutbox.js';
+import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from './notificationOutboxPublication.js';
 import type { FulfillmentStatus } from '../../../../shared/fulfillmentStatus.js';
 import { sanitizeFulfillmentTrackingCode } from '../../../../shared/fulfillmentTracking.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
   decideBuyerOrderShippedNotification,
+  isBuyerOrderShippedNotificationEligible,
   type BuyerOrderShippedDecision,
 } from './buyerOrderShipped.js';
 import {
@@ -64,27 +67,6 @@ async function withDeliveryOrderFulfillment<T>(
   }
 }
 
-export function markDeliveryOrderShippedEmailQueued(args: {
-  common: CommerceTransactionTarget;
-  deliveryId: number;
-  dropId: string;
-  jobId: string;
-}): Promise<boolean> {
-  return withDeliveryOrderFulfillment(args, async (unit, document) => {
-    if (
-      document.fulfillment.buyerOrderShippedEmailState !== BUYER_ORDER_SHIPPED_EMAIL_PENDING ||
-      document.fulfillment.buyerOrderShippedEmailJobId !== args.jobId
-    ) return false;
-    const updates: DeliveryOrderFulfillmentUpdates = {
-      buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
-      buyerOrderShippedEmailJobId: args.jobId,
-      buyerOrderShippedEmailQueuedAt: commerceFieldValue.serverTimestamp(),
-    };
-    await updateDeliveryOrder(unit, document.key, updates);
-    return true;
-  });
-}
-
 export function setDeliveryOrderFulfillment(args: {
   common: CommerceTransactionTarget;
   createNotificationJobId: () => string;
@@ -96,6 +78,9 @@ export function setDeliveryOrderFulfillment(args: {
   wallet: string;
 }): Promise<DeliveryOrderFulfillmentMutation> {
   return withDeliveryOrderFulfillment(args, async (unit, document) => {
+    const existingOutbox = await unit.getNotificationOutbox(document.key.path, 'shipped');
+    let outbox = existingOutbox;
+    const existingEntry = existingOutbox?.entries[0];
     const nextStatus = args.status || '';
     const nextTrackingCode = nextStatus === 'Shipped'
       ? sanitizeFulfillmentTrackingCode(args.trackingCode)
@@ -116,10 +101,10 @@ export function setDeliveryOrderFulfillment(args: {
       after: order,
       deliveryDocId: args.deliveryId,
       dropId: args.dropId,
-      emailState: document.fulfillment.buyerOrderShippedEmailState,
+      emailState: existingOutbox?.state,
       forceRetry: args.retryShippedEmail === true,
-      idempotencyKey: document.fulfillment.buyerOrderShippedEmailIdempotencyKey,
-      jobId: document.fulfillment.buyerOrderShippedEmailJobId,
+      idempotencyKey: existingEntry?.idempotencyKey,
+      jobId: existingEntry?.jobId,
       createJobId: args.createNotificationJobId,
     });
     const updates: DeliveryOrderFulfillmentUpdates = {
@@ -131,35 +116,34 @@ export function setDeliveryOrderFulfillment(args: {
     if (nextStatus === 'Shipped') {
       updates.fulfillmentTrackingCode = nextTrackingCode || commerceFieldValue.delete();
     }
-    if (decision.kind === 'send') {
-      updates.buyerOrderShippedEmailState = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
-      updates.buyerOrderShippedEmailJobId = decision.jobId;
-      updates.buyerOrderShippedEmailIdempotencyKey = decision.idempotencyKey;
-      updates.buyerOrderShippedEmailQueuedAt = commerceFieldValue.delete();
-      order.buyerOrderShippedEmailState = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
-      order.buyerOrderShippedEmailJobId = decision.jobId;
-      order.buyerOrderShippedEmailIdempotencyKey = decision.idempotencyKey;
-      delete order.buyerOrderShippedEmailQueuedAt;
-    } else if (decision.clearPending) {
-      updates.buyerOrderShippedEmailState = commerceFieldValue.delete();
-      updates.buyerOrderShippedEmailJobId = commerceFieldValue.delete();
-      updates.buyerOrderShippedEmailIdempotencyKey = commerceFieldValue.delete();
-      updates.buyerOrderShippedEmailQueuedAt = commerceFieldValue.delete();
-      delete order.buyerOrderShippedEmailState;
-      delete order.buyerOrderShippedEmailJobId;
-      delete order.buyerOrderShippedEmailIdempotencyKey;
-      delete order.buyerOrderShippedEmailQueuedAt;
-    }
     await updateDeliveryOrder(unit, document.key, updates);
+    if (decision.kind === 'send') {
+      const nowMs = typeof args.common.nowMs === 'function' ? args.common.nowMs() : args.common.nowMs;
+      const intent = {
+        parentPath: document.key.path,
+        family: 'shipped' as const,
+        dropId: args.dropId,
+        generation: decision.jobId,
+        entries: [{
+          kind: 'buyer_order_shipped' as const,
+          jobId: decision.jobId,
+          idempotencyKey: decision.idempotencyKey,
+          state: 'pending' as const,
+        }],
+        retryUntilMs: nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS,
+      };
+      outbox = args.retryShippedEmail
+        ? await unit.replaceNotificationOutbox(intent)
+        : await unit.enqueueNotificationOutbox(intent);
+    } else if (decision.clearPending || (existingOutbox?.state === 'failed' && !isBuyerOrderShippedNotificationEligible(order))) {
+      outbox = await unit.cancelNotificationOutbox(document.key.path, 'shipped', decision.reason);
+    }
+    const publicState = shippedNotificationState(outbox);
     return {
       decision,
       order,
       response: {
-        ...(decision.kind === 'send'
-          ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_PENDING }
-          : document.fulfillment.buyerOrderShippedEmailState === BUYER_ORDER_SHIPPED_EMAIL_QUEUED
-            ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED }
-            : {}),
+        ...(publicState ? { buyerOrderShippedEmailState: publicState } : {}),
         deliveryId: args.deliveryId,
         fulfillmentStatus: nextStatus,
         ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}),

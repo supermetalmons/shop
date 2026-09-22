@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
+import { parseNotificationOutboxRecord, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.ts';
 import type {
   CommerceDocumentData,
   CommerceDocumentKey,
@@ -115,7 +116,7 @@ export type CommerceD1Harness = {
   db: D1Database;
 };
 
-function resumeFreshCommerce(database: DatabaseSync): void {
+function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table'): void {
   database.exec('BEGIN IMMEDIATE');
   try {
     database.exec(`INSERT INTO commerce_authority_control_lease (
@@ -129,6 +130,11 @@ function resumeFreshCommerce(database: DatabaseSync): void {
     SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
       updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
     WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL;
+    ${notificationOutboxMode === 'table' ? `UPDATE commerce_notification_outbox_control
+      SET preparation_state = 'preparing' WHERE singleton = 1;
+    UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', source_documents_revision = 0,
+      prepared_at_ms = 0 WHERE singleton = 1;
+    UPDATE commerce_notification_outbox_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
     UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
       updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -184,6 +190,7 @@ export function createCommerceD1Harness(
     observeBatchAfterCommit?: CommerceD1BatchObserver;
     observeCall?: CommerceD1CallObserver;
     observeStatement?: CommerceD1StatementObserver;
+    notificationOutboxMode?: 'legacy' | 'table';
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -200,7 +207,8 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0010_dude_inventory.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0011_stripe_order_disputes.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0012_stripe_identity_lookup_indexes.sql', 'utf8'));
-  resumeFreshCommerce(database);
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0013_notification_outbox.sql', 'utf8'));
+  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
   return {
     database,
     db: d1Database(
@@ -390,6 +398,9 @@ export function applyCommerceDocumentFixtureEpoch(
   if (!mutations.length) throw new TypeError('A commerce fixture epoch requires at least one mutation.');
   harness.database.exec('BEGIN');
   try {
+    const fences = harness.database.prepare(`SELECT name, sql FROM sqlite_schema
+      WHERE type = 'trigger' AND name IN ('commerce_notification_legacy_insert_fence', 'commerce_notification_legacy_update_fence')`).all();
+    for (const fence of fences) harness.database.exec(`DROP TRIGGER ${String(fence.name)}`);
     for (const mutation of mutations) {
       if (mutation.type === 'upsert') writeCommerceDocument(harness, mutation.seed);
       else harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(mutation.key.path);
@@ -405,6 +416,7 @@ export function applyCommerceDocumentFixtureEpoch(
       WHERE owner_revision.revision > control.documents_revision
     ) AS invalid`).get()!.invalid;
     if (invalid) throw new Error('Commerce fixture owner revision exceeds the global revision.');
+    for (const fence of fences) harness.database.exec(String(fence.sql));
     harness.database.exec('COMMIT');
   } catch (error) {
     harness.database.exec('ROLLBACK');
@@ -427,4 +439,24 @@ export function seedCommerceDocument(
   seed: CommerceDocumentSeed,
 ): void {
   seedCommerceDocuments(harness, [seed]);
+}
+
+export function seedNotificationOutbox(harness: CommerceD1Harness, value: NotificationOutboxRecord): void {
+  const row = parseNotificationOutboxRecord(value);
+  harness.database.prepare(`INSERT INTO commerce_notification_outbox (
+    parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
+    attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms,
+    created_at_ms, updated_at_ms, last_error_code
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(parent_path, family) DO UPDATE SET
+    generation = excluded.generation, outcome = excluded.outcome, state = excluded.state,
+    entries_json = excluded.entries_json, revision = excluded.revision, attempt_count = excluded.attempt_count,
+    next_attempt_at_ms = excluded.next_attempt_at_ms, claim_id = excluded.claim_id,
+    claim_expires_at_ms = excluded.claim_expires_at_ms, retry_until_ms = excluded.retry_until_ms,
+    created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms,
+    last_error_code = excluded.last_error_code`).run(
+    row.parentPath, row.family, row.dropId, row.generation, row.outcome, row.state, JSON.stringify(row.entries),
+    row.revision, row.attemptCount, row.nextAttemptAtMs, row.claimId, row.claimExpiresAtMs, row.retryUntilMs,
+    row.createdAtMs, row.updatedAtMs, row.lastErrorCode,
+  );
 }

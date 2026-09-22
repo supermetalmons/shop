@@ -22,10 +22,9 @@ import {
   type StripeCheckoutDocumentData,
 } from './contract.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
-import type { StripeTerminalNotificationFields } from './notificationOutboxState.js';
 
 export type StripeCheckoutCommerceContext = {
-  repository: Pick<D1CommerceRepository, 'get' | 'run'>;
+  repository: Pick<D1CommerceRepository, 'get' | 'run' | 'notificationOutbox'>;
   nowMs: () => number;
   signal?: AbortSignal;
 };
@@ -52,7 +51,7 @@ type DeleteField = ReturnType<typeof commerceFieldValue.delete>;
 type TimestampWrite = number | ReturnType<typeof commerceFieldValue.timestamp> |
   ReturnType<typeof commerceFieldValue.serverTimestamp>;
 
-export type StripeCheckoutUpdate = StripeTerminalNotificationFields & {
+export type StripeCheckoutUpdate = {
   status?: typeof STRIPE_CHECKOUT_STATUS[keyof typeof STRIPE_CHECKOUT_STATUS];
   dropId?: string;
   sessionId?: string;

@@ -145,6 +145,7 @@ export type CommerceD1Plan = {
   documentsToDelete: Array<{ path: string; version: number }>;
   missingClaimCodes: string[];
   targetDocumentCount: number;
+  notificationOutboxCount: number;
 };
 
 export function sameCommerceD1Plan(
@@ -904,6 +905,7 @@ export function buildCommerceD1PlanFromDocuments(args: {
   dropId: string;
   inventory: CommerceD1InventorySnapshot;
   targetDocuments: CommerceD1Document[];
+  notificationOutboxCount?: number;
 }): CommerceD1Plan {
   const dropId = validateDropId(args.dropId, 'drop id');
   const targetAssignments = args.targetDocuments.filter((document) => document.kind === 'box_assignment');
@@ -987,6 +989,7 @@ export function buildCommerceD1PlanFromDocuments(args: {
     documentsToDelete,
     missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.has(code))),
     targetDocumentCount: args.targetDocuments.length,
+    notificationOutboxCount: safeInteger(args.notificationOutboxCount ?? 0, 'Notification outbox count'),
   };
 }
 
@@ -1006,6 +1009,8 @@ export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
     authority: readRemoteCommerceAuthority(),
     dropId,
     inventory: readRemoteCommerceInventory(dropId),
+    notificationOutboxCount: safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
+      FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}`)[0]?.count, 'Notification outbox count'),
     targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
     claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
     assignmentDocuments: commerceDocuments(`document_kind = 'box_assignment'`),
@@ -1642,6 +1647,7 @@ function printPlan(args: {
   console.log('commerce d1');
   console.log(`- authority revision: ${commercePlan.authority.revision}`);
   console.log(`- documents revision: ${commercePlan.authority.documentsRevision}`);
+  console.log(`- notification outbox rows to delete: ${commercePlan.notificationOutboxCount}`);
   console.log(`- figure inventory mode: ${commercePlan.inventory.mode}`);
   console.log(`- available figure rows to delete: ${commercePlan.inventory.availableCount}`);
   if (commercePlan.inventory.metadata) {
@@ -4752,6 +4758,7 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
           AND initialized_at_ms = ${metadata.initializedAtMs})`
     : `NOT EXISTS (SELECT 1 FROM commerce_inventory_drops WHERE drop_id = ${sqlString(dropId)})`;
   const inventoryExpectation = `${metadataExpectation}
+      AND (SELECT COUNT(*) FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}) = ${plan.notificationOutboxCount}
       AND (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)}) = ${inventory.availableCount}
       AND (SELECT dude_inventory_mode FROM commerce_authority_control WHERE singleton = 1) = ${sqlString(inventory.mode)}
       AND EXISTS (SELECT 1 FROM commerce_authority_control_lease
@@ -4819,6 +4826,8 @@ function readCommerceD1WipeOutcome(
       (SELECT COUNT(*) FROM commerce_documents
         WHERE drop_id = ${sqlString(dropId)}) AS target_count,
       ${claimCountSql} AS claim_count,
+      (SELECT COUNT(*) FROM commerce_notification_outbox
+        WHERE drop_id = ${sqlString(dropId)}) AS notification_outbox_count,
       (SELECT COUNT(*) FROM commerce_inventory_drops
         WHERE drop_id = ${sqlString(dropId)}) AS inventory_count,
       (SELECT COUNT(*) FROM commerce_available_dudes
@@ -4837,6 +4846,7 @@ function readCommerceD1WipeOutcome(
   const databaseNowMs = Number(row.database_now_ms);
   const targetCount = Number(row.target_count);
   const claimCount = Number(row.claim_count);
+  const notificationOutboxCount = Number(row.notification_outbox_count);
   const inventoryCount = Number(row.inventory_count);
   const availableCount = Number(row.available_count);
   const guardCount = Number(row.guard_count);
@@ -4851,6 +4861,7 @@ function readCommerceD1WipeOutcome(
     databaseNowMs - pausedAtMs < COMMERCE_WIPE_D1_PAUSE_THRESHOLD_MS ||
     !Number.isSafeInteger(targetCount) ||
     !Number.isSafeInteger(claimCount) ||
+    !Number.isSafeInteger(notificationOutboxCount) ||
     !Number.isSafeInteger(inventoryCount) ||
     !Number.isSafeInteger(availableCount) ||
     !Number.isSafeInteger(guardCount)
@@ -4861,6 +4872,7 @@ function readCommerceD1WipeOutcome(
     documentsRevision === plan.authority.documentsRevision + revisionDelta &&
     targetCount === 0 &&
     claimCount === 0 &&
+    notificationOutboxCount === 0 &&
     inventoryCount === 0 &&
     availableCount === 0 &&
     guardCount === expectedGuardCount

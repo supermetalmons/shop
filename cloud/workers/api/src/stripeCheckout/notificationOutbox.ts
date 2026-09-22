@@ -21,8 +21,9 @@ type PublicationOptions = StripeTerminalNotificationStoreOptions & {
 };
 
 function validJobIdentity(args: PublicationOptions, claim: NotificationClaim, job: NotificationEmailJobV1): boolean {
-  const { checkout, outbox } = claim.state;
-  if (job.context.dropId !== args.dropId || job.jobId !== outbox.jobIds[job.kind as keyof typeof outbox.jobIds]) {
+  const checkout = claim.checkout;
+  const outbox = claim.record;
+  if (job.context.dropId !== args.dropId || job.jobId !== outbox.entries.find((entry) => entry.kind === job.kind)?.jobId) {
     return false;
   }
   if (outbox.outcome === 'manual_review') {
@@ -40,13 +41,15 @@ async function prepareNotificationJobs(
   args: PublicationOptions,
   claim: NotificationClaim,
 ): Promise<NotificationEmailJobV1[]> {
-  const { checkout, outbox } = claim.state;
-  let jobs = outbox.jobs;
+  const checkout = claim.checkout;
+  const outbox = claim.record;
+  let jobs: NotificationEmailJobV1[] | undefined = outbox.entries.every((entry) => entry.state !== 'pending' || entry.payload)
+    ? outbox.entries.flatMap((entry) => entry.payload ? [entry.payload] : []) : undefined;
   if (!jobs) {
     const prepared = await prepareStripeCheckoutTerminalNotifications({
       dropId: args.dropId,
       sessionId: args.sessionId,
-      jobIds: outbox.jobIds,
+      jobIds: Object.fromEntries(outbox.entries.map((entry) => [entry.kind, entry.jobId])),
       dependencies: {
         loadCheckout: async () => ({
           path: `drops/${args.dropId}/stripeCheckouts/${args.sessionId}`,
@@ -65,8 +68,10 @@ async function prepareNotificationJobs(
       throw new Error(`stripe_terminal_notification_${prepared.reason || 'invalid-outcome'}`);
     }
     jobs = prepared.jobs;
-    if (!await persistStripeTerminalNotificationJobs(args, claim, jobs)) throw new Error('stripe_terminal_notification_claim_lost');
   }
+  const stored = await persistStripeTerminalNotificationJobs(args, claim, jobs);
+  if (!stored) throw new Error('stripe_terminal_notification_claim_lost');
+  jobs = stored.entries.flatMap((entry) => entry.payload ? [entry.payload] : []);
   if (jobs.some((job) => !validJobIdentity(args, claim, job))) {
     throw new Error('stripe_terminal_notification_job_identity_invalid');
   }
@@ -99,17 +104,17 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
     return await publishClaimedNotificationBatch<StripeCheckoutTerminalPublicationResult>({
       signal: args.signal,
       nowMs: args.nowMs || Date.now,
-      expiresAtMs: claim.expiresAtMs,
-      retryUntilMs: claim.retryUntilMs,
+      expiresAtMs: claim.record.claimExpiresAtMs!,
+      retryUntilMs: claim.record.retryUntilMs,
       queue: args.queue,
       prepareAndPersist: () => prepareNotificationJobs(args, claim),
       createExpiredClaimError: () => new Error('stripe_terminal_notification_claim_expired'),
       finalize: async (jobs) => {
-        const finalized = await markStripeTerminalNotificationsQueued(cleanupPublication(args), claim);
+        const finalized = await markStripeTerminalNotificationsQueued(cleanupPublication(args), claim, jobs);
         if (!finalized) throw new Error('stripe_terminal_notification_finalization_lost');
         console.log({ event: 'stripe_terminal_notifications_queued', dropId: args.dropId,
           sessionId: args.sessionId, jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })) });
-        return { outcome: claim.state.outbox.outcome, publication: 'queued', queuedJobs: jobs.length };
+        return { outcome: claim.record.outcome!, publication: 'queued', queuedJobs: jobs.length };
       },
       releaseUnusedClaim: async () => {
         await releaseStripeTerminalNotificationClaim(cleanupPublication(args), claim);

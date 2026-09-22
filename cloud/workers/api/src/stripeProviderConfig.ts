@@ -3,8 +3,8 @@ import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.j
 import { isRecord } from './dataAccess.js';
 
 export type StripeApiMode = StripeCheckoutMode;
-export type StripeProviderEnv = Partial<Pick<Env,
-  'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'
+export type StripeProviderEnv = Partial<Record<
+  'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE', string
 >>;
 
 export const STRIPE_API_VERSION = '2026-07-29.dahlia' satisfies Stripe.LatestApiVersion;

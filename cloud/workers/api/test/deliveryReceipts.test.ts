@@ -52,6 +52,7 @@ import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts
 import {
   OWNER, SIGNATURE, READY_NOTIFICATION_NOW_MS,
   nativeDeliveryContext, notificationQueue, readyNotificationOrderFields, deliveryCleanupContext,
+  withoutNotificationFields, seedReadyNotificationOutbox,
 } from './deliveryStoreTestSupport.ts';
 
 function receiptAuthDatabase(): D1Database {
@@ -279,9 +280,10 @@ test('unfiltered recovery uses indexed owner candidates, identity filtering, ord
         if (currentBatch === 1) {
           seedCommerceDocument(harness, {
             key: commerceKeys.deliveryOrder('card_nft_2', '3'),
-            data: readyNotificationOrderFields(3, true) as never,
+            data: withoutNotificationFields(readyNotificationOrderFields(3, true)),
             version: 2,
           });
+          seedReadyNotificationOutbox(harness, 3, readyNotificationOrderFields(3, true));
         }
       }, () => undefined);
       return result;
@@ -354,7 +356,7 @@ test('receipt API reports notification claim read failures as unavailable withou
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7), {
     observeCall: (call) => {
       if (failClaimReads && call.method === 'batch' && call.statements.some(({ sql }) =>
-        /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql))) {
+        /FROM commerce_notification_outbox/.test(sql))) {
         failedReads += 1;
         throw new Error('D1_ERROR: network connection lost');
       }

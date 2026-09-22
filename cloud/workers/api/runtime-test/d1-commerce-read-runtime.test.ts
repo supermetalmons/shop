@@ -1,3 +1,5 @@
+import { LEGACY_NOTIFICATION_FIELDS, type NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
+import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepository.ts';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,12 +36,30 @@ function insertDocument(
     key.kind,
     key.dropId,
     key.documentId,
-    JSON.stringify(data),
+    JSON.stringify(Object.fromEntries(Object.entries(data).filter(([name]) => !LEGACY_NOTIFICATION_FIELDS.includes(name as typeof LEGACY_NOTIFICATION_FIELDS[number])))),
     '2026-01-01T00:00:00.000Z',
     '2026-01-01T00:00:00.000Z',
     processedAt?.seconds ?? null,
     processedAt?.nanos ?? null,
   );
+}
+
+function insertOutbox(
+  db: D1Database,
+  key: CommerceDocumentKey,
+  dueAtMs: number,
+  family: NotificationOutboxFamily = 'ready',
+  outcome: 'fulfilled' | 'manual_review' = 'fulfilled',
+) {
+  return notificationOutboxWriteStatement(db, {
+    parentPath: key.path, dropId: key.dropId!, family, generation: crypto.randomUUID(), revision: 1,
+    outcome: family === 'stripe_terminal' ? outcome : null, state: 'pending',
+    entries: [{ kind: family === 'stripe_terminal' && outcome === 'manual_review' ? 'stripe_checkout_manual_review' : 'buyer_order_received',
+      jobId: crypto.randomUUID(),
+      idempotencyKey: `${key.dropId}:${key.documentId}:${outcome === 'manual_review' ? 'stripe_manual_review' : 'order_received'}`, state: 'pending' }],
+    attemptCount: 0, nextAttemptAtMs: dueAtMs, claimId: null, claimExpiresAtMs: null,
+    retryUntilMs: 21_600_000, createdAtMs: 0, updatedAtMs: 0, lastErrorCode: null,
+  });
 }
 
 test('document-path migration backfills a populated Commerce D1 in the real runtime', async (context) => {
@@ -174,6 +194,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0010_dude_inventory.sql',
       '0011_stripe_order_disputes.sql',
       '0012_stripe_identity_lookup_indexes.sql',
+      '0013_notification_outbox.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -201,6 +222,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
         SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
         WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing' WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_notification_outbox_control SET preparation_state = 'ready',
+        source_documents_revision = 0, prepared_at_ms = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_notification_outbox_control SET storage_mode = 'table' WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -310,6 +335,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
         SET documents_revision = documents_revision + 1,
           updated_at_ms = updated_at_ms + 1
         WHERE singleton = 1`),
+    ]);
+    await env.COMMERCE_DB.batch([
+      insertOutbox(env.COMMERCE_DB, deliveryKey, 0),
+      ...[10, 11].map((expiry) => insertOutbox(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', `notification-${expiry}`), expiry)),
+      insertOutbox(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), 10, 'stripe_terminal'),
     ]);
     const commerceBeforeChargeback = (await env.COMMERCE_DB.prepare(`SELECT document_path,
       document_json, version, update_time FROM commerce_documents ORDER BY document_path`).all()).results;
@@ -575,6 +605,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
           WHERE singleton = 1`),
       ]);
     }
+    for (let offset = 0; offset < 128; offset += 32) {
+      await env.COMMERCE_DB.batch(Array.from({ length: 32 }, (_, index) =>
+        insertOutbox(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', `paused-${offset + index}`), 1_000)));
+    }
     let observedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
     const observedBatchSizes: number[] = [];
     const observedPreparedSql: string[] = [];
@@ -696,14 +730,14 @@ test('commerce repository reads and transaction guards run through the real D1 r
     );
     const dueReadyRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(dueReadyRowsRead), true);
-    assert.equal(dueReadyRowsRead <= 10, true);
-    const readyDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_ready_notifications_due'));
+    assert.equal(dueReadyRowsRead <= 10, true, `Due notification query read ${dueReadyRowsRead} rows: ${observedPreparedSql.join("\n")}`);
+    const readyDueSql = observedPreparedSql.find((sql) => sql.includes('commerce_notification_outbox') && sql.includes('next_attempt_at_ms'));
     assert.ok(readyDueSql);
     const readyDuePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${readyDueSql}`)
       .bind(10, 8)
       .all<{ detail: string }>();
     const readyDuePlanDetails = readyDuePlan.results.map((row) => row.detail).join('\n');
-    assert.match(readyDuePlanDetails, /SEARCH commerce_documents USING INDEX commerce_ready_notifications_due\b/);
+    assert.match(readyDuePlanDetails, /SEARCH .* USING (?:COVERING )?INDEX commerce_notification_outbox_family_due\b/);
     assert.doesNotMatch(readyDuePlanDetails, /SCAN commerce_documents|USE TEMP B-TREE/i);
 
     assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
@@ -745,6 +779,58 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const missingOwnerRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(missingOwnerRowsRead), true);
     assert.equal(missingOwnerRowsRead <= 4, true);
+
+    const notificationOwner = 'large-notification-owner';
+    for (let offset = 0; offset < 1000; offset += 50) {
+      const completedKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `completed-${offset + index}`));
+      const otherKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `other-${offset + index}`));
+      const ineligibleKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `ineligible-${offset + index}`));
+      await env.COMMERCE_DB.batch([
+        ...completedKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'ready_to_ship' })),
+        ...otherKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: 'other-notification-owner', status: 'ready_to_ship' })),
+        ...ineligibleKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'processing' })),
+        env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
+      ]);
+      await env.COMMERCE_DB.batch([...otherKeys, ...ineligibleKeys].map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
+    }
+    observedBatchResults = undefined;
+    assert.deepEqual(await observedRepository.queryPendingReadyNotifications({ owner: notificationOwner, limit: 8 }), []);
+    const emptyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(emptyNotificationRowsRead <= 4, true, `Empty notification lookup read ${emptyNotificationRowsRead} rows`);
+    const activeNotificationKeys = ['active-1', 'active-2'].map((id) => commerceKeys.deliveryOrder('notification-load', id));
+    await env.COMMERCE_DB.batch([
+      ...activeNotificationKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'ready_to_ship' })),
+      env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
+    ]);
+    await env.COMMERCE_DB.batch(activeNotificationKeys.map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
+    observedBatchResults = undefined;
+    observedPreparedSql.length = 0;
+    assert.deepEqual((await observedRepository.queryPendingReadyNotifications({ owner: notificationOwner, limit: 1 }))
+      .map((record) => record.key.path), [activeNotificationKeys[0].path]);
+    const matchingNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(matchingNotificationRowsRead <= 8, true, `Matching notification lookup read ${matchingNotificationRowsRead} rows`);
+    const ownerNotificationSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_pending_owner_path'));
+    assert.ok(ownerNotificationSql);
+    const ownerNotificationPlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${ownerNotificationSql}`)
+      .bind(notificationOwner, 1).all<{ detail: string }>();
+    assert.match(ownerNotificationPlan.results.map((row) => row.detail).join('\n'),
+      /SEARCH pending USING (?:COVERING )?INDEX commerce_notification_outbox_pending_owner_path/);
+    assert.deepEqual((await observedRepository.queryPendingReadyNotifications({
+      owner: notificationOwner, limit: 1, startAfterPath: activeNotificationKeys[0].path,
+    })).map((record) => record.key.path), [activeNotificationKeys[1].path]);
+    const originalNotification = await repository.notificationOutbox.get(activeNotificationKeys[0].path, 'ready');
+    assert.ok(originalNotification);
+    await repository.run(Date.now(), (unit) => unit.update(activeNotificationKeys[0], { owner: 'transferred-notification-owner' }));
+    assert.deepEqual(await repository.notificationOutbox.get(activeNotificationKeys[0].path, 'ready'), originalNotification);
+    assert.deepEqual((await observedRepository.queryPendingReadyNotifications({ owner: 'transferred-notification-owner', limit: 8 }))
+      .map((record) => record.key.path), [activeNotificationKeys[0].path]);
+    await repository.run(Date.now(), async (unit) => {
+      await unit.update(activeNotificationKeys[0], { owner: notificationOwner });
+      await unit.cancelNotificationOutbox(activeNotificationKeys[0].path, 'ready');
+    });
+    assert.deepEqual(await observedRepository.queryPendingReadyNotifications({ owner: 'transferred-notification-owner', limit: 8 }), []);
+    assert.deepEqual((await observedRepository.queryPendingReadyNotifications({ owner: notificationOwner, limit: 8 }))
+      .map((record) => record.key.path), [activeNotificationKeys[1].path]);
 
     const indexedSessionId = 'cs_live_indexed';
     const indexedPaymentIntentId = 'pi_indexed';
@@ -806,6 +892,61 @@ test('commerce repository reads and transaction guards run through the real D1 r
         assert.doesNotMatch(matchedPlanDetails, /SCAN commerce_documents/i);
       }
     }
+
+    for (let offset = 0; offset < 1000; offset += 50) {
+      const keys = Array.from({ length: 50 }, (_, index) => commerceKeys.stripeCheckout('stripe-due-load', `cs_inactive_${offset + index}`));
+      await env.COMMERCE_DB.batch([
+        ...keys.map((key, index) => insertDocument(env.COMMERCE_DB, key, {
+          status: index % 2 ? 'processing' : 'fulfillment_pending', manualRefundReviewRequired: true,
+        })),
+        env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
+      ]);
+      await env.COMMERCE_DB.batch(keys.map((key) => insertOutbox(env.COMMERCE_DB, key, 0, 'stripe_terminal', 'manual_review')));
+    }
+    const suspendedKey = commerceKeys.stripeCheckout('stripe-due-load', 'cs_inactive_0');
+    const suspendedOutbox = await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal');
+    assert.ok(suspendedOutbox);
+    for (const analyze of [false, true]) {
+      if (analyze) await env.COMMERCE_DB.prepare('ANALYZE').run();
+      observedBatchResults = undefined;
+      assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(5, 20), []);
+      const rowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+      assert.ok(Number.isSafeInteger(rowsRead) && rowsRead <= 4,
+        `Suspended Stripe notification query read ${rowsRead} rows (analyzed: ${analyze})`);
+    }
+    const stripeDueKeys = ['cs_due_a', 'cs_due_b', 'cs_due_earlier', 'cs_due_future']
+      .map((id) => commerceKeys.stripeCheckout('stripe-due-load', id));
+    const stripeDueTimes = [2, 2, 1, 6];
+    await env.COMMERCE_DB.batch([
+      ...stripeDueKeys.map((key) => insertDocument(env.COMMERCE_DB, key, {
+        status: 'fulfillment_failed', manualRefundReviewRequired: true,
+      })),
+      env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
+    ]);
+    await env.COMMERCE_DB.batch(stripeDueKeys.map((key, index) =>
+      insertOutbox(env.COMMERCE_DB, key, stripeDueTimes[index], 'stripe_terminal', 'manual_review')));
+    observedBatchResults = undefined;
+    observedPreparedSql.length = 0;
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 2)).map((record) => record.key.path),
+      [stripeDueKeys[2].path, stripeDueKeys[0].path]);
+    const matchedStripeDueRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.ok(Number.isSafeInteger(matchedStripeDueRowsRead) && matchedStripeDueRowsRead <= 12,
+      `Matching Stripe notification query read ${matchedStripeDueRowsRead} rows`);
+    const stripeDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_stripe_due_at'));
+    assert.ok(stripeDueSql);
+    const stripeDuePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${stripeDueSql}`)
+      .bind(5, 2).all<{ detail: string }>();
+    const stripeDuePlanDetails = stripeDuePlan.results.map((row) => row.detail).join('\n');
+    assert.match(stripeDuePlanDetails, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);
+    assert.doesNotMatch(stripeDuePlanDetails, /SCAN (?:commerce_documents|document|outbox)|USE TEMP B-TREE/i);
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 20)).map((record) => record.key.path),
+      [stripeDueKeys[2].path, stripeDueKeys[0].path, stripeDueKeys[1].path]);
+    await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { status: 'fulfillment_failed' }));
+    assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(0, 20)).map((record) => record.key.path), [suspendedKey.path]);
+    await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { manualRefundReviewRequired: false }));
+    assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(0, 20), []);
+    assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
 
     const pausedReadUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:24.000Z'));
     const pausedWriteUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:25.000Z'));
@@ -870,7 +1011,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     );
     const pausedRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedRowsRead), true);
-    assert.equal(pausedRowsRead <= 4, true);
+    assert.equal(pausedRowsRead <= 4, true, `Paused pending notifications read ${pausedRowsRead} rows`);
 
     observedBatchResults = undefined;
     await assert.rejects(
@@ -889,7 +1030,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     );
     const pausedTerminalNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedTerminalNotificationRowsRead), true);
-    assert.equal(pausedTerminalNotificationRowsRead <= 4, true);
+    assert.equal(pausedTerminalNotificationRowsRead <= 4, true, `Paused Stripe notifications read ${pausedTerminalNotificationRowsRead} rows`);
 
     observedBatchResults = undefined;
     await assert.rejects(
@@ -898,7 +1039,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     );
     const pausedReadyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedReadyNotificationRowsRead), true);
-    assert.equal(pausedReadyNotificationRowsRead <= 4, true);
+    assert.equal(pausedReadyNotificationRowsRead <= 4, true, `Paused ready notifications read ${pausedReadyNotificationRowsRead} rows`);
 
     for (const read of [
       () => observedRepository.queryDeliveryHistory({ owners: ['named-owner'] }),

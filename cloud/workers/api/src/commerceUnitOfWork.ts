@@ -15,6 +15,7 @@ import {
 } from './commerceQueries.js';
 import {
   assertDocumentIdentity,
+  commerceKeyFromPath,
   cloneData,
   compareTimestamps,
   dataField,
@@ -42,6 +43,14 @@ import {
   unavailableCommerce,
   unavailableCommerceData,
 } from './commerceRepositorySupport.js';
+import {
+  notificationOutboxState,
+  parseNotificationOutboxRecord,
+  type NotificationOutboxCreate,
+  type NotificationOutboxFamily,
+  type NotificationOutboxRecord,
+} from '../../../../shared/notificationOutbox.js';
+import { NotificationOutboxRepository, notificationOutboxWriteStatement } from './notificationOutboxRepository.js';
 
 type PendingDocument = StoredDocument | null;
 
@@ -97,6 +106,8 @@ export class CommerceUnitOfWork {
   private readonly expectations = new Map<string, DocumentExpectation>();
   private readonly original = new Map<string, StoredDocument | null>();
   private readonly pending = new Map<string, PendingDocument>();
+  private readonly originalOutboxes = new Map<string, NotificationOutboxRecord | null>();
+  private readonly pendingOutboxes = new Map<string, NotificationOutboxRecord>();
   private readonly createPaths = new Set<string>();
   private readonly existingPaths = new Set<string>();
   private commitTimestamp: CommerceTimestamp;
@@ -116,6 +127,72 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const document = await this.load(key);
     return document ? publicRecord<T>(document) : null;
+  }
+
+  async getNotificationOutbox(parentPath: string, family: NotificationOutboxFamily): Promise<NotificationOutboxRecord | null> {
+    this.assertOpen();
+    const key = JSON.stringify([parentPath, family]);
+    if (!this.originalOutboxes.has(key)) {
+      this.originalOutboxes.set(key, await new NotificationOutboxRepository(this.db).get(parentPath, family));
+    }
+    const value = this.pendingOutboxes.get(key) ?? this.originalOutboxes.get(key);
+    return value ? parseNotificationOutboxRecord(value) : null;
+  }
+
+  async enqueueNotificationOutbox(input: NotificationOutboxCreate): Promise<NotificationOutboxRecord> {
+    const current = await this.getNotificationOutbox(input.parentPath, input.family);
+    if (current) return current;
+    return this.stageNotificationOutbox(input, null);
+  }
+
+  async replaceNotificationOutbox(input: NotificationOutboxCreate): Promise<NotificationOutboxRecord> {
+    const current = await this.getNotificationOutbox(input.parentPath, input.family);
+    if (current?.generation === input.generation) {
+      throw new CommerceRepositoryError('invalid-argument', 'A notification replacement requires a new generation.');
+    }
+    return this.stageNotificationOutbox(input, current);
+  }
+
+  async cancelNotificationOutbox(
+    parentPath: string,
+    family: NotificationOutboxFamily,
+    reason = 'source-ineligible',
+  ): Promise<NotificationOutboxRecord | null> {
+    const current = await this.getNotificationOutbox(parentPath, family);
+    if (!current || current.state === 'queued' || current.state === 'cancelled') return current;
+    const next = parseNotificationOutboxRecord({
+      ...current, state: 'cancelled',
+      revision: (this.originalOutboxes.get(JSON.stringify([parentPath, family]))?.revision ?? 0) + 1,
+      entries: current.entries.map(({ payload: _payload, ...entry }) => entry),
+      nextAttemptAtMs: null, claimId: null, claimExpiresAtMs: null, lastErrorCode: reason,
+      updatedAtMs: Math.max(current.updatedAtMs, timestampMilliseconds(this.commitTimestamp)),
+    });
+    this.pendingOutboxes.set(JSON.stringify([parentPath, family]), next);
+    return parseNotificationOutboxRecord(next);
+  }
+
+  private async stageNotificationOutbox(
+    input: NotificationOutboxCreate,
+    current: NotificationOutboxRecord | null,
+  ): Promise<NotificationOutboxRecord> {
+    const parentKey = commerceKeyFromPath(input.parentPath);
+    if (!parentKey || parentKey.dropId !== input.dropId ||
+      parentKey.kind !== (input.family === 'stripe_terminal' ? 'stripe_checkout' : 'delivery_order')) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid notification outbox parent.');
+    }
+    const parent = this.pending.has(input.parentPath) ? this.pending.get(input.parentPath) : await this.load(parentKey);
+    if (!parent) throw new CommerceWriteConflict('failed-precondition');
+    const nowMs = Math.max(current?.updatedAtMs ?? 0, timestampMilliseconds(this.commitTimestamp));
+    const state = notificationOutboxState(input.entries);
+    const next = parseNotificationOutboxRecord({
+      ...input, outcome: input.outcome ?? null, state,
+      revision: (this.originalOutboxes.get(JSON.stringify([input.parentPath, input.family]))?.revision ?? 0) + 1,
+      attemptCount: 0,
+      nextAttemptAtMs: state === 'pending' ? nowMs : null,
+      claimId: null, claimExpiresAtMs: null, createdAtMs: nowMs, updatedAtMs: nowMs, lastErrorCode: null,
+    });
+    this.pendingOutboxes.set(JSON.stringify([input.parentPath, input.family]), next);
+    return parseNotificationOutboxRecord(next);
   }
 
   async getMany<T extends CommerceDocumentData>(
@@ -225,8 +302,8 @@ export class CommerceUnitOfWork {
     this.closed = true;
     const documentExpectationsJson = JSON.stringify(this.serializedDocumentExpectations());
     const deliveryOwnerExpectationsJson = JSON.stringify(this.serializedDeliveryOwnerExpectations());
-    if (!this.pending.size) {
-      if (!this.deliveryOwnerExpectations.size && !this.expectations.size) {
+    if (!this.pending.size && !this.pendingOutboxes.size) {
+      if (!this.deliveryOwnerExpectations.size && !this.expectations.size && !this.originalOutboxes.size) {
         await authority(this.db);
         return;
       }
@@ -237,13 +314,14 @@ export class CommerceUnitOfWork {
     const statements: D1PreparedStatement[] = [
       this.db.prepare(`INSERT INTO commerce_commit_guards (
         guard_id, expectations_json, delivery_owner_expectations_json,
-        expected_documents_revision, created_at_ms
-      ) VALUES (?, ?, ?, ?, ?)`).bind(
+        expected_documents_revision, created_at_ms, notification_outbox_expectations_json
+      ) VALUES (?, ?, ?, ?, ?, ?)`).bind(
         guardId,
         documentExpectationsJson,
         deliveryOwnerExpectationsJson,
         null,
         timestampMilliseconds(this.commitTimestamp),
+        this.serializedOutboxExpectations(),
       ),
     ];
     for (const [path, document] of this.pending) {
@@ -277,7 +355,10 @@ export class CommerceUnitOfWork {
         document.processedAt?.nanos ?? null,
       ));
     }
-    statements.push(this.db.prepare(`UPDATE commerce_authority_control
+    for (const outbox of this.pendingOutboxes.values()) {
+      statements.push(notificationOutboxWriteStatement(this.db, outbox));
+    }
+    if (this.pending.size) statements.push(this.db.prepare(`UPDATE commerce_authority_control
       SET documents_revision = documents_revision + 1, updated_at_ms = ? WHERE singleton = 1`)
       .bind(timestampMilliseconds(this.commitTimestamp)));
     statements.push(this.db.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId));
@@ -285,7 +366,7 @@ export class CommerceUnitOfWork {
       await this.db.batch(statements);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (/authority is not d1/i.test(message)) {
+      if (/authority is not d1|notification outbox is unavailable/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
       if (/transaction conflict|UNIQUE constraint|cannot start a transaction within a transaction/i.test(message)) {
@@ -304,6 +385,7 @@ export class CommerceUnitOfWork {
   rollback(): void {
     this.closed = true;
     this.pending.clear();
+    this.pendingOutboxes.clear();
   }
 
   private assertOpen(): void {
@@ -318,6 +400,13 @@ export class CommerceUnitOfWork {
   private serializedDocumentExpectations(): DocumentExpectation[] {
     return Array.from(this.expectations.values())
       .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  }
+
+  private serializedOutboxExpectations(): string {
+    return JSON.stringify(Array.from(this.originalOutboxes, ([key, value]) => {
+      const [parentPath, family] = JSON.parse(key) as [string, NotificationOutboxFamily];
+      return { parentPath, family, revision: value?.revision ?? -1, generation: value?.generation ?? null };
+    }));
   }
 
   private async revalidateReadOnly(
@@ -352,12 +441,21 @@ export class CommerceUnitOfWork {
                 CAST(json_extract(expectation.value, '$.pathRevision') AS INTEGER)
             )
         ) AS conflict`).bind(documentExpectationsJson),
+        ...(this.originalOutboxes.size ? [this.db.prepare(`SELECT CASE WHEN ? = 0 THEN 0 ELSE
+          NOT EXISTS (SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'table') OR EXISTS (
+            SELECT 1 FROM json_each(?) AS expectation
+            LEFT JOIN commerce_notification_outbox AS outbox
+              ON outbox.parent_path = json_extract(expectation.value, '$.parentPath')
+              AND outbox.family = json_extract(expectation.value, '$.family')
+            WHERE COALESCE(outbox.revision, -1) <> json_extract(expectation.value, '$.revision')
+              OR outbox.generation IS NOT json_extract(expectation.value, '$.generation')
+          ) END AS conflict`).bind(this.originalOutboxes.size, this.serializedOutboxExpectations())] : []),
       ]);
     } catch (error) {
       throw unavailableCommerce(error);
     }
-    if (results.length !== 3) throw unavailableCommerce();
-    const [authorityResult, ownerResult, documentResult] = results;
+    if (results.length !== 3 + Number(this.originalOutboxes.size > 0)) throw unavailableCommerce();
+    const [authorityResult, ownerResult, documentResult, outboxResult] = results;
     if (
       authorityResult.success !== true ||
       authorityResult.results.length !== 1 ||
@@ -367,7 +465,7 @@ export class CommerceUnitOfWork {
     if (control.state !== 'd1') throw unavailableCommerce();
     if (
       parseConflictResult(ownerResult) ||
-      parseConflictResult(documentResult)
+      parseConflictResult(documentResult) || (outboxResult && parseConflictResult(outboxResult))
     ) {
       throw new CommerceWriteConflict();
     }

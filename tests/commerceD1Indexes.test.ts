@@ -228,7 +228,7 @@ function planDetails(db: DatabaseSync, query: CommerceSqlQuery): string {
   return db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings).map((row) => String(row.detail)).join('\n');
 }
 
-test('Commerce migrations create the exact current authority and guard schema', () => {
+test('Commerce migrations through the ready due index preserve the authority and guard schema', () => {
   const db = database();
   try {
     const authority = { ...db.prepare('SELECT * FROM commerce_authority_control').get()! };
@@ -1246,6 +1246,9 @@ test('Admin IRL Workflow status lookup searches its operation index without temp
 
 test('Commerce baseline keeps required covering and partial indexes', () => {
   const db = database();
+  for (const name of ['0010_dude_inventory.sql', '0011_stripe_order_disputes.sql', '0012_stripe_identity_lookup_indexes.sql', '0013_notification_outbox.sql']) {
+    db.exec(readFileSync(new URL(`../cloud/workers/api/commerce-migrations/${name}`, import.meta.url), 'utf8'));
+  }
   try {
     const insert = db.prepare(`INSERT INTO commerce_documents (
       document_path, document_kind, drop_id, document_id, document_json,
@@ -1271,6 +1274,23 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     ]);
     assert.equal(db.prepare(`SELECT documents_revision FROM commerce_authority_control
       WHERE singleton = 1`).get()!.documents_revision, 1);
+    pauseCommerceForMigration(db, true);
+    insertAuthorityLease(db);
+    db.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 1`);
+    for (const [id, kind] of [[100, 'buyer_order_received'], [200, 'shipper_ready_to_ship']] as const) {
+      db.prepare(`INSERT INTO commerce_notification_outbox (
+        parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count,
+        next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
+      ) VALUES (?, 'ready', 'drop', '00000000-0000-4000-8000-000000000601', NULL, 'pending', ?, 1, 0, 0, NULL, NULL, 10000, 0, 0, NULL)`)
+        .run(`drops/drop/deliveryOrders/${id}`, JSON.stringify([{
+          kind, jobId: '00000000-0000-4000-8000-000000000602',
+          idempotencyKey: `drop:${id}:${kind === 'buyer_order_received' ? 'order_received' : 'ready_to_ship'}`, state: 'pending',
+        }]));
+    }
+    db.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
+      UPDATE commerce_notification_outbox_control SET storage_mode = 'table';
+      DELETE FROM commerce_authority_control_lease`);
+    resumeCommerceAfterMigration(db);
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
       'owner',
@@ -1327,6 +1347,11 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     );
     assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_reconciliation_due'), ['null', 'document_path']);
     assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_due'), ['next_attempt_at_ms', 'parent_path', 'family']);
+    assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_family_due'), ['family', 'next_attempt_at_ms', 'parent_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_pending_path'), ['family', 'parent_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_pending_owner_path'), ['owner', 'family', 'parent_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_stripe_due_at'), ['next_attempt_at_ms', 'parent_path']);
     const ownerQueryPlan = planDetails(db, deliveryOrdersByOwnerQuery({ owner: 'owner', limit: 450 }));
     assert.match(ownerQueryPlan, /SEARCH document USING INDEX commerce_documents_delivery_owner_path \(owner=\?\)/);
     assert.match(ownerQueryPlan, /SEARCH path_revision .*\(document_path=\?\) LEFT-JOIN/);
@@ -1356,13 +1381,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       for (const startAfterPath of [undefined, 'drops/drop/deliveryOrders/100']) {
         const query = pendingReadyNotificationsQuery({ limit: 8, owner, startAfterPath });
         const plan = planDetails(db, query);
-        for (const kind of ['buyer', 'shipper']) {
-          const indexName = `commerce_delivery_orders_${kind}_notifications_pending${owner ? '_owner_path' : ''}`;
-          const search = owner
-            ? (startAfterPath ? String.raw` \(owner=\? AND document_path>\?\)` : String.raw` \(owner=\?\)`)
-            : (startAfterPath ? String.raw` \(document_path>\?\)` : String.raw`\b`);
-          assert.match(plan, new RegExp(`${indexName}${search}`));
-        }
+        assert.match(plan, owner
+          ? /SEARCH pending USING (?:COVERING )?INDEX commerce_notification_outbox_pending_owner_path/
+          : /SEARCH outbox USING (?:COVERING )?INDEX commerce_notification_outbox_pending_path/);
+        assert.doesNotMatch(plan, /USE TEMP B-TREE/);
         assert.deepEqual(db.prepare(query.sql).all(...query.bindings).map((row) => row.document_path),
           startAfterPath
             ? ['drops/drop/deliveryOrders/200']
@@ -1375,11 +1397,32 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     );
     assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkouts_reconciliation_due/);
     const terminalNotificationPlan = planDetails(db, dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
-    assert.match(terminalNotificationPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_terminal_notifications_due/);
+    assert.match(terminalNotificationPlan, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);
+    assert.doesNotMatch(terminalNotificationPlan, /USE TEMP B-TREE/);
+    const readyQuery = dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 });
+    const readyPlan = planDetails(db, readyQuery);
+    assert.match(readyPlan, /SEARCH outbox USING (?:COVERING )?INDEX commerce_notification_outbox_family_due/);
+    assert.doesNotMatch(readyPlan, /USE TEMP B-TREE/);
+    assert.deepEqual(db.prepare(readyQuery.sql).all(...readyQuery.bindings).map((row) => row.document_path),
+      ['drops/drop/deliveryOrders/100', 'drops/drop/deliveryOrders/200']);
   } finally {
     db.close();
   }
 });
+
+function legacyReadyDueQuery(db: DatabaseSync, dueAtMs: number): CommerceSqlQuery {
+  const index = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commerce_ready_notifications_due'").get()!.sql);
+  const expression = index.match(/CASE WHEN[\s\S]*?END/)![0];
+  return {
+    sql: `SELECT document_path FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY commerce_ready_notifications_due
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document_kind = 'delivery_order' AND status = 'ready_to_ship'
+        AND (buyer_notification_state = 'pending' OR shipper_notification_state = 'pending')
+        AND (${expression}) <= ? ORDER BY (${expression}), document_path LIMIT 8`,
+    bindings: [dueAtMs],
+  };
+}
 
 test('ready-notification due index upgrades populated Commerce without changing documents or old indexes', () => {
   const db = databaseBeforeWorkflowOperationIndex();
@@ -1414,7 +1457,7 @@ test('ready-notification due index upgrades populated Commerce without changing 
     assert.deepEqual(db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all(), before);
     assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
     assert.deepEqual(db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all(), revisionsBefore);
-    const query = dueReadyNotificationsQuery({ dueAtMs: 10, limit: 8 });
+    const query = legacyReadyDueQuery(db, 10);
     const plan = planDetails(db, query);
     assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_ready_notifications_due/);
     assert.doesNotMatch(plan, /SCAN commerce_documents|USE TEMP B-TREE/);
@@ -1453,7 +1496,7 @@ test('ready-notification due index treats integral real expiries as leases', () 
         .run('{"status":"ready_to_ship","buyerOrderReceivedEmailState":"pending","readyToShipNotificationPublishClaimId":"claim","readyToShipNotificationPublishClaimExpiresAtMs":10.0}');
     });
     for (const [dueAtMs, expectedCount] of [[9, 0], [10, 1]]) {
-      const query = dueReadyNotificationsQuery({ dueAtMs, limit: 8 });
+      const query = legacyReadyDueQuery(db, dueAtMs);
       assert.equal(db.prepare(query.sql).all(...query.bindings).length, expectedCount);
     }
   } finally {

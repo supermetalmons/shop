@@ -239,6 +239,9 @@ expects a schema that has not been applied.
 `check:commerce-d1 -- --for-deployment`. The standalone database check still
 accepts staged legacy inventory. Use the
 [inventory cutover runbook](scripts/docs/dude_inventory_cutover.md) for the first activation.
+Notification deployment also requires active table storage, or a fully paused and
+verified preparation for the initial publication. Follow the
+[notification outbox cutover runbook](scripts/docs/notification_outbox_cutover.md).
 
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
@@ -492,23 +495,23 @@ The shared five-minute scheduled trigger recovers Stripe fulfillment,
 pack-status projections, and ready-to-ship notification work. Do not disable
 the schedule to control one subsystem.
 
-Ready-to-ship email publication and recovery live in dedicated notification
-modules. The scheduled recovery query reads up to eight due Commerce D1 orders
-and attempts publication for at most four. Valid active publication claims stay
-out of the query until their ten-minute lease expires. Missing or malformed
-claims are immediately eligible for inspection; unclaimed orders sort before
-expired claims, then by document path. Recovery does not use an Ops D1 cursor.
-The four-attempt cap, six-hour retry window, job IDs, and idempotency keys are
-preserved. Before enqueue, publication saves each complete email job in
-`buyerOrderReceivedEmailJob` or `shipperReadyToShipEmailJob` under its active
-claim. Retries reuse the saved payload even if order content changes. Each
-payload is removed when its marker becomes queued or failed; pending siblings
-keep theirs. Existing pending markers acquire payloads lazily without a backfill.
-Partial publication retains pending markers and their lease; a cancellation
-before enqueue releases the claim and restores its attempt count while retaining
-any saved payloads.
-Reconcile stored job IDs with Queue and Resend outcomes before replaying work
-because a Queue publish may have succeeded before its D1 marker update.
+Ready-to-ship, Stripe terminal, and shipped email publication state lives in
+`COMMERCE_DB.commerce_notification_outbox` after its one-way activation. Publication
+claims and retries update outbox rows without changing order/check-out versions.
+Ready and shipped reconciliation each inspect at most eight due rows and publish
+at most four; existing Stripe limits remain unchanged. Publication keeps ten-minute
+claims, four attempts, six-hour retry windows, and stable job IDs/idempotency keys.
+Rendered payloads are persisted before sending and reused exactly across retries;
+Queue acceptance or cancellation removes payloads. Failed entries remain available
+for investigation. Shipped-email intent is saved with fulfillment status and cron
+recovers enqueue failures automatically; explicit resend uses a new generation.
+
+Use `npm run notification-outbox-control -- status` for mode, readiness, pending
+age, failures, and expired claims. The public shipped state remains `pending` or
+`queued`; `queued` means Queue acceptance. Reconcile saved identities with Queue
+and Resend outcomes before deliberately replaying work. The
+[cutover runbook](scripts/docs/notification_outbox_cutover.md) covers backfill,
+legacy ambiguous shipped markers, maintenance, and recovery.
 
 Queue a synthetic notification email through the production API:
 

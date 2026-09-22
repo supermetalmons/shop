@@ -125,6 +125,7 @@ test('atomic publication retries recheck the lease before creating order, marker
     nowMs: () => NOW_MS,
     repository: {
       get: repository.get.bind(repository),
+      notificationOutbox: repository.notificationOutbox,
       run: (now, operation) => repository.run(now, async (transaction) => {
         attempts += 1;
         const result = await operation(transaction);

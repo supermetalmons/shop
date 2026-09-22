@@ -19,7 +19,7 @@ import { CommerceWriteConflict, D1CommerceRepository, commerceKeys, type Commerc
 import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';
 import {
   OWNER, SIGNATURE, SECOND_SIGNATURE, READY_NOTIFICATION_NOW_MS,
-  nativeDeliveryContext, readyNotificationOrderFields,
+  nativeDeliveryContext, readyNotificationOrderFields, withoutNotificationFields, seedReadyNotificationOutbox,
 } from './deliveryStoreTestSupport.ts';
 
 test('recovery mutation contracts require delivery keys and typed lease fields', () => {
@@ -101,8 +101,7 @@ test('pending ready recovery queries all outbox marker states', async () => {
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7, true));
   const result = await runPendingReadyNotificationQuery(native.context, OWNER);
   assert.equal(result.length, 1);
-  assert.equal(result[0].data.buyerOrderReceivedEmailState, 'pending');
-  assert.equal(result[0].data.shipperReadyToShipEmailState, 'pending');
+  assert.deepEqual((await native.context.repository.notificationOutbox.get(result[0].key.path, 'ready'))?.entries.map((entry) => entry.state), ['pending', 'pending']);
 });
 
 test('pending ready recovery pages past malformed identities', async () => {
@@ -113,16 +112,17 @@ test('pending ready recovery pages past malformed identities', async () => {
       await unit.create(
         commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
         {
-          ...readyNotificationOrderFields(deliveryId),
+          ...withoutNotificationFields(readyNotificationOrderFields(deliveryId)),
           deliveryId: 999,
         },
       );
     }
     await unit.create(
       commerceKeys.deliveryOrder('card_nft_2', '9'),
-      readyNotificationOrderFields(9),
+      withoutNotificationFields(readyNotificationOrderFields(9)),
     );
   });
+  for (let id = 1; id <= 9; id += 1) seedReadyNotificationOutbox(harness, id, readyNotificationOrderFields(id));
   const context = {
     repository: new D1CommerceRepository(harness.db),
     nowMs: READY_NOTIFICATION_NOW_MS,

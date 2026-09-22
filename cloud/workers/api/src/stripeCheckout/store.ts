@@ -23,7 +23,7 @@ import {
   type StripeOffchainDeliveryOrderDocumentInput,
 } from './contract.js';
 import { StripeCheckoutProcessingAttemptOwnershipCheckError } from './errors.js';
-import { createStripeTerminalNotificationOutboxFields } from './notificationOutboxState.js';
+import { enqueueStripeTerminalNotifications } from './notificationOutboxState.js';
 
 const STRIPE_MANUAL_REFUND_REASON = 'fulfillment_failed_after_payment';
 export const STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS = 2;
@@ -158,7 +158,6 @@ export type StripeCheckoutFulfillmentCompletionFields = {
 };
 
 function stripeCheckoutFulfilledUpdate(params: {
-  before: Record<string, unknown> | null;
   deliveryId: number;
   metadataId?: number;
   metadataIds?: number[];
@@ -169,7 +168,6 @@ function stripeCheckoutFulfilledUpdate(params: {
   const metadataId = metadataIds.length === 1 ? metadataIds[0] : undefined;
   return {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
-    ...createStripeTerminalNotificationOutboxFields(params.before, 'fulfilled'),
     deliveryId: params.deliveryId,
     ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: commerceFieldValue.delete() } : {}),
     ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
@@ -229,7 +227,9 @@ export async function markStripeCheckoutFulfillmentFulfilled(
       if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
       if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
     }
-    await updateStripeCheckout(tx, checkoutKey, stripeCheckoutFulfilledUpdate({ ...params, before: checkout?.fields ?? null }));
+    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+      outcome: 'fulfilled', deliveryId: params.deliveryId, nowMs: commerce.nowMs() });
+    await updateStripeCheckout(tx, checkoutKey, stripeCheckoutFulfilledUpdate(params));
     return { status: 'fulfilled' as const };
   }, { shouldRetry: (error) => error.code === 'aborted' }).catch((err) => {
     if (!params.processingAttemptId) throw err;
@@ -400,7 +400,6 @@ export async function markStripeCheckoutFulfillmentFailed(
       {
         ...identityUpdate,
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-        ...createStripeTerminalNotificationOutboxFields(checkout?.fields ?? null, 'manual_review'),
         failedAt: commerceFieldValue.serverTimestamp(),
         lastFulfillmentError: error,
         manualRefundReviewRequired: true,
@@ -410,6 +409,8 @@ export async function markStripeCheckoutFulfillmentFailed(
         updatedAt: commerceFieldValue.serverTimestamp(),
       },
     );
+    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+      outcome: 'manual_review', nowMs: commerce.nowMs() });
     return { status: 'failed' as const };
   }, { shouldRetry: (error) => error.code === 'aborted' });
 }
@@ -443,10 +444,11 @@ export function publishStripeOffchainDeliveryOrder(params: {
           return { checkoutStatus };
         }
         if (checkoutStatus === 'fulfilled') {
+          await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+            outcome: 'fulfilled', deliveryId: existingOrder.deliveryId, nowMs: commerce.nowMs() });
           await updateStripeCheckout(
             tx, checkoutKey,
             stripeCheckoutFulfilledUpdate({
-              before: checkout?.fields ?? null,
               deliveryId: existingOrder.deliveryId,
               metadataId: existingOrder.metadataId,
               metadataIds: existingOrder.metadataIds,
@@ -508,10 +510,11 @@ export function publishStripeOffchainDeliveryOrder(params: {
       } satisfies StripeReceiptClaimCreate));
     }
     if (checkoutStatus === 'fulfilled') {
+      await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+        outcome: 'fulfilled', deliveryId, nowMs: commerce.nowMs() });
       await updateStripeCheckout(
         tx, checkoutKey,
         stripeCheckoutFulfilledUpdate({
-          before: checkout?.fields ?? null,
           deliveryId,
           ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
           metadataIds,

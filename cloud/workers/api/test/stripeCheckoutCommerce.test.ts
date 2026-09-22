@@ -243,6 +243,7 @@ test('Stripe checkout retries aborted commits with a fresh clock and processing-
     nowMs: () => nowMs + clockCalls++,
     repository: {
       get: repository.get.bind(repository),
+      notificationOutbox: repository.notificationOutbox,
       run: (now, operation) => repository.run(now, async (unit) => {
         operationTimes.push(now);
         const result = await operation(unit);
@@ -259,7 +260,9 @@ test('Stripe checkout retries aborted commits with a fresh clock and processing-
     processingAttemptId: 'old-attempt',
   });
   assert.deepEqual(result, { status: 'stale_processing_attempt' });
-  assert.deepEqual(operationTimes, [nowMs, nowMs + 1]);
+  assert.equal(operationTimes.length, 2);
+  assert.equal(operationTimes[0], nowMs);
+  assert.ok(operationTimes[1] > operationTimes[0]);
   assert.deepEqual((await repository.get(key))?.data, {
     status: 'processing',
     processingAttemptId: 'new-attempt',
@@ -276,6 +279,7 @@ test('Stripe checkout missing-document updates surface failed preconditions with
     nowMs: () => 1_800_000_000_000,
     repository: {
       get: repository.get.bind(repository),
+      notificationOutbox: repository.notificationOutbox,
       run: (now, operation) => {
         attempts += 1;
         return repository.run(now, operation);

@@ -1,6 +1,6 @@
 import {
   createReadyToShipNotificationJobs,
-  createReadyToShipNotificationOutbox,
+  planReadyToShipNotifications,
 } from './readyToShipNotifications.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import {
@@ -18,14 +18,14 @@ export async function createStripeReadyToShipNotificationJobs(args: {
   if (args.order.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || args.order.status !== 'ready_to_ship') {
     return [];
   }
-  const outbox = createReadyToShipNotificationOutbox({
+  const planned = planReadyToShipNotifications({
     before: {},
     after: args.order,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     createJobId: args.createJobId,
   });
-  const pending = outbox.pending.map((marker) => {
+  const pending = planned.map((marker) => {
     const jobId = args.jobIds?.[marker.kind];
     if (jobId === undefined) return marker;
     if (!isNotificationEmailJobId(jobId)) throw new Error('Stripe ready-to-ship notification job ID is invalid');

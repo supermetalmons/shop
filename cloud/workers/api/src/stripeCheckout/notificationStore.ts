@@ -1,23 +1,13 @@
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
-import { commerceFieldValue, commerceKeys } from '../commerceRepository.js';
+import type { NotificationOutboxRecord } from '../../../../../shared/notificationOutbox.js';
+import { commerceKeys } from '../commerceRepository.js';
+import { runCommerceTransaction } from '../commerceTransactions.js';
 import {
-  claimNotificationOutbox,
-  updateClaimedNotificationOutbox,
-  type NotificationOutboxAdapter,
-  type NotificationOutboxClaim,
-  type NotificationOutboxTarget,
+  claimNotificationOutbox, markClaimedNotificationQueued, persistClaimedNotificationJobs,
+  releaseNotificationOutboxClaim,
 } from '../notificationOutboxStore.js';
-import { stripeCheckoutWriteData, type StripeCheckoutCommerceContext } from './commerce.js';
-import {
-  createStripeTerminalNotificationOutboxFields,
-  parseStripeTerminalNotificationOutbox,
-  stripeTerminalNotificationOutcome,
-  STRIPE_TERMINAL_NOTIFICATION_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD,
-  type StripeTerminalNotificationOutbox,
-  type StripeTerminalNotificationOutcome,
-} from './notificationOutboxState.js';
+import type { StripeCheckoutCommerceContext } from './commerce.js';
+import { enqueueStripeTerminalNotifications, stripeTerminalNotificationOutcome, type StripeTerminalNotificationOutcome } from './notificationOutboxState.js';
 
 export type StripeTerminalNotificationStoreOptions = {
   dropId: string;
@@ -28,14 +18,6 @@ export type StripeTerminalNotificationStoreOptions = {
   nowMs?: () => number;
 };
 
-type StripeTerminalNotificationUpdate = {
-  stripeTerminalNotification?: StripeTerminalNotificationOutbox;
-  stripeTerminalNotificationState?: 'pending' | 'queued' | 'failed';
-  stripeTerminalNotificationNextAttemptAtMs?: number | ReturnType<typeof commerceFieldValue.delete>;
-  stripeTerminalNotificationQueuedAt?: ReturnType<typeof commerceFieldValue.serverTimestamp>;
-  stripeTerminalNotificationLastError?: string | ReturnType<typeof commerceFieldValue.delete>;
-};
-
 export type StripeCheckoutTerminalPublicationResult = {
   outcome: StripeTerminalNotificationOutcome | 'not_terminal' | 'invalid';
   publication: 'queued' | 'busy' | 'failed' | 'none';
@@ -43,16 +25,13 @@ export type StripeCheckoutTerminalPublicationResult = {
   reason?: string;
 };
 
-type NotificationState = {
+export type NotificationClaim = {
+  record: NotificationOutboxRecord;
   checkout: Record<string, unknown>;
-  outbox: StripeTerminalNotificationOutbox;
+  parentVersion: number;
 };
 
-export type NotificationClaim = NotificationOutboxClaim<NotificationState>;
-
-type ClaimResult =
-  | { claim: NotificationClaim }
-  | { result: StripeCheckoutTerminalPublicationResult };
+type ClaimResult = { claim: NotificationClaim } | { result: StripeCheckoutTerminalPublicationResult };
 
 function skipped(
   outcome: StripeCheckoutTerminalPublicationResult['outcome'],
@@ -62,144 +41,77 @@ function skipped(
   return { outcome, publication, queuedJobs: 0, ...(reason ? { reason } : {}) };
 }
 
-function notificationOutboxTarget(args: StripeTerminalNotificationStoreOptions): NotificationOutboxTarget {
-  return {
-    context: args.commerce,
-    key: commerceKeys.stripeCheckout(args.dropId, args.sessionId),
-    retry: { shouldRetry: (error) => error.code === 'aborted' },
-  };
-}
-
 export async function claimStripeTerminalNotifications(args: StripeTerminalNotificationStoreOptions): Promise<ClaimResult> {
-  const target = notificationOutboxTarget(args);
-  const fail = (outcome: StripeTerminalNotificationOutcome, reason: string): {
-    result: StripeCheckoutTerminalPublicationResult;
-    values: StripeTerminalNotificationUpdate;
-  } => ({
-    result: skipped(outcome, 'failed', reason),
-    values: {
-      [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'failed',
-      [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
-      stripeTerminalNotificationLastError: reason,
-    },
-  });
-  const adapter: NotificationOutboxAdapter<NotificationState, StripeCheckoutTerminalPublicationResult> = {
-    missing: skipped('invalid', 'none', 'missing_checkout'),
-    inspect: (document, nowMs) => {
-      const checkout = document.data;
-      const outcome = stripeTerminalNotificationOutcome(checkout);
-      if (!outcome) return { result: skipped('not_terminal', 'none') };
-      const hasMarker = Object.hasOwn(checkout, STRIPE_TERMINAL_NOTIFICATION_FIELD) ||
-        Object.hasOwn(checkout, STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD);
-      if (!hasMarker) {
-        if (!args.initializeMissing) return { result: skipped(outcome, 'none', 'missing_outbox') };
-        Object.assign(checkout, createStripeTerminalNotificationOutboxFields(null, outcome, nowMs));
-      }
-      const state = checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD];
-      const outbox = parseStripeTerminalNotificationOutbox(checkout[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
-      const dueAtMs = checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD];
-      if (!outbox || outbox.outcome !== outcome) return fail(outcome, 'invalid-notification-state');
-      if (state === 'queued' || state === 'failed') return { result: skipped(outcome, state) };
-      if (state !== 'pending' || !Number.isSafeInteger(dueAtMs) || Number(dueAtMs) < 0) {
-        return fail(outcome, 'invalid-notification-state');
-      }
-      return {
-        state: { checkout, outbox },
-        activeUntilMs: Number(dueAtMs),
-        attemptCount: outbox.attemptCount,
-        retryUntilMs: outbox.retryUntilMs,
-      };
-    },
-    busy: ({ outbox }) => skipped(outbox.outcome, 'busy'),
-    exhausted: ({ outbox }) => fail(outbox.outcome, 'manual-review-required'),
-    claim: ({ checkout, outbox }, lease) => {
-      const claimed: StripeTerminalNotificationOutbox = {
-        ...outbox,
-        attemptCount: lease.attemptCount,
-        claimId: lease.claimId,
-        retryUntilMs: lease.retryUntilMs,
-      };
-      return {
-        state: { checkout, outbox: claimed },
-        values: stripeCheckoutWriteData({
-          [STRIPE_TERMINAL_NOTIFICATION_FIELD]: claimed,
-          [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'pending',
-          [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: lease.expiresAtMs,
-        } satisfies StripeTerminalNotificationUpdate),
-      };
-    },
-  };
+  args.signal.throwIfAborted();
+  const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
+  const document = await args.commerce.repository.get(key);
+  if (!document) return { result: skipped('invalid', 'none', 'missing_checkout') };
+  const outcome = stripeTerminalNotificationOutcome(document.data);
+  if (!outcome) return { result: skipped('not_terminal', 'none') };
+  let record = await args.commerce.repository.notificationOutbox.get(key.path, 'stripe_terminal');
+  if (record && record.outcome !== outcome && record.state === 'pending') {
+    await args.commerce.repository.notificationOutbox.compareAndSet({
+      expected: record, parentVersion: document.version, nowMs: (args.nowMs || args.commerce.nowMs)(),
+      changes: { state: 'cancelled', claimId: null, claimExpiresAtMs: null, nextAttemptAtMs: null,
+        lastErrorCode: 'checkout-not-terminal', entries: record.entries.map(({ payload: _payload, ...entry }) => entry) },
+    });
+  }
+  if (!record && args.initializeMissing) {
+    await runCommerceTransaction(args.commerce, async (transaction) => {
+      const current = await transaction.get(key);
+      if (!current || stripeTerminalNotificationOutcome(current.data) !== outcome) return;
+      await enqueueStripeTerminalNotifications({
+        transaction, key, before: current.data, outcome, deliveryId: Number(current.data.deliveryId),
+        nowMs: (args.nowMs || args.commerce.nowMs)(), initializeMissing: true,
+      });
+    });
+    record = await args.commerce.repository.notificationOutbox.get(key.path, 'stripe_terminal');
+  }
+  if (!record) return { result: skipped(outcome, 'none', 'missing_outbox') };
+  if (record.outcome !== outcome || record.state === 'cancelled') {
+    return { result: skipped(outcome, 'none', 'obsolete_outbox') };
+  }
+  if (record.state !== 'pending') return { result: skipped(outcome, record.state) };
   const result = await claimNotificationOutbox({
-    target: {
-      ...target,
-      read: (transaction) => {
-        args.signal.throwIfAborted();
-        return transaction.get(target.key);
-      },
-    },
-    adapter,
-    nowMs: args.nowMs || Date.now,
+    repository: args.commerce.repository, parentPath: key.path, family: 'stripe_terminal',
+    nowMs: args.nowMs || args.commerce.nowMs, signal: args.signal, parentVersion: document.version,
   });
-  return result.outcome === 'claimed' ? { claim: result.claim } : { result: result.result };
+  if (result.outcome !== 'claimed') return { result: skipped(outcome,
+    result.outcome === 'none' ? result.record?.state === 'queued' ? 'queued' : 'none' : result.outcome,
+    result.outcome === 'failed' ? result.record?.lastErrorCode || 'manual-review-required' : undefined) };
+  return { claim: { record: result.claim, checkout: document.data, parentVersion: document.version } };
 }
 
-async function updateClaim(
-  args: StripeTerminalNotificationStoreOptions,
-  claim: NotificationClaim,
-  update: (outbox: StripeTerminalNotificationOutbox) => StripeTerminalNotificationUpdate,
-): Promise<boolean> {
-  return updateClaimedNotificationOutbox({
-    target: notificationOutboxTarget(args),
-    claimId: claim.claimId,
-    inspect: (document) => {
-      const checkout = document.data;
-      const outbox = parseStripeTerminalNotificationOutbox(checkout[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
-      if (
-        !outbox || checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD] !== 'pending' ||
-        stripeTerminalNotificationOutcome(checkout) !== claim.state.outbox.outcome
-      ) return null;
-      return { claimId: outbox.claimId, state: outbox };
-    },
-    lost: () => false,
-    update: (outbox) => ({ values: stripeCheckoutWriteData(update(outbox)), result: true }),
-  });
+function claimOptions(args: StripeTerminalNotificationStoreOptions, claim: NotificationClaim) {
+  return { repository: args.commerce.repository, claim: claim.record, nowMs: args.nowMs || args.commerce.nowMs };
 }
 
-export function persistStripeTerminalNotificationJobs(
+export async function persistStripeTerminalNotificationJobs(
   args: StripeTerminalNotificationStoreOptions,
   claim: NotificationClaim,
   jobs: NotificationEmailJobV1[],
-): Promise<boolean> {
-  return updateClaim(args, claim, (outbox) => ({
-    [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...outbox, jobs },
-  }));
+): Promise<NotificationOutboxRecord | null> {
+  const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
+  const current = await args.commerce.repository.get(key);
+  if (!current || stripeTerminalNotificationOutcome(current.data) !== claim.record.outcome) return null;
+  return persistClaimedNotificationJobs({ ...claimOptions(args, claim), jobs, parentVersion: current.version, completeMissing: true });
 }
 
-export function markStripeTerminalNotificationsQueued(
+export async function markStripeTerminalNotificationsQueued(
+  args: StripeTerminalNotificationStoreOptions,
+  claim: NotificationClaim,
+  jobs: readonly NotificationEmailJobV1[],
+): Promise<boolean> {
+  if (!jobs.length) {
+    const current = await args.commerce.repository.notificationOutbox.get(claim.record.parentPath, 'stripe_terminal');
+    return current?.generation === claim.record.generation && current.state === 'queued';
+  }
+  return Boolean(await markClaimedNotificationQueued({ ...claimOptions(args, claim), jobs }));
+}
+
+export async function releaseStripeTerminalNotificationClaim(
   args: StripeTerminalNotificationStoreOptions,
   claim: NotificationClaim,
 ): Promise<boolean> {
-  return updateClaim(args, claim, (outbox) => {
-    const { claimId: _claimId, jobs: _jobs, ...complete } = outbox;
-    return {
-      [STRIPE_TERMINAL_NOTIFICATION_FIELD]: complete,
-      [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'queued',
-      [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
-      stripeTerminalNotificationQueuedAt: commerceFieldValue.serverTimestamp(),
-      stripeTerminalNotificationLastError: commerceFieldValue.delete(),
-    };
-  });
-}
-
-export function releaseStripeTerminalNotificationClaim(
-  args: StripeTerminalNotificationStoreOptions,
-  claim: NotificationClaim,
-): Promise<boolean> {
-  return updateClaim(args, claim, (outbox) => {
-    const { claimId: _claimId, ...released } = outbox;
-    return {
-      [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...released, attemptCount: outbox.attemptCount - 1 },
-      [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: (args.nowMs || Date.now)(),
-    };
-  });
+  return Boolean(await releaseNotificationOutboxClaim(claimOptions(args, claim)));
 }

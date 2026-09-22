@@ -51,6 +51,7 @@ function commerceReconcilers(calls: string[] = []): Omit<ScheduledReconcilers, '
     packStatus: async () => { calls.push('packStatus'); return 0; },
     stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
     stripeNotifications: async () => { calls.push('stripeNotifications'); return 0; },
+    shippedNotifications: async () => { calls.push('shippedNotifications'); return 0; },
   };
 }
 

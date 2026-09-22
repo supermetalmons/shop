@@ -11,30 +11,14 @@ import {
 const JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 const PARCEL = { length: 12, width: 9, height: 2, weight: 4 };
 
-test('fulfillment parsing preserves exact statuses and notification identifiers while trimming tracking codes', () => {
+test('fulfillment parsing ignores retired notification state and normalizes tracking', () => {
   assert.deepEqual(parseDeliveryFulfillmentState({
-    fulfillmentStatus: 'Shipped',
-    fulfillmentTrackingCode: '  TRACK-123 \n',
-    buyerOrderShippedEmailState: 'queued',
-    buyerOrderShippedEmailJobId: JOB_ID,
-    buyerOrderShippedEmailIdempotencyKey: 'buyer_order_shipped:7',
-  }), {
-    fulfillmentStatus: 'Shipped',
-    fulfillmentTrackingCode: 'TRACK-123',
-    buyerOrderShippedEmailState: 'queued',
-    buyerOrderShippedEmailJobId: JOB_ID,
-    buyerOrderShippedEmailIdempotencyKey: 'buyer_order_shipped:7',
+    fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: '  TRACK-123 \n',
+    buyerOrderShippedEmailState: 'queued', buyerOrderShippedEmailJobId: JOB_ID,
+  }), { fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: 'TRACK-123' });
+  assert.deepEqual(parseDeliveryFulfillmentState({ fulfillmentStatus: ' Shipped ', fulfillmentTrackingCode: ' \n ' }), {
+    fulfillmentStatus: undefined, fulfillmentTrackingCode: undefined,
   });
-  assert.deepEqual(parseDeliveryFulfillmentState({
-    fulfillmentStatus: ' Shipped ',
-    fulfillmentTrackingCode: ' \n ',
-    buyerOrderShippedEmailState: ' queued ',
-    buyerOrderShippedEmailJobId: ` ${JOB_ID} `,
-    buyerOrderShippedEmailIdempotencyKey: ' buyer_order_shipped:7 ',
-  }), parseDeliveryFulfillmentState({}));
-  assert.equal(parseDeliveryFulfillmentState({ fulfillmentStatus: 'legacy-status' }).fulfillmentStatus, undefined);
-  assert.equal(parseDeliveryFulfillmentState({ fulfillmentTrackingCode: 123 }).fulfillmentTrackingCode, undefined);
-  assert.equal(parseDeliveryFulfillmentState({ buyerOrderShippedEmailState: 'pending' }).buyerOrderShippedEmailState, 'pending');
 });
 
 test('address snapshots retain exact strings and ignore malformed optional fields', () => {

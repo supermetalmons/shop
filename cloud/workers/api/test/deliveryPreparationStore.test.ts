@@ -11,7 +11,7 @@ import {
   type PreparedDeliveryCommerceContext,
   type PreparedDeliveryInput,
 } from '../src/deliveryPreparationStore.ts';
-import type { ReadyToShipNotificationUpdates } from '../src/deliveryOrderUpdates.ts';
+import type { NotificationOutboxMutation } from '../../../../shared/notificationOutbox.ts';
 import type { DeliveryPackStatusProjectionUpdates } from '../src/deliveryPackStatusOutbox.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
@@ -69,7 +69,7 @@ function checkWriteContracts(context: PreparedDeliveryCommerceContext): void {
   // @ts-expect-error Only the supported delivery item kinds may be persisted.
   void createPreparedDeliveryOrder(context, { ...input, items: [{ assetId: 'asset', kind: 'checkout', refId: 7 }] });
   // @ts-expect-error Notification states are a closed domain union.
-  const invalidNotification: ReadyToShipNotificationUpdates = { buyerOrderReceivedEmailState: 'done' };
+  const invalidNotification: NotificationOutboxMutation = { state: 'done' };
   // @ts-expect-error Projection payloads cannot mutate unrelated commerce fields.
   const invalidProjection: DeliveryPackStatusProjectionUpdates = { owner: 'another-wallet' };
   void invalidNotification;

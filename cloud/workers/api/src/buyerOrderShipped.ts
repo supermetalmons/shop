@@ -30,6 +30,8 @@ export type BuyerOrderShippedDecision =
       clearPending: boolean;
       reason:
         | 'already-queued'
+        | 'publication-failed'
+        | 'cancelled'
         | 'ignored-source'
         | 'invalid-delivery-id'
         | 'missing-or-invalid-recipient'
@@ -52,6 +54,15 @@ function shippedWithTracking(order: DeliveryOrder): boolean {
   });
 }
 
+export function isBuyerOrderShippedNotificationEligible(order: DeliveryOrder): boolean {
+  const address = order.addressSnapshot;
+  return shippedWithTracking(order) && Boolean(validateNotificationEmailRecipient(
+    address && typeof address === 'object' && !Array.isArray(address)
+      ? (address as Record<string, unknown>).email
+      : undefined,
+  ));
+}
+
 export function decideBuyerOrderShippedNotification(args: {
   before: DeliveryOrder;
   after: DeliveryOrder;
@@ -64,6 +75,9 @@ export function decideBuyerOrderShippedNotification(args: {
   createJobId?: () => string;
 }): BuyerOrderShippedDecision {
   const pending = args.emailState === BUYER_ORDER_SHIPPED_EMAIL_PENDING;
+  if (!args.forceRetry && (args.emailState === 'failed' || args.emailState === 'cancelled')) {
+    return { kind: 'skip', clearPending: false, reason: args.emailState === 'failed' ? 'publication-failed' : 'cancelled' };
+  }
   if (args.emailState === BUYER_ORDER_SHIPPED_EMAIL_QUEUED && !args.forceRetry) {
     return { kind: 'skip', clearPending: false, reason: 'already-queued' };
   }

@@ -35,6 +35,9 @@ import {
   unavailableCommerceData,
 } from './commerceRepositorySupport.js';
 import { CommerceUnitOfWork } from './commerceUnitOfWork.js';
+import {
+  NotificationOutboxRepository, notificationOutboxAuthorityStatement, requireNotificationOutboxAuthority,
+} from './notificationOutboxRepository.js';
 
 export * from './commerceRepositoryTypes.js';
 export { commerceKeyFromPath, commerceKeys } from './commerceDocumentCodec.js';
@@ -45,7 +48,11 @@ export {
 export { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 
 export class D1CommerceRepository {
-  constructor(private readonly db: D1Database) {}
+  readonly notificationOutbox: NotificationOutboxRepository;
+
+  constructor(private readonly db: D1Database) {
+    this.notificationOutbox = new NotificationOutboxRepository(db);
+  }
 
   async getDudeInventory(args: Readonly<{
     dropFamily: string;
@@ -203,7 +210,7 @@ export class D1CommerceRepository {
   }): Promise<CommerceDocumentRecord[]> {
     const limit = positiveQueryLimit(args.limit);
     const query = pendingReadyNotificationsQuery({ ...args, limit });
-    const result = await this.readBatchWithAuthority(
+    const result = await this.readNotificationBatch(
       () => this.db.prepare(query.sql).bind(...query.bindings),
     );
     reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
@@ -219,7 +226,7 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid ready-notification cutoff.');
     }
     const query = dueReadyNotificationsQuery({ ...args, limit });
-    const result = await this.readBatchWithAuthority(
+    const result = await this.readNotificationBatch(
       () => this.db.prepare(query.sql).bind(...query.bindings),
     );
     reportInefficientQuery('due-ready-notifications', 'delivery_order', result, result.results.length);
@@ -261,7 +268,7 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe notification cutoff.');
     }
     const query = dueStripeTerminalNotificationsQuery({ dueAtMs, limit });
-    const result = await this.readBatchWithAuthority(
+    const result = await this.readNotificationBatch(
       () => this.db.prepare(query.sql).bind(...query.bindings),
     );
     reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
@@ -327,5 +334,14 @@ export class D1CommerceRepository {
     const control = parseAuthorityControl(authorityResult.results[0]);
     if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
     return dataResult;
+  }
+
+  private async readNotificationBatch(statement: () => D1PreparedStatement): Promise<D1Result<Record<string, unknown>>> {
+    const results = await this.db.batch<Record<string, unknown>>([
+      notificationOutboxAuthorityStatement(this.db), statement(),
+    ]);
+    if (results.length !== 2 || !results[1].success || !Array.isArray(results[1].results)) throw unavailableCommerceData();
+    requireNotificationOutboxAuthority(results[0]);
+    return results[1];
   }
 }

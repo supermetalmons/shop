@@ -214,6 +214,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
         calls.push('stripeNotifications');
         return 0;
       },
+      shippedNotifications: async () => { calls.push('shippedNotifications'); return 0; },
     }),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
@@ -221,7 +222,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       return true;
     },
   );
-  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'stripe', 'stripeNotifications']);
+  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'shippedNotifications', 'stripe', 'stripeNotifications']);
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {

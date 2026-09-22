@@ -49,10 +49,9 @@ import { saveD1ProfileAddress } from './profileD1.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
-  createBuyerOrderShippedNotificationJob,
 } from './buyerOrderShipped.js';
+import { publishBuyerOrderShippedNotification } from './buyerOrderShippedOutbox.js';
 import {
-  markDeliveryOrderShippedEmailQueued,
   setDeliveryOrderFulfillment,
   type DeliveryOrderFulfillmentResponse,
 } from './deliveryOrderCommerce.js';
@@ -201,7 +200,7 @@ async function updateFulfillmentStatus(
   env: ProfileWriteEnv,
   dependencies: Pick<
     ProfileWriteDependencies,
-    'createNotificationJobId' | 'error' | 'log' | 'warn'
+    'createNotificationJobId' | 'error' | 'log' | 'warn' | 'nowMs'
   >,
 ): Promise<DeliveryOrderFulfillmentResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -231,53 +230,22 @@ async function updateFulfillmentStatus(
     deliveryId: mutation.decision.deliveryId,
     jobId: mutation.decision.jobId,
   };
-  let job;
   try {
-    job = await createBuyerOrderShippedNotificationJob({
-      ...jobContext,
-      idempotencyKey: mutation.decision.idempotencyKey,
-      order: mutation.order,
-    });
     if (!env.NOTIFICATION_EMAIL_QUEUE) throw new Error('Notification email queue binding is unavailable');
-    await env.NOTIFICATION_EMAIL_QUEUE.send(job, { contentType: 'json' });
+    const queued = await publishBuyerOrderShippedNotification({
+      repository: common.repository,
+      parentPath: `drops/${dropId}/deliveryOrders/${body.deliveryId}`,
+      queue: env.NOTIFICATION_EMAIL_QUEUE,
+      signal: common.signal,
+      nowMs: dependencies.nowMs,
+    });
+    if (queued) {
+      dependencies.log({ event: 'buyer_order_shipped_notification_queued', ...jobContext, kind: 'buyer_order_shipped' });
+      return { ...mutation.response, buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED };
+    }
   } catch (error) {
     dependencies.error({
       event: 'buyer_order_shipped_notification_enqueue_failed',
-      ...jobContext,
-      error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-    });
-    throw new ProfileReadError(
-      'unavailable',
-      503,
-      'Order status was saved, but the shipment email could not be queued. Retry saving the status.',
-    );
-  }
-  dependencies.log({
-    event: 'buyer_order_shipped_notification_queued',
-    ...jobContext,
-    kind: job.kind,
-  });
-  try {
-    const marked = await markDeliveryOrderShippedEmailQueued({
-      common,
-      deliveryId: body.deliveryId,
-      dropId,
-      jobId: mutation.decision.jobId,
-    });
-    if (marked) {
-      return {
-        ...mutation.response,
-        buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
-      };
-    }
-    dependencies.warn({
-      event: 'buyer_order_shipped_notification_marker_finalization_failed',
-      ...jobContext,
-      reason: 'pending-marker-changed',
-    });
-  } catch (error) {
-    dependencies.error({
-      event: 'buyer_order_shipped_notification_marker_finalization_failed',
       ...jobContext,
       error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
     });

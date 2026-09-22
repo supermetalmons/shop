@@ -1,13 +1,16 @@
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
+import { planNotificationOutboxBackfill } from '../shared/notificationOutboxMaintenance.ts';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
   commerceD1DocumentIdentity,
+  parseCommerceD1DocumentRow,
   queryRemoteCommerceD1 as defaultQueryRemoteCommerceD1,
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
 import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
-import { READY_NOTIFICATION_DUE_SQL } from '../../shared/readyNotificationDueSql.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
 import {
@@ -20,6 +23,7 @@ import {
   fulfillmentOrdersQuery,
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
+  notificationOutboxDueQuery,
   staleStripeFulfillmentsQuery,
   stripeChargebackLinkedSessionsQuery,
   stripeChargebackMatchedDocumentsQuery,
@@ -31,10 +35,38 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
+  commerce_commit_guard_notification_outbox_validate: ['trigger', 'ab98d81736bc0927987abf669d9b0bffb8d41f5b61a22fa2e6bb2c0905adbca7'],
+  commerce_notification_legacy_insert_fence: ['trigger', '0dbe842e565314c6247a3e8d9a6717daa1df00840f0bc061e5acde00179ed0bf'],
+  commerce_notification_legacy_update_fence: ['trigger', 'd62e43b923b7575c8059821ab57159483f1944b151c39a127ba04aeeed810340'],
+  commerce_notification_outbox: ['table', '929002240cc9b6bdc4ad070cb7b3beff103687c4daa2819d1847e54b4c5be986'],
+  commerce_notification_outbox_control: ['table', '7ba8128b4cbed9569851c913f7c0d7ebb7171728dba0556fca0189808733284e'],
+  commerce_notification_outbox_control_delete_guard: ['trigger', '7066c5566748ee845d3ef223326c2a4176462087f4002538c26e604bd0bef331'],
+  commerce_notification_outbox_control_insert_guard: ['trigger', 'bbd9280a3c7680efc71558459186be0fdf84ac308c04850985c6a970cc807f3f'],
+  commerce_notification_outbox_control_update_guard: ['trigger', 'a8f61963452b798c3763a058fc8c9953507b3d11923086152de60311731c9c89'],
+  commerce_notification_outbox_delete_guard: ['trigger', '0bd6dbf7c0a44193862b61a8ad0484ce7a7795106319fc7b505a889b24706821'],
+  commerce_notification_outbox_drop: ['index', '6695c84402bec160831be68e5a163d104e00293aaa28ccce5b21da74458b04af'],
+  commerce_notification_outbox_due: ['index', '0c41e4ed80645314f38b7a743ff629b8d48094f62c2688eac6d420e5594cba70'],
+  commerce_notification_outbox_family_due: ['index', '77bf8dbb5045e3d29727f5ec1e24ba200e2d2d7703bf1137e365511751e76f3b'],
+  commerce_notification_outbox_insert_guard: ['trigger', 'c0184390d1422d395dd3ee3464a7ec263a99195d8525b63aca2cb93ba5c73352'],
+  commerce_notification_outbox_pending_owner_insert: ['trigger', '289dfdbdd4b62a43efce7c8f7a57f4b344ad5b55722bdfec42f56f547279d51e'],
+  commerce_notification_outbox_pending_owner_path: ['index', 'b12c746376afd70803ab0936f3501f6aab1f6c402da1f5573aeaa8edc7ace346'],
+  commerce_notification_outbox_pending_owner_source: ['trigger', '2cde471901e82575575329a663604ba061c4dcf9755806b72ac14f8478d0dc94'],
+  commerce_notification_outbox_pending_owner_state: ['trigger', '7bcc978359b0ce245db50f451e30a03e52bd45564a7bf49e80839fbae5fc7a17'],
+  commerce_notification_outbox_pending_owners: ['table', '5a8d5783c9d2d2e25648f1bf82b4684519d2f91b3ba36fb986fb831f3fb5da0b'],
+  commerce_notification_outbox_pending_path: ['index', '1359f130f5e0cafc7995d45288f5d2cfe5482cc07bce319b43b831da6ef4d4bf'],
+  commerce_notification_outbox_resume_guard: ['trigger', '0a73b8805ba7d15e3399265969ca02ca5873178b2b7b38a33fb80a1a0f8cf331'],
+  commerce_notification_outbox_stripe_due: ['table', '5afa0b407a916e626402b876a0d3bc2992af426d21e6914c71c7c49b61ef06d7'],
+  commerce_notification_outbox_stripe_due_at: ['index', '8a4d0e2385d715badc63e633140e5b2d2a1b7ab02521fbb04b858ea6d83c5f06'],
+  commerce_notification_outbox_stripe_due_insert: ['trigger', 'b756dc5d600bb1344ffdd08f86848fc7243598ea4113d98879538df3269d17fb'],
+  commerce_notification_outbox_stripe_due_source: ['trigger', '8c13c3a33bad1e89807dfc9740128a3f60e34d41f152a5b3c1f8f9c4d7c8dad4'],
+  commerce_notification_outbox_stripe_due_state: ['trigger', '55a3f2c4ea6b3d140c1fd9a8470d2330ea0dacbe8a45d35b5143c79868b6443e'],
+  commerce_notification_outbox_update_guard: ['trigger', 'f1b74eef1fc6e0fedc0c849a1128f99c7b42285062667de0ca0e709c9d25705c'],
+});
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '376e5c3579dd47c8742fb68171df543c2c35fc144a8c2277d66d68fd73c82b07';
 const COMMIT_GUARD_SCHEMA_FINGERPRINT = '13c79bbc939b01898f4a4ebc429d7d83899158f0e65a54d3b9592290d4884f80';
-const COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT = 'f8195cb0d586aeb91c7e872148f227524a83498a5357e02ae83553a8d888da02';
+const COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT = '1556298f47f92ca475dae746d1a730706cdcc5ff1df34ac21e911ffcbd570c26';
 const DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT = '64fd01604169a0b6c3834a5f88e8dd3b6f08f0d7a9404882ced957aca35225a5';
 const DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
   commerce_delivery_owner_revision_arrival: '46b377200b52c8e68da92a817c05c9184bdd643096fd91dbfde6990d06a34e1c',
@@ -135,12 +167,19 @@ const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_
     document_path
   )
   WHERE document_kind = 'admin_irl_redeem_request'`;
-const READY_NOTIFICATION_DUE_INDEX_SQL = `CREATE INDEX ${READY_NOTIFICATION_DUE_SQL.indexName}
+const READY_NOTIFICATION_DUE_INDEX_SQL = `CREATE INDEX commerce_ready_notifications_due
   ON commerce_documents (
-    ${READY_NOTIFICATION_DUE_SQL.dueAtExpression},
+    CASE WHEN
+      json_type(document_json, '$.readyToShipNotificationPublishClaimId') = 'text' AND
+      json_extract(document_json, '$.readyToShipNotificationPublishClaimId') <> '' AND
+      json_type(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') IN ('integer', 'real') AND
+      json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') BETWEEN 0 AND 9007199254740991 AND
+      json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') = CAST(json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') AS INTEGER)
+    THEN CAST(json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') AS INTEGER) ELSE 0 END,
     document_path
   )
-  WHERE ${READY_NOTIFICATION_DUE_SQL.pendingPredicate}`;
+  WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+    (buyer_notification_state = 'pending' OR shipper_notification_state = 'pending')`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -188,7 +227,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 12 ||
+    migrations.length !== 13 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -200,7 +239,8 @@ export function checkCommerceD1(
     migrations[8].name !== '0009_ready_notification_due_index.sql' ||
     migrations[9].name !== '0010_dude_inventory.sql' ||
     migrations[10].name !== '0011_stripe_order_disputes.sql' ||
-    migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql'
+    migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql' ||
+    migrations[12].name !== '0013_notification_outbox.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -219,6 +259,10 @@ export function checkCommerceD1(
     'commerce_document_path_revisions',
     'commerce_documents',
     'commerce_inventory_drops',
+    'commerce_notification_outbox',
+    'commerce_notification_outbox_control',
+    'commerce_notification_outbox_pending_owners',
+    'commerce_notification_outbox_stripe_due',
     'commerce_wipe_guards',
     'stripe_order_disputes',
   ];
@@ -264,7 +308,7 @@ export function checkCommerceD1(
   safeInteger(authority.documents_revision, 'Commerce document revision');
 
   const authoritativeDocuments = queryRemoteCommerceD1(`SELECT
-    document_path, document_kind, drop_id, document_id, document_json
+    document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
     FROM commerce_documents ORDER BY document_path`);
   for (const row of authoritativeDocuments) {
     const identity = commerceD1DocumentIdentity(String(row.document_path));
@@ -376,7 +420,7 @@ export function checkCommerceD1(
   if (
     authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms,dude_inventory_mode' ||
     commitGuardColumns.join(',') !==
-      'guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json' ||
+      'guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json,notification_outbox_expectations_json' ||
     documentPathRevisionColumns.join(',') !== 'document_path,revision' ||
     leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
     wipeGuardColumns.join(',') !== 'guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision' ||
@@ -430,6 +474,7 @@ export function checkCommerceD1(
     'commerce_delivery_owner_revision_path',
     'commerce_delivery_owner_revision_update_guard',
     ...Object.keys(INVENTORY_TRIGGER_FINGERPRINTS),
+    ...Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name),
   ]);
   const triggers = queryRemoteCommerceD1(`SELECT name FROM sqlite_master
     WHERE type = 'trigger' AND name LIKE 'commerce_%' ORDER BY name`);
@@ -549,7 +594,7 @@ export function checkCommerceD1(
   ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
 
   const readyNotificationDueIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = '${READY_NOTIFICATION_DUE_SQL.indexName}'`);
+    WHERE type = 'index' AND name = 'commerce_ready_notifications_due'`);
   if (
     readyNotificationDueIndex.length !== 1 ||
     normalizedSql(readyNotificationDueIndex[0].sql) !== normalizedSql(READY_NOTIFICATION_DUE_INDEX_SQL)
@@ -563,6 +608,13 @@ export function checkCommerceD1(
     pendingReadyNotificationIndexes.some((row) =>
       normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
   ) fail('Commerce D1 pending ready-notification indexes are invalid.');
+
+  for (const [name, [type, fingerprint]] of Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS)) {
+    const rows = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
+    if (rows.length !== 1 || sqlSchemaFingerprint(String(rows[0].sql)) !== fingerprint) {
+      fail(`Notification outbox schema is invalid: ${name}.`);
+    }
+  }
 
   const queryPlan = (query: CommerceSqlQuery) =>
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN ${renderCommerceQuerySql(query)}`);
@@ -613,14 +665,13 @@ export function checkCommerceD1(
     owner: 'owner',
     startAfterPath: 'drops/a/deliveryOrders/1',
   }));
-  requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending_owner_path');
-  requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending_owner_path');
+  requireSearchIndex(ownerNotificationPlan, 'commerce_notification_outbox_pending_owner_path');
+  requireNoTemporaryBTree(ownerNotificationPlan, 'owner ready-notification');
   const ownerlessNotificationPlan = queryPlan(pendingReadyNotificationsQuery({
     limit: 8,
     startAfterPath: 'drops/a/deliveryOrders/1',
   }));
-  requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending');
-  requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending');
+  requireSearchIndex(ownerlessNotificationPlan, 'commerce_notification_outbox_pending_path');
   requireIndex(
     queryPlan(duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
     'commerce_documents_pack_projection',
@@ -631,11 +682,12 @@ export function checkCommerceD1(
   );
 
   const readyNotificationDuePlan = queryPlan(dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 }));
-  requireSearchIndex(readyNotificationDuePlan, READY_NOTIFICATION_DUE_SQL.indexName);
+  requireSearchIndex(readyNotificationDuePlan, 'commerce_notification_outbox_family_due');
   requireNoTemporaryBTree(readyNotificationDuePlan, 'due ready-notification');
 
   const stripeTerminalNotificationPlan = queryPlan(dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
-  requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_stripe_terminal_notifications_due');
+  requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_notification_outbox_stripe_due_at');
+  requireNoTemporaryBTree(stripeTerminalNotificationPlan, 'Stripe terminal-notification');
 
   const stripeLinkedSessionsPlan = queryPlan(stripeChargebackLinkedSessionsQuery('pi_check'));
   requireIdentitySearchIndex(stripeLinkedSessionsPlan, 'commerce_documents_stripe_payment_intent', '<expr>=?');
@@ -663,6 +715,85 @@ export function checkCommerceD1(
     safeInteger(invalidProcessedTimeRows[0].count, 'Commerce processed-time invalid count') !== 0
   ) fail('Commerce D1 processed-time projections are invalid.');
 
+  const notificationControls = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox_control');
+  const notificationControl = notificationControls[0];
+  if (notificationControls.length !== 1 || !['legacy', 'table'].includes(String(notificationControl.storage_mode)) ||
+    !['idle', 'preparing', 'ready'].includes(String(notificationControl.preparation_state))) fail('Notification outbox control is invalid.');
+  const notificationRows = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox ORDER BY parent_path, family')
+    .map(parseNotificationOutboxRow);
+  const parents = new Map(authoritativeDocuments.map((document) => [document.document_path, document]));
+  for (const row of notificationRows) {
+    const parent = parents.get(row.parentPath);
+    if (!parent || parent.drop_id !== row.dropId || parent.document_kind !==
+      (row.family === 'stripe_terminal' ? 'stripe_checkout' : 'delivery_order')) fail('Notification outbox parent identity is invalid.');
+  }
+  const invalidNotificationOwners = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM (
+    SELECT outbox.parent_path, outbox.family
+    FROM commerce_notification_outbox AS outbox
+    JOIN commerce_documents AS document ON document.document_path = outbox.parent_path
+    LEFT JOIN commerce_notification_outbox_pending_owners AS pending
+      ON pending.parent_path = outbox.parent_path AND pending.family = outbox.family
+    WHERE outbox.state = 'pending' AND document.owner IS NOT NULL
+      AND (outbox.family <> 'ready' OR document.status = 'ready_to_ship')
+      AND (pending.parent_path IS NULL OR pending.owner IS NOT document.owner)
+    UNION ALL
+    SELECT pending.parent_path, pending.family
+    FROM commerce_notification_outbox_pending_owners AS pending
+    LEFT JOIN commerce_notification_outbox AS outbox
+      ON outbox.parent_path = pending.parent_path AND outbox.family = pending.family
+    LEFT JOIN commerce_documents AS document ON document.document_path = pending.parent_path
+    WHERE outbox.state IS NOT 'pending' OR pending.owner IS NOT document.owner
+      OR (pending.family = 'ready' AND document.status IS NOT 'ready_to_ship')
+  )`);
+  if (invalidNotificationOwners.length !== 1 ||
+    safeInteger(invalidNotificationOwners[0].count, 'Notification outbox owner invalid count') !== 0) {
+    fail('Notification outbox pending-owner lookup is inconsistent.');
+  }
+  const invalidStripeDue = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM (
+    SELECT outbox.parent_path
+    FROM commerce_notification_outbox AS outbox
+    JOIN commerce_documents AS document ON document.document_path = outbox.parent_path
+    LEFT JOIN commerce_notification_outbox_stripe_due AS due
+      ON due.parent_path = outbox.parent_path AND due.family = outbox.family
+    WHERE outbox.family = 'stripe_terminal' AND outbox.state = 'pending'
+      AND ((outbox.outcome = 'fulfilled' AND document.status = 'fulfilled') OR
+        (outbox.outcome = 'manual_review' AND document.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1))
+      AND (due.parent_path IS NULL OR due.next_attempt_at_ms IS NOT outbox.next_attempt_at_ms)
+    UNION ALL
+    SELECT due.parent_path FROM commerce_notification_outbox_stripe_due AS due
+    WHERE NOT EXISTS (
+      SELECT 1 FROM commerce_notification_outbox AS outbox
+      JOIN commerce_documents AS document ON document.document_path = outbox.parent_path
+      WHERE outbox.parent_path = due.parent_path AND outbox.family = due.family
+        AND outbox.family = 'stripe_terminal' AND outbox.state = 'pending'
+        AND outbox.next_attempt_at_ms = due.next_attempt_at_ms
+        AND ((outbox.outcome = 'fulfilled' AND document.status = 'fulfilled') OR
+          (outbox.outcome = 'manual_review' AND document.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1))
+    )
+  )`);
+  if (invalidStripeDue.length !== 1 || safeInteger(invalidStripeDue[0].count, 'Stripe notification due invalid count') !== 0) {
+    fail('Notification outbox Stripe due lookup is inconsistent.');
+  }
+  if (notificationControl.storage_mode === 'legacy' && notificationControl.preparation_state === 'ready') {
+    const expected = authoritativeDocuments.map(parseCommerceD1DocumentRow).flatMap(planNotificationOutboxBackfill)
+      .sort((left, right) => left.parentPath.localeCompare(right.parentPath) || left.family.localeCompare(right.family));
+    if (notificationControl.source_documents_revision !== authority.documents_revision ||
+      !isDeepStrictEqual(notificationRows.slice().sort((left, right) => left.parentPath.localeCompare(right.parentPath) || left.family.localeCompare(right.family)), expected)) {
+      fail('Notification outbox preparation differs from source documents.');
+    }
+  }
+  if (options.forDeployment && notificationControl.storage_mode !== 'table' && !(
+    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
+    notificationControl.preparation_state === 'ready' && notificationControl.source_documents_revision === authority.documents_revision
+  )) fail('API deployment requires activated notification outbox storage or fully paused, verified preparation. Follow scripts/docs/notification_outbox_cutover.md.');
+  for (const family of ['ready', 'stripe_terminal', 'shipped'] as const) {
+    const plan = queryPlan(notificationOutboxDueQuery({ family, dueAtMs: 1, limit: 8 }));
+    requireSearchIndex(plan, 'commerce_notification_outbox_family_due');
+    requireNoTemporaryBTree(plan, 'notification outbox due');
+  }
+  const notificationFailures = queryRemoteCommerceD1(`SELECT family, last_error_code, COUNT(*) AS count
+    FROM commerce_notification_outbox WHERE state = 'failed' GROUP BY family, last_error_code ORDER BY family, last_error_code`);
+
   const kindCounts = Object.fromEntries(queryRemoteCommerceD1(`SELECT document_kind, COUNT(*) AS count
     FROM commerce_documents GROUP BY document_kind ORDER BY document_kind`).map((row) => [
       String(row.document_kind),
@@ -672,6 +803,10 @@ export function checkCommerceD1(
     authorityState: authority.authority_state,
     authorityRevision: safeInteger(authority.revision, 'Commerce authority revision'),
     inventoryMode: authority.dude_inventory_mode,
+    notificationOutboxMode: notificationControl.storage_mode,
+    notificationOutboxPreparation: notificationControl.preparation_state,
+    notificationOutboxGroups: notificationRows.length,
+    notificationOutboxFailures: notificationFailures,
     inventoryDrops: inventory.length,
     availableDudes,
     authoritativeDocuments: authoritativeDocuments.length,

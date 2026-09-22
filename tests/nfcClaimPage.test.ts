@@ -30,7 +30,7 @@ afterEach(() => {
 });
 after(() => dom.window.close());
 
-function walletState(publicKey: PublicKey | null = null): WalletContextState {
+function walletState(publicKey: PublicKey | null = null) {
   return {
     publicKey,
     autoConnect: false,
@@ -47,7 +47,7 @@ function walletState(publicKey: PublicKey | null = null): WalletContextState {
     signAllTransactions: mock.fn(async (transactions) => transactions),
     signMessage: mock.fn(async () => new Uint8Array()),
     signIn: undefined,
-  };
+  } satisfies WalletContextState;
 }
 
 function PageContents() {
@@ -142,8 +142,7 @@ test('NFC synchronously opens the video with or without a wallet and never claim
   const open = t.mock.method(window, 'open', () => null);
   for (const [index, publicKey] of [null, walletKey].entries()) {
     const wallet = walletState(publicKey);
-    const walletCalls = [wallet.connect, wallet.sendTransaction, wallet.signTransaction!, wallet.signAllTransactions!, wallet.signMessage!]
-      .map((method) => method as ReturnType<typeof mock.fn>);
+    const walletCalls = [wallet.connect, wallet.sendTransaction, wallet.signTransaction, wallet.signAllTransactions, wallet.signMessage];
     const view = renderPage(wallet);
     const claim = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
     assert.equal(view.queryByRole('textbox'), null);
@@ -324,9 +323,9 @@ test('NFC starts at the top after the previous inventory viewer restores its scr
     return createElement('div', null,
       createElement(ShopHeader),
       viewerOpen ? createElement('main', null, 'Inventory') : createElement(NfcClaimPage),
-      createElement(BackgroundBlurPortal, { open: viewerOpen, active: viewerOpen },
-        createElement('div', { role: 'dialog' }, 'Inventory viewer'),
-      ),
+      createElement(BackgroundBlurPortal, { open: viewerOpen, active: viewerOpen,
+        children: createElement('div', { role: 'dialog' }, 'Inventory viewer'),
+      }),
     );
   }
   function ScrollFixture({ path }: { path: string }) {

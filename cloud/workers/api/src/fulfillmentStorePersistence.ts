@@ -1,4 +1,5 @@
-import { CommerceWriteConflict } from './commerceRepository.js';
+import { CommerceWriteConflict, isCommerceDeleteField } from './commerceRepository.js';
+import { isBuyerOrderShippedNotificationEligible } from './buyerOrderShipped.js';
 import { runCommerceTransaction } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
 import { loadDeliveryOrderDocument, updateDeliveryOrder, type DeliveryOrderDocument } from './deliveryOrderStore.js';
@@ -22,7 +23,16 @@ export async function mutateDeliveryOrder<T>(args: {
     }, async (unit) => {
       const record = await loadDeliveryOrderDocument({ repository: unit }, args.dropId, args.deliveryId);
       const mutation = args.build(record);
-      if (mutation.updates) await updateDeliveryOrder(unit, record.key, mutation.updates);
+      if (mutation.updates) {
+        const tracking = mutation.updates.fulfillmentTrackingCode;
+        if (tracking !== undefined && !isBuyerOrderShippedNotificationEligible({
+          ...record.data,
+          fulfillmentTrackingCode: isCommerceDeleteField(tracking) ? undefined : tracking,
+        })) {
+          await unit.cancelNotificationOutbox(record.key.path, 'shipped', 'order-no-longer-eligible');
+        }
+        await updateDeliveryOrder(unit, record.key, mutation.updates);
+      }
       return mutation.value;
     });
   } catch (error) {

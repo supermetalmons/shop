@@ -9,6 +9,7 @@ import {
   commerceKeys,
   d1RetryCount,
   type CommerceDocumentData,
+  type CommerceDocumentKey,
 } from '../src/commerceRepository.ts';
 import {
   type CommerceD1BatchObservation,
@@ -16,7 +17,37 @@ import {
   createCommerceD1Harness,
   seedCommerceDocument,
   seedCommerceDocuments,
+  seedNotificationOutbox,
 } from './commerceD1Harness.ts';
+import type { NotificationOutboxEntry, NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
+
+function seedQueryNotification(
+  harness: ReturnType<typeof createCommerceD1Harness>,
+  key: CommerceDocumentKey,
+  args: {
+    family?: NotificationOutboxFamily;
+    dueAtMs?: number;
+    claimed?: boolean;
+    state?: 'pending' | 'queued' | 'failed';
+    outcome?: 'fulfilled' | 'manual_review';
+    entries?: NotificationOutboxEntry[];
+  } = {},
+): void {
+  const family = args.family ?? 'ready';
+  const state = args.state ?? 'pending';
+  const dueAtMs = args.dueAtMs ?? 0;
+  seedNotificationOutbox(harness, {
+    parentPath: key.path, family, dropId: key.dropId!, generation: crypto.randomUUID(),
+    outcome: family === 'stripe_terminal' ? args.outcome ?? 'fulfilled' : null,
+    state, entries: args.entries ?? [{
+      kind: args.outcome === 'manual_review' ? 'stripe_checkout_manual_review' : 'buyer_order_received',
+      jobId: crypto.randomUUID(), idempotencyKey: `${key.dropId}:${key.documentId}:notification`, state,
+    }],
+    revision: 1, attemptCount: 0, nextAttemptAtMs: state === 'pending' ? dueAtMs : null,
+    claimId: args.claimed ? crypto.randomUUID() : null, claimExpiresAtMs: args.claimed ? dueAtMs : null,
+    retryUntilMs: 10_000, createdAtMs: 0, updatedAtMs: 0, lastErrorCode: null,
+  });
+}
 
 function pauseCommerce(harness: ReturnType<typeof createCommerceD1Harness>): void {
   const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
@@ -325,27 +356,21 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(10, async (unit) => {
     await unit.create(commerceKeys.deliveryOrder('drop', '1'), {
-      buyerOrderReceivedEmailState: 'pending',
       owner: 'owner-a',
       packStatusProjectionNextAttemptAtMs: 30,
       packStatusProjectionState: 'pending',
-      shipperReadyToShipEmailState: 'pending',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.deliveryOrder('drop', '2'), {
-      buyerOrderReceivedEmailState: 'queued',
       owner: 'owner-a',
       packStatusProjectionNextAttemptAtMs: 10,
       packStatusProjectionState: 'pending',
-      shipperReadyToShipEmailState: 'pending',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.deliveryOrder('drop', '3'), {
-      buyerOrderReceivedEmailState: 'queued',
       owner: 'owner-b',
       packStatusProjectionNextAttemptAtMs: 20,
       packStatusProjectionState: 'pending',
-      shipperReadyToShipEmailState: 'queued',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.stripeCheckout('drop', 'recent'), {
@@ -367,6 +392,15 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
       });
     }
   });
+  for (const id of ['1', '2', '3']) {
+    seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', id), {
+      state: id === '3' ? 'queued' : 'pending',
+      entries: [
+        { kind: 'buyer_order_received', jobId: crypto.randomUUID(), idempotencyKey: `drop:${id}:buyer`, state: id === '1' ? 'pending' : 'queued' },
+        { kind: 'shipper_ready_to_ship', jobId: crypto.randomUUID(), idempotencyKey: `drop:${id}:shipper`, state: id === '3' ? 'queued' : 'pending' },
+      ],
+    });
+  }
   const pending = await repository.queryPendingReadyNotifications({ owner: 'owner-a', limit: 8 });
   assert.deepEqual(pending.map((record) => record.key.documentId), ['1', '2']);
   const after = await repository.queryPendingReadyNotifications({
@@ -428,7 +462,13 @@ test('ready-notification recovery selects unclaimed and expired leases in due or
     })),
     { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: pending },
   ]);
-  const immediateIds = [...malformed.map((_, index) => `malformed-${String(index).padStart(2, '0')}`), 'unclaimed'];
+  seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', 'unclaimed'));
+  for (const [id, dueAtMs] of [['a', 10], ['b', 10], ['future', 11], ['older', 5]] as const) {
+    seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', id), { dueAtMs, claimed: true });
+  }
+  for (const status of ['prepared', 'processing']) seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', status));
+  for (const state of ['queued', 'failed'] as const) seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', state), { state });
+  const immediateIds = ['unclaimed'];
   calls.length = 0;
   assert.deepEqual(
     (await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 30 })).map((record) => record.key.documentId),
@@ -438,14 +478,14 @@ test('ready-notification recovery selects unclaimed and expired leases in due or
   assert.equal(calls[0].method, 'batch');
   if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch.');
   assertAuthoritativeReadBatch(calls[0]);
-  assert.match(calls[0].statements[1].sql, /INDEXED BY commerce_ready_notifications_due/);
+  assert.match(calls[0].statements[1].sql, /INDEXED BY commerce_notification_outbox_family_due/);
   assert.deepEqual(
     (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 30 })).map((record) => record.key.documentId),
     [...immediateIds, 'older', 'a', 'b'],
   );
   assert.deepEqual(
     (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 2 })).map((record) => record.key.documentId),
-    immediateIds.slice(0, 2),
+    ['unclaimed', 'older'],
   );
   for (const [dueAtMs, limit] of [[-1, 1], [Number.NaN, 1], [1.5, 1], [Number.MAX_SAFE_INTEGER + 1, 1], [1, 0], [1, 1.5]]) {
     await assert.rejects(
@@ -495,6 +535,15 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
     },
     { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: pending },
   ]);
+  for (const [id, dueAtMs] of [['a', 10], ['b', 10], ['review', 5], ['future', 11]] as const) {
+    seedQueryNotification(harness, commerceKeys.stripeCheckout('drop', id), {
+      family: 'stripe_terminal', dueAtMs, outcome: id === 'review' ? 'manual_review' : 'fulfilled',
+    });
+  }
+  seedQueryNotification(harness, commerceKeys.stripeCheckout('drop', 'queued'), { family: 'stripe_terminal', state: 'queued' });
+  for (const status of ['fulfillment_pending', 'processing', 'fulfillment_failed']) {
+    seedQueryNotification(harness, commerceKeys.stripeCheckout('drop', status), { family: 'stripe_terminal' });
+  }
   assert.deepEqual(
     (await repository.queryDueStripeTerminalNotifications(10, 2)).map((record) => record.key.documentId),
     ['review', 'a'],
@@ -507,6 +556,11 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
     key: commerceKeys.stripeCheckout('drop', `more-${String(index).padStart(2, '0')}`),
     data: pending,
   })));
+  for (let index = 0; index < 21; index += 1) {
+    seedQueryNotification(harness, commerceKeys.stripeCheckout('drop', `more-${String(index).padStart(2, '0')}`), {
+      family: 'stripe_terminal', dueAtMs: 10,
+    });
+  }
   assert.equal((await repository.queryDueStripeTerminalNotifications(10)).length, 20);
   for (const [dueAtMs, limit] of [[-1, 1], [Number.NaN, 1], [1, 0], [1, 1.5]]) {
     await assert.rejects(
@@ -1765,13 +1819,9 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   if (ownerlessNotificationCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(
     ownerlessNotificationCall.statements[1].sql,
-    /INDEXED BY commerce_delivery_orders_buyer_notifications_pending\s/,
+    /INDEXED BY commerce_notification_outbox_pending_path\s/,
   );
-  assert.match(
-    ownerlessNotificationCall.statements[1].sql,
-    /INDEXED BY commerce_delivery_orders_shipper_notifications_pending\s/,
-  );
-  assert.doesNotMatch(ownerlessNotificationCall.statements[1].sql, /notifications_pending_owner_path/);
+  assert.doesNotMatch(ownerlessNotificationCall.statements[1].sql, /INDEXED BY commerce_documents_delivery_owner_status/);
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({
       limit: 1,
@@ -1784,11 +1834,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   if (ownerNotificationCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(
     ownerNotificationCall.statements[1].sql,
-    /INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path\s/,
-  );
-  assert.match(
-    ownerNotificationCall.statements[1].sql,
-    /INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path\s/,
+    /INDEXED BY commerce_notification_outbox_pending_owner_path\s/,
   );
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryDuePackStatusProjections({

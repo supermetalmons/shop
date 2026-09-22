@@ -6,13 +6,12 @@ import { reconcilePendingReadyToShipNotifications } from '../src/readyToShipNoti
 import {
   NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
 } from '../src/notificationOutboxPublication.ts';
-import {
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD as ATTEMPTS,
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD as CLAIM_EXPIRY,
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD as CLAIM_ID,
-  READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD as RETRY_UNTIL,
-} from '../src/readyToShipNotifications.ts';
-import { createCommerceD1Harness, seedCommerceDocuments } from './commerceD1Harness.ts';
+const ATTEMPTS = 'readyToShipNotificationPublishAttemptCount';
+const CLAIM_EXPIRY = 'readyToShipNotificationPublishClaimExpiresAtMs';
+const CLAIM_ID = 'readyToShipNotificationPublishClaimId';
+const RETRY_UNTIL = 'readyToShipNotificationRetryUntilMs';
+import { withoutNotificationFields } from './deliveryStoreTestSupport.ts';
+import { createCommerceD1Harness, seedCommerceDocuments, seedNotificationOutbox } from './commerceD1Harness.ts';
 
 const NOW_MS = 1_700_000_000_000;
 const READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS = 10 * 60_000;
@@ -39,8 +38,23 @@ function fixture(context: TestContext, orders: Array<{ id: number; fields?: Comm
   context.after(() => harness.database.close());
   seedCommerceDocuments(harness, orders.map(({ id, fields }) => ({
     key: commerceKeys.deliveryOrder('card_nft_2', String(id)),
-    data: order(id, fields),
+    data: withoutNotificationFields(order(id, fields)),
   })));
+  for (const { id, fields } of orders) {
+    const source = order(id, fields);
+    const state = source.buyerOrderReceivedEmailState as 'pending' | 'queued' | 'failed';
+    const expiry = typeof source[CLAIM_EXPIRY] === 'number' ? Number(source[CLAIM_EXPIRY]) : null;
+    seedNotificationOutbox(harness, {
+      parentPath: commerceKeys.deliveryOrder('card_nft_2', String(id)).path, family: 'ready', dropId: 'card_nft_2',
+      generation: crypto.randomUUID(), outcome: null, state, revision: 1,
+      entries: [{ kind: 'buyer_order_received', jobId: String(source.buyerOrderReceivedEmailJobId),
+        idempotencyKey: String(source.buyerOrderReceivedEmailIdempotencyKey), state }],
+      attemptCount: Number(source[ATTEMPTS]), retryUntilMs: Number(source[RETRY_UNTIL]),
+      claimId: typeof source[CLAIM_ID] === 'string' ? String(source[CLAIM_ID]) : null,
+      claimExpiresAtMs: expiry, nextAttemptAtMs: state === 'pending' ? expiry ?? NOW_MS : null,
+      createdAtMs: NOW_MS, updatedAtMs: NOW_MS, lastErrorCode: null,
+    });
+  }
   const repository = new D1CommerceRepository(harness.db);
   const jobs: NotificationEmailJobV1[] = [];
   const logs: Record<string, unknown>[] = [];
@@ -63,9 +77,9 @@ function fixture(context: TestContext, orders: Array<{ id: number; fields?: Comm
     }, signal, { nowMs: () => nowMs, log: (entry) => { logs.push(entry); } })
   );
   const load = async (id: number) => {
-    const record = await repository.get(commerceKeys.deliveryOrder('card_nft_2', String(id)));
+    const record = await repository.notificationOutbox.get(commerceKeys.deliveryOrder('card_nft_2', String(id)).path, 'ready');
     assert.ok(record);
-    return record.data;
+    return record;
   };
   return { repository, jobs, logs, run, load, setSend: (send: typeof onSend) => { onSend = send; } };
 }
@@ -73,7 +87,7 @@ function fixture(context: TestContext, orders: Array<{ id: number; fields?: Comm
 test('successive bounded passes drain due notifications without OPS_DB or revisiting leased work', async (context) => {
   const ids = Array.from({ length: 12 }, (_, index) => 100 + index);
   const native = fixture(context, [
-    { id: 90, fields: { [ATTEMPTS]: 1, [CLAIM_ID]: 'live-claim', [CLAIM_EXPIRY]: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS } },
+    { id: 90, fields: { [ATTEMPTS]: 1, [CLAIM_ID]: '00000000-0000-4000-8000-000000000090', [CLAIM_EXPIRY]: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS } },
     { id: 91, fields: { buyerOrderReceivedEmailState: 'queued' } },
     { id: 92, fields: { buyerOrderReceivedEmailState: 'failed' } },
     ...ids.map((id) => ({ id })),
@@ -85,7 +99,7 @@ test('successive bounded passes drain due notifications without OPS_DB or revisi
   assert.equal(await native.run(), 4);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), ids);
   assert.equal(await native.run(), 0);
-  assert.equal((await native.load(90))[CLAIM_ID], 'live-claim');
+  assert.equal((await native.load(90)).claimId, '00000000-0000-4000-8000-000000000090');
 });
 
 test('the eight-candidate scan cap bounds malformed-order cleanup without refilling the query', async (context) => {
@@ -99,11 +113,11 @@ test('the eight-candidate scan cap bounds malformed-order cleanup without refill
   assert.equal(native.logs.length, 8);
   for (const id of invalidIds.slice(0, 8)) {
     const failed = await native.load(id);
-    assert.equal(failed.buyerOrderReceivedEmailState, 'failed');
-    assert.equal(failed.readyToShipNotificationLastErrorCode, 'invalid-order-identity');
+    assert.equal(failed.state, 'failed');
+    assert.equal(failed.lastErrorCode, 'invalid-order-identity');
   }
-  assert.equal((await native.load(108)).buyerOrderReceivedEmailState, 'pending');
-  assert.equal((await native.load(109)).buyerOrderReceivedEmailState, 'pending');
+  assert.equal((await native.load(108)).state, 'pending');
+  assert.equal((await native.load(109)).state, 'pending');
   assert.equal(await native.run(), 1);
   assert.equal(native.logs.length, 9);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [109]);
@@ -121,8 +135,8 @@ test('individual publication failures consume four slots and defer their retries
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), ids.slice(0, 4));
   for (const id of ids.slice(0, 4)) {
     const pending = await native.load(id);
-    assert.equal(pending[ATTEMPTS], 1);
-    assert.equal(pending[CLAIM_EXPIRY], NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS);
+    assert.equal(pending.attemptCount, 1);
+    assert.equal(pending.claimExpiresAtMs, NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS);
   }
   native.setSend(undefined);
   assert.equal(await native.run(), 4);
@@ -143,12 +157,12 @@ test('cancellation after an enqueue finalizes that notification and stops the re
     return true;
   });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100]);
-  assert.equal((await native.load(100)).buyerOrderReceivedEmailState, 'queued');
+  assert.equal((await native.load(100)).state, 'queued');
   for (const id of [101, 102, 103]) {
     const untouched = await native.load(id);
-    assert.equal(untouched.buyerOrderReceivedEmailState, 'pending');
-    assert.equal(untouched[ATTEMPTS], 0);
-    assert.equal(untouched[CLAIM_ID], undefined);
+    assert.equal(untouched.state, 'pending');
+    assert.equal(untouched.attemptCount, 0);
+    assert.equal(untouched.claimId, null);
   }
 });
 
@@ -156,16 +170,15 @@ test('a claim acquired after candidate selection consumes one slot without dupli
   const native = fixture(context, [100, 101, 102, 103, 104].map((id) => ({ id })));
   native.setSend(async (jobs) => {
     if (jobs[0].context.deliveryId !== 100) return;
-    await native.repository.run(NOW_MS, (unit) => unit.update(commerceKeys.deliveryOrder('card_nft_2', '101'), {
-      [ATTEMPTS]: 1,
-      [CLAIM_ID]: 'concurrent-publisher',
-      [CLAIM_EXPIRY]: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
-    }));
+    await native.repository.notificationOutbox.compareAndSet({ expected: await native.load(101), nowMs: NOW_MS,
+      changes: { attemptCount: 1, claimId: '00000000-0000-4000-8000-000000000101',
+        claimExpiresAtMs: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+        nextAttemptAtMs: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS } });
   });
   assert.equal(await native.run(), 3);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 102, 103]);
-  assert.equal((await native.load(101))[CLAIM_ID], 'concurrent-publisher');
-  assert.equal((await native.load(104))[ATTEMPTS], 0);
+  assert.equal((await native.load(101)).claimId, '00000000-0000-4000-8000-000000000101');
+  assert.equal((await native.load(104)).attemptCount, 0);
   assert.equal(await native.run(), 1);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 102, 103, 104]);
 });

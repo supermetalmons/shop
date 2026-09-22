@@ -1,9 +1,5 @@
 import { normalizeFulfillmentStatus, type FulfillmentStatus } from '../../../../shared/fulfillmentStatus.js';
 import { normalizeOptionalFulfillmentTrackingCode } from '../../../../shared/fulfillmentTracking.js';
-import {
-  isNotificationEmailIdempotencyKey,
-  isNotificationEmailJobId,
-} from '../../../../shared/notificationEmailJob.js';
 import { storedFulfillmentShipStationLabel } from '../../../../shared/shipstationLabels.js';
 import { parseShipStationPackage } from '../../../../shared/shipstationPackage.js';
 import type { FulfillmentShipStationLabel } from '../../../../shared/contracts.js';
@@ -15,23 +11,12 @@ import { optionalString, storedShipStationRateQuotes } from './profileWriteRates
 export type DeliveryFulfillmentState = {
   fulfillmentStatus: FulfillmentStatus | undefined;
   fulfillmentTrackingCode: string | undefined;
-  buyerOrderShippedEmailState: 'pending' | 'queued' | undefined;
-  buyerOrderShippedEmailJobId: string | undefined;
-  buyerOrderShippedEmailIdempotencyKey: string | undefined;
 };
 
 export function parseDeliveryFulfillmentState(order: Record<string, unknown>): DeliveryFulfillmentState {
-  const emailState = order.buyerOrderShippedEmailState;
   return {
     fulfillmentStatus: normalizeFulfillmentStatus(order.fulfillmentStatus),
     fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
-    buyerOrderShippedEmailState: emailState === 'pending' || emailState === 'queued' ? emailState : undefined,
-    buyerOrderShippedEmailJobId: isNotificationEmailJobId(order.buyerOrderShippedEmailJobId)
-      ? order.buyerOrderShippedEmailJobId
-      : undefined,
-    buyerOrderShippedEmailIdempotencyKey: isNotificationEmailIdempotencyKey(order.buyerOrderShippedEmailIdempotencyKey)
-      ? order.buyerOrderShippedEmailIdempotencyKey
-      : undefined,
   };
 }
 

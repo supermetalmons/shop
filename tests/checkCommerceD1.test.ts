@@ -36,6 +36,7 @@ const migrationNames = [
   '0010_dude_inventory.sql',
   '0011_stripe_order_disputes.sql',
   '0012_stripe_identity_lookup_indexes.sql',
+  '0013_notification_outbox.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -191,6 +192,10 @@ test('Commerce D1 checker accepts the current schema using complete production q
       authorityState: 'd1',
       authorityRevision: 3,
       inventoryMode: 'legacy',
+      notificationOutboxMode: 'legacy',
+      notificationOutboxPreparation: 'idle',
+      notificationOutboxGroups: 0,
+      notificationOutboxFailures: [],
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 513,
@@ -230,7 +235,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
       assert.equal(queries.filter((sql) => sql === expected).length, 1, expected);
     }
-    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 1);
+    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 4);
     const smokeQuery = renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 }));
     assert.equal(queries.filter((sql) => sql === smokeQuery).length, 1);
   } finally {
@@ -269,6 +274,10 @@ test('Commerce D1 checker accepts the exact empty post-migration state', () => {
       authorityState: 'paused',
       authorityRevision: 2,
       inventoryMode: 'legacy',
+      notificationOutboxMode: 'legacy',
+      notificationOutboxPreparation: 'idle',
+      notificationOutboxGroups: 0,
+      notificationOutboxFailures: [],
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 0,
@@ -301,6 +310,10 @@ test('API deployment requires activation even after inventory preparation and ac
     assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated figure inventory/);
     database.exec('DELETE FROM commerce_available_dudes');
     database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
+    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated notification outbox/);
+    database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
+      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
+      UPDATE commerce_notification_outbox_control SET storage_mode = 'table'`);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).inventoryMode, 'rows');
     assert.equal(checkCommerceD1(query, { forDeployment: true }).availableDudes, 0);
     database.exec(`UPDATE commerce_authority_control
@@ -513,15 +526,15 @@ test('Commerce D1 checker rejects due ready-notification scans and temporary sor
   try {
     const query = localQuery(database);
     for (const details of [
-      ['SCAN commerce_documents USING INDEX commerce_ready_notifications_due'],
-      ['SEARCH commerce_documents USING INDEX commerce_ready_notifications_due (<expr><?)', 'USE TEMP B-TREE FOR ORDER BY'],
+      ['SCAN outbox USING INDEX commerce_notification_outbox_family_due'],
+      ['SEARCH outbox USING INDEX commerce_notification_outbox_family_due (family=? AND next_attempt_at_ms<?)', 'USE TEMP B-TREE FOR ORDER BY'],
     ]) {
       assert.throws(() => checkCommerceD1((sql) => {
-        if (sql.includes('EXPLAIN QUERY PLAN') && sql.includes('INDEXED BY commerce_ready_notifications_due')) {
+        if (sql.includes('EXPLAIN QUERY PLAN') && sql.includes('INDEXED BY commerce_notification_outbox_family_due') && sql.includes("outbox.family = 'ready'")) {
           return details.map((detail) => ({ detail }));
         }
         return query(sql);
-      }), /does not search commerce_ready_notifications_due|due ready-notification query plan uses a temporary B-tree/);
+      }), /does not search commerce_notification_outbox_family_due|due ready-notification query plan uses a temporary B-tree/);
     }
   } finally {
     database.close();
@@ -628,5 +641,100 @@ test('Commerce D1 checker rejects a malformed Admin IRL Workflow operation index
     );
   } finally {
     database.close();
+  }
+});
+
+test('API deployment accepts a fully paused verified notification preparation before activation', () => {
+  const database = currentDatabase(false);
+  try {
+    seedInventory(database);
+    database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
+    database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
+      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1`);
+    const result = checkCommerceD1(localQuery(database), { forDeployment: true });
+    assert.equal(result.notificationOutboxMode, 'legacy');
+    assert.equal(result.notificationOutboxPreparation, 'ready');
+    database.exec('UPDATE commerce_notification_outbox_control SET preparation_state = \'preparing\', prepared_at_ms = NULL');
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), /requires activated notification outbox/);
+  } finally { database.close(); }
+});
+
+test('Commerce D1 checker rejects weakened notification fences and outbox indexes', () => {
+  for (const name of ['commerce_notification_legacy_update_fence', 'commerce_notification_outbox_resume_guard', 'commerce_notification_outbox_family_due']) {
+    const database = currentDatabase(false);
+    try {
+      const type = name.endsWith('_due') ? 'INDEX' : 'TRIGGER';
+      database.exec(`DROP ${type} ${name}`);
+      if (type === 'INDEX') database.exec(`CREATE INDEX ${name} ON commerce_notification_outbox (family)`);
+      else database.exec(`CREATE TRIGGER ${name} BEFORE UPDATE ON commerce_documents BEGIN SELECT 1; END`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /Notification outbox schema is invalid|no query solution/);
+    } finally { database.close(); }
+  }
+});
+
+test('Commerce D1 checker rejects missing or stale pending-owner lookup entries', () => {
+  for (const corruption of ['missing', 'wrong-owner', 'terminal-row'] as const) {
+    const database = currentDatabase();
+    try {
+      database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
+        1, '00000000-0000-4000-8000-000000000407',
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
+      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing';`);
+      database.prepare(`INSERT INTO commerce_notification_outbox (
+        parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
+        attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
+      ) VALUES ('drops/drop/deliveryOrders/16', 'ready', 'drop',
+        '00000000-0000-4000-8000-000000000408', NULL, 'pending', ?, 1, 0, 0, NULL, NULL, 10000, 0, 0, NULL)`)
+        .run(JSON.stringify([{ kind: 'buyer_order_received', jobId: '00000000-0000-4000-8000-000000000409',
+          idempotencyKey: 'drop:16:order_received', state: 'pending' }]));
+      assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+      if (corruption === 'missing') database.exec('DELETE FROM commerce_notification_outbox_pending_owners');
+      else if (corruption === 'wrong-owner') database.exec("UPDATE commerce_notification_outbox_pending_owners SET owner = 'wrong-owner'");
+      else {
+        database.exec(`UPDATE commerce_notification_outbox SET state = 'queued', next_attempt_at_ms = NULL,
+          entries_json = json_set(entries_json, '$[0].state', 'queued'), revision = revision + 1;
+        INSERT INTO commerce_notification_outbox_pending_owners VALUES ('drops/drop/deliveryOrders/16', 'ready', 'stale-owner')`);
+      }
+      assert.throws(() => checkCommerceD1(localQuery(database)), /pending-owner lookup is inconsistent/);
+    } finally { database.close(); }
+  }
+});
+
+test('Commerce D1 checker rejects missing or stale Stripe due lookup entries', () => {
+  for (const corruption of ['missing', 'wrong-due', 'terminal-row'] as const) {
+    const database = currentDatabase();
+    try {
+      database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
+        1, '00000000-0000-4000-8000-000000000407',
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
+      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing';`);
+      database.prepare(`INSERT INTO commerce_notification_outbox (
+        parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
+        attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
+      ) VALUES ('drops/drop/stripeCheckouts/1', 'stripe_terminal', 'drop',
+        '00000000-0000-4000-8000-000000000408', 'fulfilled', 'pending', ?, 1, 0, 0, NULL, NULL, 10000, 0, 0, NULL)`)
+        .run(JSON.stringify([{ kind: 'buyer_order_received', jobId: '00000000-0000-4000-8000-000000000409',
+          idempotencyKey: 'drop:1:order_received', state: 'pending' }]));
+      assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+      if (corruption === 'missing') database.exec('DELETE FROM commerce_notification_outbox_stripe_due');
+      else if (corruption === 'wrong-due') database.exec('UPDATE commerce_notification_outbox_stripe_due SET next_attempt_at_ms = 1');
+      else {
+        database.exec(`UPDATE commerce_notification_outbox SET state = 'queued', next_attempt_at_ms = NULL,
+          entries_json = json_set(entries_json, '$[0].state', 'queued'), revision = revision + 1;
+        INSERT INTO commerce_notification_outbox_stripe_due (parent_path, next_attempt_at_ms)
+          VALUES ('drops/drop/stripeCheckouts/1', 0)`);
+      }
+      assert.throws(() => checkCommerceD1(localQuery(database)), /Stripe due lookup is inconsistent/);
+    } finally { database.close(); }
   }
 });

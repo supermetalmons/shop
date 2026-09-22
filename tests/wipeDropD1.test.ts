@@ -101,6 +101,7 @@ function database(): DatabaseSync {
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0009_ready_notification_due_index.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0010_dude_inventory.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0013_notification_outbox.sql', 'utf8'));
   insertAuthorityLease(db);
   db.exec(`UPDATE commerce_authority_control SET
     paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
@@ -627,4 +628,37 @@ test('Commerce D1 wipe verification requires native inventory to remain absent',
     /wipe verification failed/,
   );
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 1);
+});
+
+test('Commerce D1 wipe snapshots notification rows and cascades them with their exact parent', (context) => {
+  const db = database();
+  context.after(() => db.close());
+  const target = document('delivery_order', 'target', '7', { owner: 'target-owner' });
+  const other = document('delivery_order', 'other', '8', { owner: 'other-owner' });
+  insertDocumentEpoch(db, [target, other]);
+  pauseCommerce(db);
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 1`);
+  const insert = db.prepare(`INSERT INTO commerce_notification_outbox (
+    parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count,
+    next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
+  ) VALUES (?, 'shipped', ?, '00000000-0000-4000-8000-000000000501', NULL, 'pending', ?, 1, 0, 0, NULL, NULL, 1, 0, 0, NULL)`);
+  for (const parent of [target, other]) insert.run(parent.path, parent.dropId, JSON.stringify([{
+    kind: 'buyer_order_shipped', jobId: '00000000-0000-4000-8000-000000000502',
+    idempotencyKey: `${parent.dropId}:${parent.documentId}:order_shipped`, state: 'pending',
+  }]));
+  const wipePlan = buildCommerceD1PlanFromDocuments({
+    authority: { ...authority, documentsRevision: 1 }, dropId: 'target', inventory: emptyInventory,
+    targetDocuments: [target], assignmentDocuments: [], claimDocuments: [], notificationOutboxCount: 1,
+  });
+  assert.equal(wipePlan.notificationOutboxCount, 1);
+  assert.equal(sameCommerceD1Plan(wipePlan, { ...wipePlan, notificationOutboxCount: 2 }), false);
+  assert.throws(() => executeTransaction(db, buildCommerceD1WipeSql({ ...wipePlan, notificationOutboxCount: 0 }, 'stale-outbox', 67_000)), /commerce wipe conflict/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_documents').get()!.count, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_notification_outbox_pending_owners').get()!.count, 2);
+  executeTransaction(db, buildCommerceD1WipeSql(wipePlan, 'wipe:target:outbox', 67_000));
+  assert.deepEqual(db.prepare('SELECT owner FROM commerce_notification_outbox_pending_owners').all().map((row) => row.owner), ['other-owner']);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM commerce_notification_outbox WHERE drop_id = 'target'").get()!.count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM commerce_notification_outbox WHERE drop_id = 'other'").get()!.count, 1);
+  verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:outbox:', (sql) => db.prepare(sql).all().map((row) => ({ ...row })));
 });

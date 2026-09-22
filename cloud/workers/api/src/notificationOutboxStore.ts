@@ -1,125 +1,153 @@
-import type {
-  CommerceDocumentKey,
-  CommerceDocumentRecord,
-  CommerceDocumentWriteData,
-  CommerceUnitOfWork,
-} from './commerceRepository.js';
-import {
-  runCommerceTransaction,
-  type CommerceConflictRetryOptions,
-  type CommerceTransactionTarget,
-} from './commerceTransactions.js';
+import { isNotificationEmailJobV1, type NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.js';
+import type { NotificationOutboxFamily, NotificationOutboxRecord, NotificationOutboxMutation } from '../../../../shared/notificationOutbox.js';
+import type { D1CommerceRepository } from './commerceRepository.js';
 import { planNotificationPublicationClaim } from './notificationOutboxPublication.js';
 
-export type NotificationOutboxTarget = {
-  context: CommerceTransactionTarget;
-  key: CommerceDocumentKey;
-  read?: (transaction: CommerceUnitOfWork) => Promise<CommerceDocumentRecord | null>;
-  retry?: Omit<CommerceConflictRetryOptions, 'signal'>;
+type OutboxRepository = Pick<D1CommerceRepository, 'notificationOutbox'>;
+type ClaimedOutboxOptions = {
+  repository: OutboxRepository;
+  claim: NotificationOutboxRecord;
+  nowMs: () => number;
+  parentVersion?: number;
 };
 
-type NotificationPublicationLease = {
-  claimId: string;
-  attemptCount: number;
-  previousAttemptCount: number;
-  expiresAtMs: number;
-  retryUntilMs: number;
-};
-
-export type NotificationOutboxClaim<State> = NotificationPublicationLease & {
-  document: CommerceDocumentRecord;
-  state: State;
-};
-
-type NotificationOutboxClaimResult<State, Skipped> =
-  | { outcome: 'claimed'; claim: NotificationOutboxClaim<State> }
-  | { outcome: 'skipped'; result: Skipped };
-
-type OutboxMutation<Result> = {
-  result: Result;
-  values?: CommerceDocumentWriteData;
-};
-
-export type NotificationOutboxAdapter<State, Skipped> = {
-  missing: Skipped;
-  inspect: (document: CommerceDocumentRecord, nowMs: number) => OutboxMutation<Skipped> | {
-    state: State;
-    attemptCount: number | null;
-    retryUntilMs: number | null;
-    activeUntilMs: number | null;
-  };
-  busy: (state: State) => Skipped;
-  exhausted: (state: State) => OutboxMutation<Skipped>;
-  claim: (state: State, lease: NotificationPublicationLease) => {
-    state: State;
-    values: CommerceDocumentWriteData;
-  };
-};
-
-async function mutateNotificationOutbox<Result>(
-  target: NotificationOutboxTarget,
-  mutate: (document: CommerceDocumentRecord | null) => OutboxMutation<Result>,
-): Promise<Result> {
-  return runCommerceTransaction(target.context, async (transaction) => {
-    const document = await (target.read ? target.read(transaction) : transaction.get(target.key));
-    const mutation = mutate(document);
-    if (mutation.values && Object.keys(mutation.values).length) {
-      await transaction.update(target.key, mutation.values);
+export async function claimNotificationOutbox(args: {
+  repository: OutboxRepository;
+  parentPath: string;
+  family: NotificationOutboxFamily;
+  nowMs: () => number;
+  signal?: AbortSignal;
+  parentVersion?: number;
+}): Promise<
+  | { outcome: 'claimed'; claim: NotificationOutboxRecord; previousAttemptCount: number }
+  | { outcome: 'none' | 'busy' | 'failed'; record: NotificationOutboxRecord | null }
+> {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    args.signal?.throwIfAborted();
+    const record = await args.repository.notificationOutbox.get(args.parentPath, args.family);
+    if (!record || record.state !== 'pending') {
+      return { outcome: record?.state === 'failed' ? 'failed' : 'none', record };
     }
-    return mutation.result;
-  }, target.retry);
+    const nowMs = args.nowMs();
+    const plan = planNotificationPublicationClaim({
+      nowMs, attemptCount: record.attemptCount, retryUntilMs: record.retryUntilMs,
+      activeUntilMs: record.claimExpiresAtMs ?? record.nextAttemptAtMs,
+    });
+    if (plan.outcome === 'busy') return { outcome: 'busy', record };
+    const changes: NotificationOutboxMutation = plan.outcome === 'exhausted'
+      ? {
+          state: 'failed', nextAttemptAtMs: null, claimId: null, claimExpiresAtMs: null,
+          lastErrorCode: 'manual-review-required',
+          entries: record.entries.map((entry) => {
+            if (entry.state !== 'pending') return entry;
+            const { payload, ...identity } = entry;
+            return { ...identity, state: 'failed' as const, errorCode: 'manual-review-required',
+              ...(record.family === 'stripe_terminal' && payload ? { payload } : {}) };
+          }),
+        }
+      : {
+          claimId: crypto.randomUUID(), attemptCount: plan.attemptCount,
+          retryUntilMs: plan.retryUntilMs, claimExpiresAtMs: plan.expiresAtMs,
+          nextAttemptAtMs: plan.expiresAtMs,
+        };
+    args.signal?.throwIfAborted();
+    const updated = await args.repository.notificationOutbox.compareAndSet({
+      expected: record, changes, nowMs, parentVersion: args.parentVersion,
+    });
+    if (!updated) continue;
+    return plan.outcome === 'exhausted'
+      ? { outcome: 'failed', record: updated }
+      : { outcome: 'claimed', claim: updated, previousAttemptCount: record.attemptCount };
+  }
+  return { outcome: 'busy', record: await args.repository.notificationOutbox.get(args.parentPath, args.family) };
 }
 
-export async function claimNotificationOutbox<State, Skipped>(args: {
-  target: NotificationOutboxTarget;
-  adapter: NotificationOutboxAdapter<State, Skipped>;
-  nowMs: () => number;
-}): Promise<NotificationOutboxClaimResult<State, Skipped>> {
-  return mutateNotificationOutbox<NotificationOutboxClaimResult<State, Skipped>>(args.target, (document) => {
-    if (!document) return { result: { outcome: 'skipped', result: args.adapter.missing } };
-    const nowMs = args.nowMs();
-    const inspected = args.adapter.inspect(document, nowMs);
-    if ('result' in inspected) {
-      return { values: inspected.values, result: { outcome: 'skipped', result: inspected.result } };
-    }
-    const plan = planNotificationPublicationClaim({
-      nowMs,
-      attemptCount: inspected.attemptCount,
-      retryUntilMs: inspected.retryUntilMs,
-      activeUntilMs: inspected.activeUntilMs,
+export async function updateClaimedNotificationOutbox(args: ClaimedOutboxOptions & {
+  update: (record: NotificationOutboxRecord) => NotificationOutboxMutation;
+}): Promise<NotificationOutboxRecord | null> {
+  if (!args.claim.claimId || args.claim.claimExpiresAtMs === null) return null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const record = await args.repository.notificationOutbox.get(args.claim.parentPath, args.claim.family);
+    if (!record || record.state !== 'pending' || record.generation !== args.claim.generation ||
+      record.claimId !== args.claim.claimId) return null;
+    const updated = await args.repository.notificationOutbox.compareAndSet({
+      expected: record, changes: args.update(record), nowMs: args.nowMs(), parentVersion: args.parentVersion,
     });
-    if (plan.outcome === 'busy') {
-      return { result: { outcome: 'skipped', result: args.adapter.busy(inspected.state) } };
-    }
-    if (plan.outcome === 'exhausted') {
-      const exhausted = args.adapter.exhausted(inspected.state);
-      return { values: exhausted.values, result: { outcome: 'skipped', result: exhausted.result } };
-    }
-    const lease: NotificationPublicationLease = {
-      claimId: crypto.randomUUID(),
-      attemptCount: plan.attemptCount,
-      previousAttemptCount: plan.attemptCount - 1,
-      expiresAtMs: plan.expiresAtMs,
-      retryUntilMs: plan.retryUntilMs,
-    };
-    const claimed = args.adapter.claim(inspected.state, lease);
-    return {
-      values: claimed.values,
-      result: { outcome: 'claimed', claim: { ...lease, document, state: claimed.state } },
-    };
+    if (updated) return updated;
+  }
+  return null;
+}
+
+export function persistClaimedNotificationJobs(args: ClaimedOutboxOptions & {
+  jobs: readonly NotificationEmailJobV1[];
+  completeMissing?: boolean;
+}): Promise<NotificationOutboxRecord | null> {
+  return updateClaimedNotificationOutbox({
+    ...args,
+    update: (record) => {
+      const nowMs = args.nowMs();
+      if (nowMs >= (record.claimExpiresAtMs ?? 0) || nowMs >= record.retryUntilMs) {
+        throw new Error('notification_publication_claim_expired');
+      }
+      if (new Set(args.jobs.map((job) => job.jobId)).size !== args.jobs.length) throw new Error('notification_publication_duplicate_job');
+      for (const job of args.jobs) {
+        if (!isNotificationEmailJobV1(job) || !record.entries.some((entry) => entry.state === 'pending' &&
+          entry.kind === job.kind && entry.jobId === job.jobId && entry.idempotencyKey === job.idempotencyKey)) {
+          throw new Error('notification_publication_job_identity_invalid');
+        }
+        const saved = record.entries.find((entry) => entry.jobId === job.jobId)?.payload;
+        if (saved && JSON.stringify(saved) !== JSON.stringify(job)) throw new Error('notification_publication_payload_changed');
+      }
+      const entries = record.entries.map((entry) => {
+        if (entry.state !== 'pending') return entry;
+        const job = args.jobs.find((candidate) => candidate.jobId === entry.jobId);
+        if (job) return { ...entry, payload: entry.payload ?? job };
+        if (!args.completeMissing) return entry;
+        if (entry.payload) throw new Error('notification_publication_payload_omitted');
+        return { ...entry, state: 'queued' as const, queuedAtMs: nowMs };
+      });
+      const pending = entries.some((entry) => entry.state === 'pending');
+      return { entries, ...(!pending ? {
+        state: entries.some((entry) => entry.state === 'failed') ? 'failed' as const : 'queued' as const,
+        claimId: null, claimExpiresAtMs: null, nextAttemptAtMs: null,
+      } : {}) };
+    },
   });
 }
 
-export function updateClaimedNotificationOutbox<State, Result>(args: {
-  target: NotificationOutboxTarget;
-  claimId: string;
-  inspect: (document: CommerceDocumentRecord) => { claimId: unknown; state: State } | null;
-  lost: () => Result;
-  update: (state: State) => OutboxMutation<Result>;
-}): Promise<Result> {
-  return mutateNotificationOutbox(args.target, (document) => {
-    const current = document && args.inspect(document);
-    if (!document || !current || current.claimId !== args.claimId) return { result: args.lost() };
-    return args.update(current.state);
+export function markClaimedNotificationQueued(args: ClaimedOutboxOptions & {
+  jobs: readonly NotificationEmailJobV1[];
+}): Promise<NotificationOutboxRecord | null> {
+  return updateClaimedNotificationOutbox({
+    ...args,
+    update: (record) => {
+      if (new Set(args.jobs.map((job) => job.jobId)).size !== args.jobs.length) throw new Error('notification_publication_duplicate_job');
+      for (const job of args.jobs) {
+        const saved = record.entries.find((entry) => entry.state === 'pending' && entry.jobId === job.jobId && entry.idempotencyKey === job.idempotencyKey)?.payload;
+        if (!saved || JSON.stringify(saved) !== JSON.stringify(job)) throw new Error('notification_publication_snapshot_missing');
+      }
+      const entries = record.entries.map((entry) => {
+        if (entry.state !== 'pending' || !args.jobs.some((job) =>
+          job.jobId === entry.jobId && job.idempotencyKey === entry.idempotencyKey)) return entry;
+        const { payload: _payload, ...identity } = entry;
+        return { ...identity, state: 'queued' as const, queuedAtMs: args.nowMs() };
+      });
+      const pending = entries.some((entry) => entry.state === 'pending');
+      return {
+        entries,
+        state: pending ? 'pending' : entries.some((entry) => entry.state === 'failed') ? 'failed' : 'queued',
+        ...(!pending ? { claimId: null, claimExpiresAtMs: null, nextAttemptAtMs: null } : {}),
+      };
+    },
+  });
+}
+
+export function releaseNotificationOutboxClaim(args: ClaimedOutboxOptions): Promise<NotificationOutboxRecord | null> {
+  return updateClaimedNotificationOutbox({
+    ...args,
+    update: (record) => ({
+      attemptCount: Math.max(0, record.attemptCount - 1), claimId: null,
+      claimExpiresAtMs: null, nextAttemptAtMs: args.nowMs(),
+    }),
   });
 }

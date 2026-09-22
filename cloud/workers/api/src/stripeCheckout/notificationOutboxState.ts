@@ -1,34 +1,8 @@
 import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from '../notificationOutboxPublication.js';
-import { isRecord } from '../dataAccess.js';
-import {
-  isNotificationEmailJobId,
-  isNotificationEmailJobV1,
-  type NotificationEmailJobV1,
-} from '../../../../../shared/notificationEmailJob.js';
 import { STRIPE_CHECKOUT_STATUS } from './contract.js';
-
-export const STRIPE_TERMINAL_NOTIFICATION_FIELD = 'stripeTerminalNotification';
-export const STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD = 'stripeTerminalNotificationState';
-export const STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD = 'stripeTerminalNotificationNextAttemptAtMs';
 
 export type StripeTerminalNotificationOutcome = 'fulfilled' | 'manual_review';
 type StripeTerminalNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship' | 'stripe_checkout_manual_review';
-
-export type StripeTerminalNotificationOutbox = {
-  version: 1;
-  outcome: StripeTerminalNotificationOutcome;
-  jobIds: Partial<Record<StripeTerminalNotificationKind, string>>;
-  attemptCount: number;
-  retryUntilMs: number;
-  claimId?: string;
-  jobs?: NotificationEmailJobV1[];
-};
-
-export type StripeTerminalNotificationFields = {
-  stripeTerminalNotification?: StripeTerminalNotificationOutbox;
-  stripeTerminalNotificationState?: 'pending';
-  stripeTerminalNotificationNextAttemptAtMs?: number;
-};
 
 export function stripeTerminalNotificationOutcome(
   checkout: Record<string, unknown> | null,
@@ -41,55 +15,48 @@ export function stripeTerminalNotificationOutcome(
   return null;
 }
 
-export function createStripeTerminalNotificationOutboxFields(
-  before: Record<string, unknown> | null,
-  outcome: StripeTerminalNotificationOutcome,
-  nowMs = Date.now(),
-): StripeTerminalNotificationFields {
-  if (stripeTerminalNotificationOutcome(before) === outcome) return {};
-  const existing = before?.[STRIPE_TERMINAL_NOTIFICATION_FIELD];
-  if (isRecord(existing) && existing.outcome === outcome) return {};
-  const kinds: StripeTerminalNotificationKind[] = outcome === 'fulfilled'
-    ? ['buyer_order_received', 'shipper_ready_to_ship']
-    : ['stripe_checkout_manual_review'];
-  const outbox: StripeTerminalNotificationOutbox = {
-    version: 1,
-    outcome,
-    jobIds: Object.fromEntries(kinds.map((kind) => [kind, crypto.randomUUID()])),
-    attemptCount: 0,
-    retryUntilMs: nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS,
-  };
+function createStripeTerminalNotificationIntent(args: {
+  parentPath: string;
+  dropId: string;
+  sessionId: string;
+  outcome: StripeTerminalNotificationOutcome;
+  deliveryId?: number;
+  nowMs: number;
+}): import('../../../../../shared/notificationOutbox.js').NotificationOutboxCreate {
+  if (args.outcome === 'fulfilled' && (!Number.isSafeInteger(args.deliveryId) || Number(args.deliveryId) < 1)) {
+    throw new Error('stripe_terminal_notification_delivery_id_invalid');
+  }
+  const kinds: StripeTerminalNotificationKind[] = args.outcome === 'fulfilled'
+    ? ['buyer_order_received', 'shipper_ready_to_ship'] : ['stripe_checkout_manual_review'];
   return {
-    [STRIPE_TERMINAL_NOTIFICATION_FIELD]: outbox,
-    [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'pending',
-    [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: nowMs,
+    parentPath: args.parentPath, family: 'stripe_terminal', dropId: args.dropId,
+    generation: crypto.randomUUID(), outcome: args.outcome,
+    retryUntilMs: args.nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS,
+    entries: kinds.map((kind) => ({
+      kind, jobId: crypto.randomUUID(), state: 'pending',
+      idempotencyKey: kind === 'stripe_checkout_manual_review'
+        ? `${args.dropId}:${args.sessionId}:stripe_manual_review`
+        : `${args.dropId}:${args.deliveryId}:${kind === 'buyer_order_received' ? 'order_received' : 'ready_to_ship'}`,
+    })),
   };
 }
 
-export function parseStripeTerminalNotificationOutbox(value: unknown): StripeTerminalNotificationOutbox | null {
-  if (
-    !isRecord(value) || value.version !== 1 ||
-    (value.outcome !== 'fulfilled' && value.outcome !== 'manual_review') ||
-    !isRecord(value.jobIds) ||
-    !Number.isSafeInteger(value.attemptCount) || Number(value.attemptCount) < 0 ||
-    !Number.isSafeInteger(value.retryUntilMs) || Number(value.retryUntilMs) < 0 ||
-    (value.claimId !== undefined && !isNotificationEmailJobId(value.claimId))
-  ) return null;
-  const kinds: StripeTerminalNotificationKind[] = value.outcome === 'fulfilled'
-    ? ['buyer_order_received', 'shipper_ready_to_ship']
-    : ['stripe_checkout_manual_review'];
-  const jobIds = value.jobIds;
-  if (kinds.some((kind) => !isNotificationEmailJobId(jobIds[kind]))) return null;
-  if (value.jobs !== undefined) {
-    if (!Array.isArray(value.jobs) || value.jobs.length > kinds.length) return null;
-    const seen = new Set<string>();
-    for (const job of value.jobs) {
-      if (
-        !isNotificationEmailJobV1(job) || !kinds.includes(job.kind as StripeTerminalNotificationKind) ||
-        job.jobId !== jobIds[job.kind] || seen.has(job.kind)
-      ) return null;
-      seen.add(job.kind);
-    }
-  }
-  return value as StripeTerminalNotificationOutbox;
+export async function enqueueStripeTerminalNotifications(args: {
+  transaction: import('../commerceRepository.js').CommerceUnitOfWork;
+  key: import('../commerceRepository.js').CommerceDocumentKey<'stripe_checkout'>;
+  before: Record<string, unknown> | null;
+  outcome: StripeTerminalNotificationOutcome;
+  deliveryId?: number;
+  nowMs: number;
+  initializeMissing?: boolean;
+}): Promise<void> {
+  const current = await args.transaction.getNotificationOutbox(args.key.path, 'stripe_terminal');
+  if (current?.outcome === args.outcome ||
+    (!current && !args.initializeMissing && stripeTerminalNotificationOutcome(args.before) === args.outcome)) return;
+  const intent = createStripeTerminalNotificationIntent({
+    parentPath: args.key.path, dropId: args.key.dropId!, sessionId: args.key.documentId,
+    outcome: args.outcome, deliveryId: args.deliveryId, nowMs: args.nowMs,
+  });
+  if (current) await args.transaction.replaceNotificationOutbox(intent);
+  else await args.transaction.enqueueNotificationOutbox(intent);
 }
