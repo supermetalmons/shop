@@ -264,6 +264,16 @@ button.fulfillment-export-menu__item:focus-visible {
   flex-direction: column;
 }
 
+.manual-review-menu__footer {
+  display: grid;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.manual-review-menu__footer:empty {
+  display: none;
+}
+
 .manual-review-row {
   display: flex;
   flex-direction: column;

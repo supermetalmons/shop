@@ -1295,6 +1295,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       new URL('../cloud/workers/api/commerce-migrations/0014_drop_legacy_notification_indexes.sql', import.meta.url),
       'utf8',
     ));
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', import.meta.url),
+      'utf8',
+    ));
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
       'owner',
@@ -1346,8 +1350,18 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       const fulfillmentPlan = planDetails(db, fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001, startAfter }));
       assert.match(fulfillmentPlan, /SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor/);
     }
-    const manualReviewPlan = planDetails(db, manualReviewCheckoutsQuery({ dropId: 'drop' }));
-    assert.match(manualReviewPlan, /SEARCH commerce_documents USING INDEX commerce_documents_manual_review/);
+    const manualReviewPlan = planDetails(db, manualReviewCheckoutsQuery({ dropId: 'drop', limit: 26 }));
+    assert.match(manualReviewPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_checkouts_manual_review_cursor/);
+    const manualReviewCursorPlan = planDetails(db, manualReviewCheckoutsQuery({
+      dropId: 'drop', limit: 26,
+      startAfter: {
+        version: 1, dropId: 'drop', sortAtMs: 200, sessionId: 'cs_cursor',
+        documentPath: 'drops/drop/stripeCheckouts/cs_cursor',
+      },
+    }));
+    assert.match(manualReviewCursorPlan,
+      /\(manual_review_sort_at_ms,manual_review_session_id,document_path\)<\(\?,\?,\?\)/);
+    assert.doesNotMatch(manualReviewPlan + manualReviewCursorPlan, /USE TEMP B-TREE/);
     const legacyClaimPlan = planDetails(db, legacyClaimAssignmentsQuery({ code: 'claim' }));
     assert.match(legacyClaimPlan, /SEARCH commerce_documents USING INDEX commerce_documents_assignment_claim/);
     const deliveryRecoveryPlan = planDetails(db, deliveryRecoveryOrdersQuery('owner'));
@@ -1384,6 +1398,38 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.doesNotMatch(readyPlan, /USE TEMP B-TREE/);
     assert.deepEqual(db.prepare(readyQuery.sql).all(...readyQuery.bindings).map((row) => row.document_path),
       ['drops/drop/deliveryOrders/100', 'drops/drop/deliveryOrders/200']);
+  } finally {
+    db.close();
+  }
+});
+
+test('manual-review pagination migration indexes populated documents without changing commerce state', () => {
+  const db = database();
+  try {
+    runDocumentEpoch(db, () => {
+      insertTestDocument(db, {
+        kind: 'stripe_checkout', dropId: 'drop', documentId: 'cs_existing',
+        path: 'drops/drop/stripeCheckouts/cs_existing',
+        data: {
+          status: 'fulfillment_failed', manualRefundReviewRequired: true,
+          failedAt: 0, createdAt: 123.5, sessionId: '\u2000cs_existing\ufeff',
+        },
+      });
+    });
+    const before = db.prepare('SELECT document_path, document_json, version, create_time, update_time FROM commerce_documents').all();
+    const authorityBefore = db.prepare('SELECT * FROM commerce_authority_control').all();
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', import.meta.url), 'utf8',
+    ));
+    assert.deepEqual(db.prepare('SELECT document_path, document_json, version, create_time, update_time FROM commerce_documents').all(), before);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
+    assert.deepEqual({ ...db.prepare('SELECT manual_review_sort_at_ms, manual_review_session_id FROM commerce_documents').get() }, {
+      manual_review_sort_at_ms: 123.5, manual_review_session_id: 'cs_existing',
+    });
+    assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_manual_review_cursor'), [
+      'drop_id', 'manual_review_sort_at_ms', 'manual_review_session_id', 'document_path',
+    ]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'commerce_documents_manual_review'").get()!.count, 1);
   } finally {
     db.close();
   }

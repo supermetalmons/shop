@@ -37,6 +37,7 @@ export function classifyAuthenticatedRequestError(
   error: unknown,
   options: {
     authenticated: boolean;
+    fallbackAuthOutcome?: RequestFailureAuthOutcome;
     timedOut: boolean;
     timeoutPrecedence: 'before-known-errors' | 'after-known-errors';
     timeoutMessage: string;
@@ -44,7 +45,7 @@ export function classifyAuthenticatedRequestError(
     mapDomainError: (error: unknown) => MappedRequestError | undefined;
   },
 ): ClassifiedRequestError {
-  const defaultAuthOutcome = options.authenticated ? 'provider-failure' : 'rejected';
+  const defaultAuthOutcome = options.fallbackAuthOutcome ?? (options.authenticated ? 'provider-failure' : 'rejected');
   const timeout: ClassifiedRequestError = {
     error: { code: 'deadline-exceeded', message: options.timeoutMessage },
     authOutcome: defaultAuthOutcome,

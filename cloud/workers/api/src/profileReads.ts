@@ -21,6 +21,8 @@ import {
   STRIPE_CHECKOUT_RETRY_HEADER,
   type DeliveryOrderSummary,
   type FulfillmentManualReviewCheckout,
+  type FulfillmentManualReviewCursor,
+  type FulfillmentManualReviewPage,
   type FulfillmentOrder,
   type FulfillmentOrdersCursor,
   type GetAdminProfileViewResponse,
@@ -29,6 +31,12 @@ import {
   type ProfileStateProfile,
   type ProfileStateSection,
 } from '../../../../shared/contracts.js';
+import {
+  DEFAULT_MANUAL_REVIEW_LIMIT,
+  MAX_MANUAL_REVIEW_LIMIT,
+  isFulfillmentManualReviewCursor,
+  manualReviewDocumentCursor,
+} from '../../../../shared/fulfillmentManualReviewPagination.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
@@ -44,7 +52,6 @@ import { isStripeChargebackSessionId } from '../../../../shared/stripeChargeback
 import { loadStripeChargebackSessionIds } from './stripeChargebackStore.js';
 import {
   type RequestAuthContext,
-  RequestIdentityError,
   isStaffOnlyApiPath,
   isStaffRequestIdentity,
   resolveRequestWallet,
@@ -62,7 +69,7 @@ import {
   raceReadWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
@@ -293,6 +300,7 @@ function deliveryHistoryFromDocuments(documents: readonly CommerceDocumentRecord
 type ParsedReadRequest = {
   ownerWallet?: string;
   cursor?: string | FulfillmentOrdersCursor | null;
+  manualReviewCursor?: FulfillmentManualReviewCursor | null;
   pageSize?: number;
   limit?: number;
   dropId?: string;
@@ -374,8 +382,16 @@ async function parseExactRequestBody(
     };
   }
   if (path === FULFILLMENT_MANUAL_REVIEW_PATH) {
-    if (!exactKeys(parsed, ['dropId'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    return { dropId: supportedDropId(parsed.dropId) };
+    if (!exactKeys(parsed, ['dropId', 'limit', 'cursor'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
+    const dropId = supportedDropId(parsed.dropId);
+    const limit = parsed.limit ?? DEFAULT_MANUAL_REVIEW_LIMIT;
+    if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > MAX_MANUAL_REVIEW_LIMIT || parsed.limit === null) {
+      throw new ProfileReadError('invalid-argument', 400, 'Invalid limit.');
+    }
+    if (parsed.cursor != null && !isFulfillmentManualReviewCursor(parsed.cursor, dropId)) {
+      throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
+    }
+    return { dropId, limit: Number(limit), manualReviewCursor: parsed.cursor as FulfillmentManualReviewCursor | null | undefined };
   }
   if (Object.keys(parsed).length !== 1 || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address.');
@@ -701,17 +717,21 @@ async function manualReviewFromDocuments(args: {
   providerFetch: ProfileProviderFetch;
   request: Request;
   signal: AbortSignal;
-}): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
+  nextCursor: FulfillmentManualReviewCursor | null;
+}): Promise<FulfillmentManualReviewPage> {
   const mode = DEPLOYMENT_DROPS[args.dropId]?.solanaCluster === 'mainnet-beta' ? 'live' : 'test';
   const keys = stripeKeysForMode(args.env, mode);
-  const summaries = await Promise.all(args.documents.map(async (document) => {
+  const summaries = new Array<FulfillmentManualReviewCheckout | null>(args.documents.length).fill(null);
+  let nextIndex = 0;
+  const hydrate = async (document: CommerceDocumentRecord): Promise<FulfillmentManualReviewCheckout | null> => {
+    args.request.signal.throwIfAborted();
     const fields = selectedFields(document.data, MANUAL_REVIEW_FIELDS);
     if (!isManualReviewCheckout(fields)) return null;
     const sessionId = optionalString(fields.sessionId) || document.key.documentId;
     if (!/^[A-Za-z0-9_:-]{4,256}$/.test(sessionId)) return null;
     let session: unknown = null;
     try {
-      session = await fetchStripeSession(sessionId, keys, args.providerFetch, args.signal);
+      if (!args.signal.aborted) session = await fetchStripeSession(sessionId, keys, args.providerFetch, args.signal);
     } catch (error) {
       if (isRequestCancellationError(args.request, error)) throw error;
     }
@@ -722,19 +742,28 @@ async function manualReviewFromDocuments(args: {
       session,
       sessionId,
     });
+  };
+  await Promise.all(Array.from({ length: Math.min(4, args.documents.length) }, async () => {
+    while (nextIndex < args.documents.length) {
+      const index = nextIndex++;
+      summaries[index] = await hydrate(args.documents[index]);
+    }
   }));
   const checkouts = summaries.filter((value): value is FulfillmentManualReviewCheckout => Boolean(value));
-  checkouts.sort((left, right) =>
-    (right.failedAt || right.createdAt || 0) - (left.failedAt || left.createdAt || 0) ||
-    right.sessionId.localeCompare(left.sessionId));
-  return { checkouts };
+  return { checkouts, nextCursor: args.nextCursor };
 }
 
 async function loadManualReviewDocuments(args: {
   dropId: string;
+  limit: number;
+  cursor?: FulfillmentManualReviewCursor | null;
   repository: Pick<D1CommerceRepository, 'queryManualReviewCheckouts'>;
 }): Promise<CommerceDocumentRecord[]> {
-  return args.repository.queryManualReviewCheckouts({ dropId: args.dropId });
+  return args.repository.queryManualReviewCheckouts({
+    dropId: args.dropId,
+    limit: args.limit + 1,
+    ...(args.cursor ? { startAfter: args.cursor } : {}),
+  });
 }
 
 async function loadProfileStateProfile(args: {
@@ -910,10 +939,15 @@ export async function handleProfileReadRequest(
         }
         return {
           response: jsonResponse(await (async () => {
-            const documents = await boundedRead(loadManualReviewDocuments({ ...common, dropId }));
+            const limit = requestBody.limit ?? DEFAULT_MANUAL_REVIEW_LIMIT;
+            const documents = await boundedRead(loadManualReviewDocuments({
+              ...common, dropId, limit, cursor: requestBody.manualReviewCursor,
+            }));
+            const page = documents.slice(0, limit);
             return manualReviewFromDocuments({
               canViewSensitiveAddress: access.canViewSensitiveAddress,
-              documents,
+              documents: page,
+              nextCursor: documents.length > limit ? manualReviewDocumentCursor(dropId, page[page.length - 1]) : null,
               dropId,
               env,
               providerFetch: trackedFetch,
@@ -950,27 +984,21 @@ export async function handleProfileReadRequest(
       };
     } catch (error) {
       if (isRequestCancellationError(request, error)) throw error;
-      let profileError: ProfileReadError;
-      let authOutcome: ProfileReadResult['authOutcome'] = identity! ? 'provider-failure' : 'rejected';
-      if (error instanceof ProfileReadError) {
-        profileError = error;
-        if (error.code === 'unauthenticated' || error.code === 'permission-denied' || error.code === 'invalid-argument') {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Profile request timed out.',
-        });
-        profileError = new ProfileReadError(mapped.code, httpStatusForApiErrorCode(mapped.code, 502), mapped.message);
-        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-      } else if (deadline.timedOut()) {
-        profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-        authOutcome = identity! ? 'provider-failure' : 'rejected';
-      } else {
-        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
-        authOutcome = identity! ? 'provider-failure' : 'rejected';
-      }
+      const { error: classified, authOutcome } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity!),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'after-known-errors',
+        timeoutMessage: 'Profile request timed out.',
+        internalMessage: 'Profile request failed.',
+        mapDomainError: (failure) => failure instanceof ProfileReadError ? {
+          error: failure,
+          authOutcome: ['unauthenticated', 'permission-denied', 'invalid-argument'].includes(failure.code)
+            ? 'rejected' : identity! ? 'provider-failure' : 'rejected',
+        } : undefined,
+      });
+      const profileError = classified instanceof ProfileReadError ? classified : new ProfileReadError(
+        classified.code, httpStatusForApiErrorCode(classified.code, 502), classified.message, classified.details,
+      );
       return { response: errorResponse(profileError), metrics, authOutcome };
     }
   });

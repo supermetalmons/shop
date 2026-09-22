@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { unstable_splitSqlQuery } from 'wrangler';
+import { createD1MaintenanceRunner } from '../../../../scripts/shared/d1MaintenanceRunner.ts';
 import {
   assertD1Integrity,
   buildD1SummaryRebuildSql,
+  readD1Integrity,
   type D1IntegrityInput,
 } from '../../../../scripts/shared/d1PackStatusMaintenance.ts';
 import {
@@ -118,6 +121,35 @@ function commerceDocument(
     updateTime: '2026-08-25T10:00:00.000000001Z',
   };
 }
+
+test('D1 integrity reads all checks in one command without changing the report', () => {
+  const database = createPackStatusDatabase();
+  try {
+    const expected = { ...integrityInput(), eventCounts: [] };
+    database.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    for (const { name } of expected.migrations) {
+      database.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run(String(name));
+    }
+    database.exec('UPDATE pack_status_metadata SET cache_generation = 8');
+    for (const summary of expected.summaries) {
+      const columns = Object.keys(summary);
+      database.prepare(`INSERT INTO pack_status (${columns.join(', ')})
+        VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(summary) as Array<string | number | null>);
+    }
+    let calls = 0;
+    const runner = createD1MaintenanceRunner('data', (_file, args) => {
+      calls += 1;
+      assert.equal(args.includes('--file'), false);
+      const statements = unstable_splitSqlQuery(args[args.indexOf('--command') + 1]);
+      assert.equal(statements.length, 8);
+      return JSON.stringify(statements.map((sql) => ({ success: true, results: database.prepare(sql).all() })));
+    });
+    assert.deepEqual(readD1Integrity(runner.queryBatch), assertD1Integrity(expected));
+    assert.equal(calls, 1);
+  } finally {
+    database.close();
+  }
+});
 
 test('D1 integrity requires valid metadata, exact supported summaries, guards, and event ownership', () => {
   const input = integrityInput();

@@ -1,4 +1,5 @@
 import type { FulfillmentManualReviewCheckout } from '../types';
+import { manualReviewSortAt } from '../../shared/fulfillmentManualReviewPagination';
 
 export function formatOrderDate(ts?: number) {
   if (!ts) return 'Date pending';
@@ -31,8 +32,8 @@ export function manualReviewCheckoutKey(
   return `${checkout.dropId}:${checkout.sessionId}`;
 }
 
-function manualReviewSortValue(checkout: FulfillmentManualReviewCheckout): number {
-  return checkout.failedAt || checkout.createdAt || 0;
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function sortManualReviewCheckouts(
@@ -40,9 +41,9 @@ export function sortManualReviewCheckouts(
 ): FulfillmentManualReviewCheckout[] {
   return [...checkouts].sort(
     (a, b) =>
-      manualReviewSortValue(b) - manualReviewSortValue(a) ||
-      a.dropId.localeCompare(b.dropId) ||
-      b.sessionId.localeCompare(a.sessionId),
+      manualReviewSortAt(b) - manualReviewSortAt(a) ||
+      compareStrings(a.dropId, b.dropId) ||
+      compareStrings(b.sessionId, a.sessionId),
   );
 }
 

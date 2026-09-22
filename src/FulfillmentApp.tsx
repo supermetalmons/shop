@@ -20,6 +20,7 @@ import {
 import { resolveDropContent } from './lib/dropContent';
 import { fulfillmentOrderLooseFigureIds } from './lib/fulfillmentCodes';
 import { FulfillmentOrderCard } from './fulfillment/FulfillmentOrderCard';
+import { FulfillmentManualReviewMenu } from './fulfillment/FulfillmentManualReviewMenu';
 import { FulfillmentFigureTiles } from './fulfillment/FulfillmentMedia';
 import { FulfillmentStatusModal } from './fulfillment/FulfillmentStatusModal';
 import { FulfillmentAddressModal } from './fulfillment/FulfillmentAddressModal';
@@ -28,7 +29,6 @@ import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
 import { useFulfillmentExports } from './fulfillment/useFulfillmentExports';
 import { ShopHeader } from './components/ShopHeader';
 import { BodyPortal } from './components/BackgroundBlurLayer';
-import { formatFulfillmentAddressText } from './lib/fulfillmentExports';
 import {
   DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
   FULFILLMENT_ORDER_VISIBILITY_OPTIONS,
@@ -44,13 +44,6 @@ import {
 } from './config/deployment';
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
-import {
-  formatManualReviewAmount,
-  formatOrderDate,
-  manualReviewCheckoutKey,
-  manualReviewIssueText,
-  shortenStripeSessionId,
-} from './fulfillment/manualReview';
 import { fulfillmentOrderKey, groupFulfillmentOrders } from './fulfillment/orders';
 import {
   collectFulfillmentFigureMetadataTargets,
@@ -270,6 +263,10 @@ export default function FulfillmentApp({
     orders,
     orderPageKeys,
     manualReviewCheckouts,
+    manualReviewHasMore,
+    manualReviewLoading,
+    manualReviewError,
+    loadMoreManualReview,
     loading,
     loadingMore,
     ordersError,
@@ -284,11 +281,13 @@ export default function FulfillmentApp({
     onReset: resetOrderUi,
   });
 
+  const manualReviewVisible = manualReviewCheckouts.length > 0 || manualReviewHasMore || manualReviewLoading || Boolean(manualReviewError);
+  const manualReviewCount = `${manualReviewCheckouts.length}${manualReviewHasMore ? '+' : ''}`;
   useEffect(() => {
-    if (!manualReviewCheckouts.length && manualReviewMenuOpen) {
+    if (!manualReviewVisible && manualReviewMenuOpen) {
       setManualReviewMenuOpen(false);
     }
-  }, [manualReviewCheckouts.length, manualReviewMenuOpen]);
+  }, [manualReviewVisible, manualReviewMenuOpen]);
 
   const mergeLoadedFigureMetadata = useCallback((records: FigureMetadataRecord[]) => {
     if (!records.length) return;
@@ -515,43 +514,6 @@ export default function FulfillmentApp({
     onMenuClose: closeExportMenu,
   });
 
-  const renderManualReviewMenu = () => (
-    <div className="manual-review-menu" role="dialog" aria-label="Needs manual review">
-      <div className="manual-review-menu__head">
-        <div className="manual-review-menu__title">Needs manual review</div>
-        <div className="muted small">
-          {manualReviewCheckouts.length} {manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'}
-        </div>
-      </div>
-      <div className="manual-review-menu__list">
-        {manualReviewCheckouts.map((checkout) => {
-          const addressText = formatFulfillmentAddressText(checkout.address);
-          const contactEmail = checkout.address.full !== '***' ? checkout.address.email : '';
-          const quantityText = typeof checkout.quantity === 'number' ? `${checkout.quantity} item${checkout.quantity === 1 ? '' : 's'}` : 'Quantity pending';
-          const ownerText = checkout.owner || checkout.authSubject || 'Owner unavailable';
-          return (
-            <div key={manualReviewCheckoutKey(checkout)} className="manual-review-row">
-              <div className="manual-review-row__top">
-                <div className="manual-review-row__title">
-                  {showManualReviewDropId ? `${checkout.dropId} · ` : ''}
-                  {quantityText} · {formatManualReviewAmount(checkout.amountTotal, checkout.currency)}
-                </div>
-                <div className="muted small">{formatOrderDate(checkout.failedAt || checkout.createdAt)}</div>
-              </div>
-              <div className="manual-review-row__meta">
-                <span className="mono small">{shortenStripeSessionId(checkout.sessionId)}</span>
-                <span className="mono small">{ownerText}</span>
-              </div>
-              {contactEmail ? <div className="manual-review-contact small">{contactEmail}</div> : null}
-              <div className="manual-review-address small">{addressText || 'Address unavailable'}</div>
-              <div className="manual-review-reason small">{manualReviewIssueText(checkout)}</div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-
   const renderExportMenu = () => (
     <div className="fulfillment-export-menu" role="menu" aria-label="Fulfillment exports">
       <button
@@ -646,13 +608,13 @@ export default function FulfillmentApp({
               ) : null}
               {selectedDropIds.length ? (
                 <div className="fulfillment-toolbar-actions">
-                  {manualReviewCheckouts.length ? (
+                  {manualReviewVisible ? (
                     <div className="manual-review-menu-wrap" ref={manualReviewMenuRef}>
                       <button
                         type="button"
                         className="manual-review-button"
-                        aria-label={`Needs manual review, ${manualReviewCheckouts.length} ${
-                          manualReviewCheckouts.length === 1 ? 'checkout' : 'checkouts'
+                        aria-label={`Needs manual review, ${manualReviewCount} ${
+                          manualReviewCheckouts.length === 1 && !manualReviewHasMore ? 'checkout' : 'checkouts'
                         }`}
                         aria-haspopup="dialog"
                         aria-expanded={manualReviewMenuOpen}
@@ -663,9 +625,18 @@ export default function FulfillmentApp({
                         }}
                       >
                         <FiAlertTriangle aria-hidden="true" />
-                        <span>{manualReviewCheckouts.length}</span>
+                        <span>{manualReviewCount}</span>
                       </button>
-                      {manualReviewMenuOpen ? renderManualReviewMenu() : null}
+                      {manualReviewMenuOpen ? (
+                        <FulfillmentManualReviewMenu
+                          checkouts={manualReviewCheckouts}
+                          showDropId={showManualReviewDropId}
+                          hasMore={manualReviewHasMore}
+                          loading={manualReviewLoading}
+                          error={manualReviewError}
+                          onLoadMore={loadMoreManualReview}
+                        />
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="fulfillment-export-menu-wrap" ref={exportMenuRef}>

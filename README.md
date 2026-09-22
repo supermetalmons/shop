@@ -461,7 +461,17 @@ notification indexes after activation, while preserving their historical fields
 and write fences. An untouched, empty paused database can apply all migrations
 before initialization. Populated legacy databases must finish the `0013` cutover
 first. The checker supports both exact migration baselines during that transition.
-Append `0015_<description>.sql` for the next change.
+Migration `0015_manual_review_pagination.sql` adds indexed, newest-first
+manual-review pagination. It is additive and keeps the prior index available;
+apply it before publishing the API Worker. Coordinate the API and frontend
+release and refresh staff clients: legacy callers receive the first page only.
+Manual-review requests accept `dropId`, optional `limit` (default 25, maximum
+100), and a versioned `cursor`; responses return `checkouts` and `nextCursor`.
+The fulfillment menu loads older pages on demand and shows `+` after its loaded
+count while more pages remain. Stripe hydration is limited to four concurrent
+requests per page, and OPS/DATA integrity checks batch their read-only statements
+into one Wrangler command per database.
+Append `0016_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

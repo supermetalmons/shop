@@ -48,7 +48,7 @@ import {
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   D1CommerceRepository,
@@ -62,6 +62,7 @@ import {
   apiErrorBody,
   httpStatusForApiErrorCode,
   jsonResponse,
+  type ApiErrorLike,
 } from './httpResponse.js';
 import {
   createSolanaProvider,
@@ -129,7 +130,7 @@ const defaultDependencies: CheckoutDependencies = {
   verifyIdentity: verifyRequestIdentity,
 };
 
-function checkoutErrorResponse(error: StripeCheckoutSessionError, retrySameOperation = false): Response {
+function checkoutErrorResponse(error: ApiErrorLike, retrySameOperation = false): Response {
   const response = jsonResponse(
     apiErrorBody(error),
     httpStatusForApiErrorCode(error.code, 502),
@@ -538,43 +539,36 @@ export async function handleStripeCheckoutSession(
         const checkoutError = new StripeCheckoutSessionError(mapped.code, mapped.message);
         return { response: checkoutErrorResponse(checkoutError), metrics, authOutcome: 'provider-failure' };
       }
-      if (deadline.timedOut()) {
-        return {
-          response: checkoutErrorResponse(
-            new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.'),
-            true,
-          ),
-          metrics,
-          authOutcome: identity ? 'provider-failure' : 'rejected',
-        };
-      }
-      if (error instanceof StripeCheckoutOperationUncertainError) {
-        return {
-          response: checkoutErrorResponse(error, true),
-          metrics,
-          authOutcome: 'provider-failure',
-        };
-      }
-      if (error instanceof StripeCheckoutSessionError) {
-        return {
-          response: checkoutErrorResponse(error),
-          metrics,
-          authOutcome: error.code === 'invalid-argument' || error.code === 'failed-precondition'
-            ? 'rejected'
-            : 'provider-failure',
-        };
-      }
-      if (error instanceof ProfileReadError) {
-        return {
-          response: checkoutErrorResponse(new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.')),
-          metrics,
-          authOutcome: 'provider-failure',
-        };
-      }
+      const timedOut = deadline.timedOut();
+      const { error: checkoutError, authOutcome } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        fallbackAuthOutcome: timedOut ? undefined : 'provider-failure',
+        timedOut,
+        timeoutPrecedence: 'before-known-errors',
+        timeoutMessage: 'Checkout request timed out.',
+        internalMessage: 'Stripe checkout failed.',
+        mapDomainError: (failure) => {
+          if (failure instanceof StripeCheckoutOperationUncertainError) return { error: failure, authOutcome: 'provider-failure' };
+          if (failure instanceof StripeCheckoutSessionError) {
+            return {
+              error: failure,
+              authOutcome: failure.code === 'invalid-argument' || failure.code === 'failed-precondition'
+                ? 'rejected' : 'provider-failure',
+            };
+          }
+          if (failure instanceof ProfileReadError) {
+            return {
+              error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
+              authOutcome: 'provider-failure',
+            };
+          }
+          return undefined;
+        },
+      });
       return {
-        response: checkoutErrorResponse(new StripeCheckoutSessionError('internal', 'Stripe checkout failed.')),
+        response: checkoutErrorResponse(checkoutError, timedOut || error instanceof StripeCheckoutOperationUncertainError),
         metrics,
-        authOutcome: 'provider-failure',
+        authOutcome,
       };
     }
   });

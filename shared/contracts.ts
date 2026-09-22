@@ -339,6 +339,19 @@ export type FulfillmentManualReviewCheckout = Omit<StripeCheckoutManualReviewSum
   address: FulfillmentOrderAddress;
 };
 
+export type FulfillmentManualReviewCursor = {
+  version: 1;
+  dropId: string;
+  sortAtMs: number;
+  sessionId: string;
+  documentPath: string;
+};
+
+export type FulfillmentManualReviewPage = {
+  checkouts: FulfillmentManualReviewCheckout[];
+  nextCursor: FulfillmentManualReviewCursor | null;
+};
+
 export type UpdateFulfillmentAddressRequest = {
   dropId: string;
   deliveryId: number;

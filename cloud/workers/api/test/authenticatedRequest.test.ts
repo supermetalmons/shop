@@ -102,6 +102,15 @@ test('domain adapters can mark write conflicts rejected without changing other a
   })), { error, authOutcome: 'rejected', unexpected: false });
 });
 
+test('fallback auth outcomes preserve timeout and unknown-error policy without overriding known errors', () => {
+  const options = classificationOptions({ authenticated: false, fallbackAuthOutcome: 'provider-failure' });
+  assert.equal(classifyAuthenticatedRequestError(new Error('Unknown failure'), options).authOutcome, 'provider-failure');
+  assert.equal(classifyAuthenticatedRequestError(new Error('Expired'), { ...options, timedOut: true }).authOutcome, 'provider-failure');
+  assert.equal(classifyAuthenticatedRequestError(new RequestIdentityError('invalid-token'), options).authOutcome, 'rejected');
+  assert.equal(classifyAuthenticatedRequestError(new DeliveryPrepareError('not-found', 'Missing'), options).authOutcome, 'rejected');
+  assert.equal(classifyAuthenticatedRequestError(new ProfileReadError('unavailable', 503, 'Unavailable'), options).authOutcome, 'provider-failure');
+});
+
 test('only unexpected failures request logging and expose the safe internal message', () => {
   for (const error of [new Error('Private provider details'), { code: 'permission-denied', message: 'Untrusted shape' }, null]) {
     for (const authenticated of [true, false]) {

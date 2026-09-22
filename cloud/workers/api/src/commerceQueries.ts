@@ -4,6 +4,7 @@ import { PROFILE_SHIPMENT_STATUSES } from '../../../../shared/deliveryOrderSumma
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.js';
+import type { FulfillmentManualReviewCursor } from '../../../../shared/contracts.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -17,6 +18,12 @@ export type FulfillmentOrdersQueryArgs = Readonly<{
     processedAt: CommerceTimestamp;
     documentPath: string;
   }>;
+}>;
+
+export type ManualReviewCheckoutsQueryArgs = Readonly<{
+  dropId: string;
+  limit: number;
+  startAfter?: FulfillmentManualReviewCursor;
 }>;
 
 const DOCUMENT_COLUMN_NAMES = [
@@ -121,14 +128,25 @@ export function fulfillmentOrdersQuery(args: FulfillmentOrdersQueryArgs): Commer
   };
 }
 
-export function manualReviewCheckoutsQuery(args: Readonly<{ dropId: string }>): CommerceSqlQuery {
+export function manualReviewCheckoutsQuery(args: ManualReviewCheckoutsQueryArgs): CommerceSqlQuery {
+  const cursor = args.startAfter;
   return {
     sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
-        AND document_kind = 'stripe_checkout' AND drop_id = ? AND manual_refund_review_required = 1
-      ORDER BY document_path ASC`,
-    bindings: [args.dropId],
+      FROM commerce_documents INDEXED BY commerce_stripe_checkouts_manual_review_cursor
+      WHERE EXISTS (SELECT 1 FROM commerce_authority_control
+        WHERE singleton = 1 AND authority_state = 'd1')
+        AND document_kind = 'stripe_checkout' AND drop_id = ?
+        AND status = 'fulfillment_failed' AND manual_refund_review_required = 1
+        AND json_type(document_json, '$.manualRefundReviewRequired') = 'true'
+        AND length(CAST(manual_review_session_id AS BLOB)) <= 256
+        AND length(CAST(document_path AS BLOB)) <= 512${cursor === undefined ? '' : `
+        AND (manual_review_sort_at_ms, manual_review_session_id, document_path) < (?, ?, ?)`}
+      ORDER BY manual_review_sort_at_ms DESC, manual_review_session_id COLLATE BINARY DESC,
+        document_path COLLATE BINARY DESC
+      LIMIT ?`,
+    bindings: [args.dropId, ...(cursor === undefined ? [] : [
+      cursor.sortAtMs, cursor.sessionId, cursor.documentPath,
+    ]), args.limit],
   };
 }
 

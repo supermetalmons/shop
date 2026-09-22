@@ -132,6 +132,17 @@ const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = O
 });
 const DELIVERY_RECOVERY_INDEX_SQL = `CREATE INDEX commerce_documents_delivery_owner_status
   ON commerce_documents (document_kind, owner, status, document_path)`;
+const MANUAL_REVIEW_CURSOR_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_manual_review_cursor
+  ON commerce_documents (
+    drop_id,
+    manual_review_sort_at_ms DESC,
+    manual_review_session_id COLLATE BINARY DESC,
+    document_path COLLATE BINARY DESC
+  )
+  WHERE document_kind = 'stripe_checkout'
+    AND status = 'fulfillment_failed'
+    AND manual_refund_review_required = 1
+    AND json_type(document_json, '$.manualRefundReviewRequired') = 'true'`;
 const STRIPE_RECONCILIATION_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_reconciliation_due
   ON commerce_documents (
     CAST(json_extract(document_json, '$.updatedAt') AS INTEGER),
@@ -227,7 +238,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length !== 13 && migrations.length !== 14) ||
+    (migrations.length !== 13 && migrations.length !== 14 && migrations.length !== 15) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -241,11 +252,18 @@ export function checkCommerceD1(
     migrations[10].name !== '0011_stripe_order_disputes.sql' ||
     migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql' ||
     migrations[12].name !== '0013_notification_outbox.sql' ||
-    (migrations.length === 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql')
+    (migrations.length >= 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql') ||
+    (migrations.length === 15 && migrations[14].name !== '0015_manual_review_pagination.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
-  const legacyNotificationIndexesRemoved = migrations.length === 14;
+  const legacyNotificationIndexesRemoved = migrations.some((migration) =>
+    migration.name === '0014_drop_legacy_notification_indexes.sql');
+  const manualReviewPaginationReady = migrations.some((migration) =>
+    migration.name === '0015_manual_review_pagination.sql');
+  if (options.forDeployment && !manualReviewPaginationReady) {
+    fail('Commerce D1 manual-review pagination migration is required for deployment.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -643,10 +661,28 @@ export function checkCommerceD1(
       WHERE document_kind = 'delivery_order' AND fulfillment_status = 'pending'`),
     'commerce_documents_fulfillment_status',
   );
-  requireIndex(
-    queryPlan(manualReviewCheckoutsQuery({ dropId: 'drop' })),
-    'commerce_documents_manual_review',
-  );
+  if (manualReviewPaginationReady) {
+    const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+      WHERE type = 'index' AND name = 'commerce_stripe_checkouts_manual_review_cursor'`);
+    if (index.length !== 1 || normalizedSql(index[0].sql) !== normalizedSql(MANUAL_REVIEW_CURSOR_INDEX_SQL)) {
+      fail('Commerce D1 manual-review cursor index is invalid.');
+    }
+    for (const startAfter of [undefined, {
+      version: 1 as const, dropId: 'drop', sortAtMs: 1, sessionId: 'cs_cursor',
+      documentPath: 'drops/drop/stripeCheckouts/cs_cursor',
+    }]) {
+      const plan = queryPlan(manualReviewCheckoutsQuery({ dropId: 'drop', limit: 26, startAfter }));
+      requireSearchIndex(plan, 'commerce_stripe_checkouts_manual_review_cursor');
+      requireNoTemporaryBTree(plan, 'manual-review');
+      if (startAfter && !plan.some((row) => normalizedSql(row.detail).includes(
+        '(manual_review_sort_at_ms,manual_review_session_id,document_path)<(?,?,?)',
+      ))) fail('Commerce D1 manual-review query plan does not seek the full cursor.');
+    }
+  } else {
+    requireIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
+      WHERE document_kind = 'stripe_checkout' AND drop_id = 'drop' AND manual_refund_review_required = 1
+      ORDER BY document_path ASC`), 'commerce_documents_manual_review');
+  }
   requireIndex(
     queryPlan(fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001 })),
     'commerce_documents_drop_processed_cursor',

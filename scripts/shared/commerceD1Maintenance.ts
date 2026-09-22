@@ -1,6 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createD1MaintenanceRunner } from './d1MaintenanceRunner.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 
 export type CommerceD1Row = Record<string, unknown>;
@@ -46,88 +44,17 @@ export type CommerceAuthorityLease = {
   token: string;
 };
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const configPath = 'cloud/workers/api/wrangler.jsonc';
-const envFilePath = 'cloud/workers/api/release.env';
-const databaseName = 'mons-shop-commerce';
-const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const commerceD1 = createD1MaintenanceRunner('commerce');
 const COMMERCE_AUTHORITY_LEASE_TTL_MS = 30 * 60_000;
 export const COMMERCE_D1_NOW_MS_SQL = "(CAST(strftime('%s', 'now') AS INTEGER) * 1000)";
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const wranglerBinary = resolve(
-  repoRoot,
-  'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler',
-);
 
 function fail(message: string): never {
   throw new Error(message);
 }
 
-function runWrangler(args: string[], json = true): string {
-  try {
-    return execFileSync(
-      wranglerBinary,
-      [
-        ...args,
-        '--config',
-        configPath,
-        '--env-file',
-        envFilePath,
-        ...(json ? ['--json'] : []),
-      ],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: process.env,
-        maxBuffer: 64 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: WRANGLER_COMMAND_TIMEOUT_MS,
-      },
-    ).trim();
-  } catch (error) {
-    const output = error && typeof error === 'object'
-      ? [
-          'stdout' in error ? (error as { stdout?: unknown }).stdout : '',
-          'stderr' in error ? (error as { stderr?: unknown }).stderr : '',
-        ]
-          .map((value) => String(value || '').replace(/\u001b\[[0-9;]*m/g, '').trim())
-          .filter(Boolean)
-          .join('\n')
-      : '';
-    return fail(output || 'Wrangler Commerce D1 command failed.');
-  }
-}
-
-function parseEnvelope(output: string): CommerceD1Row[][] {
-  let parsed: unknown;
-  try {
-    const jsonStart = output.indexOf('[');
-    parsed = JSON.parse(jsonStart >= 0 ? output.slice(jsonStart) : output);
-  } catch {
-    return fail('Commerce D1 returned invalid JSON.');
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) return fail('Commerce D1 returned an invalid result envelope.');
-  return parsed.map((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return fail('Commerce D1 returned an invalid result.');
-    const result = entry as { results?: unknown; success?: unknown };
-    if (result.success !== true || !Array.isArray(result.results)) return fail('Commerce D1 query failed.');
-    return result.results as CommerceD1Row[];
-  });
-}
-
 export function queryRemoteCommerceD1(sql: string): CommerceD1Row[] {
-  const results = parseEnvelope(runWrangler([
-    'd1',
-    'execute',
-    databaseName,
-    '--remote',
-    '--command',
-    sql,
-  ]));
-  if (results.length !== 1) return fail('Expected exactly one Commerce D1 statement result.');
-  return results[0];
+  return commerceD1.query(sql);
 }
 
 export function commerceAuthorityLeaseToken(value: unknown): string {
@@ -317,14 +244,7 @@ export function readRemoteCommerceAuthority(): CommerceD1Authority {
 }
 
 export function executeRemoteCommerceD1File(filePath: string): CommerceD1Row[][] {
-  return parseEnvelope(runWrangler([
-    'd1',
-    'execute',
-    databaseName,
-    '--remote',
-    '--file',
-    filePath,
-  ]));
+  return commerceD1.executeFile(filePath);
 }
 
 export function sqlString(value: string): string {

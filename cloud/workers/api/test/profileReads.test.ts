@@ -1180,6 +1180,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     }),
   );
   assert.deepEqual(await manual.response.json(), {
+    nextCursor: null,
     checkouts: [{
       dropId: 'card_nft_2',
       sessionId: 'cs_test_review',

@@ -2,9 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { unstable_splitSqlQuery } from 'wrangler';
+import { createD1MaintenanceRunner } from '../scripts/shared/d1MaintenanceRunner.ts';
 import {
   assertOpsD1Integrity,
   OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS,
+  readRemoteOpsD1Integrity,
   type OpsD1IntegrityInput,
 } from '../scripts/shared/opsD1Maintenance.ts';
 import {
@@ -204,6 +207,29 @@ function integrityInput(
     db.close();
   }
 }
+
+test('Ops integrity reads all checks in one command without changing the report', () => {
+  const db = database();
+  try {
+    const expected = integrityInput();
+    db.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    for (const { name } of expected.migrations) {
+      db.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run(String(name));
+    }
+    let calls = 0;
+    const runner = createD1MaintenanceRunner('ops', (_file, args) => {
+      calls += 1;
+      assert.equal(args.includes('--file'), false);
+      const statements = unstable_splitSqlQuery(args[args.indexOf('--command') + 1]);
+      assert.equal(statements.length, 27);
+      return JSON.stringify(statements.map((sql) => ({ success: true, results: queryRows(db, sql) })));
+    });
+    assert.deepEqual(readRemoteOpsD1Integrity(runner.queryBatch), assertOpsD1Integrity(expected));
+    assert.equal(calls, 1);
+  } finally {
+    db.close();
+  }
+});
 
 test('Ops baseline creates the exact current schema and active controls', () => {
   const db = database();

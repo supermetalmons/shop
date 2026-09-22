@@ -26,7 +26,7 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -39,7 +39,7 @@ import {
   type DeferredWork,
 } from './deferredWork.js';
 import { ProfileReadError } from './dataAccess.js';
-import { apiErrorBody, jsonResponse } from './httpResponse.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
   D1CommerceRepository,
 } from './commerceRepository.js';
@@ -448,36 +448,33 @@ export async function handleProfileLifecycleRequest(
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isRequestCancellationError(request, error)) throw error;
-      let profileError: ProfileReadError;
-      let authOutcome: ProfileLifecycleResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (error instanceof ProfileReadError) {
-        profileError = error;
-        if ([
-          'unauthenticated',
-          'permission-denied',
-          'invalid-argument',
-          'not-found',
-          'aborted',
-          'failed-precondition',
-        ].includes(error.code)) authOutcome = 'rejected';
-      } else if (error instanceof WalletLifecycleValidationError) {
-        const status = error.code === 'permission-denied' ? 403 : error.code === 'failed-precondition' ? 409 : 400;
-        profileError = new ProfileReadError(error.code, status, error.message);
-        authOutcome = 'rejected';
-      } else if (error instanceof RequestIdentityError) {
-        if (error.kind === 'invalid-token') {
-          profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
-          authOutcome = 'rejected';
-        } else if (error.kind === 'provider-timeout') {
-          profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-        } else {
-          profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
-        }
-      } else if (deadline.timedOut()) {
-        profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-      } else {
-        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
-      }
+      const { error: classified, authOutcome } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'after-known-errors',
+        timeoutMessage: 'Profile request timed out.',
+        internalMessage: 'Profile request failed.',
+        mapDomainError: (failure) => {
+          if (failure instanceof ProfileReadError) {
+            return {
+              error: failure,
+              authOutcome: ['unauthenticated', 'permission-denied', 'invalid-argument', 'not-found', 'aborted', 'failed-precondition'].includes(failure.code)
+                ? 'rejected' : identity ? 'provider-failure' : 'rejected',
+            };
+          }
+          if (failure instanceof WalletLifecycleValidationError) return { error: failure, authOutcome: 'rejected' };
+          if (failure instanceof RequestIdentityError) {
+            return {
+              error: requestIdentityErrorDetails(failure, { code: 'deadline-exceeded', message: 'Profile request timed out.' }),
+              authOutcome: failure.kind === 'invalid-token' ? 'rejected' : identity ? 'provider-failure' : 'rejected',
+            };
+          }
+          return undefined;
+        },
+      });
+      const profileError = classified instanceof ProfileReadError ? classified : new ProfileReadError(
+        classified.code, httpStatusForApiErrorCode(classified.code, 502), classified.message, classified.details,
+      );
       return { response: errorResponse(profileError), metrics, authOutcome };
     }
   });

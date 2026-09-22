@@ -2,6 +2,8 @@ import type {
   AddFulfillmentOrderToShipStationRequest,
   AddFulfillmentOrderToShipStationResponse,
   FulfillmentManualReviewCheckout,
+  FulfillmentManualReviewCursor,
+  FulfillmentManualReviewPage,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
   FulfillmentShipStationAddressCorrectionDetails,
@@ -22,6 +24,7 @@ import type {
 } from '../types';
 import { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../types';
 import { parseShipStationPackage } from '../../shared/shipstationPackage.ts';
+import { isFulfillmentManualReviewCursor } from '../../shared/fulfillmentManualReviewPagination.ts';
 import {
   callProfileApi as defaultCallProfileApi,
   ProfileApiError,
@@ -519,8 +522,14 @@ export function createFulfillmentApiClient(
 
   async function listFulfillmentManualReviewCheckouts(args: {
     dropId: string;
-  }): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
-    const response = await callProfileApi('/fulfillment/manual-review-checkouts', { dropId: args.dropId });
+    limit?: number;
+    cursor?: FulfillmentManualReviewCursor | null;
+  }): Promise<FulfillmentManualReviewPage> {
+    const response = await callProfileApi('/fulfillment/manual-review-checkouts', {
+      dropId: args.dropId,
+      ...(args.limit === undefined ? {} : { limit: args.limit }),
+      ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
+    });
     if (!isRecord(response) || !Array.isArray(response.checkouts)) {
       throw new Error('Invalid fulfillment manual-review response');
     }
@@ -531,7 +540,19 @@ export function createFulfillmentApiClient(
       typeof checkout.owner === 'string' &&
       isRecord(checkout.address));
     if (checkouts.length !== response.checkouts.length) throw new Error('Invalid fulfillment manual-review response');
+    let nextCursor: FulfillmentManualReviewCursor | null = null;
+    if (response.nextCursor !== null) {
+      if (!isFulfillmentManualReviewCursor(response.nextCursor, args.dropId)) {
+        throw new Error('Invalid fulfillment manual-review response');
+      }
+      nextCursor = response.nextCursor;
+    }
+    if (nextCursor && args.cursor && nextCursor.sortAtMs === args.cursor.sortAtMs &&
+      nextCursor.sessionId === args.cursor.sessionId && nextCursor.documentPath === args.cursor.documentPath) {
+      throw new Error('Invalid fulfillment manual-review response');
+    }
     return {
+      nextCursor,
       checkouts: checkouts.map((checkout) => ({
         ...checkout,
         dropId: checkout.dropId || args.dropId,

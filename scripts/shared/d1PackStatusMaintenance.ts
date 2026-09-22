@@ -1,6 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createD1MaintenanceRunner, type D1MaintenanceQueryBatch } from './d1MaintenanceRunner.ts';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
   type PackStatusCounters,
@@ -37,12 +35,7 @@ export type D1EventCountExpectation = Pick<
   'appliedEventCount' | 'dropId' | 'eventCount' | 'historicalEventCount'
 >;
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const configPath = 'cloud/workers/api/wrangler.jsonc';
-const envFilePath = 'cloud/workers/api/release.env';
-const databaseName = 'mons-shop-data';
-const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
-const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
+const dataD1 = createD1MaintenanceRunner('data');
 const PACK_STATUS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
   '0002_pack_status_event_conflict_guard.sql',
@@ -77,60 +70,6 @@ function nonnegativeInteger(value: unknown, label: string): number {
 
 function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
-}
-
-function runWrangler(args: string[], json = false): string {
-  try {
-    return execFileSync(wranglerBinary, [
-      ...args,
-      '--config', configPath,
-      '--env-file', envFilePath,
-      ...(json ? ['--json'] : []),
-    ], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: process.env,
-      maxBuffer: 32 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: WRANGLER_COMMAND_TIMEOUT_MS,
-    }).trim();
-  } catch (error) {
-    const output = error && typeof error === 'object'
-      ? [
-          'stdout' in error ? (error as { stdout?: unknown }).stdout : '',
-          'stderr' in error ? (error as { stderr?: unknown }).stderr : '',
-        ].map((value) => String(value || '').replace(/\u001b\[[0-9;]*m/g, '').trim()).filter(Boolean).join('\n')
-      : '';
-    fail(output || 'Wrangler D1 command failed.');
-  }
-}
-
-function parseD1Envelope(output: string): Array<{ results: D1Row[]; success: boolean }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    return fail('D1 returned invalid JSON.');
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) fail('D1 returned an invalid query envelope.');
-  return parsed.map((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) fail('D1 returned an invalid query result.');
-    const result = entry as { results?: unknown; success?: unknown };
-    if (result.success !== true || !Array.isArray(result.results)) fail('D1 query failed.');
-    return { results: result.results as D1Row[], success: true };
-  });
-}
-
-function executeD1(sql: string): D1Row[][] {
-  return parseD1Envelope(runWrangler([
-    'd1', 'execute', databaseName, '--remote', '--command', sql,
-  ], true)).map((entry) => entry.results);
-}
-
-function queryD1(sql: string): D1Row[] {
-  const results = executeD1(sql);
-  if (results.length !== 1) fail('Expected exactly one D1 statement result.');
-  return results[0];
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -243,22 +182,24 @@ export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
   };
 }
 
-export function readD1Integrity(): D1IntegrityReport {
-  return assertD1Integrity({
-    migrations: queryD1('SELECT name FROM d1_migrations ORDER BY id'),
-    metadata: queryD1('SELECT singleton, cache_generation FROM pack_status_metadata ORDER BY singleton'),
-    summaries: queryD1(`SELECT
+export function readD1Integrity(
+  queryBatch: D1MaintenanceQueryBatch = dataD1.queryBatch,
+): D1IntegrityReport {
+  return assertD1Integrity(queryBatch({
+    migrations: 'SELECT name FROM d1_migrations ORDER BY id',
+    metadata: 'SELECT singleton, cache_generation FROM pack_status_metadata ORDER BY singleton',
+    summaries: `SELECT
       drop_id, version, total_initial_supply, total_cards, cards_per_pack,
       unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
       rebuilt_at_ms, updated_at_ms
-      FROM pack_status ORDER BY drop_id`),
-    eventCounts: queryD1(`SELECT
+      FROM pack_status ORDER BY drop_id`,
+    eventCounts: `SELECT
       drop_id,
       COUNT(*) AS event_count,
       SUM(CASE WHEN apply_delta = 0 THEN 1 ELSE 0 END) AS historical_event_count,
       SUM(CASE WHEN apply_delta = 1 THEN 1 ELSE 0 END) AS applied_event_count
-      FROM pack_status_events GROUP BY drop_id ORDER BY drop_id`),
-    invalidEvents: queryD1(`SELECT drop_id, event_type, event_key
+      FROM pack_status_events GROUP BY drop_id ORDER BY drop_id`,
+    invalidEvents: `SELECT drop_id, event_type, event_key
       FROM pack_status_events
       WHERE NOT (
         (
@@ -282,16 +223,16 @@ export function readD1Integrity(): D1IntegrityReport {
           redeemed_unsealed_cards_delta = 0
         )
       )
-      ORDER BY drop_id, event_type, event_key`),
-    schema: queryD1(`SELECT name, type, tbl_name, sql FROM sqlite_schema
+      ORDER BY drop_id, event_type, event_key`,
+    schema: `SELECT name, type, tbl_name, sql FROM sqlite_schema
       WHERE
         name NOT LIKE 'sqlite_%' AND
         name NOT GLOB '_cf_*' AND
         name <> 'd1_migrations'
-      ORDER BY name`),
-    quickCheck: queryD1('PRAGMA quick_check'),
-    foreignKeyCheck: queryD1('PRAGMA foreign_key_check'),
-  });
+      ORDER BY name`,
+    quickCheck: 'PRAGMA quick_check',
+    foreignKeyCheck: 'PRAGMA foreign_key_check',
+  }));
 }
 
 function normalizeRebuildCounters(
@@ -398,8 +339,8 @@ export function writeD1RebuiltSummaries(
   nowMs = Date.now(),
 ): void {
   const counters = normalizeRebuildCounters(input, nowMs);
-  executeD1(buildD1SummaryRebuildSql(counters, nowMs, expectedEvents));
-  const rows = queryD1(`SELECT
+  dataD1.executeCommand(buildD1SummaryRebuildSql(counters, nowMs, expectedEvents));
+  const rows = dataD1.query(`SELECT
     drop_id, version, total_initial_supply, total_cards, cards_per_pack,
     unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
     rebuilt_at_ms, updated_at_ms

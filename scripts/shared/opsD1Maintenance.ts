@@ -1,6 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createD1MaintenanceRunner, type D1MaintenanceQueryBatch } from './d1MaintenanceRunner.ts';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../shared/opsExpiryCleanupSql.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
@@ -110,17 +108,7 @@ export type OpsD1IntegrityReport = {
   authWalletBindingCount: number;
 };
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const configPath = 'cloud/workers/api/wrangler.jsonc';
-const envFilePath = 'cloud/workers/api/release.env';
-const databaseName = 'mons-shop-ops';
-const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
-const wranglerBinary = resolve(
-  repoRoot,
-  'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler',
-);
+const opsD1 = createD1MaintenanceRunner('ops');
 const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
@@ -686,170 +674,57 @@ export function assertOpsD1Integrity(
   };
 }
 
-function runWrangler(args: string[], json = false): string {
-  try {
-    return execFileSync(
-      wranglerBinary,
-      [
-        ...args,
-        '--config',
-        configPath,
-        '--env-file',
-        envFilePath,
-        ...(json ? ['--json'] : []),
-      ],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        env: process.env,
-        maxBuffer: 32 * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: WRANGLER_COMMAND_TIMEOUT_MS,
-      },
-    ).trim();
-  } catch (error) {
-    const output = error && typeof error === 'object'
-      ? [
-          'stdout' in error ? (error as { stdout?: unknown }).stdout : '',
-          'stderr' in error ? (error as { stderr?: unknown }).stderr : '',
-        ]
-          .map((value) =>
-            String(value || '')
-              .replace(/\u001b\[[0-9;]*m/g, '')
-              .trim(),
-          )
-          .filter(Boolean)
-          .join('\n')
-      : '';
-    return fail(output || 'Wrangler Ops D1 command failed.');
-  }
-}
-
-function parseD1Envelope(
-  output: string,
-): Array<{ results: OpsD1Row[]; success: true }> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    return fail('Ops D1 returned invalid JSON.');
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    return fail('Ops D1 returned an invalid query envelope.');
-  }
-  return parsed.map((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      return fail('Ops D1 returned an invalid query result.');
-    }
-    const result = entry as { results?: unknown; success?: unknown };
-    if (result.success !== true || !Array.isArray(result.results)) {
-      return fail('Ops D1 query failed.');
-    }
-    return { results: result.results as OpsD1Row[], success: true };
-  });
-}
-
-function executeRemoteOpsD1(sql: string): OpsD1Row[][] {
-  return parseD1Envelope(
-    runWrangler(
-      [
-        'd1',
-        'execute',
-        databaseName,
-        '--remote',
-        '--command',
-        sql,
-      ],
-      true,
-    ),
-  ).map((entry) => entry.results);
-}
-
 export function queryRemoteOpsD1(sql: string): OpsD1Row[] {
-  const results = executeRemoteOpsD1(sql);
-  if (results.length !== 1) {
-    return fail('Expected exactly one Ops D1 statement result.');
-  }
-  return results[0];
+  return opsD1.query(sql);
 }
 
-export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
-  return assertOpsD1Integrity({
-    anonymousAuthSessionColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(anonymous_auth_sessions)',
-    ),
-    anonymousAuthSessionCounts: queryRemoteOpsD1(
-      'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions',
-    ),
-    anonymousAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
-    ),
-    expiryCleanupQueryPlans: {
-      anonymousAuthSessions: queryRemoteOpsD1(
-        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,
-      ),
-      staffAuthSessions: queryRemoteOpsD1(
-        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthSessions.sql,
-      ),
-      staffAuthChallenges: queryRemoteOpsD1(
-        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthChallenges.sql,
-      ),
-      rateLimitBuckets: queryRemoteOpsD1(
-        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.rateLimitBuckets.sql,
-      ),
-    },
-    rateLimitBucketExpiryIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
-    ),
-    foreignKeyCheck: queryRemoteOpsD1('PRAGMA foreign_key_check'),
-    migrations: queryRemoteOpsD1(
-      'SELECT name FROM d1_migrations ORDER BY id',
-    ),
-    profileAddressColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(profile_addresses)',
-    ),
-    profileCounts: queryRemoteOpsD1(`SELECT
+export function readRemoteOpsD1Integrity(
+  queryBatch: D1MaintenanceQueryBatch = opsD1.queryBatch,
+): OpsD1IntegrityReport {
+  const {
+    anonymousAuthSessionsQueryPlan,
+    staffAuthSessionsQueryPlan,
+    staffAuthChallengesQueryPlan,
+    rateLimitBucketsQueryPlan,
+    ...rows
+  } = queryBatch({
+    anonymousAuthSessionColumns: 'PRAGMA table_info(anonymous_auth_sessions)',
+    anonymousAuthSessionCounts: 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions',
+    anonymousAuthSessionExpiryIndexColumns: 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
+    anonymousAuthSessionsQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,
+    staffAuthSessionsQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthSessions.sql,
+    staffAuthChallengesQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthChallenges.sql,
+    rateLimitBucketsQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.rateLimitBuckets.sql,
+    rateLimitBucketExpiryIndexColumns: 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
+    foreignKeyCheck: 'PRAGMA foreign_key_check',
+    migrations: 'SELECT name FROM d1_migrations ORDER BY id',
+    profileAddressColumns: 'PRAGMA table_info(profile_addresses)',
+    profileCounts: `SELECT
       (SELECT COUNT(*) FROM profiles) AS profile_count,
-      (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
-    profileColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(profiles)',
-    ),
-    quickCheck: queryRemoteOpsD1('PRAGMA quick_check'),
-    rateLimitBucketColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(rate_limit_buckets)',
-    ),
-    revealSubmissionColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(reveal_submissions)',
-    ),
-    revealSubmissionStatusIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
-    ),
-    revealSubmissionCounts: queryRemoteOpsD1(
-      'SELECT COUNT(*) AS reveal_submission_count FROM reveal_submissions',
-    ),
-    revealSubmissionStorageControl: queryRemoteOpsD1(`SELECT
+      (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`,
+    profileColumns: 'PRAGMA table_info(profiles)',
+    quickCheck: 'PRAGMA quick_check',
+    rateLimitBucketColumns: 'PRAGMA table_info(rate_limit_buckets)',
+    revealSubmissionColumns: 'PRAGMA table_info(reveal_submissions)',
+    revealSubmissionStatusIndexColumns: 'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
+    revealSubmissionCounts: 'SELECT COUNT(*) AS reveal_submission_count FROM reveal_submissions',
+    revealSubmissionStorageControl: `SELECT
       singleton,
       paused,
       revision,
       updated_at_ms
-      FROM reveal_submission_storage_control`),
-    revealSubmissionStorageControlColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(reveal_submission_storage_control)',
-    ),
-    schema: queryRemoteOpsD1(`SELECT name, type, tbl_name, sql
+      FROM reveal_submission_storage_control`,
+    revealSubmissionStorageControlColumns: 'PRAGMA table_info(reveal_submission_storage_control)',
+    schema: `SELECT name, type, tbl_name, sql
       FROM sqlite_schema
       WHERE
         name NOT LIKE 'sqlite_%' AND
         name NOT GLOB '_cf_*' AND
         name <> 'd1_migrations'
-      ORDER BY name`),
-    staffAuthChallengeExpiryIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(staff_auth_challenges_expires_at_ms)',
-    ),
-    staffAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(staff_auth_sessions_expires_at_ms)',
-    ),
-    tableList: queryRemoteOpsD1(`SELECT name, type, strict
+      ORDER BY name`,
+    staffAuthChallengeExpiryIndexColumns: 'PRAGMA index_info(staff_auth_challenges_expires_at_ms)',
+    staffAuthSessionExpiryIndexColumns: 'PRAGMA index_info(staff_auth_sessions_expires_at_ms)',
+    tableList: `SELECT name, type, strict
       FROM pragma_table_list
       WHERE
         schema = 'main' AND
@@ -865,15 +740,18 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
           'auth_wallet_bindings',
           'worker_controls'
         )
-      ORDER BY name`),
-    authWalletBindingColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(auth_wallet_bindings)',
-    ),
-    authWalletBindingCounts: queryRemoteOpsD1(
-      'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',
-    ),
-    workerControlColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(worker_controls)',
-    ),
+      ORDER BY name`,
+    authWalletBindingColumns: 'PRAGMA table_info(auth_wallet_bindings)',
+    authWalletBindingCounts: 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',
+    workerControlColumns: 'PRAGMA table_info(worker_controls)',
+  });
+  return assertOpsD1Integrity({
+    ...rows,
+    expiryCleanupQueryPlans: {
+      anonymousAuthSessions: anonymousAuthSessionsQueryPlan,
+      staffAuthSessions: staffAuthSessionsQueryPlan,
+      staffAuthChallenges: staffAuthChallengesQueryPlan,
+      rateLimitBuckets: rateLimitBucketsQueryPlan,
+    },
   });
 }

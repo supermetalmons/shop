@@ -7,6 +7,8 @@ export type {
   DeliveryOrderSummary,
   DeliverySelection,
   FulfillmentManualReviewCheckout,
+  FulfillmentManualReviewCursor,
+  FulfillmentManualReviewPage,
   FulfillmentOrder,
   FulfillmentOrderAddress,
   FulfillmentOrderBox,

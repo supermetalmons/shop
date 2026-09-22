@@ -29,7 +29,7 @@ import {
   raceReadWithSignal,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   ProfileReadError,
 } from './dataAccess.js';
@@ -372,34 +372,33 @@ export async function handleProfileWriteRequest(
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isRequestCancellationError(request, error)) throw error;
-      let profileError: ProfileReadError;
-      let authOutcome: ProfileWriteResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (error instanceof ProfileReadError) {
-        profileError = error;
-        if (error instanceof ShipStationProfileError) {
-          authOutcome = 'provider-failure';
-        } else if (
-          error.code === 'unauthenticated' ||
-          error.code === 'permission-denied' ||
-          error.code === 'invalid-argument' ||
-          error.code === 'not-found' ||
-          error.code === 'aborted' ||
-          error.code === 'failed-precondition'
-        ) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Profile request timed out.',
-        });
-        profileError = new ProfileReadError(mapped.code, httpStatusForApiErrorCode(mapped.code, 502), mapped.message);
-        if (error.kind === 'invalid-token') authOutcome = 'rejected';
-      } else if (deadline.timedOut()) {
-        profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-      } else {
-        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
-      }
+      const { error: classified, authOutcome } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'after-known-errors',
+        timeoutMessage: 'Profile request timed out.',
+        internalMessage: 'Profile request failed.',
+        mapDomainError: (failure) => {
+          if (failure instanceof ProfileReadError) {
+            return {
+              error: failure,
+              authOutcome: failure instanceof ShipStationProfileError ? 'provider-failure'
+                : ['unauthenticated', 'permission-denied', 'invalid-argument', 'not-found', 'aborted', 'failed-precondition'].includes(failure.code)
+                  ? 'rejected' : identity ? 'provider-failure' : 'rejected',
+            };
+          }
+          if (failure instanceof RequestIdentityError) {
+            return {
+              error: requestIdentityErrorDetails(failure, { code: 'deadline-exceeded', message: 'Profile request timed out.' }),
+              authOutcome: failure.kind === 'invalid-token' ? 'rejected' : identity ? 'provider-failure' : 'rejected',
+            };
+          }
+          return undefined;
+        },
+      });
+      const profileError = classified instanceof ProfileReadError ? classified : new ProfileReadError(
+        classified.code, httpStatusForApiErrorCode(classified.code, 502), classified.message, classified.details,
+      );
       return { response: errorResponse(profileError), metrics, authOutcome };
     }
   });

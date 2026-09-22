@@ -43,7 +43,7 @@ function createApi(deferReviews = false) {
     listFulfillmentManualReviewCheckouts(args) {
       const pending = deferred<ReviewResponse>();
       reviewCalls.push({ args, pending });
-      if (!deferReviews) pending.resolve({ checkouts: [] });
+      if (!deferReviews) pending.resolve({ checkouts: [], nextCursor: null });
       return pending.promise;
     },
   };
@@ -82,6 +82,86 @@ function cursor(id: string): FulfillmentOrdersCursor {
   return { id, processedAt: { seconds: 100, nanos: 0 } };
 }
 
+function reviewCursor(dropId: string, sessionId: string): NonNullable<ReviewResponse['nextCursor']> {
+  return { version: 1, dropId, sessionId, sortAtMs: 100, documentPath: `drops/${dropId}/stripeCheckouts/${sessionId}` };
+}
+
+test('manual-review pages are independent, bounded, deduplicated, and retry only failed drops', async (t) => {
+  t.mock.method(console, 'warn', () => undefined);
+  const { api, orderCalls, reviewCalls } = createApi(true);
+  const { result } = mount(options({ dropIds: ['drop-a', 'drop-b'] }), api);
+  await act(async () => {
+    orderCalls.forEach(({ pending }) => pending.resolve({ orders: [], nextCursor: null }));
+  });
+  assert.equal(result.current.loading, false);
+  assert.equal(result.current.manualReviewLoading, true);
+  assert.ok(reviewCalls.every(({ args }) => args.limit === 25 && args.cursor === null));
+  const next = reviewCursor('drop-a', 'cs_next');
+  await act(async () => {
+    reviewCalls[0].pending.resolve({ checkouts: [checkout('drop-a', 'cs_one', 300)], nextCursor: next });
+    reviewCalls[1].pending.reject(new Error('Review unavailable'));
+  });
+  assert.equal(result.current.manualReviewError, 'Review unavailable');
+  assert.equal(result.current.ordersError, null);
+  let page!: Promise<void>;
+  act(() => { page = result.current.loadMoreManualReview(); void result.current.loadMoreManualReview(); });
+  assert.equal(reviewCalls.length, 4);
+  assert.deepEqual(reviewCalls[2].args.cursor, next);
+  assert.equal(reviewCalls[3].args.cursor, null);
+  await act(async () => {
+    reviewCalls[2].pending.resolve({ checkouts: [checkout('drop-a', 'cs_one', 300), checkout('drop-a', 'cs_two', 200)], nextCursor: null });
+    reviewCalls[3].pending.reject(new Error('Still unavailable'));
+    await page;
+  });
+  assert.deepEqual(result.current.manualReviewCheckouts.map((entry) => entry.sessionId), ['cs_one', 'cs_two']);
+  act(() => { page = result.current.loadMoreManualReview(); });
+  assert.equal(reviewCalls.length, 5);
+  assert.equal(reviewCalls[4].args.dropId, 'drop-b');
+  await act(async () => { reviewCalls[4].pending.resolve({ checkouts: [], nextCursor: null }); await page; });
+  assert.equal(result.current.manualReviewError, null);
+  assert.equal(result.current.manualReviewHasMore, false);
+  assert.equal(orderCalls.length, 2);
+});
+
+test('empty manual-review pages retain a usable cursor and partial count', async () => {
+  const { api, reviewCalls } = createApi(true);
+  const { result } = mount(options(), api);
+  await act(async () => { reviewCalls[0].pending.resolve({ checkouts: [], nextCursor: reviewCursor('drop-a', 'cs_filtered') }); });
+  assert.equal(result.current.manualReviewCheckouts.length, 0);
+  assert.equal(result.current.manualReviewHasMore, true);
+  let page!: Promise<void>;
+  act(() => { page = result.current.loadMoreManualReview(); });
+  await act(async () => { reviewCalls[1].pending.resolve({ checkouts: [checkout('drop-a', 'cs_valid', 1)], nextCursor: null }); await page; });
+  assert.equal(result.current.manualReviewCheckouts.length, 1);
+  assert.equal(result.current.manualReviewHasMore, false);
+});
+
+for (const scope of ['wallet', 'drop', 'access'] as const) {
+  test(`manual-review pagination ignores stale ${scope} results and callbacks`, async () => {
+    const { api, reviewCalls } = createApi(true);
+    const initial = options();
+    const { result, rerender } = mount(initial, api);
+    await act(async () => { reviewCalls[0].pending.resolve({ checkouts: [], nextCursor: reviewCursor('drop-a', 'cs_next') }); });
+    let page!: Promise<void>;
+    const oldLoad = result.current.loadMoreManualReview;
+    act(() => { page = oldLoad(); });
+    rerender({ ...initial,
+      ...(scope === 'wallet' ? { walletAddress: 'wallet-b' } : {}),
+      ...(scope === 'drop' ? { dropIds: ['drop-b'] } : {}),
+      ...(scope === 'access' ? { enabled: false } : {}),
+    });
+    await act(async () => {
+      reviewCalls[1].pending.resolve({ checkouts: [checkout('drop-a', 'cs_old', 1)], nextCursor: null });
+      await page;
+      await oldLoad();
+    });
+    assert.deepEqual(result.current.manualReviewCheckouts, []);
+    assert.equal(result.current.manualReviewError, null);
+    assert.equal(result.current.manualReviewLoading, scope !== 'access');
+    assert.equal(reviewCalls.length, scope === 'access' ? 2 : 3);
+  });
+}
+
 function keys(orders: readonly FulfillmentOrder[]): string[] {
   return orders.map((entry) => `${entry.dropId}:${entry.deliveryId}`);
 }
@@ -107,8 +187,8 @@ test('initial load sorts and deduplicates every drop while manual-review failure
     orderCalls[0].pending.resolve({ orders: [order('drop-b', 1, 100), order('drop-b', 2, 400)] });
     orderCalls[1].pending.resolve({ orders: [order('drop-a', 1, 200), order('drop-a', 2, 200), order('drop-a', 1, 999)] });
     orderCalls[2].pending.resolve({ orders: [] });
-    reviewCalls[0].pending.resolve({ checkouts: [checkout('drop-b', 'same-session', 200)] });
-    reviewCalls[1].pending.resolve({ checkouts: [checkout('drop-a', 'same-session', 300), checkout('drop-a', 'old', 100), checkout('drop-a', 'old', 900)] });
+    reviewCalls[0].pending.resolve({ checkouts: [checkout('drop-b', 'same-session', 200)], nextCursor: null });
+    reviewCalls[1].pending.resolve({ checkouts: [checkout('drop-a', 'same-session', 300), checkout('drop-a', 'old', 100), checkout('drop-a', 'old', 900)], nextCursor: null });
     reviewCalls[2].pending.reject(new Error('Manual review unavailable'));
   });
 

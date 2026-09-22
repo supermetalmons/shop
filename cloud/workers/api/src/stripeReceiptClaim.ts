@@ -70,7 +70,7 @@ import {
   runCriticalRequestOperation,
   sleepWithSignal,
 } from './boundedRequest.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord } from './dataAccess.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext as CommerceContext } from './commerceTransactions.js';
@@ -115,6 +115,7 @@ import {
   apiErrorBody,
   httpStatusForApiErrorCode,
   jsonResponse,
+  type ApiErrorLike,
 } from './httpResponse.js';
 import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 
@@ -167,7 +168,7 @@ type ClaimDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-function errorResponse(error: StripeReceiptClaimError): Response {
+function errorResponse(error: ApiErrorLike): Response {
   return jsonResponse(
     apiErrorBody(error),
     httpStatusForApiErrorCode(error.code, 502),
@@ -1365,28 +1366,40 @@ export async function handleStripeReceiptClaim(
       };
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
-      let normalized: StripeReceiptClaimError;
       if (isSignalCancellationError(request.signal, error)) throw request.signal.reason;
       if (isRequestCancellationError(request, error)) throw error;
-      if (deadline.timedOut()) {
-        normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Authentication is temporarily unavailable.',
-        });
-        normalized = new StripeReceiptClaimError(mapped.code, mapped.message);
-      } else {
-        normalized = normalizedError(error, 'Receipt claim failed.');
-        if (normalized.code === 'internal') {
-          console.error({ event: 'stripe_receipt_claim_unhandled_error', error: summarizeError(error) });
-        }
-      }
-      const rejected = ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(normalized.code);
+      const { error: normalized, authOutcome } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        fallbackAuthOutcome: 'provider-failure',
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'before-known-errors',
+        timeoutMessage: 'Receipt claim request timed out.',
+        internalMessage: 'Receipt claim failed.',
+        mapDomainError: (failure) => {
+          if (failure instanceof RequestIdentityError) {
+            return {
+              error: requestIdentityErrorDetails(failure, {
+                code: 'deadline-exceeded', message: 'Authentication is temporarily unavailable.',
+              }),
+              authOutcome: failure.kind === 'invalid-token' ? 'rejected' : 'provider-failure',
+            };
+          }
+          const normalized = normalizedError(failure, 'Receipt claim failed.');
+          if (normalized.code === 'internal') {
+            console.error({ event: 'stripe_receipt_claim_unhandled_error', error: summarizeError(failure) });
+          }
+          const rejected = ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(normalized.code);
+          return {
+            error: normalized,
+            authOutcome: identity ? (rejected ? 'rejected' : 'provider-failure')
+              : normalized.code === 'unauthenticated' ? 'rejected' : 'provider-failure',
+          };
+        },
+      });
       return {
         response: errorResponse(normalized),
         metrics,
-        authOutcome: identity ? (rejected ? 'rejected' : 'provider-failure') : normalized.code === 'unauthenticated' ? 'rejected' : 'provider-failure',
+        authOutcome,
         ...claimContext,
         outcome: normalized.code,
       };

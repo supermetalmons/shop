@@ -8,9 +8,11 @@ import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
+  manualReviewCheckoutsQuery,
   stripeChargebackLinkedSessionsQuery,
   stripeChargebackMatchedDocumentsQuery,
 } from '../src/commerceQueries.ts';
+import { manualReviewDocumentCursor } from '../../../../shared/fulfillmentManualReviewPagination.ts';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -196,6 +198,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0012_stripe_identity_lookup_indexes.sql',
       '0013_notification_outbox.sql',
       '0014_drop_legacy_notification_indexes.sql',
+      '0015_manual_review_pagination.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -322,7 +325,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
         owner: 'named-owner', status: 'prepared',
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('named-reads', 'manual'), {
-        manualRefundReviewRequired: true,
+        manualRefundReviewRequired: true, status: 'fulfillment_failed', failedAt: 100,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('named-reads', 'manual-older'), {
+        manualRefundReviewRequired: true, status: 'fulfillment_failed', createdAt: 1,
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('named-reads', 'not-manual'), {
         manualRefundReviewRequired: false,
@@ -394,10 +400,23 @@ test('commerce repository reads and transaction guards run through the real D1 r
       { seconds: 100, nanos: 2 }, { seconds: 100, nanos: 1 }, null,
     ]);
     assert.deepEqual(
-      (await repository.queryManualReviewCheckouts({ dropId: 'named-reads' })).map((record) => record.key.documentId),
-      ['manual'],
+      (await repository.queryManualReviewCheckouts({ dropId: 'named-reads', limit: 26 })).map((record) => record.key.documentId),
+      ['manual', 'manual-older'],
     );
-    assert.deepEqual(await repository.queryManualReviewCheckouts({ dropId: 'missing' }), []);
+    const manualReviewFirstPage = await repository.queryManualReviewCheckouts({ dropId: 'named-reads', limit: 1 });
+    const manualReviewCursor = manualReviewDocumentCursor('named-reads', manualReviewFirstPage[0]);
+    assert.deepEqual((await repository.queryManualReviewCheckouts({
+      dropId: 'named-reads', limit: 1, startAfter: manualReviewCursor,
+    })).map((record) => record.key.documentId), ['manual-older']);
+    const manualReviewQuery = manualReviewCheckoutsQuery({
+      dropId: 'named-reads', limit: 2, startAfter: manualReviewCursor,
+    });
+    const manualReviewPlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${manualReviewQuery.sql}`)
+      .bind(...manualReviewQuery.bindings).all<{ detail: string }>();
+    assert.match(manualReviewPlan.results.map((row) => row.detail).join('\n'),
+      /\(manual_review_sort_at_ms,manual_review_session_id,document_path\)<\(\?,\?,\?\)/);
+    assert.ok(manualReviewPlan.results.every((row) => !row.detail.includes('USE TEMP B-TREE')));
+    assert.deepEqual(await repository.queryManualReviewCheckouts({ dropId: 'missing', limit: 26 }), []);
     assert.deepEqual(
       (await repository.queryLegacyClaimAssignments({ code: 'RUNTIME-LEGACY' })).map((record) => record.key.path),
       ['drops/a/boxAssignments/legacy', 'drops/b/boxAssignments/legacy'],
@@ -1073,7 +1092,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     for (const read of [
       () => observedRepository.queryDeliveryHistory({ owners: ['named-owner'] }),
       () => observedRepository.queryFulfillmentOrders({ dropId: 'named-reads', limit: 2 }),
-      () => observedRepository.queryManualReviewCheckouts({ dropId: 'named-reads' }),
+      () => observedRepository.queryManualReviewCheckouts({ dropId: 'named-reads', limit: 26 }),
       () => observedRepository.queryLegacyClaimAssignments({ code: 'RUNTIME-LEGACY' }),
     ]) {
       await assert.rejects(read(),

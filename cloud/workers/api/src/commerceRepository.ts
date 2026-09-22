@@ -21,6 +21,7 @@ import {
   staleStripeFulfillmentsQuery,
   type CommerceSqlQuery,
   type FulfillmentOrdersQueryArgs,
+  type ManualReviewCheckoutsQueryArgs,
 } from './commerceQueries.js';
 import { isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import {
@@ -38,6 +39,10 @@ import { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 import {
   NotificationOutboxRepository, notificationOutboxAuthorityStatement, requireNotificationOutboxAuthority,
 } from './notificationOutboxRepository.js';
+import {
+  isFulfillmentManualReviewCursor,
+  MAX_MANUAL_REVIEW_LIMIT,
+} from '../../../../shared/fulfillmentManualReviewPagination.js';
 
 export * from './commerceRepositoryTypes.js';
 export { commerceKeyFromPath, commerceKeys } from './commerceDocumentCodec.js';
@@ -163,8 +168,13 @@ export class D1CommerceRepository {
     return this.readDocuments(fulfillmentOrdersQuery({ ...args, limit }), 'fulfillment-orders', 'delivery_order');
   }
 
-  async queryManualReviewCheckouts(args: Readonly<{ dropId: string }>): Promise<CommerceDocumentRecord[]> {
-    return this.readDocuments(manualReviewCheckoutsQuery(args), 'manual-review-checkouts', 'stripe_checkout');
+  async queryManualReviewCheckouts(args: ManualReviewCheckoutsQueryArgs): Promise<CommerceDocumentRecord[]> {
+    const limit = positiveQueryLimit(args.limit);
+    if (limit > MAX_MANUAL_REVIEW_LIMIT + 1 || (args.startAfter !== undefined &&
+      !isFulfillmentManualReviewCursor(args.startAfter, args.dropId))) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid manual-review pagination.');
+    }
+    return this.readDocuments(manualReviewCheckoutsQuery({ ...args, limit }), 'manual-review-checkouts', 'stripe_checkout');
   }
 
   async queryLegacyClaimAssignments(args: Readonly<{ code: string }>): Promise<CommerceDocumentRecord[]> {

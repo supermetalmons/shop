@@ -20,6 +20,7 @@ import {
   seedNotificationOutbox,
 } from './commerceD1Harness.ts';
 import type { NotificationOutboxEntry, NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
+import { manualReviewDocumentCursor } from '../../../../shared/fulfillmentManualReviewPagination.ts';
 
 function seedQueryNotification(
   harness: ReturnType<typeof createCommerceD1Harness>,
@@ -79,8 +80,12 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
     /FROM commerce_authority_control WHERE singleton = 1/,
   );
   assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
-  assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
-  assert.match(dataSql, /authority\.singleton\s*=\s*1/);
+  if (dataSql.includes('INDEXED BY commerce_stripe_checkouts_manual_review_cursor')) {
+    assert.match(dataSql, /WHERE EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
+  } else {
+    assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
+    assert.match(dataSql, /authority\.singleton\s*=\s*1/);
+  }
   assert.match(dataSql, /authority_state\s*=\s*'d1'/);
 }
 
@@ -312,15 +317,67 @@ test('manual review reads select flagged checkouts in the requested drop', async
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   seedCommerceDocuments(harness, [
-    { key: commerceKeys.stripeCheckout('drop', 'a'), data: { manualRefundReviewRequired: true, status: 'processing' } },
-    { key: commerceKeys.stripeCheckout('drop', 'b'), data: { manualRefundReviewRequired: true, status: 'pending' } },
+    { key: commerceKeys.stripeCheckout('drop', 'a'), data: { manualRefundReviewRequired: true, status: 'fulfillment_failed' } },
+    { key: commerceKeys.stripeCheckout('drop', 'b'), data: { manualRefundReviewRequired: true, status: 'fulfillment_failed' } },
     { key: commerceKeys.stripeCheckout('drop', 'false'), data: { manualRefundReviewRequired: false } },
     { key: commerceKeys.stripeCheckout('drop', 'missing'), data: {} },
+    { key: commerceKeys.stripeCheckout('drop', 'processing'), data: { manualRefundReviewRequired: true, status: 'processing' } },
+    { key: commerceKeys.stripeCheckout('drop', 'numeric-flag'), data: { manualRefundReviewRequired: 1, status: 'fulfillment_failed' } },
     { key: commerceKeys.stripeCheckout('other', 'wrong-drop'), data: { manualRefundReviewRequired: true } },
     { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: { manualRefundReviewRequired: true } },
   ]);
-  const records = await repository.queryManualReviewCheckouts({ dropId: 'drop' });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['a', 'b']);
+  const records = await repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 });
+  assert.deepEqual(records.map((record) => record.key.documentId), ['b', 'a']);
+});
+
+test('manual review keyset pagination preserves timestamp fallback and binary session/path ties', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const entries: Array<[string, CommerceDocumentData]> = [
+    ['latest', { failedAt: 300, createdAt: 1, sessionId: 'cs_latest' }],
+    ['trimmed', { failedAt: 200, sessionId: '\u00a0\tcs_z\u2028\ufeff' }],
+    ['same-b', { failedAt: 200, sessionId: 'cs_a' }],
+    ['same-a', { failedAt: 200, sessionId: 'cs_a' }],
+    ['uppercase', { failedAt: 200, sessionId: 'cs_A' }],
+    ['zero-failed', { failedAt: 0, createdAt: 100, sessionId: '  ' }],
+    ['bad-failed', { failedAt: '999', createdAt: 90, sessionId: 5 }],
+    ['fractional', { failedAt: 0.5, createdAt: 500 }],
+    ['missing-time', {}],
+    ['negative', { failedAt: -1, createdAt: 500 }],
+  ];
+  seedCommerceDocuments(harness, entries.map(([id, data]) => ({
+    key: commerceKeys.stripeCheckout('drop', id),
+    data: { ...data, status: 'fulfillment_failed', manualRefundReviewRequired: true },
+  })));
+  const visited: string[] = [];
+  let startAfter: ReturnType<typeof manualReviewDocumentCursor> | undefined;
+  for (let page = 0; page < 6; page += 1) {
+    const records = await repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 2, startAfter });
+    if (records.length === 0) break;
+    visited.push(...records.map((record) => record.key.documentId));
+    startAfter = manualReviewDocumentCursor('drop', records.at(-1)!);
+  }
+  assert.deepEqual(visited, entries.map(([id]) => id));
+  assert.equal(new Set(visited).size, entries.length);
+});
+
+test('manual review rejects invalid limits and cross-drop cursors before querying D1', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  for (const limit of [0, -1, 1.5, Number.NaN, 102]) {
+    await assert.rejects(repository.queryManualReviewCheckouts({ dropId: 'drop', limit }),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument');
+  }
+  await assert.rejects(repository.queryManualReviewCheckouts({
+    dropId: 'drop', limit: 25,
+    startAfter: {
+      version: 1, dropId: 'other', sortAtMs: 1, sessionId: 'cs_cursor',
+      documentPath: 'drops/other/stripeCheckouts/cs_cursor',
+    },
+  }), (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument');
+  assert.equal(calls.length, 0);
+  assert.deepEqual(await repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 101 }), []);
 });
 
 test('legacy claim assignments filter by code across drops and stop after two ordered matches', async () => {
@@ -709,12 +766,12 @@ test('native timestamps remain monotonic and path ordering is binary', async () 
   assert.equal(Boolean(before && after && after.updateTime > before.updateTime), true);
 
   await repository.run(3_000, async (unit) => {
-    await unit.create(commerceKeys.stripeCheckout('drop', 'a'), { manualRefundReviewRequired: true });
-    await unit.create(commerceKeys.stripeCheckout('drop', '_'), { manualRefundReviewRequired: true });
-    await unit.create(commerceKeys.stripeCheckout('drop', 'A'), { manualRefundReviewRequired: true });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'a'), { manualRefundReviewRequired: true, status: 'fulfillment_failed' });
+    await unit.create(commerceKeys.stripeCheckout('drop', '_'), { manualRefundReviewRequired: true, status: 'fulfillment_failed' });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'A'), { manualRefundReviewRequired: true, status: 'fulfillment_failed' });
   });
-  const ordered = await repository.queryManualReviewCheckouts({ dropId: 'drop' });
-  assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a']);
+  const ordered = await repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 });
+  assert.deepEqual(ordered.map((record) => record.key.documentId), ['a', '_', 'A']);
 });
 
 test('transactional delivery-owner queries use atomic scope snapshots and sorted unique guards', async () => {
@@ -1795,7 +1852,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     [],
   );
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.queryManualReviewCheckouts({ dropId: 'drop' })),
+    await readWithSingleBatch(calls, () => repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 })),
     [],
   );
   assert.deepEqual(
@@ -1873,7 +1930,7 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     { name: 'get', read: (value) => value.get(commerceKeys.claimCode('MISSING')) },
     { name: 'queryDeliveryHistory', read: (value) => value.queryDeliveryHistory({ owners: ['owner'] }) },
     { name: 'queryFulfillmentOrders', read: (value) => value.queryFulfillmentOrders({ dropId: 'drop', limit: 1 }) },
-    { name: 'queryManualReviewCheckouts', read: (value) => value.queryManualReviewCheckouts({ dropId: 'drop' }) },
+    { name: 'queryManualReviewCheckouts', read: (value) => value.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 }) },
     { name: 'queryLegacyClaimAssignments', read: (value) => value.queryLegacyClaimAssignments({ code: 'MISSING' }) },
     {
       name: 'queryDeliveryOrderOwners',

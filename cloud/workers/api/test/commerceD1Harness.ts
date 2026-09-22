@@ -209,6 +209,7 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0012_stripe_identity_lookup_indexes.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0013_notification_outbox.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0014_drop_legacy_notification_indexes.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', 'utf8'));
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
   return {
     database,

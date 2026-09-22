@@ -38,9 +38,10 @@ const migrationNames = [
   '0012_stripe_identity_lookup_indexes.sql',
   '0013_notification_outbox.sql',
   '0014_drop_legacy_notification_indexes.sql',
+  '0015_manual_review_pagination.sql',
 ] as const;
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 = 14): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 = 15): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -213,7 +214,14 @@ test('Commerce D1 checker accepts the current schema using complete production q
       deliveryOrderOwnersQuery({ limit: 501 }),
       deliveryOrderOwnersQuery({ limit: 501, startAfterOwner: '11111111111111111111111111111111' }),
       deliveryRecoveryOrdersQuery('11111111111111111111111111111111'),
-      manualReviewCheckoutsQuery({ dropId: 'drop' }),
+      manualReviewCheckoutsQuery({ dropId: 'drop', limit: 26 }),
+      manualReviewCheckoutsQuery({
+        dropId: 'drop', limit: 26,
+        startAfter: {
+          version: 1, dropId: 'drop', sortAtMs: 1, sessionId: 'cs_cursor',
+          documentPath: 'drops/drop/stripeCheckouts/cs_cursor',
+        },
+      }),
       fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001 }),
       fulfillmentOrdersQuery({
         dropId: 'drop',
@@ -296,6 +304,28 @@ test('Commerce D1 checker still accepts migration 0013 during notification cutov
   const database = currentDatabase(true, 13);
   try {
     assert.equal(checkCommerceD1(localQuery(database)).notificationOutboxMode, 'legacy');
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker accepts migration 0014 for inspection but requires pagination before deployment', () => {
+  const database = currentDatabase(true, 14);
+  try {
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
+      /manual-review pagination migration is required/);
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects a weakened manual-review cursor index', () => {
+  const database = currentDatabase(false);
+  try {
+    database.exec(`DROP INDEX commerce_stripe_checkouts_manual_review_cursor;
+      CREATE INDEX commerce_stripe_checkouts_manual_review_cursor ON commerce_documents (document_path)`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /manual-review cursor index is invalid/);
   } finally {
     database.close();
   }
