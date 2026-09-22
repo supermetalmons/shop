@@ -104,14 +104,20 @@ export async function markStripeTerminalNotificationsQueued(
 ): Promise<boolean> {
   if (!jobs.length) {
     const current = await args.commerce.repository.notificationOutbox.get(claim.record.parentPath, 'stripe_terminal');
-    return current?.generation === claim.record.generation && current.state === 'queued';
+    if (current?.generation !== claim.record.generation || current.state !== 'queued') return false;
+    claim.record = current;
+    return true;
   }
-  return Boolean(await markClaimedNotificationQueued({ ...claimOptions(args, claim), jobs }));
+  const updated = await markClaimedNotificationQueued({ ...claimOptions(args, claim), jobs });
+  if (updated) claim.record = updated;
+  return Boolean(updated);
 }
 
 export async function releaseStripeTerminalNotificationClaim(
   args: StripeTerminalNotificationStoreOptions,
   claim: NotificationClaim,
 ): Promise<boolean> {
-  return Boolean(await releaseNotificationOutboxClaim(claimOptions(args, claim)));
+  const released = await releaseNotificationOutboxClaim(claimOptions(args, claim));
+  if (released) claim.record = released;
+  return Boolean(released);
 }

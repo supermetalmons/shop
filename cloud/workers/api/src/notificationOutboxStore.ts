@@ -65,15 +65,31 @@ export async function claimNotificationOutbox(args: {
 export async function updateClaimedNotificationOutbox(args: ClaimedOutboxOptions & {
   update: (record: NotificationOutboxRecord) => NotificationOutboxMutation;
 }): Promise<NotificationOutboxRecord | null> {
-  if (!args.claim.claimId || args.claim.claimExpiresAtMs === null) return null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const record = await args.repository.notificationOutbox.get(args.claim.parentPath, args.claim.family);
-    if (!record || record.state !== 'pending' || record.generation !== args.claim.generation ||
-      record.claimId !== args.claim.claimId) return null;
+  const { parentPath, family, generation, claimId, claimExpiresAtMs } = args.claim;
+  if (!claimId || claimExpiresAtMs === null) return null;
+  let record: NotificationOutboxRecord | null = args.claim;
+  let hasReloaded = false;
+  for (let attempt = 0; attempt < 6;) {
+    if (!record || record.state !== 'pending' || record.generation !== generation ||
+      record.claimId !== claimId) return null;
+    let changes: NotificationOutboxMutation;
+    try {
+      changes = args.update(record);
+    } catch (error) {
+      if (hasReloaded) throw error;
+      record = await args.repository.notificationOutbox.get(parentPath, family);
+      hasReloaded = true;
+      continue;
+    }
     const updated = await args.repository.notificationOutbox.compareAndSet({
-      expected: record, changes: args.update(record), nowMs: args.nowMs(), parentVersion: args.parentVersion,
+      expected: record, changes, nowMs: args.nowMs(), parentVersion: args.parentVersion,
     });
+    attempt += 1;
     if (updated) return updated;
+    if (attempt < 6) {
+      record = await args.repository.notificationOutbox.get(parentPath, family);
+      hasReloaded = true;
+    }
   }
   return null;
 }

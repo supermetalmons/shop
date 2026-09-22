@@ -60,7 +60,9 @@ test('shipment publication updates only the outbox and completed jobs are not se
   const jobs: NotificationEmailJobV1[] = [];
   const args = { repository, parentPath: key.path, signal: new AbortController().signal,
     nowMs: () => NOW_MS, queue: queue(async (batch) => { jobs.push(...batch); }) };
+  const outboxReads = context.mock.method(repository.notificationOutbox, 'get');
   assert.equal(await publishBuyerOrderShippedNotification(args), true);
+  assert.equal(outboxReads.mock.callCount(), 1);
   assert.equal(await publishBuyerOrderShippedNotification(args), true);
   assert.equal(jobs.length, 1);
   assert.match(jobs[0].text, /Tracking: https:\/\/carrier.example/);
@@ -70,6 +72,38 @@ test('shipment publication updates only the outbox and completed jobs are not se
   assert.equal(group?.entries[0].payload, undefined);
   assert.equal((await update()).response.buyerOrderShippedEmailState, 'queued');
 });
+
+for (const afterSnapshot of [false, true]) {
+  test(`shipment cancellation after ${afterSnapshot ? 'snapshot' : 'claim'} reuses the latest record for cleanup`, async (context) => {
+    const { repository, update } = fixture(context);
+    await update();
+    const controller = new AbortController();
+    const original = repository.notificationOutbox.compareAndSet.bind(repository.notificationOutbox);
+    let cancelled = false;
+    context.mock.method(repository.notificationOutbox, 'compareAndSet', async (args: Parameters<typeof original>[0]) => {
+      const result = await original(args);
+      if (!cancelled && result?.claimId && (!afterSnapshot || result.entries.some((entry) => entry.payload))) {
+        cancelled = true;
+        controller.abort(new Error('cancelled'));
+      }
+      return result;
+    });
+    const outboxReads = context.mock.method(repository.notificationOutbox, 'get');
+    const jobs: NotificationEmailJobV1[] = [];
+    await assert.rejects(publishBuyerOrderShippedNotification({
+      repository, parentPath: key.path, signal: controller.signal, nowMs: () => NOW_MS,
+      queue: queue(async (batch) => { jobs.push(...batch); }),
+    }), /cancelled/);
+    assert.equal(outboxReads.mock.callCount(), 1);
+    const record = await repository.notificationOutbox.get(key.path, 'shipped');
+    assert.ok(record);
+    assert.equal(record.attemptCount, 0);
+    assert.equal(record.claimId, null);
+    assert.equal(record.nextAttemptAtMs, NOW_MS);
+    assert.equal(record.entries.some((entry) => entry.payload), afterSnapshot);
+    assert.equal(jobs.length, 0);
+  });
+}
 
 test('scheduled shipment recovery reuses the exact saved email after an uncertain queue send', async (context) => {
   const { harness, repository, update } = fixture(context);

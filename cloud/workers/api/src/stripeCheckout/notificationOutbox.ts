@@ -71,6 +71,7 @@ async function prepareNotificationJobs(
   }
   const stored = await persistStripeTerminalNotificationJobs(args, claim, jobs);
   if (!stored) throw new Error('stripe_terminal_notification_claim_lost');
+  claim.record = stored;
   jobs = stored.entries.flatMap((entry) => entry.payload ? [entry.payload] : []);
   if (jobs.some((job) => !validJobIdentity(args, claim, job))) {
     throw new Error('stripe_terminal_notification_job_identity_invalid');

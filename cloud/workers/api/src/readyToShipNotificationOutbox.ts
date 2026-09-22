@@ -130,17 +130,22 @@ async function publishReadyNotifications(args: {
       if (!jobs.length) throw new ReadyToShipNotificationEnqueueError('Notification emails could not be prepared. Retry later.');
       const stored = await persistClaimedNotificationJobs({ ...options, jobs, parentVersion: current.version });
       if (!stored) throw new ReadyToShipNotificationEnqueueError('Notification publication claim changed. Retry later.');
+      options.claim = stored;
       return stored.entries.filter((entry) => jobs.some((job) => job.jobId === entry.jobId))
         .map((entry) => entry.payload!).filter(Boolean);
     },
     finalize: async (jobs) => {
       const updated = await markClaimedNotificationQueued({ ...options, jobs });
       if (!updated) throw new ReadyToShipNotificationEnqueueError('Notifications were queued, but their recovery state could not be saved. Retry later.');
+      options.claim = updated;
       console.log({ event: 'ready_to_ship_notifications_queued', dropId: args.dropId,
         deliveryId: args.deliveryId, jobs: jobs.map(({ jobId, kind }) => ({ jobId, kind })) });
       return jobs.length > 0;
     },
-    releaseUnusedClaim: async () => { await releaseNotificationOutboxClaim(options); },
+    releaseUnusedClaim: async () => {
+      const released = await releaseNotificationOutboxClaim(options);
+      if (released) options.claim = released;
+    },
   });
   if (buildErrors.length) throw new ReadyToShipNotificationEnqueueError('Some notification emails could not be prepared. Retry later.');
   return result;

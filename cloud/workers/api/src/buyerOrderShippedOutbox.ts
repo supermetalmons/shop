@@ -73,11 +73,14 @@ export async function publishBuyerOrderShippedNotification(args: {
     prepareAndPersist: async () => {
       const latest = await args.repository.get(key);
       if (!latest || !isBuyerOrderShippedNotificationEligible(latest.data)) {
-        if (latest) await updateClaimedNotificationOutbox({
-          ...claimArgs,
-          parentVersion: latest.version,
-          update: cancelledNotification,
-        });
+        if (latest) {
+          const cancelled = await updateClaimedNotificationOutbox({
+            ...claimArgs,
+            parentVersion: latest.version,
+            update: cancelledNotification,
+          });
+          if (cancelled) claimArgs.claim = cancelled;
+        }
         throw new Error('Shipped notification order is no longer eligible.');
       }
       const entry = claim.entries[0];
@@ -88,28 +91,40 @@ export async function publishBuyerOrderShippedNotification(args: {
         idempotencyKey: entry.idempotencyKey,
         order: latest.data,
       });
-      if (!await persistClaimedNotificationJobs({ ...claimArgs, jobs: [job], parentVersion: latest.version })) {
+      const stored = await persistClaimedNotificationJobs({ ...claimArgs, jobs: [job], parentVersion: latest.version });
+      if (!stored) {
         throw new Error('Shipped notification claim changed.');
       }
+      claimArgs.claim = stored;
       const beforeSend = await args.repository.get(key);
       if (!beforeSend || !isBuyerOrderShippedNotificationEligible(beforeSend.data)) {
-        if (beforeSend) await updateClaimedNotificationOutbox({
-          ...claimArgs, parentVersion: beforeSend.version, update: cancelledNotification,
-        });
+        if (beforeSend) {
+          const cancelled = await updateClaimedNotificationOutbox({
+            ...claimArgs, parentVersion: beforeSend.version, update: cancelledNotification,
+          });
+          if (cancelled) claimArgs.claim = cancelled;
+        }
         throw new Error('Shipped notification order changed before publication.');
       }
-      if (!await updateClaimedNotificationOutbox({ ...claimArgs, parentVersion: beforeSend.version, update: () => ({}) })) {
+      const checked = await updateClaimedNotificationOutbox({ ...claimArgs, parentVersion: beforeSend.version, update: () => ({}) });
+      if (!checked) {
         throw new Error('Shipped notification claim changed before publication.');
       }
+      claimArgs.claim = checked;
       return [job];
     },
     finalize: async (jobs) => {
-      if (!await markClaimedNotificationQueued({ ...claimArgs, jobs: [...jobs] })) {
+      const updated = await markClaimedNotificationQueued({ ...claimArgs, jobs: [...jobs] });
+      if (!updated) {
         throw new Error('Shipped notification finalization lost its claim.');
       }
+      claimArgs.claim = updated;
       return true;
     },
-    releaseUnusedClaim: async () => { await releaseNotificationOutboxClaim(claimArgs); },
+    releaseUnusedClaim: async () => {
+      const released = await releaseNotificationOutboxClaim(claimArgs);
+      if (released) claimArgs.claim = released;
+    },
     createExpiredClaimError: () => new Error('Shipped notification publication lease expired.'),
   });
 }
