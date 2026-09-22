@@ -1,8 +1,7 @@
-import { LEGACY_NOTIFICATION_FIELDS, shippedNotificationState, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
+import type { NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
 import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
 import {
   deliveryOrderSummarySortAt,
-  parseDeliveryOrderSummary,
 } from '../../../../shared/deliveryOrderSummary.js';
 import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
@@ -11,11 +10,9 @@ import {
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
 } from '../../../../shared/fulfillmentAccess.js';
-import {
-  fulfillmentOrderFromRecord,
-  isManualReviewCheckout,
-  manualReviewCheckoutFromRecord,
-} from '../../../../shared/fulfillmentReadModel.js';
+import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
+import { fulfillmentOrderSummaryFromDocument, fulfillmentStripeSessionId } from './deliveryOrderProfileViews.js';
+import { stripeCheckoutManualReviewSessionId, stripeCheckoutManualReviewSummary } from './stripeCheckout/readModel.js';
 import {
   STRIPE_CHECKOUT_OPERATION_HEADER,
   STRIPE_CHECKOUT_RETRY_HEADER,
@@ -44,11 +41,8 @@ import {
   decryptAddressCipherText,
   parseAddressCipherPayload,
 } from '../../../../shared/addressCipher.js';
-import { parseCanonicalPositiveInteger } from '../../../../shared/positiveInteger.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import { stripeCheckoutAnonymousOwnerId } from '../../../../shared/stripeCheckoutSession.js';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
-import { isStripeChargebackSessionId } from '../../../../shared/stripeChargebacks.js';
 import { loadStripeChargebackSessionIds } from './stripeChargebackStore.js';
 import {
   type RequestAuthContext,
@@ -121,17 +115,6 @@ const DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT = 4;
 const MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES = 2048;
 const DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER = 4;
 const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
-const FULFILLMENT_ORDER_FIELDS = [
-  'deliveryId', 'owner', 'source', 'status', 'createdAt', 'processedAt', 'fulfillmentStatus',
-  'fulfillmentTrackingCode', 'fulfillmentUpdatedAt', 'fulfillmentInternalStatus', 'shipstation',
-  'addressSnapshot', 'items', 'irlClaims', 'stripeReceiptClaimsByBoxId', 'stripeReceiptClaims',
-  'stripeReceiptClaim', 'adminIrlRedeem',
-] as const;
-const MANUAL_REVIEW_FIELDS = [
-  'manualRefundReviewRequired', 'status', 'sessionId', 'stripeSessionSummary', 'quantity', 'owner',
-  'ownerKind', 'authSubject', 'uid', 'manualRefundReviewReason', 'lastFulfillmentError',
-  'createdAt', 'failedAt',
-] as const;
 
 export type ProfileReadPath =
   | typeof PROFILE_SHIPMENTS_PATH
@@ -156,14 +139,6 @@ export type ProfileReadResult = {
     shipments: 'ready' | 'error' | 'not-applicable';
   };
 };
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function selectedFields(data: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
-  return Object.fromEntries(fields.flatMap((field) => Object.hasOwn(data, field) ? [[field, data[field]]] : []));
-}
 
 function isAllowedProfileOrigin(origin: string): boolean {
   let url: URL;
@@ -269,25 +244,6 @@ const defaultDependencies: ProfileReadDependencies = {
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
-
-function documentIdentity(document: CommerceDocumentRecord): { dropId: string; deliveryId: number } | null {
-  const dropId = normalizeDropId(document.key.dropId || '');
-  const deliveryId = parseCanonicalPositiveInteger(document.key.documentId);
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || deliveryId === null) return null;
-  return { dropId, deliveryId };
-}
-
-function deliveryOrderSummaryFromDocument(document: CommerceDocumentRecord): DeliveryOrderSummary | null {
-  const identity = documentIdentity(document);
-  const fields = document.data;
-  if (!identity || fields.source === 'admin_irl_redeem') return null;
-  const storedDropId = typeof fields.dropId === 'string' && fields.dropId
-    ? normalizeDropId(fields.dropId)
-    : identity.dropId;
-  const storedDeliveryId = Number.isSafeInteger(fields.deliveryId) ? Number(fields.deliveryId) : identity.deliveryId;
-  if (storedDropId !== identity.dropId || storedDeliveryId !== identity.deliveryId) return null;
-  return parseDeliveryOrderSummary({ ...fields, dropId: identity.dropId, deliveryId: identity.deliveryId });
-}
 
 function deliveryHistoryFromDocuments(documents: readonly CommerceDocumentRecord[]): DeliveryOrderSummary[] {
   const orders = documents
@@ -583,28 +539,10 @@ function addressDecryptor(secretValue: string): (payload: string) => string | nu
   };
 }
 
-function fulfillmentDocumentIdentity(
-  document: CommerceDocumentRecord,
-  dropId: string,
-): { id: string; fields: Record<string, unknown> } | null {
-  if (document.key.kind !== 'delivery_order' || document.key.dropId !== dropId) return null;
-  return { id: document.key.documentId, fields: selectedFields(document.data, FULFILLMENT_ORDER_FIELDS) };
-}
-
 function timestampCursor(document: CommerceDocumentRecord): FulfillmentOrdersCursor | null {
   return document.processedAt
     ? { processedAt: document.processedAt, id: document.key.documentId }
     : null;
-}
-
-function fulfillmentStripeSessionId(document: CommerceDocumentRecord, dropId: string): string | null {
-  if (
-    document.key.kind !== 'delivery_order' || document.key.dropId !== dropId ||
-    document.data.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE ||
-    (document.data.dropId !== undefined && document.data.dropId !== dropId)
-  ) return null;
-  const sessionId = document.data.stripeCheckoutSessionId;
-  return isStripeChargebackSessionId(sessionId) ? sessionId : null;
 }
 
 function fulfillmentOrdersFromDocuments(args: {
@@ -620,17 +558,12 @@ function fulfillmentOrdersFromDocuments(args: {
   const page = hasMore ? args.documents.slice(0, args.limit) : args.documents;
   const decryptAddress = addressDecryptor(args.addressSecret);
   const orders = page.flatMap((document) => {
-    const parsed = fulfillmentDocumentIdentity(document, args.dropId);
-    if (!parsed) return [];
-    for (const field of LEGACY_NOTIFICATION_FIELDS) delete parsed.fields[field];
-    const shippedState = shippedNotificationState(args.shippedOutboxes.get(document.key.path));
-    if (shippedState) parsed.fields.buyerOrderShippedEmailState = shippedState;
-    const sessionId = fulfillmentStripeSessionId(document, args.dropId);
-    const order = fulfillmentOrderFromRecord(parsed.id, parsed.fields, {
+    const order = fulfillmentOrderSummaryFromDocument(document, {
       canViewSensitiveAddress: args.canViewSensitiveAddress,
       decryptAddress,
       dropId: args.dropId,
-      stripeChargeback: sessionId !== null && args.chargebackSessionIds.has(sessionId),
+      chargebackSessionIds: args.chargebackSessionIds,
+      shippedOutbox: args.shippedOutboxes.get(document.key.path),
     });
     return order ? [order] : [];
   });
@@ -725,19 +658,17 @@ async function manualReviewFromDocuments(args: {
   let nextIndex = 0;
   const hydrate = async (document: CommerceDocumentRecord): Promise<FulfillmentManualReviewCheckout | null> => {
     args.request.signal.throwIfAborted();
-    const fields = selectedFields(document.data, MANUAL_REVIEW_FIELDS);
-    if (!isManualReviewCheckout(fields)) return null;
-    const sessionId = optionalString(fields.sessionId) || document.key.documentId;
-    if (!/^[A-Za-z0-9_:-]{4,256}$/.test(sessionId)) return null;
+    const sessionId = stripeCheckoutManualReviewSessionId(document);
+    if (sessionId === null) return null;
     let session: unknown = null;
     try {
       if (!args.signal.aborted) session = await fetchStripeSession(sessionId, keys, args.providerFetch, args.signal);
     } catch (error) {
       if (isRequestCancellationError(args.request, error)) throw error;
     }
-    return manualReviewCheckoutFromRecord({
+    return stripeCheckoutManualReviewSummary({
       canViewSensitiveAddress: args.canViewSensitiveAddress,
-      checkout: fields,
+      document,
       dropId: args.dropId,
       session,
       sessionId,

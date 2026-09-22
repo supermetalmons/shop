@@ -1,3 +1,5 @@
+import { parseDeliveryOrderReceiptView, type DeliveryOrderReceiptView } from './deliveryOrderReceiptView.js';
+import { parseDeliveryOrderOwnership, parseDeliveryOrderStatus } from './deliveryOrderReadModel.js';
 import bs58 from 'bs58';
 import {
   ComputeBudgetProgram,
@@ -48,7 +50,6 @@ import type {
 } from '../../../../shared/contracts.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import {
-  isBase58Bytes,
   isNonZeroBase58Bytes,
 } from '../../../../shared/solanaRpcProxy.js';
 import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
@@ -61,7 +62,7 @@ import {
   sleepWithSignal,
 } from './boundedRequest.js';
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { ProfileReadError } from './dataAccess.js';
 import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
   CommerceDudeAssignmentError,
@@ -87,7 +88,7 @@ import {
 } from './transactionSubmissionRecovery.js';
 import { resolveDeliveryOrderDropId } from './deliveryOrderSummaries.js';
 import { buildRecoverDeliveryOrdersResult } from '../../../../shared/deliveryRecovery.js';
-import { D1CommerceRepository, type CommerceDocumentData } from './commerceRepository.js';
+import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import {
   deliveryOrderKey,
@@ -335,19 +336,11 @@ function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: num
   };
 }
 
-function expectedDeliveryLamports(order: Record<string, unknown>): number {
-  const value = Number(order.deliveryLamports ?? order.shippingLamports);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new DeliveryReceiptError('failed-precondition', 'Stored delivery fee is invalid.');
-  }
-  return value;
-}
-
 function assertDeliverArgsMatchOrder(args: {
   decoded: ReturnType<typeof decodeDeliverArgs>;
   deliveryId: number;
   expectedDeliveryBump: number;
-  order: Record<string, unknown>;
+  order: DeliveryOrderReceiptView;
 }): void {
   if (args.decoded.deliveryId !== args.deliveryId) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery id mismatch.', {
@@ -359,7 +352,7 @@ function assertDeliverArgsMatchOrder(args: {
       reason: 'delivery_bump_mismatch',
     });
   }
-  if (args.decoded.feeLamports !== expectedDeliveryLamports(args.order)) {
+  if (args.decoded.feeLamports !== args.order.deliveryLamports) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery fee mismatch.', {
       reason: 'delivery_fee_mismatch',
     });
@@ -383,20 +376,6 @@ function decodeDeliveryRecord(data: Buffer): {
     deliveryFeeLamports: Number(fee),
     itemCount: data.readUInt16LE(48),
   };
-}
-
-function storedDeliveryItemIds(order: Record<string, unknown>): string[] {
-  if (order.itemIds === undefined) return [];
-  if (
-    !Array.isArray(order.itemIds) ||
-    !order.itemIds.every((value): value is string => typeof value === 'string' && isBase58Bytes(value, 32))
-  ) {
-    throw new DeliveryReceiptError('failed-precondition', 'Delivery order contains invalid itemIds.');
-  }
-  if (new Set(order.itemIds).size !== order.itemIds.length) {
-    throw new DeliveryReceiptError('failed-precondition', 'Delivery order contains duplicate itemIds.');
-  }
-  return [...order.itemIds];
 }
 
 async function fetchDeliveryRecord(
@@ -423,8 +402,8 @@ async function fetchDeliveryRecord(
   return { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo };
 }
 
-function assertStoredDeliveryPda(order: Record<string, unknown>, expectedDeliveryPda: PublicKey): void {
-  const stored = typeof order.deliveryPda === 'string' ? order.deliveryPda.trim() : '';
+function assertStoredDeliveryPda(order: DeliveryOrderReceiptView, expectedDeliveryPda: PublicKey): void {
+  const stored = order.deliveryPda;
   if (stored && stored !== expectedDeliveryPda.toBase58()) {
     throw new DeliveryReceiptError('failed-precondition', 'Stored delivery PDA does not match the expected delivery PDA.');
   }
@@ -450,7 +429,7 @@ function assertDeliveryPayers(
 async function verifyReceiptIssuanceBySignature(args: {
   connection: Connection;
   deliveryId: number;
-  order: Record<string, unknown>;
+  order: DeliveryOrderReceiptView;
   ownerWallet: string;
   runtime: DeliveryRuntime;
   signature: string;
@@ -497,7 +476,7 @@ async function verifyReceiptIssuanceBySignature(args: {
     expectedDeliveryBump,
     order: args.order,
   });
-  const itemIds = storedDeliveryItemIds(args.order);
+  const itemIds = args.order.itemIds;
   const deliveredAssets = deliverAccounts.slice(fixedAccountCount).map((key) => key.toBase58());
   if (itemIds.length && deliveredAssets.length && itemIds.length !== deliveredAssets.length) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery item count mismatch.', {
@@ -527,11 +506,11 @@ async function verifyReceiptIssuanceBySignature(args: {
 async function verifyReceiptIssuanceByDeliveryRecord(args: {
   connection: Connection;
   deliveryId: number;
-  order: Record<string, unknown>;
+  order: DeliveryOrderReceiptView;
   ownerWallet: string;
   runtime: DeliveryRuntime;
 }): Promise<VerifiedReceiptIssuanceTarget> {
-  const itemIds = storedDeliveryItemIds(args.order);
+  const itemIds = args.order.itemIds;
   if (!itemIds.length) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing itemIds for recovery.');
   }
@@ -548,7 +527,7 @@ async function verifyReceiptIssuanceByDeliveryRecord(args: {
       got: record.itemCount,
     });
   }
-  const expectedLamports = expectedDeliveryLamports(args.order);
+  const expectedLamports = args.order.deliveryLamports;
   if (record.deliveryFeeLamports !== expectedLamports) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery record fee mismatch.', {
       expected: expectedLamports,
@@ -557,7 +536,7 @@ async function verifyReceiptIssuanceByDeliveryRecord(args: {
   }
   return {
     verification: 'delivery_pda',
-    signature: typeof args.order.deliverySignature === 'string' ? args.order.deliverySignature : null,
+    signature: args.order.deliverySignature,
     expectedDeliveryPda: account.expectedDeliveryPda,
     expectedDeliveryBump: account.expectedDeliveryBump,
     targetAssetIds: itemIds,
@@ -573,13 +552,13 @@ function looksLikeComputeLimitError(message: string, logs: readonly string[]): b
 }
 
 function pendingReceiptItems(
-  order: Record<string, unknown>,
+  order: DeliveryOrderReceiptView,
   targetAssetIds: readonly string[],
   infos: readonly (AccountInfo<Buffer> | null)[],
   runtime: DeliveryRuntime,
 ): Array<{ assetId: string; asset: PublicKey; kind: 'box' | 'dude'; refId: number }> {
-  const storedItems = Array.isArray(order.items) ? order.items.filter(isRecord) : [];
-  const byAssetId = new Map<string, Record<string, unknown>>();
+  const storedItems = order.items;
+  const byAssetId = new Map<string, DeliveryOrderReceiptView['items'][number]>();
   for (const item of storedItems) {
     if (typeof item.assetId === 'string') byAssetId.set(item.assetId, item);
   }
@@ -589,7 +568,7 @@ function pendingReceiptItems(
     const assetId = targetAssetIds[index];
     const stored = byAssetId.get(assetId);
     const kind = stored?.kind;
-    const refId = Number(stored?.refId);
+    const refId = stored?.refId ?? NaN;
     if (kind !== 'box' && kind !== 'dude') {
       throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing item kind for receipt minting.', {
         assetId,
@@ -825,7 +804,8 @@ async function retryIssueReceipts(args: {
   const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
   let document = await readDeliveryOrder(args.commerce, deliveryOrderKey(path));
   if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-  if (document.data.owner && document.data.owner !== owner.toBase58()) {
+  const receipt = parseDeliveryOrderReceiptView(document.data);
+  if (receipt.ownership.hasOwner && receipt.ownership.owner !== owner.toBase58()) {
     throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
   }
   const connection = createConnection(args.provider, runtime);
@@ -834,16 +814,14 @@ async function retryIssueReceipts(args: {
   if (!signer.publicKey.equals(onchain.admin)) {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
-  if (document.data.status === 'ready_to_ship') {
+  if (receipt.status === 'ready_to_ship') {
     scheduleDeliveryPackStatusProjection({
       context: args.commerce,
       deliveryId,
       dropId: runtime.dropId,
       waitUntil: args.waitUntil,
     });
-    let closeDeliveryTx = typeof document.data.closeDeliveryTx === 'string'
-      ? document.data.closeDeliveryTx
-      : null;
+    let closeDeliveryTx = receipt.closeDeliveryTx;
     if (!closeDeliveryTx) {
       const [deliveryPda, deliveryBump] = deriveDeliveryPda(runtime, deliveryId);
       try {
@@ -878,10 +856,8 @@ async function retryIssueReceipts(args: {
     return {
       processed: true,
       deliveryId,
-      receiptsMinted: Number(document.data.receiptsMinted || 0),
-      receiptTxs: Array.isArray(document.data.receiptTxs)
-        ? document.data.receiptTxs.filter((value): value is string => typeof value === 'string')
-        : [],
+      receiptsMinted: receipt.receiptsMinted,
+      receiptTxs: receipt.receiptTxs,
       closeDeliveryTx,
     };
   }
@@ -889,7 +865,7 @@ async function retryIssueReceipts(args: {
     ? await verifyReceiptIssuanceBySignature({
         connection,
         deliveryId,
-        order: document.data,
+        order: receipt,
         ownerWallet: owner.toBase58(),
         runtime,
         signature: args.request.signature,
@@ -897,7 +873,7 @@ async function retryIssueReceipts(args: {
     : await verifyReceiptIssuanceByDeliveryRecord({
         connection,
         deliveryId,
-        order: document.data,
+        order: receipt,
         ownerWallet: owner.toBase58(),
         runtime,
       });
@@ -945,7 +921,7 @@ async function retryIssueReceipts(args: {
     commitment: 'confirmed',
     dataSlice: { offset: 0, length: 0 },
   });
-  const pending = pendingReceiptItems(document.data, verified.targetAssetIds, infos, runtime);
+  const pending = pendingReceiptItems(parseDeliveryOrderReceiptView(document.data), verified.targetAssetIds, infos, runtime);
   const alreadyProcessed = verified.targetAssetIds.length - pending.length;
   const receiptTxs = confirmedReceiptTransactions(document.data);
   let totalProcessed = 0;
@@ -989,12 +965,10 @@ async function retryIssueReceipts(args: {
   const receiptsMinted = alreadyProcessed + totalProcessed;
   const irlClaims: DeliveryIrlClaim[] = [];
   if (runtime.itemsPerBox > 0) {
-    const items = Array.isArray(document.data.items)
-      ? document.data.items.filter((item): item is CommerceDocumentData => isRecord(item))
-      : [];
+    const items = parseDeliveryOrderReceiptView(document.data).items;
     for (const item of items) {
       if (item.kind !== 'box' || typeof item.assetId !== 'string') continue;
-      const boxId = Number(item.refId);
+      const boxId = item.refId;
       if (!Number.isSafeInteger(boxId) || boxId < 1 || boxId > 0xffff_ffff) continue;
       const dudeIds = await assignDudesForBox(
         args.commerce,
@@ -1168,7 +1142,7 @@ async function issueReceiptsRequest(
   const order = await readDeliveryOrder(commerce, deliveryOrderKey(path));
   if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
   let acquiredLease: DeliveryRecoveryLease | undefined;
-  if (order.data.status !== 'ready_to_ship') {
+  if (parseDeliveryOrderStatus(order.data).status !== 'ready_to_ship') {
     const lease = await acquireDeliveryRecoveryLease(commerce, order.key, ownerWallet, Date.now(), true);
     if (!lease.acquired) {
       if (lease.result.outcome === 'lease_active') {
@@ -1237,7 +1211,7 @@ async function hasConfirmedDeliveryRecord(
 ): Promise<boolean> {
   const connection = createConnection(provider, runtime);
   const [expectedDeliveryPda] = deriveDeliveryPda(runtime, deliveryId);
-  assertStoredDeliveryPda(order, expectedDeliveryPda);
+  assertStoredDeliveryPda(parseDeliveryOrderReceiptView(order), expectedDeliveryPda);
   return Boolean(await fetchDeliveryRecord(connection, runtime, deliveryId, false));
 }
 
@@ -1298,7 +1272,8 @@ async function recoverReceiptsRequest(
     if (commerce.signal.aborted) throw commerce.signal.reason;
     const base = orderResultBase(document);
     if (!base) continue;
-    if (document.data.owner && document.data.owner !== wallet) {
+    const ownership = parseDeliveryOrderOwnership(document.data);
+    if (ownership.hasOwner && ownership.owner !== wallet) {
       results.push({
         ...base,
         outcome: 'failed',
@@ -1637,5 +1612,4 @@ export const deliveryReceiptTestHooks = {
   runtimeForDrop,
   sendReceiptBatch,
   shouldShrinkReceiptBatch,
-  storedDeliveryItemIds,
 };

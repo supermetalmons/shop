@@ -1,23 +1,15 @@
-import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
 import {
-  STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   createStripeCheckoutFulfillmentJobV1,
-  type StripeCheckoutFulfillmentEventType,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import {
   D1CommerceRepository,
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
 import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
+import { stripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCandidate } from './stripeCheckout/readModel.js';
 
 export const STRIPE_FULFILLMENT_REQUEUE_AFTER_MS = 15 * 60 * 1000;
-type RequeueCandidate = {
-  checkoutPath: string;
-  dropId: string;
-  sessionId: string;
-  stripeEventId: string;
-  stripeEventType: StripeCheckoutFulfillmentEventType;
-};
+type RequeueCandidate = StripeCheckoutRequeueCandidate;
 
 type ReconciliationEnv = Pick<Env,
   'COMMERCE_DB' | 'STRIPE_FULFILLMENT_QUEUE'
@@ -45,29 +37,8 @@ export function parseRequeueCandidates(
 ): RequeueCandidate[] {
   const candidates: RequeueCandidate[] = [];
   for (const document of value) {
-    if (document.key.kind !== 'stripe_checkout' || !document.key.dropId) continue;
-    const dropId = document.key.dropId;
-    const sessionId = document.key.documentId;
-    const fields = document.data;
-    if (
-      (
-        fields.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING &&
-        fields.status !== STRIPE_CHECKOUT_STATUS.PROCESSING
-      ) ||
-      fields.fulfillmentProcessor !== STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR ||
-      typeof fields.updatedAt !== 'number' ||
-      fields.updatedAt > cutoffMs ||
-      typeof fields.lastStripeWebhookEventId !== 'string'
-    ) continue;
-    candidates.push({
-      checkoutPath: `drops/${dropId}/stripeCheckouts/${sessionId}`,
-      dropId,
-      sessionId,
-      stripeEventId: fields.lastStripeWebhookEventId,
-      stripeEventType: fields.lastStripeWebhookEventType === 'checkout.session.async_payment_succeeded'
-        ? fields.lastStripeWebhookEventType
-        : 'checkout.session.completed',
-    });
+    const candidate = stripeCheckoutRequeueCandidate(document, cutoffMs);
+    if (candidate) candidates.push(candidate);
   }
   return candidates;
 }

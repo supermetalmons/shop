@@ -1,3 +1,4 @@
+import { preparedDeliveryRecoveryNextCheckMs, processingDeliveryRecoveryNextCheckMs } from '../../../../shared/deliveryRecovery.js';
 import { normalizeFulfillmentStatus, type FulfillmentStatus } from '../../../../shared/fulfillmentStatus.js';
 import { normalizeOptionalFulfillmentTrackingCode } from '../../../../shared/fulfillmentTracking.js';
 import { storedFulfillmentShipStationLabel } from '../../../../shared/shipstationLabels.js';
@@ -136,6 +137,8 @@ export type DeliveryRecoveryState = {
   rawAttemptCount: CommerceJsonValue | undefined;
   rawLastAttemptAt: CommerceJsonValue | undefined;
   rawPreparedProbeCount: CommerceJsonValue | undefined;
+  preparedNextCheckAt: (nowMs?: number) => number | null;
+  processingNextCheckAt: (nowMs: number) => number | null;
 };
 
 function finiteMillis(value: unknown): number | null {
@@ -153,5 +156,44 @@ export function parseDeliveryRecoveryState(order: CommerceDocumentData): Deliver
     rawAttemptCount: recovery.attemptCount,
     rawLastAttemptAt: recovery.lastAttemptAt,
     rawPreparedProbeCount: recovery.preparedProbeCount,
+    preparedNextCheckAt: (nowMs) => preparedDeliveryRecoveryNextCheckMs(order, nowMs),
+    processingNextCheckAt: (nowMs) => processingDeliveryRecoveryNextCheckMs(order, nowMs),
   };
+}
+
+export function parseDeliveryOrderOwnership(order: Record<string, unknown>): {
+  owner: string | undefined;
+  hasOwner: boolean;
+} {
+  return {
+    owner: typeof order.owner === 'string' ? order.owner : undefined,
+    hasOwner: Boolean(order.owner),
+  };
+}
+
+export function parseDeliveryOrderStatus(order: Record<string, unknown>): {
+  status: string | undefined;
+  source: string | undefined;
+} {
+  return {
+    status: typeof order.status === 'string' ? order.status : undefined,
+    source: typeof order.source === 'string' ? order.source : undefined,
+  };
+}
+
+export function parseDeliveryShipmentItemCounts(order: Record<string, unknown>): {
+  boxCount: number;
+  looseItemCount: number;
+} {
+  const items = Array.isArray(order.items) ? order.items : [];
+  let boxCount = 0;
+  let looseItemCount = 0;
+  for (const item of items) {
+    if (!isRecord(item) || (item.kind !== 'box' && item.kind !== 'dude')) continue;
+    const refId = Math.floor(Number(item.refId));
+    if (!Number.isFinite(refId) || refId <= 0) continue;
+    if (item.kind === 'box') boxCount += 1;
+    else looseItemCount += 1;
+  }
+  return { boxCount, looseItemCount };
 }

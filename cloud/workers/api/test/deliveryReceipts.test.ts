@@ -1,3 +1,4 @@
+import { parseDeliveryOrderReceiptView } from '../src/deliveryOrderReceiptView.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -1511,13 +1512,13 @@ test('stored assignment validation rejects malformed or duplicate ids', () => {
 test('stored delivery item ids reject malformed subsets and duplicates', () => {
   const first = Keypair.generate().publicKey.toBase58();
   const second = Keypair.generate().publicKey.toBase58();
-  assert.deepEqual(deliveryReceiptTestHooks.storedDeliveryItemIds({ itemIds: [first, second] }), [first, second]);
+  assert.deepEqual(parseDeliveryOrderReceiptView({ itemIds: [first, second] }).itemIds, [first, second]);
   assert.throws(
-    () => deliveryReceiptTestHooks.storedDeliveryItemIds({ itemIds: [first, 'invalid'] }),
+    () => parseDeliveryOrderReceiptView({ itemIds: [first, 'invalid'] }).itemIds,
     /invalid itemIds/,
   );
   assert.throws(
-    () => deliveryReceiptTestHooks.storedDeliveryItemIds({ itemIds: [first, first] }),
+    () => parseDeliveryOrderReceiptView({ itemIds: [first, first] }).itemIds,
     /duplicate itemIds/,
   );
 });
@@ -1588,24 +1589,24 @@ test('delivery record decoding validates discriminator, payer, fee, and item cou
     decoded: { deliveryId: 7, feeLamports: 1234, deliveryBump: 255 },
     deliveryId: 7,
     expectedDeliveryBump: 255,
-    order: { deliveryLamports: 1234 },
+    order: parseDeliveryOrderReceiptView({ deliveryLamports: 1234 }),
   }));
   assert.doesNotThrow(() => deliveryReceiptTestHooks.assertDeliverArgsMatchOrder({
     decoded: { deliveryId: 7, feeLamports: 1234, deliveryBump: 255 },
     deliveryId: 7,
     expectedDeliveryBump: 255,
-    order: { shippingLamports: 1234 },
+    order: parseDeliveryOrderReceiptView({ shippingLamports: 1234 }),
   }));
   assert.throws(() => deliveryReceiptTestHooks.assertDeliverArgsMatchOrder({
     decoded: { deliveryId: 7, feeLamports: 1, deliveryBump: 255 },
     deliveryId: 7,
     expectedDeliveryBump: 255,
-    order: { deliveryLamports: 1234 },
+    order: parseDeliveryOrderReceiptView({ deliveryLamports: 1234 }),
   }), /Delivery fee mismatch/);
   assert.throws(() => deliveryReceiptTestHooks.assertDeliverArgsMatchOrder({
     decoded: { deliveryId: 7, feeLamports: 1234, deliveryBump: 1 },
     deliveryId: 7,
     expectedDeliveryBump: 255,
-    order: { deliveryLamports: 1234 },
+    order: parseDeliveryOrderReceiptView({ deliveryLamports: 1234 }),
   }), /Delivery PDA bump mismatch/);
 });

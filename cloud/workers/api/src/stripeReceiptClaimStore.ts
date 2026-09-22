@@ -9,12 +9,16 @@ import { isRecord } from './dataAccess.js';
 import {
   commerceFieldValue,
   commerceKeys,
-  type CommerceDocumentWriteData,
 } from './commerceRepository.js';
+import { deliveryOrderKey, readDeliveryOrder, updateDeliveryOrder } from './deliveryOrderStore.js';
+import type {
+  DeliveryReceiptClaimFields,
+  DeliveryReceiptClaimUpdates,
+  DeliveryReceiptClaimValues,
+} from './deliveryOrderUpdates.js';
 import {
   commerceTimestamp,
   readCommerceRecord,
-  requireCommerceKey,
   runCommerceTransaction,
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
@@ -162,24 +166,24 @@ function orderClaimValues(args: {
   code: string;
   boxId: number;
   status: 'processing' | 'unclaimed' | 'claimed';
-  values: CommerceDocumentWriteData;
+  values: DeliveryReceiptClaimValues;
   updatePluralOrderClaim: boolean;
   updateSingularOrderClaim: boolean;
-}): CommerceDocumentWriteData {
-  const values: CommerceDocumentWriteData = {};
+}): DeliveryReceiptClaimUpdates {
+  const entries: Array<[string, DeliveryReceiptClaimFields[keyof DeliveryReceiptClaimFields]]> = [];
   const claim = {
     namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
     code: args.code,
     boxId: args.boxId,
     status: args.status,
     ...args.values,
+  } satisfies DeliveryReceiptClaimFields;
+  const assign = (prefix: 'stripeReceiptClaim' | `stripeReceiptClaimsByBoxId.box_${number}`) => {
+    for (const [key, value] of Object.entries(claim)) entries.push([`${prefix}.${key}`, value]);
   };
-  const assign = (prefix: string) => {
-    for (const [key, value] of Object.entries(claim)) values[`${prefix}.${key}`] = value;
-  };
-  if (args.updatePluralOrderClaim) assign(`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(args.boxId)}`);
+  if (args.updatePluralOrderClaim) assign(`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(args.boxId) as `box_${number}`}`);
   if (args.updateSingularOrderClaim) assign('stripeReceiptClaim');
-  return values;
+  return Object.fromEntries(entries) as DeliveryReceiptClaimUpdates;
 }
 
 function timestamp(value: number) {
@@ -249,7 +253,7 @@ export async function startClaim(
         );
       }
       const orderKey = commerceKeys.deliveryOrder(dropId, String(deliveryId));
-      const orderDocument = await readCommerceRecord(context, orderKey, transaction);
+      const orderDocument = await readDeliveryOrder(context, orderKey, transaction);
       if (!orderDocument) throw new StripeReceiptClaimError('not-found', 'Receipt claim order not found.');
       const order = orderDocument.data;
       if (!isReceiptClaimDeliveryOrderSource(order.source)) {
@@ -304,7 +308,7 @@ export async function startClaim(
         processingStartedAt: commerceFieldValue.serverTimestamp(),
         updatedAt: commerceFieldValue.serverTimestamp(),
       });
-      await transaction.update(orderKey, orderValues);
+      await updateDeliveryOrder(transaction, orderKey, orderValues);
       return attemptedStart;
     });
   } catch (error) {
@@ -321,7 +325,7 @@ export async function startClaim(
         claim.data.processingAttemptId === attemptId &&
         claim.data.recipient === recipientWallet
       ) {
-        const order = await readCommerceRecord(cleanup, requireCommerceKey(attemptedStart.orderPath));
+        const order = await readDeliveryOrder(cleanup, deliveryOrderKey(attemptedStart.orderPath));
         const orderClaims = order ? [
           ...(attemptedStart.updatePluralOrderClaim
             ? [orderStripeReceiptClaimByBoxId(order.data, attemptedStart.boxId)]
@@ -387,7 +391,7 @@ export async function clearProcessing(
         updatePluralOrderClaim: started.updatePluralOrderClaim,
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       });
-      const orderKey = requireCommerceKey(started.orderPath);
+      const orderKey = deliveryOrderKey(started.orderPath);
       await transaction.getMany([claimKey, orderKey]);
       await transaction.update(claimKey, {
         status: 'unclaimed',
@@ -398,7 +402,7 @@ export async function clearProcessing(
         lastClaimErrorAt: commerceFieldValue.serverTimestamp(),
         updatedAt: commerceFieldValue.serverTimestamp(),
       });
-      await transaction.update(orderKey, orderValues);
+      await updateDeliveryOrder(transaction, orderKey, orderValues);
     });
   } catch (cleanupError) {
     console.warn({
@@ -503,7 +507,7 @@ export async function finalizeClaim(
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       }),
     };
-    const orderKey = requireCommerceKey(started.orderPath);
+    const orderKey = deliveryOrderKey(started.orderPath);
     await transaction.getMany([claimKey, orderKey]);
     await transaction.update(claimKey, {
       status: 'claimed',
@@ -518,7 +522,7 @@ export async function finalizeClaim(
       claimedAt: commerceFieldValue.serverTimestamp(),
       updatedAt: commerceFieldValue.serverTimestamp(),
     });
-    await transaction.update(orderKey, orderValues);
+    await updateDeliveryOrder(transaction, orderKey, orderValues);
     return receiptTxs;
   });
 }

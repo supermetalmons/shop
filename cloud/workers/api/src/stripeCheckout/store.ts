@@ -1,10 +1,12 @@
 import { randomInt } from 'crypto';
 import { commerceFieldValue, commerceKeys, type CommerceDocumentKey } from '../commerceRepository.js';
 import { commerceTimestamp, runCommerceTransaction } from '../commerceTransactions.js';
+import { createDeliveryOrder } from '../deliveryOrderStore.js';
 import {
   getStripeCheckout,
   mergeStripeCheckout,
   stripeCheckoutRecord,
+  stripeCheckoutJsonObject,
   stripeCheckoutWriteData,
   updateStripeCheckout,
   validateStripeCheckoutForFulfillment,
@@ -227,7 +229,7 @@ export async function markStripeCheckoutFulfillmentFulfilled(
       if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
       if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
     }
-    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout,
       outcome: 'fulfilled', deliveryId: params.deliveryId, nowMs: commerce.nowMs() });
     await updateStripeCheckout(tx, checkoutKey, stripeCheckoutFulfilledUpdate(params));
     return { status: 'fulfilled' as const };
@@ -311,7 +313,7 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
       return { started: false, reason: 'not_pending' };
     }
 
-    const variantKey = String(checkoutData.fields.variantKey || '').trim();
+    const variantKey = checkoutData.variantKey;
     const checkout = validateStripeCheckoutForFulfillment(checkoutData, {
       dropId,
       ...(variantKey ? { variantKey } : {}),
@@ -409,7 +411,7 @@ export async function markStripeCheckoutFulfillmentFailed(
         updatedAt: commerceFieldValue.serverTimestamp(),
       },
     );
-    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+    await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout,
       outcome: 'manual_review', nowMs: commerce.nowMs() });
     return { status: 'failed' as const };
   }, { shouldRetry: (error) => error.code === 'aborted' });
@@ -444,7 +446,7 @@ export function publishStripeOffchainDeliveryOrder(params: {
           return { checkoutStatus };
         }
         if (checkoutStatus === 'fulfilled') {
-          await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+          await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout,
             outcome: 'fulfilled', deliveryId: existingOrder.deliveryId, nowMs: commerce.nowMs() });
           await updateStripeCheckout(
             tx, checkoutKey,
@@ -465,7 +467,7 @@ export function publishStripeOffchainDeliveryOrder(params: {
       return { checkoutStatus };
     }
     if (checkoutStatus === 'already_fulfilled') {
-      const deliveryId = positiveInteger(checkout?.fields.deliveryId);
+      const deliveryId = checkout?.fulfillmentDeliveryId;
       return deliveryId ? { deliveryId, checkoutStatus } : { checkoutStatus };
     }
 
@@ -481,11 +483,14 @@ export function publishStripeOffchainDeliveryOrder(params: {
       stripeReceiptClaims,
     };
     await tx.getMany([orderKey, ...claimKeys]);
-    await tx.create(orderKey, stripeCheckoutWriteData({
-      ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
+    const { stripeCheckoutSessionId, ...orderFields } = buildStripeOffchainDeliveryOrderDocument(deliveryOrder);
+    await createDeliveryOrder(tx, orderKey, {
+      ...orderFields,
+      addressSnapshot: stripeCheckoutJsonObject(orderFields.addressSnapshot),
+      ...(stripeCheckoutSessionId === undefined ? {} : { stripeCheckoutSessionId }),
       processedAt: commerceFieldValue.serverTimestamp(),
       createdAt: commerceFieldValue.serverTimestamp(),
-    }));
+    });
     await tx.create(markerKey, stripeCheckoutWriteData({
       ...buildStripeOffchainOrderMarkerDocument(deliveryOrder),
       createdAt: commerceFieldValue.serverTimestamp(),
@@ -510,7 +515,7 @@ export function publishStripeOffchainDeliveryOrder(params: {
       } satisfies StripeReceiptClaimCreate));
     }
     if (checkoutStatus === 'fulfilled') {
-      await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout?.fields ?? null,
+      await enqueueStripeTerminalNotifications({ transaction: tx, key: checkoutKey, before: checkout,
         outcome: 'fulfilled', deliveryId, nowMs: commerce.nowMs() });
       await updateStripeCheckout(
         tx, checkoutKey,

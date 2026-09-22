@@ -31,6 +31,21 @@ const input: PreparedDeliveryInput = {
   prepareAttemptId: 'original-attempt',
 };
 
+test('typed prepared creation preserves address metadata and native timestamps', async (t) => {
+  const harness = createCommerceD1Harness();
+  t.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  await createPreparedDeliveryOrder({ repository, nowMs: 1_000, signal: new AbortController().signal }, input);
+  assert.deepEqual((await repository.get(key))?.data, {
+    dropId: 'card_nft_2', status: 'prepared', owner: 'owner', addressId: 'address',
+    addressSnapshot: { encrypted: 'cipher', futureAddressField: 'preserved', id: 'address', countryCode: 'US' },
+    itemIds: ['asset'], items: [{ assetId: 'asset', kind: 'box', refId: 7 }],
+    deliveryId: 7, deliveryPda: 'delivery-pda', deliveryLamports: 200_000_000,
+    prepareAttemptId: 'original-attempt', receiptRecovery: { preparedProbeCount: 0, nextPreparedProbeAt: 30_000 },
+    createdAt: 1_000,
+  });
+});
+
 test('prepared delivery cleanup cannot delete a newer revision', async (t) => {
   const harness = createCommerceD1Harness();
   t.after(() => harness.database.close());

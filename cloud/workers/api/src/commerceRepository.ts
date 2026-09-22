@@ -1,6 +1,5 @@
 import {
   CommerceRepositoryError,
-  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentKind,
   type CommerceDocumentRecord,
@@ -116,9 +115,9 @@ export class D1CommerceRepository {
     return { generation: inventory.generation, pool };
   }
 
-  async getAdminIrlRedeemRequestForWorkflowStatus<T extends CommerceDocumentData>(
+  async getAdminIrlRedeemRequestForWorkflowStatus(
     operationId: string,
-  ): Promise<CommerceDocumentRecord<T> | null> {
+  ): Promise<CommerceDocumentRecord | null> {
     if (!/^airf-v1-[0-9a-f]{64}$/.test(operationId)) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Admin IRL redeem Workflow operation id.');
     }
@@ -131,12 +130,12 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('internal', 'Duplicate Admin IRL redeem Workflow operation id.');
     }
     const document = result.results[0] ? parseRow(result.results[0]) : null;
-    return document ? publicRecord<T>(document) : null;
+    return document ? publicRecord(document) : null;
   }
 
-  async get<T extends CommerceDocumentData>(
+  async get(
     key: CommerceDocumentKey,
-  ): Promise<CommerceDocumentRecord<T> | null> {
+  ): Promise<CommerceDocumentRecord | null> {
     const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1' AND document_path = ?
@@ -148,7 +147,7 @@ export class D1CommerceRepository {
       document.key.dropId !== key.dropId ||
       document.key.documentId !== key.documentId
     )) throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
-    return document ? publicRecord<T>(document) : null;
+    return document ? publicRecord(document) : null;
   }
 
   async queryDeliveryHistory(args: Readonly<{ owners: readonly string[] }>): Promise<CommerceDocumentRecord[]> {

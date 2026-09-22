@@ -6,6 +6,8 @@ import {
   type CommerceDocumentData,
 } from './commerceRepository.js';
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
+import { createDeliveryOrder } from './deliveryOrderStore.js';
+import type { PreparedDeliveryOrderCreate } from './deliveryOrderCreate.js';
 
 const RECONCILE_TIMEOUT_MS = 5_000;
 
@@ -78,13 +80,13 @@ export async function createPreparedDeliveryOrder(
       nextPreparedProbeAt: input.nextPreparedProbeAtMs,
     },
     createdAt: commerceFieldValue.serverTimestamp(),
-  };
+  } satisfies PreparedDeliveryOrderCreate;
   const key = commerceKeys.deliveryOrder(input.dropId, String(input.deliveryId));
   try {
     if (key.path !== input.path) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
     const created = await commerceRepository(context).run(
       context.nowMs,
-      async (unit) => unit.create(key, fields),
+      async (unit) => createDeliveryOrder(unit, key, fields),
     );
     return created.updateTime;
   } catch (error) {

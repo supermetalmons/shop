@@ -30,10 +30,10 @@ function validJobIdentity(args: PublicationOptions, claim: NotificationClaim, jo
     return job.kind === 'stripe_checkout_manual_review' && job.context.sessionId === args.sessionId &&
       job.idempotencyKey === `${args.dropId}:${args.sessionId}:stripe_manual_review`;
   }
-  const deliveryId = Number(checkout.deliveryId);
+  const deliveryId = checkout.deliveryId;
   const suffix = job.kind === 'buyer_order_received' ? 'order_received'
     : job.kind === 'shipper_ready_to_ship' ? 'ready_to_ship' : null;
-  return suffix !== null && Number.isSafeInteger(deliveryId) && deliveryId > 0 &&
+  return suffix !== null && deliveryId !== undefined &&
     job.context.deliveryId === deliveryId && job.idempotencyKey === `${args.dropId}:${deliveryId}:${suffix}`;
 }
 

@@ -8,6 +8,7 @@ import {
 import type { DropFamily } from './dropConfig.js';
 import { isAdminIrlRedeemDropFamily } from '../../../../shared/adminIrlEligibility.js';
 import type { CommerceDocumentData } from './commerceRepositoryTypes.js';
+import type { AdminCardDeliveryOrderFields, AdminPackDeliveryOrderFields } from './deliveryOrderCreate.js';
 
 const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
   label: 'Redeemed for IRL',
@@ -181,7 +182,7 @@ export function buildAdminIrlRedeemSelectionKey(args: {
 
 export function buildAdminIrlRedeemDeliveryOrderDocument(
   input: AdminIrlRedeemDeliveryOrderInput,
-): CommerceDocumentData {
+): AdminPackDeliveryOrderFields {
   const boxes = input.boxes.map(normalizeBox).sort((a, b) => a.boxId - b.boxId);
   if (!boxes.length) throw new Error('Admin IRL redeem order requires at least one box');
   assertUnique(boxes.map((box) => box.boxId), 'box ids');
@@ -231,7 +232,7 @@ export function buildAdminIrlRedeemDeliveryOrderDocument(
       transferSignature: normalizeString(input.transferSignature, 'transfer signature'),
       originalItemIds: originalAssetIds,
     },
-  };
+  } satisfies AdminPackDeliveryOrderFields;
 }
 
 export function buildAdminIrlRedeemClaimCodeDocument(args: {
@@ -263,7 +264,7 @@ export function buildAdminIrlRedeemClaimCodeDocument(args: {
 
 export function buildAdminIrlRedeemCardDeliveryOrderDocument(
   input: AdminIrlRedeemCardDeliveryOrderInput,
-): CommerceDocumentData {
+): AdminCardDeliveryOrderFields {
   const card = normalizeCard(input.card);
   const claim = {
     namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
@@ -275,7 +276,7 @@ export function buildAdminIrlRedeemCardDeliveryOrderDocument(
     receiptKind: 'figure',
     figureId: card.figureId,
     receiptAssetId: card.receiptAssetId,
-  };
+  } satisfies AdminCardDeliveryOrderFields['stripeReceiptClaim'];
 
   return {
     dropId: normalizeString(input.dropId, 'dropId'),
@@ -297,7 +298,7 @@ export function buildAdminIrlRedeemCardDeliveryOrderDocument(
       transferSignature: normalizeString(input.transferSignature, 'transfer signature'),
       originalItemIds: [card.receiptAssetId],
     },
-  };
+  } satisfies AdminCardDeliveryOrderFields;
 }
 
 export function buildAdminIrlRedeemCardClaimCodeDocument(args: {

@@ -1069,7 +1069,7 @@ test('getMany preserves order, missing documents, duplicate isolation, and cache
   const unit = await repository.begin(10);
   calls.length = 0;
 
-  const records = await unit.getMany<{ nested: { value: string } }>([second, missing, first, second, missing]);
+  const records = await unit.getMany([second, missing, first, second, missing]);
   assert.deepEqual(records.map((record) => record?.key.path ?? null), [second.path, null, first.path, second.path, null]);
   assert.equal(calls.length, 1);
   const call = calls[0];
@@ -1080,14 +1080,18 @@ test('getMany preserves order, missing documents, duplicate isolation, and cache
   assert.deepEqual(statements.map((statement) => statement.sql.match(/\?/g)?.length), [3, 3]);
   assert.notEqual(records[0], records[3]);
   assert.notEqual(records[0]!.data, records[3]!.data);
-  records[0]!.data.nested.value = 'caller mutation';
-  assert.equal(records[3]!.data.nested.value, 'second');
+  const firstNested = records[0]!.data.nested;
+  const duplicateNested = records[3]!.data.nested;
+  assert.ok(firstNested && typeof firstNested === 'object' && !Array.isArray(firstNested));
+  assert.ok(duplicateNested && typeof duplicateNested === 'object' && !Array.isArray(duplicateNested));
+  firstNested.value = 'caller mutation';
+  assert.equal(duplicateNested.value, 'second');
 
   calls.length = 0;
   assert.deepEqual(await unit.getMany([]), []);
-  const cached = await unit.getMany<{ nested: { value: string } }>([missing, second, first]);
+  const cached = await unit.getMany([missing, second, first]);
   assert.equal(cached[0], null);
-  assert.equal(cached[1]!.data.nested.value, 'second');
+  assert.deepEqual(cached[1]!.data.nested, { value: 'second' });
   assert.equal((await unit.get(first))?.key.path, first.path);
   await unit.update(first, { status: 'used' });
   await unit.create(missing, { status: 'unused' });

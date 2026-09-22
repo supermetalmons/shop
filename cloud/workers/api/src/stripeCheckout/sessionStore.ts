@@ -12,29 +12,51 @@ import {
   commerceFieldValue,
   commerceKeyFromPath,
   commerceKeys,
-  type CommerceDocumentWriteData,
+  type CommerceDocumentKey,
 } from '../commerceRepository.js';
 import { runCommerceTransaction, type CommerceTransactionTarget } from '../commerceTransactions.js';
-import { stripeCheckoutWriteData, updateStripeCheckout, type StripeReconciliationFailure } from './commerce.js';
+import {
+  getStripeCheckout,
+  stripeCheckoutWriteData,
+  updateStripeCheckout,
+  updateStripeCheckoutWebhook,
+  type StripeCheckoutWebhookUpdate,
+  type StripeReconciliationFailure,
+} from './commerce.js';
 
 type StripeCheckoutIdentity = { dropId: string; sessionId: string };
+type WithoutTimestamps<T> = T extends unknown ? Omit<T, 'createdAt' | 'updatedAt'> & {
+  createdAt?: never;
+  updatedAt?: never;
+} : never;
 
-export function createStripeCheckoutDocument(
-  commerce: CommerceTransactionTarget,
-  path: string,
-  document: StripeCheckoutCreatedDocument,
-): Promise<void> {
+export type StripeCheckoutCreate = WithoutTimestamps<StripeCheckoutCreatedDocument>;
+
+export function stripeCheckoutCreateInput(document: StripeCheckoutCreatedDocument): StripeCheckoutCreate {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...fields } = document;
+  return fields;
+}
+
+export function stripeCheckoutKeyFromPath(path: string): CommerceDocumentKey<'stripe_checkout'> {
   const key = commerceKeyFromPath(path);
   if (!key || key.kind !== 'stripe_checkout') {
     throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout document path.');
   }
+  return { ...key, kind: key.kind };
+}
+
+export function createStripeCheckoutDocument(
+  commerce: CommerceTransactionTarget,
+  key: CommerceDocumentKey<'stripe_checkout'>,
+  document: StripeCheckoutCreate,
+): Promise<void> {
   return runCommerceTransaction(commerce, async (transaction) => {
-    const existing = await transaction.get(key);
+    const existing = await getStripeCheckout(transaction, key);
     if (existing) {
       if (
-        existing.data.operationId === document.operationId &&
-        existing.data.sessionId === document.sessionId &&
-        existing.data.dropId === document.dropId
+        existing.identity.operationId === document.operationId &&
+        existing.identity.sessionId === document.sessionId &&
+        existing.identity.dropId === document.dropId
       ) return;
       throw new StripeCheckoutSessionError('failed-precondition', 'Stripe checkout operation conflicts with an existing session.');
     }
@@ -49,13 +71,14 @@ export function createStripeCheckoutDocument(
 function webhookWriteData(
   action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
   transition: StripeWebhookTransition,
-): CommerceDocumentWriteData {
-  return {
+): StripeCheckoutWebhookUpdate {
+  const updates: StripeCheckoutWebhookUpdate = {
     ...transition.fields,
-    ...Object.fromEntries(transition.deleteFields.map((field) => [field, commerceFieldValue.delete()])),
     stripeWebhookEventIds: commerceFieldValue.arrayUnion(action.eventId),
-    ...Object.fromEntries(transition.serverTimestampFields.map((field) => [field, commerceFieldValue.serverTimestamp()])),
-  } as CommerceDocumentWriteData;
+  };
+  for (const field of transition.deleteFields) updates[field] = commerceFieldValue.delete();
+  for (const field of transition.serverTimestampFields) updates[field] = commerceFieldValue.serverTimestamp();
+  return updates;
 }
 
 export function applyStripeCheckoutWebhook(
@@ -67,7 +90,7 @@ export function applyStripeCheckoutWebhook(
     const document = await transaction.get(key);
     if (!document) throw new Error('Stripe checkout session was not created by this app');
     const transition = stripeWebhookTransition(document.data, action);
-    await transaction.update(key, webhookWriteData(action, transition));
+    await updateStripeCheckoutWebhook(transaction, key, webhookWriteData(action, transition));
     return { outcome: transition.outcome, ...(transition.deliveryId ? { deliveryId: transition.deliveryId } : {}) };
   });
 }

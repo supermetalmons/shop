@@ -53,7 +53,11 @@ import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   D1CommerceRepository,
 } from './commerceRepository.js';
-import { createStripeCheckoutDocument } from './stripeCheckout/sessionStore.js';
+import {
+  createStripeCheckoutDocument,
+  stripeCheckoutCreateInput,
+  stripeCheckoutKeyFromPath,
+} from './stripeCheckout/sessionStore.js';
 import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
@@ -506,8 +510,8 @@ export async function handleStripeCheckoutSession(
               ? dependencies.persistCheckout(path, document)
               : createStripeCheckoutDocument(
                   { repository: new D1CommerceRepository(env.COMMERCE_DB), nowMs: dependencies.nowMs() },
-                  path,
-                  document,
+                  stripeCheckoutKeyFromPath(path),
+                  stripeCheckoutCreateInput(document),
                 ),
             { deadline, defer: dependencies.defer },
           );

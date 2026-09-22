@@ -1,6 +1,9 @@
+import { parseDeliveryOrderSummary } from '../../../../shared/deliveryOrderSummary.js';
+import { parseCanonicalPositiveInteger, parsePositiveSafeInteger } from '../../../../shared/positiveInteger.js';
+import type { DeliveryOrderSummary } from '../../../../shared/contracts.js';
+import type { CommerceDocumentRecord } from './commerceRepository.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import { parseDropDeliveryOrderPath, type DropDeliveryOrderPathIdentity } from './dropPaths.js';
-import { parsePositiveSafeInteger } from '../../../../shared/positiveInteger.js';
 
 function normalizeDropIdMaybe(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -42,4 +45,17 @@ function dropIdFromDeliveryOrderPath(path: string): string | null {
 
 export function resolveDeliveryOrderDropId(order: unknown, path: string): string | null {
   return normalizeDropIdMaybe((order as { dropId?: unknown } | null)?.dropId) || dropIdFromDeliveryOrderPath(path);
+}
+
+export function deliveryOrderSummaryFromDocument(document: CommerceDocumentRecord): DeliveryOrderSummary | null {
+  const dropId = normalizeDropId(document.key.dropId || '');
+  const deliveryId = parseCanonicalPositiveInteger(document.key.documentId);
+  const fields = document.data;
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || deliveryId === null || fields.source === 'admin_irl_redeem') return null;
+  const storedDropId = typeof fields.dropId === 'string' && fields.dropId
+    ? normalizeDropId(fields.dropId)
+    : dropId;
+  const storedDeliveryId = Number.isSafeInteger(fields.deliveryId) ? Number(fields.deliveryId) : deliveryId;
+  if (storedDropId !== dropId || storedDeliveryId !== deliveryId) return null;
+  return parseDeliveryOrderSummary({ ...fields, dropId, deliveryId });
 }

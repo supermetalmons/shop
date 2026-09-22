@@ -6,7 +6,8 @@ import {
   claimNotificationOutbox, markClaimedNotificationQueued, persistClaimedNotificationJobs,
   releaseNotificationOutboxClaim,
 } from '../notificationOutboxStore.js';
-import type { StripeCheckoutCommerceContext } from './commerce.js';
+import { getStripeCheckout, type StripeCheckoutCommerceContext } from './commerce.js';
+import type { StripeCheckoutNotificationView } from './readModel.js';
 import { enqueueStripeTerminalNotifications, stripeTerminalNotificationOutcome, type StripeTerminalNotificationOutcome } from './notificationOutboxState.js';
 
 export type StripeTerminalNotificationStoreOptions = {
@@ -27,7 +28,7 @@ export type StripeCheckoutTerminalPublicationResult = {
 
 export type NotificationClaim = {
   record: NotificationOutboxRecord;
-  checkout: Record<string, unknown>;
+  checkout: StripeCheckoutNotificationView;
   parentVersion: number;
 };
 
@@ -44,9 +45,9 @@ function skipped(
 export async function claimStripeTerminalNotifications(args: StripeTerminalNotificationStoreOptions): Promise<ClaimResult> {
   args.signal.throwIfAborted();
   const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
-  const document = await args.commerce.repository.get(key);
+  const document = await getStripeCheckout(args.commerce.repository, key);
   if (!document) return { result: skipped('invalid', 'none', 'missing_checkout') };
-  const outcome = stripeTerminalNotificationOutcome(document.data);
+  const outcome = stripeTerminalNotificationOutcome(document);
   if (!outcome) return { result: skipped('not_terminal', 'none') };
   let record = await args.commerce.repository.notificationOutbox.get(key.path, 'stripe_terminal');
   if (record && record.outcome !== outcome && record.state === 'pending') {
@@ -58,10 +59,10 @@ export async function claimStripeTerminalNotifications(args: StripeTerminalNotif
   }
   if (!record && args.initializeMissing) {
     await runCommerceTransaction(args.commerce, async (transaction) => {
-      const current = await transaction.get(key);
-      if (!current || stripeTerminalNotificationOutcome(current.data) !== outcome) return;
+      const current = await getStripeCheckout(transaction, key);
+      if (!current || stripeTerminalNotificationOutcome(current) !== outcome) return;
       await enqueueStripeTerminalNotifications({
-        transaction, key, before: current.data, outcome, deliveryId: Number(current.data.deliveryId),
+        transaction, key, before: current, outcome, deliveryId: current.notification.deliveryId,
         nowMs: (args.nowMs || args.commerce.nowMs)(), initializeMissing: true,
       });
     });
@@ -80,7 +81,7 @@ export async function claimStripeTerminalNotifications(args: StripeTerminalNotif
   if (result.outcome !== 'claimed') return { result: skipped(outcome,
     result.outcome === 'none' ? result.record?.state === 'queued' ? 'queued' : 'none' : result.outcome,
     result.outcome === 'failed' ? result.record?.lastErrorCode || 'manual-review-required' : undefined) };
-  return { claim: { record: result.claim, checkout: document.data, parentVersion: document.version } };
+  return { claim: { record: result.claim, checkout: document.notification, parentVersion: document.version } };
 }
 
 function claimOptions(args: StripeTerminalNotificationStoreOptions, claim: NotificationClaim) {
@@ -93,8 +94,8 @@ export async function persistStripeTerminalNotificationJobs(
   jobs: NotificationEmailJobV1[],
 ): Promise<NotificationOutboxRecord | null> {
   const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
-  const current = await args.commerce.repository.get(key);
-  if (!current || stripeTerminalNotificationOutcome(current.data) !== claim.record.outcome) return null;
+  const current = await getStripeCheckout(args.commerce.repository, key);
+  if (!current || stripeTerminalNotificationOutcome(current) !== claim.record.outcome) return null;
   return persistClaimedNotificationJobs({ ...claimOptions(args, claim), jobs, parentVersion: current.version, completeMissing: true });
 }
 

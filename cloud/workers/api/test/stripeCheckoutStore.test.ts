@@ -6,15 +6,17 @@ import {
   StripeCheckoutSessionError,
 } from '../../../../shared/stripeCheckoutSession.ts';
 import { CommerceWriteConflict, commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
-import type { StripeCheckoutCommerceContext } from '../src/stripeCheckout/commerce.ts';
+import { getStripeCheckout, stripeCheckoutJsonObject, type StripeCheckoutCommerceContext } from '../src/stripeCheckout/commerce.ts';
 import {
   createStripeCheckoutDocument,
+  stripeCheckoutCreateInput,
   markStripeCheckoutReenqueued,
   recordStripeCheckoutReconciliationFailure,
 } from '../src/stripeCheckout/sessionStore.ts';
 import {
   markStripeCheckoutFulfillmentFulfilled,
   publishStripeOffchainDeliveryOrder,
+  startStripeCheckoutFulfillmentDocument,
   type StripeOffchainDeliveryOrderDraft,
 } from '../src/stripeCheckout/store.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
@@ -49,7 +51,7 @@ function order(): StripeOffchainDeliveryOrderDraft {
 
 test('checkout creation retains an advanced same-operation record and rejects conflicting identity', async (context) => {
   const { repository, commerce } = fixture(context);
-  const document = buildStripeCheckoutDocument({
+  const document = stripeCheckoutCreateInput(buildStripeCheckoutDocument({
     ...createStripeCheckoutIdentity('store-subject'),
     dropId: 'drop',
     sessionId: 'cs_store',
@@ -57,8 +59,8 @@ test('checkout creation retains an advanced same-operation record and rejects co
     unitAmountCents: 100,
     createdAt: 0,
     updatedAt: 0,
-  });
-  await createStripeCheckoutDocument(commerce, CHECKOUT_KEY.path, document);
+  }));
+  await createStripeCheckoutDocument(commerce, CHECKOUT_KEY, document);
   assert.equal((await repository.get(CHECKOUT_KEY))?.data.createdAt, NOW_MS);
   await repository.run(NOW_MS + 1, (transaction) => transaction.update(CHECKOUT_KEY, {
     status: 'processing',
@@ -66,10 +68,10 @@ test('checkout creation retains an advanced same-operation record and rejects co
     historicalField: { retained: true },
   }));
   const advanced = await repository.get(CHECKOUT_KEY);
-  await createStripeCheckoutDocument(commerce, CHECKOUT_KEY.path, document);
+  await createStripeCheckoutDocument(commerce, CHECKOUT_KEY, document);
   assert.deepEqual(await repository.get(CHECKOUT_KEY), advanced);
   await assert.rejects(
-    createStripeCheckoutDocument(commerce, CHECKOUT_KEY.path, { ...document, operationId: 'other' }),
+    createStripeCheckoutDocument(commerce, CHECKOUT_KEY, { ...document, operationId: 'other' }),
     (error: unknown) => error instanceof StripeCheckoutSessionError && error.code === 'failed-precondition',
   );
   assert.deepEqual(await repository.get(CHECKOUT_KEY), advanced);
@@ -93,6 +95,62 @@ test('reconciliation domain writes preserve checkout state and historical fields
     lastFulfillmentReconciliationErrorAt: NOW_MS + 1,
     updatedAt: NOW_MS + 1,
   });
+});
+
+test('duplicate creation and active lease reads do not coerce unrelated historical fields', async (context) => {
+  const { harness, repository, commerce } = fixture(context);
+  const document = stripeCheckoutCreateInput(buildStripeCheckoutDocument({
+    ...createStripeCheckoutIdentity('store-subject'), dropId: 'drop', sessionId: 'cs_store',
+    operationId: 'operation', unitAmountCents: 100, createdAt: 0, updatedAt: 0,
+  }));
+  const stored = {
+    ...document, status: 'processing', processingAttemptId: 'current',
+    processingLeaseExpiresAt: NOW_MS + 100_000,
+    variantKey: { toString: false, valueOf: false },
+    deliveryId: { toString: false, valueOf: false },
+  };
+  seedCommerceDocument(harness, { key: CHECKOUT_KEY, data: stripeCheckoutJsonObject(stored) });
+  const checkout = await getStripeCheckout(repository, CHECKOUT_KEY);
+  assert.equal(checkout?.processingAttemptId, 'current');
+  await createStripeCheckoutDocument(commerce, CHECKOUT_KEY, document);
+  assert.deepEqual(await startStripeCheckoutFulfillmentDocument({
+    commerce, checkoutKey: CHECKOUT_KEY, dropId: 'drop', sessionId: 'cs_store', nowMs: NOW_MS,
+  }), { started: false, reason: 'processing' });
+  assert.deepEqual((await repository.get(CHECKOUT_KEY))?.data, stored);
+});
+
+test('absent creation operation IDs do not match malformed persisted IDs', async (context) => {
+  const { harness, commerce } = fixture(context);
+  const document = stripeCheckoutCreateInput(buildStripeCheckoutDocument({
+    ...createStripeCheckoutIdentity('store-subject'), dropId: 'drop', sessionId: 'cs_store',
+    unitAmountCents: 100, createdAt: 0, updatedAt: 0,
+  }));
+  seedCommerceDocument(harness, { key: CHECKOUT_KEY, data: stripeCheckoutJsonObject({ ...document, operationId: null }) });
+  await assert.rejects(createStripeCheckoutDocument(commerce, CHECKOUT_KEY, document),
+    (error: unknown) => error instanceof StripeCheckoutSessionError && error.code === 'failed-precondition');
+});
+
+test('typed Stripe order creation preserves snapshot JSON filtering and missing provider IDs', async (context) => {
+  const { harness, repository, commerce } = fixture(context);
+  seedCommerceDocument(harness, { key: CHECKOUT_KEY, data: { status: 'processing', processingAttemptId: 'current' } });
+  const draft = {
+    ...order(), stripeSession: {}, addressSnapshot: {
+      country: 'US', removed: undefined,
+      metadata: { kind: 'server-timestamp', retained: [null, false, 0], removed: undefined },
+    },
+  };
+  assert.deepEqual(await publishStripeOffchainDeliveryOrder({
+    commerce, order: draft, checkoutKey: CHECKOUT_KEY, deliveryId: 123,
+    claimCodes: [CLAIM_KEY.documentId], processingAttemptId: 'current',
+  }), { deliveryId: 123, checkoutStatus: 'fulfilled', created: true });
+  const persisted = (await repository.get(ORDER_KEY))?.data;
+  assert.deepEqual(persisted?.addressSnapshot, {
+    country: 'US', metadata: { kind: 'server-timestamp', retained: [null, false, 0] },
+  });
+  assert.equal(persisted?.stripeCheckoutSessionId, undefined);
+  assert.equal(persisted?.createdAt, NOW_MS);
+  assert.equal(persisted?.processedAt, NOW_MS);
+  assert.equal(Object.hasOwn(draft.addressSnapshot, 'removed'), true);
 });
 
 test('fulfillment domain writes generate completion timestamps inside the transaction', async (context) => {

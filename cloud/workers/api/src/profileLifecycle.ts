@@ -1,11 +1,10 @@
+import { parseDeliveryRecoveryState } from './deliveryOrderReadModel.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { z } from 'zod';
 import { WALLET_SESSION_SUPERSEDED_ERROR_REASON } from '../../../../shared/apiErrorCode.js';
 import {
   buildWalletDeliveryRecoveryState,
-  preparedDeliveryRecoveryNextCheckMs,
-  processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import type {
@@ -195,11 +194,12 @@ async function loadDeliveryRecoveryState(common: CommerceCommon, wallet: string,
   let remainingProcessing = 0;
   const nextCheckCandidates: Array<number | null> = [];
   for (const document of documents) {
-    if (document.data.status === 'processing') {
+    const recovery = parseDeliveryRecoveryState(document.data);
+    if (recovery.status === 'processing') {
       remainingProcessing += 1;
-      nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(document.data, nowMs));
-    } else if (document.data.status === 'prepared') {
-      nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(document.data, nowMs));
+      nextCheckCandidates.push(recovery.processingNextCheckAt(nowMs));
+    } else if (recovery.status === 'prepared') {
+      nextCheckCandidates.push(recovery.preparedNextCheckAt(nowMs));
     }
   }
   return buildWalletDeliveryRecoveryState({ remainingProcessing, nextCheckCandidates });

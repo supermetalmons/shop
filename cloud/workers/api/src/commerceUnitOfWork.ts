@@ -1,7 +1,6 @@
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
-  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
@@ -120,13 +119,13 @@ export class CommerceUnitOfWork {
     this.commitTimestamp = timestampFromMilliseconds(nowMs);
   }
 
-  async get<T extends CommerceDocumentData>(
+  async get(
     key: CommerceDocumentKey,
-  ): Promise<CommerceDocumentRecord<T> | null> {
+  ): Promise<CommerceDocumentRecord | null> {
     this.assertOpen();
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const document = await this.load(key);
-    return document ? publicRecord<T>(document) : null;
+    return document ? publicRecord(document) : null;
   }
 
   async getNotificationOutbox(parentPath: string, family: NotificationOutboxFamily): Promise<NotificationOutboxRecord | null> {
@@ -195,9 +194,9 @@ export class CommerceUnitOfWork {
     return parseNotificationOutboxRecord(next);
   }
 
-  async getMany<T extends CommerceDocumentData>(
+  async getMany(
     keys: readonly CommerceDocumentKey[],
-  ): Promise<Array<CommerceDocumentRecord<T> | null>> {
+  ): Promise<Array<CommerceDocumentRecord | null>> {
     this.assertOpen();
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const uniqueKeys = new Map<string, CommerceDocumentKey>();
@@ -215,13 +214,13 @@ export class CommerceUnitOfWork {
       const document = this.original.get(key.path);
       if (!document) return null;
       assertDocumentIdentity(document.key, key);
-      return publicRecord<T>(document);
+      return publicRecord(document);
     });
   }
 
-  async queryDeliveryOrdersByOwner<T extends CommerceDocumentData>(
+  async queryDeliveryOrdersByOwner(
     args: Readonly<{ owner: string; limit: number }>,
-  ): Promise<CommerceDocumentRecord<T>[]> {
+  ): Promise<CommerceDocumentRecord[]> {
     this.assertOpen();
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const scopedOwner = deliveryOwner(args.owner);
@@ -249,7 +248,7 @@ export class CommerceUnitOfWork {
       for (const { document, pathRevision } of documents) {
         this.recordRead(document.key.path, document.version, document, pathRevision);
       }
-      return documents.map(({ document }) => publicRecord<T>(document));
+      return documents.map(({ document }) => publicRecord(document));
     });
   }
 

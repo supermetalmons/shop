@@ -1,3 +1,5 @@
+import { parseDeliveryOrderProjectionView, type DeliveryOrderProjectionView } from './deliveryOrderProjectionView.js';
+import { deliveryOrderKey, readDeliveryOrder, updateDeliveryOrder } from './deliveryOrderStore.js';
 import { API_DROPS } from './dropConfig.js';
 import { runtimeForDrop, type DeliveryRuntime } from './deliveryReceiptOnchain.js';
 import { DeliveryReceiptError, summarizeDeliveryReceiptError as summarizeError } from './deliveryReceiptErrors.js';
@@ -12,15 +14,12 @@ import {
   isStripeOffchainDeliveryOrderSource,
 } from '../../../../shared/fulfillmentSources.js';
 import {
-  countDeliveryOrderBoxItems,
-  countDeliveryOrderDudeItems,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
   type PackStatusEvent,
 } from '../../../../shared/packStatus.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import { raceWithSignal } from './boundedRequest.js';
-import { isRecord } from './dataAccess.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
@@ -28,13 +27,14 @@ import {
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
 import {
-  readCommerceRecord,
-  requireCommerceKey,
   runCommerceTransaction,
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
+import type { DeliveryPackStatusProjectionUpdates } from './deliveryPackStatusProjectionTypes.js';
+
+export type { DeliveryPackStatusProjectionUpdates } from './deliveryPackStatusProjectionTypes.js';
 
 const CLEANUP_TIMEOUT_MS = 5_000;
 const PACK_STATUS_TIMEOUT_MS = 10_000;
@@ -47,22 +47,6 @@ const PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD = 'packStatusProjectionFailureC
 const PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD = 'packStatusProjectionCompletedAt';
 const PACK_STATUS_PROJECTION_FAILED_AT_FIELD = 'packStatusProjectionFailedAt';
 const PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD = 'packStatusProjectionLastErrorCode';
-
-type ProjectionDeleteField = ReturnType<typeof commerceFieldValue.delete>;
-type ProjectionTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
-type ProjectionState =
-  | typeof PACK_STATUS_PROJECTION_PENDING
-  | typeof PACK_STATUS_PROJECTION_COMPLETED
-  | typeof PACK_STATUS_PROJECTION_FAILED;
-
-export type DeliveryPackStatusProjectionUpdates = {
-  packStatusProjectionState?: ProjectionState | ProjectionDeleteField;
-  packStatusProjectionNextAttemptAtMs?: number | ProjectionDeleteField;
-  packStatusProjectionFailureCount?: number | ProjectionDeleteField;
-  packStatusProjectionCompletedAt?: ProjectionTimestamp | ProjectionDeleteField;
-  packStatusProjectionFailedAt?: ProjectionTimestamp | ProjectionDeleteField;
-  packStatusProjectionLastErrorCode?: string | ProjectionDeleteField;
-};
 
 class DeliveryPackStatusProjectionInvalidError extends Error {
   constructor(readonly code: string, message: string) {
@@ -85,7 +69,7 @@ function cleanupContext(context: DeliveryPackStatusContext): DeliveryPackStatusC
 
 function shouldProjectNormalIrlPackStatus(
   runtime: DeliveryRuntime,
-  order: Record<string, unknown>,
+  order: DeliveryOrderProjectionView,
 ): boolean {
   if (!shouldTrackPackStatusForDrop({
     dropId: runtime.dropId,
@@ -96,19 +80,19 @@ function shouldProjectNormalIrlPackStatus(
   if (isStripeOffchainDeliveryOrderSource(order.source)) return false;
   if (
     isAdminIrlRedeemDeliveryOrderSource(order.source) &&
-    isRecord(order.adminIrlRedeem) &&
-    order.adminIrlRedeem.targetKind === 'card_receipt'
+    order.adminTargetKind === 'card_receipt'
   ) return false;
   return true;
 }
 
 export function createDeliveryPackStatusProjectionOutbox(
   runtime: DeliveryRuntime,
-  order: Record<string, unknown>,
+  data: Record<string, unknown>,
   nowMs = Date.now(),
 ): DeliveryPackStatusProjectionUpdates {
+  const order = parseDeliveryOrderProjectionView(data);
   if (!shouldProjectNormalIrlPackStatus(runtime, order)) return {};
-  if (countDeliveryOrderBoxItems(order.items) < 1 && countDeliveryOrderDudeItems(order.items) < 1) {
+  if (order.packQuantity < 1 && order.cardQuantity < 1) {
     return {};
   }
   const nextAttemptAtMs = Number.isSafeInteger(nowMs) && nowMs >= 0 ? nowMs : Date.now();
@@ -126,11 +110,11 @@ async function countNormalIrlPackStatus(
   context: DeliveryPackStatusContext,
   runtime: DeliveryRuntime,
   deliveryId: number,
-  order: Record<string, unknown>,
+  order: DeliveryOrderProjectionView,
 ): Promise<void> {
   if (!shouldProjectNormalIrlPackStatus(runtime, order)) return;
-  const packQuantity = countDeliveryOrderBoxItems(order.items);
-  const cardQuantity = countDeliveryOrderDudeItems(order.items);
+  const packQuantity = order.packQuantity;
+  const cardQuantity = order.cardQuantity;
   if (packQuantity < 1 && cardQuantity < 1) return;
   const event: PackStatusEvent = {
     dropId: runtime.dropId,
@@ -149,14 +133,6 @@ async function countNormalIrlPackStatus(
     event,
     log: (entry) => console.warn(entry),
   });
-}
-
-function deliveryPackStatusProjectionFailureCount(value: unknown): number {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
-}
-
-function deliveryPackStatusProjectionNextAttemptAtMs(value: unknown): number {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
 function deliveryPackStatusProjectionErrorCode(error: unknown): string {
@@ -180,9 +156,9 @@ async function transitionDeliveryPackStatusProjection(
   },
 ): Promise<boolean> {
   return runCommerceTransaction(context, async (transaction) => {
-    const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
-    if (!document || document.data[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
-    await transaction.update(document.key, options.values);
+    const document = await readDeliveryOrder(context, deliveryOrderKey(documentPath), transaction);
+    if (!document || parseDeliveryOrderProjectionView(document.data).state !== options.requiredState) return false;
+    await updateDeliveryOrder(transaction, document.key, options.values);
     return true;
   });
 }
@@ -244,22 +220,15 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
   errorCode: string;
 }): Promise<boolean> {
   return runCommerceTransaction(args.context, async (transaction) => {
-    const document = await readCommerceRecord(args.context, requireCommerceKey(args.documentPath), transaction);
-    if (!document || document.data[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
-      return false;
-    }
-    if (
-      deliveryPackStatusProjectionNextAttemptAtMs(
-        document.data[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
-      ) > args.attemptStartedAtMs
-    ) return false;
-    const failureCount = deliveryPackStatusProjectionFailureCount(
-      document.data[PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD],
-    );
+    const document = await readDeliveryOrder(args.context, deliveryOrderKey(args.documentPath), transaction);
+    if (!document) return false;
+    const projection = parseDeliveryOrderProjectionView(document.data);
+    if (projection.state !== PACK_STATUS_PROJECTION_PENDING || projection.nextAttemptAtMs > args.attemptStartedAtMs) return false;
+    const failureCount = projection.failureCount;
     const backoffMs = PACK_STATUS_PROJECTION_BACKOFF_MS[
       Math.min(failureCount, PACK_STATUS_PROJECTION_BACKOFF_MS.length - 1)
     ];
-    await transaction.update(document.key, {
+    await updateDeliveryOrder(transaction, document.key, {
       [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
       [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
       [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
@@ -300,16 +269,13 @@ export async function projectPendingDeliveryPackStatus(args: {
   const key = commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId));
   const documentPath = key.path;
   try {
-    const order = await raceWithSignal(readCommerceRecord(context, key), context.signal);
+    const order = await raceWithSignal(readDeliveryOrder(context, key), context.signal);
     if (!order) return 'not-needed';
-    const state = order.data[PACK_STATUS_PROJECTION_STATE_FIELD];
+    const projection = parseDeliveryOrderProjectionView(order.data);
+    const state = projection.state;
     if (state !== PACK_STATUS_PROJECTION_PENDING) return 'not-needed';
-    if (
-      deliveryPackStatusProjectionNextAttemptAtMs(
-        order.data[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
-      ) > attemptStartedAtMs
-    ) return 'not-due';
-    if (order.data.status !== 'ready_to_ship') {
+    if (projection.nextAttemptAtMs > attemptStartedAtMs) return 'not-due';
+    if (projection.status !== 'ready_to_ship') {
       throw new DeliveryPackStatusProjectionInvalidError(
         'invalid-order-status',
         'Pack-status projection order is not ready to ship.',
@@ -335,7 +301,7 @@ export async function projectPendingDeliveryPackStatus(args: {
         'Pack-status projection drop is invalid.',
       );
     }
-    if (!shouldProjectNormalIrlPackStatus(runtime, order.data)) {
+    if (!shouldProjectNormalIrlPackStatus(runtime, projection)) {
       await raceWithSignal(clearDeliveryPackStatusProjection(context, order.key.path), context.signal);
       log({
         event: 'delivery_pack_status_projection_skipped',
@@ -345,8 +311,8 @@ export async function projectPendingDeliveryPackStatus(args: {
       return 'not-needed';
     }
     if (
-      countDeliveryOrderBoxItems(order.data.items) < 1 &&
-      countDeliveryOrderDudeItems(order.data.items) < 1
+      projection.packQuantity < 1 &&
+      projection.cardQuantity < 1
     ) {
       throw new DeliveryPackStatusProjectionInvalidError(
         'invalid-order-items',
@@ -355,7 +321,7 @@ export async function projectPendingDeliveryPackStatus(args: {
     }
     if (!context.dataDb) throw new Error('pack_status_data_db_not_configured');
     await raceWithSignal(
-      countNormalIrlPackStatus(context, runtime, args.deliveryId, order.data),
+      countNormalIrlPackStatus(context, runtime, args.deliveryId, projection),
       context.signal,
     );
     await raceWithSignal(markDeliveryPackStatusProjectionCompleted(context, order.key.path), context.signal);

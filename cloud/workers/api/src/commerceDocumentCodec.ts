@@ -286,10 +286,10 @@ export function parseRow(value: unknown): StoredDocument {
   };
 }
 
-export function publicRecord<T extends CommerceDocumentData>(document: StoredDocument): CommerceDocumentRecord<T> {
+export function publicRecord(document: StoredDocument): CommerceDocumentRecord {
   return Object.freeze({
     createTime: document.createTime,
-    data: cloneData(document.data) as T,
+    data: cloneData(document.data),
     key: document.key,
     processedAt: document.processedAt ? { ...document.processedAt } : null,
     updateTime: document.updateTime,

@@ -1,12 +1,12 @@
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
 import { storedFulfillmentShipStationLabel } from '../../../../../shared/shipstationLabels.js';
 import { ProfileReadError } from '../dataAccess.js';
-import { parseDeliveryOrderShipStation, type DeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
+import { parseDeliveryOrderShipStation, parseDeliveryOrderStatus, type DeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 
 export const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 
 export function rejectIrlShipStationOrder(order: Record<string, unknown>): void {
-  if (order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
+  if (parseDeliveryOrderStatus(order).source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
     throw new ProfileReadError('failed-precondition', 409, 'In-person redemption orders do not have a delivery address');
   }
 }

@@ -54,6 +54,8 @@ import {
 import { isRecord } from './dataAccess.js';
 import { createDeliveryPackStatusProjectionOutbox } from './deliveryPackStatusOutbox.js';
 import { secureRandomInt } from './deliveryRandom.js';
+import { createDeliveryOrder } from './deliveryOrderStore.js';
+import type { AdminCardDeliveryOrderCreate, AdminPackDeliveryOrderCreate } from './deliveryOrderCreate.js';
 
 type CommerceContext = CommerceRepositoryContext;
 type Runtime = AdminIrlRedeemRuntime;
@@ -344,7 +346,7 @@ export async function publishPack(
         receiptTxs,
         boxes: boxesWithCodes,
       });
-      const orderValues: CommerceDocumentWriteData = {
+      const orderValues = {
         ...order,
         ...Object.fromEntries(Object.entries(createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs))
           .filter(([, value]) => !isCommerceDeleteField(value))),
@@ -406,11 +408,11 @@ export async function publishPack(
         ...Array.from(markers.values(), ({ key }) => key),
         document.key,
       ]);
-      await transaction.create(orderKey, {
+      await createDeliveryOrder(transaction, orderKey, {
         ...orderValues,
         createdAt: commerceFieldValue.serverTimestamp(),
         processedAt: commerceFieldValue.serverTimestamp(),
-      });
+      } satisfies AdminPackDeliveryOrderCreate);
       for (const [index, values] of claimValues.entries()) {
         await transaction.create(claimKeys[index], values);
       }
@@ -535,11 +537,11 @@ export async function publishCard(
         cards: [{ figureId: card.figureId, receiptAssetId: card.receiptAssetId, claimCode }],
       };
       await transaction.getMany([orderKey, claimKey, markerKey, document.key]);
-      await transaction.create(orderKey, {
+      await createDeliveryOrder(transaction, orderKey, {
         ...order,
         createdAt: commerceFieldValue.serverTimestamp(),
         processedAt: commerceFieldValue.serverTimestamp(),
-      });
+      } satisfies AdminCardDeliveryOrderCreate);
       await transaction.create(claimKey, {
         ...claim,
         createdAt: commerceFieldValue.serverTimestamp(),

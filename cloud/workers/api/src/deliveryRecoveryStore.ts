@@ -4,8 +4,6 @@ import {
   DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
   buildWalletDeliveryRecoveryState,
   nextPreparedDeliveryRecoveryDelayMs,
-  preparedDeliveryRecoveryNextCheckMs,
-  processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import type {
   DeliveryRecoveryOutcome,
@@ -34,6 +32,7 @@ import {
 } from './deliveryOrderStore.js';
 import {
   parseDeliveryRecoveryState,
+  parseDeliveryOrderOwnership,
   type DeliveryRecoveryState,
 } from './deliveryOrderReadModel.js';
 import {
@@ -76,7 +75,7 @@ function processingDeliveryRecoveryReferenceMs(state: DeliveryRecoveryState): nu
 function deliveryRecoveryPriorityMs(order: CommerceDocumentData): number {
   const state = parseDeliveryRecoveryState(order);
   if (state.status === 'processing') return processingDeliveryRecoveryReferenceMs(state);
-  if (state.status === 'prepared') return preparedDeliveryRecoveryNextCheckMs(order) ?? (state.createdAtMs ?? 0);
+  if (state.status === 'prepared') return state.preparedNextCheckAt() ?? (state.createdAtMs ?? 0);
   return state.createdAtMs ?? 0;
 }
 
@@ -155,7 +154,7 @@ export function deliveryRecoveryEligibility(
   }
   if (status === 'prepared') {
     if (force) return { eligible: true };
-    const nextCheckAt = preparedDeliveryRecoveryNextCheckMs(order);
+    const nextCheckAt = recovery.preparedNextCheckAt();
     if (nextCheckAt === null) {
       return { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
     }
@@ -228,7 +227,8 @@ export async function acquireDeliveryRecoveryLease(
           },
         };
       }
-      if (document.data.owner && document.data.owner !== ownerWallet) {
+      const ownership = parseDeliveryOrderOwnership(document.data);
+      if (ownership.hasOwner && ownership.owner !== ownerWallet) {
         return {
           acquired: false,
           result: {
@@ -418,8 +418,8 @@ export async function fetchDeliveryRecoveryState(
   return buildWalletDeliveryRecoveryState({
     remainingProcessing: processing.length,
     nextCheckCandidates: [
-      ...processing.map((document) => processingDeliveryRecoveryNextCheckMs(document.data, nowMs)),
-      ...prepared.map((document) => preparedDeliveryRecoveryNextCheckMs(document.data)),
+      ...processing.map((document) => document.recovery.processingNextCheckAt(nowMs)),
+      ...prepared.map((document) => document.recovery.preparedNextCheckAt()),
     ],
   });
 }

@@ -1,3 +1,4 @@
+import { parseDeliveryOrderStatus } from './deliveryOrderReadModel.js';
 import {
   deliveryOrderDocument, deliveryOrderKey, readDeliveryOrder,
 } from './deliveryOrderStore.js';
@@ -73,7 +74,7 @@ async function publishReadyNotifications(args: {
   args.context.signal.throwIfAborted();
   const supplied = deliveryOrderDocument(args.document);
   const document = await readDeliveryOrder(args.context, supplied.key);
-  if (!document || document.data.status !== 'ready_to_ship') return false;
+  if (!document || parseDeliveryOrderStatus(document.data).status !== 'ready_to_ship') return false;
   const startedAt = performance.now();
   const nowMs = args.nowMs || (() => args.context.nowMs + Math.max(0, Math.floor(performance.now() - startedAt)));
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -112,7 +113,7 @@ async function publishReadyNotifications(args: {
     createExpiredClaimError: () => new ReadyToShipNotificationEnqueueError('Notification publication claim expired. Retry later.'),
     prepareAndPersist: async () => {
       const current = await readDeliveryOrder(args.context, document.key);
-      if (!current || current.data.status !== 'ready_to_ship') throw new ReadyToShipNotificationEnqueueError('Delivery order changed. Retry later.');
+      if (!current || parseDeliveryOrderStatus(current.data).status !== 'ready_to_ship') throw new ReadyToShipNotificationEnqueueError('Delivery order changed. Retry later.');
       const jobs: NotificationEmailJobV1[] = [];
       for (const entry of claim.entries) {
         if (entry.state !== 'pending') continue;

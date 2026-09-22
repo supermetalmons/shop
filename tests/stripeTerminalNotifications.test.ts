@@ -6,6 +6,7 @@ import {
   shouldPublishStripeCheckoutTerminalNotificationsWrite,
 } from '../cloud/workers/api/src/stripeCheckout/terminalNotifications.ts';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import { stripeCheckoutNotificationView } from '../cloud/workers/api/src/stripeCheckout/readModel.ts';
 
 const DROP_ID = 'card_nft_2';
 const SESSION_ID = 'cs_test_terminal_notifications';
@@ -36,7 +37,7 @@ function dependencies(args: {
   return {
     loadCheckout: async () => args.checkout === null
       ? null
-      : { path: CHECKOUT_PATH, data: args.checkout || { status: 'processing' } },
+      : { path: CHECKOUT_PATH, data: stripeCheckoutNotificationView(args.checkout || { status: 'processing' }) },
     loadDeliveryOrder: async () => args.order === null ? null : args.order || readyOrder(),
     getDropName: () => 'Card NFT 2',
     ...(args.createJobId ? { createJobId: args.createJobId } : {}),
@@ -88,7 +89,7 @@ test('fulfilled checkout reloads terminal state and prepares exact buyer and shi
         checkoutReads += 1;
         return {
           path: CHECKOUT_PATH,
-          data: { status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 7 },
+          data: stripeCheckoutNotificationView({ status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 7 }),
         };
       },
       loadDeliveryOrder: async (_dropId, deliveryId) => {

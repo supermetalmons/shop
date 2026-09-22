@@ -19,6 +19,7 @@ import {
   type DeliveryRecoveryState,
 } from './deliveryOrderReadModel.js';
 import type { DeliveryOrderUpdates } from './deliveryOrderUpdates.js';
+import type { DeliveryOrderCreate } from './deliveryOrderCreate.js';
 
 export type DeliveryOrderKey = CommerceDocumentKey<'delivery_order'>;
 export type DeliveryOrderDocument = CommerceDocumentRecord<CommerceDocumentData, 'delivery_order'>;
@@ -54,6 +55,14 @@ export function updateDeliveryOrder(
   updates: DeliveryOrderUpdates,
 ): Promise<void> {
   return transaction.update(key, updates);
+}
+
+export async function createDeliveryOrder(
+  transaction: Pick<CommerceUnitOfWork, 'create'>,
+  key: DeliveryOrderKey,
+  data: DeliveryOrderCreate,
+): Promise<DeliveryOrderDocument> {
+  return deliveryOrderDocument(await transaction.create(key, data));
 }
 
 export async function readDeliveryOrder(

@@ -6,17 +6,16 @@ import {
   type NotificationEmailJobContext,
   type NotificationEmailJobV1,
 } from '../../../../../shared/notificationEmailJob.js';
-import { toMillisMaybe } from '../time.js';
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
 import { STRIPE_CHECKOUT_STATUS } from './contract.js';
-import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
+import type { StripeCheckoutNotificationView, StripeCheckoutTerminalState } from './readModel.js';
 
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'development@support.mons.shop';
 
 type CheckoutDocument = {
   path: string;
-  data: Record<string, unknown>;
+  data: StripeCheckoutNotificationView;
 };
 
 export type StripeCheckoutTerminalNotificationDependencies = {
@@ -33,8 +32,8 @@ export type StripeCheckoutTerminalNotificationResult = {
 };
 
 export function shouldPublishStripeCheckoutTerminalNotificationsWrite(args: {
-  before: Record<string, unknown> | null;
-  after: Record<string, unknown>;
+  before: StripeCheckoutTerminalState | null;
+  after: StripeCheckoutTerminalState;
 }): boolean {
   if (!args.before) return false;
   if (args.after.status === STRIPE_CHECKOUT_STATUS.FULFILLED) {
@@ -48,15 +47,6 @@ export function shouldPublishStripeCheckoutTerminalNotificationsWrite(args: {
       args.before.manualRefundReviewRequired !== true
     )
   );
-}
-
-function optionalTrimmedString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function positiveDeliveryId(value: unknown): number | undefined {
-  const deliveryId = Number(value);
-  return Number.isSafeInteger(deliveryId) && deliveryId > 0 ? deliveryId : undefined;
 }
 
 function invalid(reason: string): StripeCheckoutTerminalNotificationResult {
@@ -75,7 +65,7 @@ export async function prepareStripeCheckoutTerminalNotifications(args: {
   const checkout = checkoutDocument.data;
 
   if (checkout.status === STRIPE_CHECKOUT_STATUS.FULFILLED) {
-    const deliveryId = positiveDeliveryId(checkout.deliveryId);
+    const deliveryId = checkout.deliveryId;
     if (!deliveryId) return invalid('invalid_delivery_id');
     const order = await dependencies.loadDeliveryOrder(dropId, deliveryId);
     if (!order) return invalid('missing_delivery_order');
@@ -114,7 +104,8 @@ export async function prepareStripeCheckoutTerminalNotifications(args: {
     if (jobId !== undefined && !isNotificationEmailJobId(jobId)) {
       return invalid('invalid_manual_review_notification');
     }
-    const identity = normalizeStripeCheckoutIdentity(checkout);
+    const identity = checkout.identity;
+    if (!identity) return invalid('invalid_manual_review_notification');
     const email = buildStripeCheckoutManualReviewEmailContent({
       idempotencyKey,
       recipients: [recipient],
@@ -122,16 +113,16 @@ export async function prepareStripeCheckoutTerminalNotifications(args: {
       dropName: dependencies.getDropName(dropId),
       sessionId,
       checkoutPath: checkoutDocument.path,
-      livemode: checkout.livemode === true,
-      variantKey: optionalTrimmedString(checkout.variantKey),
+      livemode: checkout.livemode,
+      variantKey: checkout.variantKey,
       owner: identity.owner,
       ...('authSubject' in identity ? { authSubject: identity.authSubject } : {}),
-      manualRefundReviewReason: optionalTrimmedString(checkout.manualRefundReviewReason),
+      manualRefundReviewReason: checkout.manualRefundReviewReason,
       lastFulfillmentError: checkout.lastFulfillmentError,
-      createdAt: toMillisMaybe(checkout.createdAt),
-      fulfillmentRequestedAt: toMillisMaybe(checkout.fulfillmentRequestedAt),
-      processingStartedAt: toMillisMaybe(checkout.processingStartedAt),
-      failedAt: toMillisMaybe(checkout.failedAt),
+      createdAt: checkout.createdAtMs,
+      fulfillmentRequestedAt: checkout.fulfillmentRequestedAtMs,
+      processingStartedAt: checkout.processingStartedAtMs,
+      failedAt: checkout.failedAtMs,
     });
     job = createNotificationEmailJobV1({
       ...(jobId !== undefined ? { jobId } : {}),

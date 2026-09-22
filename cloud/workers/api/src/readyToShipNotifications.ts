@@ -1,17 +1,12 @@
+import { parseDeliveryOrderNotificationView, type DeliveryOrderNotificationView } from './deliveryOrderNotificationView.js';
 import type { NotificationOutboxCreate, NotificationOutboxEntry } from '../../../../shared/notificationOutbox.js';
-import {
-  buildBuyerVisibleOrderEmailItems,
-  buildShipperVisibleOrderEmailItems,
-} from './orderEmailItems.js';
 import {
   buildBuyerOrderReceivedEmailContent,
   buildShipperReadyToShipEmailContent,
   fulfillmentAppUrlForDrop,
-  summarizeShipperReadyOrderItems,
 } from './notificationEmails.js';
 import {
   planReadyToShipOrderNotifications,
-  resolveNotificationDeliveryId,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
 } from './notifications.js';
 import {
@@ -63,32 +58,27 @@ function shipperReadyToShipRecipients(dropId: string): string[] {
     : [];
 }
 
-function readyToShipNotificationPlan(order: Record<string, unknown>, dropId: string) {
-  const address = order.addressSnapshot;
-  const buyerEmail = address && typeof address === 'object' && !Array.isArray(address)
-    ? (address as Record<string, unknown>).email
-    : undefined;
+function readyToShipNotificationPlan(order: DeliveryOrderNotificationView, dropId: string) {
   return planReadyToShipOrderNotifications({
-    buyerEmail,
+    buyerEmail: order.buyerRecipient,
     shipperRecipients: shipperReadyToShipRecipients(dropId),
   });
 }
 
-function notificationDeliveryId(order: Record<string, unknown>, deliveryId: number): number {
-  const resolved = resolveNotificationDeliveryId({
-    deliveryDocId: deliveryId,
-    storedDeliveryId: order.deliveryId,
-  });
+function notificationDeliveryId(order: DeliveryOrderNotificationView, deliveryId: number): number {
+  const resolved = order.resolveDeliveryId(deliveryId);
   if (!resolved) throw new Error('Ready-to-ship notification delivery ID is invalid');
   return resolved;
 }
 
 export function planReadyToShipNotifications(args: ReadyNotificationPlanOptions): PendingReadyToShipNotification[] {
+  const before = parseDeliveryOrderNotificationView(args.before);
+  const after = parseDeliveryOrderNotificationView(args.after);
   if (!shouldNotifyShippersForDeliveryReadyToShipWrite({
-    before: args.before, after: args.after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
+    before, after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
   })) return [];
-  const deliveryId = notificationDeliveryId(args.after, args.deliveryId);
-  const plan = readyToShipNotificationPlan(args.after, args.dropId);
+  const deliveryId = notificationDeliveryId(after, args.deliveryId);
+  const plan = readyToShipNotificationPlan(after, args.dropId);
   const kinds: ReadyToShipNotificationKind[] = [
     ...(plan.buyerRecipient ? ['buyer_order_received' as const] : []),
     ...(plan.shipperRecipients.length ? ['shipper_ready_to_ship' as const] : []),
@@ -128,10 +118,11 @@ export async function createReadyToShipNotificationJobs(args: {
   dropId: string;
   pending: readonly PendingReadyToShipNotification[];
 }): Promise<NotificationEmailJobV1[]> {
-  const deliveryId = notificationDeliveryId(args.order, args.deliveryId);
+  const order = parseDeliveryOrderNotificationView(args.order);
+  const deliveryId = notificationDeliveryId(order, args.deliveryId);
   const drop = DEPLOYMENT_DROPS[args.dropId];
   if (!drop) throw new Error('Ready-to-ship notification drop is unsupported');
-  const plan = readyToShipNotificationPlan(args.order, args.dropId);
+  const plan = readyToShipNotificationPlan(order, args.dropId);
   const dropName = drop.displayName || drop.collectionName || args.dropId;
   const jobs: NotificationEmailJobV1[] = [];
   for (const marker of args.pending) {
@@ -147,7 +138,7 @@ export async function createReadyToShipNotificationJobs(args: {
         dropId: args.dropId,
         dropName,
         deliveryId,
-        items: await buildBuyerVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
+        items: await order.buyerItems(args.dropId),
       };
       const email = buildBuyerOrderReceivedEmailContent(message);
       jobs.push(createNotificationEmailJobV1({
@@ -169,9 +160,9 @@ export async function createReadyToShipNotificationJobs(args: {
       dropId: args.dropId,
       dropName,
       deliveryId,
-      owner: typeof args.order.owner === 'string' ? args.order.owner : '',
-      items: summarizeShipperReadyOrderItems(args.order),
-      itemPreviews: await buildShipperVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
+      owner: order.owner,
+      items: order.shipperSummary,
+      itemPreviews: await order.shipperItems(args.dropId),
       fulfillmentUrl: fulfillmentAppUrlForDrop(args.dropId),
     };
     const email = buildShipperReadyToShipEmailContent(message);

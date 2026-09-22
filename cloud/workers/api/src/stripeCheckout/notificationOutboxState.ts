@@ -1,11 +1,12 @@
 import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from '../notificationOutboxPublication.js';
 import { STRIPE_CHECKOUT_STATUS } from './contract.js';
+import type { StripeCheckoutTerminalState } from './readModel.js';
 
 export type StripeTerminalNotificationOutcome = 'fulfilled' | 'manual_review';
 type StripeTerminalNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship' | 'stripe_checkout_manual_review';
 
 export function stripeTerminalNotificationOutcome(
-  checkout: Record<string, unknown> | null,
+  checkout: StripeCheckoutTerminalState | null,
 ): StripeTerminalNotificationOutcome | null {
   if (checkout?.status === STRIPE_CHECKOUT_STATUS.FULFILLED) return 'fulfilled';
   if (
@@ -44,7 +45,7 @@ function createStripeTerminalNotificationIntent(args: {
 export async function enqueueStripeTerminalNotifications(args: {
   transaction: import('../commerceRepository.js').CommerceUnitOfWork;
   key: import('../commerceRepository.js').CommerceDocumentKey<'stripe_checkout'>;
-  before: Record<string, unknown> | null;
+  before: StripeCheckoutTerminalState | null;
   outcome: StripeTerminalNotificationOutcome;
   deliveryId?: number;
   nowMs: number;

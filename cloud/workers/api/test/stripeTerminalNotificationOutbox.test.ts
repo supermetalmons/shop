@@ -49,6 +49,15 @@ test('Stripe manual-review jobs retain their identity and immutable checkout con
   assert.equal(job.context.sessionId, 'cs_notification');
 });
 
+test('manual-review publication does not coerce an unrelated malformed delivery ID', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { outcome: 'manual_review' });
+  await state.repository.run(OUTBOX_NOW, (unit) => unit.update(state.parentKey, {
+    deliveryId: { toString: false, valueOf: false },
+  }));
+  assert.deepEqual(await state.publish(), { outcome: 'manual_review', publication: 'queued', queuedJobs: 1 });
+  assert.equal(state.sent[0][0].kind, 'stripe_checkout_manual_review');
+});
+
 test('Stripe optional recipients complete unused entries without sending those jobs', async (context) => {
   const state = await notificationFixture(context, 'stripe_terminal');
   await state.updateOrder({ addressSnapshot: {} });

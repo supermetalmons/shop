@@ -53,7 +53,10 @@ test('recovery timestamps require finite numbers while status and rollback value
     processingAt: 123,
     receiptRecovery: { ...rollbackValues, leaseExpiresAt: 456 },
   });
-  assert.deepEqual(parsed, {
+  const { preparedNextCheckAt, processingNextCheckAt, ...fields } = parsed;
+  assert.equal(preparedNextCheckAt(1_000), 1_000);
+  assert.equal(processingNextCheckAt(1_000), null);
+  assert.deepEqual(fields, {
     status: ' processing ',
     createdAtMs: 0,
     processingAtMs: 123,
@@ -78,7 +81,11 @@ test('recovery timestamps require finite numbers while status and rollback value
 
 test('recovery rollback distinguishes missing fields from explicit null and preserves legacy counters', () => {
   for (const receiptRecovery of [null, [], 'legacy', 12]) {
-    assert.deepEqual(parseDeliveryRecoveryState({ receiptRecovery }), parseDeliveryRecoveryState({}));
+    const { preparedNextCheckAt, processingNextCheckAt, ...actual } = parseDeliveryRecoveryState({ receiptRecovery });
+    const { preparedNextCheckAt: emptyPrepared, processingNextCheckAt: emptyProcessing, ...empty } = parseDeliveryRecoveryState({});
+    assert.deepEqual(actual, empty);
+    assert.equal(preparedNextCheckAt(1_000), emptyPrepared(1_000));
+    assert.equal(processingNextCheckAt(1_000), emptyProcessing(1_000));
   }
   const empty = parseDeliveryRecoveryState({});
   assert.equal(empty.rawAttemptCount, undefined);

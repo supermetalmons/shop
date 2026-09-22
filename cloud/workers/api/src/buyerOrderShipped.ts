@@ -1,18 +1,12 @@
-import { buildBuyerVisibleOrderEmailItems } from './orderEmailItems.js';
+import { parseDeliveryOrderNotificationView, type DeliveryOrderNotificationView } from './deliveryOrderNotificationView.js';
 import { buildBuyerOrderShippedEmailContent } from './notificationEmails.js';
-import {
-  resolveNotificationDeliveryId,
-  shouldNotifyBuyerForDeliveryShippedWrite,
-} from './notifications.js';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
-import { resolveFulfillmentTrackingHref } from '../../../../shared/fulfillmentTracking.js';
 import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
   isNotificationEmailJobId,
   type NotificationEmailJobV1,
 } from '../../../../shared/notificationEmailJob.js';
-import { validateNotificationEmailRecipient } from '../../../../shared/notificationSubscription.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 
 export const BUYER_ORDER_SHIPPED_EMAIL_PENDING = 'pending' as const;
@@ -42,25 +36,17 @@ export type BuyerOrderShippedDecision =
 
 type DeliveryOrder = Record<string, unknown>;
 
-function isIgnoredSource(order: DeliveryOrder): boolean {
+function isIgnoredSource(order: DeliveryOrderNotificationView): boolean {
   return order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
 }
 
-function shippedWithTracking(order: DeliveryOrder): boolean {
-  return shouldNotifyBuyerForDeliveryShippedWrite({
-    before: null,
-    after: order,
-    ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
-  });
+function shippedWithTracking(order: DeliveryOrderNotificationView): boolean {
+  return !isIgnoredSource(order) && order.shippedWithTracking;
 }
 
 export function isBuyerOrderShippedNotificationEligible(order: DeliveryOrder): boolean {
-  const address = order.addressSnapshot;
-  return shippedWithTracking(order) && Boolean(validateNotificationEmailRecipient(
-    address && typeof address === 'object' && !Array.isArray(address)
-      ? (address as Record<string, unknown>).email
-      : undefined,
-  ));
+  const notification = parseDeliveryOrderNotificationView(order);
+  return shippedWithTracking(notification) && Boolean(notification.buyerRecipient);
 }
 
 export function decideBuyerOrderShippedNotification(args: {
@@ -74,6 +60,8 @@ export function decideBuyerOrderShippedNotification(args: {
   jobId?: unknown;
   createJobId?: () => string;
 }): BuyerOrderShippedDecision {
+  const before = parseDeliveryOrderNotificationView(args.before);
+  const after = parseDeliveryOrderNotificationView(args.after);
   const pending = args.emailState === BUYER_ORDER_SHIPPED_EMAIL_PENDING;
   if (!args.forceRetry && (args.emailState === 'failed' || args.emailState === 'cancelled')) {
     return { kind: 'skip', clearPending: false, reason: args.emailState === 'failed' ? 'publication-failed' : 'cancelled' };
@@ -81,19 +69,15 @@ export function decideBuyerOrderShippedNotification(args: {
   if (args.emailState === BUYER_ORDER_SHIPPED_EMAIL_QUEUED && !args.forceRetry) {
     return { kind: 'skip', clearPending: false, reason: 'already-queued' };
   }
-  if (isIgnoredSource(args.after)) {
+  if (isIgnoredSource(after)) {
     return { kind: 'skip', clearPending: pending, reason: 'ignored-source' };
   }
 
-  const firstShippedWithTracking = shouldNotifyBuyerForDeliveryShippedWrite({
-    before: args.before,
-    after: args.after,
-    ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
-  });
-  if (args.forceRetry && !shippedWithTracking(args.after)) {
+  const firstShippedWithTracking = after.shippedWithTracking && !before.shippedWithTracking;
+  if (args.forceRetry && !shippedWithTracking(after)) {
     return { kind: 'skip', clearPending: pending, reason: 'retry-not-shipped' };
   }
-  if (!args.forceRetry && !firstShippedWithTracking && !(pending && shippedWithTracking(args.after))) {
+  if (!args.forceRetry && !firstShippedWithTracking && !(pending && shippedWithTracking(after))) {
     return {
       kind: 'skip',
       clearPending: pending,
@@ -101,16 +85,9 @@ export function decideBuyerOrderShippedNotification(args: {
     };
   }
 
-  const deliveryId = resolveNotificationDeliveryId({
-    deliveryDocId: String(args.deliveryDocId),
-    storedDeliveryId: args.after.deliveryId,
-  });
+  const deliveryId = after.resolveDeliveryId(String(args.deliveryDocId));
   if (!deliveryId) return { kind: 'skip', clearPending: pending, reason: 'invalid-delivery-id' };
-  if (!validateNotificationEmailRecipient(args.after.addressSnapshot &&
-    typeof args.after.addressSnapshot === 'object' &&
-    !Array.isArray(args.after.addressSnapshot)
-    ? (args.after.addressSnapshot as Record<string, unknown>).email
-    : undefined)) {
+  if (!after.buyerRecipient) {
     return { kind: 'skip', clearPending: pending, reason: 'missing-or-invalid-recipient' };
   }
 
@@ -138,14 +115,10 @@ export async function createBuyerOrderShippedNotificationJob(args: {
   jobId: string;
   order: DeliveryOrder;
 }): Promise<NotificationEmailJobV1> {
-  const trackingUrl = resolveFulfillmentTrackingHref(args.order.fulfillmentTrackingCode);
+  const order = parseDeliveryOrderNotificationView(args.order);
+  const trackingUrl = order.trackingUrl;
   if (!trackingUrl) throw new Error('Buyer order shipped notification requires a valid tracking URL');
-  const address = args.order.addressSnapshot;
-  const recipient = validateNotificationEmailRecipient(
-    address && typeof address === 'object' && !Array.isArray(address)
-      ? (address as Record<string, unknown>).email
-      : undefined,
-  );
+  const recipient = order.buyerRecipient;
   if (!recipient) throw new Error('Buyer order shipped notification requires a valid recipient');
   const drop = DEPLOYMENT_DROPS[args.dropId];
   if (!drop) throw new Error('Buyer order shipped notification requires a supported drop');
@@ -155,7 +128,7 @@ export async function createBuyerOrderShippedNotificationJob(args: {
     dropId: args.dropId,
     dropName: drop.displayName || drop.collectionName || args.dropId,
     deliveryId: args.deliveryId,
-    items: await buildBuyerVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
+    items: await order.buyerItems(args.dropId),
     trackingUrl,
   };
   const email = buildBuyerOrderShippedEmailContent(message);

@@ -21,6 +21,8 @@ import {
   stripeCheckoutShippingCountriesForDropFamily,
 } from '../../../../../shared/stripeCheckoutSession.js';
 import { canonicalWalletAddress } from '../../../../../shared/walletLifecycle.js';
+import type { StripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
+import type { StripeDeliveryOrderFields } from '../deliveryOrderCreate.js';
 import {
   isStripeOffchainFulfillmentSession,
 } from '../../../../../shared/stripeWebhook.js';
@@ -161,7 +163,7 @@ function positiveIntegerOrNull(value: unknown): number | null {
 
 function normalizeStripeOffchainDeliveryOrderIdentity(
   args: StripeOffchainDeliveryOrderIdentity,
-): StripeOffchainDeliveryOrderIdentity {
+): StripeCheckoutIdentity & { authSubject?: string } {
   const authSubject = normalizedString(args.authSubject);
   if (args.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS) {
     if (!authSubject || args.owner !== stripeCheckoutAnonymousOwnerId(authSubject)) {
@@ -470,7 +472,9 @@ function normalizeStripeReceiptClaims(
   return claims;
 }
 
-export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput) {
+export function buildStripeOffchainDeliveryOrderDocument(
+  args: StripeOffchainDeliveryOrderDocumentInput,
+): StripeDeliveryOrderFields<Record<string, unknown>> {
   const identity = normalizeStripeOffchainDeliveryOrderIdentity(args);
   const metadataIds = normalizeStripeMetadataIds(args);
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
@@ -505,7 +509,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
     receiptTxs: args.receiptTx ? [args.receiptTx] : [],
     ...(stripeReceiptClaims.length ? { stripeReceiptClaimsByBoxId } : {}),
     ...(legacyStripeReceiptClaim ? { stripeReceiptClaim: legacyStripeReceiptClaim } : {}),
-  };
+  } satisfies StripeDeliveryOrderFields<Record<string, unknown>>;
 }
 
 export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput) {

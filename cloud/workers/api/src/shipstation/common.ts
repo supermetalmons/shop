@@ -1,3 +1,4 @@
+import { parseDeliveryShipmentItemCounts } from '../deliveryOrderReadModel.js';
 import { z } from 'zod';
 import nacl from 'tweetnacl';
 import { normalizeDropId } from '../../../../../shared/deploymentCore.js';
@@ -30,7 +31,6 @@ import { type ShipStationPackageInput } from '../../../../../shared/shipstationP
 import type { FulfillmentShipStationAddressCorrectionDetails } from '../../../../../shared/contracts.js';
 import { isSignalCancellationError } from '../boundedRequest.js';
 import {
-  isRecord,
   ProfileReadError,
 } from '../dataAccess.js';
 import { type ProfileWriteOperationContext } from '../profileWriteOperation.js';
@@ -129,22 +129,8 @@ export function requireFulfillmentAccess(wallet: string, dropId: string): void {
   }
 }
 
-function fulfillmentShipmentItemCounts(order: Record<string, unknown>): { boxCount: number; looseItemCount: number } {
-  const items = Array.isArray(order.items) ? order.items : [];
-  let boxCount = 0;
-  let looseItemCount = 0;
-  for (const item of items) {
-    if (!isRecord(item) || (item.kind !== 'box' && item.kind !== 'dude')) continue;
-    const refId = Math.floor(Number(item.refId));
-    if (!Number.isFinite(refId) || refId <= 0) continue;
-    if (item.kind === 'box') boxCount += 1;
-    else looseItemCount += 1;
-  }
-  return { boxCount, looseItemCount };
-}
-
 export function fulfillmentShipmentUnitCount(order: Record<string, unknown>): number {
-  const counts = fulfillmentShipmentItemCounts(order);
+  const counts = parseDeliveryShipmentItemCounts(order);
   return counts.boxCount + counts.looseItemCount;
 }
 
@@ -152,7 +138,7 @@ export function requireShipStationCustomsDeclaration(
   dropId: string,
   order: Record<string, unknown>,
 ): ShipStationCustomsDeclaration {
-  const counts = fulfillmentShipmentItemCounts(order);
+  const counts = parseDeliveryShipmentItemCounts(order);
   const declaration = buildShipStationCustomsDeclaration(dropId, counts.boxCount, counts.looseItemCount);
   if (!declaration) {
     throw new ProfileReadError(

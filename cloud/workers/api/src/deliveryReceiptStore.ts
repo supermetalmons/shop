@@ -20,6 +20,7 @@ import {
 import { isRecord } from './dataAccess.js';
 import {
   readDeliveryOrder,
+  updateDeliveryOrder,
   type DeliveryOrderDocument,
   type DeliveryOrderKey,
 } from './deliveryOrderStore.js';
@@ -29,6 +30,14 @@ import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
 import { createReadyToShipNotificationIntent } from './readyToShipNotifications.js';
 import { mutateSubmissionJournal } from './submissionJournal.js';
 import type { TransactionSubmissionOutcome } from './transactionSubmissionRecovery.js';
+import type {
+  DeliveryCloseUpdate,
+  DeliveryIrlClaim,
+  DeliveryProcessingUpdate,
+  DeliveryReadyFields,
+  DeliveryReadyUpdate,
+} from './deliveryReceiptTypes.js';
+export type { DeliveryIrlClaim } from './deliveryReceiptTypes.js';
 
 const DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS = 4 * 60_000;
 const RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD = 'receiptRecovery.pendingSubmission';
@@ -38,13 +47,6 @@ export type PendingReceiptSubmission = {
   blockhash: string;
   lastValidBlockHeight: number;
   assetIds: string[];
-};
-
-export type DeliveryIrlClaim = {
-  code: string;
-  boxId: number;
-  boxAssetId: string;
-  dudeIds: number[];
 };
 
 export type DeliveryReceiptCompletion = {
@@ -86,44 +88,6 @@ type AssignmentClaimFields = {
 };
 
 type AssignmentClaimUpdate = AssignmentClaimFields & { 'irlClaim.createdAt': ServerTimestamp };
-
-type DeliveryProcessingUpdate = {
-  dropId: string;
-  status: 'processing';
-  deliverySignature?: string;
-  'receiptRecovery.lastPreparedProbeAt': DeletedField;
-  'receiptRecovery.preparedProbeCount': DeletedField;
-  'receiptRecovery.nextPreparedProbeAt': DeletedField;
-  'receiptRecovery.status': DeletedField;
-  processingAt?: ServerTimestamp;
-};
-
-type DeliveryReadyFields = {
-  dropId: string;
-  status: 'ready_to_ship';
-  deliverySignature?: string;
-  receiptsMinted: number;
-  receiptTxs: string[];
-  irlClaims?: DeliveryIrlClaim[];
-};
-
-type DeliveryReadyUpdate = DeliveryReadyFields & {
-  'receiptRecovery.leaseExpiresAt': DeletedField;
-  'receiptRecovery.lastErrorCode': DeletedField;
-  'receiptRecovery.lastErrorMessage': DeletedField;
-  'receiptRecovery.lastPreparedProbeAt': DeletedField;
-  'receiptRecovery.preparedProbeCount': DeletedField;
-  'receiptRecovery.nextPreparedProbeAt': DeletedField;
-  'receiptRecovery.status': DeletedField;
-  processedAt: ServerTimestamp;
-  irlClaimsUpdatedAt?: ServerTimestamp;
-};
-
-type DeliveryCloseUpdate = {
-  dropId: string;
-  closeDeliveryTx: string;
-  deliveryClosedAt: ServerTimestamp;
-};
 
 type PendingReceiptSubmissionUpdate = {
   [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: PendingReceiptSubmission;
@@ -328,7 +292,7 @@ export async function markDeliveryProcessing(
 ): Promise<void> {
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
     await transaction.getMany([document.key]);
-    await transaction.update(document.key, {
+    await updateDeliveryOrder(transaction, document.key, {
       dropId: runtime.dropId,
       status: 'processing',
       ...(signature ? { deliverySignature: signature } : {}),
@@ -370,7 +334,7 @@ export async function markDeliveryReady(
       dropId: runtime.dropId, nowMs: context.nowMs,
     });
     if (notificationOutbox) await transaction.enqueueNotificationOutbox(notificationOutbox);
-    await transaction.update(document.key, {
+    await updateDeliveryOrder(transaction, document.key, {
       ...fields,
       ...packStatusOutbox,
       'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
@@ -397,7 +361,7 @@ export async function recordDeliveryClose(
 ): Promise<void> {
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
     await transaction.getMany([key]);
-    await transaction.update(key, {
+    await updateDeliveryOrder(transaction, key, {
       dropId,
       closeDeliveryTx,
       deliveryClosedAt: commerceFieldValue.serverTimestamp(),

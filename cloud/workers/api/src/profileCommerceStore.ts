@@ -9,6 +9,8 @@ import {
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
 import { runCommerceTransaction, type CommerceTransactionTarget } from './commerceTransactions.js';
+import { deliveryOrderKey, updateDeliveryOrder } from './deliveryOrderStore.js';
+import type { DeliveryOwnerMergeUpdate } from './deliveryOrderUpdates.js';
 
 export const STRIPE_OWNER_MERGE_BATCH_SIZE = 450;
 
@@ -55,13 +57,13 @@ export async function mergeAnonymousStripeOwnerBatch(params: {
         deliveryOrderPath(document);
       }
       for (const document of documents) {
-        await unit.update(document.key, {
+        await updateDeliveryOrder(unit, deliveryOrderKey(document.key.path), {
           mergedAuthSubject: params.authSubject,
           owner: params.wallet,
           ownerKind: 'wallet',
           ownerMergedAt: commerceFieldValue.serverTimestamp(),
           previousOwner: stripeCheckoutAnonymousOwnerId(params.authSubject),
-        });
+        } satisfies DeliveryOwnerMergeUpdate);
       }
       return documents.length;
     });

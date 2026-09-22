@@ -22,6 +22,8 @@ import {
   type StripeCheckoutDocumentData,
 } from './contract.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
+import { stripeCheckoutNotificationView, type StripeCheckoutNotificationView } from './readModel.js';
+import type { StripeWebhookTransition } from '../../../../../shared/stripeWebhook.js';
 
 export type StripeCheckoutCommerceContext = {
   repository: Pick<D1CommerceRepository, 'get' | 'run' | 'notificationOutbox'>;
@@ -34,7 +36,13 @@ export type StripeReconciliationFailure = { name: string; message?: string };
 export type StripeCheckoutRecord = {
   key: CommerceDocumentKey<'stripe_checkout'>;
   fields: CommerceDocumentData;
+  version: number;
+  identity: { operationId: string | null | undefined; sessionId: string | undefined; dropId: string | undefined };
   status: string;
+  manualRefundReviewRequired: boolean;
+  variantKey: string;
+  fulfillmentDeliveryId: number | undefined;
+  notification: StripeCheckoutNotificationView;
   processingAttemptId: string;
   processingStartedAtMs: number | undefined;
   processingLeaseExpiresAtMs: number | undefined;
@@ -81,6 +89,15 @@ export type StripeCheckoutUpdate = {
   updatedAt?: TimestampWrite;
 };
 
+type WebhookDeleteField = StripeWebhookTransition['deleteFields'][number];
+type WebhookTimestampField = StripeWebhookTransition['serverTimestampFields'][number];
+
+export type StripeCheckoutWebhookUpdate = StripeWebhookTransition['fields'] &
+  Partial<Record<WebhookDeleteField, DeleteField>> &
+  Partial<Record<WebhookTimestampField, ReturnType<typeof commerceFieldValue.serverTimestamp>>> & {
+    stripeWebhookEventIds: ReturnType<typeof commerceFieldValue.arrayUnion>;
+  };
+
 export function stripeCheckoutRecord(
   key: CommerceDocumentKey<'stripe_checkout'>,
   record: CommerceDocumentRecord | null,
@@ -95,7 +112,20 @@ export function stripeCheckoutRecord(
   return {
     key,
     fields,
+    version: record.version,
+    identity: {
+      operationId: typeof fields.operationId === 'string' ? fields.operationId : fields.operationId === undefined ? undefined : null,
+      sessionId: typeof fields.sessionId === 'string' ? fields.sessionId : undefined,
+      dropId: typeof fields.dropId === 'string' ? fields.dropId : undefined,
+    },
     status: typeof fields.status === 'string' ? fields.status : '',
+    manualRefundReviewRequired: fields.manualRefundReviewRequired === true,
+    get variantKey() { return String(fields.variantKey || '').trim(); },
+    get fulfillmentDeliveryId() {
+      const deliveryId = Math.floor(Number(fields.deliveryId));
+      return Number.isFinite(deliveryId) && deliveryId > 0 ? deliveryId : undefined;
+    },
+    get notification() { return stripeCheckoutNotificationView(fields); },
     processingAttemptId: typeof fields.processingAttemptId === 'string' ? fields.processingAttemptId : '',
     processingStartedAtMs: toMillisMaybe(fields.processingStartedAt),
     processingLeaseExpiresAtMs: toMillisMaybe(fields.processingLeaseExpiresAt),
@@ -137,6 +167,14 @@ export function updateStripeCheckout(
   return transaction.update(key, stripeCheckoutWriteData(updates));
 }
 
+export function updateStripeCheckoutWebhook(
+  transaction: Pick<CommerceUnitOfWork, 'update'>,
+  key: CommerceDocumentKey<'stripe_checkout'>,
+  updates: StripeCheckoutWebhookUpdate,
+): Promise<void> {
+  return transaction.update(key, stripeCheckoutWriteData(updates));
+}
+
 export function mergeStripeCheckout(
   transaction: Pick<CommerceUnitOfWork, 'set'>,
   key: CommerceDocumentKey<'stripe_checkout'>,
@@ -158,6 +196,14 @@ function jsonValue(value: unknown): CommerceJsonValue {
     );
   }
   throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout document value.');
+}
+
+export function stripeCheckoutJsonObject(data: Record<string, unknown>): CommerceDocumentData {
+  return Object.fromEntries(
+    Object.entries(data)
+      .filter(([, value]) => value !== undefined)
+      .map(([field, value]) => [field, jsonValue(value)]),
+  );
 }
 
 function updateValue(value: unknown): CommerceUpdateValue {
