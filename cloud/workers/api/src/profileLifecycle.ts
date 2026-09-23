@@ -43,7 +43,7 @@ import {
   D1CommerceRepository,
 } from './commerceRepository.js';
 import { mergeAnonymousStripeOwnerBatch, STRIPE_OWNER_MERGE_BATCH_SIZE } from './profileCommerceStore.js';
-import { isProfileRequestOriginAllowed } from './profileReads.js';
+import { isProfileRequestOriginAllowed } from './profileReadSupport.js';
 import { ensureD1Profile } from './profileD1.js';
 import {
   AuthWalletBindingD1BusyError,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import { commerceKeys } from '../src/commerceRepository.ts';
-import { FULFILLMENT_MANUAL_REVIEW_PATH, handleProfileReadRequest } from '../src/profileReads.ts';
+import { FULFILLMENT_MANUAL_REVIEW_PATH, handleStaffReadRequest } from '../src/staffReads.ts';
 import type { FulfillmentManualReviewPage } from '../../../../shared/contracts.ts';
 import { manualReviewDocumentCursor } from '../../../../shared/fulfillmentManualReviewPagination.ts';
 
@@ -19,8 +19,8 @@ function fixture() {
           failedAt, sessionId, quantity: 1 },
       });
     },
-    async request(body: Record<string, unknown>, overrides: Parameters<typeof handleProfileReadRequest>[4] = {}, signal?: AbortSignal) {
-      return handleProfileReadRequest(new Request(`https://api.mons.shop${FULFILLMENT_MANUAL_REVIEW_PATH}`, {
+    async request(body: Record<string, unknown>, overrides: Parameters<typeof handleStaffReadRequest>[4] = {}, signal?: AbortSignal) {
+      return handleStaffReadRequest(new Request(`https://api.mons.shop${FULFILLMENT_MANUAL_REVIEW_PATH}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
         body: JSON.stringify({ dropId: DROP, ...body }), signal,
       }), { COMMERCE_DB: harness.db, STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_SECRET_KEY_LIVE: 'sk_live_fixture' }, FULFILLMENT_MANUAL_REVIEW_PATH, {}, {

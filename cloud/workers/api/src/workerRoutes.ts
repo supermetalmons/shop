@@ -23,11 +23,18 @@ import {
 import {
   applyProfileCors,
   handleProfileCorsPreflight,
-  handleProfileReadRequest,
   isProfileRequestOriginAllowed,
+} from './profileReadSupport.js';
+import {
+  handleProfileReadRequest,
   PROFILE_READ_PATHS,
   type ProfileReadPath,
 } from './profileReads.js';
+import {
+  handleStaffReadRequest,
+  STAFF_READ_PATHS,
+  type StaffReadPath,
+} from './staffReads.js';
 import {
   PROFILE_ADDRESSES_PATH,
   PROFILE_WRITE_PATHS,
@@ -473,6 +480,18 @@ async function dispatchProfileRead(
   };
 }
 
+async function dispatchStaffRead(
+  context: WorkerRouteContext,
+  path: StaffReadPath,
+): Promise<WorkerRouteResult> {
+  const result = await handleStaffReadRequest(context.request, context.env, path, context.authContext);
+  addMetrics(context.metrics, result);
+  return {
+    response: result.response,
+    logFields: { profileAuthOutcome: result.authOutcome },
+  };
+}
+
 async function dispatchProfileWrite(
   context: WorkerRouteContext,
   path: ProfileWritePath,
@@ -727,8 +746,13 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
   )),
   ...Array.from(PROFILE_READ_PATHS, (path) => exactRoute(
     path,
-    profilePolicy({ staff: isStaffOnlyApiPath(path) ? 'required' : 'optional' }),
-    (context) => dispatchProfileRead(context, path as ProfileReadPath),
+    profilePolicy({ staff: 'optional' }),
+    (context) => dispatchProfileRead(context, path),
+  )),
+  ...Array.from(STAFF_READ_PATHS, (path) => exactRoute(
+    path,
+    profilePolicy({ staff: 'required' }),
+    (context) => dispatchStaffRead(context, path),
   )),
   ...Array.from(PROFILE_WRITE_PATHS, (path) => exactRoute(
     path,

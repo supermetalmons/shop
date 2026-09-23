@@ -136,7 +136,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
-    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
+    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/admin/profile', '/admin/delivery-order-owners', '/fulfillment/orders', '/fulfillment/manual-review-checkouts', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },

@@ -1,248 +1,68 @@
-import type { NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
 import {
-  DEFAULT_SHIPMENT_PAGE_LIMIT, MAX_SHIPMENT_PAGE_LIMIT, MAX_SHIPMENT_PRESENCE_SELECTORS,
-  isShipmentHistoryCursor,
-  type ShipmentPageRequest, type ShipmentHistoryCursor, type ShipmentPresenceRequest,
+  MAX_SHIPMENT_PRESENCE_SELECTORS, isShipmentHistoryCursor,
+  type ShipmentPageRequest, type ShipmentPresenceRequest, type ShipmentDeliveryReference,
 } from '../../../../shared/shipmentHistory.js';
-import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
-import {
-  deliveryOrderSummarySortAt,
-} from '../../../../shared/deliveryOrderSummary.js';
-import {
-  FULFILLMENT_ADMIN_WALLET_ADDRESSES,
-  SHIPPER_FULFILLMENT_ACCESS,
-  walletHasAdminAccess,
-  walletCanViewSensitiveFulfillmentAddress,
-  walletHasFulfillmentDropAccess,
-} from '../../../../shared/fulfillmentAccess.js';
-import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
-import { fulfillmentOrderSummaryFromDocument, fulfillmentStripeSessionId } from './deliveryOrderProfileViews.js';
-import { stripeCheckoutManualReviewSessionId, stripeCheckoutManualReviewSummary } from './stripeCheckout/readModel.js';
-import {
-  STRIPE_CHECKOUT_OPERATION_HEADER,
-  STRIPE_CHECKOUT_RETRY_HEADER,
-  type DeliveryOrderSummary,
-  type FulfillmentManualReviewCheckout,
-  type FulfillmentManualReviewCursor,
-  type FulfillmentManualReviewPage,
-  type FulfillmentOrder,
-  type FulfillmentOrdersCursor,
-  type GetAdminProfileViewResponse,
-  type GetProfileStateResponse,
-  type GetProfileShipmentsResponse,
-  type ProfileStateProfile,
-  type ProfileStateSection,
+import type {
+  DeliveryOrderSummary, GetProfileStateResponse, GetProfileShipmentsResponse,
+  ProfileStateProfile, ProfileStateSection,
 } from '../../../../shared/contracts.js';
-import {
-  DEFAULT_MANUAL_REVIEW_LIMIT,
-  MAX_MANUAL_REVIEW_LIMIT,
-  isFulfillmentManualReviewCursor,
-  manualReviewDocumentCursor,
-} from '../../../../shared/fulfillmentManualReviewPagination.js';
-import { normalizeDropId } from '../../../../shared/deploymentCore.js';
-import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
-import {
-  ADDRESS_CIPHER_SECRET_KEY_LENGTH,
-  decryptAddressCipherText,
-  parseAddressCipherPayload,
-} from '../../../../shared/addressCipher.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import { stripeCheckoutAnonymousOwnerId } from '../../../../shared/stripeCheckoutSession.js';
-import { loadStripeChargebackSessionIds } from './stripeChargebackStore.js';
 import {
-  type RequestAuthContext,
-  isStaffOnlyApiPath,
-  isStaffRequestIdentity,
-  resolveRequestWallet,
-  verifyRequestIdentity,
-  type RequestIdentity,
+  type RequestAuthContext, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity,
 } from './requestIdentity.js';
+import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  cancelResponseBody,
-  readBoundedResponseJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
-import {
-  isRequestCancellationError,
-  isSignalCancellationError,
-  raceReadWithSignal,
-  readBoundedRequestJson,
+  isRequestCancellationError, isSignalCancellationError, raceReadWithSignal,
 } from './boundedRequest.js';
-import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
-import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { jsonResponse } from './httpResponse.js';
+import { D1CommerceRepository } from './commerceRepository.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
-  D1CommerceRepository,
-  type CommerceDocumentRecord,
-} from './commerceRepository.js';
-import {
-  loadD1Profile,
-} from './profileD1.js';
-import {
-  resolveD1AuthWalletBinding,
-} from './authWalletBindingD1.js';
-
-export {
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
-export { ProfileReadError } from './dataAccess.js';
+  PROFILE_READ_TIMEOUT_MS, exactKeys, readProfileRequestBody, parseShipmentsPage,
+  loadShipments, loadProfileEmail, readMethodNotAllowed, profileReadFailure,
+  type ReadRequestDependencies, type ReadRequestResult,
+} from './profileReadSupport.js';
 
 export const PROFILE_SHIPMENTS_PATH = '/profile/shipments';
 export const PROFILE_STATE_PATH = '/profile/state';
 export const SHIPMENT_PRESENCE_PATH = '/profile/shipment-presence';
 export const ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH = '/profile/anonymous-stripe-delivery-history';
-export const ADMIN_PROFILE_PATH = '/admin/profile';
-export const ADMIN_DELIVERY_ORDER_OWNERS_PATH = '/admin/delivery-order-owners';
-export const FULFILLMENT_ORDERS_PATH = '/fulfillment/orders';
-export const FULFILLMENT_MANUAL_REVIEW_PATH = '/fulfillment/manual-review-checkouts';
-export const PROFILE_READ_PATHS = new Set([
-  PROFILE_SHIPMENTS_PATH,
-  PROFILE_STATE_PATH,
-  SHIPMENT_PRESENCE_PATH,
-  ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-  ADMIN_PROFILE_PATH,
-  ADMIN_DELIVERY_ORDER_OWNERS_PATH,
-  FULFILLMENT_ORDERS_PATH,
-  FULFILLMENT_MANUAL_REVIEW_PATH,
-]);
-
-const PROFILE_CORS_ALLOW_HEADERS = `Content-Type, Authorization, X-Mons-CSRF, ${STRIPE_CHECKOUT_OPERATION_HEADER}`;
-const PROFILE_CORS_ALLOW_METHODS = 'POST, OPTIONS';
-
-const MAX_PROFILE_REQUEST_BYTES = 4096;
-const PROFILE_READ_TIMEOUT_MS = 15_000;
-const ADMIN_WALLETS = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
-const SHIPPER_DROP_IDS_BY_WALLET = new Map(
-  SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, new Set(dropIds)]),
-);
-const FULFILLMENT_ORDER_LIMIT = 1000;
-const DELIVERY_ORDER_OWNER_PAGE_SIZE = 200;
-const MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE = 500;
-const DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT = 4;
-const MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES = 2048;
-const DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER = 4;
-const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
-
 export type ProfileReadPath =
   | typeof PROFILE_SHIPMENTS_PATH
   | typeof PROFILE_STATE_PATH
   | typeof SHIPMENT_PRESENCE_PATH
-  | typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH
-  | typeof ADMIN_PROFILE_PATH
-  | typeof ADMIN_DELIVERY_ORDER_OWNERS_PATH
-  | typeof FULFILLMENT_ORDERS_PATH
-  | typeof FULFILLMENT_MANUAL_REVIEW_PATH;
+  | typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH;
 
-type ProfileReadMetrics = {
-  upstreamCalls: number;
-  providerDurationMs: number;
-};
+export const PROFILE_READ_PATHS = new Set<ProfileReadPath>([
+  PROFILE_SHIPMENTS_PATH, PROFILE_STATE_PATH, SHIPMENT_PRESENCE_PATH,
+  ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
+]);
 
-export type ProfileReadResult = {
-  response: Response;
-  metrics: ProfileReadMetrics;
-  authOutcome: 'accepted' | 'rejected' | 'provider-failure';
+type ProfileReadResult = ReadRequestResult & {
   profileStateSections?: {
     profile: 'ready' | 'error' | 'not-applicable';
     shipments: 'ready' | 'error' | 'not-applicable';
   };
 };
 
-function isAllowedProfileOrigin(origin: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (url.origin !== origin || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false;
-  if (url.protocol === 'https:' && (url.hostname === 'mons.shop' || url.hostname === 'www.mons.shop')) return true;
-  if (
-    (url.protocol === 'http:' || url.protocol === 'https:') &&
-    (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
-  ) return true;
-  if (url.protocol !== 'https:') return false;
-  const match = url.hostname.match(/^([^.]+)-mons-shop\.lil-org\.workers\.dev$/);
-  return match?.[1] === 'candidate' || /^[0-9a-f]{8}$/i.test(match?.[1] || '');
-}
-
-function profileCorsHeaders(origin: string): Record<string, string> {
-  return {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': PROFILE_CORS_ALLOW_METHODS,
-    'Access-Control-Allow-Headers': PROFILE_CORS_ALLOW_HEADERS,
-    'Access-Control-Expose-Headers': STRIPE_CHECKOUT_RETRY_HEADER,
-    'Access-Control-Max-Age': '86400',
-    'Timing-Allow-Origin': origin,
-    Vary: 'Origin',
-  };
-}
-
-export function handleProfileCorsPreflight(
-  request: Request,
-  isAllowedOrigin: (origin: string) => boolean = isAllowedProfileOrigin,
-): Response {
-  const origin = request.headers.get('Origin') || '';
-  if (!isAllowedOrigin(origin)) {
-    return errorResponse(new ProfileReadError('permission-denied', 403, 'Origin is not allowed.'));
-  }
-  return new Response(null, {
-    status: 204,
-    headers: { ...profileCorsHeaders(origin), 'Cache-Control': 'no-store' },
-  });
-}
-
-export function isProfileRequestOriginAllowed(request: Request): boolean {
-  const origin = request.headers.get('Origin');
-  return !origin || isAllowedProfileOrigin(origin);
-}
-
-export function applyProfileCors(request: Request, response: Response): Response {
-  const origin = request.headers.get('Origin');
-  if (!origin) return response;
-  if (!isAllowedProfileOrigin(origin)) {
-    return errorResponse(new ProfileReadError('permission-denied', 403, 'Origin is not allowed.'));
-  }
-  for (const [key, value] of Object.entries(profileCorsHeaders(origin))) response.headers.set(key, value);
-  return response;
-}
-
-function errorResponse(error: ProfileReadError): Response {
-  return jsonResponse(apiErrorBody(error), error.status);
-}
-
-
-type ProfileReadDependencies = {
-  createCommerceRepository: (
-    db: D1Database,
-  ) => Pick<D1CommerceRepository,
-    'queryDeliveryHistory' | 'queryShipmentHistoryPage' | 'queryShipmentPresence' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners' | 'notificationOutbox'>;
-  loadProfileEmail: typeof loadProfileEmail;
-  loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
-  nowMs: () => number;
-  providerFetch: ProfileProviderFetch;
+type ProfileReadDependencies = ReadRequestDependencies & {
+  createCommerceRepository: (db: D1Database) => Pick<D1CommerceRepository,
+    'queryDeliveryHistory' | 'queryShipmentHistoryPage' | 'queryShipmentPresence'>;
   resolveD1AuthWalletBinding: (
     db: D1Database | undefined,
     uid: string,
     signal: AbortSignal,
   ) => ReturnType<typeof resolveD1AuthWalletBinding>;
-  timeoutMs: number;
-  verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileReadEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
-  | 'ADDRESS_DECRYPTION_SECRET'
-  | 'OPS_DB'
-  | 'STRIPE_SECRET_KEY'
-  | 'STRIPE_RESTRICTED_KEY'
-  | 'STRIPE_SECRET_KEY_LIVE'
-  | 'STRIPE_RESTRICTED_KEY_LIVE'
->>;
+type ProfileReadEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 const defaultDependencies: ProfileReadDependencies = {
   createCommerceRepository: (db) => new D1CommerceRepository(db),
   loadProfileEmail,
-  loadStripeChargebackSessionIds,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   resolveD1AuthWalletBinding: (db, uid, signal) => {
@@ -253,145 +73,54 @@ const defaultDependencies: ProfileReadDependencies = {
   verifyIdentity: verifyRequestIdentity,
 };
 
-function deliveryHistoryFromDocuments(documents: readonly CommerceDocumentRecord[]): DeliveryOrderSummary[] {
-  const orders = documents
-    .map(deliveryOrderSummaryFromDocument)
-    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
-  orders.sort((left, right) => deliveryOrderSummarySortAt(right) - deliveryOrderSummarySortAt(left));
-  return orders;
+type ParsedProfileReadRequest =
+  | { path: typeof SHIPMENT_PRESENCE_PATH; presence: ShipmentPresenceRequest }
+  | { path: typeof PROFILE_STATE_PATH; shipmentsPage?: ShipmentPageRequest }
+  | { path: typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH; shipmentsPage?: ShipmentPageRequest }
+  | { path: typeof PROFILE_SHIPMENTS_PATH; ownerWallet: string; shipmentsPage?: ShipmentPageRequest };
+
+function isShipmentDeliveryReference(value: unknown): value is ShipmentDeliveryReference {
+  return isRecord(value) && exactKeys(value, ['dropId', 'deliveryId']) &&
+    typeof value.dropId === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.dropId) &&
+    typeof value.deliveryId === 'number' && Number.isSafeInteger(value.deliveryId) && value.deliveryId > 0;
 }
 
-type ParsedReadRequest = {
-  ownerWallet?: string;
-  cursor?: string | FulfillmentOrdersCursor | null;
-  manualReviewCursor?: FulfillmentManualReviewCursor | null;
-  pageSize?: number;
-  limit?: number;
-  dropId?: string;
-  shipmentsPage?: ShipmentPageRequest;
-  presence?: ShipmentPresenceRequest;
-};
-
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
-  const expected = new Set(allowed);
-  return Object.keys(value).every((key) => expected.has(key));
-}
-
-function supportedDropId(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new ProfileReadError('invalid-argument', 400, 'dropId is required.');
+function parseShipmentPresence(parsed: Record<string, unknown>): ShipmentPresenceRequest {
+  const sessions = parsed.stripeSessionIds ?? [];
+  const deliveries = parsed.deliveries ?? [];
+  const invalid = () => new ProfileReadError('invalid-argument', 400, 'Invalid shipment presence request.');
+  if (!exactKeys(parsed, ['scope', 'expectedWallet', 'stripeSessionIds', 'deliveries']) ||
+    !Array.isArray(sessions) || !Array.isArray(deliveries) ||
+    sessions.length + deliveries.length < 1 || sessions.length + deliveries.length > MAX_SHIPMENT_PRESENCE_SELECTORS ||
+    !sessions.every((id): id is string => typeof id === 'string' && /^cs_[A-Za-z0-9_]+$/.test(id) && id.length <= 256) ||
+    !deliveries.every(isShipmentDeliveryReference) ||
+    parsed.stripeSessionIds === null || parsed.deliveries === null) {
+    throw invalid();
   }
-  const dropId = normalizeDropId(value);
-  if (!Object.hasOwn(DEPLOYMENT_DROPS, dropId)) {
-    throw new ProfileReadError('invalid-argument', 400, `Unsupported dropId: ${dropId}`);
+  if (parsed.scope === 'wallet') {
+    if (typeof parsed.expectedWallet !== 'string' || !isBase58Bytes(parsed.expectedWallet, 32)) throw invalid();
+    return { scope: 'wallet', expectedWallet: parsed.expectedWallet, stripeSessionIds: sessions, deliveries };
   }
-  return dropId;
-}
-
-function fulfillmentCursor(value: unknown): FulfillmentOrdersCursor | null {
-  if (value === undefined || value === null) return null;
-  if (!isRecord(value) || !exactKeys(value, ['processedAt', 'id'])) {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-  }
-  const processedAt = value.processedAt;
-  if (!isRecord(processedAt) || !exactKeys(processedAt, ['seconds', 'nanos'])) {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-  }
-  if (
-    !Number.isSafeInteger(processedAt.seconds) || Number(processedAt.seconds) < 0 ||
-    !Number.isInteger(processedAt.nanos) || Number(processedAt.nanos) < 0 || Number(processedAt.nanos) > 999_999_999 ||
-    typeof value.id !== 'string' || !value.id || value.id.length > 128
-  ) throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-  return {
-    processedAt: { seconds: Number(processedAt.seconds), nanos: Number(processedAt.nanos) },
-    id: value.id,
-  };
+  if (parsed.scope !== 'anonymous' || Object.hasOwn(parsed, 'expectedWallet')) throw invalid();
+  return { scope: 'anonymous', stripeSessionIds: sessions, deliveries };
 }
 
 async function parseExactRequestBody(
   request: Request,
   path: ProfileReadPath,
   signal: AbortSignal,
-): Promise<ParsedReadRequest> {
-  const parsed = await readBoundedRequestJson(request, {
-    maxBytes: path === SHIPMENT_PRESENCE_PATH ? 16 * 1024 : MAX_PROFILE_REQUEST_BYTES,
-    signal,
-    createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid request.'),
-  });
-  if (!isRecord(parsed)) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  if (path === SHIPMENT_PRESENCE_PATH) {
-    const sessions = parsed.stripeSessionIds ?? [];
-    const deliveries = parsed.deliveries ?? [];
-    if (!exactKeys(parsed, ['scope', 'expectedWallet', 'stripeSessionIds', 'deliveries']) ||
-      (parsed.scope !== 'wallet' && parsed.scope !== 'anonymous') ||
-      (parsed.scope === 'wallet'
-        ? typeof parsed.expectedWallet !== 'string' || !isBase58Bytes(parsed.expectedWallet, 32)
-        : Object.hasOwn(parsed, 'expectedWallet')) ||
-      !Array.isArray(sessions) || !Array.isArray(deliveries) ||
-      sessions.length + deliveries.length < 1 || sessions.length + deliveries.length > MAX_SHIPMENT_PRESENCE_SELECTORS ||
-      sessions.some((id) => typeof id !== 'string' || !/^cs_[A-Za-z0-9_]+$/.test(id) || id.length > 256) ||
-      deliveries.some((ref) => !isRecord(ref) || !exactKeys(ref, ['dropId', 'deliveryId']) ||
-        typeof ref.dropId !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ref.dropId) ||
-        !Number.isSafeInteger(ref.deliveryId) || Number(ref.deliveryId) < 1) ||
-      parsed.stripeSessionIds === null || parsed.deliveries === null) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment presence request.');
-    }
-    return { presence: { ...parsed, stripeSessionIds: sessions, deliveries } as ShipmentPresenceRequest };
-  }
-  let shipmentsPage: ShipmentPageRequest | undefined;
-  if (Object.hasOwn(parsed, 'shipmentsPage')) {
-    const page = parsed.shipmentsPage;
-    if (!isRecord(page) || !exactKeys(page, ['limit', 'cursor']) ||
-      (page.limit !== undefined && (!Number.isInteger(page.limit) || Number(page.limit) < 1 || Number(page.limit) > MAX_SHIPMENT_PAGE_LIMIT)) ||
-      (page.cursor !== undefined && page.cursor !== null && !isShipmentHistoryCursor(page.cursor))) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment pagination.');
-    }
-    shipmentsPage = { limit: Number(page.limit ?? DEFAULT_SHIPMENT_PAGE_LIMIT), cursor: page.cursor as ShipmentHistoryCursor | null | undefined };
-  }
+): Promise<ParsedProfileReadRequest> {
+  const parsed = await readProfileRequestBody(request, signal, path === SHIPMENT_PRESENCE_PATH ? 16 * 1024 : undefined);
+  if (path === SHIPMENT_PRESENCE_PATH) return { path, presence: parseShipmentPresence(parsed) };
+  const shipmentsPage = parseShipmentsPage(parsed);
   if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH || path === PROFILE_STATE_PATH) {
     if (!exactKeys(parsed, ['shipmentsPage'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    return { ...(shipmentsPage ? { shipmentsPage } : {}) };
-  }
-  if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-    if (!exactKeys(parsed, ['cursor', 'pageSize'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    const cursor = parsed.cursor;
-    const pageSize = parsed.pageSize;
-    if (cursor !== undefined && (typeof cursor !== 'string' || !cursor || cursor.length > 2000)) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-    }
-    if (pageSize !== undefined && (!Number.isInteger(pageSize) || Number(pageSize) < 1 || Number(pageSize) > MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE)) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid page size.');
-    }
-    return { ...(typeof cursor === 'string' ? { cursor } : {}), ...(pageSize === undefined ? {} : { pageSize: Number(pageSize) }) };
-  }
-  if (path === FULFILLMENT_ORDERS_PATH) {
-    if (!exactKeys(parsed, ['dropId', 'limit', 'cursor'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    const limit = parsed.limit;
-    if (limit !== undefined && (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > FULFILLMENT_ORDER_LIMIT)) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid limit.');
-    }
-    return {
-      dropId: supportedDropId(parsed.dropId),
-      limit: limit === undefined ? FULFILLMENT_ORDER_LIMIT : Number(limit),
-      cursor: fulfillmentCursor(parsed.cursor),
-    };
-  }
-  if (path === FULFILLMENT_MANUAL_REVIEW_PATH) {
-    if (!exactKeys(parsed, ['dropId', 'limit', 'cursor'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    const dropId = supportedDropId(parsed.dropId);
-    const limit = parsed.limit ?? DEFAULT_MANUAL_REVIEW_LIMIT;
-    if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > MAX_MANUAL_REVIEW_LIMIT || parsed.limit === null) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid limit.');
-    }
-    if (parsed.cursor != null && !isFulfillmentManualReviewCursor(parsed.cursor, dropId)) {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-    }
-    return { dropId, limit: Number(limit), manualReviewCursor: parsed.cursor as FulfillmentManualReviewCursor | null | undefined };
+    return { path, ...(shipmentsPage ? { shipmentsPage } : {}) };
   }
   if (!exactKeys(parsed, ['ownerWallet', 'shipmentsPage']) || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address.');
   }
-  return { ownerWallet: parsed.ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) };
+  return { path, ownerWallet: parsed.ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) };
 }
 
 async function loadOptionalSessionWallet(args: {
@@ -423,335 +152,6 @@ async function loadSessionWallet(args: {
   const wallet = await loadOptionalSessionWallet(args);
   if (!wallet) throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
   return wallet;
-}
-
-async function loadDeliveryHistory(args: {
-  owners: readonly string[];
-  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory'>;
-}): Promise<DeliveryOrderSummary[]> {
-  const documents = await args.repository.queryDeliveryHistory({ owners: args.owners });
-  return deliveryHistoryFromDocuments(documents);
-}
-
-type ShipmentReadResult = { orders: DeliveryOrderSummary[]; nextCursor?: ShipmentHistoryCursor | null };
-
-async function loadShipments(args: {
-  owner: string;
-  shipmentsPage?: ShipmentPageRequest;
-  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory' | 'queryShipmentHistoryPage'>;
-}): Promise<ShipmentReadResult> {
-  if (!args.shipmentsPage) return { orders: await loadDeliveryHistory({ ...args, owners: [args.owner] }) };
-  if (args.shipmentsPage.cursor && !isShipmentHistoryCursor(args.shipmentsPage.cursor, args.owner)) {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment cursor owner.');
-  }
-  return args.repository.queryShipmentHistoryPage({
-    owner: args.owner, limit: args.shipmentsPage.limit ?? DEFAULT_SHIPMENT_PAGE_LIMIT,
-    ...(args.shipmentsPage.cursor ? { startAfter: args.shipmentsPage.cursor } : {}),
-  });
-}
-
-async function loadAdminProfile(args: {
-  db: D1Database | undefined;
-  nowMs: number;
-  ownerWallet: string;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
-}, profileEmailLoader: typeof loadProfileEmail, ordersLoader: () => Promise<ShipmentReadResult>): Promise<GetAdminProfileViewResponse> {
-  const [email, shipments] = await Promise.all([
-    profileEmailLoader(args),
-    ordersLoader(),
-  ]);
-  return {
-    profile: {
-      wallet: args.ownerWallet,
-      ...(email ? { email } : {}),
-      orders: shipments.orders,
-    },
-    ...(shipments.nextCursor !== undefined ? { nextCursor: shipments.nextCursor } : {}),
-  };
-}
-
-async function loadProfileEmail(args: {
-  db: D1Database | undefined;
-  nowMs: number;
-  ownerWallet: string;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
-}): Promise<string | undefined> {
-  if (!args.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-  let stored;
-  try {
-    stored = await loadD1Profile(args.db, args.ownerWallet, args.signal);
-  } catch (error) {
-    if (isSignalCancellationError(args.signal, error)) throw args.signal.reason;
-    throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  }
-  return stored?.email;
-}
-
-function encodeOwnersCursor(afterOwner: string): string {
-  return btoa(JSON.stringify({ v: 1, afterOwner })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function decodeOwnersCursor(value: unknown): string | null {
-  if (value === undefined) return null;
-  if (typeof value !== 'string' || !value || value.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(value)) {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-  }
-  try {
-    const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-    const parsed = JSON.parse(atob(padded)) as unknown;
-    if (
-      !isRecord(parsed) ||
-      !exactKeys(parsed, ['v', 'afterOwner']) ||
-      parsed.v !== 1 ||
-      typeof parsed.afterOwner !== 'string' ||
-      !isBase58Bytes(parsed.afterOwner, 32)
-    ) throw new Error('cursor');
-    return parsed.afterOwner;
-  } catch {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
-  }
-}
-
-async function loadDeliveryOrderOwners(args: {
-  cursor?: string;
-  pageSize?: number;
-  repository: Pick<D1CommerceRepository, 'queryDeliveryOrderOwners'>;
-  signal: AbortSignal;
-}): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
-  const pageSize = args.pageSize ?? DELIVERY_ORDER_OWNER_PAGE_SIZE;
-  const targetCount = pageSize + 1;
-  const candidateLimit = Math.max(
-    MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES,
-    targetCount * DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER,
-  );
-  const owners: string[] = [];
-  let startAfterOwner = decodeOwnersCursor(args.cursor);
-  let batchCount = 0;
-  let candidateCount = 0;
-  let queryLimit = targetCount;
-  while (owners.length < targetCount) {
-    if (args.signal.aborted) throw args.signal.reason;
-    if (
-      batchCount >= DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT ||
-      candidateCount >= candidateLimit
-    ) {
-      throw new ProfileReadError('unavailable', 503, 'Delivery-order owners are temporarily unavailable.');
-    }
-    queryLimit = Math.min(queryLimit, candidateLimit - candidateCount);
-    batchCount += 1;
-    const candidates = await args.repository.queryDeliveryOrderOwners({
-      limit: queryLimit,
-      ...(startAfterOwner ? { startAfterOwner } : {}),
-    });
-    if (args.signal.aborted) throw args.signal.reason;
-    candidateCount += candidates.length;
-    if (!candidates.length) break;
-    for (const owner of candidates) {
-      if (isBase58Bytes(owner, 32)) owners.push(owner);
-      if (owners.length >= targetCount) break;
-    }
-    if (candidates.length < queryLimit || owners.length >= targetCount) break;
-    startAfterOwner = candidates[candidates.length - 1]!;
-    const remainingBatchCount = DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT - batchCount;
-    if (remainingBatchCount > 0) {
-      queryLimit = Math.ceil((candidateLimit - candidateCount) / remainingBatchCount);
-    }
-  }
-  const hasMore = owners.length > pageSize;
-  const page = hasMore ? owners.slice(0, pageSize) : owners;
-  const nextCursor = hasMore ? encodeOwnersCursor(page[page.length - 1]!) : null;
-  return { owners: page, nextCursor, hasMore };
-}
-
-function fulfillmentAccess(wallet: string, dropId: string): { canViewSensitiveAddress: boolean } {
-  if (!walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET)) {
-    throw new ProfileReadError('permission-denied', 403, 'Fulfillment access denied.');
-  }
-  return {
-    canViewSensitiveAddress: walletCanViewSensitiveFulfillmentAddress(
-      wallet,
-      dropId,
-      ADMIN_WALLETS,
-      SHIPPER_DROP_IDS_BY_WALLET,
-    ),
-  };
-}
-
-function decodeBase64(value: string): Uint8Array | null {
-  try {
-    return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
-  } catch {
-    return null;
-  }
-}
-
-function addressDecryptor(secretValue: string): (payload: string) => string | null {
-  const secret = decodeBase64(secretValue.trim());
-  if (!secret || secret.length !== ADDRESS_CIPHER_SECRET_KEY_LENGTH) return () => null;
-  return (payload) => {
-    const parts = parseAddressCipherPayload(payload, decodeBase64);
-    return parts ? decryptAddressCipherText(parts, secret) : null;
-  };
-}
-
-function timestampCursor(document: CommerceDocumentRecord): FulfillmentOrdersCursor | null {
-  return document.processedAt
-    ? { processedAt: document.processedAt, id: document.key.documentId }
-    : null;
-}
-
-function fulfillmentOrdersFromDocuments(args: {
-  addressSecret: string;
-  canViewSensitiveAddress: boolean;
-  documents: readonly CommerceDocumentRecord[];
-  dropId: string;
-  limit: number;
-  chargebackSessionIds: ReadonlySet<string>;
-  shippedOutboxes: ReadonlyMap<string, NotificationOutboxRecord>;
-}): { orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null } {
-  const hasMore = args.documents.length > args.limit;
-  const page = hasMore ? args.documents.slice(0, args.limit) : args.documents;
-  const decryptAddress = addressDecryptor(args.addressSecret);
-  const orders = page.flatMap((document) => {
-    const order = fulfillmentOrderSummaryFromDocument(document, {
-      canViewSensitiveAddress: args.canViewSensitiveAddress,
-      decryptAddress,
-      dropId: args.dropId,
-      chargebackSessionIds: args.chargebackSessionIds,
-      shippedOutbox: args.shippedOutboxes.get(document.key.path),
-    });
-    return order ? [order] : [];
-  });
-  return { orders, nextCursor: hasMore && page.length ? timestampCursor(page[page.length - 1]!) : null };
-}
-
-async function loadFulfillmentOrders(args: {
-  addressSecret: string;
-  canViewSensitiveAddress: boolean;
-  cursor: FulfillmentOrdersCursor | null;
-  dropId: string;
-  limit: number;
-  repository: Pick<D1CommerceRepository, 'queryFulfillmentOrders' | 'notificationOutbox'>;
-  db: D1Database;
-  loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
-  signal: AbortSignal;
-}): Promise<{ orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null }> {
-  const documents = await args.repository.queryFulfillmentOrders({
-    dropId: args.dropId,
-    limit: args.limit + 1,
-    ...(args.cursor ? {
-      startAfter: {
-        processedAt: args.cursor.processedAt,
-        documentPath: `drops/${args.dropId}/deliveryOrders/${args.cursor.id}`,
-      },
-    } : {}),
-  });
-  args.signal.throwIfAborted();
-  const sessionIds = [...new Set(documents.slice(0, args.limit).flatMap((document) => {
-    const sessionId = fulfillmentStripeSessionId(document, args.dropId);
-    return sessionId ? [sessionId] : [];
-  }))];
-  const chargebackSessionIds = sessionIds.length
-    ? await args.loadStripeChargebackSessionIds(args.db, args.dropId, sessionIds)
-    : new Set<string>();
-  const shippedOutboxes = new Map((await args.repository.notificationOutbox.getMany(
-    documents.slice(0, args.limit).map((document) => document.key.path), 'shipped',
-  )).map((record) => [record.parentPath, record]));
-  return fulfillmentOrdersFromDocuments({ ...args, documents, chargebackSessionIds, shippedOutboxes });
-}
-
-async function fetchStripeSession(
-  sessionId: string,
-  keys: string[],
-  providerFetch: ProfileProviderFetch,
-  signal: AbortSignal,
-): Promise<unknown> {
-  if (!/^[A-Za-z0-9_:-]{4,256}$/.test(sessionId)) throw new Error('invalid-session');
-  let lastCredentialFailure = false;
-  for (const key of keys) {
-    const response = await providerFetch(`${STRIPE_API_BASE_URL}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${key}`,
-        'Stripe-Version': STRIPE_API_VERSION,
-      },
-      redirect: 'manual',
-      signal,
-    });
-    if (response.status === 401 || response.status === 403) {
-      lastCredentialFailure = true;
-      await cancelResponseBody(response);
-      continue;
-    }
-    if (!response.ok) {
-      await cancelResponseBody(response);
-      throw new Error('stripe-unavailable');
-    }
-    return readBoundedResponseJson(response, {
-      maxBytes: MAX_STRIPE_RESPONSE_BYTES,
-      signal,
-      contentType: 'require-json',
-      createError: () => new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.'),
-    });
-  }
-  throw new Error(lastCredentialFailure ? 'stripe-credentials' : 'stripe-not-configured');
-}
-
-async function manualReviewFromDocuments(args: {
-  canViewSensitiveAddress: boolean;
-  documents: readonly CommerceDocumentRecord[];
-  dropId: string;
-  env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>;
-  providerFetch: ProfileProviderFetch;
-  request: Request;
-  signal: AbortSignal;
-  nextCursor: FulfillmentManualReviewCursor | null;
-}): Promise<FulfillmentManualReviewPage> {
-  const mode = DEPLOYMENT_DROPS[args.dropId]?.solanaCluster === 'mainnet-beta' ? 'live' : 'test';
-  const keys = stripeKeysForMode(args.env, mode);
-  const summaries = new Array<FulfillmentManualReviewCheckout | null>(args.documents.length).fill(null);
-  let nextIndex = 0;
-  const hydrate = async (document: CommerceDocumentRecord): Promise<FulfillmentManualReviewCheckout | null> => {
-    args.request.signal.throwIfAborted();
-    const sessionId = stripeCheckoutManualReviewSessionId(document);
-    if (sessionId === null) return null;
-    let session: unknown = null;
-    try {
-      if (!args.signal.aborted) session = await fetchStripeSession(sessionId, keys, args.providerFetch, args.signal);
-    } catch (error) {
-      if (isRequestCancellationError(args.request, error)) throw error;
-    }
-    return stripeCheckoutManualReviewSummary({
-      canViewSensitiveAddress: args.canViewSensitiveAddress,
-      document,
-      dropId: args.dropId,
-      session,
-      sessionId,
-    });
-  };
-  await Promise.all(Array.from({ length: Math.min(4, args.documents.length) }, async () => {
-    while (nextIndex < args.documents.length) {
-      const index = nextIndex++;
-      summaries[index] = await hydrate(args.documents[index]);
-    }
-  }));
-  const checkouts = summaries.filter((value): value is FulfillmentManualReviewCheckout => Boolean(value));
-  return { checkouts, nextCursor: args.nextCursor };
-}
-
-async function loadManualReviewDocuments(args: {
-  dropId: string;
-  limit: number;
-  cursor?: FulfillmentManualReviewCursor | null;
-  repository: Pick<D1CommerceRepository, 'queryManualReviewCheckouts'>;
-}): Promise<CommerceDocumentRecord[]> {
-  return args.repository.queryManualReviewCheckouts({
-    dropId: args.dropId,
-    limit: args.limit + 1,
-    ...(args.cursor ? { startAfter: args.cursor } : {}),
-  });
 }
 
 async function loadProfileStateProfile(args: {
@@ -798,16 +198,7 @@ export async function handleProfileReadRequest(
   overrides: Partial<ProfileReadDependencies> = {},
 ): Promise<ProfileReadResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  if (request.method !== 'POST') {
-    await request.body?.cancel().catch(() => undefined);
-    const response = errorResponse(new ProfileReadError('invalid-argument', 405, 'Method not allowed.'));
-    response.headers.set('Allow', PROFILE_CORS_ALLOW_METHODS);
-    return {
-      response,
-      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
-      authOutcome: 'rejected',
-    };
-  }
+  if (request.method !== 'POST') return readMethodNotAllowed(request);
   return withAuthenticatedRequest<ProfileReadResult>(request, {
     authContext,
     opsDb: env.OPS_DB,
@@ -815,13 +206,10 @@ export async function handleProfileReadRequest(
     dependencies,
   }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
     const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
-    let identity: RequestIdentity;
+    let identity: RequestIdentity | undefined;
     try {
       const requestBody = await parseExactRequestBody(request, path, deadline.signal);
       identity = await authenticate();
-      if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
-        throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
-      }
       const common = {
         repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
         nowMs: dependencies.nowMs(),
@@ -833,8 +221,8 @@ export async function handleProfileReadRequest(
         resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
         signal: deadline.signal,
       };
-      if (path === SHIPMENT_PRESENCE_PATH) {
-        const presence = requestBody.presence!;
+      if (requestBody.path === SHIPMENT_PRESENCE_PATH) {
+        const presence = requestBody.presence;
         const owner = presence.scope === 'anonymous'
           ? identity.kind === 'staff-wallet' ? identity.wallet : stripeCheckoutAnonymousOwnerId(identity.authSubject)
           : await boundedRead(resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid })));
@@ -844,12 +232,12 @@ export async function handleProfileReadRequest(
         const matches = await boundedRead(common.repository.queryShipmentPresence({ ...presence, owner }));
         return { response: jsonResponse(matches, 200), metrics, authOutcome: 'accepted' };
       }
-      if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
+      if (requestBody.path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
         const owner = identity.kind === 'staff-wallet' ? identity.wallet : stripeCheckoutAnonymousOwnerId(identity.authSubject);
         const shipments = await boundedRead(loadShipments({ ...common, owner, shipmentsPage: requestBody.shipmentsPage }));
         return { response: jsonResponse(shipments, 200), metrics, authOutcome: 'accepted' };
       }
-      if (path === PROFILE_STATE_PATH) {
+      if (requestBody.path === PROFILE_STATE_PATH) {
         const wallet = await boundedRead(resolveRequestWallet(
           identity,
           (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
@@ -898,118 +286,17 @@ export async function handleProfileReadRequest(
           profileStateSections: { profile: profile.status, shipments: shipments.status },
         };
       }
-      if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-        const wallet = await boundedRead(resolveRequestWallet(
-          identity,
-          (uid) => loadSessionWallet({ ...sessionCommon, uid }),
-        ));
-        if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
-          throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
-        }
-        return {
-          response: jsonResponse(await boundedRead(loadDeliveryOrderOwners({
-            ...common,
-            cursor: typeof requestBody.cursor === 'string' ? requestBody.cursor : undefined,
-            pageSize: requestBody.pageSize,
-          })), 200),
-          metrics,
-          authOutcome: 'accepted',
-        };
-      }
-      if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
-        const dropId = requestBody.dropId!;
-        const wallet = await boundedRead(resolveRequestWallet(
-          identity,
-          (uid) => loadSessionWallet({ ...sessionCommon, uid }),
-        ));
-        const access = fulfillmentAccess(wallet, dropId);
-        if (path === FULFILLMENT_ORDERS_PATH) {
-          const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
-          return {
-            response: jsonResponse(await boundedRead(loadFulfillmentOrders({
-              ...common,
-              db: env.COMMERCE_DB,
-              loadStripeChargebackSessionIds: dependencies.loadStripeChargebackSessionIds,
-              addressSecret,
-              canViewSensitiveAddress: access.canViewSensitiveAddress,
-              cursor: requestBody.cursor && typeof requestBody.cursor === 'object'
-                ? requestBody.cursor as FulfillmentOrdersCursor
-                : null,
-              dropId,
-              limit: requestBody.limit ?? FULFILLMENT_ORDER_LIMIT,
-            })), 200),
-            metrics,
-            authOutcome: 'accepted',
-          };
-        }
-        return {
-          response: jsonResponse(await (async () => {
-            const limit = requestBody.limit ?? DEFAULT_MANUAL_REVIEW_LIMIT;
-            const documents = await boundedRead(loadManualReviewDocuments({
-              ...common, dropId, limit, cursor: requestBody.manualReviewCursor,
-            }));
-            const page = documents.slice(0, limit);
-            return manualReviewFromDocuments({
-              canViewSensitiveAddress: access.canViewSensitiveAddress,
-              documents: page,
-              nextCursor: documents.length > limit ? manualReviewDocumentCursor(dropId, page[page.length - 1]) : null,
-              dropId,
-              env,
-              providerFetch: trackedFetch,
-              request,
-              signal: deadline.signal,
-            });
-          })(), 200),
-          metrics,
-          authOutcome: 'accepted',
-        };
-      }
-      const ownerWallet = requestBody.ownerWallet!;
+      const ownerWallet = requestBody.ownerWallet;
       const wallet = await boundedRead(resolveRequestWallet(
         identity,
         (uid) => loadSessionWallet({ ...sessionCommon, uid }),
       ));
-      if (path === PROFILE_SHIPMENTS_PATH) {
-        if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
-        const shipments = await boundedRead(loadShipments({ ...common, owner: ownerWallet, shipmentsPage: requestBody.shipmentsPage }));
-        const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, ...shipments };
-        return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
-      }
-      if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
-        throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
-      }
-      return {
-        response: jsonResponse(await boundedRead(loadAdminProfile(
-          { ...common, db: env.OPS_DB, ownerWallet },
-          dependencies.loadProfileEmail,
-          () => loadShipments({ ...common, owner: ownerWallet, shipmentsPage: requestBody.shipmentsPage }),
-        )), 200),
-        metrics,
-        authOutcome: 'accepted',
-      };
+      if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
+      const shipments = await boundedRead(loadShipments({ ...common, owner: ownerWallet, shipmentsPage: requestBody.shipmentsPage }));
+      const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, ...shipments };
+      return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
     } catch (error) {
-      if (isRequestCancellationError(request, error)) throw error;
-      const { error: classified, authOutcome } = classifyAuthenticatedRequestError(error, {
-        authenticated: Boolean(identity!),
-        timedOut: deadline.timedOut(),
-        timeoutPrecedence: 'after-known-errors',
-        timeoutMessage: 'Profile request timed out.',
-        internalMessage: 'Profile request failed.',
-        mapDomainError: (failure) => failure instanceof ProfileReadError ? {
-          error: failure,
-          authOutcome: ['unauthenticated', 'permission-denied', 'invalid-argument'].includes(failure.code)
-            ? 'rejected' : identity! ? 'provider-failure' : 'rejected',
-        } : undefined,
-      });
-      const profileError = classified instanceof ProfileReadError ? classified : new ProfileReadError(
-        classified.code, httpStatusForApiErrorCode(classified.code, 502), classified.message, classified.details,
-      );
-      return { response: errorResponse(profileError), metrics, authOutcome };
+      return profileReadFailure(error, request, identity, deadline, metrics);
     }
   });
 }
-
-export const profileReadTestHooks = {
-  loadDeliveryOrderOwners,
-  loadProfileEmail,
-};

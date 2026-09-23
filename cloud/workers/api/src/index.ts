@@ -1,4 +1,4 @@
-import { applyProfileCors } from './profileReads.js';
+import { applyProfileCors } from './profileReadSupport.js';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
 } from '../../../../shared/contracts.js';

@@ -4,9 +4,10 @@ import { createCommerceD1Harness, seedCommerceDocuments, type CommerceD1Harness 
 import { commerceKeys, D1CommerceRepository, CommerceRepositoryError, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { deliveryOrderSummaryFromDocument } from '../src/deliveryOrderSummaries.ts';
 import {
-  ADMIN_PROFILE_PATH, ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, PROFILE_SHIPMENTS_PATH,
+  ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, PROFILE_SHIPMENTS_PATH,
   PROFILE_STATE_PATH, SHIPMENT_PRESENCE_PATH, handleProfileReadRequest, type ProfileReadPath,
 } from '../src/profileReads.ts';
+import { ADMIN_PROFILE_PATH, handleStaffReadRequest } from '../src/staffReads.ts';
 import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
@@ -89,13 +90,21 @@ test('all shipment endpoints opt into pagination while legacy responses remain c
   for (const [path, body] of [
     [PROFILE_STATE_PATH, {}], [PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }], [ADMIN_PROFILE_PATH, { ownerWallet: OWNER }],
   ] as const) {
-    const overrides = path === ADMIN_PROFILE_PATH ? { verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }) } : {};
-    const legacy = await read(harness, path, body, overrides);
+    const load = (requestBody: unknown) => path === ADMIN_PROFILE_PATH
+      ? handleStaffReadRequest(new Request(`https://api.mons.shop${path}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody),
+        }), { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database }, path, {}, {
+          nowMs: () => 1000,
+          loadProfileEmail: async () => undefined,
+          verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: ADMIN }),
+        })
+      : read(harness, path, requestBody);
+    const legacy = await load(body);
     assert.equal(legacy.response.status, 200);
     const oldPayload = await legacy.response.json() as any;
     assert.equal('nextCursor' in oldPayload, false);
     assert.equal((oldPayload.orders ?? oldPayload.shipments?.value ?? oldPayload.profile?.orders).length, 52);
-    const paged = await read(harness, path, { ...body, shipmentsPage: {} }, overrides);
+    const paged = await load({ ...body, shipmentsPage: {} });
     const payload = await paged.response.json() as any;
     assert.equal((payload.orders ?? payload.shipments?.value ?? payload.profile?.orders).length, 50);
     assert.equal(payload.nextCursor.owner, OWNER);

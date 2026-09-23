@@ -19,7 +19,7 @@ import {
   loadD1ProfileAddress,
   saveD1ProfileAddress,
 } from '../src/profileD1.ts';
-import { profileReadTestHooks } from '../src/profileReads.ts';
+import { loadProfileEmail } from '../src/profileReadSupport.ts';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.ts';
 import {
   AuthWalletBindingD1BusyError,
@@ -657,7 +657,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
     await assert.rejects(env.OPS_DB.prepare(
       'DELETE FROM profiles WHERE wallet = ?',
     ).bind(PROFILE_WALLET).run());
-    assert.equal(await profileReadTestHooks.loadProfileEmail({
+    assert.equal(await loadProfileEmail({
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: PROFILE_WALLET,
@@ -665,7 +665,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       signal: new AbortController().signal,
     }), 'owner@example.com');
     const missingWallet = 'So11111111111111111111111111111111111111112';
-    assert.equal(await profileReadTestHooks.loadProfileEmail({
+    assert.equal(await loadProfileEmail({
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: missingWallet,

@@ -5,6 +5,7 @@ import { STRIPE_CHECKOUT_RETRY_HEADER } from '../../../../shared/contracts.ts';
 import { StripeCheckoutSessionError } from '../../../../shared/stripeCheckoutSession.ts';
 import { ProfileReadError, type ApiErrorCode } from '../src/dataAccess.ts';
 import { PROFILE_STATE_PATH, handleProfileReadRequest } from '../src/profileReads.ts';
+import { ADMIN_DELIVERY_ORDER_OWNERS_PATH, handleStaffReadRequest } from '../src/staffReads.ts';
 import { PROFILE_ADDRESSES_PATH, handleProfileWriteRequest } from '../src/profileWrites.ts';
 import { PROFILE_RECONCILE_PATH, handleProfileLifecycleRequest } from '../src/profileLifecycle.ts';
 import { RequestIdentityError, type verifyRequestIdentity } from '../src/requestIdentity.ts';
@@ -42,14 +43,16 @@ async function throwAfterDeadline(signal: AbortSignal, error: unknown): Promise<
   throw error;
 }
 
-function profileRequest(kind: 'read' | 'write' | 'lifecycle', error: unknown, authenticated: boolean, timedOut = false) {
+function profileRequest(kind: 'read' | 'staff-read' | 'write' | 'lifecycle', error: unknown, authenticated: boolean, timedOut = false) {
   const dependencies = {
     timeoutMs: timedOut ? 1 : 1000,
     nowMs: () => 1_700_000_000_000,
     verifyIdentity: (async (_request, _db, signal) => {
       if (timedOut) return throwAfterDeadline(signal, error);
       if (!authenticated) throw error;
-      return identity;
+      return kind === 'staff-read'
+        ? { kind: 'staff-wallet', wallet: 'So11111111111111111111111111111111111111112' }
+        : identity;
     }) satisfies typeof verifyRequestIdentity,
     createCommerceRepository: () => { throw error; },
     providerFetch: async () => assert.fail('Error contract must not contact a provider'),
@@ -57,6 +60,9 @@ function profileRequest(kind: 'read' | 'write' | 'lifecycle', error: unknown, au
   const env = { COMMERCE_DB: database, OPS_DB: database };
   if (kind === 'read') {
     return handleProfileReadRequest(request(PROFILE_STATE_PATH), env, PROFILE_STATE_PATH, {}, dependencies);
+  }
+  if (kind === 'staff-read') {
+    return handleStaffReadRequest(request(ADMIN_DELIVERY_ORDER_OWNERS_PATH), env, ADMIN_DELIVERY_ORDER_OWNERS_PATH, {}, dependencies);
   }
   if (kind === 'write') {
     return handleProfileWriteRequest(request(PROFILE_ADDRESSES_PATH, {
@@ -69,8 +75,8 @@ function profileRequest(kind: 'read' | 'write' | 'lifecycle', error: unknown, au
 test('profile error contracts preserve route-specific outcomes, status, and details', async () => {
   const codes: ApiErrorCode[] = ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found',
     'failed-precondition', 'resource-exhausted', 'aborted', 'unavailable', 'internal'];
-  for (const kind of ['read', 'write', 'lifecycle'] as const) {
-    const rejected = kind === 'read'
+  for (const kind of ['read', 'staff-read', 'write', 'lifecycle'] as const) {
+    const rejected = kind === 'read' || kind === 'staff-read'
       ? ['invalid-argument', 'unauthenticated', 'permission-denied']
       : ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'aborted'];
     for (const authenticated of [false, true]) {
@@ -86,14 +92,14 @@ test('profile error contracts preserve route-specific outcomes, status, and deta
 });
 
 test('profile known errors and identity failures preserve precedence over an expired deadline', async () => {
-  for (const kind of ['read', 'write', 'lifecycle'] as const) {
+  for (const kind of ['read', 'staff-read', 'write', 'lifecycle'] as const) {
     const known = await profileRequest(kind, new ProfileReadError('not-found', 404, 'Original message.'), false, true);
     assert.equal(known.response.status, 404);
     assert.deepEqual(await known.response.json(), { ok: false, error: { code: 'not-found', message: 'Original message.' } });
     for (const identityKind of ['invalid-token', 'provider-timeout', 'provider-unavailable'] as const) {
       const result = await profileRequest(kind, new RequestIdentityError(identityKind), false, true);
       assert.equal(result.response.status, identityKind === 'invalid-token' ? 401 : identityKind === 'provider-timeout' ? 504 : 502);
-      assert.equal(result.authOutcome, kind === 'read' && identityKind !== 'invalid-token' ? 'provider-failure' : 'rejected');
+      assert.equal(result.authOutcome, (kind === 'read' || kind === 'staff-read') && identityKind !== 'invalid-token' ? 'provider-failure' : 'rejected');
     }
   }
 });
