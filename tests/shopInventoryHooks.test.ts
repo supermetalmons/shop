@@ -17,20 +17,23 @@ import {
 } from '../src/shop/persistedState.ts';
 import type { RevealOverlayState } from '../src/shop/reveal/types.ts';
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { WalletContext } = await import('@solana/wallet-adapter-react');
 const { useShopInventoryQueries } = await import('../src/shop/inventory/useShopInventoryQueries.ts');
 const { useShopInventorySource, useShopInventoryMaintenance } = await import('../src/shop/inventory/useShopInventorySource.ts');
 const { useShopInventoryView } = await import('../src/shop/inventory/useShopInventoryView.ts');
+const { useShopInventorySelection, useShopInventorySelectionState } = await import('../src/shop/inventory/useShopInventorySelection.ts');
 type SourceOptions = Parameters<typeof useShopInventorySource>[0];
 type Views = Parameters<typeof useShopInventoryMaintenance>[1];
 type ViewOptions = Parameters<typeof useShopInventoryView>[0];
+type SelectionOptions = Parameters<typeof useShopInventorySelection>[0];
 const clients: InstanceType<typeof QueryClient>[] = [];
 
 afterEach(() => {
   cleanup();
+  setMediaQueryMatches('(max-width: 720px)', false);
   clients.splice(0).forEach((client) => client.clear());
   dom.window.localStorage.clear();
   dom.window.sessionStorage.clear();
@@ -70,20 +73,23 @@ function sourceOptions(overrides: Partial<SourceOptions> = {}): SourceOptions {
 const viewDefaults: Omit<ViewOptions, 'source' | keyof Views> = {
   routeDrop: getFrontendDrop('card_nft_2')!,
   receiptOperationHiddenAssets: new Set(),
-  pendingDeliveryItemIds: new Set(),
-  connectedWallet: 'wallet-a',
-  isSignedInWallet: true,
   stripeCheckoutInventoryRefreshPending: false,
   stripeCheckoutProfileRecoveryPending: false,
   walletIdleReady: true,
   authReady: true,
-  deliveryCountryCode: 'US',
   cardNft2PackInventoryPreviewVideo: { sources: [] },
-  getDropConfig: (dropId) => getFrontendDrop(dropId || 'card_nft_2'),
   figureReferenceForDropId: (_dropId, reference) => `Figure ${reference}`,
   boxReferenceForDropId: (_dropId, reference) => `Pack ${reference}`,
   boxLabelForDropId: () => 'pack',
   boxImageForDropId: () => 'https://images.example/pack.webp',
+};
+
+const selectionDefaults: Omit<SelectionOptions, 'state' | 'inventoryView' | 'inventoryIndex' | 'pendingRevealIds' | 'owner' | 'connectedWallet'> = {
+  pendingDeliveryItemIds: new Set(),
+  isSignedInWallet: true,
+  deliveryCountryCode: 'US',
+  dismissalBlocked: false,
+  getDropConfig: (dropId) => getFrontendDrop(dropId || 'card_nft_2'),
   canOpenBoxesForDropId: () => true,
   usesClearCard3dRevealForDropId: (dropId) => isDropFamily(dropId, 'clear_cards'),
   usesInteractiveCardPackRevealForDropId: () => false,
@@ -93,10 +99,12 @@ type InventoryHarnessProps = {
   options: SourceOptions;
   views?: Views;
   viewOptions?: Partial<typeof viewDefaults>;
+  selectionOptions?: Partial<typeof selectionDefaults>;
 };
 
-function useInventoryHarness({ options, views, viewOptions }: InventoryHarnessProps) {
+function useInventoryHarness({ options, views, viewOptions, selectionOptions }: InventoryHarnessProps) {
   const source = useShopInventorySource(options);
+  const state = useShopInventorySelectionState(options);
   const presentation = views || {
     inventoryView: options.inventory,
     pendingOpenBoxesView: options.pendingOpenBoxes,
@@ -104,7 +112,17 @@ function useInventoryHarness({ options, views, viewOptions }: InventoryHarnessPr
   };
   useShopInventoryMaintenance(source, presentation);
   const view = useShopInventoryView({ ...viewDefaults, ...viewOptions, source, ...presentation });
-  return { source, view };
+  const selection = useShopInventorySelection({
+    ...selectionDefaults,
+    ...selectionOptions,
+    state,
+    inventoryView: presentation.inventoryView,
+    inventoryIndex: view.inventoryIndex,
+    pendingRevealIds: view.pendingRevealIds,
+    owner: options.owner,
+    connectedWallet: options.connectedWallet,
+  });
+  return { source, view, selection, state };
 }
 
 test('wallet hydration preserves each account and late hidden-asset updates stay with the captured wallet', () => {
@@ -252,33 +270,155 @@ test('selection excludes pending delivery/reveal items, follows drop rules and p
     { id: 'receipt', dropId: 'clear_cards', name: 'Receipt', kind: 'certificate' },
   ];
   const options = sourceOptions({ inventory: items });
-  const initial: InventoryHarnessProps = { options, viewOptions: { pendingDeliveryItemIds: new Set(['other-pack-2']) } };
+  const initial: InventoryHarnessProps = { options, selectionOptions: { pendingDeliveryItemIds: new Set(['other-pack-2']) } };
   const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
-  act(() => result.current.view.toggleSelected('other-pack-1'));
-  act(() => result.current.view.toggleSelected('other-pack-2'));
-  assert.deepEqual(result.current.view.selected, new Set(['other-pack-1']));
-  act(() => result.current.view.toggleSelected('clear-card-1'));
-  act(() => result.current.view.toggleSelected('clear-card-2'));
-  assert.deepEqual(result.current.view.selected, new Set(['clear-card-1', 'clear-card-2']));
-  act(() => result.current.view.toggleSelected('clear-pack-1'));
-  assert.deepEqual(result.current.view.selected, new Set(['clear-pack-1']));
-  act(() => result.current.view.toggleSelected('clear-pack-2'));
-  assert.deepEqual(result.current.view.selected, new Set(['clear-pack-2']));
-  act(() => result.current.view.toggleSelected('receipt'));
-  assert.deepEqual(result.current.view.selected, new Set(['clear-pack-2']));
+  act(() => result.current.selection.toggleSelected('other-pack-1'));
+  act(() => result.current.selection.toggleSelected('other-pack-2'));
+  assert.deepEqual(result.current.selection.selected, new Set(['other-pack-1']));
+  act(() => result.current.selection.toggleSelected('clear-card-1'));
+  act(() => result.current.selection.toggleSelected('clear-card-2'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-card-1', 'clear-card-2']));
+  act(() => result.current.selection.toggleSelected('clear-pack-1'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-pack-1']));
+  act(() => result.current.selection.toggleSelected('clear-pack-2'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-pack-2']));
+  act(() => result.current.selection.toggleSelected('receipt'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-pack-2']));
 
   const pendingOpenBoxes: PendingOpenBox[] = [{
     dropId: 'clear_cards', pendingPda: 'pending', boxAssetId: 'clear-pack-2', dudeAssetIds: [],
   }];
   rerender({ ...initial, options: { ...options, pendingOpenBoxes } });
   assert.equal(result.current.view.pendingRevealIds.has('clear-pack-2'), true);
-  assert.equal(result.current.view.selected.size, 0);
-  act(() => result.current.view.toggleSelected('clear-pack-2'));
-  assert.equal(result.current.view.selected.size, 0);
-  act(() => result.current.view.toggleSelected('clear-card-1'));
-  assert.deepEqual(result.current.view.selected, new Set(['clear-card-1']));
+  assert.equal(result.current.selection.selected.size, 0);
+  act(() => result.current.selection.toggleSelected('clear-pack-2'));
+  assert.equal(result.current.selection.selected.size, 0);
+  act(() => result.current.selection.toggleSelected('clear-card-1'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-card-1']));
   rerender({ ...initial, options: { ...options, pendingOpenBoxes, inventory: items.filter((item) => item.id !== 'clear-card-1') } });
-  assert.equal(result.current.view.selected.size, 0);
+  assert.equal(result.current.selection.selected.size, 0);
+});
+
+test('selection resets on owner or connected-wallet changes and targeted removal preserves other selections', () => {
+  const options = sourceOptions({ inventory: [box('pack-a'), box('pack-b')] });
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+  const clearSelection = result.current.state.clearSelection;
+  act(() => result.current.state.replaceSelection(['pack-a', 'pack-b']));
+  rerender({ options: { ...options, inventory: [...options.inventory] } });
+  assert.equal(result.current.state.clearSelection, clearSelection);
+  assert.deepEqual(result.current.selection.selected, new Set(['pack-a', 'pack-b']));
+  act(() => result.current.state.removeSelected(['pack-a']));
+  assert.deepEqual(result.current.selection.selected, new Set(['pack-b']));
+
+  rerender({ options: { ...options, owner: 'wallet-b' } });
+  assert.equal(result.current.selection.selected.size, 0);
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  rerender({ options: { ...options, owner: 'wallet-b', connectedWallet: 'wallet-c' } });
+  assert.equal(result.current.selection.selected.size, 0);
+});
+
+test('selection keeps the reveal inventory snapshot until it is released', () => {
+  const snapshot = [box('snapshot-pack', 'card_nft_2', '1')];
+  const options = sourceOptions({ inventory: snapshot });
+  const views: Views = { inventoryView: snapshot, pendingOpenBoxesView: [], revealOverlay: openOverlay };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options, views } });
+  act(() => result.current.selection.toggleSelected('snapshot-pack'));
+  rerender({ options: { ...options, inventory: [] }, views });
+  assert.deepEqual(result.current.selection.selectedItems, snapshot);
+  assert.equal(result.current.selection.canOpenSelected, true);
+  rerender({ options: { ...options, inventory: [] }, views: { ...views, inventoryView: [], revealOverlay: null } });
+  assert.equal(result.current.selection.selected.size, 0);
+});
+
+test('pending delivery disables actions and new toggles without clearing an existing selection', () => {
+  const options = sourceOptions({ inventory: [box('pack-a'), box('pack-b')] });
+  const initial: InventoryHarnessProps = { options };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  assert.equal(result.current.selection.canShipSelected, true);
+  rerender({ ...initial, selectionOptions: { pendingDeliveryItemIds: new Set(['pack-a', 'pack-b']) } });
+  act(() => result.current.selection.toggleSelected('pack-b'));
+  assert.deepEqual(result.current.selection.selected, new Set(['pack-a']));
+  assert.equal(result.current.selection.canShipSelected, false);
+  assert.equal(result.current.selection.canOpenSelected, false);
+});
+
+test('selection Escape handling respects blocked and already-handled events and cleans up', () => {
+  const options = sourceOptions({ inventory: [box('pack-a')] });
+  const initial: InventoryHarnessProps = { options, selectionOptions: { dismissalBlocked: true } };
+  const { result, rerender, unmount } = renderHook(useInventoryHarness, { initialProps: initial });
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  const pressEscape = (prevented = false) => {
+    const event = new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    if (prevented) event.preventDefault();
+    act(() => dom.window.dispatchEvent(event));
+    return event;
+  };
+  assert.equal(pressEscape().defaultPrevented, false);
+  assert.equal(result.current.selection.selectedCount, 1);
+  rerender({ ...initial, selectionOptions: { dismissalBlocked: false } });
+  pressEscape(true);
+  assert.equal(result.current.selection.selectedCount, 1);
+  assert.equal(pressEscape().defaultPrevented, true);
+  assert.equal(result.current.selection.selectedCount, 0);
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  unmount();
+  assert.equal(pressEscape().defaultPrevented, false);
+});
+
+test('selection preserves shipment limits and action eligibility with country-specific pricing', () => {
+  const adminWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const items: InventoryItem[] = [
+    ...Array.from({ length: 25 }, (_, index) => box(`pack-${index}`, 'card_nft_2', `${index + 1}`)),
+    box('clear-pack', 'clear_cards', '1'),
+    { id: 'clear-card', dropId: 'clear_cards', name: 'Card', kind: 'dude', dudeId: 1 },
+  ];
+  const options = sourceOptions({ inventory: items, owner: adminWallet, connectedWallet: adminWallet });
+  const initial: InventoryHarnessProps = { options };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
+  act(() => result.current.selection.toggleSelected('pack-0'));
+  assert.equal(result.current.selection.canShipSelected, true);
+  assert.equal(result.current.selection.canOpenSelected, true);
+  assert.equal(result.current.selection.canViewSelected, false);
+  assert.equal(result.current.selection.canShowAdminIrlRedeem, true);
+  assert.equal(result.current.selection.selectionSummary, '1 pack');
+  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.2 SOL');
+  rerender({ ...initial, selectionOptions: { deliveryCountryCode: 'TR', isSignedInWallet: false } });
+  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.4 SOL');
+  assert.equal(result.current.selection.canShowAdminIrlRedeem, false);
+  act(() => {
+    for (let index = 1; index < 25; index += 1) result.current.selection.toggleSelected(`pack-${index}`);
+  });
+  assert.equal(result.current.selection.selectedCount, 24);
+  assert.equal(result.current.selection.selected.has('pack-24'), false);
+  assert.equal(result.current.selection.canOpenSelected, false);
+
+  act(() => result.current.selection.toggleSelected('clear-pack'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-pack']));
+  assert.equal(result.current.selection.canOpenSelected, true);
+  assert.equal(result.current.selection.canViewSelected, true);
+  assert.equal(result.current.selection.canShipSelected, false);
+  act(() => result.current.selection.toggleSelected('clear-card'));
+  assert.deepEqual(result.current.selection.selected, new Set(['clear-card']));
+  assert.equal(result.current.selection.canOpenSelected, false);
+  assert.equal(result.current.selection.canViewSelected, true);
+  assert.equal(result.current.selection.canShipSelected, true);
+});
+
+test('selection previews retain distinct artwork and resize between five and three thumbnails', () => {
+  const items: InventoryItem[] = Array.from({ length: 7 }, (_, index) => ({
+    id: `card-${index}`, dropId: 'card_nft_2', name: `Card ${index}`, kind: 'dude',
+    image: `https://images.example/${index < 5 ? 'shared' : index}.webp`,
+  }));
+  const { result } = renderHook(useInventoryHarness, { initialProps: { options: sourceOptions({ inventory: items }) } });
+  act(() => result.current.state.replaceSelection(items.map((item) => item.id)));
+  assert.equal(result.current.selection.selectedPreview.length, 5);
+  assert.equal(result.current.selection.selectedOverflow, 2);
+  assert.deepEqual(result.current.selection.selectedPreview.slice(-2).map(({ item }) => item.id), ['card-5', 'card-6']);
+  act(() => setMediaQueryMatches('(max-width: 720px)', true));
+  assert.equal(result.current.selection.selectedPreview.length, 3);
+  assert.equal(result.current.selection.selectedOverflow, 4);
+  assert.deepEqual(result.current.selection.selectedPreview.map(({ item }) => item.id), ['card-2', 'card-5', 'card-6']);
 });
 
 test('inventory empty states wait for fetch and checkout recovery readiness', () => {

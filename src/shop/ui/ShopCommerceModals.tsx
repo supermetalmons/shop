@@ -20,12 +20,12 @@ import type { useClaimActions } from '../commerce/useClaimActions';
 import type { useCommerceModals } from '../commerce/useCommerceModals';
 import type { useDeliveryActions } from '../commerce/useDeliveryActions';
 import type { useReceiptActions } from '../commerce/useReceiptActions';
-import type { ShopInventoryView } from '../inventory/useShopInventoryView';
+import type { ShopInventorySelection } from '../inventory/useShopInventorySelection';
 import { RevealOverlayState } from '../reveal/types';
 
 type ShopCommerceModalsProps = {
   modals: ReturnType<typeof useCommerceModals>;
-  view: ShopInventoryView;
+  selection: ShopInventorySelection;
   activeModalLayer: ActiveModalLayer;
   suspended: boolean;
   connectedWallet: string | undefined;
@@ -41,7 +41,7 @@ type ShopCommerceModalsProps = {
 };
 export function ShopCommerceModals({
   modals,
-  view,
+  selection,
   activeModalLayer,
   suspended,
   connectedWallet,
@@ -71,7 +71,7 @@ export function ShopCommerceModals({
     setClaimSubmitting,
     claimInitialCode,
   } = modals;
-  const { selectionSummary, selectedDropConfig, canShipSelected, deliveryCtaLabel, canShowAdminIrlRedeem } = view;
+  const { selectionSummary, selectedDropConfig, canShipSelected, deliveryCtaLabel, canShowAdminIrlRedeem } = selection;
   const receiptTransferThumbnail =
     receiptTransferTarget?.image ||
     (receiptTransferTarget

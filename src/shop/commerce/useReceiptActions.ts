@@ -1,18 +1,28 @@
 import type { WalletContextState } from '@solana/wallet-adapter-react';
-import type { Connection, VersionedTransaction } from '@solana/web3.js';
+import type { Connection } from '@solana/web3.js';
 import { prepareAdminIrlRedeemTx, finalizeAdminIrlRedeem, prepareReceiptTransferTx } from '../../api/commerce';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import { canAdminIrlRedeemCardReceipt, canAdminIrlRedeemSelection, forgetPendingAdminIrlRedeem, rememberPendingAdminIrlRedeem } from '../../lib/adminIrlRedeem';
 import { isBlockhashExpiredError, isPotentiallySubmittedTransactionError, isSubmittedTransactionFailureError, reconcileSubmittedTransaction, shortAddress } from '../../lib/solana';
-import { receiptOperationKey, receiptReconciliationDisposition, type ReceiptOperation } from '../../lib/receiptTransfer';
+import { receiptOperationKey } from '../../lib/receiptTransfer';
 import type { InventoryItem } from '../../types';
 import { ADMIN_VIEWER_READ_ONLY_MESSAGE } from '../account/display';
 import type { RevealOverlayState } from '../reveal/types';
 import type { CommerceWalletContext, CommerceInventoryRefresh, PreparedTransactionSender, DropConnection } from './contracts';
 import type { useCommerceModals } from './useCommerceModals';
 import type { useReceiptOperationState } from './useReceiptOperationState';
-import { isUserRejectedError, RECEIPT_STATUS_CHECK_TIMEOUT_MS, RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE, RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE } from './transactionSupport';
+import { isUserRejectedError, RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE, RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE } from './transactionSupport';
 import { sendReceiptSubmission } from './receiptSubmission';
+import { createReceiptOperationTracker } from './receiptOperationTracker';
+import { useReceiptReconciliation } from './useReceiptReconciliation';
+
+const DEFAULT_RUNTIME = {
+  prepareAdminIrlRedeemTx,
+  finalizeAdminIrlRedeem,
+  prepareReceiptTransferTx,
+  sendReceiptSubmission,
+  reconcileSubmittedTransaction,
+};
 
 type ReceiptActionOptions = Omit<CommerceWalletContext, 'ownerRef'> & {
   wallet: WalletContextState;
@@ -60,7 +70,14 @@ export function useReceiptActions({
   markAssetsHidden,
   refetchInventory,
   signAndSendPreparedViaConnection,
-}: ReceiptActionOptions) {
+}: ReceiptActionOptions, runtime: Partial<typeof DEFAULT_RUNTIME> = {}) {
+  const {
+    prepareAdminIrlRedeemTx,
+    finalizeAdminIrlRedeem,
+    prepareReceiptTransferTx,
+    sendReceiptSubmission,
+    reconcileSubmittedTransaction,
+  } = { ...DEFAULT_RUNTIME, ...runtime };
   const {
     adminIrlRedeeming,
     receiptTransferTarget,
@@ -77,11 +94,7 @@ export function useReceiptActions({
   } = modals;
   const {
     receiptOperationsRef,
-    receiptOperationGenerationRef,
-    beginReceiptOperation,
     updateReceiptOperation,
-    recordReceiptSubmission,
-    resetReceiptSubmissionForRetry,
     isReceiptOperationCurrent,
   } = receiptState;
   const assertReceiptTransferWalletReady = (
@@ -107,144 +120,9 @@ export function useReceiptActions({
     }
   };
 
-  const refreshInventoryAfterReceiptReconciliation = () => {
-    void refetchInventory()
-      .then((result) => {
-        if (result.error) {
-          console.warn('[mons] failed to refresh inventory after receipt transfer reconciliation', result.error);
-        }
-      })
-      .catch((refreshErr) => {
-        console.warn('[mons] failed to refresh inventory after receipt transfer reconciliation', refreshErr);
-      });
-  };
-
-  const settleReceiptOperation = (
-    operation: ReceiptOperation,
-    resolution: Awaited<ReturnType<typeof reconcileSubmittedTransaction>>,
-    options?: { manual?: boolean; reconciliationError?: unknown },
-  ) => {
-    const disposition = receiptReconciliationDisposition(resolution);
-    const applied = updateReceiptOperation(operation, (current) => {
-      if (disposition === 'available') return null;
-      return {
-        ...current,
-        phase: disposition === 'hidden' ? 'hidden' : 'unverified',
-      };
-    });
-    if (!applied) return;
-    if (disposition === 'available' && operation.adminFinalizeRequestId) {
-      forgetPendingAdminIrlRedeem(operation.wallet, operation.adminFinalizeRequestId);
-    }
-    if (connectedWalletRef.current !== operation.wallet) return;
-
-    if (disposition === 'hidden') {
-      showToast(
-        operation.adminFinalizeRequestId
-          ? 'Admin IRL transfer confirmed'
-          : operation.signature
-            ? `Receipt transfer confirmed · ${shortAddress(operation.signature)}`
-            : 'Receipt transfer confirmed',
-      );
-    } else if (disposition === 'available') {
-      showToast(
-        operation.adminFinalizeRequestId
-          ? 'Admin IRL transfer did not complete · receipt restored'
-          : 'Receipt transfer did not complete · receipt restored',
-      );
-    } else {
-      console.warn('[mons] receipt transfer confirmation remains unresolved', {
-        signature: operation.signature,
-        recentBlockhash: operation.recentBlockhash,
-        receiptId: operation.assetId,
-        adminFinalizeRequestId: operation.adminFinalizeRequestId || null,
-        error: options?.reconciliationError,
-      });
-      showToast(
-        options?.manual
-          ? 'Receipt transfer status is still unavailable · no new transfer was sent'
-          : operation.adminFinalizeRequestId
-            ? 'Admin IRL transfer status could not be verified · receipt is view-only for now'
-            : 'Receipt transfer status could not be verified · receipt is view-only for now',
-      );
-    }
-    refreshInventoryAfterReceiptReconciliation();
-  };
-
-  const reconcilePendingReceiptSubmission = (args: {
-    connection: Connection;
-    operation: ReceiptOperation;
-  }) => {
-    if (!args.operation.signature || !args.operation.recentBlockhash) {
-      console.warn('[mons] cannot reconcile pending receipt transfer without submission identifiers', {
-        receiptId: args.operation.assetId,
-        generation: args.operation.generation,
-      });
-      settleReceiptOperation(args.operation, 'unknown');
-      return;
-    }
-    void reconcileSubmittedTransaction(args.connection, {
-      signature: args.operation.signature,
-      recentBlockhash: args.operation.recentBlockhash,
-    })
-      .then((resolution) => {
-        settleReceiptOperation(args.operation, resolution);
-      })
-      .catch((err) => {
-        settleReceiptOperation(args.operation, 'unknown', { reconciliationError: err });
-      });
-  };
-
-  const checkReceiptOperationStatus = (operation: ReceiptOperation) => {
-    if (
-      operation.phase !== 'unverified' ||
-      !operation.signature ||
-      !operation.recentBlockhash ||
-      connectedWalletRef.current !== operation.wallet
-    ) {
-      return;
-    }
-    const started = updateReceiptOperation(operation, (current) => {
-      if (current.phase !== 'unverified') return current;
-      return {
-        ...current,
-        generation: ++receiptOperationGenerationRef.current,
-        phase: 'checking',
-      };
-    });
-    const checkingOperation = receiptOperationsRef.current.get(operation.key);
-    if (
-      !started ||
-      !checkingOperation ||
-      checkingOperation.phase !== 'checking' ||
-      checkingOperation.generation === operation.generation ||
-      !checkingOperation.signature ||
-      !checkingOperation.recentBlockhash
-    ) {
-      return;
-    }
-    let statusConnection: Connection;
-    try {
-      statusConnection = getDropConnection(checkingOperation.dropId);
-    } catch (err) {
-      settleReceiptOperation(checkingOperation, 'unknown', { manual: true, reconciliationError: err });
-      return;
-    }
-    void reconcileSubmittedTransaction(
-      statusConnection,
-      {
-        signature: checkingOperation.signature,
-        recentBlockhash: checkingOperation.recentBlockhash,
-      },
-      { timeoutMs: RECEIPT_STATUS_CHECK_TIMEOUT_MS },
-    )
-      .then((resolution) => {
-        settleReceiptOperation(checkingOperation, resolution, { manual: true });
-      })
-      .catch((err) => {
-        settleReceiptOperation(checkingOperation, 'unknown', { manual: true, reconciliationError: err });
-      });
-  };
+  const { reconcilePendingReceiptSubmission, checkReceiptOperationStatus } = useReceiptReconciliation({
+    receiptState, connectedWalletRef, getDropConnection, refetchInventory, showToast,
+  }, { reconcileSubmittedTransaction });
 
   const handleAdminIrlRedeem = async (receiptTarget?: InventoryItem) => {
     if (blockViewerModeAction()) return;
@@ -335,16 +213,16 @@ export function useReceiptActions({
     let pendingFinalizeConnection: Connection | null = null;
     let broadcastAttemptRequestId = '';
     let transferConfirmed = false;
-    let receiptOperation: ReceiptOperation | null = null;
+    let receiptTracker: ReturnType<typeof createReceiptOperationTracker> | null = null;
     const receiptOperationIsCurrent = () =>
-      !isReceiptTarget || isReceiptOperationCurrent(receiptOperation);
+      !isReceiptTarget || isReceiptOperationCurrent(receiptTracker?.operation ?? null);
     try {
       setAdminIrlRedeeming(true);
       const adminIrlDrop = requireKnownDropConfig(adminIrlDropId, 'Admin IRL redeem selection');
       const adminIrlConnection = getDropConnection(adminIrlDrop.dropId);
       pendingFinalizeConnection = adminIrlConnection;
       if (isReceiptTarget) {
-        receiptOperation = beginReceiptOperation({
+        receiptTracker = createReceiptOperationTracker(receiptState, {
           wallet,
           assetId: receiptTarget.id,
           dropId: adminIrlDrop.dropId,
@@ -364,23 +242,6 @@ export function useReceiptActions({
           itemIds: redeemIds,
         });
       };
-      const recordReceiptSubmissionState = (
-        phase: Extract<ReceiptOperation['phase'], 'in-flight' | 'hidden'>,
-        signature: string,
-        submittedTx: VersionedTransaction,
-        requestId: string,
-      ): boolean => {
-        if (!receiptOperation) return false;
-        const recorded = recordReceiptSubmission(receiptOperation, {
-          phase,
-          signature,
-          recentBlockhash: submittedTx.message.recentBlockhash,
-          adminFinalizeRequestId: requestId,
-        });
-        receiptOperation = recorded.operation;
-        return recorded.applied;
-      };
-
       const submitTransfer = (encodedTx: string, requestId: string): Promise<string> =>
         sendReceiptSubmission({
           encodedTx,
@@ -394,7 +255,7 @@ export function useReceiptActions({
                   operationWalletSessionGeneration,
                 ),
                 onBroadcastAttempt: (signature, submittedTx) => {
-                  recordReceiptSubmissionState('in-flight', signature, submittedTx, requestId);
+                  receiptTracker?.recordSubmission({ phase: 'in-flight', signature, transaction: submittedTx, adminFinalizeRequestId: requestId });
                   rememberPendingAdminIrlRedeem(wallet, {
                     dropId: adminIrlDrop.dropId,
                     requestId,
@@ -415,7 +276,7 @@ export function useReceiptActions({
             pendingFinalizeRequestId = requestId;
             pendingFinalizeTransferSignature = submittedSig;
             pendingFinalizeRecentBlockhash = submittedTx.message.recentBlockhash;
-            recordReceiptSubmissionState('hidden', submittedSig, submittedTx, requestId);
+            receiptTracker?.recordSubmission({ phase: 'hidden', signature: submittedSig, transaction: submittedTx, adminFinalizeRequestId: requestId });
           },
         });
 
@@ -429,9 +290,7 @@ export function useReceiptActions({
           forgetPendingAdminIrlRedeem(wallet, broadcastAttemptRequestId);
           broadcastAttemptRequestId = '';
         }
-        if (receiptOperation) {
-          receiptOperation = resetReceiptSubmissionForRetry(receiptOperation) ?? receiptOperation;
-        }
+        receiptTracker?.resetForRetry();
         if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
           showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         }
@@ -506,11 +365,11 @@ export function useReceiptActions({
             !transferConfirmed &&
             pendingFinalizeConnection &&
             pendingFinalizeRecentBlockhash &&
-            receiptOperation
+            receiptTracker
           ) {
             reconcilePendingReceiptSubmission({
               connection: pendingFinalizeConnection,
-              operation: receiptOperation,
+              operation: receiptTracker.operation,
             });
           }
         }
@@ -525,8 +384,8 @@ export function useReceiptActions({
         }
       }
     } finally {
-      if (receiptOperation && !pendingFinalizeRequestId && !transferConfirmed) {
-        updateReceiptOperation(receiptOperation, () => null);
+      if (receiptTracker && !pendingFinalizeRequestId && !transferConfirmed) {
+        updateReceiptOperation(receiptTracker.operation, () => null);
       }
       setAdminIrlRedeeming(false);
     }
@@ -566,12 +425,12 @@ export function useReceiptActions({
 
     receiptTransferInFlightRef.current = true;
     setReceiptTransferInFlight(true);
-    let receiptOperation: ReceiptOperation | null = null;
+    let receiptTracker: ReturnType<typeof createReceiptOperationTracker> | null = null;
     let submittedSignature = '';
     try {
       const transferDrop = requireKnownDropConfig(target.dropId, 'receipt transfer');
       const transferConnection = getDropConnection(transferDrop.dropId);
-      receiptOperation = beginReceiptOperation({
+      receiptTracker = createReceiptOperationTracker(receiptState, {
         wallet,
         assetId: target.id,
         dropId: transferDrop.dropId,
@@ -589,20 +448,6 @@ export function useReceiptActions({
           destination,
         });
       };
-      const recordReceiptSubmissionState = (
-        phase: Extract<ReceiptOperation['phase'], 'in-flight' | 'hidden'>,
-        signature: string,
-        submittedTx: VersionedTransaction,
-      ): boolean => {
-        if (!receiptOperation) return false;
-        const recorded = recordReceiptSubmission(receiptOperation, {
-          phase,
-          signature,
-          recentBlockhash: submittedTx.message.recentBlockhash,
-        });
-        receiptOperation = recorded.operation;
-        return recorded.applied;
-      };
       const submitTransfer = (encodedTx: string) =>
         sendReceiptSubmission({
           encodedTx,
@@ -615,20 +460,20 @@ export function useReceiptActions({
               operationWalletSessionGeneration,
             ),
             onBroadcastAttempt: (signature, submittedTx) => {
-              recordReceiptSubmissionState('in-flight', signature, submittedTx);
+              receiptTracker?.recordSubmission({ phase: 'in-flight', signature, transaction: submittedTx });
             },
           },
           simulateBeforeSigning: true,
           onSubmitted: (signature, submittedTx) => {
             submittedSignature = signature;
-            const applied = recordReceiptSubmissionState('hidden', signature, submittedTx);
+            const applied = receiptTracker?.recordSubmission({ phase: 'hidden', signature, transaction: submittedTx }) ?? false;
             if (applied && connectedWalletRef.current === wallet) {
               showToast(`Receipt transfer submitted · ${shortAddress(signature)}`);
             }
           },
         });
       const finishPendingTransfer = (signature: string) => {
-        if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
+        if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptTracker?.operation ?? null)) {
           setReceiptTransferTarget(null);
           closeRevealOverlay();
           showToast(`Receipt transfer submitted · confirmation pending · ${shortAddress(signature)}`);
@@ -636,10 +481,10 @@ export function useReceiptActions({
             console.warn('[mons] failed to refresh inventory after pending receipt transfer', refreshErr);
           });
         }
-        if (receiptOperation?.signature && receiptOperation.recentBlockhash) {
+        if (receiptTracker?.operation.signature && receiptTracker.operation.recentBlockhash) {
           reconcilePendingReceiptSubmission({
             connection: transferConnection,
-            operation: receiptOperation,
+            operation: receiptTracker.operation,
           });
         } else {
           console.warn('[mons] cannot reconcile pending receipt transfer without its recent blockhash', {
@@ -663,10 +508,8 @@ export function useReceiptActions({
               return null;
             }
             if (attempt > 0 || submittedSignature || !isBlockhashExpiredError(err)) throw err;
-            if (receiptOperation) {
-              receiptOperation = resetReceiptSubmissionForRetry(receiptOperation) ?? receiptOperation;
-            }
-            if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
+            receiptTracker?.resetForRetry();
+            if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptTracker?.operation ?? null)) {
               showToast('Prepared transaction expired. Preparing a fresh one…');
             }
           }
@@ -676,7 +519,7 @@ export function useReceiptActions({
       const signature = await submitWithBlockhashRetry();
       if (!signature) return;
 
-      if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
+      if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptTracker?.operation ?? null)) {
         setReceiptTransferTarget(null);
         closeRevealOverlay();
         showToast(`Receipt transferred to ${shortAddress(destination)} · ${shortAddress(signature)}`);
@@ -685,8 +528,8 @@ export function useReceiptActions({
         });
       }
     } catch (err) {
-      if (receiptOperation && (!submittedSignature || isSubmittedTransactionFailureError(err))) {
-        updateReceiptOperation(receiptOperation, () => null);
+      if (receiptTracker && (!submittedSignature || isSubmittedTransactionFailureError(err))) {
+        updateReceiptOperation(receiptTracker.operation, () => null);
       }
       throw err;
     } finally {

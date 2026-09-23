@@ -21,7 +21,6 @@ import {
   type FigureMetadataTarget,
 } from '../../lib/figureMetadata';
 import { useFigureMetadataSnapshot, useFigureMetadataTargets } from '../../hooks/useFigureMetadata';
-import { toggleInventorySelection } from '../../lib/inventorySelection';
 import {
   buildCurrentBoxIdIndexes,
   isUnresolvedCardNft2Box,
@@ -49,7 +48,7 @@ import {
 } from '../persistedState';
 import { startPostActionInventoryPolling } from '../postActionPolling';
 import { RevealOverlayState } from '../reveal/types';
-import { LOCAL_PENDING_GRACE_MS, MAX_SHIPMENT_ITEMS, RECENT_REVEALS_LIMIT, pendingRevealListEqual } from './stateSupport';
+import { LOCAL_PENDING_GRACE_MS, RECENT_REVEALS_LIMIT, pendingRevealListEqual } from './stateSupport';
 import type { ShopInventoryQueries } from './useShopInventoryQueries';
 
 export type ShopInventoryViews = {
@@ -75,7 +74,6 @@ export function useShopInventorySource(options: InventorySourceOptions) {
     inventoryFetched,
     pendingOpenBoxesSuccess,
   } = options;
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hiddenAssets, setHiddenAssets] = useState<Set<string>>(() => loadHiddenAssets(localAccountWallet));
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
     loadPendingReveals(localAccountWallet),
@@ -261,20 +259,6 @@ export function useShopInventorySource(options: InventorySourceOptions) {
       return next;
     });
   }, []);
-  const clearSelection = useCallback(() => setSelected(new Set()), []);
-  const replaceSelection = useCallback((ids: Iterable<string>) => setSelected(new Set(ids)), []);
-  const removeSelected = useCallback((ids: Iterable<string>) => setSelected(current => {
-    const next = new Set(current);
-    for (const id of ids) next.delete(id);
-    return next.size === current.size ? current : next;
-  }), []);
-  const pruneSelection = useCallback((validIds: ReadonlySet<string>, excludedIds: ReadonlySet<string>) => setSelected(current => {
-    const next = new Set([...current].filter(id => validIds.has(id) && !excludedIds.has(id)));
-    return next.size === current.size ? current : next;
-  }), []);
-  const toggleSelection = (id: string, inventoryIndex: ReadonlyMap<string, InventoryItem>) => {
-    setSelected(previous => toggleInventorySelection({ selected: previous, itemId: id, inventoryIndex, maxSelected: MAX_SHIPMENT_ITEMS }));
-  };
   function reconcilePendingReveals({ inventoryView, pendingOpenBoxesView, revealOverlay }: ShopInventoryViews) {
     if (!owner || isViewerMode) return;
     if (revealOverlay) return;
@@ -386,8 +370,8 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   }
   return {
     queries: options,
-    selected, hiddenAssets, localPendingReveals, recentRevealedBoxes, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey,
-    actions: { addLocalPendingReveal, addLocalMintedBoxes, removeLocalPendingReveal, rememberRecentReveal, addLocalRevealedDudes, hideAssetsForWallet, markAssetsHidden, unhideAssetsForWallet, clearSelection, replaceSelection, removeSelected, pruneSelection, toggleSelection },
+    hiddenAssets, localPendingReveals, recentRevealedBoxes, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey,
+    actions: { addLocalPendingReveal, addLocalMintedBoxes, removeLocalPendingReveal, rememberRecentReveal, addLocalRevealedDudes, hideAssetsForWallet, markAssetsHidden, unhideAssetsForWallet },
     maintenance: { reconcilePendingReveals, reconcileMintedBoxes, pruneExpiredMintedBoxes, refreshMintedExpectations, reconcileRevealedFigures },
   };
 }

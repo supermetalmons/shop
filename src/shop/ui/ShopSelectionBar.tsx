@@ -3,9 +3,9 @@ import {
   BackgroundLayerPortal
 } from '../../components/BackgroundBlurLayer';
 import { colorSchemeBackgroundImageStyle } from '../../components/ColorSchemeImage';
-import type { ShopInventoryView } from '../inventory/useShopInventoryView';
+import type { ShopInventorySelection } from '../inventory/useShopInventorySelection';
 
-type ShopSelectionBarProps = Pick<ShopInventoryView,
+type ShopSelectionBarProps = Pick<ShopInventorySelection,
   'selectedCount'
   | 'selectedPreview'
   | 'selectedOverflow'

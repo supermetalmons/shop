@@ -31,6 +31,7 @@ import { useReceiptView } from './shop/commerce/useReceiptView';
 import { useReceiptViewerControls } from './shop/commerce/useReceiptViewerControls';
 import { useWalletTransactions } from './shop/commerce/useWalletTransactions';
 import { useShopInventoryQueries } from './shop/inventory/useShopInventoryQueries';
+import { useShopInventorySelection, useShopInventorySelectionState } from './shop/inventory/useShopInventorySelection';
 import { useShopInventoryMaintenance, useShopInventorySource } from './shop/inventory/useShopInventorySource';
 import { useShopInventoryView } from './shop/inventory/useShopInventoryView';
 import { useShopPurchaseActions } from './shop/purchase/useShopPurchaseActions';
@@ -118,6 +119,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     ...queries, owner, connectedWallet, localAccountWallet, isViewerMode,
     requireKnownDropConfig: drop.requireKnownDropConfig,
   });
+  const selectionState = useShopInventorySelectionState({ connectedWallet, owner });
   const prepared = usePreparedTransactionState(connectedWallet, connectedWalletRef);
   const receiptState = useReceiptOperationState(connectedWallet);
   const modals = useCommerceModals({
@@ -147,6 +149,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   });
   const reveal = useShopReveal({
     ...drop, ...inventorySource.actions,
+    clearSelection: selectionState.clearSelection,
     connectedWallet, publicKey, owner, localAccountWallet, isViewerMode, suspended: commerceUiSuspended,
     walletModalVisible, receiptTransferOpen: Boolean(modals.receiptTransferTarget),
     inventory: queries.inventory, pendingOpenBoxes: queries.pendingOpenBoxes,
@@ -159,22 +162,39 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     sendAndConfirmViaConnection: transactions.sendAndConfirmViaConnection,
     retryAfterBlockhashExpiry: transactions.retryAfterBlockhashExpiry,
   });
+  const notifications = useShopNotifications(drop.normalizedCurrentPath, Boolean(drop.upcomingDropRoute), reveal.revealOverlayOpen);
+  const activeModalLayer = resolveActiveModalLayer({
+    wallet: walletModalVisible,
+    transfer: Boolean(modals.receiptTransferTarget),
+    reveal: reveal.revealOverlayOpen && !reveal.revealOverlayClosing,
+    claim: modals.claimOpen,
+    shipment: modals.deliveryOpen,
+    notify: notifications.notifyOpen,
+  });
   useShopInventoryMaintenance(inventorySource, reveal);
   const inventory = useShopInventoryView({
     ...drop,
     source: inventorySource,
     inventoryView: reveal.inventoryView,
     pendingOpenBoxesView: reveal.pendingOpenBoxesView,
-    revealOverlay: reveal.revealOverlay,
     receiptOperationHiddenAssets: receiptState.receiptOperationHiddenAssets,
-    pendingDeliveryItemIds: prepared.pendingDeliveryItemIds,
-    connectedWallet, isSignedInWallet,
     stripeCheckoutInventoryRefreshPending,
     stripeCheckoutProfileRecoveryPending: stripeRecovery.profileRecoveryPending,
     walletIdleReady: signIn.walletIdleReady,
     authReady: signIn.authReady,
-    deliveryCountryCode: modals.deliveryCountryCode,
     boxImageForDropId: reveal.boxImageForDropId,
+  });
+  const selection = useShopInventorySelection({
+    state: selectionState,
+    inventoryView: reveal.inventoryView,
+    inventoryIndex: inventory.inventoryIndex,
+    pendingRevealIds: inventory.pendingRevealIds,
+    pendingDeliveryItemIds: prepared.pendingDeliveryItemIds,
+    owner, connectedWallet, isSignedInWallet,
+    deliveryCountryCode: modals.deliveryCountryCode,
+    dismissalBlocked: Boolean(activeModalLayer) || commerceUiSuspended,
+    getDropConfig: drop.getDropConfig,
+    canOpenBoxesForDropId: drop.canOpenBoxesForDropId,
     usesClearCard3dRevealForDropId: reveal.usesClearCard3dRevealForDropId,
     usesInteractiveCardPackRevealForDropId: reveal.usesInteractiveCardPackRevealForDropId,
   });
@@ -220,11 +240,11 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     connectedWalletRef, ownerRef,
     ensureSignedIn: signIn.ensureSignedIn,
     blockViewerModeAction,
-    selected: inventory.selected,
-    replaceSelection: inventorySource.actions.replaceSelection,
-    removeSelected: inventorySource.actions.removeSelected,
-    deliverableItems: inventory.deliverableItems,
-    canShipSelected: inventory.canShipSelected,
+    selected: selection.selected,
+    replaceSelection: selectionState.replaceSelection,
+    removeSelected: selectionState.removeSelected,
+    deliverableItems: selection.deliverableItems,
+    canShipSelected: selection.canShipSelected,
     setVisible, showToast,
     addressEncryptionPublicKey: ADDRESS_ENCRYPTION_PUBLIC_KEY,
     boxLabelForDropId: drop.boxLabelForDropId,
@@ -258,10 +278,10 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     getDropConfig: drop.getDropConfig,
     requireKnownDropConfig: drop.requireKnownDropConfig,
     getDropConnection: drop.getDropConnection,
-    selectedDropId: inventory.selectedDropId,
-    adminIrlRedeemSelection: inventory.adminIrlRedeemSelection,
-    deliverableItems: inventory.deliverableItems,
-    clearSelection: inventorySource.actions.clearSelection,
+    selectedDropId: selection.selectedDropId,
+    adminIrlRedeemSelection: selection.adminIrlRedeemSelection,
+    deliverableItems: selection.deliverableItems,
+    clearSelection: selectionState.clearSelection,
     getCurrentOverlay: reveal.getCurrentOverlay,
     closeRevealOverlay: reveal.closeRevealOverlay,
     setVisible, showToast,
@@ -288,15 +308,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     source: inventorySource, view: inventory, signIn, connectedWallet,
     getDropContent: drop.getDropContent,
   });
-  const notifications = useShopNotifications(drop.normalizedCurrentPath, Boolean(drop.upcomingDropRoute), reveal.revealOverlayOpen);
-  const activeModalLayer = resolveActiveModalLayer({
-    wallet: walletModalVisible,
-    transfer: Boolean(modals.receiptTransferTarget),
-    reveal: reveal.revealOverlayOpen && !reveal.revealOverlayClosing,
-    claim: modals.claimOpen,
-    shipment: modals.deliveryOpen,
-    notify: notifications.notifyOpen,
-  });
   const revealOverlaySuspended = isModalLayerSuspended({ activeLayer: activeModalLayer, layer: 'reveal', open: reveal.revealOverlayOpen });
   const toastAboveModal = shouldToastAppearAboveModal({
     activeLayer: activeModalLayer,
@@ -304,21 +315,10 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     receiptViewerOpen: reveal.presentation.revealOverlayUsesReceiptImage,
   });
   useEffect(() => {
-    inventorySource.actions.clearSelection();
     modals.setDeliveryOpen(false);
     modals.closeReceiptTransferModal();
   }, [connectedWallet, owner]);
   useEffect(() => { modals.closeReceiptTransferModal(); }, [drop.normalizedCurrentPath]);
-  useEffect(() => {
-    if (!inventory.selectedCount || activeModalLayer || commerceUiSuspended) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      event.preventDefault();
-      inventorySource.actions.clearSelection();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeModalLayer, inventory.selectedCount, commerceUiSuspended]);
   const viewedProfileErrorMessage = account.viewedProfileError instanceof Error ? account.viewedProfileError.message : '';
   const anonymousStripeHistoryErrorMessage = stripeRecovery.anonymousHistory.error instanceof Error ? stripeRecovery.anonymousHistory.error.message : '';
   const activeError = auth.error && !isUserRejectedError(auth.error)
@@ -384,6 +384,8 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
       {!miNoteCardsPage && !isNfcPage && (
         <ShopInventorySection
           {...inventory}
+          selected={selection.selected}
+          toggleSelected={selection.toggleSelected}
           canOpenBoxesForDropId={drop.canOpenBoxesForDropId}
           onReveal={(id, rect) => {
             const item = inventory.inventoryIndex.get(id);
@@ -396,7 +398,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
       {!isNfcPage && (
         <ShopCommerceModals
           modals={modals}
-          view={inventory}
+          selection={selection}
           activeModalLayer={activeModalLayer}
           suspended={suspended}
           connectedWallet={connectedWallet}
@@ -427,15 +429,15 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             onEnterCode={() => { if (!blockViewerModeAction()) modals.openClaim(); }}
             receiptsContentVisible={shipments.receiptsContentVisible}
             receiptItems={inventory.receiptItems}
-            selected={inventory.selected}
-            toggleSelected={inventory.toggleSelected}
+            selected={selection.selected}
+            toggleSelected={selection.toggleSelected}
             openReceiptImageViewer={reveal.openReceiptImageViewer}
           />
           <ShopSelectionBar
-            {...inventory}
-            clearSelection={inventorySource.actions.clearSelection}
-            handleViewSelectedItem={() => { if (inventory.selectedViewableItem) reveal.viewItem(inventory.selectedViewableItem); }}
-            handleOpenSelectedBox={() => { if (inventory.selectedBox) void reveal.openSelectedBox(inventory.selectedBox); }}
+            {...selection}
+            clearSelection={selectionState.clearSelection}
+            handleViewSelectedItem={() => { if (selection.selectedViewableItem) reveal.viewItem(selection.selectedViewableItem); }}
+            handleOpenSelectedBox={() => { if (selection.selectedBox) void reveal.openSelectedBox(selection.selectedBox); }}
             handleOpenShip={deliveryActions.handleOpenShip}
             startOpenLoading={reveal.startOpenLoading}
             openActionLabelForDropId={drop.openActionLabelForDropId}
