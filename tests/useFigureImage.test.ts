@@ -83,8 +83,7 @@ test('fallback-only and empty sources render without requesting metadata', () =>
 test('primary failure resolves metadata once and failed metadata images become placeholders', async () => {
   const pending = deferred();
   const loader = mock.fn<Loader>(() => pending.promise);
-  const onMetadataResolved = mock.fn<NonNullable<Options['onMetadataResolved']>>();
-  const initial = options({ onMetadataResolved });
+  const initial = options();
   initial.fallbackSrc = initial.primarySrc;
   const { result } = mount(initial, loader);
 
@@ -94,7 +93,6 @@ test('primary failure resolves metadata once and failed metadata images become p
   const record = metadata();
   await act(async () => { pending.resolve(record); });
   assert.equal(result.current.activeSrc, record.image);
-  assert.deepEqual(onMetadataResolved.mock.calls.map((call) => call.arguments), [[record]]);
 
   act(() => result.current.handleError());
   assert.equal(result.current.activeSrc, null);
@@ -102,10 +100,9 @@ test('primary failure resolves metadata once and failed metadata images become p
 });
 
 for (const failure of ['rejection', 'null', 'missing image', 'same primary image'] as const) {
-  test(`metadata ${failure} leaves a placeholder without publishing metadata`, async () => {
+  test(`metadata ${failure} leaves a placeholder`, async () => {
     const pending = deferred();
-    const onMetadataResolved = mock.fn<NonNullable<Options['onMetadataResolved']>>();
-    const initial = options({ onMetadataResolved });
+    const initial = options();
     const { result } = mount(initial, () => pending.promise);
 
     act(() => result.current.handleError());
@@ -116,7 +113,6 @@ for (const failure of ['rejection', 'null', 'missing image', 'same primary image
       else pending.resolve(metadata(initial.primarySrc));
     });
     assert.equal(result.current.activeSrc, null);
-    assert.equal(onMetadataResolved.mock.callCount(), 0);
   });
 }
 
@@ -163,8 +159,7 @@ for (const change of [
       const newRequest = deferred();
       let calls = 0;
       const loader: Loader = () => (++calls === 1 ? oldRequest.promise : newRequest.promise);
-      const onMetadataResolved = mock.fn<NonNullable<Options['onMetadataResolved']>>();
-      const initial = options({ onMetadataResolved });
+      const initial = options();
       const { result, rerender } = mount(initial, loader);
 
       act(() => result.current.handleError());
@@ -180,20 +175,18 @@ for (const change of [
       });
 
       assert.equal(result.current.activeSrc, currentRecord.image);
-      assert.deepEqual(onMetadataResolved.mock.calls.map((call) => call.arguments), [[currentRecord]]);
     });
   }
 }
 
-test('unmount invalidates pending metadata callbacks', async () => {
+test('unmount leaves a pending metadata image unapplied', async () => {
   const pending = deferred();
-  const onMetadataResolved = mock.fn<NonNullable<Options['onMetadataResolved']>>();
-  const { result, unmount } = mount(options({ onMetadataResolved }), () => pending.promise);
+  const { result, unmount } = mount(options(), () => pending.promise);
 
   act(() => result.current.handleError());
   unmount();
   await act(async () => { pending.resolve(metadata()); });
-  assert.equal(onMetadataResolved.mock.callCount(), 0);
+  assert.equal(result.current.activeSrc, null);
 });
 
 test('inventory images retain color-scheme rendering, fallback handling, and drag prevention', () => {

@@ -7,7 +7,7 @@ import { ReceiptTransferForm } from '../../components/ReceiptTransferForm';
 import {
   type FrontendDeploymentConfig
 } from '../../config/deployment';
-import { hideImageShowFallback, showImageHideFallback } from '../../lib/imageFallback';
+import { MediaWithFallback } from '../../components/MediaWithFallback';
 import type { ActiveModalLayer } from '../../lib/modalLayers';
 import {
   isModalLayerSuspended
@@ -87,24 +87,18 @@ export function ShopCommerceModals({
     }
     titleAbove={
       receiptTransferTarget ? (
-        <>
-          {receiptTransferThumbnail ? (
-            <img
-              className="receipt-transfer-modal__thumbnail"
-              src={receiptTransferThumbnail}
-              alt=""
-              draggable={false}
-              onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-              onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-            />
-          ) : null}
-          <span
-            className="receipt-transfer-modal__thumbnail receipt-transfer-modal__thumbnail--placeholder"
-            hidden={Boolean(receiptTransferThumbnail)}
-          >
-            <FaReceipt aria-hidden="true" focusable="false" />
-          </span>
-        </>
+        <MediaWithFallback
+          imageSources={receiptTransferThumbnail ? [receiptTransferThumbnail] : []}
+          imageProps={{ className: 'receipt-transfer-modal__thumbnail', alt: '', draggable: false }}
+          renderPlaceholder={(hidden) => (
+            <span
+              className="receipt-transfer-modal__thumbnail receipt-transfer-modal__thumbnail--placeholder"
+              hidden={hidden}
+            >
+              <FaReceipt aria-hidden="true" focusable="false" />
+            </span>
+          )}
+        />
       ) : undefined
     }
     onClose={closeReceiptTransferModal}

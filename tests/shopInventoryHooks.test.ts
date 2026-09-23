@@ -4,6 +4,7 @@ import { createElement, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop, isDropFamily } from '../src/config/deployment.ts';
+import { figureMetadataCacheKey, getFigureMetadataSnapshot, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 import type { InventoryItem, PendingOpenBox } from '../src/types.ts';
 import {
   hiddenInventoryKey,
@@ -133,6 +134,23 @@ test('wallet hydration preserves each account and late hidden-asset updates stay
   persistHiddenAssets('wallet-b', new Set(['external-b']));
   act(() => dom.window.dispatchEvent(new dom.window.StorageEvent('storage', { key: hiddenInventoryKey('wallet-b') })));
   assert.deepEqual(result.current.hiddenAssets, new Set(['external-b']));
+});
+
+test('inventory observes shared metadata and keeps its public snapshot across wallet changes', async () => {
+  const figureId = 2;
+  const item: InventoryItem = { id: 'metadata-figure', dropId: 'card_nft_2', dudeId: figureId, kind: 'dude', name: 'Card' };
+  const initial = { options: sourceOptions({ inventory: [item] }) };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
+  await act(async () => { await loadFigureMetadata(item.dropId, figureId); });
+  const snapshot = result.current.source.figureMetadataByKey;
+  const metadata = snapshot[figureMetadataCacheKey(item.dropId, figureId)];
+  assert.equal(snapshot, getFigureMetadataSnapshot());
+  assert.ok(metadata.image);
+  assert.equal(result.current.view.inventoryItems[0].image, metadata.image);
+
+  rerender({ options: sourceOptions({ owner: 'wallet-b', connectedWallet: 'wallet-b', localAccountWallet: 'wallet-b', inventory: [item] }) });
+  assert.equal(result.current.source.figureMetadataByKey, snapshot);
+  assert.equal(result.current.view.inventoryItems[0].image, metadata.image);
 });
 
 test('viewer mode neither persists reveal state nor shows private optimistic or hidden assets', (t) => {

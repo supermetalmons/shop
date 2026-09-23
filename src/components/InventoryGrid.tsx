@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent 
 import type { InventoryItem, InventoryPreviewVideo } from '../types';
 import { getFrontendDrop, isDropFamily } from '../config/deployment';
 import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
-import { hideImageShowFallback, showImageHideFallback } from '../lib/imageFallback';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
 import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './ColorSchemeImage';
+import { MediaWithFallback } from './MediaWithFallback';
 import {
   createMobileTapCandidate,
   findTouchByIdentifier,
@@ -287,24 +287,24 @@ function InventoryImageWithFallback({
   decoding,
 }: InventoryImageWithFallbackProps) {
   return (
-    <>
-      <ColorSchemeImage
-        dropId={dropId}
-        className="inventory__image"
-        src={src}
-        alt={ariaHidden ? '' : alt}
-        aria-hidden={ariaHidden ? 'true' : undefined}
-        loading="lazy"
-        decoding={decoding}
-        draggable={false}
-        onDragStart={(evt) => evt.preventDefault()}
-        onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-        onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-      />
-      <div className="placeholder" aria-hidden hidden>
-        <span> </span>
-      </div>
-    </>
+    <MediaWithFallback
+      dropId={dropId}
+      imageSources={[src]}
+      imageProps={{
+        className: 'inventory__image',
+        alt: ariaHidden ? '' : alt,
+        'aria-hidden': ariaHidden ? true : undefined,
+        loading: 'lazy',
+        decoding,
+        draggable: false,
+        onDragStart: (evt) => evt.preventDefault(),
+      }}
+      renderPlaceholder={(hidden) => (
+        <div className="placeholder" aria-hidden hidden={hidden}>
+          <span> </span>
+        </div>
+      )}
+    />
   );
 }
 

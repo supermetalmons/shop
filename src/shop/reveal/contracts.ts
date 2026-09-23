@@ -1,7 +1,7 @@
 import type { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import type { resolveDropContent } from '../../lib/dropContent';
-import type { FigureMetadataRecord, FigureMetadataTarget } from '../../lib/figureMetadata';
+import type { FigureMetadataRecord } from '../../lib/figureMetadata';
 import type { InventoryItem, PendingOpenBox } from '../../types';
 import type { SendViaConnectionOptions } from '../commerce/transactionSupport';
 
@@ -30,7 +30,6 @@ export type ShopRevealOptions = RevealDropContext & {
   inventory: InventoryItem[];
   pendingOpenBoxes: PendingOpenBox[];
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
-  queueFigureMetadataFetch: (targets: FigureMetadataTarget[]) => void;
   addLocalPendingReveal: (item: InventoryItem) => void;
   removeLocalPendingReveal: (id: string) => void;
   rememberRecentReveal: (id: string) => void;

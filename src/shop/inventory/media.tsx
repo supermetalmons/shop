@@ -7,9 +7,6 @@ import {
   normalizeBoxDisplayImage
 } from '../../lib/dropContent';
 import {
-  type FigureMetadataRecord
-} from '../../lib/figureMetadata';
-import {
   InventoryItem
 } from '../../types';
 
@@ -36,7 +33,6 @@ export function FigureTileImage(props: {
   alt: string;
   primarySrc?: string;
   fallbackSrc?: string;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
 }) {
   const { dropId, alt } = props;
   const { activeSrc, handleError } = useFigureImage(props);

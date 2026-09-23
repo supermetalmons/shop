@@ -13,10 +13,7 @@ import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import type { FulfillmentOrder } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
-import {
-  loadFigureMetadataBatch,
-  type FigureMetadataRecord,
-} from './lib/figureMetadata';
+import { useFigureMetadataSnapshot, useFigureMetadataTargets } from './hooks/useFigureMetadata';
 import { resolveDropContent } from './lib/dropContent';
 import { fulfillmentOrderLooseFigureIds } from './lib/fulfillmentCodes';
 import { FulfillmentOrderCard } from './fulfillment/FulfillmentOrderCard';
@@ -47,11 +44,9 @@ import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
 import { fulfillmentOrderKey, groupFulfillmentOrders } from './fulfillment/orders';
 import {
   collectFulfillmentFigureMetadataTargets,
-  mergeFigureMetadataRecords,
 } from './fulfillment/figureMetadata';
 
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
-const FIGURE_METADATA_RETRY_MS = 3000;
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
@@ -206,7 +201,7 @@ export default function FulfillmentApp({
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
-  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
+  const figureMetadataByKey = useFigureMetadataSnapshot();
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const [activeAddressOrderKey, setActiveAddressOrderKey] = useState<string | null>(null);
@@ -288,11 +283,6 @@ export default function FulfillmentApp({
       setManualReviewMenuOpen(false);
     }
   }, [manualReviewVisible, manualReviewMenuOpen]);
-
-  const mergeLoadedFigureMetadata = useCallback((records: FigureMetadataRecord[]) => {
-    if (!records.length) return;
-    setFigureMetadataByKey((prev) => mergeFigureMetadataRecords(prev, records));
-  }, []);
 
   const displayedOrders = useMemo(
     () => filterFulfillmentOrdersByVisibility(orders, orderVisibilityFilter),
@@ -391,29 +381,7 @@ export default function FulfillmentApp({
     figureMetadataByKey,
   ]);
 
-  useEffect(() => {
-    if (!fulfillmentFigureMetadataTargets.length) return;
-    let cancelled = false;
-    const fetchMetadata = async () => {
-      try {
-        const records = await loadFigureMetadataBatch(fulfillmentFigureMetadataTargets);
-        if (cancelled || !records.length) return;
-        mergeLoadedFigureMetadata(records);
-      } catch (err) {
-        console.warn('[mons] failed to load fulfillment figure metadata', { error: err });
-      }
-    };
-
-    void fetchMetadata();
-    if (typeof window === 'undefined') return;
-    const interval = window.setInterval(() => {
-      void fetchMetadata();
-    }, FIGURE_METADATA_RETRY_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
+  useFigureMetadataTargets(fulfillmentFigureMetadataTargets);
 
   useEffect(() => {
     const node = sentinelRef.current;
@@ -509,7 +477,6 @@ export default function FulfillmentApp({
     dropById,
     figureMetadataByKey,
     fulfillmentFigureMetadataTargets,
-    mergeLoadedFigureMetadata,
     setOrdersError,
     onMenuClose: closeExportMenu,
   });
@@ -679,7 +646,6 @@ export default function FulfillmentApp({
                         figureMediaBase={duplicateFigureMediaBase}
                         figureMedia={duplicateDrop.figureMedia}
                         figureMetadataByKey={figureMetadataByKey}
-                        onMetadataResolved={(record) => mergeLoadedFigureMetadata([record])}
                         labelOverride={({ figureId, mediaId }) => {
                           const duplicate = duplicateFigureByFigureId.get(figureId);
                           const labelId = duplicate?.labelId || (mediaId ? String(mediaId) : String(figureId));
@@ -705,7 +671,6 @@ export default function FulfillmentApp({
                         showFullAddress={!group.collapseSharedContact || index === 0}
                         canAdminEditFulfillmentAddress={canAdminEditFulfillmentAddress}
                         secretCodeDownloadDisabled={secretCodeDownloadDisabled}
-                        onMetadataResolved={(record) => mergeLoadedFigureMetadata([record])}
                         onEditAddress={handleOpenAddressModal}
                         onEditStatus={handleOpenUpdateModal}
                         onPrintLabel={handleOpenShipstationModal}

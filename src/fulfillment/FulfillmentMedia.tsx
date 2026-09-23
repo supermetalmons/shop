@@ -36,7 +36,6 @@ function FigureTileImage(props: {
   aspectRatio: number;
   primarySrc?: string;
   fallbackSrc?: string;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
 }) {
   const { activeSrc, handleError } = useFigureImage(props);
 
@@ -53,7 +52,6 @@ export function FulfillmentFigureTiles(args: {
   figureMedia?: FigureMediaConfig;
   figureMediaBase?: string;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
   labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
   renderFooter?: (args: { figureId: number; index: number }) => ReactNode;
 }) {
@@ -67,7 +65,6 @@ export function FulfillmentFigureTiles(args: {
     figureMedia,
     figureMediaBase,
     figureMetadataByKey,
-    onMetadataResolved,
     labelOverride,
     renderFooter,
   } = args;
@@ -94,7 +91,6 @@ export function FulfillmentFigureTiles(args: {
               fallbackSrc={preview.fallbackSrc}
               alt={preview.alt}
               aspectRatio={aspectRatio}
-              onMetadataResolved={onMetadataResolved}
             />
             <span className="muted small">{preview.label}</span>
             {renderFooter?.({ figureId, index })}

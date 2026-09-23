@@ -49,7 +49,6 @@ type FulfillmentExportsOptions = {
   dropById: ReadonlyMap<string, FrontendDeploymentConfig>;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   fulfillmentFigureMetadataTargets: FigureMetadataTarget[];
-  mergeLoadedFigureMetadata: (records: FigureMetadataRecord[]) => void;
   setOrdersError: (error: string | null) => void;
   onMenuClose: () => void;
 };
@@ -61,7 +60,6 @@ export function useFulfillmentExports({
   dropById,
   figureMetadataByKey,
   fulfillmentFigureMetadataTargets,
-  mergeLoadedFigureMetadata,
   setOrdersError,
   onMenuClose,
 }: FulfillmentExportsOptions, dependencies = defaultFulfillmentExportDependencies) {
@@ -100,12 +98,11 @@ export function useFulfillmentExports({
     if (targets.length) {
       const records = await dependencies.loadFigureMetadataBatch(targets);
       if (records.length) {
-        mergeLoadedFigureMetadata(records);
         exportFigureMetadataByKey = mergeFigureMetadataRecords(exportFigureMetadataByKey, records);
       }
     }
     return exportFigureMetadataByKey;
-  }, [dependencies, figureMetadataByKey, fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
+  }, [dependencies, figureMetadataByKey, fulfillmentFigureMetadataTargets]);
 
   const downloadSecretCodePng = useCallback(
     async (order: FulfillmentOrder, target: FulfillmentSecretCodeDownloadTarget) => {

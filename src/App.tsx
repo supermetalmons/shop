@@ -421,7 +421,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             figureMetadataByKey={inventorySource.figureMetadataByKey}
             getDropContent={drop.getDropContent}
             dropById={drop.dropById}
-            mergeLoadedFigureMetadata={inventorySource.actions.mergeLoadedFigureMetadata}
             shipmentsEmptyContent={<ShopShipmentsEmptyState {...shipments.emptyState} />}
           />
           <ShopReceiptsSection

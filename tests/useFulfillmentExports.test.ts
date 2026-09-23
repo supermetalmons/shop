@@ -51,7 +51,6 @@ function options() {
     dropById: new Map([[cardDrop.dropId, cardDrop]]),
     figureMetadataByKey: {} as Options['figureMetadataByKey'],
     fulfillmentFigureMetadataTargets: [101, 102].map((figureId) => ({ dropId: cardDrop.dropId, figureId })),
-    mergeLoadedFigureMetadata: mock.fn<Options['mergeLoadedFigureMetadata']>(),
     setOrdersError: mock.fn<Options['setOrdersError']>(),
     onMenuClose: mock.fn<Options['onMenuClose']>(),
   } satisfies Options;
@@ -88,7 +87,6 @@ test('ZIP uses refreshed metadata, reports progress, and blocks PNG downloads un
   assert.equal(result.current.secretCodeDownloadDisabled, true);
   assert.equal(result.current.secretCodesExportPercent, 38);
   assert.deepEqual(files.loadFigureMetadataBatch.mock.calls[0].arguments[0], inputs.fulfillmentFigureMetadataTargets);
-  assert.deepEqual(inputs.mergeLoadedFigureMetadata.mock.calls[0].arguments[0], [metadata(101), metadata(102)]);
   assert.deepEqual(files.buildSecretCodesZipBlob.mock.calls[0].arguments[0].map((entry) => entry.previewImages), [
     [{ src: metadata(101).image }], [{ src: metadata(102).image }],
   ]);

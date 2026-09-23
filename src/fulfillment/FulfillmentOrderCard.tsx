@@ -170,7 +170,6 @@ type FulfillmentOrderCardProps = {
   showFullAddress?: boolean;
   canAdminEditFulfillmentAddress: boolean;
   secretCodeDownloadDisabled: boolean;
-  onMetadataResolved: (record: FigureMetadataRecord) => void;
   onEditAddress: (order: FulfillmentOrder) => void;
   onEditStatus: (orderKey: string) => void;
   onPrintLabel: (orderKey: string) => void;
@@ -185,7 +184,6 @@ export function FulfillmentOrderCard({
   showFullAddress = true,
   canAdminEditFulfillmentAddress,
   secretCodeDownloadDisabled,
-  onMetadataResolved,
   onEditAddress,
   onEditStatus,
   onPrintLabel,
@@ -368,7 +366,6 @@ export function FulfillmentOrderCard({
                         figureMediaBase={orderFigureMediaBase}
                         figureMedia={orderDrop.figureMedia}
                         figureMetadataByKey={figureMetadataByKey}
-                        onMetadataResolved={onMetadataResolved}
                       />
                     ) : null}
                   </div>
@@ -389,7 +386,6 @@ export function FulfillmentOrderCard({
             figureMediaBase={orderFigureMediaBase}
             figureMedia={orderDrop.figureMedia}
             figureMetadataByKey={figureMetadataByKey}
-            onMetadataResolved={onMetadataResolved}
             renderFooter={({ index }) => {
               const claim = cardClaims[index];
               const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
@@ -425,7 +421,6 @@ export function FulfillmentOrderCard({
             figureMediaBase={orderFigureMediaBase}
             figureMedia={orderDrop.figureMedia}
             figureMetadataByKey={figureMetadataByKey}
-            onMetadataResolved={onMetadataResolved}
           />
         ) : null}
       </div>

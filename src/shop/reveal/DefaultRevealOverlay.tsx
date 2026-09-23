@@ -1,6 +1,5 @@
 import { ModalFocusScope } from '../../components/ModalFocusScope';
-import { ColorSchemeImage } from '../../components/ColorSchemeImage';
-import { hideImageShowFallback, showImageHideFallback } from '../../lib/imageFallback';
+import { MediaWithFallback } from '../../components/MediaWithFallback';
 import { joinDropAssetUrl } from '../../lib/dropContent';
 import type { ShopRevealController } from './useShopReveal';
 
@@ -80,21 +79,15 @@ export function DefaultRevealOverlay({ reveal, suspended: revealOverlaySuspended
                         />
                         <source src={joinDropAssetUrl(revealMediaBase, `${mediaId}.webm`)} type="video/webm" />
                       </video>
-                    ) : image ? (
-                      <>
-                        <ColorSchemeImage
-                          dropId={revealOverlay.dropId}
-                          src={image}
-                          alt={name}
-                          className="reveal-overlay__still"
-                          draggable={false}
-                          onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                          onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-                        />
-                        <div className="reveal-overlay__still reveal-overlay__still--placeholder" hidden />
-                      </>
                     ) : (
-                      <div className="reveal-overlay__still reveal-overlay__still--placeholder" />
+                      <MediaWithFallback
+                        dropId={revealOverlay.dropId}
+                        imageSources={image ? [image] : []}
+                        imageProps={{ alt: name, className: 'reveal-overlay__still', draggable: false }}
+                        renderPlaceholder={(hidden) => (
+                          <div className="reveal-overlay__still reveal-overlay__still--placeholder" hidden={hidden} />
+                        )}
+                      />
                     )}
                   </div>
                 </div>
@@ -119,21 +112,13 @@ export function DefaultRevealOverlay({ reveal, suspended: revealOverlaySuspended
             handleRevealOverlayClick();
           }}
         >
-          {revealBoxFrameSrc ? (
-            <>
-              <img
-                src={revealBoxFrameSrc}
-                alt={revealOverlay.name}
-                className="reveal-overlay__image"
-                draggable={false}
-                onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-              />
-              <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden aria-hidden="true" />
-            </>
-          ) : (
-            <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
-          )}
+          <MediaWithFallback
+            imageSources={revealBoxFrameSrc ? [revealBoxFrameSrc] : []}
+            imageProps={{ alt: revealOverlay.name, className: 'reveal-overlay__image', draggable: false }}
+            renderPlaceholder={(hidden) => (
+              <div className="reveal-overlay__image reveal-overlay__image--placeholder" hidden={hidden} aria-hidden="true" />
+            )}
+          />
         </button>
       </div>
     </ModalFocusScope>

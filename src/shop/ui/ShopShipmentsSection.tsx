@@ -23,7 +23,6 @@ import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import {
   figureMetadataCacheKey,
   figureMetadataHasImage,
-  getCachedFigureMetadata,
   type FigureMetadataRecord
 } from '../../lib/figureMetadata';
 import {
@@ -56,7 +55,6 @@ type ShopShipmentsSectionProps = Pick<ShopRevealController,
   shipmentsEmptyContent: ReactNode;
   figureMetadataByKey: Record<string, FigureMetadataRecord>;
   getDropContent: (dropId?: string) => ReturnType<typeof resolveDropContent>;
-  mergeLoadedFigureMetadata: (record: FigureMetadataRecord) => void;
 };
 export function ShopShipmentsSection({
   openClearCardModelViewer,
@@ -73,7 +71,6 @@ export function ShopShipmentsSection({
   shipmentsEmptyContent,
   figureMetadataByKey,
   getDropContent,
-  mergeLoadedFigureMetadata,
 }: ShopShipmentsSectionProps) {
   const renderShipmentItems = useCallback(
     (order: DeliveryOrderSummary) => {
@@ -143,7 +140,7 @@ export function ShopShipmentsSection({
             }
 
             const cacheKey = figureMetadataCacheKey(order.dropId, item.refId);
-            const metadata = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(order.dropId, item.refId);
+            const metadata = figureMetadataByKey[cacheKey];
             const fallbackSrc = figureMetadataHasImage(metadata) ? metadata.image : undefined;
             const mediaId = useMediaFolderPreview
               ? getMediaIdForFigureId(item.refId, dropConfig?.figureMedia)
@@ -247,7 +244,6 @@ export function ShopShipmentsSection({
                   primarySrc={primarySrc}
                   fallbackSrc={fallbackSrc}
                   alt={label}
-                  onMetadataResolved={mergeLoadedFigureMetadata}
                 />
               </div>
             );
@@ -258,7 +254,6 @@ export function ShopShipmentsSection({
     [
       figureMetadataByKey,
       getDropContent,
-      mergeLoadedFigureMetadata,
       openClearCardModelViewer,
       openImageViewer,
       openInteractiveCardViewer,

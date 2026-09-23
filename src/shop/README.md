@@ -9,7 +9,7 @@
 - `commerce`: delivery/claim coordination and receipt transfer/redemption.
 - `ui`: page sections, modal shells, header actions, and feedback.
 
-Compose purchase queries before Stripe recovery, then resolve the account owner before subscribing to inventory. Keep each query and the metadata loader single-instance.
+Compose purchase queries before Stripe recovery, then resolve the account owner before subscribing to inventory. Keep each query single-instance. Subscribe to the shared figure metadata snapshot once per app root. Inventory, shipment, reveal, and fulfillment targets retain their metadata requests while needed; the shared service owns request deduplication and the single retry timer. Release targets on cleanup, and preserve the public metadata cache across wallet changes.
 
 Inventory source state precedes reveal; inventory presentation consumes reveal's frozen views afterward. Viewer commands take explicit items. Mint actions capture the displayed inventory snapshot, while receipt ownership checks and claim recovery use raw inventory.
 

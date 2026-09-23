@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { loadFigureMetadata, type FigureMetadataRecord } from '../lib/figureMetadata';
+import { loadFigureMetadata } from '../lib/figureMetadata';
 
 type FigureImageOptions = {
   dropId: string;
   figureId: number;
   primarySrc?: string;
   fallbackSrc?: string;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
 };
 
 export function useFigureImage(
-  { dropId, figureId, primarySrc, fallbackSrc, onMetadataResolved }: FigureImageOptions,
+  { dropId, figureId, primarySrc, fallbackSrc }: FigureImageOptions,
   loadMetadata = loadFigureMetadata,
 ) {
   const [activeSrc, setActiveSrc] = useState<string | null>(() => primarySrc || fallbackSrc || null);
@@ -62,7 +61,6 @@ export function useFigureImage(
     void loadMetadata(dropId, figureId)
       .then((record) => {
         if (requestIdRef.current !== requestId || !record?.image || record.image === primarySrc) return;
-        onMetadataResolved?.(record);
         setActiveSrc(record.image);
         setUsingFallback(true);
       })
@@ -70,7 +68,7 @@ export function useFigureImage(
         if (requestIdRef.current !== requestId) return;
         setActiveSrc(null);
       });
-  }, [dropId, fallbackSrc, figureId, loadMetadata, onMetadataResolved, primarySrc, usingFallback]);
+  }, [dropId, fallbackSrc, figureId, loadMetadata, primarySrc, usingFallback]);
 
   return { activeSrc, handleError };
 }

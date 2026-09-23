@@ -2,9 +2,8 @@ import {
   useRef
 } from 'react';
 import { FaBoxOpen } from 'react-icons/fa6';
-import { ColorSchemeImage } from '../../components/ColorSchemeImage';
+import { MediaWithFallback } from '../../components/MediaWithFallback';
 import { useModalFocusScope } from '../../components/ModalFocusScope';
-import { hideImageShowFallback, showImageHideFallback } from '../../lib/imageFallback';
 import { ReceiptImageViewerOverlayProps, ReceiptViewerImageShellStyle } from './types';
 
 export function ReceiptImageViewerOverlay({
@@ -60,22 +59,18 @@ export function ReceiptImageViewerOverlay({
         <div className={`receipt-viewer-overlay__image-shell${multiReceiptClass}`} style={imageShellStyle}>
           {receiptImages.map((receiptImage, index) => (
             <div className="receipt-viewer-overlay__image-frame" key={`${receiptImage.key}:${index}`}>
-              {receiptImage.image ? (
-                <>
-                  <ColorSchemeImage
-                    dropId={dropId}
-                    src={receiptImage.image}
-                    alt={receiptImage.name || alt}
-                    className="receipt-viewer-overlay__image"
-                    draggable={false}
-                    onLoad={(evt) => showImageHideFallback(evt.currentTarget)}
-                    onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-                  />
-                  <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden aria-hidden="true" />
-                </>
-              ) : (
-                <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" aria-hidden="true" />
-              )}
+              <MediaWithFallback
+                dropId={dropId}
+                imageSources={receiptImage.image ? [receiptImage.image] : []}
+                imageProps={{
+                  alt: receiptImage.name || alt,
+                  className: 'receipt-viewer-overlay__image',
+                  draggable: false,
+                }}
+                renderPlaceholder={(hidden) => (
+                  <div className="receipt-viewer-overlay__image receipt-viewer-overlay__image--placeholder" hidden={hidden} aria-hidden="true" />
+                )}
+              />
             </div>
           ))}
         </div>

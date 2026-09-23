@@ -17,12 +17,10 @@ import {
 import {
   figureMetadataCacheKey,
   figureMetadataHasImage,
-  getCachedFigureMetadata,
-  loadFigureMetadata,
   parseFigureMetadataCacheKey,
-  type FigureMetadataRecord,
   type FigureMetadataTarget,
 } from '../../lib/figureMetadata';
+import { useFigureMetadataSnapshot, useFigureMetadataTargets } from '../../hooks/useFigureMetadata';
 import { toggleInventorySelection } from '../../lib/inventorySelection';
 import {
   buildCurrentBoxIdIndexes,
@@ -51,7 +49,7 @@ import {
 } from '../persistedState';
 import { startPostActionInventoryPolling } from '../postActionPolling';
 import { RevealOverlayState } from '../reveal/types';
-import { FIGURE_METADATA_RETRY_MS, LOCAL_PENDING_GRACE_MS, MAX_SHIPMENT_ITEMS, RECENT_REVEALS_LIMIT, pendingRevealListEqual } from './stateSupport';
+import { LOCAL_PENDING_GRACE_MS, MAX_SHIPMENT_ITEMS, RECENT_REVEALS_LIMIT, pendingRevealListEqual } from './stateSupport';
 import type { ShopInventoryQueries } from './useShopInventoryQueries';
 
 export type ShopInventoryViews = {
@@ -85,10 +83,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(localAccountWallet));
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
-  const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
-  const figureMetadataRef = useRef<Record<string, FigureMetadataRecord>>({});
-  const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
-  const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
+  const figureMetadataByKey = useFigureMetadataSnapshot();
   const localAccountWalletRef = useRef<string | null>(localAccountWallet || null);
   const pendingRevealHydrationWalletRef = useRef<string | null>(null);
   const recentRevealHydrationWalletRef = useRef<string | null>(null);
@@ -119,10 +114,6 @@ export function useShopInventorySource(options: InventorySourceOptions) {
     setLocalMintedBoxes([]);
 
     setLocalRevealedDudeKeys([]);
-    setFigureMetadataByKey({});
-    figureMetadataRef.current = {};
-    figureMetadataLoadingRef.current.clear();
-    figureMetadataRetryAtRef.current.clear();
     localMintCounterRef.current = 0;
     knownBoxIdIndexesRef.current = {
       allByDrop: new Map(),
@@ -151,9 +142,6 @@ export function useShopInventorySource(options: InventorySourceOptions) {
     persistRecentReveals(localAccountWallet, recentRevealedBoxes);
   }, [localAccountWallet, recentRevealedBoxes, isViewerMode]);
 
-  useEffect(() => {
-    figureMetadataRef.current = figureMetadataByKey;
-  }, [figureMetadataByKey]);
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!connectedWallet || isViewerMode) return;
     const now = Date.now();
@@ -227,62 +215,6 @@ export function useShopInventorySource(options: InventorySourceOptions) {
       return next.slice(0, RECENT_REVEALS_LIMIT);
     });
   };
-  const queueFigureMetadataFetch = useCallback((targets: FigureMetadataTarget[]) => {
-    if (typeof window === 'undefined') return;
-    const now = Date.now();
-    const seen = new Set<string>();
-    targets.forEach((target) => {
-      const id = Number(target.figureId);
-      if (!Number.isFinite(id) || id <= 0) return;
-      const drop = requireKnownDropConfig(target.dropId, `figure metadata target ${target.dropId}:${id}`);
-      const cacheKey = figureMetadataCacheKey(drop.dropId, id);
-      if (seen.has(cacheKey)) return;
-      seen.add(cacheKey);
-      const cached = figureMetadataRef.current[cacheKey] || getCachedFigureMetadata(drop.dropId, id);
-      if (figureMetadataHasImage(cached)) {
-        setFigureMetadataByKey((prev) =>
-          figureMetadataHasImage(prev[cacheKey]) ? prev : { ...prev, [cacheKey]: cached },
-        );
-        return;
-      }
-      if (figureMetadataLoadingRef.current.has(cacheKey)) return;
-      const retryAt = figureMetadataRetryAtRef.current.get(cacheKey);
-      if (retryAt && retryAt > now) return;
-      figureMetadataLoadingRef.current.add(cacheKey);
-      void (async () => {
-        try {
-          const metadata = await loadFigureMetadata(drop.dropId, id);
-          if (!metadata) throw new Error('metadata fetch failed');
-          setFigureMetadataByKey((prev) => {
-            const existing = prev[cacheKey];
-            if (
-              existing &&
-              existing.image === metadata.image &&
-              existing.name === metadata.name &&
-              existing.attributes === metadata.attributes
-            ) {
-              return prev;
-            }
-            return {
-              ...prev,
-              [cacheKey]: metadata,
-            };
-          });
-          figureMetadataRetryAtRef.current.delete(cacheKey);
-        } catch (err) {
-          console.warn('[mons] failed to load figure metadata', {
-            dropId: drop.dropId,
-            id,
-            cacheKey,
-            error: err,
-          });
-          figureMetadataRetryAtRef.current.set(cacheKey, Date.now() + FIGURE_METADATA_RETRY_MS);
-        } finally {
-          figureMetadataLoadingRef.current.delete(cacheKey);
-        }
-      })();
-    });
-  }, [requireKnownDropConfig]);
   const addLocalRevealedDudes = (ids: number[], dropId: string) => {
     const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id) && id > 0)));
     if (!uniqueIds.length) return;
@@ -295,26 +227,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
       });
       return Array.from(next);
     });
-    queueFigureMetadataFetch(targets);
   };
-  const mergeLoadedFigureMetadata = useCallback((record: FigureMetadataRecord) => {
-    const cacheKey = figureMetadataCacheKey(record.dropId, record.id);
-    setFigureMetadataByKey((prev) => {
-      const existing = prev[cacheKey];
-      if (
-        existing &&
-        existing.image === record.image &&
-        existing.name === record.name &&
-        existing.attributes === record.attributes
-      ) {
-        return prev;
-      }
-      return {
-        ...prev,
-        [cacheKey]: record,
-      };
-    });
-  }, []);
   const hideAssetsForWallet = useCallback((wallet: string, ids: readonly string[]) => {
     const stored = loadHiddenAssets(wallet);
     const nextStored = new Set(stored);
@@ -474,7 +387,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   return {
     queries: options,
     selected, hiddenAssets, localPendingReveals, recentRevealedBoxes, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey,
-    actions: { addLocalPendingReveal, addLocalMintedBoxes, removeLocalPendingReveal, rememberRecentReveal, queueFigureMetadataFetch, addLocalRevealedDudes, mergeLoadedFigureMetadata, hideAssetsForWallet, markAssetsHidden, unhideAssetsForWallet, clearSelection, replaceSelection, removeSelected, pruneSelection, toggleSelection },
+    actions: { addLocalPendingReveal, addLocalMintedBoxes, removeLocalPendingReveal, rememberRecentReveal, addLocalRevealedDudes, hideAssetsForWallet, markAssetsHidden, unhideAssetsForWallet, clearSelection, replaceSelection, removeSelected, pruneSelection, toggleSelection },
     maintenance: { reconcilePendingReveals, reconcileMintedBoxes, pruneExpiredMintedBoxes, refreshMintedExpectations, reconcileRevealedFigures },
   };
 }
@@ -483,7 +396,6 @@ export function useShopInventoryMaintenance(source: ShopInventorySource, views: 
   const { inventoryView, pendingOpenBoxesView, revealOverlay } = views;
   const { owner, isViewerMode, inventoryFetched, pendingOpenBoxesSuccess, refetchInventory } = source.queries;
   const { recentRevealedBoxes, localPendingReveals, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey } = source;
-  const { queueFigureMetadataFetch } = source.actions;
   useEffect(() => source.maintenance.reconcilePendingReveals(views), [
     owner,
     isViewerMode,
@@ -517,15 +429,7 @@ export function useShopInventoryMaintenance(source: ShopInventorySource, views: 
     return Array.from(targetsByKey.values());
   }, [inventoryView, localRevealedDudeKeys, figureMetadataByKey]);
 
-  useEffect(() => {
-    if (!figureTargetsNeedingMetadata.length) return;
-    if (typeof window === 'undefined') return;
-    queueFigureMetadataFetch(figureTargetsNeedingMetadata);
-    const interval = window.setInterval(() => {
-      queueFigureMetadataFetch(figureTargetsNeedingMetadata);
-    }, FIGURE_METADATA_RETRY_MS);
-    return () => window.clearInterval(interval);
-  }, [figureTargetsNeedingMetadata, queueFigureMetadataFetch]);
+  useFigureMetadataTargets(figureTargetsNeedingMetadata);
 
   const shouldPollInventory =
     !isViewerMode && !revealOverlay && (localRevealedDudeKeys.length > 0 || localMintedBoxes.length > 0);

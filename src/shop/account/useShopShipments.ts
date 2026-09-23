@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useMemo
 } from 'react';
 import {
@@ -14,7 +13,6 @@ import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import {
   figureMetadataCacheKey,
   figureMetadataHasImage,
-  getCachedFigureMetadata,
   type FigureMetadataTarget
 } from '../../lib/figureMetadata';
 import {
@@ -24,7 +22,7 @@ import {
 import {
   ownProfileShipmentsEmptyState
 } from '../../lib/profileState';
-import { FIGURE_METADATA_RETRY_MS } from '../inventory/stateSupport';
+import { useFigureMetadataTargets } from '../../hooks/useFigureMetadata';
 import type { ShopInventorySource } from '../inventory/useShopInventorySource';
 import type { ShopInventoryView } from '../inventory/useShopInventoryView';
 import type { ShopAccount } from './useShopAccount';
@@ -55,7 +53,7 @@ export function useShopShipments({
   const { canReadOwnProfile, isViewerMode, viewedProfileLoading, viewedProfile, viewedProfileError } = account;
   const { shipments: profileShipments, shipmentsReady: profileShipmentsReady, shipmentsError: profileShipmentsError, loading: authLoading } = auth;
   const { profileRecoveryPending: stripeCheckoutProfileRecoveryPending, anonymousHistory: { orders: anonymousStripeDeliveryOrders, visible: anonymousStripeHistoryVisible, initialLoading: anonymousStripeHistoryInitialLoading, waitingForFulfillment: anonymousStripeHistoryWaitingForFulfillment, error: anonymousStripeHistoryError } } = stripeRecovery;
-  const { figureMetadataByKey, actions: { queueFigureMetadataFetch } } = source;
+  const { figureMetadataByKey } = source;
   const { inventoryInitialResponseReady, receiptItems, inventoryEmptyStateVisibility } = view;
   const { authReady, walletIdleReady, pendingShipmentsSignIn, handleSignInForShipments } = signIn;
   const isOwnProfileView = canReadOwnProfile;
@@ -100,7 +98,7 @@ export function useShopShipments({
           if (hasMappedMedia) return;
         }
         const cacheKey = figureMetadataCacheKey(order.dropId, item.refId);
-        const metadata = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(order.dropId, item.refId);
+        const metadata = figureMetadataByKey[cacheKey];
         if (!figureMetadataHasImage(metadata)) {
           targetsByKey.set(cacheKey, { dropId: order.dropId, figureId: item.refId });
         }
@@ -143,15 +141,7 @@ export function useShopShipments({
   const shipmentsSectionReady = profileSectionsReady.shipments;
 
   const receiptsContentVisible = profileSectionsReady.receipts;
-  useEffect(() => {
-    if (!shipmentFigureTargetsNeedingMetadata.length) return;
-    if (typeof window === 'undefined') return;
-    queueFigureMetadataFetch(shipmentFigureTargetsNeedingMetadata);
-    const interval = window.setInterval(() => {
-      queueFigureMetadataFetch(shipmentFigureTargetsNeedingMetadata);
-    }, FIGURE_METADATA_RETRY_MS);
-    return () => window.clearInterval(interval);
-  }, [queueFigureMetadataFetch, shipmentFigureTargetsNeedingMetadata]);
+  useFigureMetadataTargets(shipmentFigureTargetsNeedingMetadata);
   return { deliveryOrders, shipmentsRetainedError, shipmentHistory: history, shipmentsEmptyStateVisibility: shipmentsEmptyStateVisibility as 'visible' | 'hidden', shipmentsSectionReady, receiptsContentVisible, emptyState: { isOwnProfileView, ownShipmentsEmptyState, isViewerMode, viewedProfileError, profileLoadingForView, anonymousStripeHistoryVisible, anonymousStripeHistoryInitialLoading, anonymousStripeHistoryError, anonymousStripeHistoryWaitingForFulfillment, handleSignInForShipments, authLoading, pendingShipmentsSignIn } };
 }
 export type ShopShipments = ReturnType<typeof useShopShipments>;

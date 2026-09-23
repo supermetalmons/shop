@@ -19,8 +19,6 @@ export const LOCAL_PENDING_GRACE_MS = 2 * 60 * 1000;
 
 export const RECENT_REVEALS_LIMIT = 10;
 
-export const FIGURE_METADATA_RETRY_MS = 3000;
-
 export const EMPTY_LOCAL_MINTED_BOXES: readonly LocalMintedBox[] = [];
 
 export function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingReveal[]): boolean {

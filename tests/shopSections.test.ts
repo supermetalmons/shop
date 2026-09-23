@@ -79,7 +79,6 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
     shipmentsEmptyContent: 'No shipments yet.',
     figureMetadataByKey: {},
     getDropContent: (dropId) => resolveDropContent(getFrontendDrop(dropId || '')),
-    mergeLoadedFigureMetadata: () => undefined,
   };
   const view = render(createElement(ShopShipmentsSection, props));
   assert.match(view.getByRole('status').textContent || '', /Showing previously loaded data/);

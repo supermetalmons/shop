@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from 'react';
+import { useFigureMetadataTargets } from '../../hooks/useFigureMetadata';
 import {
   figureMetadataCacheKey,
-  getCachedFigureMetadata,
 } from '../../lib/figureMetadata';
 import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import {
@@ -28,7 +28,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
 }) {
   const {
     getDropContent, routeDrop, boxLabelForDropId, figureLabelForDropId,
-    figureMetadataByKey, figureReferenceForDropId, requireKnownDropConfig, queueFigureMetadataFetch,
+    figureMetadataByKey, figureReferenceForDropId, requireKnownDropConfig,
   } = options;
   const {
     usesInteractiveCardPackRevealForDropId, usesClearCard3dRevealForDropId,
@@ -130,7 +130,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     if (revealOverlayContent.figures.revealPresentation === 'videos') {
       return revealOverlay.revealedIds.map((figureId, index) => {
         const cacheKey = figureMetadataCacheKey(revealOverlay.dropId, figureId);
-        const meta = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(revealOverlay.dropId, figureId);
+        const meta = figureMetadataByKey[cacheKey];
         return {
           figureId,
           index,
@@ -142,7 +142,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     }
     return revealOverlay.revealedIds.map((figureId, index) => {
       const cacheKey = figureMetadataCacheKey(revealOverlay.dropId, figureId);
-      const meta = figureMetadataByKey[cacheKey] || getCachedFigureMetadata(revealOverlay.dropId, figureId);
+      const meta = figureMetadataByKey[cacheKey];
       return {
         figureId,
         index,
@@ -185,11 +185,11 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     playRevealSoundForDropId(revealOverlay.dropId);
   }, [playRevealSoundForDropId, revealOverlay, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack, showRevealOutcome]);
 
-  useEffect(() => {
-    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d) return;
-    if (!revealOverlay?.revealedIds?.length) return;
-    queueFigureMetadataFetch(revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId })));
-  }, [queueFigureMetadataFetch, revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack]);
+  const revealMetadataTargets = useMemo(() => {
+    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d || !revealOverlay?.revealedIds?.length) return [];
+    return revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId }));
+  }, [revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack]);
+  useFigureMetadataTargets(revealMetadataTargets);
 
   const revealMediaStyle = useMemo(() => {
     if (!revealOverlay || !revealMediaItems.length) return undefined;

@@ -42,7 +42,6 @@ function props(overrides: Partial<Props> = {}): Props {
     figureMetadataByKey: {},
     canAdminEditFulfillmentAddress: true,
     secretCodeDownloadDisabled: false,
-    onMetadataResolved: () => undefined,
     onEditAddress: () => undefined,
     onEditStatus: () => undefined,
     onPrintLabel: () => undefined,
