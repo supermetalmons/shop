@@ -114,6 +114,8 @@ function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16
         String(index),
         JSON.stringify({
           owner,
+          source: 'stripe_offchain',
+          stripeCheckoutSessionId: `cs_live_${index}`,
           status: deliveryStatus,
           buyerOrderReceivedEmailState: index % 32 === 0 ? 'pending' : 'sent',
           shipperReadyToShipEmailState: index % 32 === 16 ? 'pending' : 'sent',
@@ -132,6 +134,7 @@ function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16
         'drop',
         String(index),
         JSON.stringify({
+          stripePaymentIntentId: `pi_${index}`,
           fulfillmentProcessor: 'cloudflare_queue_v1',
           status: index % 32 === 0 ? 'fulfillment_pending' : 'fulfilled',
           updatedAt: index,
