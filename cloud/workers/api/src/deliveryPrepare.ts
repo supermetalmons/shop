@@ -92,6 +92,7 @@ import {
   type D1ProfileAddress,
 } from './profileD1.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
 import {
@@ -861,35 +862,6 @@ function ensurePacketFits(args: {
   );
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  map: (value: T, index: number) => Promise<R>,
-  onFailure?: (error: unknown) => void,
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  let failed = false;
-  let failure: unknown;
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (!failed && nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      try {
-        results[index] = await map(values[index], index);
-      } catch (error) {
-        if (!failed) {
-          failed = true;
-          failure = error;
-          onFailure?.(error);
-        }
-      }
-    }
-  }));
-  if (failed) throw failure;
-  return results;
-}
-
 function orderItem(asset: DasAsset, assetId: string, runtime: DeliveryRuntime, owner: string): DeliveryOrderItem {
   if (asset.id !== assetId) {
     throw new DeliveryPrepareError('failed-precondition', 'Asset id does not match the requested item');
@@ -959,18 +931,13 @@ async function prepareDelivery(args: {
     ? address.decoded.countryCode
     : typeof address.decoded.country === 'string' ? address.decoded.country : '';
   const addressCountry = normalizeCountryCode(rawAddressCountry) || rawAddressCountry;
-  const assetAbort = new AbortController();
-  const assetContext = {
-    ...args.providerContext,
-    signal: AbortSignal.any([args.providerContext.signal, assetAbort.signal]),
-  };
-  const items = await mapWithConcurrency(itemIds, PROVIDER_CONCURRENCY, async (assetId) =>
+  const items = await mapWithConcurrency(itemIds, PROVIDER_CONCURRENCY, async (assetId, _index, signal) =>
     orderItem(
-      await args.dependencies.fetchAsset(assetContext, runtime, assetId),
+      await args.dependencies.fetchAsset({ ...args.providerContext, signal }, runtime, assetId),
       assetId,
       runtime,
       ownerWallet,
-    ), (error) => assetAbort.abort(error));
+    ), { signal: args.providerContext.signal });
   const deliveryLamports = calculateDeliveryLamports(
     items,
     addressCountry,

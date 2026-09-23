@@ -209,7 +209,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     getDropConnection: drop.getDropConnection,
     requireKnownDropConfig: drop.requireKnownDropConfig,
     hasAuthenticatedWalletSession: auth.hasAuthenticatedWalletSession,
-    profileShipments: auth.shipments,
     hideAssetsForWallet: inventorySource.actions.hideAssetsForWallet,
     runDeliveryRecovery,
     refetchInventory: queries.refetchInventory,

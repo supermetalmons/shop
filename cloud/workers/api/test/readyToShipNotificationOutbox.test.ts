@@ -10,7 +10,7 @@ for (const family of ['ready', 'stripe_terminal'] as const) {
     const before = await state.repository.get(state.parentKey);
     const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
     await state.publish();
-    assert.equal(outboxReads.mock.callCount(), family === 'stripe_terminal' ? 1 : 2);
+    assert.equal(outboxReads.mock.callCount(), 1);
     const record = await state.read();
     assert.equal(record.state, 'queued');
     assert.equal(record.attemptCount, 1);
@@ -74,7 +74,7 @@ for (const family of ['ready', 'stripe_terminal'] as const) {
       });
       const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
       await assert.rejects(state.publish({ signal: controller.signal }), /cancelled/);
-      assert.equal(outboxReads.mock.callCount(), family === 'stripe_terminal' ? 1 : 2);
+      assert.equal(outboxReads.mock.callCount(), 1);
       const record = await state.read();
       assert.equal(record.attemptCount, 0);
       assert.equal(record.claimId, null);
@@ -203,7 +203,52 @@ test('ready: an invalid delivery identity fails only that notification', async (
   await state.repository.run(OUTBOX_NOW, (unit) => unit.replaceNotificationOutbox({ ...state.intent,
     generation: crypto.randomUUID(), entries: state.intent.entries.map((entry) => entry.kind === 'buyer_order_received'
       ? { ...entry, idempotencyKey: 'card_nft_2:8:order_received' } : entry) }));
+  const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
+  const compareAndSet = context.mock.method(state.repository.notificationOutbox, 'compareAndSet');
   await state.publish();
+  assert.equal(outboxReads.mock.callCount(), 1);
+  const repaired = await compareAndSet.mock.calls[0].result;
+  assert.ok(repaired);
+  assert.deepEqual(compareAndSet.mock.calls[1].arguments[0].expected, repaired);
   assert.deepEqual(state.sent[0].map((job) => job.kind), ['shipper_ready_to_ship']);
   assert.deepEqual((await state.read()).entries.map(({ state }) => state), ['failed', 'queued']);
 });
+
+for (const conflicts of [1, 6]) {
+  test(`ready: ${conflicts} repair conflicts ${conflicts === 6 ? 'stop publication' : 'reload before publication'}`, async (context) => {
+    const state = await notificationFixture(context, 'ready');
+    await state.repository.run(OUTBOX_NOW, (unit) => unit.replaceNotificationOutbox({ ...state.intent,
+      generation: crypto.randomUUID(), entries: state.intent.entries.map((entry) => entry.kind === 'buyer_order_received'
+        ? { ...entry, idempotencyKey: 'card_nft_2:8:order_received' } : entry) }));
+    const original = state.repository.notificationOutbox.compareAndSet.bind(state.repository.notificationOutbox);
+    let repairAttempts = 0;
+    const compareAndSet = context.mock.method(state.repository.notificationOutbox, 'compareAndSet', async (args: Parameters<typeof original>[0]) => {
+      if (args.changes.lastErrorCode === 'invalid-notification-data' && ++repairAttempts <= conflicts) {
+        assert.ok(await original({ ...args, changes: { nextAttemptAtMs: OUTBOX_NOW } }));
+        return null;
+      }
+      return original(args);
+    });
+    const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
+    if (conflicts === 6) {
+      await assert.rejects(state.publish(), (error: unknown) => error instanceof ReadyToShipNotificationEnqueueError &&
+        error.message === 'Notification state changed. Retry later.');
+      assert.equal(outboxReads.mock.callCount(), 6);
+      assert.equal(compareAndSet.mock.callCount(), 6);
+      assert.equal(state.sent.length, 0);
+      const record = await state.read();
+      assert.equal(record.attemptCount, 0);
+      assert.equal(record.claimId, null);
+      assert.ok(record.entries.every((entry) => entry.state === 'pending' && !entry.payload));
+    } else {
+      await state.publish();
+      assert.equal(outboxReads.mock.callCount(), 2);
+      assert.equal(repairAttempts, 2);
+      const repaired = await compareAndSet.mock.calls[1].result;
+      assert.ok(repaired);
+      assert.deepEqual(compareAndSet.mock.calls[2].arguments[0].expected, repaired);
+      assert.deepEqual(state.sent[0].map((job) => job.kind), ['shipper_ready_to_ship']);
+      assert.deepEqual((await state.read()).entries.map(({ state }) => state), ['failed', 'queued']);
+    }
+  });
+}

@@ -471,7 +471,17 @@ The fulfillment menu loads older pages on demand and shows `+` after its loaded
 count while more pages remain. Stripe hydration is limited to four concurrent
 requests per page, and OPS/DATA integrity checks batch their read-only statements
 into one Wrangler command per database.
-Append `0016_<description>.sql` for the next change.
+Migration `0016_shipment_history_pagination.sql` adds shipment-history and
+session-presence indexes. Apply it and deploy the API before the frontend.
+Profile-state, shipment, admin-profile, and anonymous-history requests opt in
+with `shipmentsPage: { limit, cursor }` (default 50, maximum 100), retaining their
+existing arrays and adding `nextCursor`. Legacy requests still receive complete
+histories. The frontend loads older shipments automatically while scrolling;
+checkout and prepared-delivery recovery use owner-scoped
+`/profile/shipment-presence` lookups instead of relying on loaded history pages.
+Wallet-scoped presence requests include `expectedWallet`; a changed binding
+returns an authentication error before reading shipments.
+Append `0017_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

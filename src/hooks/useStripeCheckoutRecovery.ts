@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAnonymousStripeDeliveryHistory } from '../api/profile';
+import { getAnonymousStripeDeliveryHistory, getShipmentPresence } from '../api/profile';
 import { isRetryableApiError } from '../lib/apiErrors';
 import {
-  authoritativeProfileShipmentsContainStripeSessions,
   retainMatchingOwnerRecoveryKey,
   stripeInventoryRecoveryTargetForResolvedSessions,
   stripeRecoveryKeyForResolvedSessions,
@@ -74,9 +73,9 @@ type StripeCheckoutRecoveryOptions = {
     | 'authenticated'
     | 'loading'
     | 'sessionResolution'
-    | 'shipments'
-    | 'shipmentsReady'
+    | 'shipmentsRevision'
     | 'reconcileProfile'
+    | 'refreshProfileState'
   >;
   connectedWallet: string | undefined;
   dropId: string | undefined;
@@ -101,9 +100,9 @@ export function useStripeCheckoutRecovery({
     authenticated,
     loading: authLoading,
     sessionResolution,
-    shipments: profileShipments,
-    shipmentsReady: profileShipmentsReady,
+    shipmentsRevision,
     reconcileProfile,
+    refreshProfileState,
   } = auth;
   const authReady = sessionResolution === 'settled';
   const authenticatedWallet = authenticated && sessionWallet ? sessionWallet : undefined;
@@ -135,29 +134,31 @@ export function useStripeCheckoutRecovery({
     useState<StripeCheckoutOptimisticMintProgress | null>(null);
   const [stripeCheckoutRecoveredProfile, setStripeCheckoutRecoveredProfile] =
     useState<OwnerRecoveryKey | null>(null);
-  const profileShipmentsRef = useRef({
-    shipments: profileShipments,
-    ready: profileShipmentsReady,
-  });
+  const [walletShipmentPresence, setWalletShipmentPresence] = useState<{
+    authSubject: string;
+    wallet: string;
+    recoveryKey: string;
+    sessionIds: string[];
+  } | null>(null);
   const stripeCheckoutReturnRef = useRef<StripeCheckoutReturn | null | undefined>(undefined);
   const stripeCheckoutOptimisticMintSessionRef = useRef<string | null>(null);
   const stripeCheckoutCompletionHandledRef = useRef(false);
   const stripeCheckoutReturnPollUntilRef = useRef(0);
   const stripeCheckoutRecoveryLoadedKeysRef = useRef<Set<string>>(new Set());
-  const profileShipmentStripeSessionIds = useMemo(
-    () =>
-      profileShipments
-        .map((order) => order.stripeCheckoutSessionId?.trim() || '')
-        .filter(Boolean),
-    [profileShipments],
+  const walletShipmentPresenceReady = walletShipmentPresence?.authSubject === authSubject &&
+    walletShipmentPresence?.wallet === sessionWallet &&
+    walletShipmentPresence?.recoveryKey === stripeCheckoutRecoveryKey;
+  const walletShipmentStripeSessionIds = useMemo(
+    () => walletShipmentPresenceReady ? walletShipmentPresence?.sessionIds ?? [] : [],
+    [walletShipmentPresence, walletShipmentPresenceReady],
   );
-  const pendingProfileStripeSessionIds = useMemo(
+  const pendingWalletStripeSessionIds = useMemo(
     () =>
       pendingStripeCheckoutRecoverySessionIds(
         stripeCheckoutRecoverySessionIds,
-        profileShipmentStripeSessionIds,
+        walletShipmentStripeSessionIds,
       ),
-    [profileShipmentStripeSessionIds, stripeCheckoutRecoverySessionIds],
+    [walletShipmentStripeSessionIds, stripeCheckoutRecoverySessionIds],
   );
   const stripeCheckoutProfileRecoveryPending = Boolean(
     stripeCheckoutRecoveryKey &&
@@ -184,19 +185,24 @@ export function useStripeCheckoutRecovery({
     Boolean(anonymousStripeHistoryPollUntil && Date.now() < anonymousStripeHistoryPollUntil);
   const {
     data: anonymousStripeHistoryData,
+    dataUpdatedAt: anonymousStripeHistoryUpdatedAt,
     isFetching: anonymousStripeHistoryLoading,
     error: anonymousStripeHistoryError,
   } = useQuery({
     queryKey: anonymousStripeDeliveryHistoryQueryKey(authSubject, anonymousStripeHistoryMarkerKey),
     enabled: anonymousStripeHistoryEnabled,
-    queryFn: getAnonymousStripeDeliveryHistory,
+    queryFn: async () => {
+      const presence = await getShipmentPresence({ scope: 'anonymous', stripeSessionIds: stripeCheckoutRecoverySessionIds })
+        .then((result) => ({ sessionIds: result.stripeSessionIds, error: null }))
+        .catch((error: unknown) => ({ sessionIds: null, error }));
+      const page = await getAnonymousStripeDeliveryHistory({ limit: 50 });
+      return { ...page, presence };
+    },
     refetchInterval: (query) => {
       if (!anonymousStripeHistoryPollActive || !anonymousStripeHistoryPollUntil) return false;
-      const error = query.state.error;
+      const error = query.state.error || query.state.data?.presence.error;
       const completedAttempts = query.state.dataUpdateCount + query.state.errorUpdateCount;
-      const presentSessionIds = (query.state.data?.orders || [])
-        .map((order) => order.stripeCheckoutSessionId || '')
-        .filter(Boolean);
+      const presentSessionIds = query.state.data?.presence.sessionIds ?? [];
       return stripeCheckoutRetryDelay({
         hasPendingWork: pendingStripeCheckoutRecoverySessionIds(
           stripeCheckoutRecoverySessionIds,
@@ -344,24 +350,17 @@ export function useStripeCheckoutRecovery({
   ]);
 
   useEffect(() => {
-    profileShipmentsRef.current = {
-      shipments: profileShipments,
-      ready: profileShipmentsReady,
-    };
-  }, [profileShipments, profileShipmentsReady]);
-
-  useEffect(() => {
     if (
       !authSubject ||
       !stripeCheckoutRecoveryKey ||
       !stripeCheckoutRecoverySessionIds.length ||
-      !profileShipmentsReady
+      !walletShipmentPresenceReady
     ) {
       return;
     }
     const markerResult = forgetCompletedStripeCheckoutMarkersForAuthSubject({
       authSubject,
-      sessionIds: profileShipmentStripeSessionIds,
+      sessionIds: walletShipmentStripeSessionIds,
     });
     if (markerResult.removed) {
       setStripeCheckoutMarkers(markerResult.markers);
@@ -382,15 +381,19 @@ export function useStripeCheckoutRecovery({
         });
       }
     }
-    if (
-      stripeCheckoutReturnSessionId &&
-      profileShipmentStripeSessionIds.includes(stripeCheckoutReturnSessionId)
-    ) {
+    const returnSessionResolved = Boolean(stripeCheckoutReturnSessionId &&
+      walletShipmentStripeSessionIds.includes(stripeCheckoutReturnSessionId));
+    if (returnSessionResolved) {
       setStripeCheckoutReturnSessionId((current) =>
         current === stripeCheckoutReturnSessionId ? null : current,
       );
     }
-    if (!sessionWallet || pendingProfileStripeSessionIds.length) return;
+    if (markerResult.removed || returnSessionResolved) {
+      void refreshProfileState().catch((error) => {
+        console.warn('[mons] failed to refresh shipments after Stripe checkout recovery', error);
+      });
+    }
+    if (!sessionWallet || pendingWalletStripeSessionIds.length) return;
     setStripeCheckoutProfileRecovery((current) =>
       stripeProfileRecoveryAfterRefresh(current, stripeCheckoutRecoveryKey, true),
     );
@@ -405,10 +408,11 @@ export function useStripeCheckoutRecovery({
     anonymousStripeHistoryMarkerKey,
     connectedWallet,
     authSubject,
-    pendingProfileStripeSessionIds,
-    profileShipmentStripeSessionIds,
-    profileShipmentsReady,
+    pendingWalletStripeSessionIds,
+    walletShipmentStripeSessionIds,
+    walletShipmentPresenceReady,
     queryClient,
+    refreshProfileState,
     sessionWallet,
     stripeCheckoutRecoveryKey,
     stripeCheckoutRecoverySessionIds.length,
@@ -431,28 +435,10 @@ export function useStripeCheckoutRecovery({
       anonymousStripeHistoryPollUntil,
       stripeCheckoutReturnPollUntilRef.current,
     );
-    let deliveryRecoveryLoaded = stripeCheckoutRecoveryLoadedKeysRef.current.has(recoveryKey);
+    const ownerRecoveryKey = `${sessionWallet}:${recoveryKey}`;
+    let deliveryRecoveryLoaded = stripeCheckoutRecoveryLoadedKeysRef.current.has(ownerRecoveryKey);
     let retryIndex = 0;
     setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'pending' });
-
-    const readCurrentShipments = () => {
-      const snapshot = profileShipmentsRef.current;
-      const expectedSessionsPresent = authoritativeProfileShipmentsContainStripeSessions({
-        shipments: snapshot.shipments,
-        ready: snapshot.ready,
-        expectedSessionIds: stripeCheckoutRecoverySessionIds,
-      });
-      const walletStripeSessionIds = (snapshot.ready ? snapshot.shipments : [])
-        .map((order) => order.stripeCheckoutSessionId || '')
-        .filter(Boolean);
-      return {
-        expectedSessionsPresent,
-        pendingSessionIds: pendingStripeCheckoutRecoverySessionIds(
-          stripeCheckoutRecoverySessionIds,
-          walletStripeSessionIds,
-        ),
-      };
-    };
 
     const markRecovered = () => {
       setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'recovered' });
@@ -462,59 +448,57 @@ export function useStripeCheckoutRecovery({
       if (!connectedWallet) setStripeRecoveryOwner(sessionWallet);
     };
 
-    const recoverUntilSettled = () => {
+    const recoverUntilSettled = async () => {
       if (cancelled) return;
-      const { expectedSessionsPresent } = readCurrentShipments();
-      if (expectedSessionsPresent) {
-        markRecovered();
-        return;
-      }
       let retryable = true;
-      const reconciliationOptions = stripeMergeReconciliationOptions(deliveryRecoveryLoaded);
-      void reconcileProfile(reconciliationOptions)
-        .then((result) => {
-          if (!result) {
-            retryable = false;
-            return;
-          }
+      let pendingSessionIds = stripeCheckoutRecoverySessionIds;
+      const checkPresence = async () => {
+        const presence = await getShipmentPresence({
+          scope: 'wallet', expectedWallet: sessionWallet, stripeSessionIds: stripeCheckoutRecoverySessionIds,
+        });
+        if (cancelled) return;
+        pendingSessionIds = pendingStripeCheckoutRecoverySessionIds(
+          stripeCheckoutRecoverySessionIds, presence.stripeSessionIds,
+        );
+        setWalletShipmentPresence({ authSubject, wallet: sessionWallet, recoveryKey, sessionIds: presence.stripeSessionIds });
+        if (!pendingSessionIds.length) markRecovered();
+      };
+      try {
+        await checkPresence();
+        if (cancelled || !pendingSessionIds.length) return;
+        const reconciliationOptions = stripeMergeReconciliationOptions(deliveryRecoveryLoaded);
+        const result = await reconcileProfile(reconciliationOptions);
+        if (cancelled) return;
+        if (!result) retryable = false;
+        else {
           if (reconciliationOptions.includeDeliveryRecovery) {
             deliveryRecoveryLoaded = true;
-            stripeCheckoutRecoveryLoadedKeysRef.current.add(recoveryKey);
+            stripeCheckoutRecoveryLoadedKeysRef.current.add(ownerRecoveryKey);
           }
-          if (cancelled) return;
-          const { expectedSessionsPresent } = readCurrentShipments();
-          if (expectedSessionsPresent) markRecovered();
-        })
-        .catch((err) => {
-          retryable = isRetryableApiError(err);
-          console.warn('[mons] failed to reconcile profile after Stripe checkout', err);
-        })
-        .finally(() => {
-          if (cancelled) return;
-          const { expectedSessionsPresent, pendingSessionIds } = readCurrentShipments();
-          if (expectedSessionsPresent) {
-            markRecovered();
-            return;
-          }
-          const retryDelay = stripeCheckoutRetryDelay({
-            hasPendingWork: pendingSessionIds.length > 0,
-            retryable,
-            now: Date.now(),
-            stopAt,
-            retryIndex,
-          });
-          if (retryDelay === null) {
-            if (pendingSessionIds.length) {
-              setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'fallback' });
-            }
-            return;
-          }
-          retryIndex += 1;
-          timeout = setTimeout(recoverUntilSettled, retryDelay);
+          await checkPresence();
+        }
+      } catch (err) {
+        retryable = isRetryableApiError(err);
+        console.warn('[mons] failed to reconcile profile after Stripe checkout', err);
+      } finally {
+        if (cancelled || !pendingSessionIds.length) return;
+        const retryDelay = stripeCheckoutRetryDelay({
+          hasPendingWork: true,
+          retryable,
+          now: Date.now(),
+          stopAt,
+          retryIndex,
         });
+        if (retryDelay === null) {
+          setStripeCheckoutProfileRecovery({ key: recoveryKey, phase: 'fallback' });
+          return;
+        }
+        retryIndex += 1;
+        timeout = setTimeout(() => { void recoverUntilSettled(); }, retryDelay);
+      }
     };
 
-    recoverUntilSettled();
+    void recoverUntilSettled();
     return () => {
       cancelled = true;
       if (timeout) clearTimeout(timeout);
@@ -525,12 +509,30 @@ export function useStripeCheckoutRecovery({
     authReady,
     connectedWallet,
     authSubject,
-    profileShipmentsReady,
     reconcileProfile,
     sessionWallet,
     sessionResolution,
     stripeCheckoutRecoveryKey,
     stripeCheckoutRecoverySessionIds,
+  ]);
+
+  useEffect(() => {
+    if (!authSubject || !sessionWallet || !stripeCheckoutAnonymousFallbackReady) return;
+    let cancelled = false;
+    void getShipmentPresence({ scope: 'wallet', expectedWallet: sessionWallet, stripeSessionIds: stripeCheckoutRecoverySessionIds })
+      .then((presence) => {
+        if (cancelled) return;
+        setWalletShipmentPresence({
+          authSubject, wallet: sessionWallet, recoveryKey: stripeCheckoutRecoveryKey, sessionIds: presence.stripeSessionIds,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) console.warn('[mons] failed to check Stripe shipment presence after profile refresh', error);
+      });
+    return () => { cancelled = true; };
+  }, [
+    authSubject, sessionWallet, shipmentsRevision, stripeCheckoutAnonymousFallbackReady,
+    stripeCheckoutRecoveryKey, stripeCheckoutRecoverySessionIds,
   ]);
 
   const anonymousStripeDeliveryOrders = anonymousStripeHistoryData?.orders || [];
@@ -561,6 +563,8 @@ export function useStripeCheckoutRecovery({
     recoveredProfile: stripeCheckoutRecoveredProfile,
     anonymousHistory: {
       orders: anonymousStripeDeliveryOrders,
+      nextCursor: anonymousStripeHistoryData?.nextCursor ?? null,
+      updatedAt: anonymousStripeHistoryUpdatedAt,
       visible: anonymousStripeHistoryVisible,
       initialLoading: anonymousStripeHistoryInitialLoading,
       waitingForFulfillment: anonymousStripeHistoryWaitingForFulfillment,

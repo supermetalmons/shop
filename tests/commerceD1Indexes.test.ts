@@ -15,6 +15,8 @@ import {
   legacyClaimAssignmentsQuery,
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
+  shipmentHistoryPageQuery,
+  shipmentPresenceQuery,
   staleStripeFulfillmentsQuery,
   type CommerceSqlQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
@@ -1299,6 +1301,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       new URL('../cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', import.meta.url),
       'utf8',
     ));
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', import.meta.url),
+      'utf8',
+    ));
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
       'owner',
@@ -1310,6 +1316,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       'status',
       'document_path',
     ]);
+    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipment_cursor'), [
+      'owner', 'shipment_sort_at_ms', 'document_path',
+    ]);
+    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipment_session'), ['owner', 'null']);
     assert.equal(
       String(db.prepare(`SELECT sql FROM sqlite_schema
         WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`).get()!.sql)
@@ -1430,6 +1440,107 @@ test('manual-review pagination migration indexes populated documents without cha
       'drop_id', 'manual_review_sort_at_ms', 'manual_review_session_id', 'document_path',
     ]);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'commerce_documents_manual_review'").get()!.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('shipment-history pagination migration preserves state and projects finite timestamps including zero', () => {
+  const db = database();
+  try {
+    const cases = [
+      { processedAt: 0, processingAt: 50, createdAt: 100, expected: 0 },
+      { processedAt: 12.5, processingAt: 50, expected: 12.5 },
+      { processedAt: { seconds: 1 }, processingAt: -4, createdAt: 100, expected: -4 },
+      { processedAt: '120', processingAt: false, createdAt: 100, expected: 100 },
+      { processedAt: null, processingAt: {}, createdAt: '100', expected: 0 },
+      { processingAt: 0, createdAt: 100, expected: 0 },
+      { createdAt: -0.5, expected: -0.5 },
+    ];
+    runDocumentEpoch(db, () => {
+      cases.forEach(({ expected: _expected, ...data }, index) => insertTestDocument(db, {
+        kind: 'delivery_order', dropId: 'drop', documentId: String(index),
+        path: `drops/drop/deliveryOrders/${index}`, data: { owner: 'owner', status: 'ready_to_ship', ...data },
+      }));
+      db.prepare(`INSERT INTO commerce_documents (
+        document_path, document_kind, drop_id, document_id, document_json,
+        version, create_time, update_time, processed_at_seconds, processed_at_nanos
+      ) VALUES ('drops/drop/deliveryOrders/overflow', 'delivery_order', 'drop', 'overflow',
+        ?, 1, 'created', 'updated', NULL, NULL)`).run(
+        '{"owner":"owner","status":"ready_to_ship","processedAt":1e999,"processingAt":-1e999,"createdAt":23}',
+      );
+    });
+    const before = db.prepare('SELECT document_path, document_json, version, create_time, update_time FROM commerce_documents').all();
+    const authorityBefore = db.prepare('SELECT * FROM commerce_authority_control').all();
+    const ownerRevisionsBefore = deliveryOwnerRevisions(db);
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', import.meta.url), 'utf8',
+    ));
+    assert.deepEqual(db.prepare('SELECT document_path, document_json, version, create_time, update_time FROM commerce_documents').all(), before);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
+    assert.deepEqual(deliveryOwnerRevisions(db), ownerRevisionsBefore);
+    assert.deepEqual(db.prepare('SELECT shipment_sort_at_ms FROM commerce_documents ORDER BY document_path').all()
+      .map((row) => row.shipment_sort_at_ms), [...cases.map(({ expected }) => expected), 23]);
+    assert.deepEqual({ ...db.prepare(`SELECT type, hidden FROM pragma_table_xinfo('commerce_documents')
+      WHERE name = 'shipment_sort_at_ms'`).get() }, { type: 'REAL', hidden: 2 });
+  } finally {
+    db.close();
+  }
+});
+
+test('shipment-history queries seek owner cursors and targeted presence without temporary sorting', () => {
+  const db = database();
+  try {
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', import.meta.url), 'utf8',
+    ));
+    runDocumentEpoch(db, () => {
+      for (let id = 0; id < 500; id += 1) {
+        insertTestDocument(db, {
+          kind: 'delivery_order', dropId: 'drop', documentId: String(id),
+          path: `drops/drop/deliveryOrders/${id}`,
+          data: { owner: id < 250 ? 'owner' : 'other', status: 'ready_to_ship', processedAt: id,
+            stripeCheckoutSessionId: `cs_${id}` },
+        });
+      }
+      for (const [id, data] of [
+        ['excluded-source', { status: 'ready_to_ship', source: 'admin_irl_redeem' }],
+        ['excluded-status', { status: 'shipped' }],
+      ] as const) {
+        insertTestDocument(db, {
+          kind: 'delivery_order', dropId: 'drop', documentId: id, path: `drops/drop/deliveryOrders/${id}`,
+          data: { owner: 'owner', processedAt: 999, stripeCheckoutSessionId: 'cs_249', ...data },
+        });
+      }
+    });
+    db.exec('ANALYZE');
+    const first = shipmentHistoryPageQuery({ owner: 'owner', limit: 3 });
+    const firstRows = db.prepare(first.sql).all(...first.bindings);
+    assert.deepEqual(firstRows.map((row) => row.document_path), [249, 248, 247].map((id) => `drops/drop/deliveryOrders/${id}`));
+    const next = shipmentHistoryPageQuery({ owner: 'owner', limit: 3,
+      startAfter: { version: 1, owner: 'owner', sortAtMs: 247, documentPath: 'drops/drop/deliveryOrders/247' } });
+    assert.deepEqual(db.prepare(next.sql).all(...next.bindings).map((row) => row.document_path),
+      [246, 245, 244].map((id) => `drops/drop/deliveryOrders/${id}`));
+    const initialPlan = planDetails(db, first);
+    const cursorPlan = planDetails(db, next);
+    assert.match(initialPlan, /SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_cursor \(owner=\?\)/);
+    assert.match(cursorPlan, /\(shipment_sort_at_ms,document_path\)<\(\?,\?\)/);
+    assert.doesNotMatch(initialPlan + cursorPlan, /USE TEMP B-TREE/);
+    for (const selectors of [
+      { stripeSessionIds: ['cs_249'] },
+      { documentPaths: ['drops/drop/deliveryOrders/1'] },
+      { stripeSessionIds: ['cs_249'], documentPaths: ['drops/drop/deliveryOrders/1'] },
+    ]) {
+      const query = shipmentPresenceQuery({ owner: 'owner', ...selectors });
+      const plan = planDetails(db, query);
+      if (selectors.stripeSessionIds) assert.match(plan, /commerce_delivery_orders_shipment_session \(owner=\? AND <expr>=\?\)/);
+      if (selectors.documentPaths) assert.match(plan, /SEARCH commerce_documents USING INDEX sqlite_autoindex_commerce_documents_1 \(document_path=\?\)/);
+      assert.doesNotMatch(plan, /USE TEMP B-TREE/);
+      assert.deepEqual(db.prepare(query.sql).all(...query.bindings).map((row) => row.document_path), [
+        ...(selectors.stripeSessionIds ? ['drops/drop/deliveryOrders/249'] : []),
+        ...(selectors.documentPaths ? ['drops/drop/deliveryOrders/1'] : []),
+      ]);
+    }
   } finally {
     db.close();
   }

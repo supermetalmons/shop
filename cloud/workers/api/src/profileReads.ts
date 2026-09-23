@@ -1,4 +1,9 @@
 import type { NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
+import {
+  DEFAULT_SHIPMENT_PAGE_LIMIT, MAX_SHIPMENT_PAGE_LIMIT, MAX_SHIPMENT_PRESENCE_SELECTORS,
+  isShipmentHistoryCursor,
+  type ShipmentPageRequest, type ShipmentHistoryCursor, type ShipmentPresenceRequest,
+} from '../../../../shared/shipmentHistory.js';
 import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
 import {
   deliveryOrderSummarySortAt,
@@ -84,6 +89,7 @@ export { ProfileReadError } from './dataAccess.js';
 
 export const PROFILE_SHIPMENTS_PATH = '/profile/shipments';
 export const PROFILE_STATE_PATH = '/profile/state';
+export const SHIPMENT_PRESENCE_PATH = '/profile/shipment-presence';
 export const ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH = '/profile/anonymous-stripe-delivery-history';
 export const ADMIN_PROFILE_PATH = '/admin/profile';
 export const ADMIN_DELIVERY_ORDER_OWNERS_PATH = '/admin/delivery-order-owners';
@@ -92,6 +98,7 @@ export const FULFILLMENT_MANUAL_REVIEW_PATH = '/fulfillment/manual-review-checko
 export const PROFILE_READ_PATHS = new Set([
   PROFILE_SHIPMENTS_PATH,
   PROFILE_STATE_PATH,
+  SHIPMENT_PRESENCE_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -119,6 +126,7 @@ const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
 export type ProfileReadPath =
   | typeof PROFILE_SHIPMENTS_PATH
   | typeof PROFILE_STATE_PATH
+  | typeof SHIPMENT_PRESENCE_PATH
   | typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH
   | typeof ADMIN_PROFILE_PATH
   | typeof ADMIN_DELIVERY_ORDER_OWNERS_PATH
@@ -208,7 +216,7 @@ type ProfileReadDependencies = {
   createCommerceRepository: (
     db: D1Database,
   ) => Pick<D1CommerceRepository,
-    'queryDeliveryHistory' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners' | 'notificationOutbox'>;
+    'queryDeliveryHistory' | 'queryShipmentHistoryPage' | 'queryShipmentPresence' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners' | 'notificationOutbox'>;
   loadProfileEmail: typeof loadProfileEmail;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   nowMs: () => number;
@@ -260,6 +268,8 @@ type ParsedReadRequest = {
   pageSize?: number;
   limit?: number;
   dropId?: string;
+  shipmentsPage?: ShipmentPageRequest;
+  presence?: ShipmentPresenceRequest;
 };
 
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
@@ -304,14 +314,43 @@ async function parseExactRequestBody(
   signal: AbortSignal,
 ): Promise<ParsedReadRequest> {
   const parsed = await readBoundedRequestJson(request, {
-    maxBytes: MAX_PROFILE_REQUEST_BYTES,
+    maxBytes: path === SHIPMENT_PRESENCE_PATH ? 16 * 1024 : MAX_PROFILE_REQUEST_BYTES,
     signal,
     createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid request.'),
   });
   if (!isRecord(parsed)) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
+  if (path === SHIPMENT_PRESENCE_PATH) {
+    const sessions = parsed.stripeSessionIds ?? [];
+    const deliveries = parsed.deliveries ?? [];
+    if (!exactKeys(parsed, ['scope', 'expectedWallet', 'stripeSessionIds', 'deliveries']) ||
+      (parsed.scope !== 'wallet' && parsed.scope !== 'anonymous') ||
+      (parsed.scope === 'wallet'
+        ? typeof parsed.expectedWallet !== 'string' || !isBase58Bytes(parsed.expectedWallet, 32)
+        : Object.hasOwn(parsed, 'expectedWallet')) ||
+      !Array.isArray(sessions) || !Array.isArray(deliveries) ||
+      sessions.length + deliveries.length < 1 || sessions.length + deliveries.length > MAX_SHIPMENT_PRESENCE_SELECTORS ||
+      sessions.some((id) => typeof id !== 'string' || !/^cs_[A-Za-z0-9_]+$/.test(id) || id.length > 256) ||
+      deliveries.some((ref) => !isRecord(ref) || !exactKeys(ref, ['dropId', 'deliveryId']) ||
+        typeof ref.dropId !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(ref.dropId) ||
+        !Number.isSafeInteger(ref.deliveryId) || Number(ref.deliveryId) < 1) ||
+      parsed.stripeSessionIds === null || parsed.deliveries === null) {
+      throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment presence request.');
+    }
+    return { presence: { ...parsed, stripeSessionIds: sessions, deliveries } as ShipmentPresenceRequest };
+  }
+  let shipmentsPage: ShipmentPageRequest | undefined;
+  if (Object.hasOwn(parsed, 'shipmentsPage')) {
+    const page = parsed.shipmentsPage;
+    if (!isRecord(page) || !exactKeys(page, ['limit', 'cursor']) ||
+      (page.limit !== undefined && (!Number.isInteger(page.limit) || Number(page.limit) < 1 || Number(page.limit) > MAX_SHIPMENT_PAGE_LIMIT)) ||
+      (page.cursor !== undefined && page.cursor !== null && !isShipmentHistoryCursor(page.cursor))) {
+      throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment pagination.');
+    }
+    shipmentsPage = { limit: Number(page.limit ?? DEFAULT_SHIPMENT_PAGE_LIMIT), cursor: page.cursor as ShipmentHistoryCursor | null | undefined };
+  }
   if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH || path === PROFILE_STATE_PATH) {
-    if (Object.keys(parsed).length !== 0) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    return {};
+    if (!exactKeys(parsed, ['shipmentsPage'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
+    return { ...(shipmentsPage ? { shipmentsPage } : {}) };
   }
   if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
     if (!exactKeys(parsed, ['cursor', 'pageSize'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
@@ -349,10 +388,10 @@ async function parseExactRequestBody(
     }
     return { dropId, limit: Number(limit), manualReviewCursor: parsed.cursor as FulfillmentManualReviewCursor | null | undefined };
   }
-  if (Object.keys(parsed).length !== 1 || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
+  if (!exactKeys(parsed, ['ownerWallet', 'shipmentsPage']) || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address.');
   }
-  return { ownerWallet: parsed.ownerWallet };
+  return { ownerWallet: parsed.ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) };
 }
 
 async function loadOptionalSessionWallet(args: {
@@ -394,14 +433,31 @@ async function loadDeliveryHistory(args: {
   return deliveryHistoryFromDocuments(documents);
 }
 
+type ShipmentReadResult = { orders: DeliveryOrderSummary[]; nextCursor?: ShipmentHistoryCursor | null };
+
+async function loadShipments(args: {
+  owner: string;
+  shipmentsPage?: ShipmentPageRequest;
+  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory' | 'queryShipmentHistoryPage'>;
+}): Promise<ShipmentReadResult> {
+  if (!args.shipmentsPage) return { orders: await loadDeliveryHistory({ ...args, owners: [args.owner] }) };
+  if (args.shipmentsPage.cursor && !isShipmentHistoryCursor(args.shipmentsPage.cursor, args.owner)) {
+    throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment cursor owner.');
+  }
+  return args.repository.queryShipmentHistoryPage({
+    owner: args.owner, limit: args.shipmentsPage.limit ?? DEFAULT_SHIPMENT_PAGE_LIMIT,
+    ...(args.shipmentsPage.cursor ? { startAfter: args.shipmentsPage.cursor } : {}),
+  });
+}
+
 async function loadAdminProfile(args: {
   db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
   signal: AbortSignal;
-}, profileEmailLoader: typeof loadProfileEmail, ordersLoader: () => Promise<DeliveryOrderSummary[]>): Promise<GetAdminProfileViewResponse> {
-  const [email, orders] = await Promise.all([
+}, profileEmailLoader: typeof loadProfileEmail, ordersLoader: () => Promise<ShipmentReadResult>): Promise<GetAdminProfileViewResponse> {
+  const [email, shipments] = await Promise.all([
     profileEmailLoader(args),
     ordersLoader(),
   ]);
@@ -409,8 +465,9 @@ async function loadAdminProfile(args: {
     profile: {
       wallet: args.ownerWallet,
       ...(email ? { email } : {}),
-      orders,
+      orders: shipments.orders,
     },
+    ...(shipments.nextCursor !== undefined ? { nextCursor: shipments.nextCursor } : {}),
   };
 }
 
@@ -776,24 +833,37 @@ export async function handleProfileReadRequest(
         resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
         signal: deadline.signal,
       };
+      if (path === SHIPMENT_PRESENCE_PATH) {
+        const presence = requestBody.presence!;
+        const owner = presence.scope === 'anonymous'
+          ? identity.kind === 'staff-wallet' ? identity.wallet : stripeCheckoutAnonymousOwnerId(identity.authSubject)
+          : await boundedRead(resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid })));
+        if (presence.scope === 'wallet' && presence.expectedWallet !== owner) {
+          throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
+        }
+        const matches = await boundedRead(common.repository.queryShipmentPresence({ ...presence, owner }));
+        return { response: jsonResponse(matches, 200), metrics, authOutcome: 'accepted' };
+      }
       if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
-        const owners = identity.kind === 'staff-wallet'
-          ? [identity.wallet]
-          : [stripeCheckoutAnonymousOwnerId(identity.authSubject)];
-        const orders = await boundedRead(loadDeliveryHistory({ ...common, owners }));
-        return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
+        const owner = identity.kind === 'staff-wallet' ? identity.wallet : stripeCheckoutAnonymousOwnerId(identity.authSubject);
+        const shipments = await boundedRead(loadShipments({ ...common, owner, shipmentsPage: requestBody.shipmentsPage }));
+        return { response: jsonResponse(shipments, 200), metrics, authOutcome: 'accepted' };
       }
       if (path === PROFILE_STATE_PATH) {
         const wallet = await boundedRead(resolveRequestWallet(
           identity,
           (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
         ));
+        if (requestBody.shipmentsPage?.cursor && (!wallet || !isShipmentHistoryCursor(requestBody.shipmentsPage.cursor, wallet))) {
+          throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment cursor owner.');
+        }
         if (!wallet) {
           const response: GetProfileStateResponse = {
             responseMode: 'profile-state',
             sessionWallet: null,
             profile: null,
             shipments: null,
+            ...(requestBody.shipmentsPage ? { nextCursor: null } : {}),
           };
           return {
             response: jsonResponse(response, 200),
@@ -807,15 +877,19 @@ export async function handleProfileReadRequest(
             { ...common, db: env.OPS_DB, ownerWallet: wallet },
             dependencies.loadProfileEmail,
           )),
-          boundedRead(loadDeliveryHistory({ ...common, owners: [wallet] })),
+          boundedRead(loadShipments({ ...common, owner: wallet, shipmentsPage: requestBody.shipmentsPage })),
         ]);
         const profile = profileStateSection(profileResult, request, deadline.timeoutSignal);
-        const shipments = profileStateSection(shipmentsResult, request, deadline.timeoutSignal);
+        const shipmentPage = profileStateSection(shipmentsResult, request, deadline.timeoutSignal);
+        const shipments: ProfileStateSection<DeliveryOrderSummary[]> = shipmentPage.status === 'ready'
+          ? { status: 'ready', value: shipmentPage.value.orders } : shipmentPage;
         const response: GetProfileStateResponse = {
           responseMode: 'profile-state',
           sessionWallet: wallet,
           profile,
           shipments,
+          ...(shipmentPage.status === 'ready' && shipmentPage.value.nextCursor !== undefined
+            ? { nextCursor: shipmentPage.value.nextCursor } : {}),
         };
         return {
           response: jsonResponse(response, 200),
@@ -897,8 +971,8 @@ export async function handleProfileReadRequest(
       ));
       if (path === PROFILE_SHIPMENTS_PATH) {
         if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
-        const orders = await boundedRead(loadDeliveryHistory({ ...common, owners: [ownerWallet] }));
-        const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, orders };
+        const shipments = await boundedRead(loadShipments({ ...common, owner: ownerWallet, shipmentsPage: requestBody.shipmentsPage }));
+        const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, ...shipments };
         return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
       }
       if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
@@ -908,7 +982,7 @@ export async function handleProfileReadRequest(
         response: jsonResponse(await boundedRead(loadAdminProfile(
           { ...common, db: env.OPS_DB, ownerWallet },
           dependencies.loadProfileEmail,
-          () => loadDeliveryHistory({ ...common, owners: [ownerWallet] }),
+          () => loadShipments({ ...common, owner: ownerWallet, shipmentsPage: requestBody.shipmentsPage }),
         )), 200),
         metrics,
         authOutcome: 'accepted',

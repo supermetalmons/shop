@@ -148,6 +148,81 @@ test('OPS cleanup does not start a batch when already cancelled', async () => {
   assert.deepEqual(harness.calls, []);
 });
 
+test('OPS cleanup runs while commerce authority is pending', async () => {
+  const authority = Promise.withResolvers<{ authority_state: string; revision: number; documents_revision: number }>();
+  const opsFinished = Promise.withResolvers<void>();
+  const commerceCalls: string[] = [];
+  let settled = false;
+  const reconciliation = runScheduledReconciliations({
+    COMMERCE_DB: { prepare: () => ({ first: () => authority.promise }) },
+  } as unknown as Env, new AbortController().signal, {
+    ...commerceReconcilers(commerceCalls),
+    ops: async () => { opsFinished.resolve(); },
+  }).finally(() => { settled = true; });
+  await opsFinished.promise;
+  assert.equal(settled, false);
+  assert.deepEqual(commerceCalls, []);
+  authority.resolve({ authority_state: 'd1', revision: 1, documents_revision: 0 });
+  await reconciliation;
+  assert.equal(commerceCalls.length, 5);
+});
+
+test('commerce authority failure waits for independent OPS cleanup and retains both failures', async () => {
+  const opsStarted = Promise.withResolvers<void>();
+  const opsFinished = Promise.withResolvers<void>();
+  const opsFailure = new Error('ops cleanup failed');
+  const commerceCalls: string[] = [];
+  let settled = false;
+  const reconciliation = runScheduledReconciliations({
+    COMMERCE_DB: { prepare: () => ({ first: async () => { throw new Error('commerce offline'); } }) },
+  } as unknown as Env, new AbortController().signal, {
+    ...commerceReconcilers(commerceCalls),
+    ops: async () => {
+      opsStarted.resolve();
+      await opsFinished.promise;
+      throw opsFailure;
+    },
+  }).finally(() => { settled = true; });
+  const rejection = assert.rejects(reconciliation, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.message, 'Scheduled reconciliation failed');
+    assert.equal(error.errors.length, 2);
+    assert.equal(error.errors[0].code, 'unavailable');
+    assert.equal(error.errors[1], opsFailure);
+    return true;
+  });
+  await opsStarted.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.deepEqual(commerceCalls, []);
+  opsFinished.resolve();
+  await rejection;
+});
+
+test('commerce reconciliation and OPS failures retain their existing aggregate shape', async () => {
+  const stripeFailure = new Error('stripe reconciliation failed');
+  const notificationFailure = new Error('notification reconciliation failed');
+  const rateLimitFailure = new Error('rate-limit cleanup failed');
+  const harness = cleanupDatabase({
+    onBatch: (table) => { if (table === 'rate_limit_buckets') throw rateLimitFailure; },
+  });
+  await assert.rejects(runScheduledReconciliations({ OPS_DB: harness.db } as Env,
+    new AbortController().signal, {
+      ...commerceReconcilers(),
+      stripe: async () => { throw stripeFailure; },
+      notifications: async () => { throw notificationFailure; },
+    }), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 3);
+    assert.deepEqual(error.errors.slice(0, 2), [stripeFailure, notificationFailure]);
+    assert.ok(error.errors[2] instanceof AggregateError);
+    assert.equal(error.errors[2].message, 'Scheduled OPS cleanup failed');
+    assert.deepEqual(error.errors[2].errors, [rateLimitFailure]);
+    return true;
+  });
+  assert.deepEqual(harness.calls, CLEANUP_TABLES);
+});
+
 test('OPS cleanup preserves completion and backlog logs while commerce is paused', async (context) => {
   const logs: unknown[] = [];
   const errors: unknown[] = [];

@@ -447,10 +447,10 @@ test('confirmed prepared recovery deduplicates reconciliation and persists resul
       prepared, connectedWallet: walletA, connectedWalletRef, ownerRef,
       claimModalGenerationRef: { current: 1 }, isViewerMode: false, suspended: true,
       isSignedInWallet: true, requireKnownDropConfig, getDropConnection: () => connection,
-      hasAuthenticatedWalletSession: () => true, profileShipments: [],
+      hasAuthenticatedWalletSession: () => true,
       hideAssetsForWallet: (wallet, ids) => { hidden.push({ wallet, ids }); },
       runDeliveryRecovery: async () => undefined,
-      refetchInventory: async () => ({ data: [] }), refreshProfileState: async () => undefined,
+      refetchInventory: async () => ({ data: [] }), refreshProfileState: async () => true,
       showToast: (message) => { toasts.push(message); },
       presentConfirmedNumericClaim: () => ({ itemsPerBox: 1, boxNamePrefix: '', figureNamePrefix: '', deferred: true }),
     });
@@ -471,6 +471,115 @@ test('confirmed prepared recovery deduplicates reconciliation and persists resul
   assert.equal(loadPendingPreparedTransaction(walletA), null);
   assert.equal(toasts.length, 0);
 });
+
+for (const finish of ['present', 'wallet-change', 'unmount'] as const) {
+  test(`pending shipment refresh uses exact presence and stops on ${finish}`, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    context.mock.method(console, 'warn', () => undefined);
+    context.mock.method(console, 'error', () => undefined);
+    let presenceCalls = 0;
+    let refreshCalls = 0;
+    const connectedWalletRef = { current: walletA as string | null };
+    const ownerRef = { current: walletA as string | undefined };
+    const delivery = { dropId: drop.dropId, deliveryId: 77 };
+    context.mock.method(globalThis, 'fetch', async (input, init) => {
+      if (String(input) === '/api/auth/anonymous/session') {
+        return Response.json({
+          subject: 'anon:00000000-0000-4000-8000-000000000001',
+          refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000,
+        });
+      }
+      assert.equal(String(input), '/api/profile/shipment-presence');
+      assert.deepEqual(JSON.parse(String(init?.body)), { scope: 'wallet', expectedWallet: walletA, stripeSessionIds: [], deliveries: [delivery] });
+      presenceCalls += 1;
+      if (presenceCalls === 1) {
+        return Response.json({ error: { code: 'unavailable', message: 'Presence temporarily unavailable.' } }, { status: 503 });
+      }
+      return Response.json({ stripeSessionIds: [], deliveries: presenceCalls === 2 ? [] : [delivery] });
+    });
+    const { result, unmount } = renderHook(() => {
+      const prepared = usePreparedTransactionState(walletA, connectedWalletRef);
+      return usePreparedTransactionRecovery({
+        prepared, connectedWallet: walletA, connectedWalletRef, ownerRef,
+        claimModalGenerationRef: { current: 1 }, isViewerMode: false, suspended: true,
+        isSignedInWallet: true, requireKnownDropConfig,
+        getDropConnection: () => assert.fail('unexpected transaction reconciliation'),
+        hasAuthenticatedWalletSession: (wallet) => wallet === connectedWalletRef.current,
+        hideAssetsForWallet: () => undefined, runDeliveryRecovery: async () => undefined,
+        refetchInventory: async () => ({ data: [] }),
+        refreshProfileState: async () => { refreshCalls += 1; return true; },
+        showToast: () => undefined,
+        presentConfirmedNumericClaim: () => ({ itemsPerBox: 1, boxNamePrefix: '', figureNamePrefix: '', deferred: true }),
+      });
+    });
+    await act(async () => { result.current.startShipmentRefresh(walletA, delivery.dropId, delivery.deliveryId); });
+    assert.equal(presenceCalls, 1);
+    if (finish === 'present') {
+      await act(async () => { context.mock.timers.tick(2_000); });
+      assert.equal(presenceCalls, 2);
+      await act(async () => { context.mock.timers.tick(4_000); });
+      assert.equal(presenceCalls, 3);
+    } else if (finish === 'wallet-change') {
+      connectedWalletRef.current = walletB;
+      ownerRef.current = walletB;
+    } else {
+      unmount();
+    }
+    await act(async () => { context.mock.timers.tick(60_000); });
+    assert.equal(presenceCalls, finish === 'present' ? 3 : 1);
+    assert.equal(refreshCalls, presenceCalls - 1);
+  });
+}
+
+for (const failure of ['incomplete', 'rejected'] as const) {
+  test(`present shipments keep refreshing when the profile refresh is ${failure}`, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    context.mock.method(console, 'warn', () => undefined);
+    const calls: string[] = [];
+    let refreshCalls = 0;
+    const connectedWalletRef = { current: walletA as string | null };
+    const ownerRef = { current: walletA as string | undefined };
+    const delivery = { dropId: drop.dropId, deliveryId: 77 };
+    context.mock.method(globalThis, 'fetch', async (input, init) => {
+      if (String(input) === '/api/auth/anonymous/session') {
+        return Response.json({
+          subject: 'anon:00000000-0000-4000-8000-000000000001',
+          refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000,
+        });
+      }
+      assert.equal(String(input), '/api/profile/shipment-presence');
+      assert.deepEqual(JSON.parse(String(init?.body)), { scope: 'wallet', expectedWallet: walletA, stripeSessionIds: [], deliveries: [delivery] });
+      calls.push('presence');
+      return Response.json({ stripeSessionIds: [], deliveries: [delivery] });
+    });
+    const { result } = renderHook(() => {
+      const prepared = usePreparedTransactionState(walletA, connectedWalletRef);
+      return usePreparedTransactionRecovery({
+        prepared, connectedWallet: walletA, connectedWalletRef, ownerRef,
+        claimModalGenerationRef: { current: 1 }, isViewerMode: false, suspended: true,
+        isSignedInWallet: true, requireKnownDropConfig,
+        getDropConnection: () => assert.fail('unexpected transaction reconciliation'),
+        hasAuthenticatedWalletSession: (wallet) => wallet === connectedWalletRef.current,
+        hideAssetsForWallet: () => undefined, runDeliveryRecovery: async () => undefined,
+        refetchInventory: async () => ({ data: [] }),
+        refreshProfileState: async () => {
+          calls.push('refresh');
+          refreshCalls += 1;
+          if (refreshCalls === 1 && failure === 'rejected') throw new Error('Profile refresh failed');
+          return refreshCalls > 1;
+        },
+        showToast: () => undefined,
+        presentConfirmedNumericClaim: () => ({ itemsPerBox: 1, boxNamePrefix: '', figureNamePrefix: '', deferred: true }),
+      });
+    });
+    await act(async () => { result.current.startShipmentRefresh(walletA, delivery.dropId, delivery.deliveryId); });
+    assert.deepEqual(calls, ['presence', 'refresh']);
+    await act(async () => { context.mock.timers.tick(2_000); });
+    assert.deepEqual(calls, ['presence', 'refresh', 'presence', 'refresh']);
+    await act(async () => { context.mock.timers.tick(30_000); });
+    assert.equal(refreshCalls, 2);
+  });
+}
 
 test('claim deep links increment presentation generation and closing navigates home', () => {
   const navigations: unknown[] = [];

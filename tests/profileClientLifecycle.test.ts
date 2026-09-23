@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  authoritativeProfileShipmentsContainStripeSessions,
   beginKeyedInventoryRecovery,
   cappedDeadlineStep,
   getOrStartKeyedInventoryRefresh,
@@ -18,7 +17,6 @@ import {
   walletSessionSignInReadiness,
   type WalletScopedSerialRun,
 } from '../src/lib/profileClientLifecycle.ts';
-import { stripeProfileRecoveryAfterRefresh } from '../src/lib/profileState.ts';
 
 function deferred() {
   let resolve!: () => void;
@@ -488,41 +486,6 @@ test('receipt readiness remains independent of the initial inventory response', 
       inventoryEmptyStateVisible: false,
     }),
     { shipments: false, receipts: true },
-  );
-});
-
-test('only authoritative shipment snapshots prove Stripe recovery', () => {
-  const shipments = [{ stripeCheckoutSessionId: 'cs_one' }];
-  const expectedSessionIds = ['cs_one'];
-  const recoveryKey = 'uid:cs_one';
-  const cachedMatch = authoritativeProfileShipmentsContainStripeSessions({
-    shipments,
-    ready: false,
-    expectedSessionIds,
-  });
-  assert.equal(cachedMatch, false);
-
-  const authoritativeMatch = authoritativeProfileShipmentsContainStripeSessions({
-    shipments,
-    ready: true,
-    expectedSessionIds,
-  });
-  assert.equal(authoritativeMatch, true);
-  for (const phase of ['pending', 'fallback'] as const) {
-    const current = { key: recoveryKey, phase };
-    assert.equal(stripeProfileRecoveryAfterRefresh(current, recoveryKey, cachedMatch), current);
-    assert.deepEqual(
-      stripeProfileRecoveryAfterRefresh(current, recoveryKey, authoritativeMatch),
-      { key: recoveryKey, phase: 'recovered' },
-    );
-  }
-  assert.equal(
-    authoritativeProfileShipmentsContainStripeSessions({
-      shipments,
-      ready: true,
-      expectedSessionIds: ['cs_one', 'cs_two'],
-    }),
-    false,
   );
 });
 

@@ -62,6 +62,10 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   const drop = getFrontendDrop('little_swag_boxes')!;
   const opened: Array<Parameters<Parameters<typeof ShopShipmentsSection>[0]['openImageViewer']>> = [];
   const props: Parameters<typeof ShopShipmentsSection>[0] = {
+    shipmentHistory: {
+      orders: [], hasMore: false, loadingMore: false, fetching: false, error: null,
+      fetchMore: async () => undefined, retry: async () => undefined,
+    },
     openClearCardModelViewer: () => undefined,
     openImageViewer: (...args) => { opened.push(args); return true; },
     openInteractiveCardViewer: () => undefined,

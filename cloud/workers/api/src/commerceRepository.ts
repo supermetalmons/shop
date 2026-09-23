@@ -18,11 +18,23 @@ import {
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
+  shipmentHistoryPageQuery,
+  shipmentPresenceQuery,
   type CommerceSqlQuery,
   type FulfillmentOrdersQueryArgs,
   type ManualReviewCheckoutsQueryArgs,
 } from './commerceQueries.js';
-import { isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
+import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
+import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
+import {
+  MAX_SHIPMENT_PAGE_LIMIT,
+  MAX_SHIPMENT_PRESENCE_SELECTORS,
+  isShipmentHistoryCursor,
+  type ShipmentHistoryPage,
+  type ShipmentHistoryCursor,
+  type ShipmentPresenceRequest,
+  type ShipmentPresenceResponse,
+} from '../../../../shared/shipmentHistory.js';
 import {
   authorityStatement,
   deliveryOwner,
@@ -156,6 +168,57 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid delivery history owners.');
     }
     return this.readDocuments(deliveryHistoryQuery(args), 'delivery-history', 'delivery_order');
+  }
+
+  async queryShipmentHistoryPage(args: { owner: string; limit: number; startAfter?: ShipmentHistoryCursor }): Promise<ShipmentHistoryPage> {
+    const owner = deliveryOwner(args.owner);
+    const limit = positiveQueryLimit(args.limit);
+    if (limit > MAX_SHIPMENT_PAGE_LIMIT || (args.startAfter && !isShipmentHistoryCursor(args.startAfter, owner))) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid shipment pagination.');
+    }
+    const query = shipmentHistoryPageQuery({ ...args, owner, limit: limit + 1 });
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(query.sql).bind(...query.bindings));
+    const page = result.results.slice(0, limit);
+    const documents = page.map(parseRow);
+    const last = page.at(-1);
+    if (last && (typeof last.shipment_sort_at_ms !== 'number' || !Number.isFinite(last.shipment_sort_at_ms))) {
+      throw unavailableCommerceData();
+    }
+    reportInefficientQuery('shipment-history-page', 'delivery_order', result, result.results.length);
+    return {
+      orders: documents.flatMap((document) => {
+        const summary = deliveryOrderSummaryFromDocument(document);
+        return summary ? [summary] : [];
+      }),
+      nextCursor: result.results.length > limit && last ? {
+        version: 1, owner, sortAtMs: last.shipment_sort_at_ms as number,
+        documentPath: documents[documents.length - 1]!.key.path,
+      } : null,
+    };
+  }
+
+  async queryShipmentPresence(args: Pick<ShipmentPresenceRequest, 'stripeSessionIds' | 'deliveries'> & { owner: string }): Promise<ShipmentPresenceResponse> {
+    const owner = deliveryOwner(args.owner);
+    if ((args.stripeSessionIds?.length ?? 0) + (args.deliveries?.length ?? 0) > MAX_SHIPMENT_PRESENCE_SELECTORS) {
+      throw new CommerceRepositoryError('invalid-argument', 'Too many shipment presence selectors.');
+    }
+    const query = shipmentPresenceQuery({
+      owner, stripeSessionIds: args.stripeSessionIds,
+      documentPaths: args.deliveries?.map(({ dropId, deliveryId }) => commerceKeys.deliveryOrder(dropId, String(deliveryId)).path),
+    });
+    if (!query.bindings.length) return { stripeSessionIds: [], deliveries: [] };
+    const documents = await this.readDocuments(query, 'shipment-presence', 'delivery_order');
+    const summaries = documents.flatMap((document) => {
+      const summary = deliveryOrderSummaryFromDocument(document);
+      return summary ? [summary] : [];
+    });
+    const sessions = new Set(summaries.map((summary) => summary.stripeCheckoutSessionId));
+    const deliveries = new Set(summaries.map(({ dropId, deliveryId }) => JSON.stringify([dropId, deliveryId])));
+    return {
+      stripeSessionIds: [...new Set(args.stripeSessionIds ?? [])].filter((id) => sessions.has(id)),
+      deliveries: Array.from(new Map((args.deliveries ?? []).map((ref) => [JSON.stringify([ref.dropId, ref.deliveryId]), ref])))
+        .filter(([key]) => deliveries.has(key)).map(([, ref]) => ref),
+    };
   }
 
   async queryFulfillmentOrders(args: FulfillmentOrdersQueryArgs): Promise<CommerceDocumentRecord[]> {

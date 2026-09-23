@@ -17,6 +17,7 @@ import type {
 import { buildSignInMessage } from '../lib/solana';
 import { normalizeApiErrorCode } from '../../shared/apiErrorCode';
 import { deliveryOrderSummarySortAt } from '../../shared/deliveryOrderSummary.js';
+import type { ShipmentHistoryCursor } from '../../shared/shipmentHistory.ts';
 import {
   deliveryOrderSummariesEqual,
   authSubjectChangeInvalidatesSession,
@@ -41,6 +42,8 @@ import {
 export type SolanaAuthState = {
   profile: Profile | null;
   shipments: DeliveryOrderSummary[];
+  shipmentsNextCursor: ShipmentHistoryCursor | null;
+  shipmentsRevision: number;
   sessionWallet: string | null;
   authenticated: boolean;
   loading: boolean;
@@ -119,6 +122,8 @@ function authenticateWalletInOrder<T>(uid: string, operation: () => Promise<T>):
 const EMPTY_AUTH_STATE: SolanaAuthState = {
   profile: null,
   shipments: [],
+  shipmentsNextCursor: null,
+  shipmentsRevision: 0,
   sessionWallet: null,
   authenticated: false,
   loading: false,
@@ -359,7 +364,9 @@ export function useSolanaAuthWithRuntime(
         ? current
         : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, authenticated: true };
       const nextShipments = response.shipments?.status === 'ready'
-        ? shipmentsInDisplayOrder(response.shipments.value)
+        ? response.nextCursor !== undefined
+          ? response.shipments.value
+          : shipmentsInDisplayOrder(response.shipments.value)
         : base.shipments;
       const next: SolanaAuthState = {
         ...base,
@@ -370,6 +377,8 @@ export function useSolanaAuthWithRuntime(
         profileReady: response.profile?.status === 'ready' ? true : base.profileReady,
         profileError: response.profile?.status === 'ready' ? null : profileError?.message || base.profileError,
         shipments: nextShipments,
+        shipmentsNextCursor: response.shipments?.status === 'ready' ? response.nextCursor ?? null : base.shipmentsNextCursor,
+        shipmentsRevision: response.shipments?.status === 'ready' ? base.shipmentsRevision + 1 : base.shipmentsRevision,
         shipmentsReady: response.shipments?.status === 'ready' ? true : base.shipmentsReady,
         shipmentsError: response.shipments?.status === 'ready' ? null : shipmentsError?.message || base.shipmentsError,
       };
@@ -382,6 +391,7 @@ export function useSolanaAuthWithRuntime(
         current.profileError === next.profileError &&
         current.shipmentsReady === next.shipmentsReady &&
         current.shipmentsError === next.shipmentsError &&
+        current.shipmentsRevision === next.shipmentsRevision &&
         deliveryOrderSummariesEqual(current.shipments, next.shipments)
       ) return current;
       return next;

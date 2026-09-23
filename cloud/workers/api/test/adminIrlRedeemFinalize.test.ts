@@ -1671,6 +1671,93 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
   );
 });
 
+for (const cancelCaller of [false, true]) {
+  test(`Admin IRL receipt asset pool ${cancelCaller ? 'preserves caller cancellation' : 'drains failed reads before owner-scan fallback'}`, { timeout: 5_000 }, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_700_000_000_000 });
+    const warning = context.mock.method(console, 'warn', () => undefined);
+    const runtime = buildRuntime(API_DROPS[DROP_ID]);
+    const receipts = [Keypair.generate().publicKey, Keypair.generate().publicKey];
+    const noop = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
+    const transaction = confirmedTransaction(new PublicKey(OWNER), [
+      new TransactionInstruction({ programId: noop, keys: [], data: Buffer.alloc(0) }),
+    ]);
+    transaction.meta!.innerInstructions = [{
+      index: 0,
+      instructions: receipts.map((receipt) => {
+        const event = Buffer.alloc(41);
+        event[0] = event[6] = event[7] = event[8] = 1;
+        event.writeUInt32LE(35, 2);
+        receipt.toBuffer().copy(event, 9);
+        return {
+          programIdIndex: transaction.transaction.message.staticAccountKeys.findIndex((key) => key.equals(noop)),
+          accounts: [],
+          data: bs58.encode(event),
+        };
+      }),
+    }];
+    const items = receipts.map((receipt, index) => ({ assetId: receipt.toBase58(), kind: 'box' as const, refId: index + 7 }));
+    const assets = items.map((item) => ({
+      id: item.assetId,
+      grouping: [{ group_key: 'collection', group_value: runtime.collectionMint.toBase58() }],
+      ownership: { owner: OWNER },
+      content: { json_uri: `${runtime.config.metadataBase}/rb${item.refId}.json` },
+    }));
+    const controller = new AbortController();
+    let failedAssetReads = 0;
+    let siblingAborted = 0;
+    let ownerScans = 0;
+    const pending = adminIrlRedeemFinalizeTestHooks.findReceiptAssets({
+      getTransactions: async () => [transaction],
+    } as unknown as Connection, {
+      apiKey: 'helius',
+      signal: controller.signal,
+      attemptTimeoutMs: 20_000,
+      providerFetch: async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { id: string; method: string; params: { id?: string } };
+        if (body.method === 'getAsset') {
+          if (body.params.id === items[0].assetId) {
+            failedAssetReads += 1;
+            return Response.json({ jsonrpc: '2.0', id: body.id, result: null });
+          }
+          assert.equal(body.params.id, items[1].assetId);
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              siblingAborted += 1;
+              reject(init.signal?.reason);
+            }, { once: true });
+          });
+        }
+        assert.equal(body.method, 'searchAssets');
+        assert.equal(init?.signal?.aborted, false);
+        assert.equal(siblingAborted, 1);
+        ownerScans += 1;
+        return Response.json({ jsonrpc: '2.0', id: body.id, result: { items: assets, total: assets.length } });
+      },
+    }, runtime, OWNER, items, [SIGNATURE]);
+    if (cancelCaller) {
+      const reason = new Error('receipt asset lookup cancelled');
+      const rejected = assert.rejects(pending, (error) => error === reason);
+      await new Promise(setImmediate);
+      controller.abort(reason);
+      await rejected;
+      assert.equal(siblingAborted, 1);
+      assert.equal(ownerScans, 0);
+      assert.equal(warning.mock.callCount(), 0);
+    } else {
+      for (const [index, delay] of [300, 600, 1_200, 2_400, 4_800].entries()) {
+        await new Promise(setImmediate);
+        assert.equal(failedAssetReads, index + 1);
+        context.mock.timers.tick(delay);
+      }
+      assert.deepEqual(await pending, new Map(assets.map((asset, index) => [index + 7, [asset]])));
+      assert.equal(controller.signal.aborted, false);
+      assert.equal(failedAssetReads, 6);
+      assert.equal(ownerScans, 1);
+      assert.equal(warning.mock.callCount(), 1);
+    }
+  });
+}
+
 test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {
   assert.deepEqual(adminIrlRedeemFinalizeTestHooks.normalizeItems({
     targetKind: 'pack',

@@ -47,7 +47,7 @@ export function resolveDeliveryOrderDropId(order: unknown, path: string): string
   return normalizeDropIdMaybe((order as { dropId?: unknown } | null)?.dropId) || dropIdFromDeliveryOrderPath(path);
 }
 
-export function deliveryOrderSummaryFromDocument(document: CommerceDocumentRecord): DeliveryOrderSummary | null {
+export function deliveryOrderSummaryFromDocument(document: Pick<CommerceDocumentRecord, 'key' | 'data'>): DeliveryOrderSummary | null {
   const dropId = normalizeDropId(document.key.dropId || '');
   const deliveryId = parseCanonicalPositiveInteger(document.key.documentId);
   const fields = document.data;

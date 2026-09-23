@@ -17,6 +17,8 @@ import {
   fulfillmentOrdersQuery,
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
+  shipmentHistoryPageQuery,
+  shipmentPresenceQuery,
   staleStripeFulfillmentsQuery,
   stripeChargebackLinkedSessionsQuery,
   stripeChargebackMatchedDocumentsQuery,
@@ -39,9 +41,10 @@ const migrationNames = [
   '0013_notification_outbox.sql',
   '0014_drop_legacy_notification_indexes.sql',
   '0015_manual_review_pagination.sql',
+  '0016_shipment_history_pagination.sql',
 ] as const;
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 = 15): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 = 16): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -214,6 +217,14 @@ test('Commerce D1 checker accepts the current schema using complete production q
       deliveryOrderOwnersQuery({ limit: 501 }),
       deliveryOrderOwnersQuery({ limit: 501, startAfterOwner: '11111111111111111111111111111111' }),
       deliveryRecoveryOrdersQuery('11111111111111111111111111111111'),
+      shipmentHistoryPageQuery({ owner: '11111111111111111111111111111111', limit: 51 }),
+      shipmentHistoryPageQuery({ owner: '11111111111111111111111111111111', limit: 51,
+        startAfter: { version: 1, owner: '11111111111111111111111111111111', sortAtMs: 1,
+          documentPath: 'drops/drop/deliveryOrders/1' } }),
+      shipmentPresenceQuery({ owner: '11111111111111111111111111111111', stripeSessionIds: ['cs_cursor'] }),
+      shipmentPresenceQuery({ owner: '11111111111111111111111111111111', documentPaths: ['drops/drop/deliveryOrders/1'] }),
+      shipmentPresenceQuery({ owner: '11111111111111111111111111111111', stripeSessionIds: ['cs_cursor'],
+        documentPaths: ['drops/drop/deliveryOrders/1'] }),
       manualReviewCheckoutsQuery({ dropId: 'drop', limit: 26 }),
       manualReviewCheckoutsQuery({
         dropId: 'drop', limit: 26,
@@ -326,6 +337,54 @@ test('Commerce D1 checker rejects a weakened manual-review cursor index', () => 
     database.exec(`DROP INDEX commerce_stripe_checkouts_manual_review_cursor;
       CREATE INDEX commerce_stripe_checkouts_manual_review_cursor ON commerce_documents (document_path)`);
     assert.throws(() => checkCommerceD1(localQuery(database)), /manual-review cursor index is invalid/);
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker accepts migration 0015 for inspection but requires shipment pagination before deployment', () => {
+  const database = currentDatabase(true, 15);
+  try {
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
+      /shipment-history pagination migration is required/);
+  } finally {
+    database.close();
+  }
+});
+
+for (const index of ['commerce_delivery_orders_shipment_cursor', 'commerce_delivery_orders_shipment_session']) {
+  test(`Commerce D1 checker rejects a weakened ${index}`, () => {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`DROP INDEX ${index}; CREATE INDEX ${index} ON commerce_documents (document_path)`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /shipment-history index .* is invalid/);
+    } finally {
+      database.close();
+    }
+  });
+}
+
+test('Commerce D1 checker rejects shipment scans, partial cursor seeks, and temporary sorts', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    const owner = '11111111111111111111111111111111';
+    const sql = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(shipmentHistoryPageQuery({ owner, limit: 51,
+      startAfter: { version: 1, owner, sortAtMs: 1, documentPath: 'drops/drop/deliveryOrders/1' } }))}`;
+    const plan = query(sql);
+    for (const replacement of [
+      [{ detail: 'SCAN commerce_documents USING INDEX commerce_delivery_orders_shipment_cursor' }],
+      [{ detail: 'SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_cursor (owner=?)' }],
+      [...plan, { detail: 'USE TEMP B-TREE FOR ORDER BY' }],
+    ]) {
+      assert.throws(() => checkCommerceD1((requestedSql) => requestedSql === sql ? replacement : query(requestedSql)),
+        /does not search commerce_delivery_orders_shipment_cursor|does not seek the full cursor|uses a temporary B-tree/);
+    }
+    const presenceSql = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(shipmentPresenceQuery({ owner, stripeSessionIds: ['cs_cursor'] }))}`;
+    assert.throws(() => checkCommerceD1((requestedSql) => requestedSql === presenceSql
+      ? [{ detail: 'SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_session (owner=?)' }]
+      : query(requestedSql)), /does not search by owner and Stripe session/);
   } finally {
     database.close();
   }

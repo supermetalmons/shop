@@ -369,7 +369,7 @@ test('domain client factories apply successful response contracts', async () => 
   const profile = createProfileApiClient({
     callProfileApi: async (pathname, data) => {
       assert.equal(pathname, '/profile/state');
-      assert.deepEqual(data, {});
+      assert.deepEqual(data, { shipmentsPage: { limit: 50 } });
       return profileState;
     },
     createProfileAddressId: () => 'AbCdEfGhIjKlMnOpQrSt',

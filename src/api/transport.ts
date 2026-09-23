@@ -167,6 +167,7 @@ export type AuthenticatedApiPath =
   | '/profile/reconcile'
   | '/profile/state'
   | '/profile/shipments'
+  | '/profile/shipment-presence'
   | '/profile/anonymous-stripe-delivery-history'
   | '/profile/addresses'
   | '/admin/profile'

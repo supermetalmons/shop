@@ -23,6 +23,8 @@ import {
   fulfillmentOrdersQuery,
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
+  shipmentHistoryPageQuery,
+  shipmentPresenceQuery,
   notificationOutboxDueQuery,
   staleStripeFulfillmentsQuery,
   stripeChargebackLinkedSessionsQuery,
@@ -132,6 +134,18 @@ const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = O
 });
 const DELIVERY_RECOVERY_INDEX_SQL = `CREATE INDEX commerce_documents_delivery_owner_status
   ON commerce_documents (document_kind, owner, status, document_path)`;
+const SHIPMENT_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
+  commerce_delivery_orders_shipment_cursor: `CREATE INDEX commerce_delivery_orders_shipment_cursor
+    ON commerce_documents (owner, shipment_sort_at_ms DESC, document_path DESC)
+    WHERE document_kind = 'delivery_order'
+      AND status IN ('processing', 'ready_to_ship')
+      AND source IS NOT 'admin_irl_redeem'`,
+  commerce_delivery_orders_shipment_session: `CREATE INDEX commerce_delivery_orders_shipment_session
+    ON commerce_documents (owner, json_extract(document_json, '$.stripeCheckoutSessionId'))
+    WHERE document_kind = 'delivery_order'
+      AND status IN ('processing', 'ready_to_ship')
+      AND source IS NOT 'admin_irl_redeem'`,
+});
 const MANUAL_REVIEW_CURSOR_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_manual_review_cursor
   ON commerce_documents (
     drop_id,
@@ -238,7 +252,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length !== 13 && migrations.length !== 14 && migrations.length !== 15) ||
+    (migrations.length < 13 || migrations.length > 16) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -253,7 +267,8 @@ export function checkCommerceD1(
     migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql' ||
     migrations[12].name !== '0013_notification_outbox.sql' ||
     (migrations.length >= 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql') ||
-    (migrations.length === 15 && migrations[14].name !== '0015_manual_review_pagination.sql')
+    (migrations.length >= 15 && migrations[14].name !== '0015_manual_review_pagination.sql') ||
+    (migrations.length === 16 && migrations[15].name !== '0016_shipment_history_pagination.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -263,6 +278,11 @@ export function checkCommerceD1(
     migration.name === '0015_manual_review_pagination.sql');
   if (options.forDeployment && !manualReviewPaginationReady) {
     fail('Commerce D1 manual-review pagination migration is required for deployment.');
+  }
+  const shipmentPaginationReady = migrations.some((migration) =>
+    migration.name === '0016_shipment_history_pagination.sql');
+  if (options.forDeployment && !shipmentPaginationReady) {
+    fail('Commerce D1 shipment-history pagination migration is required for deployment.');
   }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
@@ -654,6 +674,42 @@ export function checkCommerceD1(
     'commerce_documents_delivery_owner_status (document_kind=? AND owner=? AND status=?)',
   ))) fail('Commerce D1 delivery-recovery query plan does not use the full owner-status prefix.');
   requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery');
+  if (shipmentPaginationReady) {
+    const sortColumns = queryRemoteCommerceD1(`SELECT type, hidden FROM pragma_table_xinfo('commerce_documents')
+      WHERE name = 'shipment_sort_at_ms'`);
+    if (sortColumns.length !== 1 || sortColumns[0].type !== 'REAL' || sortColumns[0].hidden !== 2) {
+      fail('Commerce D1 shipment-history sort projection is invalid.');
+    }
+    for (const [name, expectedSql] of Object.entries(SHIPMENT_INDEX_SQL)) {
+      const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = '${name}'`);
+      if (index.length !== 1 || normalizedSql(index[0].sql) !== normalizedSql(expectedSql)) {
+        fail(`Commerce D1 shipment-history index ${name} is invalid.`);
+      }
+    }
+    const owner = '11111111111111111111111111111111';
+    for (const startAfter of [undefined, {
+      version: 1 as const, owner, sortAtMs: 1, documentPath: 'drops/drop/deliveryOrders/1',
+    }]) {
+      const plan = queryPlan(shipmentHistoryPageQuery({ owner, limit: 51, startAfter }));
+      requireSearchIndex(plan, 'commerce_delivery_orders_shipment_cursor');
+      requireNoTemporaryBTree(plan, 'shipment-history');
+      if (startAfter && !plan.some((row) => normalizedSql(row.detail).includes(
+        '(shipment_sort_at_ms,document_path)<(?,?)',
+      ))) fail('Commerce D1 shipment-history query plan does not seek the full cursor.');
+    }
+    for (const selectors of [
+      { stripeSessionIds: ['cs_cursor'] },
+      { documentPaths: ['drops/drop/deliveryOrders/1'] },
+      { stripeSessionIds: ['cs_cursor'], documentPaths: ['drops/drop/deliveryOrders/1'] },
+    ]) {
+      const plan = queryPlan(shipmentPresenceQuery({ owner, ...selectors }));
+      if (selectors.stripeSessionIds && !plan.some((row) => normalizedSql(row.detail).includes(
+        'SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_session (owner=? AND <expr>=?)',
+      ))) fail('Commerce D1 shipment presence query plan does not search by owner and Stripe session.');
+      if (selectors.documentPaths) requireSearchIndex(plan, 'sqlite_autoindex_commerce_documents_1');
+      requireNoTemporaryBTree(plan, 'shipment presence');
+    }
+  }
   queryRemoteCommerceD1(renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 })));
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path

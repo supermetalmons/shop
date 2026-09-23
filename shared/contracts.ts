@@ -1,5 +1,6 @@
 import type { FulfillmentStatus } from './fulfillmentStatus.ts';
 import type { ShipStationPackageInput } from './shipstationPackage.ts';
+import type { ShipmentHistoryCursor, ShipmentPageRequest } from './shipmentHistory.ts';
 
 export type PackStatusBreakdownItem = {
   key: 'redeemed' | 'unsealed' | 'total';
@@ -86,6 +87,7 @@ export type GetProfileShipmentsResponse = {
   responseMode: 'shipments';
   wallet: string;
   orders: DeliveryOrderSummary[];
+  nextCursor?: ShipmentHistoryCursor | null;
 };
 
 export type ProfileStateSection<T> =
@@ -102,6 +104,7 @@ export type GetProfileStateResponse = {
   sessionWallet: string | null;
   profile: ProfileStateSection<ProfileStateProfile> | null;
   shipments: ProfileStateSection<DeliveryOrderSummary[]> | null;
+  nextCursor?: ShipmentHistoryCursor | null;
 };
 
 export type DeliveryRecoveryState = {
@@ -146,9 +149,11 @@ export type RevealDudesSubmissionUnknownDetails = {
 
 export type GetAdminProfileViewRequest = {
   ownerWallet: string;
+  shipmentsPage?: ShipmentPageRequest;
 };
 
 export type GetAdminProfileViewResponse = {
+  nextCursor?: ShipmentHistoryCursor | null;
   profile: Profile;
 };
 

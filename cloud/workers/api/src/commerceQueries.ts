@@ -5,6 +5,7 @@ import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfil
 import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.js';
 import type { FulfillmentManualReviewCursor } from '../../../../shared/contracts.js';
+import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -40,6 +41,16 @@ const DOCUMENT_COLUMN_NAMES = [
 ] as const;
 
 export const COMMERCE_DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+const SHIPMENT_FIELDS = [
+  'source', 'dropId', 'deliveryId', 'status', 'items', 'stripeCheckoutSessionId',
+  'createdAt', 'processingAt', 'processedAt', 'fulfillmentStatus',
+  'fulfillmentTrackingCode', 'fulfillmentUpdatedAt',
+] as const;
+const SHIPMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_json'
+  ? `json_object(${SHIPMENT_FIELDS.map((field) => `'${field}', document_json -> '$.${field}'`).join(', ')}) AS document_json`
+  : name).join(', ');
+const SHIPMENT_PREDICATE = `document_kind = 'delivery_order'
+  AND status IN ('processing', 'ready_to_ship') AND source IS NOT 'admin_irl_redeem'`;
 export const NOTIFICATION_OUTBOX_COLUMNS = 'parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code';
 const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
   SELECT 1 FROM commerce_authority_control AS authority
@@ -90,14 +101,50 @@ export function stripeChargebackMatchedDocumentsQuery(sessionId: string): Commer
 
 export function deliveryHistoryQuery(args: Readonly<{ owners: readonly string[] }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${SHIPMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
         AND document_kind = 'delivery_order'
+        AND source IS NOT 'admin_irl_redeem'
         AND owner IN (${args.owners.map(() => '?').join(', ')})
         AND status IN (${PROFILE_SHIPMENT_STATUSES.map(() => '?').join(', ')})
       ORDER BY document_path ASC`,
     bindings: [...args.owners, ...PROFILE_SHIPMENT_STATUSES],
+  };
+}
+
+export function shipmentHistoryPageQuery(args: {
+  owner: string;
+  limit: number;
+  startAfter?: ShipmentHistoryCursor;
+}): CommerceSqlQuery {
+  return {
+    sql: `SELECT ${SHIPMENT_COLUMNS}, shipment_sort_at_ms
+      FROM commerce_documents INDEXED BY commerce_delivery_orders_shipment_cursor
+      WHERE ${SHIPMENT_PREDICATE} AND owner = ?
+        AND length(CAST(document_path AS BLOB)) <= 512
+        AND EXISTS (SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1')
+        ${args.startAfter ? 'AND (shipment_sort_at_ms, document_path) < (?, ?)' : ''}
+      ORDER BY shipment_sort_at_ms DESC, document_path DESC LIMIT ?`,
+    bindings: [args.owner, ...(args.startAfter ? [args.startAfter.sortAtMs, args.startAfter.documentPath] : []), args.limit],
+  };
+}
+
+export function shipmentPresenceQuery(args: {
+  owner: string;
+  stripeSessionIds?: readonly string[];
+  documentPaths?: readonly string[];
+}): CommerceSqlQuery {
+  const selectors = [
+    { values: args.stripeSessionIds ?? [], field: "json_extract(document_json, '$.stripeCheckoutSessionId')", index: 'commerce_delivery_orders_shipment_session' },
+    { values: args.documentPaths ?? [], field: 'document_path', index: 'sqlite_autoindex_commerce_documents_1' },
+  ].filter(({ values }) => values.length);
+  return {
+    sql: selectors.map(({ values, field, index }) => `SELECT ${SHIPMENT_COLUMNS}
+      FROM commerce_documents INDEXED BY ${index}
+      WHERE ${SHIPMENT_PREDICATE} AND owner = ? AND ${field} IN (${values.map(() => '?').join(', ')})
+        AND EXISTS (SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1')`).join(' UNION ALL '),
+    bindings: selectors.flatMap(({ values }) => [args.owner, ...values]),
   };
 }
 

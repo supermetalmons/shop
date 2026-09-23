@@ -29,6 +29,8 @@ import type { ShopInventorySource } from '../inventory/useShopInventorySource';
 import type { ShopInventoryView } from '../inventory/useShopInventoryView';
 import type { ShopAccount } from './useShopAccount';
 import type { useShopSignIn } from './useShopSignIn';
+import { useShipmentHistory, type ShipmentHistoryIdentity } from '../../hooks/useShipmentHistory';
+import type { ShipmentHistoryPage } from '../../../shared/shipmentHistory.ts';
 
 type ShopShipmentsOptions = {
   account: ShopAccount;
@@ -60,9 +62,28 @@ export function useShopShipments({
 
   const profileLoadingForView = isViewerMode && viewedProfileLoading;
 
-  const deliveryOrders = isOwnProfileView
-    ? profileShipments
-    : viewedProfile?.orders || (anonymousStripeHistoryVisible ? anonymousStripeDeliveryOrders : []);
+  let historyIdentity: ShipmentHistoryIdentity | null = null;
+  let initialPage: ShipmentHistoryPage | undefined;
+  let revision = 0;
+  if (auth.authSubject) {
+    const identity = { authSubject: auth.authSubject, sessionWallet: auth.sessionWallet };
+    if (isOwnProfileView && auth.sessionWallet) {
+      historyIdentity = { ...identity, scope: 'wallet', owner: auth.sessionWallet };
+      if (profileShipmentsReady) initialPage = { orders: profileShipments, nextCursor: auth.shipmentsNextCursor };
+      revision = auth.shipmentsRevision;
+    } else if (isViewerMode && account.canUseAdminViewer && viewedProfile) {
+      historyIdentity = { ...identity, scope: 'admin', owner: viewedProfile.wallet };
+      initialPage = { orders: viewedProfile.orders ?? [], nextCursor: account.viewedProfileNextCursor };
+      revision = account.viewedProfileUpdatedAt;
+    } else if (!isViewerMode && anonymousStripeHistoryVisible) {
+      historyIdentity = { ...identity, scope: 'anonymous', owner: auth.authSubject };
+      const anonymous = stripeRecovery.anonymousHistory;
+      if (anonymous.updatedAt) initialPage = { orders: anonymousStripeDeliveryOrders, nextCursor: anonymous.nextCursor };
+      revision = anonymous.updatedAt;
+    }
+  }
+  const history = useShipmentHistory({ identity: historyIdentity, initialPage, revision });
+  const deliveryOrders = history.orders;
 
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();
@@ -131,6 +152,6 @@ export function useShopShipments({
     }, FIGURE_METADATA_RETRY_MS);
     return () => window.clearInterval(interval);
   }, [queueFigureMetadataFetch, shipmentFigureTargetsNeedingMetadata]);
-  return { deliveryOrders, shipmentsRetainedError, shipmentsEmptyStateVisibility: shipmentsEmptyStateVisibility as 'visible' | 'hidden', shipmentsSectionReady, receiptsContentVisible, emptyState: { isOwnProfileView, ownShipmentsEmptyState, isViewerMode, viewedProfileError, profileLoadingForView, anonymousStripeHistoryVisible, anonymousStripeHistoryInitialLoading, anonymousStripeHistoryError, anonymousStripeHistoryWaitingForFulfillment, handleSignInForShipments, authLoading, pendingShipmentsSignIn } };
+  return { deliveryOrders, shipmentsRetainedError, shipmentHistory: history, shipmentsEmptyStateVisibility: shipmentsEmptyStateVisibility as 'visible' | 'hidden', shipmentsSectionReady, receiptsContentVisible, emptyState: { isOwnProfileView, ownShipmentsEmptyState, isViewerMode, viewedProfileError, profileLoadingForView, anonymousStripeHistoryVisible, anonymousStripeHistoryInitialLoading, anonymousStripeHistoryError, anonymousStripeHistoryWaitingForFulfillment, handleSignInForShipments, authLoading, pendingShipmentsSignIn } };
 }
 export type ShopShipments = ReturnType<typeof useShopShipments>;

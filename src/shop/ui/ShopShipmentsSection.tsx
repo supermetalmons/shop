@@ -37,6 +37,8 @@ import { displayOrderStatus, formatOrderDate, shouldShowDeliveryTrackingCode } f
 import { FigureTileImage } from '../inventory/media';
 import { getRenderedImagePreview } from '../reveal/layout';
 import type { ShopRevealController } from '../reveal/useShopReveal';
+import type { ShopShipments } from '../account/useShopShipments';
+import { ShipmentHistoryContinuation } from './ShipmentHistoryContinuation';
 
 type ShopShipmentsSectionProps = Pick<ShopRevealController,
   'openClearCardModelViewer'
@@ -48,6 +50,7 @@ type ShopShipmentsSectionProps = Pick<ShopRevealController,
   shipmentsSectionReady: boolean;
   deliveryOrders: DeliveryOrderSummary[];
   shipmentsRetainedError: string | null;
+  shipmentHistory: ShopShipments['shipmentHistory'];
   dropById: Map<string, FrontendDeploymentConfig>;
   shipmentsEmptyStateVisibility: 'visible' | 'hidden';
   shipmentsEmptyContent: ReactNode;
@@ -64,6 +67,7 @@ export function ShopShipmentsSection({
   shipmentsSectionReady,
   deliveryOrders,
   shipmentsRetainedError,
+  shipmentHistory,
   dropById,
   shipmentsEmptyStateVisibility,
   shipmentsEmptyContent,
@@ -317,7 +321,7 @@ export function ShopShipmentsSection({
           className={`muted small${shipmentsEmptyStateVisibility === 'hidden' ? ' empty-state--hidden' : ''}`}
           aria-hidden={shipmentsEmptyStateVisibility === 'hidden'}
         >
-          {shipmentsEmptyContent}
+          {shipmentHistory.hasMore ? 'Loading shipments…' : shipmentsEmptyContent}
         </div>
       )
     ) : (
@@ -325,5 +329,6 @@ export function ShopShipmentsSection({
         {shipmentsEmptyContent}
       </div>
     )}
+    {shipmentsSectionReady ? <ShipmentHistoryContinuation {...shipmentHistory} /> : null}
   </section>);
 }

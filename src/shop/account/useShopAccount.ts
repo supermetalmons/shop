@@ -5,6 +5,7 @@ import type { useSolanaAuth } from '../../hooks/useSolanaAuth';
 import { ADMIN_WALLETS, hasDevnetInventoryAccess, hasFulfillmentAppAccess } from '../../lib/fulfillmentAccess';
 import { profileForAuthorizedView } from '../../lib/profileState';
 import { ADMIN_OWNER_DOC_PAGE_SIZE } from './display';
+import { DEFAULT_SHIPMENT_PAGE_LIMIT } from '../../../shared/shipmentHistory.ts';
 
 const DEFAULT_RUNTIME = { getAdminProfileView, listDeliveryOrderOwners };
 
@@ -77,10 +78,11 @@ export function useShopAccount(
     data: viewedProfileData,
     isFetching: viewedProfileLoading,
     error: viewedProfileError,
+    dataUpdatedAt: viewedProfileUpdatedAt,
   } = useQuery({
     queryKey: ['viewedProfile', authenticatedWallet, owner, hasAuthenticatedAccount],
     enabled: Boolean(hasAuthenticatedAccount && canUseAdminViewer && isViewerMode && owner),
-    queryFn: () => getAdminProfileView(owner || ''),
+    queryFn: () => getAdminProfileView(owner || '', { limit: DEFAULT_SHIPMENT_PAGE_LIMIT }),
     staleTime: 10_000,
   });
 
@@ -112,6 +114,7 @@ export function useShopAccount(
     deliveryOrderOwners, deliveryOrderOwnersLoadingMore, deliveryOrderOwnersHasNextPage,
     fetchNextDeliveryOrderOwners, deliveryOrderOwnersError,
     viewedProfile, viewedProfileLoading, viewedProfileError, currentOwnerDeliveryRecoveryNextCheckAt,
+    viewedProfileNextCursor: viewedProfileData?.nextCursor ?? null, viewedProfileUpdatedAt,
   };
 }
 

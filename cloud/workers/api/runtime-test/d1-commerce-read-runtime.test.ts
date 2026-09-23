@@ -9,6 +9,8 @@ import { createTestHarness } from 'wrangler';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
   manualReviewCheckoutsQuery,
+  shipmentHistoryPageQuery,
+  shipmentPresenceQuery,
   stripeChargebackLinkedSessionsQuery,
   stripeChargebackMatchedDocumentsQuery,
 } from '../src/commerceQueries.ts';
@@ -199,6 +201,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0013_notification_outbox.sql',
       '0014_drop_legacy_notification_indexes.sql',
       '0015_manual_review_pagination.sql',
+      '0016_shipment_history_pagination.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -238,6 +241,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
         WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000206'`),
     ]);
 
+    const shipmentOwner = 'anonymous:shipment-runtime';
     const claimKey = commerceKeys.claimCode('RUNTIME');
     const deliveryKey = commerceKeys.deliveryOrder('runtime', '1');
     const validOwnerA = '11111111111111111111111111111111';
@@ -248,6 +252,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const duplicateWorkflowOperationId = `airf-v1-${'b'.repeat(64)}`;
     const missingWorkflowOperationId = `airf-v1-${'c'.repeat(64)}`;
     await env.COMMERCE_DB.batch([
+      ...['1', '2', '3'].map((id) => insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('shipment-runtime', id), {
+        owner: shipmentOwner, status: 'ready_to_ship', createdAt: Number(id),
+        ...(id === '1' ? { processedAt: 0, processingAt: 999 } : {}),
+        items: [], stripeCheckoutSessionId: `cs_shipment_${id}`, privateAddress: 'hidden',
+      })),
       insertDocument(env.COMMERCE_DB, claimKey, { status: 'unused' }),
       insertDocument(env.COMMERCE_DB, deliveryKey, {
         buyerOrderReceivedEmailState: 'pending',
@@ -375,6 +384,23 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual(await env.COMMERCE_DB.prepare('SELECT * FROM commerce_authority_control WHERE singleton = 1').first(),
       authorityBeforeChargeback);
     const repository = new D1CommerceRepository(env.COMMERCE_DB);
+    const shipmentPage = await repository.queryShipmentHistoryPage({ owner: shipmentOwner, limit: 2 });
+    assert.deepEqual(shipmentPage.orders.map((order) => order.deliveryId), [3, 2]);
+    assert.ok(shipmentPage.nextCursor);
+    const shipmentTail = await repository.queryShipmentHistoryPage({ owner: shipmentOwner, limit: 2, startAfter: shipmentPage.nextCursor });
+    assert.deepEqual(shipmentTail.orders.map((order) => order.deliveryId), [1]);
+    assert.equal(shipmentTail.nextCursor, null);
+    assert.deepEqual(await repository.queryShipmentPresence({ owner: shipmentOwner,
+      stripeSessionIds: ['cs_shipment_1'], deliveries: [{ dropId: 'shipment-runtime', deliveryId: 1 }],
+    }), { stripeSessionIds: ['cs_shipment_1'], deliveries: [{ dropId: 'shipment-runtime', deliveryId: 1 }] });
+    for (const query of [
+      shipmentHistoryPageQuery({ owner: shipmentOwner, limit: 2, startAfter: shipmentPage.nextCursor }),
+      shipmentPresenceQuery({ owner: shipmentOwner, stripeSessionIds: ['cs_shipment_1'] }),
+    ]) {
+      const plan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).bind(...query.bindings).all<{ detail: string }>();
+      assert.ok(plan.results.some((row) => row.detail.includes('commerce_delivery_orders_shipment_')));
+      assert.ok(plan.results.every((row) => !row.detail.includes('USE TEMP B-TREE')));
+    }
     assert.deepEqual((await repository.get(claimKey))?.data, { status: 'unused' });
     assert.equal(await repository.get(commerceKeys.claimCode('MISSING')), null);
     assert.deepEqual(

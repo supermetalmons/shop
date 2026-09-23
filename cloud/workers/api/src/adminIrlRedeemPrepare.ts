@@ -79,6 +79,7 @@ import { rethrowDeferredWorkRegistrationError, type DeferredWork } from './defer
 import { API_DROPS, getApiDrop, type ApiDropConfig } from './dropConfig.js';
 import { dropAdminIrlRedeemRequestPath } from './dropPaths.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
@@ -385,25 +386,6 @@ async function serializeCardTransaction(args: {
   return raw;
 }
 
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (true) {
-      const index = next;
-      next += 1;
-      if (index >= items.length) return;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
 async function prepareAdminIrlRedeem(args: {
   body: AdminIrlRedeemPrepareRequest;
   db: D1Database | undefined;
@@ -436,9 +418,9 @@ async function prepareAdminIrlRedeem(args: {
   }
 
   const onchain = await args.dependencies.loadOnchainState(args.providerContext, runtime);
-  const assets = await mapWithConcurrency(itemIds, ASSET_FETCH_CONCURRENCY, (assetId) =>
-    args.dependencies.fetchAsset(args.providerContext, runtime, assetId)
-  );
+  const assets = await mapWithConcurrency(itemIds, ASSET_FETCH_CONCURRENCY, (assetId, _index, signal) =>
+    args.dependencies.fetchAsset({ ...args.providerContext, signal }, runtime, assetId),
+  { signal: args.providerContext.signal });
   const kinds = assets.map((asset) => dasAssetKind(asset, NAME_POLICY));
   const targetKind: AdminIrlRedeemTargetKind = kinds.some((kind) => kind === 'certificate')
     ? 'card_receipt'

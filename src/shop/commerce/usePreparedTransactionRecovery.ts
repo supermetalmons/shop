@@ -6,8 +6,8 @@ import {
   type PendingSubmittedTransaction,
 } from '../../lib/pendingPreparedTransactions';
 import { reconcileSubmittedTransaction, shortAddress } from '../../lib/solana';
+import { getShipmentPresence } from '../../api/profile';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
-import type { DeliveryOrderSummary } from '../../types';
 import type { usePreparedTransactionState } from './usePreparedTransactionState';
 import type { useClaimPresentation } from './useClaimPresentation';
 import type { CommerceInventoryRefresh, DeliveryRecovery, DropConnection } from './contracts';
@@ -31,11 +31,10 @@ type PreparedRecoveryOptions = {
   isSignedInWallet: boolean;
   getDropConnection: DropConnection;
   hasAuthenticatedWalletSession: (wallet: string) => boolean;
-  profileShipments: DeliveryOrderSummary[];
   hideAssetsForWallet: (wallet: string, ids: readonly string[]) => void;
   runDeliveryRecovery: DeliveryRecovery;
   refetchInventory: CommerceInventoryRefresh;
-  refreshProfileState: () => Promise<unknown>;
+  refreshProfileState: () => Promise<boolean>;
   showToast: (message: string) => void;
   presentConfirmedNumericClaim: ReturnType<typeof useClaimPresentation>;
 };
@@ -52,7 +51,6 @@ export function usePreparedTransactionRecovery({
   isSignedInWallet,
   getDropConnection,
   hasAuthenticatedWalletSession,
-  profileShipments,
   hideAssetsForWallet,
   runDeliveryRecovery,
   refetchInventory,
@@ -72,10 +70,6 @@ export function usePreparedTransactionRecovery({
   const shipmentRefreshStopsByTransactionKeyRef = useRef<Map<string, () => void>>(new Map());
   const shipmentRefreshMountedRef = useRef(false);
 
-  const profileShipmentsRef = useRef({ shipments: profileShipments });
-  useEffect(() => {
-    profileShipmentsRef.current = { shipments: profileShipments };
-  }, [profileShipments]);
   useEffect(() => {
     shipmentRefreshMountedRef.current = true;
     return () => {
@@ -217,9 +211,6 @@ export function usePreparedTransactionRecovery({
     let retryTimer: number | null = null;
     let deadline: number | null = null;
     let stopped = false;
-    const isVisible = () => profileShipmentsRef.current.shipments.some(
-      (shipment) => shipment.dropId === dropId && shipment.deliveryId === deliveryId,
-    );
     const stop = () => {
       if (stopped) return;
       stopped = true;
@@ -241,17 +232,30 @@ export function usePreparedTransactionRecovery({
     };
     const refresh = async () => {
       if (stopped) return;
-      if (!hasAuthenticatedWalletSession(wallet) || isVisible()) {
+      if (!hasAuthenticatedWalletSession(wallet)) {
         stop();
         return;
       }
       try {
-        await refreshProfileState();
+        const presence = await getShipmentPresence({ scope: 'wallet', expectedWallet: wallet, deliveries: [{ dropId, deliveryId }] });
+        if (stopped || !hasAuthenticatedWalletSession(wallet)) {
+          stop();
+          return;
+        }
+        const refreshed = await refreshProfileState();
+        if (stopped || !hasAuthenticatedWalletSession(wallet)) {
+          stop();
+          return;
+        }
+        if (refreshed && presence.deliveries.some((delivery) => delivery.dropId === dropId && delivery.deliveryId === deliveryId)) {
+          stop();
+          return;
+        }
       } catch (err) {
         console.warn('[mons] failed to refresh pending shipment', err);
       }
       if (stopped) return;
-      if (!hasAuthenticatedWalletSession(wallet) || isVisible()) {
+      if (!hasAuthenticatedWalletSession(wallet)) {
         stop();
         return;
       }

@@ -6,7 +6,7 @@ import type { CommerceDocumentRecord } from './commerceRepository.js';
 import { type CommerceRepositoryContext } from './commerceTransactions.js';
 import { DeliveryReceiptError } from './deliveryReceiptErrors.js';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.js';
-import { notificationOutboxState } from '../../../../shared/notificationOutbox.js';
+import { notificationOutboxState, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
 import { publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
 import {
   claimNotificationOutbox, markClaimedNotificationQueued, persistClaimedNotificationJobs,
@@ -77,6 +77,7 @@ async function publishReadyNotifications(args: {
   if (!document || parseDeliveryOrderStatus(document.data).status !== 'ready_to_ship') return false;
   const startedAt = performance.now();
   const nowMs = args.nowMs || (() => args.context.nowMs + Math.max(0, Math.floor(performance.now() - startedAt)));
+  let initialRecord: NotificationOutboxRecord | undefined;
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const record = await args.context.repository.notificationOutbox.get(document.key.path, 'ready');
     if (!record || record.state !== 'pending') return false;
@@ -89,18 +90,25 @@ async function publishReadyNotifications(args: {
       const { payload: _payload, ...identity } = entry;
       return { ...identity, state: 'failed' as const, errorCode: 'invalid-notification-data' };
     });
-    if (entries.every((entry, index) => entry === record.entries[index])) break;
+    if (entries.every((entry, index) => entry === record.entries[index])) {
+      initialRecord = record;
+      break;
+    }
     const state = notificationOutboxState(entries);
     const updated = await args.context.repository.notificationOutbox.compareAndSet({
       expected: record, nowMs: nowMs(), parentVersion: document.version,
       changes: { entries, state, lastErrorCode: 'invalid-notification-data',
         ...(state !== 'pending' ? { claimId: null, claimExpiresAtMs: null, nextAttemptAtMs: null } : {}) },
     });
-    if (updated) break;
+    if (updated) {
+      initialRecord = updated;
+      break;
+    }
   }
+  if (!initialRecord) throw new ReadyToShipNotificationEnqueueError('Notification state changed. Retry later.');
   const claimed = await claimNotificationOutbox({
     repository: args.context.repository, parentPath: document.key.path,
-    family: 'ready', nowMs, signal: args.context.signal, parentVersion: document.version,
+    family: 'ready', nowMs, signal: args.context.signal, parentVersion: document.version, initialRecord,
   });
   if (claimed.outcome !== 'claimed') return false;
   const { claim } = claimed;

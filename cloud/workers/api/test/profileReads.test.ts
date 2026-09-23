@@ -195,6 +195,8 @@ function legacyFirestoreProfileDependencies(
     };
     return {
       notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
+      queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+      queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
       queryDeliveryHistory: (args: Parameters<D1CommerceRepository['queryDeliveryHistory']>[0]) =>
         loadDocuments({ operation: 'queryDeliveryHistory', ...args }),
       queryFulfillmentOrders: (args: Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]) =>
@@ -720,6 +722,8 @@ test('profile state preserves an earlier unavailable section when its sibling ti
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
         notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
+      queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+      queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
         queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
         queryFulfillmentOrders: async () => [],
         queryManualReviewCheckouts: async () => [],
@@ -757,6 +761,8 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
           notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
+      queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+      queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
           queryDeliveryHistory: async () => mode === 'stalled'
             ? new Promise<CommerceDocumentRecord[]>(() => undefined)
             : new Promise<CommerceDocumentRecord[]>((resolve) => setTimeout(() => resolve([]), 20)),
@@ -810,6 +816,8 @@ test('profile state preserves independently completed sections when D1 ignores t
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
         notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
+      queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+      queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
         queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
         queryFulfillmentOrders: async () => [],
         queryManualReviewCheckouts: async () => [],
@@ -1256,6 +1264,8 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
     async () => Response.json({}),
     () => ({
       notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
+      queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+      queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
       queryDeliveryHistory: async () => [],
       queryFulfillmentOrders: async () => [],
       queryManualReviewCheckouts: async () => [],

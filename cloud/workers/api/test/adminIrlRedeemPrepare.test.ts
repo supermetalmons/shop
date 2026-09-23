@@ -372,6 +372,33 @@ test('Admin IRL preparation rejects ownership, pending-open, marker, and proof f
   assert.equal(wrongTree.response.status, 409);
 });
 
+test('Admin IRL preparation cancels sibling asset reads and skips queued assets after a failure', async () => {
+  const itemIds = Array.from({ length: 5 }, () => Keypair.generate().publicKey.toBase58());
+  const started: string[] = [];
+  let aborted = 0;
+  const failure = new ProfileReadError('not-found', 404, 'Pack missing.');
+  const result = await handleAdminIrlRedeemPrepare(request({
+    owner: OWNER.toBase58(), dropId: DROP_ID, itemIds,
+  }), env(), {}, dependencies({
+    fetchAsset: async (context: { signal: AbortSignal }, _runtime: unknown, assetId: string) => {
+      started.push(assetId);
+      if (assetId === itemIds[0]) throw failure;
+      return new Promise((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => {
+          aborted += 1;
+          assert.equal(context.signal.reason, failure);
+          reject(context.signal.reason);
+        }, { once: true });
+      });
+    },
+    createRequest: async () => assert.fail('failed asset reads reached request creation'),
+  }));
+  assert.equal(result.response.status, 404);
+  assert.deepEqual(await result.response.json(), { ok: false, error: { code: 'not-found', message: 'Pack missing.' } });
+  assert.deepEqual(started, itemIds.slice(0, 4));
+  assert.equal(aborted, 3);
+});
+
 test('Admin IRL preparation surfaces provider deadlines and conditional-create conflicts', async () => {
   const body = { owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] };
   const timeout = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({

@@ -98,6 +98,7 @@ import { ProfileReadError, isRecord } from './dataAccess.js';
 import { assignDudesForBox } from './deliveryDudeAssignments.js';
 import { projectPendingDeliveryPackStatus } from './deliveryPackStatusOutbox.js';
 import { secureRandomInt } from './deliveryRandom.js';
+import { mapWithConcurrency } from './mapWithConcurrency.js';
 import {
   DeliveryReceiptError,
   buildTransaction as buildDeliveryTransaction,
@@ -842,24 +843,6 @@ async function scanAssetsByOwner(
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Too many assets to search for Admin IRL receipts.');
 }
 
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  transform: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  const worker = async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await transform(values[index]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
-  return results;
-}
-
 async function findReceiptAssets(
   connection: Connection,
   provider: ProviderContext,
@@ -886,7 +869,8 @@ async function findReceiptAssets(
       if (ids.length !== items.length || new Set(ids).size !== ids.length) {
         throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem receipt transaction assets do not match the request.');
       }
-      const assets = await mapWithConcurrency(ids, 4, (id) => fetchAdminIrlRedeemAsset(provider, runtime, id));
+      const assets = await mapWithConcurrency(ids, 4, (id, _index, signal) =>
+        fetchAdminIrlRedeemAsset({ ...provider, signal }, runtime, id), { signal: provider.signal });
       for (const asset of assets) {
         const boxId = isRecord(asset) ? Number(dasAssetBoxId(asset, NAME_POLICY)) : Number.NaN;
         if (!Number.isSafeInteger(boxId) || !expected.has(boxId) || !receiptMatches(asset, runtime, boxId, owner)) {

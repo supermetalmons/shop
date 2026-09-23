@@ -91,15 +91,13 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   shippedNotifications: reconcilePendingShippedNotifications,
 };
 
-export async function runScheduledReconciliations(
+async function runScheduledCommerceReconciliations(
   env: Env,
   signal: AbortSignal,
-  overrides: Partial<ScheduledReconcilers> = {},
-): Promise<void> {
-  const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
+  reconcilers: ScheduledReconcilers,
+): Promise<unknown[]> {
   if (env.COMMERCE_DB && (await loadCommerceAuthorityControl(env.COMMERCE_DB)).state === 'paused') {
-    await reconcilers.ops(env, signal);
-    return;
+    return [];
   }
   const results = await Promise.allSettled([
     reconcilers.stripe(env, signal),
@@ -107,8 +105,21 @@ export async function runScheduledReconciliations(
     reconcilers.shippedNotifications(env, signal),
     reconcilers.packStatus(env, signal),
     reconcilers.notifications(env, signal),
+  ]);
+  return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+}
+
+export async function runScheduledReconciliations(
+  env: Env,
+  signal: AbortSignal,
+  overrides: Partial<ScheduledReconcilers> = {},
+): Promise<void> {
+  const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
+  const [commerce, ops] = await Promise.allSettled([
+    runScheduledCommerceReconciliations(env, signal, reconcilers),
     reconcilers.ops(env, signal),
   ]);
-  const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  const failures = commerce.status === 'rejected' ? [commerce.reason] : commerce.value;
+  if (ops.status === 'rejected') failures.push(ops.reason);
   if (failures.length) throw new AggregateError(failures, 'Scheduled reconciliation failed');
 }

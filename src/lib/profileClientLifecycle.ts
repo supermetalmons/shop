@@ -258,24 +258,6 @@ export function profileSectionReadiness(args: {
   };
 }
 
-type StripeShipment = {
-  stripeCheckoutSessionId?: string;
-};
-
-export function authoritativeProfileShipmentsContainStripeSessions(args: {
-  shipments: readonly StripeShipment[];
-  ready: boolean;
-  expectedSessionIds: readonly string[];
-}): boolean {
-  if (!args.ready || !args.expectedSessionIds.length) return false;
-  const present = new Set(
-    args.shipments
-      .map((shipment) => shipment.stripeCheckoutSessionId?.trim() || '')
-      .filter(Boolean),
-  );
-  return args.expectedSessionIds.every((sessionId) => present.has(sessionId.trim()));
-}
-
 const RETAINED_PROFILE_SHIPMENTS_ERROR =
   'Unable to refresh shipments. Showing previously loaded data.';
 

@@ -48,6 +48,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/profile/reconcile', 'profile', true, 'optional', true, 'profile', '/profile/reconcile'],
   ['/profile/shipments', 'profile', true, 'optional', false, 'profile', '/profile/shipments'],
   ['/profile/state', 'profile', true, 'optional', false, 'profile', '/profile/state'],
+  ['/profile/shipment-presence', 'profile', true, 'optional', false, 'profile', '/profile/shipment-presence'],
   ['/profile/anonymous-stripe-delivery-history', 'profile', true, 'optional', false, 'profile', '/profile/anonymous-stripe-delivery-history'],
   ['/admin/profile', 'profile', true, 'required', false, 'profile', '/admin/profile'],
   ['/admin/delivery-order-owners', 'profile', true, 'required', false, 'profile', '/admin/delivery-order-owners'],
