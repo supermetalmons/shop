@@ -22,8 +22,10 @@ import {
   receiptClaimWorkflowContext,
   receiptClaimWorkflowFailure,
   logReceiptClaimWorkflow,
+  isReceiptClaimWorkflowRetryableCode,
   type ReceiptClaimWorkflowFailure,
 } from './stripeReceiptClaimWorkflowSupport.js';
+import { runWorkflowStage, workflowRetryErrorCode } from './workflowStage.js';
 
 const STEP_CONFIG = {
   retries: { limit: 4, delay: '2 seconds', backoff: 'exponential' },
@@ -46,29 +48,12 @@ const defaultDependencies = {
   nowMs: Date.now,
 };
 
-type StageResult<T> = { ok: true; value: T } | { ok: false; error: ReceiptClaimWorkflowFailure };
-
-async function runStage<T extends Rpc.Serializable<T>>(
-  step: Pick<WorkflowStep, 'do'>,
-  name: string,
-  logContext: { operationId: string; generation: number },
-  action: (signal: AbortSignal) => Promise<T>,
-): Promise<StageResult<T>> {
-  return step.do(name, STEP_CONFIG, async () => {
-    const startedAt = performance.now();
-    try {
-      const value = await action(AbortSignal.timeout(55_000));
-      logReceiptClaimWorkflow({ ...logContext, stage: name, outcome: 'succeeded', durationMs: Math.round(performance.now() - startedAt) });
-      return { ok: true, value } as const;
-    } catch (error) {
-      const failure = receiptClaimWorkflowFailure(error);
-      logReceiptClaimWorkflow({ ...logContext, stage: name, outcome: failure.retryable ? 'retryable_failure' : 'terminal_failure',
-        errorCode: failure.code, durationMs: Math.round(performance.now() - startedAt) });
-      if (failure.retryable) throw new Error('Receipt claim Workflow stage is temporarily unavailable.');
-      return { ok: false, error: failure } as const;
-    }
-  });
-}
+const RETRY_ERROR_MARKER = {
+  name: 'StripeReceiptClaimWorkflowRetry',
+  messagePrefix: 'stripe-receipt-claim-retry:',
+  isCode: isReceiptClaimWorkflowRetryableCode,
+  fallbackCode: 'unavailable',
+} as const;
 
 export async function runStripeReceiptClaimWorkflow(
   env: Env,
@@ -84,7 +69,18 @@ export async function runStripeReceiptClaimWorkflow(
   }
   const dependencies = { ...defaultDependencies, ...overrides };
   const stage = <T extends Rpc.Serializable<T>>(name: string, action: (signal: AbortSignal) => Promise<T>) =>
-    runStage(step, name, { operationId: payload.operationId, generation: payload.generation }, action);
+    runWorkflowStage({
+      step,
+      name,
+      config: STEP_CONFIG,
+      actionTimeoutMs: 55_000,
+      normalizeError: receiptClaimWorkflowFailure,
+      retryErrorMarker: RETRY_ERROR_MARKER,
+      log: (entry) => logReceiptClaimWorkflow({
+        operationId: payload.operationId, generation: payload.generation, stage: name, ...entry,
+      }),
+      action,
+    });
   const context = (signal: AbortSignal) => receiptClaimWorkflowContext(env, signal, dependencies.nowMs());
   const current = async (signal: AbortSignal): Promise<ReceiptClaimWorkflowSnapshot> => {
     signal.throwIfAborted();
@@ -148,7 +144,10 @@ export async function runStripeReceiptClaimWorkflow(
     }
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Aborting engine:')) throw error;
-    failure = receiptClaimWorkflowFailure(error);
+    const retryCode = workflowRetryErrorCode(error, RETRY_ERROR_MARKER);
+    failure = retryCode
+      ? { ...receiptClaimWorkflowFailure(undefined), code: retryCode }
+      : receiptClaimWorkflowFailure(error);
   }
   return step.do('persist receipt claim failure', CLEANUP_CONFIG, async () => {
     const signal = AbortSignal.timeout(25_000);

@@ -9,6 +9,12 @@ export type ReceiptClaimWorkflowFailure = {
   retryable: boolean;
 };
 
+export function isReceiptClaimWorkflowRetryableCode(value: unknown): value is
+  'aborted' | 'deadline-exceeded' | 'unavailable' | 'internal' | 'resource-exhausted' {
+  return value === 'aborted' || value === 'deadline-exceeded' || value === 'unavailable' ||
+    value === 'internal' || value === 'resource-exhausted';
+}
+
 export function receiptClaimWorkflowContext(
   env: Pick<Env, 'COMMERCE_DB'>,
   signal: AbortSignal,
@@ -28,7 +34,7 @@ export function receiptClaimWorkflowFailure(error: unknown): ReceiptClaimWorkflo
     return {
       code: error.code,
       message: error.message,
-      retryable: ['aborted', 'deadline-exceeded', 'unavailable', 'internal', 'resource-exhausted'].includes(error.code),
+      retryable: isReceiptClaimWorkflowRetryableCode(error.code),
     };
   }
   return {

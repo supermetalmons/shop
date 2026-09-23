@@ -209,6 +209,57 @@ test('Admin IRL Workflow logging failures do not change success or cleanup outco
   assert.equal(cleanupCalls, 1);
 });
 
+test('Admin IRL Workflow keeps business, pack, and cleanup action timeout margins', async (t) => {
+  const timeout = t.mock.method(AbortSignal, 'timeout', () => new AbortController().signal);
+  const success = await workflowModule.runAdminIrlRedeemFinalizeWorkflow(
+    {} as Env,
+    event(),
+    new FakeWorkflowStep() as never,
+    dependencies(),
+  );
+  assert.equal(success.ok, true);
+  assert.deepEqual(timeout.mock.calls.map(({ arguments: args }) => args[0]), [595_000, 595_000, 1_495_000, 595_000]);
+  timeout.mock.resetCalls();
+
+  const failure = await workflowModule.runAdminIrlRedeemFinalizeWorkflow(
+    {} as Env,
+    event(),
+    new FakeWorkflowStep() as never,
+    dependencies({
+      validate: async () => { throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Transfer mismatch.'); },
+    }),
+  );
+  assert.equal(failure.ok, false);
+  assert.deepEqual(timeout.mock.calls.map(({ arguments: args }) => args[0]), [595_000, 595_000, 25_000]);
+});
+
+for (const [code, message] of [
+  ['aborted', 'Admin IRL redeem finalization must be retried.'],
+  ['deadline-exceeded', 'Admin IRL redeem finalization timed out.'],
+  ['unavailable', 'Admin IRL redeem finalization is temporarily unavailable.'],
+  ['internal', 'Admin IRL redeem finalization failed unexpectedly.'],
+] as const) {
+  test(`Admin IRL Workflow preserves ${code} and its existing retry marker across exhaustion`, async () => {
+    const step = new FakeWorkflowStep();
+    const { result, captured } = await captureConsole(() => workflowModule.runAdminIrlRedeemFinalizeWorkflow(
+      {} as Env,
+      event(),
+      step as never,
+      dependencies({
+        validate: async () => { throw new AdminIrlRedeemFinalizeError(code, 'Private provider response.'); },
+      }),
+    ));
+
+    assert.deepEqual(result, { version: 1, ok: false, error: { code, message, retryable: true } });
+    assert.deepEqual(step.boundaryErrors, Array.from({ length: 5 }, () => ({
+      name: 'AdminIrlRedeemFinalizeWorkflowRetry',
+      message: `admin-irl-redeem-finalize-retry:${code}`,
+    })));
+    assert.deepEqual(logEntries(captured.warn).map((entry) => entry.retryAttempt), [1, 2, 3, 4, 5]);
+    assert.equal(JSON.stringify(captured).includes('Private provider response.'), false);
+  });
+}
+
 test('Admin IRL Workflow preserves a terminal error when cleanup retains irreversible progress', async () => {
   const { result: output, captured } = await captureConsole(() =>
     workflowModule.runAdminIrlRedeemFinalizeWorkflow(

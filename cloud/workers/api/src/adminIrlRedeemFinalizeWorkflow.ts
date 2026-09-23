@@ -19,6 +19,12 @@ import {
   type AdminIrlRedeemFinalizeWorkflowPayload,
   type AdminIrlRedeemFinalizeWorkflowResultReference,
 } from './adminIrlRedeemFinalizeWorkflowState.js';
+import {
+  runWorkflowStage,
+  workflowRetryError,
+  workflowRetryErrorCode,
+  type WorkflowStageResult,
+} from './workflowStage.js';
 
 const STEP_TIMEOUT_MS = 10 * 60 * 1000;
 const PACK_STEP_TIMEOUT_MS = 25 * 60 * 1000;
@@ -40,14 +46,14 @@ const REPORT_STEP_CONFIG = {
   timeout: 5_000,
 } as const satisfies WorkflowStepConfig;
 
-type StageResult<T> =
-  | Readonly<{ ok: true; value: T }>
-  | Readonly<{ ok: false; error: AdminIrlRedeemFinalizeWorkflowError }>;
-
 type RetryableWorkflowErrorCode = 'aborted' | 'deadline-exceeded' | 'unavailable' | 'internal';
 
-const RETRY_ERROR_NAME = 'AdminIrlRedeemFinalizeWorkflowRetry';
-const RETRY_ERROR_MESSAGE_PREFIX = 'admin-irl-redeem-finalize-retry:';
+const RETRY_ERROR_MARKER = {
+  name: 'AdminIrlRedeemFinalizeWorkflowRetry',
+  messagePrefix: 'admin-irl-redeem-finalize-retry:',
+  isCode: isRetryableWorkflowErrorCode,
+  fallbackCode: 'internal',
+} as const;
 const WORKFLOW_ENGINE_ABORT_PREFIX = 'Aborting engine:';
 
 export type AdminIrlRedeemFinalizeWorkflowDependencies = Readonly<{
@@ -113,29 +119,6 @@ function isWorkflowEngineAbort(error: unknown): boolean {
   }
 }
 
-function retryStageError(code: RetryableWorkflowErrorCode): Error {
-  const error = new Error(`${RETRY_ERROR_MESSAGE_PREFIX}${code}`);
-  error.name = RETRY_ERROR_NAME;
-  return error;
-}
-
-function retryErrorCode(error: unknown): RetryableWorkflowErrorCode | null {
-  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return null;
-  let name: unknown;
-  let message: unknown;
-  try {
-    name = (error as { name?: unknown }).name;
-    message = (error as { message?: unknown }).message;
-  } catch {
-    return null;
-  }
-  if (name !== RETRY_ERROR_NAME || typeof message !== 'string' || !message.startsWith(RETRY_ERROR_MESSAGE_PREFIX)) {
-    return null;
-  }
-  const code = message.slice(RETRY_ERROR_MESSAGE_PREFIX.length);
-  return isRetryableWorkflowErrorCode(code) ? code : null;
-}
-
 function retryFailure(code: RetryableWorkflowErrorCode): AdminIrlRedeemFinalizeWorkflowError {
   return adminIrlRedeemFinalizeWorkflowError(new AdminIrlRedeemFinalizeError(code, ''));
 }
@@ -146,38 +129,23 @@ async function runStage<T extends Rpc.Serializable<T>>(
   config: WorkflowStepConfig,
   logContext: WorkflowLogContext,
   action: (signal: AbortSignal) => Promise<T>,
-): Promise<StageResult<T>> {
+): Promise<WorkflowStageResult<T>> {
   const timeout = typeof config.timeout === 'number' ? config.timeout : STEP_TIMEOUT_MS;
-  return step.do(name, config, async (context) => {
-    const startedAt = performance.now();
-    try {
-      const value = await action(AbortSignal.timeout(Math.max(1, timeout - 5_000)));
-      logWorkflow(logContext, {
-        step: name,
-        retryAttempt: context.attempt,
-        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-        outcome: 'succeeded',
-      });
-      return { ok: true, value } as const;
-    } catch (error) {
-      const normalized = adminIrlRedeemFinalizeWorkflowError(error);
-      logWorkflow(logContext, {
-        step: name,
-        retryAttempt: context.attempt,
-        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-        outcome: normalized.retryable ? 'retryable_failure' : 'terminal_failure',
-        errorCode: normalized.code,
-      }, normalized.retryable ? 'warning' : 'error');
-      if (normalized.retryable) {
-        throw retryStageError(isRetryableWorkflowErrorCode(normalized.code) ? normalized.code : 'internal');
-      }
-      return { ok: false, error: normalized } as const;
-    }
+  return runWorkflowStage({
+    step,
+    name,
+    config,
+    actionTimeoutMs: Math.max(1, timeout - 5_000),
+    normalizeError: adminIrlRedeemFinalizeWorkflowError,
+    retryErrorMarker: RETRY_ERROR_MARKER,
+    log: (entry) => logWorkflow(logContext, { step: name, ...entry },
+      entry.outcome === 'succeeded' ? 'info' : entry.outcome === 'retryable_failure' ? 'warning' : 'error'),
+    action,
   });
 }
 
 function workflowFailure(error: unknown): AdminIrlRedeemFinalizeWorkflowError {
-  const retryCode = retryErrorCode(error);
+  const retryCode = workflowRetryErrorCode(error, RETRY_ERROR_MARKER);
   if (retryCode) return retryFailure(retryCode);
   return adminIrlRedeemFinalizeWorkflowError(error);
 }
@@ -285,7 +253,7 @@ export async function runAdminIrlRedeemFinalizeWorkflow(
           outcome: 'cleanup_failure',
           errorCode: normalized.code,
         }, 'error');
-        throw retryStageError(isRetryableWorkflowErrorCode(normalized.code) ? normalized.code : 'internal');
+        throw workflowRetryError(RETRY_ERROR_MARKER, normalized.code);
       }
     });
   } catch (error) {
