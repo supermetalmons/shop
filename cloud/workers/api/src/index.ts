@@ -25,6 +25,7 @@ import {
   strictPublicOriginDeniedResponse,
   unexpectedWorkerRouteResponse,
   isAdminIrlRedeemFinalizeRoute,
+  receiptClaimRetryHeaders,
   workerRouteBaseLogFields,
   workerRouteRegistry,
   workerRouteOriginDeniedResponse,
@@ -40,6 +41,7 @@ import {
 
 export { runScheduledReconciliations } from './workerScheduled.js';
 export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkflow.js';
+export { StripeReceiptClaimWorkflowV1 } from './stripeReceiptClaimWorkflow.js';
 export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
 export {
   processBackgroundJobBatch,
@@ -250,7 +252,7 @@ async function dispatchRequest(
               message: 'Staff authentication is temporarily unavailable.',
               ...finalizationRecovery(pathname),
             },
-          }, 503)),
+          }, 503, receiptClaimRetryHeaders(pathname))),
           logFields: { profileAuthOutcome: 'provider-failure' },
         };
       }

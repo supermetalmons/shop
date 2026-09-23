@@ -57,8 +57,16 @@ import {
 } from './receiptTransfer.js';
 import {
   STRIPE_RECEIPT_CLAIM_PATH,
-  handleStripeReceiptClaim,
 } from './stripeReceiptClaim.js';
+import {
+  handleStripeReceiptClaimWorkflowLegacy,
+  handleStripeReceiptClaimWorkflowStart,
+  handleStripeReceiptClaimWorkflowStatus,
+} from './stripeReceiptClaimWorkflowRoutes.js';
+import {
+  STRIPE_RECEIPT_CLAIM_START_PATH,
+  STRIPE_RECEIPT_CLAIM_STATUS_PATH,
+} from '../../../../shared/stripeReceiptClaimWorkflow.js';
 import {
   DELIVERY_PREPARE_PATH,
   handleDeliveryPrepare,
@@ -80,7 +88,11 @@ import {
   handleAdminIrlRedeemFinalizeWorkflowStart,
   handleAdminIrlRedeemFinalizeWorkflowStatus,
 } from './adminIrlRedeemFinalizeWorkflowRoutes.js';
-import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY } from '../../../../shared/contracts.js';
+import {
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+  STRIPE_CHECKOUT_RETRY_HEADER,
+  STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+} from '../../../../shared/contracts.js';
 import {
   REVEAL_DUDES_PATH,
   handleRevealDudes,
@@ -298,11 +310,13 @@ async function dispatchIrlClaim(context: WorkerRouteContext): Promise<WorkerRout
   };
 }
 
-async function dispatchStripeReceiptClaim(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleStripeReceiptClaim(
+async function dispatchStripeReceiptClaim(
+  context: WorkerRouteContext,
+  handler = handleStripeReceiptClaimWorkflowLegacy,
+): Promise<WorkerRouteResult> {
+  const result = await handler(
     context.request,
     context.env,
-    context.defer,
     context.authContext,
   );
   addMetrics(context.metrics, result);
@@ -313,6 +327,7 @@ async function dispatchStripeReceiptClaim(context: WorkerRouteContext): Promise<
       ...(result.dropId ? { stripeReceiptClaimDropId: result.dropId } : {}),
       ...(result.deliveryId === undefined ? {} : { stripeReceiptClaimDeliveryId: result.deliveryId }),
       ...(result.outcome ? { stripeReceiptClaimOutcome: result.outcome } : {}),
+      ...(result.operationId ? { stripeReceiptClaimOperationId: result.operationId } : {}),
     },
   };
 }
@@ -629,6 +644,16 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
     dispatchStripeReceiptClaim,
   ),
   exactRoute(
+    STRIPE_RECEIPT_CLAIM_START_PATH,
+    profilePolicy({ commerceMutation: true }),
+    (context) => dispatchStripeReceiptClaim(context, handleStripeReceiptClaimWorkflowStart),
+  ),
+  exactRoute(
+    STRIPE_RECEIPT_CLAIM_STATUS_PATH,
+    profilePolicy(),
+    (context) => dispatchStripeReceiptClaim(context, handleStripeReceiptClaimWorkflowStatus),
+  ),
+  exactRoute(
     RECEIPT_TRANSFER_PREPARE_PATH,
     profilePolicy({ commerceMutation: true }),
     dispatchReceiptTransfer,
@@ -940,9 +965,15 @@ export function unexpectedWorkerRouteResponse(
           ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
           : {}),
       },
-    }, 503));
+    }, 503, receiptClaimRetryHeaders(route.logRoute)));
   }
   return sharedJsonResponse({ ok: false, error: 'internal' }, 500);
+}
+
+export function receiptClaimRetryHeaders(pathname: string): Record<string, string> {
+  return pathname === STRIPE_RECEIPT_CLAIM_START_PATH || pathname === STRIPE_RECEIPT_CLAIM_STATUS_PATH
+    ? { [STRIPE_CHECKOUT_RETRY_HEADER]: STRIPE_CHECKOUT_RETRY_SAME_OPERATION }
+    : {};
 }
 
 export function isAdminIrlRedeemFinalizeRoute(pathname: string): boolean {

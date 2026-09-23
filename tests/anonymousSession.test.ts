@@ -146,6 +146,83 @@ test('anonymous logout retains local state when remote revocation fails', async 
   }
 });
 
+test('anonymous refresh preserves its session through gateway and malformed-response failures', async () => {
+  const session = { subject: SUBJECT, refreshedAt: Date.now(), expiresAt: Date.now() + 86_400_000 };
+  globalThis.fetch = async () => Response.json(session);
+  await ensureAnonymousSession(true);
+  for (const response of [
+    () => new Response('<html>Bad gateway</html>', { status: 502 }),
+    () => Response.json({ error: 'internal' }, { status: 503 }),
+    () => new Response('{', { status: 200 }),
+    () => Response.json({ subject: 'invalid' }),
+  ]) {
+    globalThis.fetch = async () => response();
+    await assert.rejects(ensureAnonymousSession(true), (error) => {
+      assert.ok(error instanceof Error);
+      assert.equal((error as Error & { code?: string }).code, 'unavailable');
+      return true;
+    });
+    assert.deepEqual(currentAnonymousSession(), session);
+    globalThis.fetch = async () => Response.json(session);
+    assert.deepEqual(await ensureAnonymousSession(true), session);
+  }
+});
+
+test('anonymous credential rejection remains terminal regardless of response format', async () => {
+  for (const status of [401, 403]) {
+    for (const json of [true, false]) {
+      globalThis.fetch = async () => json
+        ? Response.json({ error: { code: 'unavailable' } }, { status })
+        : new Response('<html>Denied</html>', { status });
+      await assert.rejects(ensureAnonymousSession(true), (error) => {
+        assert.ok(error instanceof Error);
+        assert.equal((error as Error & { code?: string }).code, status === 401 ? 'unauthenticated' : 'permission-denied');
+        return true;
+      });
+      assert.equal(currentAnonymousSession(), null);
+    }
+  }
+});
+
+test('anonymous authentication preserves service retry delays and normalizes rate limits', async () => {
+  for (const scenario of [
+    {
+      response: () => Response.json({ error: { code: 'unavailable' } }, { status: 503, headers: { 'Retry-After': '7' } }),
+      code: 'unavailable', retryAfterMs: 7_000,
+    },
+    {
+      response: () => Response.json({ error: { code: 'unavailable', retryAfterMs: 12_000 } }, { status: 503 }),
+      code: 'unavailable', retryAfterMs: 12_000,
+    },
+    {
+      response: () => Response.json({ error: { code: 'unavailable', retryAfterMs: 30_000 } }, { status: 429 }),
+      code: 'resource-exhausted', retryAfterMs: 30_000,
+    },
+    {
+      response: () => new Response('<html>Too many requests</html>', { status: 429, headers: { 'Retry-After': '60' } }),
+      code: 'resource-exhausted', retryAfterMs: 60_000,
+    },
+    {
+      response: () => Response.json({ error: { code: 'resource-exhausted' } }, { status: 429, headers: { 'Retry-After': '120' } }),
+      code: 'resource-exhausted', retryAfterMs: 120_000,
+    },
+    {
+      response: () => new Response('{', { status: 429 }),
+      code: 'resource-exhausted', retryAfterMs: 60_000,
+    },
+  ]) {
+    globalThis.fetch = async () => scenario.response();
+    await assert.rejects(ensureAnonymousSession(true), (error) => {
+      assert.ok(error instanceof Error);
+      const failure = error as Error & { code?: string; retryAfterMs?: number };
+      assert.equal(failure.code, scenario.code);
+      assert.equal(failure.retryAfterMs, scenario.retryAfterMs);
+      return true;
+    });
+    assert.equal(currentAnonymousSession(), null);
+  }
+});
+
 test('anonymous logout clears local state when the server responds with an error', async () => {
   const originalNow = Date.now;
   Date.now = () => NOW_MS;

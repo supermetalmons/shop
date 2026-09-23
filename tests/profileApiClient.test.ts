@@ -334,7 +334,7 @@ test('domain clients select authenticated routes through injected transport', as
     '/delivery/receipts/issue',
     '/delivery/receipts/recover',
     '/claims/irl/prepare',
-    '/receipts/stripe/claim',
+    '/receipts/stripe/claim/start',
     '/fulfillment/orders',
     '/fulfillment/manual-review-checkouts',
     '/fulfillment/order-status',

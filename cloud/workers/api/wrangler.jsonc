@@ -13,6 +13,9 @@
 	"placement": {
 		"mode": "smart"
 	},
+	"vars": {
+		"STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED": "true"
+	},
 	"d1_databases": [
 		{
 			"binding": "DATA_DB",
@@ -107,6 +110,11 @@
 			"binding": "ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW",
 			"name": "mons-shop-admin-irl-redeem-finalize-v1",
 			"class_name": "AdminIrlRedeemFinalizeWorkflowV1"
+		},
+		{
+			"binding": "STRIPE_RECEIPT_CLAIM_WORKFLOW",
+			"name": "mons-shop-stripe-receipt-claim-v1",
+			"class_name": "StripeReceiptClaimWorkflowV1"
 		}
 	],
 	"secrets": {

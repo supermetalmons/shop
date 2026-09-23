@@ -91,13 +91,17 @@ async function withSessionLock<T>(operation: () => T | Promise<T>): Promise<T> {
   return result;
 }
 
+function invalidResponseError(): Error {
+  return Object.assign(new Error('Authentication returned an invalid response'), { code: 'unavailable' });
+}
+
 async function boundedJson(response: Response): Promise<unknown> {
   const contentLength = Number(response.headers.get('Content-Length'));
   if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
     await response.body?.cancel().catch(() => undefined);
-    throw new Error('Authentication returned an invalid response');
+    throw invalidResponseError();
   }
-  if (!response.body) throw new Error('Authentication returned an invalid response');
+  if (!response.body) throw invalidResponseError();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -107,7 +111,7 @@ async function boundedJson(response: Response): Promise<unknown> {
     size += value.byteLength;
     if (size > MAX_RESPONSE_BYTES) {
       await reader.cancel().catch(() => undefined);
-      throw new Error('Authentication returned an invalid response');
+      throw invalidResponseError();
     }
     chunks.push(value);
   }
@@ -120,18 +124,31 @@ async function boundedJson(response: Response): Promise<unknown> {
   try {
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    throw new Error('Authentication returned an invalid response');
+    throw invalidResponseError();
   }
 }
 
-function responseError(payload: unknown, status: number): Error {
+function responseError(payload: unknown, response: Response): Error {
+  const status = response.status;
   const raw = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? payload as { error?: { code?: unknown; message?: unknown } }
+    ? payload as { error?: { code?: unknown; message?: unknown; retryAfterMs?: unknown } }
     : null;
   const error = new Error(
     typeof raw?.error?.message === 'string' ? raw.error.message : 'Authentication failed.',
-  ) as Error & { code?: string; responseReceived?: boolean };
-  error.code = typeof raw?.error?.code === 'string' ? raw.error.code : `http-${status}`;
+  ) as Error & { code?: string; responseReceived?: boolean; retryAfterMs?: number };
+  error.code = status >= 500 ? 'unavailable'
+    : status === 401 ? 'unauthenticated'
+      : status === 403 ? 'permission-denied'
+        : status === 429 ? 'resource-exhausted'
+          : typeof raw?.error?.code === 'string' ? raw.error.code : `http-${status}`;
+  const retryAfter = response.headers.get('Retry-After')?.trim();
+  const retryAfterMs = retryAfter && /^\d+$/.test(retryAfter)
+    ? Number(retryAfter) * 1_000 : raw?.error?.retryAfterMs;
+  if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+    error.retryAfterMs = retryAfterMs;
+  } else if (status === 429) {
+    error.retryAfterMs = 60_000;
+  }
   error.responseReceived = true;
   return error;
 }
@@ -156,8 +173,11 @@ async function call(path: string): Promise<unknown> {
       signal: controller.signal,
     });
     responseReceived = true;
-    const payload = await boundedJson(response);
-    if (!response.ok) throw responseError(payload, response.status);
+    const payload = await boundedJson(response).catch((error) => {
+      if (!response.ok) throw responseError(null, response);
+      throw error;
+    });
+    if (!response.ok) throw responseError(payload, response);
     return payload;
   } catch (error) {
     if (error instanceof Error) {
@@ -174,7 +194,7 @@ async function call(path: string): Promise<unknown> {
 
 function responseSession(payload: unknown): AnonymousSession {
   const session = parseSession(payload, Date.now());
-  if (!session) throw new Error('Authentication returned an invalid response');
+  if (!session) throw invalidResponseError();
   return session;
 }
 

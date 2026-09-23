@@ -7,6 +7,7 @@ import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransfer
 import { cleanupExpiredStaffAuthState } from './staffWalletAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
+import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
 
 export const SCHEDULED_RECONCILIATION_TIMEOUT_MS = 60_000;
 
@@ -17,6 +18,7 @@ export type ScheduledReconcilers = {
   stripe: typeof reconcileStaleStripeFulfillments;
   stripeNotifications: typeof reconcilePendingStripeTerminalNotifications;
   shippedNotifications: typeof reconcilePendingShippedNotifications;
+  receiptClaims: typeof reconcileReceiptClaimWorkflows;
 };
 
 async function cleanupScheduledOpsState(
@@ -89,6 +91,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   stripe: reconcileStaleStripeFulfillments,
   stripeNotifications: reconcilePendingStripeTerminalNotifications,
   shippedNotifications: reconcilePendingShippedNotifications,
+  receiptClaims: reconcileReceiptClaimWorkflows,
 };
 
 async function runScheduledCommerceReconciliations(
@@ -105,6 +108,7 @@ async function runScheduledCommerceReconciliations(
     reconcilers.shippedNotifications(env, signal),
     reconcilers.packStatus(env, signal),
     reconcilers.notifications(env, signal),
+    reconcilers.receiptClaims(env, signal),
   ]);
   return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
 }

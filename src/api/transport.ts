@@ -7,6 +7,11 @@ import {
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
   type AdminIrlRedeemFinalizeRecovery,
 } from '../../shared/contracts.ts';
+import {
+  STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS,
+  STRIPE_RECEIPT_CLAIM_START_PATH,
+  STRIPE_RECEIPT_CLAIM_STATUS_PATH,
+} from '../../shared/stripeReceiptClaimWorkflow.ts';
 import { ensureAnonymousSession } from '../lib/anonymousSession';
 import { AUTHENTICATED_API_ORIGIN } from '../lib/authenticatedApiOrigin';
 import { ensureStaffWalletSession } from '../lib/staffWalletSession';
@@ -160,6 +165,8 @@ export type AuthenticatedApiPath =
   | '/checkout/session'
   | '/claims/irl/prepare'
   | '/receipts/stripe/claim'
+  | typeof STRIPE_RECEIPT_CLAIM_START_PATH
+  | typeof STRIPE_RECEIPT_CLAIM_STATUS_PATH
   | '/delivery/prepare'
   | '/delivery/receipts/issue'
   | '/delivery/receipts/recover'
@@ -236,6 +243,9 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   }
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/receipts/stripe/claim') return STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS;
+  if (pathname === STRIPE_RECEIPT_CLAIM_START_PATH || pathname === STRIPE_RECEIPT_CLAIM_STATUS_PATH) {
+    return STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS;
+  }
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;

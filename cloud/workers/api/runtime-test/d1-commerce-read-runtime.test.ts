@@ -202,6 +202,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0014_drop_legacy_notification_indexes.sql',
       '0015_manual_review_pagination.sql',
       '0016_shipment_history_pagination.sql',
+      '0017_receipt_claim_workflow.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

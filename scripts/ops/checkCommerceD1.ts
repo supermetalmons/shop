@@ -192,6 +192,14 @@ const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_
     document_path
   )
   WHERE document_kind = 'admin_irl_redeem_request'`;
+const RECEIPT_CLAIM_WORKFLOW_INDEX_SQL = {
+  commerce_receipt_claim_workflow_operation: `CREATE UNIQUE INDEX commerce_receipt_claim_workflow_operation
+    ON commerce_documents (json_extract(document_json, '$.receiptClaimWorkflowV1.operationId'))
+    WHERE document_kind = 'claim_code'`,
+  commerce_receipt_claim_workflow_due: `CREATE INDEX commerce_receipt_claim_workflow_due
+    ON commerce_documents (json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path)
+    WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.phase') = 'pending'`,
+};
 const READY_NOTIFICATION_DUE_INDEX_SQL = `CREATE INDEX commerce_ready_notifications_due
   ON commerce_documents (
     CASE WHEN
@@ -252,7 +260,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 16) ||
+    (migrations.length < 13 || migrations.length > 17) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -268,7 +276,8 @@ export function checkCommerceD1(
     migrations[12].name !== '0013_notification_outbox.sql' ||
     (migrations.length >= 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql') ||
     (migrations.length >= 15 && migrations[14].name !== '0015_manual_review_pagination.sql') ||
-    (migrations.length === 16 && migrations[15].name !== '0016_shipment_history_pagination.sql')
+    (migrations.length >= 16 && migrations[15].name !== '0016_shipment_history_pagination.sql') ||
+    (migrations.length >= 17 && migrations[16].name !== '0017_receipt_claim_workflow.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -284,6 +293,8 @@ export function checkCommerceD1(
   if (options.forDeployment && !shipmentPaginationReady) {
     fail('Commerce D1 shipment-history pagination migration is required for deployment.');
   }
+  const receiptClaimWorkflowReady = migrations.some((migration) => migration.name === '0017_receipt_claim_workflow.sql');
+  if (options.forDeployment && !receiptClaimWorkflowReady) fail('Commerce D1 receipt claim Workflow migration is required for deployment.');
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -632,6 +643,22 @@ export function checkCommerceD1(
     adminIrlWorkflowOperationIndex.length !== 1 ||
     normalizedSql(adminIrlWorkflowOperationIndex[0].sql) !== normalizedSql(ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL)
   ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
+  if (receiptClaimWorkflowReady) {
+    for (const [name, expectedSql] of Object.entries(RECEIPT_CLAIM_WORKFLOW_INDEX_SQL)) {
+      const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = '${name}'`);
+      if (index.length !== 1 || sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)) {
+        fail(`Commerce D1 receipt claim Workflow index ${name} is invalid.`);
+      }
+    }
+    requireSearchIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_operation
+      WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') = 'src-v1-check'`),
+    'commerce_receipt_claim_workflow_operation');
+    requireSearchIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_due
+      WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.phase') = 'pending'
+        AND json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs') <= 0
+      ORDER BY json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path LIMIT 20`),
+    'commerce_receipt_claim_workflow_due');
+  }
 
   const readyNotificationDueIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'index' AND name = 'commerce_ready_notifications_due'`);

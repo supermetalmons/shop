@@ -61,6 +61,8 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
     OPS_DB: {} as D1Database,
     COMMERCE_DB: createCommerceD1(),
     ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW: workflow,
+    STRIPE_RECEIPT_CLAIM_WORKFLOW: {} as Env['STRIPE_RECEIPT_CLAIM_WORKFLOW'],
+    STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: 'false',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,

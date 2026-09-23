@@ -211,6 +211,7 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0014_drop_legacy_notification_indexes.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0017_receipt_claim_workflow.sql', 'utf8'));
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
   return {
     database,

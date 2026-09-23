@@ -145,6 +145,15 @@ export class D1CommerceRepository {
     return document ? publicRecord(document) : null;
   }
 
+  async getReceiptClaimWorkflowOperation(operationId: string): Promise<CommerceDocumentRecord | null> {
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_operation
+      WHERE document_kind = 'claim_code'
+        AND json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') = ? LIMIT 2`).bind(operationId), true);
+    if (result.results.length > 1) throw unavailableCommerceData();
+    return result.results[0] ? publicRecord(parseRow(result.results[0])) : null;
+  }
+
   async get(
     key: CommerceDocumentKey,
   ): Promise<CommerceDocumentRecord | null> {

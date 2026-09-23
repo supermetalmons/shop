@@ -22,7 +22,18 @@ import {
   FRONTEND_DROPS,
   normalizeDropId,
 } from '../config/deployment';
-import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
+import { isStripeReceiptClaimCode, requireStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
+import {
+  STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS,
+  STRIPE_RECEIPT_CLAIM_OVERALL_TIMEOUT_MS,
+  STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS,
+  STRIPE_RECEIPT_CLAIM_REQUEST_HEADER,
+  STRIPE_RECEIPT_CLAIM_START_PATH,
+  STRIPE_RECEIPT_CLAIM_STATUS_PATH,
+  parseStripeReceiptClaimPendingResponse,
+  type StripeReceiptClaimOperationId,
+  type StripeReceiptClaimStatusRequest,
+} from '../../shared/stripeReceiptClaimWorkflow.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
   ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
@@ -503,19 +514,19 @@ export function parseStripeReceiptClaimResponse(value: unknown): StripeReceiptCl
 }
 
 
-type AdminIrlRedeemFinalizePollingDependencies = {
+type WorkflowPollingDependencies = {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   overallTimeoutMs: number;
 };
 
-const defaultAdminIrlRedeemFinalizePollingDependencies: AdminIrlRedeemFinalizePollingDependencies = {
+const defaultAdminIrlRedeemFinalizePollingDependencies: WorkflowPollingDependencies = {
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   overallTimeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
 };
 
-function isRawAdminIrlRedeemFinalizeTransportError(error: unknown): boolean {
+function isRawWorkflowTransportError(error: unknown): boolean {
   if (
     error instanceof ProfileApiError &&
     error.code === 'deadline-exceeded' &&
@@ -536,7 +547,7 @@ function adminIrlRedeemFinalizeRetryTarget(
     error instanceof ProfileApiError &&
     error.recovery === ADMIN_IRL_REDEEM_FINALIZE_RECOVERY
   ) return 'start-request';
-  if (isRawAdminIrlRedeemFinalizeTransportError(error)) return 'same-request';
+  if (isRawWorkflowTransportError(error)) return 'same-request';
   if (error instanceof ProfileApiError) return error.retrySameOperation ? 'same-request' : null;
   return error instanceof Error && (error as Error & { code?: unknown }).code === 'unavailable'
     ? 'same-request'
@@ -553,7 +564,7 @@ function adminIrlRedeemFinalizeDeadlineError(): ProfileApiError {
 
 function adminIrlRedeemFinalizeRemainingMs(
   deadlineAt: number,
-  dependencies: AdminIrlRedeemFinalizePollingDependencies,
+  dependencies: WorkflowPollingDependencies,
 ): number {
   const remainingMs = Math.ceil(deadlineAt - dependencies.now());
   if (remainingMs <= 0) throw adminIrlRedeemFinalizeDeadlineError();
@@ -562,7 +573,7 @@ function adminIrlRedeemFinalizeRemainingMs(
 
 async function waitForAdminIrlRedeemFinalizePoll(
   deadlineAt: number,
-  dependencies: AdminIrlRedeemFinalizePollingDependencies,
+  dependencies: WorkflowPollingDependencies,
   retryAfterMs = ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
 ): Promise<void> {
   const remainingMs = adminIrlRedeemFinalizeRemainingMs(deadlineAt, dependencies);
@@ -581,11 +592,17 @@ async function waitForAdminIrlRedeemFinalizePoll(
 
 export function createCommerceApiClient(
   callProfileApi: AuthenticatedApiCall = defaultCallProfileApi,
-  adminIrlRedeemFinalizePollingOverrides: Partial<AdminIrlRedeemFinalizePollingDependencies> = {},
+  adminIrlRedeemFinalizePollingOverrides: Partial<WorkflowPollingDependencies> = {},
+  stripeReceiptClaimPollingOverrides: Partial<WorkflowPollingDependencies> = {},
 ) {
   const adminIrlRedeemFinalizePolling = {
     ...defaultAdminIrlRedeemFinalizePollingDependencies,
     ...adminIrlRedeemFinalizePollingOverrides,
+  };
+  const stripeReceiptClaimPolling = {
+    ...defaultAdminIrlRedeemFinalizePollingDependencies,
+    overallTimeoutMs: STRIPE_RECEIPT_CLAIM_OVERALL_TIMEOUT_MS,
+    ...stripeReceiptClaimPollingOverrides,
   };
   async function revealDudes(
     owner: string,
@@ -806,13 +823,76 @@ export function createCommerceApiClient(
   }
 
   async function claimStripeReceipt(args: { code: string; recipient: string }): Promise<StripeReceiptClaimResult> {
-    const response = await callProfileApi('/receipts/stripe/claim', {
-      code: args.code,
-      recipient: args.recipient,
-    });
-    const parsed = parseStripeReceiptClaimResponse(response);
-    if (!parsed) throw new Error('Invalid Stripe receipt claim response');
-    return parsed;
+    const recipient = canonicalWalletAddress(args.recipient.trim());
+    if (!recipient) throw new Error('Invalid receiver address');
+    const startRequest = Object.freeze({ code: requireStripeReceiptClaimCode(args.code), recipient });
+    const startHeaders = Object.freeze({ [STRIPE_RECEIPT_CLAIM_REQUEST_HEADER]: crypto.randomUUID() });
+    const deadlineAt = stripeReceiptClaimPolling.now() + stripeReceiptClaimPolling.overallTimeoutMs;
+    let operationId: StripeReceiptClaimOperationId | undefined;
+    let credentialRetryDelayMs: number = STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS;
+    const remainingMs = () => {
+      const remaining = Math.ceil(deadlineAt - stripeReceiptClaimPolling.now());
+      if (remaining <= 0) {
+        throw new ProfileApiError({
+          code: 'deadline-exceeded',
+          message: 'Claim is still processing. Retry with the same code and receiver.',
+          retrySameOperation: true,
+        });
+      }
+      return remaining;
+    };
+    const waitForPoll = async (retryAfterMs = STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS) => {
+      const delayMs = Number.isFinite(retryAfterMs)
+        ? Math.max(STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS, Math.floor(retryAfterMs))
+        : STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS;
+      await stripeReceiptClaimPolling.sleep(Math.min(delayMs, remainingMs()));
+      remainingMs();
+    };
+
+    for (;;) {
+      let response: unknown;
+      let responseStatus: number | undefined;
+      const timeoutMs = Math.min(STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS, remainingMs());
+      try {
+        response = await callProfileApi(
+          operationId ? STRIPE_RECEIPT_CLAIM_STATUS_PATH : STRIPE_RECEIPT_CLAIM_START_PATH,
+          operationId ? { ...startRequest, operationId } satisfies StripeReceiptClaimStatusRequest : startRequest,
+          undefined,
+          {
+            ...(operationId ? {} : { headers: startHeaders }),
+            onResponseStatus: (status) => { responseStatus = status; },
+            replaySafe: true,
+            timeoutMs,
+          },
+        );
+      } catch (error) {
+        const credentialError = error instanceof Error && !(error instanceof ProfileApiError)
+          ? error as Error & { code?: string; retryAfterMs?: number } : undefined;
+        const retryableCredential = credentialError?.code === 'unavailable' || credentialError?.code === 'resource-exhausted';
+        const retryable = isRawWorkflowTransportError(error) || (error instanceof ProfileApiError
+          ? error.retrySameOperation || (error.code === 'auth-subject-changed' && error.status === undefined)
+          : retryableCredential);
+        if (!retryable) throw error;
+        const retryAfterMs = retryableCredential
+          ? Math.max(credentialRetryDelayMs, credentialError?.retryAfterMs ?? 0)
+          : error instanceof ProfileApiError ? error.retryAfterMs : undefined;
+        if (retryableCredential) credentialRetryDelayMs = Math.min(60_000, credentialRetryDelayMs * 2);
+        await waitForPoll(retryAfterMs);
+        continue;
+      }
+      credentialRetryDelayMs = STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS;
+      const result = parseStripeReceiptClaimResponse(response);
+      if (result) {
+        if (responseStatus !== 200) throw new Error('Invalid Stripe receipt claim response');
+        return result;
+      }
+      const pending = parseStripeReceiptClaimPendingResponse(response);
+      if (!pending || responseStatus !== 202 || (operationId !== undefined && pending.operationId !== operationId)) {
+        throw new Error('Invalid Stripe receipt claim response');
+      }
+      operationId = pending.operationId;
+      await waitForPoll(pending.retryAfterMs);
+    }
   }
 
 

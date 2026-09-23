@@ -167,6 +167,8 @@ const env: Env = {
   OPS_DB: {} as D1Database,
   COMMERCE_DB: {} as D1Database,
   ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW: {} as Env['ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW'],
+  STRIPE_RECEIPT_CLAIM_WORKFLOW: {} as Env['STRIPE_RECEIPT_CLAIM_WORKFLOW'],
+  STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: 'false',
   STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
   STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   ANONYMOUS_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },

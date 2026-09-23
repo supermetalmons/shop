@@ -42,9 +42,10 @@ const migrationNames = [
   '0014_drop_legacy_notification_indexes.sql',
   '0015_manual_review_pagination.sql',
   '0016_shipment_history_pagination.sql',
+  '0017_receipt_claim_workflow.sql',
 ] as const;
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 = 16): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 = 17): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -259,7 +260,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
       assert.equal(queries.filter((sql) => sql === expected).length, 1, expected);
     }
-    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 4);
+    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 6);
     const smokeQuery = renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 }));
     assert.equal(queries.filter((sql) => sql === smokeQuery).length, 1);
   } finally {
@@ -355,6 +356,39 @@ test('Commerce D1 checker accepts migration 0015 for inspection but requires shi
     database.close();
   }
 });
+
+test('receipt Workflow readiness checks retain indexed searches before any operations exist', () => {
+  const database = currentDatabase();
+  try {
+    database.exec(`DELETE FROM sqlite_stat1 WHERE idx = 'commerce_receipt_claim_workflow_operation';
+      INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES ('commerce_documents', 'commerce_receipt_claim_workflow_operation', '1000000 1000000');
+      ANALYZE sqlite_schema;`);
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+  } finally { database.close(); }
+});
+
+test('Commerce D1 checker requires receipt claim Workflow migration for deployment', () => {
+  const database = currentDatabase(true, 16);
+  try {
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
+      /receipt claim Workflow migration is required/);
+  } finally {
+    database.close();
+  }
+});
+
+for (const index of ['commerce_receipt_claim_workflow_operation', 'commerce_receipt_claim_workflow_due']) {
+  test(`Commerce D1 checker rejects a weakened ${index}`, () => {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`DROP INDEX ${index}; CREATE INDEX ${index} ON commerce_documents (document_path)`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /receipt claim Workflow index .* is invalid/);
+    } finally {
+      database.close();
+    }
+  });
+}
 
 for (const index of ['commerce_delivery_orders_shipment_cursor', 'commerce_delivery_orders_shipment_session']) {
   test(`Commerce D1 checker rejects a weakened ${index}`, () => {

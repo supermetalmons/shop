@@ -4,7 +4,7 @@ import {
   unexpectedWorkerRouteResponse,
   workerRouteRegistry,
 } from '../src/workerRoutes.ts';
-import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY } from '../../../../shared/contracts.ts';
+import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIPE_CHECKOUT_RETRY_SAME_OPERATION } from '../../../../shared/contracts.ts';
 
 type ExpectedExactRoute = readonly [
   pathname: string,
@@ -25,6 +25,8 @@ const EXPECTED_EXACT_ROUTES = [
   ['/admin/stripe-chargebacks/backfill', 'profile', true, 'required', true, 'profile', '/admin/stripe-chargebacks/backfill'],
   ['/claims/irl/prepare', 'profile', true, 'optional', true, 'profile', '/claims/irl/prepare'],
   ['/receipts/stripe/claim', 'profile', true, 'optional', true, 'profile', '/receipts/stripe/claim'],
+  ['/receipts/stripe/claim/start', 'profile', true, 'optional', true, 'profile', '/receipts/stripe/claim/start'],
+  ['/receipts/stripe/claim/status', 'profile', true, 'optional', false, 'profile', '/receipts/stripe/claim/status'],
   ['/receipts/transfer/prepare', 'profile', true, 'optional', true, 'profile', '/receipts/transfer/prepare'],
   ['/delivery/prepare', 'profile', true, 'optional', true, 'profile', '/delivery/prepare'],
   ['/delivery/receipts/issue', 'profile', true, 'optional', true, 'profile', '/delivery/receipts/issue'],
@@ -198,5 +200,19 @@ test('unexpected finalization failures request recovery explicitly', async () =>
         recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
       },
     });
+  }
+});
+
+test('unexpected receipt polling errors request a retry without changing other routes', () => {
+  for (const [pathname, retryable] of [
+    ['/receipts/stripe/claim/start', true],
+    ['/receipts/stripe/claim/status', true],
+    ['/receipts/stripe/claim', false],
+    ['/profile/state', false],
+  ] as const) {
+    const response = unexpectedWorkerRouteResponse(workerRouteRegistry.resolve(pathname),
+      new Request(`https://api.mons.shop${pathname}`, { headers: { Origin: 'https://mons.shop' } }));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), retryable ? STRIPE_CHECKOUT_RETRY_SAME_OPERATION : null);
   }
 });

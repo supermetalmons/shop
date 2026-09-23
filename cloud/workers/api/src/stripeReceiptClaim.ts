@@ -15,6 +15,7 @@ import {
   bubblegumTransferV2Ix,
 } from './bubblegum.js';
 import {
+  adminIrlCardReceiptProofHasIdentity,
   classifyDirectCardReceiptClaimSubmission,
   classifyDirectCardReceiptClaimTransferVerificationError,
   directCardReceiptClaimSubmissionProvesNoDelivery,
@@ -66,6 +67,7 @@ import {
 import {
   isRequestCancellationError,
   isSignalCancellationError,
+  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
   sleepWithSignal,
@@ -192,7 +194,7 @@ export async function readRequestBody(request: Request, signal: AbortSignal): Pr
   return parsed.data;
 }
 
-function canonicalRecipient(value: string): { wallet: string; key: PublicKey } {
+export function canonicalRecipient(value: string): { wallet: string; key: PublicKey } {
   try {
     const key = new PublicKey(value);
     const wallet = key.toBase58();
@@ -203,7 +205,7 @@ function canonicalRecipient(value: string): { wallet: string; key: PublicKey } {
   }
 }
 
-function normalizedCode(value: string): string {
+export function normalizedCode(value: string): string {
   try {
     return requireStripeReceiptClaimCode(value);
   } catch {
@@ -237,7 +239,7 @@ export function responseForClaim(args: {
   };
 }
 
-function runtimeForDrop(dropId: string): Runtime {
+export function runtimeForDrop(dropId: string): Runtime {
   const config = getApiDrop(dropId);
   if (!config) throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an unsupported drop id.');
   try {
@@ -247,7 +249,7 @@ function runtimeForDrop(dropId: string): Runtime {
   }
 }
 
-function createConnection(provider: ProviderContext, runtime: Runtime): Connection {
+export function createConnection(provider: ProviderContext, runtime: Runtime): Connection {
   return createDeliveryConnection({
     apiKey: provider.apiKey,
     fetch: provider.providerFetch,
@@ -255,7 +257,7 @@ function createConnection(provider: ProviderContext, runtime: Runtime): Connecti
   }, runtime);
 }
 
-async function fetchAsset(provider: ProviderContext, runtime: Runtime, assetId: string): Promise<DasAsset> {
+export async function fetchAsset(provider: ProviderContext, runtime: Runtime, assetId: string): Promise<DasAsset> {
   try {
     return await fetchAdminIrlRedeemAsset(provider, runtime, assetId);
   } catch (error) {
@@ -263,15 +265,23 @@ async function fetchAsset(provider: ProviderContext, runtime: Runtime, assetId: 
   }
 }
 
-async function fetchAssetProof(
+export async function fetchAssetProof(
   provider: ProviderContext,
   runtime: Runtime,
   assetId: string,
 ): Promise<Record<string, unknown>> {
   try {
-    return await fetchAdminIrlRedeemAssetProof(provider, runtime, assetId);
+    const proof = await fetchAdminIrlRedeemAssetProof(provider, runtime, assetId);
+    if (!adminIrlCardReceiptProofHasIdentity(proof) || !Array.isArray(proof.proof)) {
+      throw new StripeReceiptClaimError('unavailable', 'Receipt proof is temporarily unavailable.');
+    }
+    return proof;
   } catch (error) {
-    throw normalizedError(error, 'Receipt claim provider is temporarily unavailable.');
+    const failure = normalizedError(error, 'Receipt claim provider is temporarily unavailable.');
+    if (failure.code === 'not-found') {
+      throw new StripeReceiptClaimError('unavailable', 'Receipt proof is temporarily unavailable.', undefined, failure);
+    }
+    throw failure;
   }
 }
 
@@ -348,7 +358,7 @@ function receiptIdentity(runtime: Runtime) {
   return adminIrlRedeemReceiptDropIdentity(runtime);
 }
 
-async function proofMatches(
+export async function proofMatches(
   provider: ProviderContext,
   runtime: Runtime,
   asset: DasAsset,
@@ -356,17 +366,11 @@ async function proofMatches(
 ): Promise<boolean> {
   const assetId = typeof asset.id === 'string' ? asset.id.trim() : '';
   if (!assetId) return false;
-  let proof: Record<string, unknown>;
-  try {
-    proof = await fetchAssetProof(provider, runtime, assetId);
-  } catch (error) {
-    if (normalizedError(error, '').code === 'not-found') return false;
-    throw error;
-  }
+  const proof = await fetchAssetProof(provider, runtime, assetId);
   return assetMatchesReceiptDropIdentity(asset, proof, receiptIdentity(runtime), expected);
 }
 
-async function findPackReceipt(
+export async function findPackReceipt(
   provider: ProviderContext,
   owner: string,
   runtime: Runtime,
@@ -383,7 +387,7 @@ async function findPackReceipt(
   return (await findOwnedAsset({ provider, runtime, owner, matches })).asset;
 }
 
-async function findPackReceiptById(
+export async function findPackReceiptById(
   provider: ProviderContext,
   owner: string,
   runtime: Runtime,
@@ -407,7 +411,7 @@ async function findPackReceiptById(
   return asset;
 }
 
-async function findFigureReceiptById(
+export async function findFigureReceiptById(
   provider: ProviderContext,
   owner: string,
   runtime: Runtime,
@@ -474,7 +478,7 @@ async function findOwnedFigureIds(
   return found;
 }
 
-async function ownsAllFigureReceipts(
+export async function ownsAllFigureReceipts(
   provider: ProviderContext,
   owner: string,
   runtime: Runtime,
@@ -539,7 +543,7 @@ async function inspectSubmission(
   return evidence === 'not_landed' ? 'rejected' : evidence;
 }
 
-async function inspectPersistedTransfers(args: {
+export async function inspectPersistedTransfers(args: {
   connection: Connection;
   runtime: Runtime;
   signatures: string[];
@@ -596,7 +600,7 @@ function deriveTreeConfig(merkleTree: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
 }
 
-function buildTransaction(
+export function buildTransaction(
   instructions: TransactionInstruction[],
   signer: Keypair,
   blockhash: string,
@@ -632,7 +636,7 @@ export async function buildWithOptionalLookupTable(args: {
   return transaction;
 }
 
-function signedTransactionSignature(transaction: VersionedTransaction): string {
+export function signedTransactionSignature(transaction: VersionedTransaction): string {
   return bs58.encode(transaction.signatures[0]);
 }
 
@@ -664,7 +668,7 @@ async function sendSigned(
   }
 }
 
-function transferInstruction(args: {
+export function transferInstruction(args: {
   proof: ReturnType<typeof parseAdminIrlRedeemProof>;
   owner: PublicKey;
   recipient: PublicKey;
@@ -693,7 +697,7 @@ function transferInstruction(args: {
   });
 }
 
-function burnInstruction(args: {
+export function burnInstruction(args: {
   proof: ReturnType<typeof parseAdminIrlRedeemProof>;
   owner: PublicKey;
   coreCollection: PublicKey;
@@ -722,7 +726,7 @@ function burnInstruction(args: {
   });
 }
 
-function proofForAsset(
+export function proofForAsset(
   asset: DasAsset,
   proof: Record<string, unknown>,
   runtime: Runtime,
@@ -871,7 +875,7 @@ async function sendDirectFigureTransfer(args: {
   }
 }
 
-function requireOpenableAssignment(claims: unknown[], runtime: Runtime, boxId: number): StripeAssignedIrlClaim {
+export function requireOpenableAssignment(claims: unknown[], runtime: Runtime, boxId: number): StripeAssignedIrlClaim {
   try {
     const assignment = stripeAssignedIrlClaimForBox({ irlClaims: claims }, boxId, {
       itemsPerBox: runtime.itemsPerBox,
@@ -957,6 +961,45 @@ type ClaimExecution = {
   outcome: 'already_claimed' | 'claimed_box' | 'claimed_figures' | 'claimed_direct_figure';
 };
 
+export async function responseForAlreadyClaimed(
+  commerce: CommerceContext,
+  claim: Extract<Awaited<ReturnType<typeof startClaim>>, { status: 'already_claimed' }>,
+  recipient: string,
+  provider?: ProviderContext,
+): Promise<StripeReceiptClaimResult> {
+  if (claim.receiptKind) return responseForClaim(claim);
+  let runtime: Runtime | null = null;
+  try { runtime = runtimeForDrop(claim.dropId); }
+  catch {}
+  if (provider && runtime && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX) {
+    try {
+      const assignment = await raceWithSignal(loadClaimAssignment(commerce, {
+        dropId: claim.dropId,
+        deliveryId: claim.deliveryId,
+        boxId: claim.boxId,
+        itemsPerBox: runtime.itemsPerBox,
+        maxDudeId: runtime.maxDudeId,
+      }), provider.signal);
+      if (assignment && await ownsAllFigureReceipts(provider, recipient, runtime, assignment.dudeIds)) {
+        return responseForClaim({
+          dropId: claim.dropId,
+          deliveryId: claim.deliveryId,
+          receiptTxs: claim.receiptTxs,
+          receiptKind: 'figure',
+          receiptsTransferred: assignment.dudeIds.length,
+          figureIds: assignment.dudeIds,
+        });
+      }
+    } catch {}
+  }
+  return responseForClaim({
+    dropId: claim.dropId,
+    deliveryId: claim.deliveryId,
+    receiptTxs: claim.receiptTxs,
+    ...(runtime ? { receiptKind: 'box' as const } : {}),
+  });
+}
+
 export async function claimStripeReceipt(
   body: StripeReceiptClaimRequest,
   env: ClaimEnv,
@@ -974,54 +1017,8 @@ export async function claimStripeReceipt(
   try {
     const claim = await startClaim(commerce, code, recipient.wallet, attemptId, commerce.nowMs);
     if (claim.status === 'already_claimed') {
-      if (claim.receiptKind) {
-        return {
-          response: responseForClaim({
-            dropId: claim.dropId,
-            deliveryId: claim.deliveryId,
-            receiptTxs: claim.receiptTxs,
-            receiptKind: claim.receiptKind,
-            receiptsTransferred: claim.receiptsTransferred,
-            figureIds: claim.figureIds,
-            receiptAssetIds: claim.receiptAssetIds,
-          }),
-          outcome: 'already_claimed',
-        };
-      }
-      let runtime: Runtime | null = null;
-      try { runtime = runtimeForDrop(claim.dropId); }
-      catch {}
-      if (runtime && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX) {
-        try {
-          const assignment = await loadClaimAssignment(commerce, {
-            dropId: claim.dropId,
-            deliveryId: claim.deliveryId,
-            boxId: claim.boxId,
-            itemsPerBox: runtime.itemsPerBox,
-            maxDudeId: runtime.maxDudeId,
-          });
-          if (assignment && await ownsAllFigureReceipts(provider, recipient.wallet, runtime, assignment.dudeIds)) {
-            return {
-              response: responseForClaim({
-                dropId: claim.dropId,
-                deliveryId: claim.deliveryId,
-                receiptTxs: claim.receiptTxs,
-                receiptKind: 'figure',
-                receiptsTransferred: assignment.dudeIds.length,
-                figureIds: assignment.dudeIds,
-              }),
-              outcome: 'already_claimed',
-            };
-          }
-        } catch {}
-      }
       return {
-        response: responseForClaim({
-          dropId: claim.dropId,
-          deliveryId: claim.deliveryId,
-          receiptTxs: claim.receiptTxs,
-          ...(runtime ? { receiptKind: 'box' as const } : {}),
-        }),
+        response: await responseForAlreadyClaimed(commerce, claim, recipient.wallet, provider),
         outcome: 'already_claimed',
       };
     }

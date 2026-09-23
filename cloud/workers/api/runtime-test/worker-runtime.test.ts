@@ -30,6 +30,10 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     binding: 'ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW',
     name: 'mons-shop-admin-irl-redeem-finalize-v1',
     class_name: 'AdminIrlRedeemFinalizeWorkflowV1',
+  }, {
+    binding: 'STRIPE_RECEIPT_CLAIM_WORKFLOW',
+    name: 'mons-shop-stripe-receipt-claim-v1',
+    class_name: 'StripeReceiptClaimWorkflowV1',
   }]);
   const runtimeConfig = {
     ...productionConfig,
@@ -40,6 +44,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
     })),
     vars: {
+      ...productionConfig.vars,
       STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_runtime_devnet',
       STRIPE_WEBHOOK_SECRET: 'whsec_runtime_mainnet',
     },
@@ -134,16 +139,16 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(profilePreflight.status, 204);
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
 
-    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/admin/profile', '/admin/delivery-order-owners', '/fulfillment/orders', '/fulfillment/manual-review-checkouts', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
+    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/admin/profile', '/admin/delivery-order-owners', '/fulfillment/orders', '/fulfillment/manual-review-checkouts', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/stripe/claim/start', '/receipts/stripe/claim/status', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
       });
       assert.equal(lifecyclePreflight.status, 204);
       assert.equal(lifecyclePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
     }
 
     const anonymousHeaders = {
@@ -337,6 +342,57 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     } finally {
       await adminWorkflow.dispose();
     }
+    const receiptOperationId = 'src-v1-123e4567-e89b-42d3-a456-426614174077';
+    const receiptWorkflow = await worker.introspectWorkflow('STRIPE_RECEIPT_CLAIM_WORKFLOW');
+    const receiptResult = {
+      processed: true, dropId: 'card_nft_2', deliveryId: 7, receiptTxs: ['runtime-receipt-signature'],
+      receiptKind: 'figure', receiptsTransferred: 1, figureIds: [1],
+    };
+    try {
+      await receiptWorkflow.modifyAll(async (modifier) => {
+        await modifier.disableRetryDelays();
+        await modifier.disableSleeps();
+        await modifier.mockStepResult({ name: 'reconcile receipt 0' }, { ok: true, value: { status: 'prepare' } });
+        await modifier.mockStepResult({ name: 'journal receipt transaction 0' }, { ok: true, value: { signature: 'runtime-receipt-signature' } });
+        await modifier.mockStepResult({ name: 'broadcast receipt transaction 0' }, { ok: true, value: { sent: true } });
+        await modifier.mockStepResult({ name: 'reconcile receipt 1' }, { ok: true, value: { status: 'complete', result: receiptResult } });
+        await modifier.mockStepResult({ name: 'publish receipt completion 1' }, { ok: true, value: { completed: true } });
+      });
+      const created = await runtimeEnv.STRIPE_RECEIPT_CLAIM_WORKFLOW.createBatch([{
+        id: `${receiptOperationId}-g1`, params: { version: 1, operationId: receiptOperationId, generation: 1 },
+      }]);
+      assert.equal(created.length, 1);
+      const [instance] = await receiptWorkflow.get();
+      assert.ok(instance);
+      await instance.waitForStatus('complete');
+      assert.deepEqual(JSON.parse(JSON.stringify(await instance.waitForStepResult({ name: 'journal receipt transaction 0' }))), {
+        ok: true, value: { signature: 'runtime-receipt-signature' },
+      });
+      assert.deepEqual(JSON.parse(JSON.stringify(await instance.getOutput())), {
+        version: 1, operationId: receiptOperationId, status: 'complete',
+      });
+    } finally {
+      await receiptWorkflow.dispose();
+    }
+    const missingReceiptOperationId = 'src-v1-123e4567-e89b-42d3-a456-426614174078';
+    const repeatedReceiptDispatch = [{
+      id: `${missingReceiptOperationId}-g1`,
+      params: { version: 1 as const, operationId: missingReceiptOperationId, generation: 1 },
+    }];
+    await runtimeEnv.STRIPE_RECEIPT_CLAIM_WORKFLOW.createBatch(repeatedReceiptDispatch);
+    const receiptInstance = await runtimeEnv.STRIPE_RECEIPT_CLAIM_WORKFLOW.get(`${missingReceiptOperationId}-g1`);
+    let receiptStatus = await receiptInstance.status();
+    const receiptCompletionDeadline = Date.now() + 5000;
+    while (receiptStatus.status !== 'complete' && Date.now() < receiptCompletionDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      receiptStatus = await receiptInstance.status();
+    }
+    assert.equal(receiptStatus.status, 'complete');
+    assert.deepEqual(receiptStatus.output, { version: 1, operationId: missingReceiptOperationId, status: 'superseded' });
+    const completedReceiptStatus = JSON.parse(JSON.stringify(receiptStatus));
+    await runtimeEnv.STRIPE_RECEIPT_CLAIM_WORKFLOW.createBatch(repeatedReceiptDispatch);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(JSON.parse(JSON.stringify(await receiptInstance.status())), completedReceiptStatus);
     const authenticatedStaffRoute = await worker.fetch('https://api.mons.shop/admin/future', {
       method: 'POST',
       headers: {
@@ -369,7 +425,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(checkoutPreflight.status, 204);
     assert.equal(checkoutPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id, X-Mons-Receipt-Claim-Request');
     assert.equal(checkoutPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
 
     const unauthenticatedCheckout = await worker.fetch('https://api.mons.shop/checkout/session', {

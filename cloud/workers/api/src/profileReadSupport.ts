@@ -7,6 +7,7 @@ import {
   type DeliveryOrderSummary,
 } from '../../../../shared/contracts.js';
 import { deliveryOrderSummarySortAt } from '../../../../shared/deliveryOrderSummary.js';
+import { STRIPE_RECEIPT_CLAIM_REQUEST_HEADER } from '../../../../shared/stripeReceiptClaimWorkflow.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
 import type { D1CommerceRepository, CommerceDocumentRecord } from './commerceRepository.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
@@ -20,7 +21,7 @@ import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpRes
 import { loadD1Profile } from './profileD1.js';
 import type { RequestIdentity, verifyRequestIdentity } from './requestIdentity.js';
 
-const PROFILE_CORS_ALLOW_HEADERS = `Content-Type, Authorization, X-Mons-CSRF, ${STRIPE_CHECKOUT_OPERATION_HEADER}`;
+const PROFILE_CORS_ALLOW_HEADERS = `Content-Type, Authorization, X-Mons-CSRF, ${STRIPE_CHECKOUT_OPERATION_HEADER}, ${STRIPE_RECEIPT_CLAIM_REQUEST_HEADER}`;
 const PROFILE_CORS_ALLOW_METHODS = 'POST, OPTIONS';
 const MAX_PROFILE_REQUEST_BYTES = 4096;
 export const PROFILE_READ_TIMEOUT_MS = 15_000;
