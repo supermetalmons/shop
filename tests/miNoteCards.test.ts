@@ -161,7 +161,7 @@ test('address mode shows every known holding without the random gallery limit', 
       ORIGINAL_COLLECTION.tokens.map((card) => card.id).reverse(),
     )));
   });
-  assert.equal(result.current.cards.length, 1388);
+  assert.equal(result.current.cards.length, 1395);
   assert.deepEqual(result.current.cards, [...COLLECTION_3.tokens, ...COLLECTION.tokens, ...ORIGINAL_COLLECTION.tokens]);
 });
 
