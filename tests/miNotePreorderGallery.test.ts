@@ -4,17 +4,21 @@ import test, { after, afterEach } from 'node:test';
 import { createElement } from 'react';
 import { getPreorderConfig, PREORDER_CARD_COUNT } from '../shared/preorders.ts';
 import type { PreorderCheckout } from '../src/hooks/usePreorderCheckout.ts';
+import type { createPreorderApi } from '../src/lib/preorderApi.ts';
+import { ProfileApiError } from '../src/api/transport.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
-const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const cssImports = registerHooks({ load(url, context, nextLoad) {
   return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context);
 } });
 const { default: MiNoteCardsGallery } = await import('../src/components/MiNoteCardsGallery.tsx');
+const { useShopFeedback } = await import('../src/shop/ui/useShopFeedback.ts');
+const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
 cssImports.deregister();
 const random = Math.random;
-afterEach(() => { cleanup(); Math.random = random; window.history.replaceState(null, '', '/mi_note_cards_devnet'); });
+afterEach(() => { cleanup(); window.localStorage.clear(); Math.random = random; window.history.replaceState(null, '', '/mi_note_cards_devnet'); });
 after(() => dom.window.close());
 
 function checkout(): PreorderCheckout {
@@ -230,6 +234,113 @@ test('tab changes clear selection while preserving the existing Ethereum wallet 
   fireEvent.click(view.getByRole('tab', { name: 'Your' }));
   assert.equal(view.queryByRole('button', { name: /Preorder .*SOL/ }), null);
   assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+});
+
+test('first wallet connection preserves selection while switching or disconnecting clears it', () => {
+  Math.random = () => 0;
+  const preorder = checkout();
+  const view = render(createElement(MiNoteCardsGallery, { preorder }));
+  const card = () => view.getByRole('button', { name: /Select preorder #1:/ });
+  fireEvent.click(card());
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'wallet-a' } }));
+  assert.equal(card().getAttribute('aria-pressed'), 'true');
+  assert.ok(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'wallet-b' } }));
+  assert.equal(card().getAttribute('aria-pressed'), 'false');
+  fireEvent.click(card());
+  view.rerender(createElement(MiNoteCardsGallery, { preorder }));
+  assert.equal(card().getAttribute('aria-pressed'), 'false');
+});
+
+test('restoring a pending preorder clears unrelated picks and resumes only the saved cards', async () => {
+  Math.random = () => 0;
+  const preorder = checkout();
+  let purchased: number[] = [];
+  preorder.purchase = async (ids) => { purchased = ids; };
+  const view = render(createElement(MiNoteCardsGallery, { preorder }));
+  const card = view.getByRole('button', { name: /Select preorder #1:/ });
+  fireEvent.click(card);
+  const connected = { ...preorder, buyer: 'wallet-a' };
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: connected }));
+  assert.equal(card.getAttribute('aria-pressed'), 'true');
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: {
+    ...connected,
+    pending: { requestId: 'saved-request', orderId: 'saved-order', cardIds: [2] },
+    pendingOrder: true,
+    order: { orderId: 'saved-order', preorderId: preorder.config.preorderId, buyer: 'wallet-a', cardIds: [2],
+      assets: [], status: 'prepared', expiresAtMs: Date.now() + 60_000, signature: null },
+  } }));
+  assert.equal(card.getAttribute('aria-pressed'), 'false');
+  assert.match(document.querySelector<HTMLElement>('.selection-panel__thumb')!.style.backgroundImage, /thumbs\/1.webp/);
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Continue preorder for 0.25 SOL' })); });
+  assert.deepEqual(purchased, [2]);
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: connected }));
+  assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
+  assert.equal(card.getAttribute('aria-pressed'), 'false');
+});
+
+for (const [status, code, message] of [
+  [412, 'failed-precondition', 'Preorder simulation failed. Check your devnet SOL balance and retry.'],
+  [429, 'resource-exhausted', 'Too many preorder attempts. Please wait a minute.'],
+] as const) {
+  test(`preparation failure ${status} keeps matching selections available for retry`, async () => {
+    Math.random = () => 0;
+    const initial = checkout();
+    let rejectPrepare!: (error: Error) => void;
+    const preparedIds: number[][] = [];
+    const forbidden = async () => { throw new Error('Preparation failure must not sign, submit, or cancel'); };
+    const api: ReturnType<typeof createPreorderApi> = {
+      availability: async () => initial.availability!,
+      prepare: ({ cardIds }) => {
+        preparedIds.push(cardIds);
+        return new Promise((_, reject) => { rejectPrepare = reject; });
+      },
+      submit: forbidden, cancel: forbidden, status: async () => ({ order: null }),
+    };
+    let current!: PreorderCheckout;
+    function Harness() {
+      current = usePreorderCheckout({
+        config: initial.config, active: true, buyer: initial.config.collection, signedIn: true,
+        ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
+      }, api);
+      return createElement(MiNoteCardsGallery, { preorder: current });
+    }
+    const view = render(createElement(Harness));
+    const card = view.getByRole('button', { name: /Select preorder #1:/ }) as HTMLButtonElement;
+    await waitFor(() => assert.equal(card.disabled, false));
+    fireEvent.click(card);
+    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Preorder for 0.25 SOL' }) as HTMLButtonElement).disabled, false));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      fireEvent.click(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
+      await waitFor(() => assert.equal(current.phase, 'preparing'));
+      await act(async () => { rejectPrepare(new ProfileApiError({ code, status, message })); });
+      await waitFor(() => assert.equal(current.error, message));
+      assert.equal(current.pending, null);
+      assert.equal(current.order, null);
+      assert.equal(card.getAttribute('aria-pressed'), 'true');
+      assert.ok(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
+    }
+    assert.deepEqual(preparedIds, [[1], [1]]);
+  });
+}
+
+test('checkout errors wait for feedback to resume and appear only once', () => {
+  const preorder = checkout();
+  const message = 'Couldn’t cancel yet. We’ll keep checking your preorder.';
+  function Harness({ suspended, error }: { suspended: boolean; error: string | null }) {
+    const feedback = useShopFeedback(suspended);
+    return createElement('div', null,
+      createElement('output', { 'data-testid': 'toast' }, feedback.toast),
+      createElement(MiNoteCardsGallery, { preorder: { ...preorder, error }, showToast: suspended ? undefined : feedback.showToast }));
+  }
+  const view = render(createElement(Harness, { suspended: true, error: null }));
+  view.rerender(createElement(Harness, { suspended: true, error: message }));
+  assert.equal(view.getByTestId('toast').textContent, '');
+  view.rerender(createElement(Harness, { suspended: false, error: message }));
+  assert.equal(view.getByTestId('toast').textContent, message);
+  view.rerender(createElement(Harness, { suspended: true, error: message }));
+  view.rerender(createElement(Harness, { suspended: false, error: message }));
+  assert.equal(view.getByTestId('toast').textContent, '');
 });
 
 test('switching between devnet purchasing and mainnet gallery clears prior selection', () => {

@@ -382,7 +382,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             <Suspense fallback={null}>
               <MiNoteCardsGallery
                 preorder={preorderCheckout}
-                showToast={showToast}
+                showToast={statusUiSuspended ? undefined : showToast}
                 onViewPreordered={(item, originRect, aspectRatio) => reveal.openImageViewer(item, originRect, {
                   size: 'preorder', aspectRatio, unavailableMessage: 'Preorder image unavailable',
                 })}

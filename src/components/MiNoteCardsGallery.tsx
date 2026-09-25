@@ -141,7 +141,7 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
     setSelectedPreordered(null);
   }, [search, tab, wallet.address, preorderEnabled, preorder?.config.preorderId]);
   useEffect(() => {
-    if (previousBuyer.current !== preorder?.buyer) {
+    if (previousBuyer.current && previousBuyer.current !== preorder?.buyer) {
       setSelected([]);
       setSelectedPreordered(null);
     }
@@ -156,7 +156,9 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
   }, [preorder?.order]);
   useEffect(() => {
     if (purchaseLocked) setSelectedPreordered(null);
-  }, [purchaseLocked]);
+    const pendingIds = preorder?.pending?.cardIds;
+    if (pendingIds) setSelected((current) => current.filter((id) => pendingIds.includes(id)));
+  }, [purchaseLocked, preorder?.pending]);
 
   const panelIds = preorder?.pending?.cardIds ?? selected;
   const preorderedCard = selectedPreordered === null ? undefined : MI_NOTE_CARDS_BY_ID.get(selectedPreordered);

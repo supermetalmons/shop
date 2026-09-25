@@ -783,3 +783,24 @@ test('switching collections during signing clears checkout presentation and igno
   assert.equal(calls.submit.length, 0);
   assert.equal(result.current.error, null);
 });
+
+test('an inactive collection refresh cannot block or overwrite a newly active collection', async () => {
+  const { api, options } = runtime();
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  type Availability = Awaited<ReturnType<typeof api.availability>>;
+  const requests: { preorderId: string; resolve: (value: Availability) => void }[] = [];
+  api.availability = (preorderId) => new Promise((resolve) => { requests.push({ preorderId, resolve }); });
+  const { result, rerender } = renderHook(({ nextConfig, active }) => usePreorderCheckout({
+    ...options, config: nextConfig, active, buyer: undefined, signedIn: false,
+  }, api), { initialProps: { nextConfig: config, active: false } });
+  act(() => { void result.current.refreshAvailability(); });
+  rerender({ nextConfig: mainnet, active: true });
+  assert.deepEqual(requests.map((request) => request.preorderId), [config.preorderId, mainnet.preorderId]);
+  await act(async () => { requests[0].resolve({ preorderId: config.preorderId, items: [{ id: 1, status: 'preordered' }] }); });
+  assert.equal(result.current.availability, null);
+  await act(async () => { await result.current.refreshAvailability(); });
+  assert.equal(requests.length, 2);
+  const response: Availability = { preorderId: mainnet.preorderId, items: [{ id: 1, status: 'available' }] };
+  await act(async () => { requests[1].resolve(response); });
+  assert.deepEqual(result.current.availability, response);
+});

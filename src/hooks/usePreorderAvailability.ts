@@ -12,12 +12,12 @@ export function usePreorderAvailability(config: PreorderConfig, active: boolean,
     error: string | null;
   } | null>(null);
   const request = useRef(0);
-  const inFlight = useRef<number | null>(null);
+  const inFlight = useRef<{ scope: typeof scope; requestId: number } | null>(null);
 
   const refreshAvailability = useCallback(async () => {
-    if (currentScope.current !== scope || inFlight.current !== null) return;
+    if (currentScope.current !== scope || inFlight.current?.scope === scope) return;
     const requestId = ++request.current;
-    inFlight.current = requestId;
+    inFlight.current = { scope, requestId };
     const isCurrent = () => currentScope.current === scope && request.current === requestId;
     try {
       const availability = await api.availability(scope.preorderId);
@@ -30,7 +30,7 @@ export function usePreorderAvailability(config: PreorderConfig, active: boolean,
         error: 'Couldn’t check card availability. Try again.',
       }));
     } finally {
-      if (inFlight.current === requestId) inFlight.current = null;
+      if (inFlight.current?.requestId === requestId) inFlight.current = null;
     }
   }, [api, scope]);
 
