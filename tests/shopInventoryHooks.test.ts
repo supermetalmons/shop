@@ -18,13 +18,14 @@ import {
 import type { RevealOverlayState } from '../src/shop/reveal/types.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
-const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
+const { act, cleanup, render, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { WalletContext } = await import('@solana/wallet-adapter-react');
 const { useShopInventoryQueries } = await import('../src/shop/inventory/useShopInventoryQueries.ts');
 const { useShopInventorySource, useShopInventoryMaintenance } = await import('../src/shop/inventory/useShopInventorySource.ts');
 const { useShopInventoryView } = await import('../src/shop/inventory/useShopInventoryView.ts');
 const { useShopInventorySelection, useShopInventorySelectionState } = await import('../src/shop/inventory/useShopInventorySelection.ts');
+const { ShopSelectionBar } = await import('../src/shop/ui/ShopSelectionBar.tsx');
 type SourceOptions = Parameters<typeof useShopInventorySource>[0];
 type Views = Parameters<typeof useShopInventoryMaintenance>[1];
 type ViewOptions = Parameters<typeof useShopInventoryView>[0];
@@ -124,6 +125,33 @@ function useInventoryHarness({ options, views, viewOptions, selectionOptions }: 
   });
   return { source, view, selection, state };
 }
+
+test('preorders remain selectable inventory with shipping, viewing, and unpacking disabled', () => {
+  const preorder: InventoryItem = {
+    id: 'preorder-1', dropId: 'mi_note_cards_devnet', name: 'Preorder #1', kind: 'preorder',
+    preorderId: 1, image: 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1.webp',
+  };
+  const options = sourceOptions({ inventory: [preorder, box('regular')] });
+  const { result } = renderHook(() => useInventoryHarness({ options }));
+  assert.ok(result.current.view.inventoryItems.some((item) => item.id === preorder.id && item.image === preorder.image));
+  act(() => result.current.selection.toggleSelected(preorder.id));
+  assert.equal(result.current.selection.selectedCount, 1);
+  assert.equal(result.current.selection.hasPreorderSelected, true);
+  assert.equal(result.current.selection.canShipSelected, false);
+  assert.equal(result.current.selection.canOpenSelected, false);
+  assert.equal(result.current.selection.canViewSelected, false);
+  assert.equal(result.current.selection.canShowAdminIrlRedeem, false);
+  const bar = render(createElement(ShopSelectionBar, {
+    ...result.current.selection,
+    clearSelection: () => {}, handleViewSelectedItem: () => {}, handleOpenSelectedBox: () => {},
+    handleOpenShip: () => { throw new Error('Preorder shipping must stay disabled'); },
+    startOpenLoading: null, openActionProgressForDropId: () => 'Opening', openActionLabelForDropId: () => 'Open',
+  }));
+  assert.equal((bar.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
+  assert.ok(bar.getByText('Soon'));
+  act(() => result.current.state.replaceSelection([preorder.id, 'regular']));
+  assert.equal(result.current.selection.canShipSelected, false);
+});
 
 test('wallet hydration preserves each account and late hidden-asset updates stay with the captured wallet', () => {
   const now = Date.now();

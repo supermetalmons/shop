@@ -22,6 +22,15 @@ import {
 } from '../src/lib/dropConfig.ts';
 import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
+test('Mi Note preorder route uses devnet while the public gallery stays on mainnet', () => {
+  const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet/' });
+  assert.equal(route.kind, 'mi-note-cards');
+  assert.equal(route.path, '/mi_note_cards_devnet');
+  assert.equal(route.walletCluster, 'devnet');
+  assert.equal(route.drop, null);
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).walletCluster, 'mainnet-beta');
+});
+
 const UPCOMING_ROUTES = [
   {
     path: '/clear_cards',

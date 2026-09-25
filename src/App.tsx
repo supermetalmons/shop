@@ -5,6 +5,8 @@ import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { usePreorderCheckout } from './hooks/usePreorderCheckout';
+import { getPreorderConfig } from '../shared/preorders';
 import { useStripeCheckoutInventoryRecovery } from './hooks/useStripeCheckoutInventoryRecovery';
 import { useStripeCheckoutRecovery } from './hooks/useStripeCheckoutRecovery';
 import {
@@ -54,6 +56,7 @@ import { useShopDrop } from './shop/useShopDrop';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
+const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -137,6 +140,18 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     auth, connectedWallet, publicKey, wallet, walletModalVisible, setVisible,
     isSignedInWallet, hasAuthenticatedAccount: account.hasAuthenticatedAccount,
     claimOpen: modals.claimOpen && !commerceUiSuspended, showToast, isUserRejectedError,
+  });
+  const preorderCheckout = usePreorderCheckout({
+    config: MI_NOTE_DEVNET_PREORDER,
+    active: drop.normalizedCurrentPath === '/mi_note_cards_devnet' && !commerceUiSuspended,
+    buyer: connectedWallet,
+    signedIn: isSignedInWallet,
+    signTransaction: wallet.signTransaction,
+    ensureSignedIn: signIn.ensureSignedIn,
+    onSucceeded: () => {
+      showSuccessHud('Preordered');
+      void queries.refreshInventoryAfterMint();
+    },
   });
   const transactions = useWalletTransactions(wallet, showToast);
   const runDeliveryRecovery = useDeliveryRecovery({
@@ -327,7 +342,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
-  const miNoteCardsPage = drop.normalizedCurrentPath === '/mi_note_cards';
+  const miNoteCardsPage = drop.normalizedCurrentPath === '/mi_note_cards' || drop.normalizedCurrentPath === '/mi_note_cards_devnet';
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
@@ -364,7 +379,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
         ) : miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
-              <MiNoteCardsGallery onNotify={notifications.handleOpenNotify} />
+              <MiNoteCardsGallery preorder={drop.normalizedCurrentPath === '/mi_note_cards_devnet' ? preorderCheckout : undefined} />
             </Suspense>
           </MiNoteCardsErrorBoundary>
         ) : (

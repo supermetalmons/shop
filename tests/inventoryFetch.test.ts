@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  listShopCollectionQueryRuntimes,
+  shopDropById,
   listShopPendingOpenProgramScopes,
   listUniqueInventoryCollectionScopes,
   resolveInventoryAssetDropId,
@@ -19,11 +19,10 @@ test('pending-open resolution requires the selected drop to match the placeholde
   const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) =>
     scope.drops.some((drop) => drop.dropId === 'card_nft_2'));
   assert.ok(sharedScope);
-  const runtimes = listShopCollectionQueryRuntimes(false);
-  const cardDrop = runtimes.find((drop) => drop.dropId === 'card_nft_2');
-  const clearCardsDrop = runtimes.find((drop) => drop.dropId === 'clear_cards');
-  const littleSwagDrop = runtimes.find((drop) => drop.dropId === 'little_swag_boxes');
-  const shirtDrop = runtimes.find((drop) => drop.dropId === 'drifella_shirt');
+  const cardDrop = shopDropById('card_nft_2');
+  const clearCardsDrop = shopDropById('clear_cards');
+  const littleSwagDrop = shopDropById('little_swag_boxes');
+  const shirtDrop = shopDropById('drifella_shirt');
   assert.ok(cardDrop?.boxMinterConfigPda);
   assert.ok(clearCardsDrop?.boxMinterConfigPda);
   assert.ok(littleSwagDrop);

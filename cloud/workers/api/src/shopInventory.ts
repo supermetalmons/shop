@@ -23,17 +23,21 @@ import {
 } from '../../../../shared/shopApi.js';
 import {
   decodePendingOpenRecordData,
-  listShopCollectionQueryRuntimes,
+  listShopInventoryCollectionScopes,
   listShopPendingOpenProgramScopes,
   resolvePendingOpenDropId,
-  shopDropById,
   toShopPendingOpenBox,
   transformShopInventoryItem,
   type PendingOpenRecordCandidate,
-  type ShopDropRuntime,
+  type ShopInventoryCollectionScope,
 } from '../../../../shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
+import { getPreorderConfig, preorderIdFromMetadataUri, preorderImageUrl } from '../../../../shared/preorders.js';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
+import { decodePreorderAssetAccount } from './preorderTransaction.js';
+import { listSucceededPreorderAssets } from './preorderStore.js';
 import { MAX_INVENTORY_SERIALIZED_ITEM_BYTES } from './inventoryLimits.js';
 import {
   PUBLIC_RATE_LIMITS,
@@ -44,6 +48,7 @@ import {
 import {
   createRequestDeadline,
   isRequestCancellationError,
+  raceWithSignal,
 } from './boundedRequest.js';
 import {
   BASE_HEADERS,
@@ -75,7 +80,7 @@ type ShopInventoryDependencies = ProviderContext['dependencies'] & Pick<WorkerDe
 >;
 
 type GroupedInventoryResult = {
-  scope: ShopDropRuntime;
+  scope: ShopInventoryCollectionScope;
   items: ShopInventoryItem[];
   needsFallback: boolean;
 };
@@ -155,6 +160,8 @@ function compactInventoryPage(
   assets: DasAsset[],
   cluster: SolanaCluster,
   seenIds: Set<string>,
+  owner: string,
+  collections: ReadonlySet<string>,
 ): ShopInventoryItem[] {
   context.inventoryCandidates += assets.length;
   if (context.inventoryCandidates > context.dependencies.inventoryMaxCandidates) {
@@ -166,10 +173,12 @@ function compactInventoryPage(
       throw new ProviderFailure('unavailable');
     }
     seenIds.add(asset.id);
+    const collection = uniqueAssetGroupingCollectionMint(asset);
+    if (!collection || !collections.has(collection)) continue;
     const item = transformShopInventoryItem(asset, cluster);
     if (!item) continue;
-    const drop = shopDropById(item.dropId);
-    if (drop?.solanaCluster === cluster) items.push(compactInventoryItem(item));
+    if (item.kind === 'preorder' && asset.ownership?.owner !== owner) continue;
+    items.push(compactInventoryItem(item));
   }
   return items;
 }
@@ -216,7 +225,7 @@ function decodePendingOpenRecordCandidate(
 async function fetchGroupedInventoryScope(
   context: ProviderContext,
   owner: string,
-  scope: ShopDropRuntime,
+  scope: ShopInventoryCollectionScope,
 ): Promise<GroupedInventoryResult> {
   const progress = { receivedResult: false };
   try {
@@ -224,6 +233,7 @@ async function fetchGroupedInventoryScope(
       context,
       owner,
       scope.solanaCluster,
+      new Set([scope.collectionMint]),
       ['collection', scope.collectionMint],
       progress,
     );
@@ -245,6 +255,7 @@ async function fetchInventoryCursorChain(
   context: ProviderContext,
   owner: string,
   cluster: SolanaCluster,
+  collections: ReadonlySet<string>,
   grouping?: ['collection', string],
   progress?: { receivedResult: boolean },
 ): Promise<ShopInventoryItem[]> {
@@ -304,7 +315,7 @@ async function fetchInventoryCursorChain(
     } catch {
       throw new ProviderFailure('unavailable');
     }
-    items.push(...compactInventoryPage(context, parsed.items, cluster, seenIds));
+    items.push(...compactInventoryPage(context, parsed.items, cluster, seenIds, owner, collections));
     if (!pageInfo.hasMore) return items;
     seenCursors.add(pageInfo.cursor);
     cursor = pageInfo.cursor;
@@ -316,25 +327,24 @@ async function fetchUngroupedInventory(
   context: ProviderContext,
   owner: string,
   cluster: SolanaCluster,
+  collections: ReadonlySet<string>,
 ): Promise<ShopInventoryItem[]> {
-  return fetchInventoryCursorChain(context, owner, cluster);
+  return fetchInventoryCursorChain(context, owner, cluster, collections);
 }
 
-async function fetchInventory(
+async function fetchInventoryCollections(
   context: ProviderContext,
-  requestBody: ShopInventoryRequest,
-): Promise<ShopInventoryResponse> {
-  const expectedGroups = expectedAssetGroups(requestBody.expectedAssetIds);
-  context.metrics.expectedAssetIds = expectedGroups.reduce((total, group) => total + group.ids.length, 0);
-  const scopes = listShopCollectionQueryRuntimes(requestBody.includeDevnet === true);
+  owner: string,
+  scopes: readonly ShopInventoryCollectionScope[],
+): Promise<Map<string, ShopInventoryItem>> {
   const grouped = await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
-    fetchGroupedInventoryScope(context, requestBody.owner, scope));
+    fetchGroupedInventoryScope(context, owner, scope));
   const fallbackClusters = Array.from(new Set(
     grouped.filter((entry) => entry.needsFallback).map((entry) => entry.scope.solanaCluster),
   ));
   const fallbackRows = await mapConcurrent(fallbackClusters, PROVIDER_CONCURRENCY, async (cluster) => ({
     cluster,
-    items: await fetchUngroupedInventory(context, requestBody.owner, cluster),
+    items: await fetchUngroupedInventory(context, owner, cluster, new Set(scopes.filter((scope) => scope.solanaCluster === cluster).map((scope) => scope.collectionMint))),
   }));
   const itemsById = new Map<string, ShopInventoryItem>();
   for (const result of grouped) {
@@ -343,8 +353,107 @@ async function fetchInventory(
   for (const fallback of fallbackRows) {
     for (const item of fallback.items) itemsById.set(item.id, item);
   }
-  await mergeExpectedInventoryItems(context, requestBody.owner, expectedGroups, itemsById);
+  return itemsById;
+}
+
+async function fetchInventory(
+  context: ProviderContext,
+  requestBody: ShopInventoryRequest,
+  commerceDb: D1Database,
+): Promise<ShopInventoryResponse> {
+  const expectedGroups = expectedAssetGroups(requestBody.expectedAssetIds);
+  context.metrics.expectedAssetIds = expectedGroups.reduce((total, group) => total + group.ids.length, 0);
+  const scopes = listShopInventoryCollectionScopes(requestBody.includeDevnet === true);
+  const optionalScopes = scopes.filter((scope) => scope.solanaCluster === 'devnet' &&
+    !Object.values(DEPLOYMENT_DROPS).some((drop) =>
+      drop.solanaCluster === scope.solanaCluster && drop.collectionMint === scope.collectionMint));
+  const requiredScopes = scopes.filter((scope) => !optionalScopes.includes(scope));
+  const itemsById = await fetchInventoryCollections(context, requestBody.owner, requiredScopes);
+  await mergeExpectedInventoryItems(context, requestBody.owner, expectedGroups.filter((group) =>
+    requiredScopes.some((scope) => scope.solanaCluster === group.cluster)), itemsById, scopes);
+
+  const optionalScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
+  const optionalContext: ProviderContext = {
+    ...context,
+    signal: optionalScope.signal,
+    providerResponseBodyBytes: 0,
+    inventoryCandidates: 0,
+    inventoryCursorPages: 0,
+    inventoryProviderCalls: 0,
+    providerReadGate: new ProviderReadGate(),
+  };
+  let optionalItems: Map<string, ShopInventoryItem> | undefined;
+  try {
+    optionalItems = await fetchInventoryCollections(optionalContext, requestBody.owner, optionalScopes);
+    await mergeExpectedInventoryItems(optionalContext, requestBody.owner, expectedGroups.filter((group) =>
+      !requiredScopes.some((scope) => scope.solanaCluster === group.cluster) &&
+      optionalScopes.some((scope) => scope.solanaCluster === group.cluster)), optionalItems, optionalScopes);
+    await mergeRecentPreorderItems(optionalContext, requestBody.owner, commerceDb, optionalItems);
+  } catch {
+    context.metrics.expectedAssetRecoveryFailures += 1;
+  } finally {
+    optionalScope.dispose();
+  }
+  if (optionalItems) {
+    const combined = new Map([...itemsById, ...optionalItems]);
+    if (combined.size <= SHOP_API_MAX_RESPONSE_ITEMS &&
+      utf8ByteLength(JSON.stringify({ ok: true, items: Array.from(combined.values()) })) <= context.dependencies.inventoryMaxResponseBodyBytes) {
+      return { ok: true, items: Array.from(combined.values()) };
+    }
+    context.metrics.expectedAssetRecoveryFailures += 1;
+  }
   return { ok: true, items: Array.from(itemsById.values()) };
+}
+
+async function mergeRecentPreorderItems(
+  context: ProviderContext,
+  owner: string,
+  db: D1Database,
+  items: Map<string, ShopInventoryItem>,
+): Promise<void> {
+  const recoveryScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
+  try {
+    const recent = await raceWithSignal(listSucceededPreorderAssets(db, owner), recoveryScope.signal);
+    const missing = recent.filter((asset) => !items.has(asset.address)).slice(0, 15);
+    if (!missing.length) return;
+    for (const cluster of new Set(missing.map((asset) => getPreorderConfig(asset.preorderId)?.cluster))) {
+      if (!cluster) continue;
+      const assets = missing.filter((asset) => getPreorderConfig(asset.preorderId)?.cluster === cluster);
+      if (context.inventoryCandidates + assets.length > context.dependencies.inventoryMaxCandidates) {
+        context.metrics.expectedAssetRecoveryFailures += 1;
+        continue;
+      }
+      context.inventoryCandidates += assets.length;
+      const result = await heliusRpc<{ context: { slot: number }; value: ({ owner: string; executable: boolean; data: [string, string] } | null)[] }>(
+        context, cluster, 'getMultipleAccounts', [assets.map((asset) => asset.address), { commitment: 'finalized', encoding: 'base64' }],
+        { signal: recoveryScope.signal, inventoryCall: true, maxAttempts: 1 },
+      );
+      if (!Number.isSafeInteger(result?.context?.slot) || !Array.isArray(result?.value) || result.value.length !== assets.length) throw new ProviderFailure('unavailable');
+      const recovered = new Map(items);
+      result.value.forEach((account, index) => {
+        if (!account || account.owner !== MPL_CORE_PROGRAM_ADDRESS || account.executable !== false || !Array.isArray(account.data) || typeof account.data[0] !== 'string' || account.data[1] !== 'base64') return;
+        const asset = assets[index];
+        const config = getPreorderConfig(asset.preorderId);
+        if (!config?.enabled) return;
+        const decoded = decodePreorderAssetAccount(Buffer.from(account.data[0], 'base64'));
+        if (!decoded || decoded.owner !== owner || decoded.collection !== config.collection || preorderIdFromMetadataUri(config, decoded.uri) !== asset.id) return;
+        recovered.set(asset.address, {
+          id: asset.address, dropId: config.preorderId, name: `Preorder #${asset.id}`, kind: 'preorder',
+          preorderId: asset.id, rawImage: preorderImageUrl(config, asset.id),
+        });
+      });
+      if (recovered.size > SHOP_API_MAX_RESPONSE_ITEMS || utf8ByteLength(JSON.stringify({ ok: true, items: Array.from(recovered.values()) })) > context.dependencies.inventoryMaxResponseBodyBytes) {
+        context.metrics.expectedAssetRecoveryFailures += 1;
+        continue;
+      }
+      for (const [id, item] of recovered) items.set(id, item);
+    }
+  } catch (error) {
+    if (context.signal.aborted) throw context.signal.reason;
+    context.metrics.expectedAssetRecoveryFailures += 1;
+  } finally {
+    recoveryScope.dispose();
+  }
 }
 
 async function fetchPendingProgramScope(
@@ -424,23 +533,18 @@ function recoveredExpectedInventoryItem(
   asset: DasAsset,
   owner: string,
   cluster: SolanaCluster,
+  scopes: readonly ShopInventoryCollectionScope[],
 ): ShopInventoryItem | null {
   if (asset?.interface !== 'MplCoreAsset' || asset?.burnt !== false) return null;
   const assetOwner = asset?.ownership?.owner;
   if (typeof assetOwner !== 'string' || !isBase58Bytes(assetOwner, 32) || assetOwner !== owner) return null;
   const collectionMint = uniqueAssetGroupingCollectionMint(asset);
   if (!collectionMint) return null;
-  const collectionIsRegistered = listShopCollectionQueryRuntimes(true).some((scope) =>
+  const collectionIsRegistered = scopes.some((scope) =>
     scope.solanaCluster === cluster && scope.collectionMint === collectionMint);
   if (!collectionIsRegistered) return null;
   const item = transformShopInventoryItem(asset, cluster);
   if (!item) return null;
-  const drop = shopDropById(item.dropId);
-  if (
-    !drop ||
-    drop.solanaCluster !== cluster ||
-    drop.collectionMint !== collectionMint
-  ) return null;
   return compactInventoryItem(item);
 }
 
@@ -480,6 +584,7 @@ async function mergeExpectedInventoryItems(
   owner: string,
   groups: ExpectedAssetGroup[],
   itemsById: Map<string, ShopInventoryItem>,
+  scopes: readonly ShopInventoryCollectionScope[],
 ): Promise<void> {
   if (groups.length === 0) return;
   const recoveryScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
@@ -489,7 +594,7 @@ async function mergeExpectedInventoryItems(
       context.metrics.expectedAssetRecoveryFailures += recovery.failures;
       const items: ShopInventoryItem[] = [];
       for (const asset of recovery.assetsById.values()) {
-        const item = recoveredExpectedInventoryItem(asset, owner, cluster);
+        const item = recoveredExpectedInventoryItem(asset, owner, cluster, scopes);
         if (item) items.push(item);
       }
       return { items, rawAssets: recovery.assetsById.size };
@@ -617,8 +722,9 @@ export async function handlePost(
   };
   try {
     const body = parsedRequest.kind === 'inventory'
-      ? await fetchInventory(context, parsedRequest.body)
+      ? await fetchInventory(context, parsedRequest.body, env.COMMERCE_DB)
       : await fetchPendingOpenBoxes(context, parsedRequest.body);
+    request.signal.throwIfAborted();
     const valid = parsedRequest.kind === 'inventory'
       ? dependencies.validateInventoryResponse(body)
       : dependencies.validatePendingOpenBoxesResponse(body);

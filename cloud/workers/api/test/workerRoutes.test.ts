@@ -17,6 +17,11 @@ type ExpectedExactRoute = readonly [
 ];
 
 const EXPECTED_EXACT_ROUTES = [
+  ['/preorders/availability', 'public', false, 'skip', false, 'public', '/preorders/availability'],
+  ['/preorders/prepare', 'profile', true, 'optional', true, 'profile', '/preorders/prepare'],
+  ['/preorders/submit', 'profile', true, 'optional', true, 'profile', '/preorders/submit'],
+  ['/preorders/cancel', 'profile', true, 'optional', true, 'profile', '/preorders/cancel'],
+  ['/preorders/status', 'profile', true, 'optional', true, 'profile', '/preorders/status'],
   ['/health', 'none', false, 'optional', false, 'internal', '/health'],
   ['/mi-note-cards', 'public', false, 'skip', false, 'public', '/mi-note-cards'],
   ['/internal/notifications/enqueue', 'none', false, 'optional', false, 'internal', '/internal/notifications/enqueue'],

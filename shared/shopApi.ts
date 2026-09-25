@@ -4,6 +4,7 @@ import {
 } from './boxMinterProtocol.ts';
 import type { PackStatusBreakdown, PackStatusBreakdownItem } from './contracts.ts';
 import { isBase58Bytes } from './solanaRpcProxy.ts';
+import { getPreorderConfig, isPreorderCardId } from './preorders.ts';
 
 type ShopApiBaseRequest = {
   owner: string;
@@ -62,10 +63,11 @@ export type ShopInventoryItem = {
   id: string;
   dropId: string;
   name: string;
-  kind: 'box' | 'dude' | 'certificate';
+  kind: 'box' | 'dude' | 'certificate' | 'preorder';
   rawImage?: string;
   boxId?: string;
   dudeId?: number;
+  preorderId?: number;
 };
 
 export type ShopPendingOpenBox = {
@@ -166,7 +168,7 @@ function isExactShopInventoryItem(value: unknown): value is ShopInventoryItem {
   if (!isRecord(value) || !hasExactKeys(
     value,
     ['id', 'dropId', 'name', 'kind'],
-    ['rawImage', 'attributes', 'boxId', 'dudeId'],
+    ['rawImage', 'attributes', 'boxId', 'dudeId', 'preorderId'],
   )) return false;
   if (
     typeof value.id !== 'string' ||
@@ -175,7 +177,7 @@ function isExactShopInventoryItem(value: unknown): value is ShopInventoryItem {
     value.dropId.length === 0 ||
     !isShopApiStringWithinUtf8Limit(value.name, SHOP_INVENTORY_NAME_MAX_UTF8_BYTES) ||
     value.name.length === 0 ||
-    (value.kind !== 'box' && value.kind !== 'dude' && value.kind !== 'certificate')
+    (value.kind !== 'box' && value.kind !== 'dude' && value.kind !== 'certificate' && value.kind !== 'preorder')
   ) return false;
   if (
     value.rawImage !== undefined &&
@@ -186,6 +188,9 @@ function isExactShopInventoryItem(value: unknown): value is ShopInventoryItem {
     (!isShopApiStringWithinUtf8Limit(value.boxId, SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES) || value.boxId.length === 0)
   ) return false;
   if (value.dudeId !== undefined && (!Number.isSafeInteger(value.dudeId) || Number(value.dudeId) <= 0)) return false;
+  if (value.kind === 'preorder') {
+    if (!getPreorderConfig(value.dropId)?.enabled || !isPreorderCardId(value.preorderId) || value.boxId !== undefined || value.dudeId !== undefined) return false;
+  } else if (value.preorderId !== undefined) return false;
   return value.attributes === undefined ||
     (Array.isArray(value.attributes) && value.attributes.every(isExactLegacyShopApiAttribute));
 }

@@ -81,6 +81,7 @@ export function useShopInventorySelection({
   }, [selected, inventoryView]);
 
   const selectedCount = selected.size;
+  const hasPreorderSelected = selectedItems.some((item) => item.kind === 'preorder');
 
   const deliverableItems = useMemo(
     () => selectedItems.filter((item) => (
@@ -214,7 +215,7 @@ export function useShopInventorySelection({
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
 
   const canShipSelected =
-    selectedCount > 0 &&
+    selectedCount > 0 && !hasPreorderSelected &&
     deliverableItems.length === selectedCount &&
     selectionHasSingleDrop;
 
@@ -281,7 +282,7 @@ export function useShopInventorySelection({
     toggleSelection(id, inventoryIndex);
   };
   return {
-    selected, selectedItems, selectedCount, deliverableItems, selectedDropIds, selectedDropId, selectedDropConfig,
+    selected, selectedItems, selectedCount, hasPreorderSelected, deliverableItems, selectedDropIds, selectedDropId, selectedDropConfig,
     adminIrlRedeemSelection, canShowAdminIrlRedeem, selectionSummary, deliveryCtaLabel,
     selectedPreview, selectedOverflow, canOpenSelected, selectedBox, canShipSelected, selectedViewableItem, canViewSelected,
     toggleSelected,

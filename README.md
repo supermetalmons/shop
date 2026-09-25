@@ -80,6 +80,57 @@ automatically treated as live code.
 
 ## Mi Note cards
 
+`/mi_note_cards_devnet` adds preorder checkout to the same gallery on Solana
+devnet. `/mi_note_cards` remains browse-only. Neither page has a Notify me button.
+Select up to three available cards, then use Preorder to purchase them in one
+transaction. Each costs 0.25 SOL, split equally between the two configured
+recipients; the buyer also pays NFT creation and network costs. Ethereum wallet
+holdings filter the gallery but do not determine preorder eligibility.
+
+Preorder checkout uses the shop's Solana wallet sign-in and requires a buyer
+wallet different from the collection authority. The wallet signs the prepared
+transaction without broadcasting it; the API adds the collection signature,
+records the fully signed transaction, and broadcasts it. Reservations start at
+checkout, last at most 120 seconds before submission, and cannot be extended by
+retrying. Submitted transactions retain their reservations until finalized
+success, failure, or verified expiry. Status polling and scheduled reconciliation
+recover interrupted purchases. A successful card ID can never be purchased again,
+even if its NFT is later transferred or burned.
+
+Reserved gallery cards keep their original artwork, display a muted Reserved
+label, and cannot be selected until the reservation is lifted. Only successfully
+minted preorders display preorder artwork after finalized confirmation. Purchased
+assets appear in owner inventory, with Send disabled and Soon beside it. The
+devnet preorder collection is public in inventory; other devnet collections keep
+their existing visibility rules. Preorder configuration lives in
+`shared/preorders.ts`, separately from ordinary pack drops. Metadata uses
+`https://cdn.lil.org/nft/mi_note_cards/preorder/json/<id>.json`; its numeric ID is
+the source catalog's `clean_card_id`. Generated local metadata copies have been
+removed after verifying the hosted set.
+
+Deployment requires commerce migrations through `0020_preorder_expiry_index.sql` and the API release
+before deploying the frontend. The normal API deployment command applies the
+migration and validates its schema. The existing `COSIGNER_SECRET` must match the
+collection authority; no additional signing secret is required. Mainnet checkout
+stays disabled in the shared configuration and the API's devnet restriction.
+
+If an old submitted preorder stays unresolved after the RPC prunes its history,
+use the recovery command with a trusted devnet archive. Set
+`PREORDER_ARCHIVE_RPC_URL` in your shell (keep any RPC credentials out of command
+arguments), then preview and apply the verified result:
+
+```bash
+npm run recover-preorder -- <order-id>
+npm run recover-preorder -- <order-id> --write
+```
+
+Recovery verifies the exact finalized transaction, or proves expiry by checking
+absent assets and complete, linked finalized blocks across its possible landing
+window. Missing history, RPC errors, or an uncertain outcome preserve the
+reservation. Successful purchases keep their permanent card claims. The command
+does not sign or broadcast transactions, and has no force-unlock option. If a
+database write is interrupted, rerun the same command to finish claim cleanup.
+
 `/mi_note_cards` opens the All tab with 300 random cards. The Your tab connects
 an installed Ethereum wallet to show its cards. Multiple wallets appear in an
 inline picker, using EIP-6963 discovery with a legacy `window.ethereum` fallback.

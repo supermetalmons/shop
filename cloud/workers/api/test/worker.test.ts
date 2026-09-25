@@ -9,11 +9,13 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  listShopCollectionQueryRuntimes,
+  listShopInventoryCollectionScopes,
   listShopPendingOpenProgramScopes,
 } from '../../../../shared/shopDomain.ts';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
+import { getPreorderConfig, preorderMetadataUri } from '../../../../shared/preorders.ts';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import {
@@ -34,6 +36,7 @@ import type { ProviderFetch } from '../src/publicRouteSupport.ts';
 import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
 import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
+import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const {
   handleRequest: rawHandleRequest,
@@ -95,7 +98,13 @@ function env(options: {
   return {
     DATA_DB: options.dataDb || {} as D1Database,
     OPS_DB: options.opsDb || {} as D1Database,
-    COMMERCE_DB: options.commerceDb || d1Database(function prepare() {
+    COMMERCE_DB: options.commerceDb || d1Database(function prepare(sql) {
+      if (sql.includes('commerce_preorder')) {
+        const statement = {} as D1PreparedStatement;
+        statement.bind = () => statement;
+        statement.all = async <T>() => ({ success: true, results: [] as T[], meta: { duration: 0, size_after: 0, rows_read: 0, rows_written: 0, last_row_id: 0, changed_db: false, changes: 0 } });
+        return statement;
+      }
       return {
         first: async () => ({
           authority_state: options.commerceState || 'd1',
@@ -113,6 +122,8 @@ function env(options: {
     PUBLIC_RPC_READ_RATE_LIMITER: options.publicRpcReadRateLimiter || allowRateLimit,
     PUBLIC_RPC_WRITE_RATE_LIMITER: options.publicRpcWriteRateLimiter || allowRateLimit,
     PUBLIC_SHOP_RATE_LIMITER: options.publicShopRateLimiter || allowRateLimit,
+    PREORDER_PREPARE_RATE_LIMITER: allowRateLimit,
+    PREORDER_PREPARE_IP_RATE_LIMITER: allowRateLimit,
     PUBLIC_NOTIFICATION_RATE_LIMITER: options.publicNotificationRateLimiter || allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
@@ -2065,6 +2076,8 @@ test('internal notification enqueue rejects signed invalid jobs and surfaces que
 test('production config has exact authentication rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.deepEqual(config.ratelimits, [
+    { name: 'PREORDER_PREPARE_RATE_LIMITER', namespace_id: '2185819631', simple: { limit: 10, period: 60 } },
+    { name: 'PREORDER_PREPARE_IP_RATE_LIMITER', namespace_id: '2185819632', simple: { limit: 30, period: 60 } },
     {
       name: 'STAFF_AUTH_CHALLENGE_RATE_LIMITER',
       namespace_id: '1142143110',
@@ -2943,7 +2956,7 @@ test('missing provider secrets fail before an upstream request', async () => {
 });
 
 test('inventory paginates sequentially, compacts pages, and never exceeds three concurrent requests', async () => {
-  const mainnetScopes = listShopCollectionQueryRuntimes(false);
+  const mainnetScopes = listShopInventoryCollectionScopes(false);
   let concurrent = 0;
   let maxConcurrent = 0;
   const calls: Array<{ cluster: string; params: any }> = [];
@@ -2988,7 +3001,8 @@ test('inventory paginates sequentially, compacts pages, and never exceeds three 
   assert.equal(calls.every((call) => call.params?.options?.showGrandTotal === undefined), true);
   assert.equal(calls.every((call) => call.params?.page === undefined), true);
   assert.equal(calls.every((call) => call.params?.sortBy?.sortBy === 'id'), true);
-  assert.equal(calls.every((call) => call.cluster !== 'devnet.helius-rpc.com'), true);
+  assert.ok(calls.some((call) => call.cluster === 'devnet.helius-rpc.com'));
+  assert.ok(calls.filter((call) => call.cluster === 'devnet.helius-rpc.com').every((call) => call.params.grouping[1] === '65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv'));
   assert.ok(maxConcurrent > 1);
   assert.ok(maxConcurrent <= 3);
 });
@@ -2997,7 +3011,7 @@ test('serialized provider body reads do not consume queued attempt time', async 
   context.mock.timers.enable({ apis: ['setTimeout'] });
   let now = 0;
   context.mock.method(performance, 'now', () => now);
-  const expectedCalls = listShopCollectionQueryRuntimes(true).length;
+  const expectedCalls = listShopInventoryCollectionScopes(true).length;
   const bodyReads = Array.from({ length: expectedCalls }, () => Promise.withResolvers<() => void>());
   let calls = 0;
   let reads = 0;
@@ -3830,7 +3844,7 @@ test('transient provider errors retry once and provider deadlines return 504', a
     },
   });
   assert.equal(retried.status, 200);
-  assert.ok(attempts > listShopCollectionQueryRuntimes(false).length);
+  assert.ok(attempts > listShopInventoryCollectionScopes(false).length);
   assert.deepEqual(retryDelays, [117]);
 
   const hanging: ProviderFetch = async (_input, init) => new Promise((_resolve, reject) => {
@@ -4103,6 +4117,41 @@ test('pending opens omit missing or unresolved assets but reject unexpected and 
   }
 });
 
+test('preorder availability applies public GET CORS to successes and errors through the Worker', async (context) => {
+  const commerce = createCommerceD1Harness();
+  context.after(() => commerce.database.close());
+  const dependencies = { log: () => {} };
+  const url = 'https://api.mons.shop/preorders/availability?preorderId=mi_note_cards_devnet';
+  for (const origin of ['https://mons.shop', 'http://localhost:5173']) {
+    const response = await handleRequest(new Request(url, { headers: { Origin: origin } }),
+      env({ commerceDb: commerce.db }), dependencies);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+    assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+    assert.equal(response.headers.get('Vary'), 'Origin');
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    const payload = await response.json() as { items: unknown[] };
+    assert.equal(payload.items.length, 1395);
+    for (const [requestedUrl, requestEnv, method, status] of [
+      [url.replace('mi_note_cards_devnet', 'mi_note_cards'), env(), 'GET', 409],
+      [url.replace('?preorderId=mi_note_cards_devnet', ''), env(), 'GET', 400],
+      [url, env({ commerceState: 'paused' }), 'GET', 503],
+      [url, env(), 'POST', 405],
+      [url, env(), 'OPTIONS', 204],
+    ] as const) {
+      const result = await handleRequest(new Request(requestedUrl, { method, headers: { Origin: origin } }), requestEnv, dependencies);
+      assert.equal(result.status, status);
+      assert.equal(result.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(result.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+    }
+  }
+  for (const origin of ['', 'https://example.com']) {
+    const rejected = await handleRequest(new Request(url, { headers: origin ? { Origin: origin } : {} }), env(), dependencies);
+    assert.equal(rejected.status, 403);
+    assert.equal(rejected.headers.has('Access-Control-Allow-Origin'), false);
+  }
+});
+
 test('Mi Note GET route is public and preserves method, origin, and error policies', async () => {
   const address = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
   const url = `https://api.mons.shop/mi-note-cards?address=${address}`;
@@ -4174,4 +4223,336 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
   assert.equal(unavailable.headers.get('Access-Control-Allow-Origin'), 'http://localhost:5173');
   assert.equal(unavailable.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
   assert.equal(calls, 2);
+});
+
+test('public inventory includes preorder assets and excludes other devnet collections in fallback queries', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const unrelated = listShopInventoryCollectionScopes(true).find((scope) => scope.solanaCluster === 'devnet' && scope.collectionMint !== preorder.collection)!;
+  const source = {
+    id: assetId('mi-note-preorder'), interface: 'MplCoreAsset', burnt: false,
+    ownership: { owner: OWNER }, grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+    content: { json_uri: preorderMetadataUri(preorder, 167), metadata: { name: 'Preorder #167' } },
+  };
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const devnet = new URL(String(input)).hostname === 'devnet.helius-rpc.com';
+    if (devnet && body.params?.grouping) return new Response('', { status: 503 });
+    if (!devnet) return rpcResult(body.id, { items: [] });
+    return rpcCursorSearchResult(body, [source, {
+      ...cardAsset('unrelated-devnet', 1), grouping: [{ group_key: 'collection', group_value: unrelated.collectionMint }],
+    }, { ...source, id: assetId('another-owner-preorder'), ownership: { owner: unrelated.collectionMint } }]);
+  };
+  const response = await handleRequest(request('/inventory'), env(), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ id: string; kind: string; preorderId: number }> };
+  assert.deepEqual(body.items.map((item) => [item.id, item.kind, item.preorderId]), [[source.id, 'preorder', 167]]);
+});
+
+test('failed devnet preorder queries preserve ordinary inventory for public and devnet-enabled requests', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  for (const includeDevnet of [false, true]) {
+    let failedCalls = 0;
+    const providerFetch: ProviderFetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      const devnet = new URL(String(input)).hostname === 'devnet.helius-rpc.com';
+      if (devnet && (!body.params?.grouping || body.params.grouping[1] === preorder.collection)) {
+        failedCalls += 1;
+        return new Response('', { status: 503 });
+      }
+      return rpcCursorSearchResult(body, body.params?.grouping?.[1] === CARD_COLLECTION
+        ? [cardAsset('mainnet-during-devnet-outage', 1)] : []);
+    };
+    const response = await handleRequest(request('/inventory', { owner: OWNER, includeDevnet }), env(), quietDependencies(providerFetch));
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { items: { id: string }[] }).items.map((item) => item.id),
+      [assetId('mainnet-during-devnet-outage')]);
+    assert.equal(failedCalls, 4);
+  }
+});
+
+test('stalled devnet preorder requests are bounded without losing completed mainnet inventory', async () => {
+  for (const overallDeadlineWins of [false, true]) {
+    let aborted = false;
+    const providerFetch: ProviderFetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (new URL(String(input)).hostname === 'devnet.helius-rpc.com') {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(init.signal?.reason);
+          }, { once: true });
+        });
+      }
+      return rpcCursorSearchResult(body, body.params?.grouping?.[1] === CARD_COLLECTION
+        ? [cardAsset('mainnet-during-devnet-stall', 1)] : []);
+    };
+    const response = await handleRequest(request('/inventory'), env(), {
+      ...quietDependencies(providerFetch),
+      expectedAssetRecoveryTimeoutMs: overallDeadlineWins ? 500 : 10,
+      providerTimeoutMs: overallDeadlineWins ? 100 : 1000,
+    });
+    assert.equal(aborted, true);
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { items: { id: string }[] }).items.map((item) => item.id),
+      [assetId('mainnet-during-devnet-stall')]);
+  }
+});
+
+test('ordinary devnet drop failures remain fatal when devnet inventory is explicitly requested', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const ordinary = listShopInventoryCollectionScopes(true).find((scope) =>
+    scope.solanaCluster === 'devnet' && scope.collectionMint !== preorder.collection)!;
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (new URL(String(input)).hostname === 'devnet.helius-rpc.com' &&
+      (!body.params?.grouping || body.params.grouping[1] === ordinary.collectionMint)) {
+      return new Response('', { status: 503 });
+    }
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === CARD_COLLECTION
+      ? [cardAsset('mainnet-with-required-devnet', 1)] : []);
+  };
+  const response = await handleRequest(request('/inventory', { owner: OWNER, includeDevnet: true }), env(), quietDependencies(providerFetch));
+  assert.equal(response.status, 502);
+});
+
+test('client cancellation still aborts the optional devnet inventory stage', async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers<void>();
+  let providerSignal: AbortSignal | null = null;
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (new URL(String(input)).hostname === 'devnet.helius-rpc.com') {
+      providerSignal = init?.signal ?? null;
+      started.resolve();
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+    }
+    return rpcCursorSearchResult(body, []);
+  };
+  const pending = handleRequest(new Request(request('/inventory'), { signal: controller.signal }), env(), quietDependencies(providerFetch));
+  await started.promise;
+  controller.abort(new Error('client disconnected during preorder loading'));
+  const response = await pending;
+  assert.ok(providerSignal);
+  assert.equal((providerSignal as AbortSignal).aborted, true);
+  assert.equal(response.status, 499);
+});
+
+test('devnet preorder resource limits preserve required inventory', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const requiredScopeCount = listShopInventoryCollectionScopes(false).length - 1;
+  let preorderCalls = 0;
+  const providerFetch: ProviderFetch = async (input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (new URL(String(input)).hostname === 'devnet.helius-rpc.com') {
+      preorderCalls += 1;
+      return rpcResult(body.id, {
+        limit: body.params.limit, cursor: `preorders-${preorderCalls}`,
+        items: Array.from({ length: 10 }, (_, index) => ({
+          id: assetId(`over-budget-preorder-${preorderCalls}-${index}`),
+          interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+          grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+          content: { json_uri: preorderMetadataUri(preorder, index + 1) },
+        })),
+      });
+    }
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === CARD_COLLECTION
+      ? [cardAsset('mainnet-with-preorder-limits', 1)] : []);
+  };
+  for (const limits of [
+    { inventoryMaxCandidates: 1 },
+    { inventoryMaxCursorPages: requiredScopeCount + 1 },
+    { inventoryMaxProviderCalls: requiredScopeCount + 1 },
+  ]) {
+    const response = await handleRequest(request('/inventory'), env(), { ...quietDependencies(providerFetch), ...limits });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json() as { items: { id: string }[] }).items.map((item) => item.id),
+      [assetId('mainnet-with-preorder-limits')]);
+  }
+  assert.ok(preorderCalls > 0);
+});
+
+test('preorder queries use independent budgets and cannot overflow the final inventory response', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const requiredScopeCount = listShopInventoryCollectionScopes(false).length - 1;
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const collection = body.params?.grouping?.[1];
+    const items = collection === CARD_COLLECTION ? [cardAsset('budget-mainnet', 1)] : collection === preorder.collection ? [{
+      id: assetId('budget-preorder'), interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+      grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+      content: { json_uri: preorderMetadataUri(preorder, 1) },
+    }] : [];
+    return rpcCursorSearchResult(body, items);
+  };
+  const dependencies = {
+    ...quietDependencies(providerFetch),
+    inventoryMaxCursorPages: requiredScopeCount + 1,
+    inventoryMaxProviderCalls: requiredScopeCount + 1,
+  };
+  const response = await handleRequest(request('/inventory'), env(), dependencies);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { ok: true; items: { id: string }[] };
+  assert.deepEqual(body.items.map((item) => item.id), [assetId('budget-mainnet'), assetId('budget-preorder')]);
+
+  const requiredBody = { ...body, items: body.items.filter((item) => item.id === assetId('budget-mainnet')) };
+  const limited = await handleRequest(request('/inventory'), env(), {
+    ...dependencies,
+    inventoryMaxResponseBodyBytes: Buffer.byteLength(JSON.stringify(requiredBody)),
+  });
+  assert.equal(limited.status, 200);
+  assert.deepEqual(await limited.json(), requiredBody);
+});
+
+test('new preorder inventory recovers recorded assets before DAS indexing and checks current onchain owner', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const owned = assetId('new-preorder-owned');
+  const transferred = assetId('new-preorder-transferred');
+  const commerceDb = d1Database(function prepare(sql) {
+    const statement = {} as D1PreparedStatement;
+    statement.bind = () => statement;
+    statement.first = async () => ({ authority_state: 'd1', revision: 1, documents_revision: 0 }) as never;
+    statement.all = async <T>() => ({ success: true, meta: { duration: 0, size_after: 0, rows_read: 0, rows_written: 0, last_row_id: 0, changed_db: false, changes: 0 }, results: (sql.includes('commerce_preorder_orders') ? [{
+      preorder_id: preorder.preorderId,
+      assets_json: JSON.stringify([{ id: 1, address: owned }, { id: 2, address: transferred }]),
+    }] : []) as T[] });
+    return statement;
+  });
+  const account = (id: number, owner: string) => {
+    const string = (value: string) => {
+      const bytes = Buffer.from(value);
+      const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length);
+      return Buffer.concat([size, bytes]);
+    };
+    const data = Buffer.concat([Buffer.from([1]), new PublicKey(owner).toBuffer(), Buffer.from([2]),
+      new PublicKey(preorder.collection).toBuffer(), string(`Preorder #${id}`), string(preorderMetadataUri(preorder, id)), Buffer.from([0])]);
+    return { owner: MPL_CORE_PROGRAM_ADDRESS, executable: false, data: [data.toString('base64'), 'base64'] };
+  };
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getMultipleAccounts') {
+      assert.deepEqual(body.params[0], [owned, transferred]);
+      assert.equal(body.params[1].commitment, 'finalized');
+      return rpcResult(body.id, { context: { slot: 1234 }, value: [account(1, OWNER), account(2, preorder.collection)] });
+    }
+    return rpcResult(body.id, { items: [] });
+  };
+  const response = await handleRequest(request('/inventory'), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ id: string; kind: string }> };
+  assert.deepEqual(body.items.map((item) => [item.id, item.kind]), [[owned, 'preorder']]);
+  const bounded = await handleRequest(request('/inventory'), env({ commerceDb }), {
+    ...quietDependencies(providerFetch), inventoryMaxResponseBodyBytes: 30,
+  });
+  assert.equal(bounded.status, 200);
+  assert.deepEqual(await bounded.json(), { ok: true, items: [] });
+});
+
+test('preorder indexing recovery failure preserves successfully fetched inventory', async () => {
+  const commerceDb = d1Database(function prepare(sql) {
+    if (sql.includes('commerce_preorder_orders')) throw new Error('D1 recovery unavailable');
+    return { first: async () => ({ authority_state: 'd1', revision: 1, documents_revision: 0 }) } as D1PreparedStatement;
+  });
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === CARD_COLLECTION ? [cardAsset('mainnet-kept', 1)] : []);
+  };
+  const response = await handleRequest(request('/inventory'), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ id: string }> };
+  assert.deepEqual(body.items.map((item) => item.id), [assetId('mainnet-kept')]);
+});
+
+test('completed preorder inventory survives failed or timed-out indexing recovery', async (context) => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const source = {
+    id: assetId('preorder-kept-after-recovery'), interface: 'MplCoreAsset', burnt: false,
+    ownership: { owner: OWNER }, grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+    content: { json_uri: preorderMetadataUri(preorder, 167) },
+  };
+  for (const failure of ['error', 'recovery-timeout', 'overall-timeout'] as const) {
+    await context.test(failure, async () => {
+      let recoveryStarted = false;
+      const commerceDb = d1Database(() => {
+        const statement = {} as D1PreparedStatement;
+        statement.bind = () => statement;
+        statement.all = async () => {
+          recoveryStarted = true;
+          if (failure === 'error') throw new Error('D1 recovery unavailable');
+          return new Promise(() => undefined);
+        };
+        return statement;
+      });
+      const providerFetch: ProviderFetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        const collection = body.params?.grouping?.[1];
+        return rpcCursorSearchResult(body, collection === preorder.collection ? [source]
+          : collection === CARD_COLLECTION ? [cardAsset('mainnet-kept-after-recovery', 1)] : []);
+      };
+      const response = await handleRequest(request('/inventory'), env({ commerceDb }), {
+        ...quietDependencies(providerFetch),
+        expectedAssetRecoveryTimeoutMs: failure === 'overall-timeout' ? 1000 : 50,
+        providerTimeoutMs: failure === 'overall-timeout' ? 100 : 2000,
+      });
+      assert.equal(recoveryStarted, true);
+      assert.equal(response.status, 200);
+      const body = await response.json() as { items: Array<{ id: string }> };
+      assert.deepEqual(body.items.map((item) => item.id), [assetId('mainnet-kept-after-recovery'), source.id]);
+    });
+  }
+});
+
+test('incomplete preorder pagination is discarded when a later page fails', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const source = {
+    id: assetId('incomplete-preorder-page'), interface: 'MplCoreAsset', burnt: false,
+    ownership: { owner: OWNER }, grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+    content: { json_uri: preorderMetadataUri(preorder, 167) },
+  };
+  let recoveryStarted = false;
+  const commerceDb = d1Database(() => {
+    recoveryStarted = true;
+    throw new Error('Recovery must not run after incomplete pagination');
+  });
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const collection = body.params?.grouping?.[1];
+    if (collection === preorder.collection && body.params.cursor) return new Response('', { status: 503 });
+    return rpcCursorSearchResult(body, collection === preorder.collection ? [source]
+      : collection === CARD_COLLECTION ? [cardAsset('mainnet-kept-after-incomplete-preorder', 1)] : []);
+  };
+  const response = await handleRequest(request('/inventory'), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.equal(recoveryStarted, false);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ id: string }> };
+  assert.deepEqual(body.items.map((item) => item.id), [assetId('mainnet-kept-after-incomplete-preorder')]);
+});
+
+test('client cancellation during indexing recovery does not return completed preorder inventory', async () => {
+  const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+  const controller = new AbortController();
+  const recoveryStarted = Promise.withResolvers<void>();
+  const commerceDb = d1Database(() => {
+    const statement = {} as D1PreparedStatement;
+    statement.bind = () => statement;
+    statement.all = async () => {
+      recoveryStarted.resolve();
+      return new Promise(() => undefined);
+    };
+    return statement;
+  });
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === preorder.collection ? [{
+      id: assetId('preorder-before-cancellation'), interface: 'MplCoreAsset', burnt: false,
+      ownership: { owner: OWNER }, grouping: [{ group_key: 'collection', group_value: preorder.collection }],
+      content: { json_uri: preorderMetadataUri(preorder, 167) },
+    }] : []);
+  };
+  const pending = handleRequest(new Request(request('/inventory'), { signal: controller.signal }),
+    env({ commerceDb }), quietDependencies(providerFetch));
+  await recoveryStarted.promise;
+  controller.abort(new Error('Client disconnected during preorder recovery'));
+  assert.equal((await pending).status, 499);
 });

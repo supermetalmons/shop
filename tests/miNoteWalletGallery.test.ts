@@ -82,7 +82,7 @@ function holdings(withCard = true): MiNoteCardsResponse {
 }
 
 function gallery() {
-  return render(createElement(MiNoteCardsGallery, { onNotify: () => {} }));
+  return render(createElement(MiNoteCardsGallery));
 }
 
 async function connect(view: ReturnType<typeof gallery>) {
@@ -142,6 +142,7 @@ for (const withCard of [false, true]) {
     const requests = captureRequests();
     const view = gallery();
     await connect(view);
+    await waitFor(() => assert.equal(requests.length, 1));
     const partial = holdings(withCard);
     partial.resultsByContract[MI_NOTE_CONTRACT_ADDRESSES[1]] = { status: 'error', error: 'provider-timeout' };
     if (!withCard) partial.resultsByContract[MI_NOTE_CONTRACT_ADDRESSES[0]] = { status: 'error', error: 'provider-unavailable' };
@@ -150,7 +151,7 @@ for (const withCard of [false, true]) {
     assert.equal(view.queryByText('No Mi Note cards found.'), null);
     assert.deepEqual(view.queryAllByRole('img').map((image) => image.getAttribute('alt')), withCard ? [CARD.name] : []);
     fireEvent.click(view.getByRole('button', { name: 'Try again' }));
-    assert.equal(requests.length, 2);
+    await waitFor(() => assert.equal(requests.length, 2));
     await act(async () => requests[1].resolve(Response.json(holdings(withCard))));
     assert.equal(view.queryByRole('alert'), null);
     assert.equal(view.queryByRole('button', { name: 'Try again' }), null);

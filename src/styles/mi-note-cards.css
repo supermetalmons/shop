@@ -149,29 +149,105 @@
   text-underline-offset: 2px;
 }
 
-.mi-note-cards__notify {
-  position: fixed;
+.mi-note-cards__selectable {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 3px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+
+.mi-note-cards__selectable:hover:not(:disabled) {
+  background: transparent;
+}
+
+.mi-note-cards__selectable:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.mi-note-cards__selectable--selected,
+.mi-note-cards__selectable--selected:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.mi-note-cards__availability {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--mi-note-muted);
+}
+
+.mi-note-preorder-panel {
+  flex-wrap: wrap;
+  width: min(500px, calc(100vw - 32px));
   bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-  left: 50%;
-  z-index: 101;
-  transform: translateX(-50%);
-  min-height: 44px;
-  padding: 14px 36px;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  white-space: nowrap;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16);
 }
 
-.mi-note-cards__notify:focus-visible {
-  box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--accent);
+.mi-note-preorder-panel .selection-panel__left {
+  flex: 1;
 }
 
-@media (max-width: 480px), (max-height: 760px) {
-  .mi-note-cards__notify {
-    padding: 12px 28px;
-    font-size: 16px;
+.mi-note-preorder-panel__submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: auto;
+  min-width: 180px;
+  padding: 12px 18px;
+}
+
+.mi-note-preorder-panel__note,
+.mi-note-preorder-panel__error {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mi-note-preorder-panel__note {
+  color: var(--muted);
+}
+
+.mi-note-preorder-panel__error {
+  color: var(--fg);
+}
+
+@media (max-width: 480px) {
+  .mi-note-cards--selection {
+    padding-bottom: calc(210px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mi-note-preorder-panel {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mi-note-preorder-panel__submit {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .mi-note-preorder-panel .selection-panel__actions {
+    display: contents;
+  }
+
+  .mi-note-preorder-panel__note,
+  .mi-note-preorder-panel__error {
+    grid-column: 1 / -1;
   }
 }
 

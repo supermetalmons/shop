@@ -16,7 +16,7 @@ import {
   shopApiUtf8ByteLength,
 } from '../shared/shopApi.ts';
 import {
-  listShopCollectionQueryRuntimes,
+  shopDropById,
   transformShopInventoryItem,
 } from '../shared/shopDomain.ts';
 
@@ -99,7 +99,7 @@ test('DAS dude IDs must be positive and zero falls through or remains absent', (
     content: { json_uri: 'https://metadata.example/drop/rf0.json' },
   }), undefined);
 
-  const drop = listShopCollectionQueryRuntimes(false).find((entry) => entry.dropId === 'drifella_shirt');
+  const drop = shopDropById('drifella_shirt');
   assert.ok(drop);
   const item = transformShopInventoryItem({
     id: 'zero-dude-asset',
@@ -129,7 +129,7 @@ test('DAS URI parsing supplies kind and ids when attributes are absent', () => {
 });
 
 test('shop inventory normalizes malformed dude IDs and falls back to the metadata name', () => {
-  const drop = listShopCollectionQueryRuntimes(false).find((entry) => entry.dropId === 'drifella_shirt');
+  const drop = shopDropById('drifella_shirt');
   assert.ok(drop);
   const item = transformShopInventoryItem({
     id: 'dude-asset',
@@ -150,7 +150,7 @@ test('shop inventory normalizes malformed dude IDs and falls back to the metadat
 });
 
 test('shop inventory compacts metadata at exact UTF-8 boundaries', () => {
-  const drop = listShopCollectionQueryRuntimes(false).find((entry) => entry.dropId === 'drifella_shirt');
+  const drop = shopDropById('drifella_shirt');
   assert.ok(drop);
   const name = 'é'.repeat(SHOP_INVENTORY_NAME_MAX_UTF8_BYTES / 2);
   const rawImage = 'i'.repeat(SHOP_INVENTORY_RAW_IMAGE_MAX_UTF8_BYTES);
@@ -185,7 +185,7 @@ test('shop inventory compacts metadata at exact UTF-8 boundaries', () => {
 });
 
 test('shop inventory truncates names without splitting UTF-8 and omits oversized URLs and identifiers', () => {
-  const drop = listShopCollectionQueryRuntimes(false).find((entry) => entry.dropId === 'drifella_shirt');
+  const drop = shopDropById('drifella_shirt');
   assert.ok(drop);
   const item = transformShopInventoryItem({
     id: 'oversized-shop-asset',

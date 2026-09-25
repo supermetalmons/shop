@@ -127,6 +127,7 @@ import type { DeferredWork } from './deferredWork.js';
 import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import { MI_NOTE_CARDS_API_PATH } from '../../../../shared/miNoteCards.js';
 import { handleMiNoteCards } from './miNoteCards.js';
+import { handlePreorderRequest, PREORDER_PATHS } from './preorders.js';
 
 type WorkerRouteCorsPolicy =
   | 'none'
@@ -598,6 +599,18 @@ async function dispatchMiNoteCards(context: WorkerRouteContext): Promise<WorkerR
 }
 
 const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
+  ...PREORDER_PATHS.map((path) => exactRoute(path, path === '/preorders/availability' ? Object.freeze({
+    commerceMutation: false, cors: 'public', profileOriginGate: false, publicMethods: 'GET, OPTIONS',
+    staff: 'skip', unexpectedError: 'public',
+  }) : profilePolicy({ commerceMutation: true }), async (context) => {
+    const result = await handlePreorderRequest(context.request, context.env, context.authContext);
+    addMetrics(context.metrics, result);
+    const origin = path === '/preorders/availability' ? publicRequestOrigin(context.request) : null;
+    return {
+      response: origin ? applyPublicCors(result.response, origin, 'GET, OPTIONS') : result.response,
+      logFields: { profileAuthOutcome: result.authOutcome },
+    };
+  })),
   exactRoute('/health', INTERNAL_POLICY, dispatchHealth),
   exactRoute(
     MI_NOTE_CARDS_API_PATH,

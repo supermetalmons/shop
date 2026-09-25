@@ -407,18 +407,16 @@ test('StrictMode ignores the aborted initial request and displays the active res
   assert.deepEqual(result.current.cards, [COLLECTION_3.tokens[0]]);
 });
 
-test('address gallery keeps thumbnails and Notify me without wallet, loading, or empty UI', async () => {
+test('address gallery keeps thumbnails without notify, wallet, loading, or empty UI', async () => {
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
-  let notifications = 0;
-  const gallery = render(createElement(MiNoteCardsGallery, { onNotify: () => { notifications += 1; } }));
+  const gallery = render(createElement(MiNoteCardsGallery));
   assert.equal(gallery.queryAllByRole('img').length, 0);
   assert.equal(gallery.queryByRole('tablist'), null);
   assert.equal(gallery.queryByRole('status'), null);
   assert.equal(gallery.queryByRole('alert'), null);
   assert.equal(gallery.getByRole('main').textContent, '');
-  fireEvent.click(gallery.getByRole('button', { name: 'Notify me' }));
-  assert.equal(notifications, 1);
+  assert.equal(gallery.queryByRole('button', { name: 'Notify me' }), null);
 
   await act(async () => { requests[0].resolve(Response.json(holdings(['2'], ['2']))); });
   assert.equal(gallery.getAllByRole('img').length, 2);
@@ -428,14 +426,14 @@ test('address gallery keeps thumbnails and Notify me without wallet, loading, or
     assert.equal(image.getAttribute('loading'), 'lazy');
     assert.equal(image.getAttribute('decoding'), 'async');
   }
-  assert.equal(gallery.getAllByRole('button').length, 1);
+  assert.equal(gallery.queryAllByRole('button').length, 0);
 });
 
 for (const search of ['?address=', '?address=invalid', `?address=${ADDRESS}&address=${OTHER_ADDRESS}`]) {
   test(`gallery with ${search} stays empty without wallet controls or ownership requests`, () => {
     setSearch(search);
     const requests = captureRequests();
-    const gallery = render(createElement(MiNoteCardsGallery, { onNotify: () => undefined }));
+    const gallery = render(createElement(MiNoteCardsGallery));
     assert.equal(gallery.queryAllByRole('img').length, 0);
     assert.equal(gallery.queryByRole('tablist'), null);
     assert.equal(gallery.getByRole('main').textContent, '');
@@ -445,7 +443,7 @@ for (const search of ['?address=', '?address=invalid', `?address=${ADDRESS}&addr
 
 test('gallery query navigation clears cards, tracks navigation events, and restores the same random sample', async () => {
   const requests = captureRequests();
-  const gallery = render(createElement(MiNoteCardsGallery, { onNotify: () => undefined }));
+  const gallery = render(createElement(MiNoteCardsGallery));
   const randomSources = gallery.getAllByRole('img').map((image) => image.getAttribute('src'));
   assert.equal(randomSources.length, 300);
   assert.equal(requests.length, 0);
@@ -471,7 +469,7 @@ test('gallery query navigation clears cards, tracks navigation events, and resto
 
 test('All and Your tabs preserve the random sample and show the disconnected wallet action', () => {
   const requests = captureRequests();
-  const gallery = render(createElement(MiNoteCardsGallery, { onNotify: () => undefined }));
+  const gallery = render(createElement(MiNoteCardsGallery));
   const all = gallery.getByRole('tab', { name: 'All' });
   const yours = gallery.getByRole('tab', { name: 'Your' });
   const randomSources = gallery.getAllByRole('img').map((image) => image.getAttribute('src'));

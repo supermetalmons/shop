@@ -15,7 +15,7 @@ const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS = 600_000_000;
 const LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS = 500_000_000;
 
-export type DeliveryItemKind = 'box' | 'dude' | 'certificate';
+export type DeliveryItemKind = 'box' | 'dude' | 'certificate' | 'preorder';
 export type DeliveryItem = { kind: DeliveryItemKind };
 export type InvalidDeliveryUnitsPolicy = 'fallback-one' | 'arithmetic';
 
@@ -32,7 +32,7 @@ export function canDeliverItemKind(
   dropFamily: DropFamily | undefined,
   kind: DeliveryItemKind,
 ): boolean {
-  if (kind === 'certificate') return false;
+  if (kind === 'certificate' || kind === 'preorder') return false;
   return dropFamily !== 'clear_cards' || kind !== 'box';
 }
 

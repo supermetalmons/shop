@@ -245,16 +245,19 @@ export function useShopInventoryView({
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];
     const dudes: typeof visibleInventory = [];
+    const preorders: typeof visibleInventory = [];
     visibleInventory.forEach((item) => {
       if (pendingRevealIds.has(item.id)) return;
       if (item.kind === 'box') boxes.push(item);
       else if (item.kind === 'dude') dudes.push(item);
+      else if (item.kind === 'preorder') preorders.push(item);
     });
     return [
       ...pendingRevealItems,
       ...localMintedItems,
       ...moveLittleSwagBoxesFamilyToEnd(boxes),
       ...moveLittleSwagBoxesFamilyToEnd(dudes),
+      ...preorders,
     ];
   }, [visibleInventory, pendingRevealIds, pendingRevealItems, localMintedItems]);
 

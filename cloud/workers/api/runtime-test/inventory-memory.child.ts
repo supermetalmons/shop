@@ -6,7 +6,7 @@ import {
   HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
 } from '../../../../shared/heliusDas.js';
-import { listShopCollectionQueryRuntimes } from '../../../../shared/shopDomain.js';
+import { shopDropById, listShopInventoryCollectionScopes } from '../../../../shared/shopDomain.js';
 import type { ProviderFetch } from '../src/publicRouteSupport.js';
 import { MAX_INVENTORY_RESPONSE_BODY_BYTES } from '../src/inventoryLimits.js';
 import { loadApiWorkerIndex } from '../test/cloudflareWorkersTestLoader.js';
@@ -21,8 +21,8 @@ const ATTRIBUTE_PADDING_BYTES = 28_000;
 const TARGET_RAW_BYTES_MIN = 50 * MIB;
 const TARGET_RAW_BYTES_MAX = 60 * MIB;
 const owner = bs58.encode(new Uint8Array(32).fill(7));
-const scopes = listShopCollectionQueryRuntimes(true);
-const targetScopeCandidate = scopes.find((scope) => scope.dropId === 'card_nft_2');
+const scopes = listShopInventoryCollectionScopes(true);
+const targetScopeCandidate = shopDropById('card_nft_2');
 if (!targetScopeCandidate) throw new Error('Missing card_nft_2 inventory scope');
 const targetScope = targetScopeCandidate;
 const padding = 'x'.repeat(ATTRIBUTE_PADDING_BYTES);
@@ -170,6 +170,8 @@ const env: Env = {
   STRIPE_RECEIPT_CLAIM_WORKFLOW: {} as Env['STRIPE_RECEIPT_CLAIM_WORKFLOW'],
   STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: 'false',
   STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PREORDER_PREPARE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PREORDER_PREPARE_IP_RATE_LIMITER: { limit: async () => ({ success: true }) },
   STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   ANONYMOUS_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   PUBLIC_RPC_READ_RATE_LIMITER: { limit: async () => ({ success: true }) },

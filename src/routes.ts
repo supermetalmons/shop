@@ -121,6 +121,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
   if (path === '/mi_note_cards') return createRoute('mi-note-cards', path, replacementHref);
+  if (path === '/mi_note_cards_devnet') return createRoute('mi-note-cards', path, replacementHref, { walletCluster: 'devnet' });
 
   const wipRoute = WIP_ROUTE_BY_PATH.get(path);
   if (wipRoute) {

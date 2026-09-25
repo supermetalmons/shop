@@ -53,6 +53,7 @@ function commerceReconcilers(calls: string[] = []): Omit<ScheduledReconcilers, '
     stripeNotifications: async () => { calls.push('stripeNotifications'); return 0; },
     shippedNotifications: async () => { calls.push('shippedNotifications'); return 0; },
     receiptClaims: async () => { calls.push('receiptClaims'); return 0; },
+    preorders: async () => { calls.push('preorders'); return 0; },
   };
 }
 
@@ -165,7 +166,7 @@ test('OPS cleanup runs while commerce authority is pending', async () => {
   assert.deepEqual(commerceCalls, []);
   authority.resolve({ authority_state: 'd1', revision: 1, documents_revision: 0 });
   await reconciliation;
-  assert.equal(commerceCalls.length, 6);
+  assert.equal(commerceCalls.length, 7);
 });
 
 test('commerce authority failure waits for independent OPS cleanup and retains both failures', async () => {

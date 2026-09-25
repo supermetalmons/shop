@@ -162,6 +162,10 @@ export type AuthenticatedApiPath =
   | typeof ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH
   | '/admin/irl-redeem/prepare'
   | '/boxes/reveal'
+  | '/preorders/prepare'
+  | '/preorders/submit'
+  | '/preorders/cancel'
+  | '/preorders/status'
   | '/checkout/session'
   | '/claims/irl/prepare'
   | '/receipts/stripe/claim'
@@ -228,6 +232,7 @@ const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
+  if (pathname.startsWith('/preorders/')) return 65_000;
   if (pathname === '/auth/solana' || pathname === '/profile/addresses') return PROFILE_D1_WRITE_API_TIMEOUT_MS;
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;

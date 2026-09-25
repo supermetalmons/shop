@@ -81,7 +81,7 @@ async function postShopApi(
 }
 
 function normalizeInventoryItem(item: ShopInventoryItem): InventoryItem {
-  const image = item.kind === 'dude'
+  const image = item.kind === 'preorder' ? item.rawImage : item.kind === 'dude'
     ? normalizeFigureDisplayImage(item.dropId, item.rawImage, item.dudeId)
     : item.kind === 'certificate'
       ? normalizeCertificateDisplayImage({
@@ -99,6 +99,7 @@ function normalizeInventoryItem(item: ShopInventoryItem): InventoryItem {
     image,
     ...(item.boxId ? { boxId: item.boxId } : {}),
     ...(item.dudeId != null ? { dudeId: item.dudeId } : {}),
+    ...(item.preorderId != null ? { preorderId: item.preorderId } : {}),
   };
 }
 

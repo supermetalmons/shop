@@ -37,6 +37,22 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+const PREORDER_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
+  commerce_preorder_active_buyer: ['index', '62c6e4e10fd71b65ccfd45702c7fe845ff40d6becb0d664287b851e1d11182f9'],
+  commerce_preorder_claim_delete_guard: ['trigger', 'c03a4679962423ee89162c6062f495b728e2d7707719a64292032106b6487171'],
+  commerce_preorder_claim_insert_guard: ['trigger', '2abb7dcf123eabfadd5b47a69ffbcbbc16acec0b8b53c6afba6aab6ed7a41925'],
+  commerce_preorder_claim_order: ['index', 'cf3aa0bd6370b9cba5499fab1899a82fdcb9f2f3bd726c039bf04d68855878e7'],
+  commerce_preorder_claim_update_guard: ['trigger', 'eee762df423788dc074157fd8d165895eb18ef2a0fe69c5dbb0a79b5916fb5fc'],
+  commerce_preorder_claims: ['table', '5b84bb81921235c72db786700f4296f6bbf0142094e39914834173db2697846d'],
+  commerce_preorder_order_delete_guard: ['trigger', '79e571b7d902d063e2e4e34a5f4a63b143edd12d0faca92bcdb09febc8199b83'],
+  commerce_preorder_order_insert_guard: ['trigger', 'a95495a3aef956980da027a5bb897b35a2b6cb8007421db9b0d9ecb4411eb622'],
+  commerce_preorder_order_update_guard: ['trigger', 'b9bb7da4d56951516074f191182e47622f2a3aaef9ebdb018eb3d527b2df35a7'],
+  commerce_preorder_orders: ['table', 'bd3b74ed4d0360609d6f47698b32c1e1b7d10f43fd349ecb3fd2481a593fbc5a'],
+  commerce_preorder_reconciliation: ['index', '6605760dce8f5eb7f4a52dba4bac4390491a6ccf4a6d7db8818efd4fdf13e7bb'],
+});
+const PREORDER_BUYER_INDEX_FINGERPRINT = '03d0921e2fe4834a986d2d2aae6dc1b2ba40d323a5f5c146f061af7db60c90f9';
+const PREORDER_EXPIRY_INDEX_FINGERPRINT = '6e75d815ecd1bd2ed85f545e17b0b5c212259dfbb7c59e2c29040b16a4d5ac01';
+
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
   commerce_notification_legacy_insert_fence: ['trigger', '0dbe842e565314c6247a3e8d9a6717daa1df00840f0bc061e5acde00179ed0bf'],
@@ -260,7 +276,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 17) ||
+    (migrations.length < 13 || migrations.length > 20) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -277,7 +293,10 @@ export function checkCommerceD1(
     (migrations.length >= 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql') ||
     (migrations.length >= 15 && migrations[14].name !== '0015_manual_review_pagination.sql') ||
     (migrations.length >= 16 && migrations[15].name !== '0016_shipment_history_pagination.sql') ||
-    (migrations.length >= 17 && migrations[16].name !== '0017_receipt_claim_workflow.sql')
+    (migrations.length >= 17 && migrations[16].name !== '0017_receipt_claim_workflow.sql') ||
+    (migrations.length >= 18 && migrations[17].name !== '0018_preorders.sql') ||
+    (migrations.length >= 19 && migrations[18].name !== '0019_preorder_buyer_index.sql') ||
+    (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -295,6 +314,29 @@ export function checkCommerceD1(
   }
   const receiptClaimWorkflowReady = migrations.some((migration) => migration.name === '0017_receipt_claim_workflow.sql');
   if (options.forDeployment && !receiptClaimWorkflowReady) fail('Commerce D1 receipt claim Workflow migration is required for deployment.');
+
+  const preordersReady = migrations.some((migration) => migration.name === '0018_preorders.sql');
+  if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
+  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(PREORDER_SCHEMA_FINGERPRINTS)) {
+    const schema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Commerce D1 preorder schema ${name} is invalid.`);
+  }
+  const preorderBuyerIndexReady = migrations.some((migration) => migration.name === '0019_preorder_buyer_index.sql');
+  if (options.forDeployment && !preorderBuyerIndexReady) fail('Commerce D1 preorder buyer index migration is required for deployment.');
+  if (preorderBuyerIndexReady) {
+    const schema = queryRemoteCommerceD1("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'commerce_preorder_succeeded_buyer'");
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== PREORDER_BUYER_INDEX_FINGERPRINT) {
+      fail('Commerce D1 preorder buyer index is invalid.');
+    }
+  }
+  const preorderExpiryIndexReady = migrations.some((migration) => migration.name === '0020_preorder_expiry_index.sql');
+  if (options.forDeployment && !preorderExpiryIndexReady) fail('Commerce D1 preorder expiry index migration is required for deployment.');
+  if (preorderExpiryIndexReady) {
+    const schema = queryRemoteCommerceD1("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'commerce_preorder_prepared_expiry'");
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== PREORDER_EXPIRY_INDEX_FINGERPRINT) {
+      fail('Commerce D1 preorder expiry index is invalid.');
+    }
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -314,6 +356,7 @@ export function checkCommerceD1(
     'commerce_notification_outbox_control',
     'commerce_notification_outbox_pending_owners',
     'commerce_notification_outbox_stripe_due',
+    ...(preordersReady ? ['commerce_preorder_claims', 'commerce_preorder_orders'] : []),
     'commerce_wipe_guards',
     'stripe_order_disputes',
   ];
@@ -497,6 +540,7 @@ export function checkCommerceD1(
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
+    ...(preordersReady ? Object.entries(PREORDER_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     'commerce_authority_transition_guard',
     'commerce_authority_update_guard',
     'commerce_authority_delete_guard',

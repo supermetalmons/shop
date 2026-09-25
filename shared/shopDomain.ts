@@ -21,6 +21,7 @@ import {
   normalizePendingOpenDudeCount,
 } from './pendingOpenCodec.ts';
 import type { SolanaCluster } from './deploymentCore.ts';
+import { PREORDER_CONFIGS, preorderIdFromMetadataUri, preorderImageUrl } from './preorders.ts';
 import {
   SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
   SHOP_INVENTORY_NAME_MAX_UTF8_BYTES,
@@ -146,8 +147,20 @@ export function listUniqueInventoryCollectionScopes<T extends Pick<InventoryDrop
   return scopes;
 }
 
-export function listShopCollectionQueryRuntimes(includeDevnet = false): ShopDropRuntime[] {
+function listShopCollectionQueryRuntimes(includeDevnet = false): ShopDropRuntime[] {
   return listUniqueInventoryCollectionScopes(listShopDropRuntimes(includeDevnet));
+}
+
+export type ShopInventoryCollectionScope = Pick<ShopDropRuntime, 'solanaCluster' | 'collectionMint'>;
+
+export function listShopInventoryCollectionScopes(includeDevnet = false): ShopInventoryCollectionScope[] {
+  return listUniqueInventoryCollectionScopes<ShopInventoryCollectionScope>([
+    ...listShopCollectionQueryRuntimes(includeDevnet),
+    ...PREORDER_CONFIGS.filter((config) => config.enabled).map((config) => ({
+      solanaCluster: config.cluster,
+      collectionMint: config.collection,
+    })),
+  ]);
 }
 
 export function listShopPendingOpenProgramScopes(includeDevnet = false): PendingOpenProgramScope[] {
@@ -209,6 +222,21 @@ function resolveShopAssetDropId(asset: DasAsset, cluster?: SolanaCluster): strin
 
 export function transformShopInventoryItem(asset: DasAsset, cluster?: SolanaCluster): ShopInventoryItem | null {
   if (dasAssetLooksBurntOrClosed(asset, BURN_POLICY)) return null;
+  const collection = uniqueAssetGroupingCollectionMint(asset);
+  const preorder = PREORDER_CONFIGS.find((config) =>
+    config.enabled && config.cluster === cluster && config.collection === collection);
+  if (preorder) {
+    const preorderId = preorderIdFromMetadataUri(preorder, dasAssetMetadataUri(asset));
+    if (preorderId === null || asset.interface !== 'MplCoreAsset' || asset.burnt !== false || typeof asset.id !== 'string' || !asset.id) return null;
+    return {
+      id: asset.id,
+      dropId: preorder.preorderId,
+      name: `Preorder #${preorderId}`,
+      kind: 'preorder',
+      preorderId,
+      rawImage: preorderImageUrl(preorder, preorderId),
+    };
+  }
   const kind = dasAssetKind(asset, NAME_POLICY);
   if (!kind) return null;
   const dropId = resolveShopAssetDropId(asset, cluster);

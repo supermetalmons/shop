@@ -212,6 +212,9 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0017_receipt_claim_workflow.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0018_preorders.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0019_preorder_buyer_index.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0020_preorder_expiry_index.sql', 'utf8'));
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
   return {
     database,

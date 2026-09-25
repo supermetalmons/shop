@@ -12,6 +12,7 @@ type ShopSelectionBarProps = Pick<ShopInventorySelection,
   | 'canViewSelected'
   | 'canOpenSelected'
   | 'canShipSelected'
+  | 'hasPreorderSelected'
   | 'selectedBox'
 > & {
   clearSelection: () => void;
@@ -29,6 +30,7 @@ export function ShopSelectionBar({
   canViewSelected,
   canOpenSelected,
   canShipSelected,
+  hasPreorderSelected,
   selectedBox,
   clearSelection,
   handleViewSelectedItem,
@@ -121,7 +123,15 @@ export function ShopSelectionBar({
               <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
             </button>
           ) : null}
-          {canShipSelected ? (
+          {hasPreorderSelected ? (
+            <>
+              <button type="button" className="selection-panel__ship" disabled aria-describedby="preorder-shipping-soon">
+                <FaPlane aria-hidden="true" focusable="false" size={16} />
+                <span>Send</span>
+              </button>
+              <span id="preorder-shipping-soon">Soon</span>
+            </>
+          ) : canShipSelected ? (
             <button
               type="button"
               className="selection-panel__ship"

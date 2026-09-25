@@ -43,9 +43,51 @@ const migrationNames = [
   '0015_manual_review_pagination.sql',
   '0016_shipment_history_pagination.sql',
   '0017_receipt_claim_workflow.sql',
+  '0018_preorders.sql',
+  '0019_preorder_buyer_index.sql',
+  '0020_preorder_expiry_index.sql',
 ] as const;
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 = 17): DatabaseSync {
+test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
+  const previous = currentDatabase(false, 17);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /preorder migration/);
+  previous.close();
+  for (const [type, name] of [['index', 'commerce_preorder_active_buyer'], ['trigger', 'commerce_preorder_claim_delete_guard']] as const) {
+    const database = currentDatabase(false);
+    database.exec(`DROP ${type} ${name}`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
+    database.close();
+  }
+});
+
+test('preorder buyer index is required for deployment and its definition is verified', () => {
+  const previous = currentDatabase(false, 18);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /preorder buyer index migration/);
+  previous.close();
+  const database = currentDatabase(false);
+  database.exec('DROP INDEX commerce_preorder_succeeded_buyer');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder buyer index is invalid/);
+  database.exec('CREATE INDEX commerce_preorder_succeeded_buyer ON commerce_preorder_orders (buyer)');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder buyer index is invalid/);
+  database.close();
+});
+
+test('preorder expiry index is required for deployment and its definition is verified', () => {
+  const previous = currentDatabase(false, 19);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /preorder expiry index migration/);
+  previous.close();
+  const database = currentDatabase(false);
+  database.exec('DROP INDEX commerce_preorder_prepared_expiry');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder expiry index is invalid/);
+  database.exec('CREATE INDEX commerce_preorder_prepared_expiry ON commerce_preorder_orders (expires_at_ms)');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder expiry index is invalid/);
+  database.close();
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 = 20): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

@@ -38,6 +38,16 @@
 	],
 	"ratelimits": [
 		{
+			"name": "PREORDER_PREPARE_RATE_LIMITER",
+			"namespace_id": "2185819631",
+			"simple": { "limit": 10, "period": 60 }
+		},
+		{
+			"name": "PREORDER_PREPARE_IP_RATE_LIMITER",
+			"namespace_id": "2185819632",
+			"simple": { "limit": 30, "period": 60 }
+		},
+		{
 			"name": "STAFF_AUTH_CHALLENGE_RATE_LIMITER",
 			"namespace_id": "1142143110",
 			"simple": {

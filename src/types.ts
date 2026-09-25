@@ -62,7 +62,7 @@ export type {
 export { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../shared/contracts';
 export type { ShipStationPackageInput } from '../shared/shipstationPackage';
 
-type AssetKind = 'box' | 'dude' | 'certificate';
+type AssetKind = 'box' | 'dude' | 'certificate' | 'preorder';
 
 export type PreviewVideoSource = {
   src: string;
@@ -84,6 +84,7 @@ export interface InventoryItem {
   attributes?: { trait_type: string; value: string }[];
   boxId?: string;
   dudeId?: number;
+  preorderId?: number;
   assignedDudes?: string[];
   status?: 'minted' | 'opened' | 'delivered' | 'pending';
 }
