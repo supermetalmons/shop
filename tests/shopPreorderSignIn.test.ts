@@ -103,17 +103,17 @@ function rig() {
       showToast: (message) => { messages.push(message); },
       isUserRejectedError: () => false,
     });
-    const preorder = usePreorderCheckout({
-      config, active: props.scopeKey === initial.scopeKey, buyer: connectedWallet, signedIn: authenticated,
-      ensureSignedIn: signIn.ensureSignedIn,
-      signTransaction: publicKey ? async (tx) => { calls.transactionSign += 1; tx.sign([payer]); return tx; } : undefined,
-      onSucceeded: () => {},
-    }, api);
     const continuation = useShopActionContinuation({
       connectedWallet, scopeKey: props.scopeKey,
       ensureSignedIn: signIn.ensureSignedIn, ensureWalletConnected: signIn.ensureWalletConnected,
       showToast: (message) => { messages.push(message); },
     });
+    const preorder = usePreorderCheckout({
+      config, active: props.scopeKey === initial.scopeKey, buyer: connectedWallet, signedIn: authenticated,
+      ensureSignedIn: continuation.ensureActionSignedIn,
+      signTransaction: publicKey ? async (tx) => { calls.transactionSign += 1; tx.sign([payer]); return tx; } : undefined,
+      onSucceeded: () => {},
+    }, api);
     const handlers = useShopActionHandlers({
       continuation, preorder, owner: connectedWallet, routeDropId: config.preorderId,
       blockViewerModeAction: () => false,

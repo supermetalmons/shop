@@ -162,7 +162,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     buyer: connectedWallet,
     signedIn: isSignedInWallet,
     signTransaction: wallet.signTransaction,
-    ensureSignedIn: signIn.ensureSignedIn,
+    ensureSignedIn: continuation.ensureActionSignedIn,
     onSucceeded: () => {
       showSuccessHud('Preordered');
       void queries.refreshInventoryAfterMint();
@@ -186,7 +186,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     figureMetadataByKey: inventorySource.figureMetadataByKey,
     refetchInventory: queries.refetchInventory,
     refetchPendingOpenBoxes: queries.refetchPendingOpenBoxes,
-    ensureSignedIn: signIn.ensureSignedIn,
+    ensureSignedIn: continuation.ensureActionSignedIn,
     openWalletModal: () => setVisible(true),
     showToast, blockViewerModeAction,
     sendAndConfirmViaConnection: transactions.sendAndConfirmViaConnection,
@@ -269,7 +269,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const deliveryActions = useDeliveryActions({
     prepared, modals, recovery, connectedWallet, publicKey,
     connectedWalletRef, ownerRef,
-    ensureSignedIn: signIn.ensureSignedIn,
+    ensureSignedIn: continuation.ensureActionSignedIn,
     blockViewerModeAction,
     selected: selection.selected,
     replaceSelection: selectionState.replaceSelection,
@@ -292,7 +292,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const claimActions = useClaimActions({
     prepared, modals, receiptState, recovery, presentConfirmedNumericClaim,
     connectedWallet, publicKey, connectedWalletRef, owner, ownerRef,
-    ensureSignedIn: signIn.ensureSignedIn,
+    ensureSignedIn: continuation.ensureActionSignedIn,
     blockViewerModeAction,
     inventory: queries.inventory,
     refetchInventory: queries.refetchInventory,
@@ -304,7 +304,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   });
   const receiptActions = useReceiptActions({
     wallet, modals, receiptState, connectedWallet, publicKey, connectedWalletRef, owner,
-    ensureSignedIn: signIn.ensureSignedIn,
+    ensureSignedIn: continuation.ensureActionSignedIn,
     blockViewerModeAction, isSignedInWallet,
     getDropConfig: drop.getDropConfig,
     requireKnownDropConfig: drop.requireKnownDropConfig,

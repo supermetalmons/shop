@@ -75,6 +75,20 @@ export function useShopActionContinuation(options: ShopActionContinuationOptions
     if (operation.stage !== 'running') release(operation);
   }, [release]);
 
+  const ensureActionSignedIn = useCallback(async (): Promise<boolean> => {
+    const operation = active.current;
+    if (!operation || operation.stage !== 'running') return false;
+    const isCurrent = () => mounted.current && active.current === operation &&
+      !operation.controller.signal.aborted && operation.scopeKey === latest.current.scopeKey &&
+      operation.wallet === latest.current.connectedWallet && operation.isCurrent();
+    if (!isCurrent()) return false;
+    const signedIn = await latest.current.ensureSignedIn({
+      signal: operation.controller.signal,
+      expectedWallet: operation.expectedWallet ?? operation.wallet,
+    });
+    return signedIn && isCurrent();
+  }, []);
+
   useEffect(() => {
     mounted.current = true;
     const cancelWaitingAction = () => {
@@ -237,5 +251,5 @@ export function useShopActionContinuation(options: ShopActionContinuationOptions
     return result;
   }, [cancel, release]);
 
-  return { pendingAction, run, cancel };
+  return { pendingAction, run, cancel, ensureActionSignedIn };
 }
