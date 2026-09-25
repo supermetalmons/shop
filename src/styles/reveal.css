@@ -613,6 +613,7 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
 }
 
@@ -627,7 +628,8 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   padding: clamp(8px, 2vmin, 24px);
 }
 
-.receipt-viewer-overlay--shipment-figure .receipt-viewer-overlay__image-shell {
+.receipt-viewer-overlay--shipment-figure .receipt-viewer-overlay__image-shell,
+.receipt-viewer-overlay--preorder .receipt-viewer-overlay__image-shell {
   box-sizing: border-box;
   padding: clamp(10px, 2.5vmin, 28px);
 }
@@ -648,6 +650,12 @@ button.clear-card-reveal-overlay__retry:focus-visible {
 .receipt-viewer-overlay__image--placeholder {
   border-style: dashed;
   background: rgba(255, 255, 255, 0.12);
+}
+
+.receipt-viewer-overlay--preorder img.receipt-viewer-overlay__image {
+  width: auto;
+  height: auto;
+  border-radius: var(--interactive-card-radius);
 }
 
 .receipt-viewer-overlay__controls {

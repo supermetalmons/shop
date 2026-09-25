@@ -38,7 +38,7 @@ import {
 } from '../reveal';
 import { isUserRejectedError } from '../commerce/transactionSupport';
 import type { InventoryItem } from '../../types';
-import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
+import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
 import { pickRandomSoundUrl } from './sounds';
 import type { EarlyClearCardRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
@@ -132,12 +132,15 @@ export function useShopReveal(options: ShopRevealOptions) {
     presentRevealOverlay(nextOverlay);
   };
 
-  const findInventoryRect = (id: string) => {
+  const findInventoryElement = (id: string) => {
     if (typeof document === 'undefined') return null;
     const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/"/g, '\\"');
-    const el = document.querySelector<HTMLElement>(`[data-inventory-id="${safeId}"]`);
-    if (!el) return null;
-    return getInventoryRevealRect(el);
+    return document.querySelector<HTMLElement>(`[data-inventory-id="${safeId}"]`);
+  };
+
+  const findInventoryRect = (id: string) => {
+    const el = findInventoryElement(id);
+    return el ? getInventoryRevealRect(el) : null;
   };
 
   const handleStartOpenBox = async (item: InventoryItem) => {
@@ -843,6 +846,16 @@ export function useShopReveal(options: ShopRevealOptions) {
   const viewItem = useCallback((selectedViewableItem: InventoryItem) => {
     if (!selectedViewableItem) return;
     const originRect = findInventoryRect(selectedViewableItem.id);
+    if (selectedViewableItem.kind === 'preorder') {
+      const element = findInventoryElement(selectedViewableItem.id);
+      const preview = element ? getRenderedImagePreview(element, selectedViewableItem.image) : { src: selectedViewableItem.image };
+      if (openImageViewer({ ...selectedViewableItem, image: preview.src }, originRect, {
+        aspectRatio: preview.aspectRatio,
+        size: 'preorder',
+        unavailableMessage: 'Preorder image unavailable',
+      })) clearInventorySelection();
+      return;
+    }
     if (selectedViewableItem.kind === 'box') {
       openClearCardModelViewer({
         overlayId: selectedViewableItem.id,
@@ -880,8 +893,11 @@ export function useShopReveal(options: ShopRevealOptions) {
       clearSelection: true,
     });
   }, [
+    clearInventorySelection,
+    findInventoryElement,
     findInventoryRect,
     openClearCardModelViewer,
+    openImageViewer,
     openInteractiveCardViewer,
     usesClearCard3dRevealForDropId,
   ]);

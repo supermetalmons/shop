@@ -222,6 +222,7 @@ export function useShopInventorySelection({
   const selectedViewableItem = useMemo(() => {
     const item = selectedCount === 1 ? selectedItems[0] : null;
     if (!item) return null;
+    if (item.kind === 'preorder') return item;
     if (item.kind === 'box') {
       return usesClearCard3dRevealForDropId(item.dropId) ? item : null;
     }

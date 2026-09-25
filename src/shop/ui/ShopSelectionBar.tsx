@@ -124,13 +124,10 @@ export function ShopSelectionBar({
             </button>
           ) : null}
           {hasPreorderSelected ? (
-            <>
-              <button type="button" className="selection-panel__ship" disabled aria-describedby="preorder-shipping-soon">
-                <FaPlane aria-hidden="true" focusable="false" size={16} />
-                <span>Send</span>
-              </button>
-              <span id="preorder-shipping-soon">Soon</span>
-            </>
+            <button type="button" className="selection-panel__ship" disabled>
+              <FaPlane aria-hidden="true" focusable="false" size={16} />
+              <span>Soon</span>
+            </button>
           ) : canShipSelected ? (
             <button
               type="button"

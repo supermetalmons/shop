@@ -100,13 +100,18 @@ even if its NFT is later transferred or burned.
 Reserved gallery cards keep their original artwork, display a muted Reserved
 label, and cannot be selected until the reservation is lifted. Only successfully
 minted preorders display preorder artwork after finalized confirmation. Purchased
-assets appear in owner inventory, with Send disabled and Soon beside it. The
-devnet preorder collection is public in inventory; other devnet collections keep
+assets appear in owner inventory with a disabled Soon button and plane icon.
+Selecting one preorder also offers View, which opens its full image over a
+blurred background. The devnet preorder collection is public in inventory;
+other devnet collections keep
 their existing visibility rules. Preorder configuration lives in
 `shared/preorders.ts`, separately from ordinary pack drops. Metadata uses
 `https://cdn.lil.org/nft/mi_note_cards/preorder/json/<id>.json`; its numeric ID is
 the source catalog's `clean_card_id`. Generated local metadata copies have been
 removed after verifying the hosted set.
+
+Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
+gallery. Available and reserved gallery artwork keeps its original corners.
 
 Deployment requires commerce migrations through `0020_preorder_expiry_index.sql` and the API release
 before deploying the frontend. The normal API deployment command applies the

@@ -208,12 +208,13 @@ export default function MiNoteCardsGallery({ preorder }: MiNoteCardsGalleryProps
           <div className="mi-note-cards__grid">
             {cards.map((card) => {
               const availabilityStatus = availability.get(card.clean_card_id);
+              const isPreordered = preorderEnabled && availabilityStatus === 'preordered';
               const unavailable = availabilityStatus === 'reserved' || availabilityStatus === 'preordered';
               const isSelected = selected.includes(card.clean_card_id);
               const image = (
                 <img
-                  className="mi-note-cards__image"
-                  src={preorderEnabled && availabilityStatus === 'preordered' ? preorderImageUrl(preorder!.config, card.clean_card_id) : card.mid.replace('/mid/', '/thumbs/')}
+                  className={`mi-note-cards__image${isPreordered ? ' mi-note-cards__image--preordered' : ''}`}
+                  src={isPreordered ? preorderImageUrl(preorder!.config, card.clean_card_id) : card.mid.replace('/mid/', '/thumbs/')}
                   alt={card.name}
                   loading="lazy"
                   decoding="async"
@@ -221,6 +222,7 @@ export default function MiNoteCardsGallery({ preorder }: MiNoteCardsGalleryProps
                   onDragStart={(event) => event.preventDefault()}
                 />
               );
+              const artwork = isPreordered ? <span className="mi-note-cards__preorder-artwork">{image}</span> : image;
               return (
               <figure key={card.mid} className="mi-note-cards__item">
                 {preorderEnabled ? (
@@ -234,9 +236,9 @@ export default function MiNoteCardsGallery({ preorder }: MiNoteCardsGalleryProps
                       ? current.filter((id) => id !== card.clean_card_id)
                       : [...current, card.clean_card_id])}
                   >
-                    {image}
+                    {artwork}
                   </button>
-                ) : image}
+                ) : artwork}
                 <figcaption className="mi-note-cards__name">
                   <a
                     className="mi-note-cards__link"

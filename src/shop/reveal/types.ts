@@ -21,7 +21,7 @@ export type ReceiptViewerImageShellStyle = CSSProperties & { '--receipt-viewer-c
 
 export type OverlayRect = { left: number; top: number; width: number; height: number; };
 
-export type ImageViewerSize = 'receipt' | 'shipment' | 'shipment-figure';
+export type ImageViewerSize = 'receipt' | 'shipment' | 'shipment-figure' | 'preorder';
 
 export type RevealOverlayState = {
   id: string;

@@ -33,14 +33,15 @@ function calcReceiptViewerTargetRect(
   size: ImageViewerSize = 'receipt',
 ): OverlayRect {
   const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const figureSize = size === 'shipment-figure' || size === 'preorder';
   const maxWidth =
-    size === 'shipment-figure'
+    figureSize
       ? Math.min(viewportWidth * 0.86, 760)
       : size === 'shipment'
         ? Math.min(viewportWidth * 0.82, 640)
         : Math.min(viewportWidth * 0.84, 620);
   const maxHeight =
-    size === 'shipment-figure'
+    figureSize
       ? Math.min(viewportHeight * 0.72, 660)
       : size === 'shipment'
         ? Math.min(viewportHeight * 0.72, 640)
@@ -82,7 +83,7 @@ export function calcRevealTargetRectForRendererInViewport(
 }
 
 export function getRenderedImagePreview(root: HTMLElement, fallback?: string): { src?: string; aspectRatio?: number; } {
-  const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden])');
+  const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden]), img.inventory__image:not([hidden])');
   const src = String(image?.currentSrc || image?.src || '').trim();
   const naturalAspectRatio =
     image && image.naturalWidth > 0 && image.naturalHeight > 0

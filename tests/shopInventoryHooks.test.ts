@@ -18,7 +18,7 @@ import {
 import type { RevealOverlayState } from '../src/shop/reveal/types.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
-const { act, cleanup, render, renderHook, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { WalletContext } = await import('@solana/wallet-adapter-react');
 const { useShopInventoryQueries } = await import('../src/shop/inventory/useShopInventoryQueries.ts');
@@ -126,12 +126,13 @@ function useInventoryHarness({ options, views, viewOptions, selectionOptions }: 
   return { source, view, selection, state };
 }
 
-test('preorders remain selectable inventory with shipping, viewing, and unpacking disabled', () => {
+test('a single preorder can be viewed while its Soon button keeps shipping disabled', () => {
   const preorder: InventoryItem = {
     id: 'preorder-1', dropId: 'mi_note_cards_devnet', name: 'Preorder #1', kind: 'preorder',
     preorderId: 1, image: 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1.webp',
   };
-  const options = sourceOptions({ inventory: [preorder, box('regular')] });
+  const otherPreorder = { ...preorder, id: 'preorder-2', preorderId: 2, name: 'Preorder #2' };
+  const options = sourceOptions({ inventory: [preorder, otherPreorder, box('regular')] });
   const { result } = renderHook(() => useInventoryHarness({ options }));
   assert.ok(result.current.view.inventoryItems.some((item) => item.id === preorder.id && item.image === preorder.image));
   act(() => result.current.selection.toggleSelected(preorder.id));
@@ -139,18 +140,33 @@ test('preorders remain selectable inventory with shipping, viewing, and unpackin
   assert.equal(result.current.selection.hasPreorderSelected, true);
   assert.equal(result.current.selection.canShipSelected, false);
   assert.equal(result.current.selection.canOpenSelected, false);
-  assert.equal(result.current.selection.canViewSelected, false);
+  assert.equal(result.current.selection.canViewSelected, true);
+  assert.equal(result.current.selection.selectedViewableItem?.id, preorder.id);
   assert.equal(result.current.selection.canShowAdminIrlRedeem, false);
-  const bar = render(createElement(ShopSelectionBar, {
+  let viewed = 0;
+  const barProps = {
     ...result.current.selection,
-    clearSelection: () => {}, handleViewSelectedItem: () => {}, handleOpenSelectedBox: () => {},
+    clearSelection: () => {}, handleViewSelectedItem: () => { viewed += 1; }, handleOpenSelectedBox: () => {},
     handleOpenShip: () => { throw new Error('Preorder shipping must stay disabled'); },
     startOpenLoading: null, openActionProgressForDropId: () => 'Opening', openActionLabelForDropId: () => 'Open',
-  }));
-  assert.equal((bar.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, true);
-  assert.ok(bar.getByText('Soon'));
-  act(() => result.current.state.replaceSelection([preorder.id, 'regular']));
-  assert.equal(result.current.selection.canShipSelected, false);
+  };
+  const bar = render(createElement(ShopSelectionBar, barProps));
+  const soon = bar.getByRole('button', { name: 'Soon' }) as HTMLButtonElement;
+  assert.equal(soon.disabled, true);
+  assert.ok(soon.querySelector('svg'));
+  assert.equal(soon.hasAttribute('aria-describedby'), false);
+  assert.equal(bar.getAllByText('Soon').length, 1);
+  assert.equal(bar.queryByRole('button', { name: 'Send' }), null);
+  fireEvent.click(soon);
+  fireEvent.click(bar.getByRole('button', { name: 'View' }));
+  assert.equal(viewed, 1);
+  for (const ids of [[preorder.id, otherPreorder.id], [preorder.id, 'regular']]) {
+    act(() => result.current.state.replaceSelection(ids));
+    assert.equal(result.current.selection.canShipSelected, false);
+    assert.equal(result.current.selection.canViewSelected, false);
+    bar.rerender(createElement(ShopSelectionBar, { ...barProps, ...result.current.selection }));
+    assert.equal(bar.queryByRole('button', { name: 'View' }), null);
+  }
 });
 
 test('wallet hydration preserves each account and late hidden-asset updates stay with the captured wallet', () => {

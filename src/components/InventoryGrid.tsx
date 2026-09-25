@@ -591,6 +591,7 @@ export function InventoryGrid({
             className={[
               'inventory__item',
               item.kind === 'box' ? 'inventory__item--box' : '',
+              item.kind === 'preorder' ? 'inventory__item--preorder' : '',
               canSelect ? 'inventory__item--selectable' : '',
               revealEnabled ? 'inventory__item--revealable' : '',
               viewEnabled ? 'inventory__item--viewable' : '',

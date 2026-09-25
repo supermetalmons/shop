@@ -35,6 +35,7 @@ test('devnet gallery keeps the artwork and captions while selecting a maximum of
   assert.equal(view.getAllByRole('img').length, 300);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
   const one = view.getByRole('button', { name: 'Select preorder #1: Angel Lady' });
   assert.equal(one.tagName, 'BUTTON');
   fireEvent.click(one);
@@ -64,11 +65,14 @@ test('reservation clears selection and keeps original artwork until the preorder
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
   assert.equal((view.getByRole('button', { name: /Preordered preorder #2:/ }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByRole('img', { name: 'watercolor milady' }).getAttribute('src'), 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/2.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
+  assert.equal(view.getByRole('img', { name: 'watercolor milady' }).classList.contains('mi-note-cards__image--preordered'), true);
   assert.equal(view.queryByRole('button', { name: /Preorder .*SOL/ }), null);
   const succeeded = { ...next, availability: { ...next.availability, items: next.availability.items.map((item) => ({ ...item, status: item.id === 1 ? 'preordered' as const : item.status })) } };
   view.rerender(createElement(MiNoteCardsGallery, { preorder: succeeded }));
   assert.equal((view.getByRole('button', { name: 'Preordered preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), true);
   assert.equal(view.queryByText('Reserved'), null);
 });
 
@@ -97,6 +101,7 @@ test('mainnet gallery has no selectable purchase controls or notify button', () 
   assert.equal(view.queryByRole('button', { name: /Select preorder/ }), null);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getAllByRole('img').length, 300);
+  assert.equal(view.container.querySelector('.mi-note-cards__image--preordered'), null);
 });
 
 test('pending submission disables selection and cancellation without requiring Ethereum ownership', () => {
