@@ -361,6 +361,38 @@ test('selection resets on owner or connected-wallet changes and targeted removal
   assert.equal(result.current.selection.selected.size, 0);
 });
 
+test('first connection to the restored inventory owner keeps the selection through sign-in', () => {
+  const options = sourceOptions({ connectedWallet: undefined, inventory: [box('pack-a'), box('pack-b')] });
+  const initial: InventoryHarnessProps = { options, selectionOptions: { isSignedInWallet: false } };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
+  act(() => result.current.state.replaceSelection(['pack-a', 'pack-b']));
+  const selected = result.current.selection.selected;
+  assert.equal(result.current.selection.canShipSelected, true);
+
+  rerender({ ...initial, options: { ...options, connectedWallet: options.owner } });
+  assert.equal(result.current.selection.selected, selected);
+  assert.equal(result.current.selection.selectedCount, 2);
+  assert.equal(result.current.selection.canShipSelected, true);
+
+  rerender({ options: { ...options, connectedWallet: options.owner }, selectionOptions: { isSignedInWallet: true } });
+  assert.equal(result.current.selection.selected, selected);
+  rerender({ ...initial, options });
+  assert.equal(result.current.selection.selected.size, 0);
+});
+
+test('initial connection to a different wallet or inventory owner still clears selection', () => {
+  const options = sourceOptions({ connectedWallet: undefined, inventory: [box('pack-a')] });
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  rerender({ options: { ...options, connectedWallet: 'wallet-b' } });
+  assert.equal(result.current.selection.selected.size, 0);
+
+  rerender({ options });
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  rerender({ options: { ...options, connectedWallet: 'wallet-b', owner: 'wallet-b', localAccountWallet: 'wallet-b' } });
+  assert.equal(result.current.selection.selected.size, 0);
+});
+
 test('selection keeps the reveal inventory snapshot until it is released', () => {
   const snapshot = [box('snapshot-pack', 'card_nft_2', '1')];
   const options = sourceOptions({ inventory: snapshot });
@@ -408,6 +440,42 @@ test('selection Escape handling respects blocked and already-handled events and 
   act(() => result.current.selection.toggleSelected('pack-a'));
   unmount();
   assert.equal(pressEscape().defaultPrevented, false);
+});
+
+test('selection cancellation runs only for an explicit unblocked Escape', () => {
+  let dismissed = 0;
+  const options = sourceOptions({ inventory: [box('pack-a'), box('pack-b')] });
+  const selectionOptions = { onDismissSelection: () => { dismissed += 1; } };
+  const initial: InventoryHarnessProps = { options, selectionOptions };
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: initial });
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  act(() => result.current.state.clearSelection());
+  assert.equal(dismissed, 0);
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  rerender({ ...initial, options: { ...options, inventory: [box('pack-b')] } });
+  assert.equal(result.current.selection.selectedCount, 0);
+  assert.equal(dismissed, 0);
+  act(() => result.current.selection.toggleSelected('pack-b'));
+  rerender({ ...initial, options: { ...options, connectedWallet: 'wallet-b' } });
+  assert.equal(result.current.selection.selectedCount, 0);
+  assert.equal(dismissed, 0);
+
+  rerender(initial);
+  act(() => result.current.selection.toggleSelected('pack-a'));
+  rerender({ ...initial, selectionOptions: { ...selectionOptions, dismissalBlocked: true } });
+  act(() => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true })));
+  assert.equal(dismissed, 0);
+  assert.equal(result.current.selection.selectedCount, 1);
+  rerender(initial);
+  const handled = new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+  handled.preventDefault();
+  act(() => dom.window.dispatchEvent(handled));
+  assert.equal(dismissed, 0);
+  act(() => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true })));
+  assert.equal(dismissed, 1);
+  assert.equal(result.current.selection.selectedCount, 0);
+  act(() => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true })));
+  assert.equal(dismissed, 1);
 });
 
 test('selection preserves shipment limits and action eligibility with country-specific pricing', () => {

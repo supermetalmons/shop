@@ -20,6 +20,8 @@ import { useDeliveryRecovery } from './shop/account/useDeliveryRecovery';
 import { useShopAccount, useShopAccountEffects } from './shop/account/useShopAccount';
 import { useShopShipments } from './shop/account/useShopShipments';
 import { useShopSignIn } from './shop/account/useShopSignIn';
+import { useShopActionContinuation } from './shop/account/useShopActionContinuation';
+import { useShopActionHandlers } from './shop/useShopActionHandlers';
 import { isUserRejectedError } from './shop/commerce/transactionSupport';
 import { useClaimActions } from './shop/commerce/useClaimActions';
 import { useClaimPresentation } from './shop/commerce/useClaimPresentation';
@@ -140,8 +142,20 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const signIn = useShopSignIn({
     auth, connectedWallet, publicKey, wallet, walletModalVisible, setVisible,
     isSignedInWallet, hasAuthenticatedAccount: account.hasAuthenticatedAccount,
-    claimOpen: modals.claimOpen && !commerceUiSuspended, showToast, isUserRejectedError,
+    showToast, isUserRejectedError,
   });
+  const continuation = useShopActionContinuation({
+    connectedWallet,
+    cancellationSignal: auth.intentCancellationSignal,
+    scopeKey: `${drop.normalizedCurrentPath}:${commerceUiSuspended}`,
+    ensureSignedIn: signIn.ensureSignedIn,
+    ensureWalletConnected: signIn.ensureWalletConnected,
+    showToast,
+  });
+  const pendingAction = continuation.pendingAction;
+  const walletActionBusy = Boolean(pendingAction);
+  const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
+  const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
   const preorderCheckout = usePreorderCheckout({
     config: drop.normalizedCurrentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER,
     active: ['/mi_note_cards', '/mi_note_cards_devnet'].includes(drop.normalizedCurrentPath) && !commerceUiSuspended,
@@ -209,6 +223,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     owner, connectedWallet, isSignedInWallet,
     deliveryCountryCode: modals.deliveryCountryCode,
     dismissalBlocked: Boolean(activeModalLayer) || commerceUiSuspended,
+    onDismissSelection: continuation.cancel,
     getDropConfig: drop.getDropConfig,
     canOpenBoxesForDropId: drop.canOpenBoxesForDropId,
     usesClearCard3dRevealForDropId: reveal.usesClearCard3dRevealForDropId,
@@ -261,6 +276,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     removeSelected: selectionState.removeSelected,
     deliverableItems: selection.deliverableItems,
     canShipSelected: selection.canShipSelected,
+    awaitingSignIn: preserveDelivery,
     setVisible, showToast,
     addressEncryptionPublicKey: ADDRESS_ENCRYPTION_PUBLIC_KEY,
     boxLabelForDropId: drop.boxLabelForDropId,
@@ -281,7 +297,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     inventory: queries.inventory,
     refetchInventory: queries.refetchInventory,
     unhideAssetsForWallet: inventorySource.actions.unhideAssetsForWallet,
-    requestClaimSignIn: signIn.requestClaimSignIn,
     showToast,
     requireKnownDropConfig: drop.requireKnownDropConfig,
     getDropConnection: drop.getDropConnection,
@@ -313,8 +328,22 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     revealOverlay: reveal.revealOverlay,
     receiptTransferTarget: modals.receiptTransferTarget,
   });
+  const actionHandlers = useShopActionHandlers({
+    continuation, owner, routeDropId: drop.routeDrop?.dropId,
+    blockViewerModeAction, showToast, selection, selectionState,
+    inventory, queries, modals, preorder: preorderCheckout,
+    purchase: purchaseActions, delivery: deliveryActions, claim: claimActions,
+    receipts: receiptActions, reveal,
+  });
+  const controlledReveal = {
+    ...reveal,
+    revealLoading: reveal.revealLoading || (pendingAction?.key === 'reveal' && awaitingActionSignIn ? reveal.revealOverlay?.id || null : null),
+    handleRevealOverlayClick: actionHandlers.handleRevealOverlayClick,
+    handlePonchoOverlayRequestReveal: actionHandlers.handlePonchoOverlayRequestReveal,
+  };
   const receiptControls = useReceiptViewerControls({
-    receiptView, modals, receiptActions,
+    receiptView, modals, receiptActions: { ...receiptActions, handleAdminIrlRedeem: actionHandlers.handleAdminIrlRedeem },
+    walletActionBusy,
     revealOverlayClosing: reveal.revealOverlayClosing,
     isClosing: reveal.isClosing,
     showToast,
@@ -331,18 +360,18 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     receiptViewerOpen: reveal.presentation.revealOverlayUsesReceiptImage,
   });
   useEffect(() => {
-    modals.setDeliveryOpen(false);
+    if (!preserveDelivery) modals.setDeliveryOpen(false);
     modals.closeReceiptTransferModal();
   }, [connectedWallet, owner]);
   useEffect(() => { modals.closeReceiptTransferModal(); }, [drop.normalizedCurrentPath]);
   const viewedProfileErrorMessage = account.viewedProfileError instanceof Error ? account.viewedProfileError.message : '';
   const anonymousStripeHistoryErrorMessage = stripeRecovery.anonymousHistory.error instanceof Error ? stripeRecovery.anonymousHistory.error.message : '';
-  const activeError = auth.error && !isUserRejectedError(auth.error)
+  const activeError = auth.error && !awaitingActionSignIn && !isUserRejectedError(auth.error)
     ? auth.error
     : account.canReadOwnProfile && auth.profileError
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
-  const showHeaderWalletButton = signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
+  const showHeaderWalletButton = !walletActionBusy && signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
   const miNoteCardsPage = drop.normalizedCurrentPath === '/mi_note_cards' || drop.normalizedCurrentPath === '/mi_note_cards_devnet';
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
@@ -370,7 +399,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             {...account}
             interactive={interactive}
             showHeaderWalletButton={showHeaderWalletButton}
-            handleHeaderWalletSignIn={signIn.handleHeaderWalletSignIn}
+            handleHeaderWalletSignIn={actionHandlers.handleHeaderSignIn}
             adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
           />}
         />
@@ -380,7 +409,13 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
               <MiNoteCardsGallery
-                preorder={preorderCheckout}
+                preorder={{
+                  ...preorderCheckout,
+                  purchase: actionHandlers.handlePreorder,
+                  busy: preorderCheckout.busy || walletActionBusy,
+                  phase: pendingAction?.key === 'preorder' && awaitingActionSignIn ? 'authenticating' : preorderCheckout.phase,
+                }}
+                onCancelPendingSignIn={pendingAction?.key === 'preorder' && awaitingActionSignIn ? continuation.cancel : undefined}
                 showToast={statusUiSuspended ? undefined : showToast}
                 onViewPreordered={(item, originRect, aspectRatio) => reveal.openImageViewer(item, originRect, {
                   size: 'preorder', aspectRatio, unavailableMessage: 'Preorder image unavailable',
@@ -393,6 +428,11 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             {...drop}
             {...purchaseState}
             {...purchaseActions}
+            handleMint={actionHandlers.handleMint}
+            handleDiscountMint={actionHandlers.handleDiscountMint}
+            walletActionBusy={walletActionBusy}
+            minting={purchaseActions.minting || pendingAction?.key === 'mint'}
+            discountMinting={purchaseActions.discountMinting || pendingAction?.key === 'discount'}
             effectiveMintStats={effectiveMintStats}
             connectedWallet={connectedWallet}
             publicKey={publicKey}
@@ -406,14 +446,14 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
         <ShopInventorySection
           {...inventory}
           selected={selection.selected}
-          toggleSelected={selection.toggleSelected}
+          toggleSelected={(id) => { if (!walletActionBusy) selection.toggleSelected(id); }}
           canOpenBoxesForDropId={drop.canOpenBoxesForDropId}
           onReveal={(id, rect) => {
             const item = inventory.inventoryIndex.get(id);
-            if (item) void reveal.openPendingReveal(item, rect);
+            if (item) void actionHandlers.openPendingReveal(item, rect);
           }}
           revealLoading={reveal.revealLoading}
-          revealDisabled={Boolean(reveal.revealLoading || reveal.startOpenLoading || reveal.revealOverlay)}
+          revealDisabled={walletActionBusy || Boolean(reveal.revealLoading || reveal.startOpenLoading || reveal.revealOverlay)}
         />
       )}
       {!isNfcPage && (
@@ -428,13 +468,16 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
           viewedProfile={account.viewedProfile}
           pendingDeliveryItemIds={prepared.pendingDeliveryItemIds}
           revealOverlay={reveal.revealOverlay}
-          handleReceiptTransfer={receiptActions.handleReceiptTransfer}
-          handleAdminIrlRedeem={receiptActions.handleAdminIrlRedeem}
-          handleShip={deliveryActions.handleShip}
-          handleClaim={claimActions.handleClaim}
+          walletActionBusy={walletActionBusy}
+          adminSignInPending={pendingAction?.key === 'admin-redeem' && awaitingActionSignIn}
+          claimSignInPending={pendingAction?.key === 'claim' && awaitingActionSignIn}
+          handleReceiptTransfer={actionHandlers.handleReceiptTransfer}
+          handleAdminIrlRedeem={actionHandlers.handleAdminIrlRedeem}
+          handleShip={actionHandlers.handleShip}
+          handleClaim={actionHandlers.handleClaim}
         />
       )}
-      <ShopRevealLayer reveal={reveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
+      <ShopRevealLayer reveal={controlledReveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
       {activeError ? <div className="error">{activeError}</div> : null}
       {!miNoteCardsPage && !isNfcPage && (
         <>
@@ -444,23 +487,29 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             figureMetadataByKey={inventorySource.figureMetadataByKey}
             getDropContent={drop.getDropContent}
             dropById={drop.dropById}
-            shipmentsEmptyContent={<ShopShipmentsEmptyState {...shipments.emptyState} />}
+            shipmentsEmptyContent={<ShopShipmentsEmptyState
+              {...shipments.emptyState}
+              handleSignInForShipments={actionHandlers.handleShipmentsSignIn}
+              pendingShipmentsSignIn={shipments.emptyState.pendingShipmentsSignIn || walletActionBusy}
+            />}
           />
           <ShopReceiptsSection
             onEnterCode={() => { if (!blockViewerModeAction()) modals.openClaim(); }}
             receiptsContentVisible={shipments.receiptsContentVisible}
             receiptItems={inventory.receiptItems}
             selected={selection.selected}
-            toggleSelected={selection.toggleSelected}
+            toggleSelected={(id) => { if (!walletActionBusy) selection.toggleSelected(id); }}
             openReceiptImageViewer={reveal.openReceiptImageViewer}
           />
           <ShopSelectionBar
             {...selection}
-            clearSelection={selectionState.clearSelection}
+            clearSelection={() => { continuation.cancel(); selectionState.clearSelection(); }}
             handleViewSelectedItem={() => { if (selection.selectedViewableItem) reveal.viewItem(selection.selectedViewableItem); }}
-            handleOpenSelectedBox={() => { if (selection.selectedBox) void reveal.openSelectedBox(selection.selectedBox); }}
-            handleOpenShip={deliveryActions.handleOpenShip}
-            startOpenLoading={reveal.startOpenLoading}
+            handleOpenSelectedBox={() => { if (selection.selectedBox) void actionHandlers.openSelectedBox(selection.selectedBox); }}
+            handleOpenShip={actionHandlers.handleOpenShip}
+            walletActionBusy={walletActionBusy}
+            shippingSignInPending={pendingAction?.key === 'open-ship' && awaitingActionSignIn}
+            startOpenLoading={reveal.startOpenLoading || (pendingAction?.key === 'open-box' ? selection.selectedBox?.id || null : null)}
             openActionLabelForDropId={drop.openActionLabelForDropId}
             openActionProgressForDropId={drop.openActionProgressForDropId}
           />

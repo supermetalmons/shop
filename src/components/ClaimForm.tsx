@@ -12,6 +12,7 @@ type ClaimFormResult = {
 
 interface ClaimFormProps {
   onClaim: (payload: { code: string; recipient?: string }) => Promise<ClaimFormResult | void>;
+  walletActionBusy?: boolean;
   onSuccess?: () => void;
   onLoadingChange?: (loading: boolean) => void;
   mode?: 'card' | 'modal';
@@ -39,6 +40,7 @@ function normalizeItemsPerBoxCount(value: number | undefined, fallback = 1): num
 
 export function ClaimForm({
   onClaim,
+  walletActionBusy = false,
   onSuccess,
   onLoadingChange,
   mode = 'card',
@@ -98,7 +100,7 @@ export function ClaimForm({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (isPending()) return;
+    if (isPending() || (!isStripeCode && walletActionBusy)) return;
     if (!shouldAutoFocusCodeInput) {
       codeInputRef.current?.blur();
       recipientInputRef.current?.blur();
@@ -150,7 +152,7 @@ export function ClaimForm({
       ) : null}
       {error ? <div className="error">{error}</div> : null}
       {success ? <div className="success">{success}</div> : null}
-      <button type="submit" disabled={loading}>
+      <button type="submit" disabled={loading || (!isStripeCode && walletActionBusy)}>
         {loading ? 'Sending…' : 'Claim'}
       </button>
     </form>

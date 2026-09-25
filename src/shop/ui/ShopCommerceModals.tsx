@@ -28,6 +28,9 @@ type ShopCommerceModalsProps = {
   selection: ShopInventorySelection;
   activeModalLayer: ActiveModalLayer;
   suspended: boolean;
+  walletActionBusy?: boolean;
+  adminSignInPending?: boolean;
+  claimSignInPending?: boolean;
   connectedWallet: string | undefined;
   publicKey: PublicKey | null;
   routeDrop: FrontendDeploymentConfig | null;
@@ -44,6 +47,9 @@ export function ShopCommerceModals({
   selection,
   activeModalLayer,
   suspended,
+  walletActionBusy = false,
+  adminSignInPending = false,
+  claimSignInPending = false,
   connectedWallet,
   publicKey,
   routeDrop,
@@ -120,6 +126,7 @@ export function ShopCommerceModals({
         feePayer={connectedWallet || ''}
         onCancel={closeReceiptTransferModal}
         onTransfer={handleReceiptTransfer}
+        disabled={walletActionBusy}
       />
     ) : null}
   </Modal>
@@ -152,6 +159,7 @@ export function ShopCommerceModals({
           dropFamily={selectedDropConfig?.dropFamily}
           shipmentPending={pendingDeliveryItemIds.size > 0}
           submitDisabled={
+            walletActionBusy ||
             !canShipSelected ||
             !connectedWallet ||
             !publicKey ||
@@ -170,10 +178,10 @@ export function ShopCommerceModals({
               onClick={() => {
                 void handleAdminIrlRedeem();
               }}
-              disabled={adminIrlRedeeming}
+              disabled={adminIrlRedeeming || walletActionBusy}
             >
               <FaBoxOpen aria-hidden="true" focusable="false" size={16} />
-              <span>{adminIrlRedeeming ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
+              <span>{adminIrlRedeeming || adminSignInPending ? 'Redeeming…' : 'Admin IRL Redeem'}</span>
             </button>
           </div>
         ) : null}
@@ -183,7 +191,7 @@ export function ShopCommerceModals({
       open={claimOpen}
       title="Secret Code"
       onClose={closeClaimModal}
-      closeOnEscape={!claimSubmitting}
+      closeOnEscape={!claimSubmitting || claimSignInPending}
       suspended={isModalLayerSuspended({
         activeLayer: activeModalLayer,
         appSuspended: suspended,
@@ -193,6 +201,7 @@ export function ShopCommerceModals({
     >
       <ClaimForm
         onClaim={handleClaim}
+        walletActionBusy={walletActionBusy}
         onSuccess={closeClaimModal}
         onLoadingChange={setClaimSubmitting}
         mode="modal"

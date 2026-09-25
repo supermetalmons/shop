@@ -27,6 +27,7 @@ type MintPanelTerminalAction = {
 };
 
 interface MintPanelProps extends MintPanelFormOptions {
+  walletActionBusy?: boolean;
   title?: string;
   boxMedia?: MintPanelBoxMedia;
   dropId?: string;
@@ -121,7 +122,7 @@ function MintPanelPackStatusPopover({
 
 export function MintPanel({
   title, boxMedia, dropId, receiptPoolId, terminalAction, onNotifyNextDrops,
-  showPackStatusInfo, packStatusBreakdown,
+  showPackStatusInfo, packStatusBreakdown, walletActionBusy = false,
   packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
   ...formOptions
 }: MintPanelProps) {
@@ -393,6 +394,7 @@ export function MintPanel({
             stripePaymentPending={form.stripePaymentPending}
             submitBusy={form.submitBusy}
             disabled={form.actionsDisabled}
+            walletActionBusy={walletActionBusy}
             useDiscountMint={form.useDiscountMint}
             showQuantitySlider={showQuantitySlider}
             quantityLabel={quantityLabel}

@@ -428,7 +428,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       const boxAssetId = revealOverlay.id;
       const dropId = revealOverlay.dropId;
       const requestSession = revealOverlaySessionRef.current;
-      void (async () => {
+      return (async () => {
         const status = await handleRevealDudes(boxAssetId, dropId);
         setRevealOverlay((current) => applyRevealRequestRetry(current, {
           status,
@@ -970,6 +970,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     inventoryView: session.inventoryView,
     pendingOpenBoxesView: session.pendingOpenBoxesView,
     getCurrentOverlay: session.getCurrentOverlay,
+    getSessionGeneration: () => revealOverlaySessionRef.current,
     isClosing: session.isClosing,
     queueOverlayAction,
     closeRevealOverlay,

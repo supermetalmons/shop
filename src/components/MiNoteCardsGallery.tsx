@@ -15,6 +15,7 @@ import '../styles/mi-note-cards.css';
 
 type MiNoteCardsGalleryProps = {
   preorder?: PreorderCheckout;
+  onCancelPendingSignIn?: () => void;
   showToast?: (message: string) => void;
   onViewPreordered?: (item: ReceiptViewerSource, originRect: DOMRect | null, aspectRatio?: number) => boolean;
 };
@@ -102,7 +103,7 @@ function MiNoteWalletControls({ wallet }: { wallet: ReturnType<typeof useMiNoteE
   );
 }
 
-export default function MiNoteCardsGallery({ preorder, showToast, onViewPreordered }: MiNoteCardsGalleryProps) {
+export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, showToast, onViewPreordered }: MiNoteCardsGalleryProps) {
   const search = useSyncExternalStore(subscribeToNavigation, currentSearch);
   const request = useMemo(() => miNoteAddressFromSearch(search), [search]);
   const [tab, setTab] = useState<'all' | 'your'>('all');
@@ -118,6 +119,8 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
   const [selectedPreordered, setSelectedPreordered] = useState<number | null>(null);
   const selectedPreorderedButton = useRef<HTMLButtonElement>(null);
   const previousBuyer = useRef(preorder?.buyer);
+  const cancelPendingSignIn = useRef(onCancelPendingSignIn);
+  cancelPendingSignIn.current = onCancelPendingSignIn;
   const lastToastedError = useRef<string | null>(null);
   const availability = useMemo(() => new Map(
     preorder?.availability?.preorderId === preorder?.config.preorderId
@@ -137,6 +140,7 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
   }, [preorderEnabled, preorder?.error, showToast]);
 
   useEffect(() => {
+    cancelPendingSignIn.current?.();
     setSelected([]);
     setSelectedPreordered(null);
   }, [search, tab, wallet.address, preorderEnabled, preorder?.config.preorderId]);
@@ -319,8 +323,9 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
               </div>
             </div>
             <div className="selection-panel__actions">
-              <button type="button" className="quiet" disabled={preorder.busy || Boolean(submitting) || Boolean(preorder.pending && !preorder.order)} onClick={() => {
-                if (preorder.pendingOrder) void preorder.cancel();
+              <button type="button" className="quiet" disabled={!onCancelPendingSignIn && (preorder.busy || Boolean(submitting) || Boolean(preorder.pending && !preorder.order))} onClick={() => {
+                if (onCancelPendingSignIn) onCancelPendingSignIn();
+                else if (preorder.pendingOrder) void preorder.cancel();
                 else setSelected([]);
               }}>Cancel</button>
               <button

@@ -203,6 +203,25 @@ test('checkout progress is communicated only through the action button', () => {
   }
 });
 
+test('pending sign-in can be cancelled and changing gallery view cancels the original preorder', () => {
+  Math.random = () => 0;
+  const preorder = checkout();
+  let cancelled = 0;
+  const onCancelPendingSignIn = () => { cancelled += 1; };
+  const view = render(createElement(MiNoteCardsGallery, { preorder }));
+  fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
+  const pending = { ...preorder, busy: true, phase: 'authenticating' as const };
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: pending, onCancelPendingSignIn }));
+  assert.equal(cancelled, 0);
+  const cancel = view.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement;
+  assert.equal(cancel.disabled, false);
+  fireEvent.click(cancel);
+  assert.equal(cancelled, 1);
+  fireEvent.click(view.getByRole('tab', { name: 'Your' }));
+  assert.equal(cancelled, 2);
+  assert.equal(view.queryByRole('button', { name: /Signing in/ }), null);
+});
+
 test('checkout errors toast once per occurrence without an error-only panel', () => {
   Math.random = () => 0;
   const preorder = checkout();

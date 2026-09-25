@@ -14,6 +14,7 @@ interface MintPanelActionsProps {
   stripePaymentPending: boolean;
   submitBusy: boolean;
   disabled: boolean;
+  walletActionBusy?: boolean;
   useDiscountMint: boolean;
   showQuantitySlider: boolean;
   quantityLabel: string;
@@ -188,7 +189,7 @@ function tighterActionTextFit(a: ActionTextFit, b: ActionTextFit): ActionTextFit
 
 export function MintPanelActions({
   formId, showStripePaymentButton, showSolanaMintButton, stripePaymentPending,
-  submitBusy, disabled, useDiscountMint, showQuantitySlider, quantityLabel,
+  submitBusy, disabled, walletActionBusy = false, useDiscountMint, showQuantitySlider, quantityLabel,
   stripePaymentDisplayPriceLabel, totalPriceLabel, totalDiscountPriceLabel, onStripePayment,
 }: MintPanelActionsProps) {
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -276,7 +277,7 @@ export function MintPanelActions({
             form={formId}
             className={submitClassName}
             style={submitActionTextFitStyle}
-            disabled={disabled}
+            disabled={disabled || walletActionBusy}
             aria-label={submitAriaLabel}
           >
             {submitBusy ? (

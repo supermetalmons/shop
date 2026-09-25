@@ -23,6 +23,7 @@ type DeliveryActionOptions = Omit<CommerceWalletContext, 'owner'> & {
   removeSelected: (ids: Iterable<string>) => void;
   deliverableItems: InventoryItem[];
   canShipSelected: boolean;
+  awaitingSignIn?: boolean;
   setVisible: (visible: boolean) => void;
   showToast: (message: string) => void;
   addressEncryptionPublicKey: string;
@@ -52,6 +53,7 @@ export function useDeliveryActions({
   removeSelected,
   deliverableItems,
   canShipSelected,
+  awaitingSignIn = false,
   setVisible,
   showToast,
   addressEncryptionPublicKey,
@@ -75,9 +77,9 @@ export function useDeliveryActions({
   const { deliveryOpen, setDeliveryOpen, deliveryActionGenerationRef } = modals;
   const { startShipmentRefresh, reconcilePendingPreparedTransaction } = recovery;
   useEffect(() => {
-    if (!deliveryOpen || canShipSelected || pendingDeliveryItemIds.size) return;
+    if (!deliveryOpen || awaitingSignIn || canShipSelected || pendingDeliveryItemIds.size) return;
     setDeliveryOpen(false);
-  }, [canShipSelected, deliveryOpen, pendingDeliveryItemIds]);
+  }, [awaitingSignIn, canShipSelected, deliveryOpen, pendingDeliveryItemIds]);
   const handleOpenShip = async () => {
     if (blockViewerModeAction()) return;
     if (!canShipSelected) return;

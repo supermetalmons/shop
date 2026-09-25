@@ -23,7 +23,6 @@ type ClaimActionOptions = CommerceWalletContext & {
   inventory: InventoryItem[];
   refetchInventory: CommerceInventoryRefresh;
   unhideAssetsForWallet: (wallet: string, ids: readonly string[]) => void;
-  requestClaimSignIn: () => void;
   showToast: (message: string) => void;
   requireKnownDropConfig: (dropId: string | undefined, context: string) => FrontendDeploymentConfig;
   getDropConnection: DropConnection;
@@ -46,7 +45,6 @@ export function useClaimActions({
   inventory,
   refetchInventory,
   unhideAssetsForWallet,
-  requestClaimSignIn,
   showToast,
   requireKnownDropConfig,
   getDropConnection,
@@ -101,7 +99,6 @@ export function useClaimActions({
     if (hasAlphabeticClaimCodeCharacters(code)) {
       throw new Error('Invalid receipt claim code');
     }
-    if (!connectedWallet || !publicKey) requestClaimSignIn();
     const signedIn = await ensureSignedIn();
     if (!signedIn || !connectedWallet || !publicKey) return { deferred: true };
     if (!claimUiIsCurrent()) return { deferred: true };

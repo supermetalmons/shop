@@ -21,6 +21,8 @@ type ShopSelectionBarProps = Pick<ShopInventorySelection,
   handleOpenSelectedBox: () => void;
   handleOpenShip: () => void;
   startOpenLoading: string | null;
+  walletActionBusy?: boolean;
+  shippingSignInPending?: boolean;
   openActionProgressForDropId: (dropId?: string) => string;
   openActionLabelForDropId: (dropId?: string) => string;
 };
@@ -130,6 +132,8 @@ export function ShopSelectionBar({
   handleOpenSelectedBox,
   handleOpenShip,
   startOpenLoading,
+  walletActionBusy = false,
+  shippingSignInPending = false,
   openActionProgressForDropId,
   openActionLabelForDropId,
 }: ShopSelectionBarProps) {
@@ -143,16 +147,16 @@ export function ShopSelectionBar({
           type="button"
           className="selection-panel__open"
           onClick={handleOpenSelectedBox}
-          disabled={Boolean(startOpenLoading)}
+          disabled={walletActionBusy || Boolean(startOpenLoading)}
         >
           <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
           <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
         </button>
       ) : null}
       {canShipSelected && (
-        <button type="button" className="selection-panel__ship" onClick={handleOpenShip}>
+        <button type="button" className="selection-panel__ship" onClick={handleOpenShip} disabled={walletActionBusy}>
           <FaPlane aria-hidden="true" focusable="false" size={16} />
-          <span>Send</span>
+          <span>{shippingSignInPending ? 'Signing in…' : 'Send'}</span>
         </button>
       )}
     </SelectionPanel>

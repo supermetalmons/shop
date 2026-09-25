@@ -33,10 +33,12 @@ export function useCommerceModals({
     receiptTransferWalletAdapter?.supportedTransactionVersions,
   );
   const deliveryActionGenerationRef = useRef(0);
+  const deliveryIntentGenerationRef = useRef(0);
   const receiptTransferWalletSupportedRef = useRef(receiptTransferWalletSupported);
   const receiptTransferWalletAdapterRef = useRef(receiptTransferWalletAdapter);
   const receiptTransferReturnFocusRef = useRef<HTMLElement | null>(null);
   const claimModalGenerationRef = useRef(0);
+  const claimIntentGenerationRef = useRef(0);
   const receiptTransferWalletSessionGenerationRef = useRef(0);
   const receiptTransferWalletContextRef = useRef({
     wallet: connectedWallet || null,
@@ -78,6 +80,7 @@ export function useCommerceModals({
 
   useEffect(() => {
     if (claimDeepLinkCode === null) return;
+    claimIntentGenerationRef.current += 1;
     claimModalGenerationRef.current += 1;
     setClaimInitialCode(claimDeepLinkCode);
     setClaimOpenedFromDeepLink(true);
@@ -86,12 +89,14 @@ export function useCommerceModals({
 
   useEffect(() => {
     if (claimDeepLinkCode !== null || !claimOpenedFromDeepLink) return;
+    claimIntentGenerationRef.current += 1;
     claimModalGenerationRef.current += 1;
     setClaimOpenedFromDeepLink(false);
     setClaimInitialCode('');
     setClaimOpen(false);
   }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
   const closeClaimModal = useCallback(() => {
+    claimIntentGenerationRef.current += 1;
     claimModalGenerationRef.current += 1;
     setClaimOpen(false);
     setClaimSubmitting(false);
@@ -107,14 +112,17 @@ export function useCommerceModals({
   };
 
   const openDelivery = () => {
+    deliveryIntentGenerationRef.current += 1;
     deliveryActionGenerationRef.current += 1;
     setDeliveryOpen(true);
   };
   const closeDelivery = () => {
+    deliveryIntentGenerationRef.current += 1;
     deliveryActionGenerationRef.current += 1;
     setDeliveryOpen(false);
   };
   const openClaim = () => {
+    claimIntentGenerationRef.current += 1;
     claimModalGenerationRef.current += 1;
     setClaimInitialCode('');
     setClaimOpenedFromDeepLink(false);
@@ -142,7 +150,9 @@ export function useCommerceModals({
     receiptTransferWalletSessionGenerationRef,
     receiptTransferInFlightRef,
     deliveryActionGenerationRef,
+    deliveryIntentGenerationRef,
     claimModalGenerationRef,
+    claimIntentGenerationRef,
     setDeliveryOpen,
     setDeliveryCountryCode,
     setAdminIrlRedeeming,

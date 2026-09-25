@@ -42,7 +42,9 @@ class StaffAuthError extends Error {
   }
 }
 
-const listeners = new Set<(wallet: string | null) => void>();
+type StaffWalletSessionListener = (wallet: string | null, reason?: 'credential-expired') => void;
+
+const listeners = new Set<StaffWalletSessionListener>();
 const refreshPromises = new Map<string, Promise<StaffWalletSession | null>>();
 let fallbackMutationTail: Promise<unknown> = Promise.resolve();
 
@@ -98,8 +100,8 @@ function parseSession(value: unknown, nowMs = Date.now()): StaffWalletSession | 
   return { wallet, token, expiresAt, refreshedAt };
 }
 
-function notify(session: StaffWalletSession | null): void {
-  for (const listener of listeners) listener(session?.wallet || null);
+function notify(session: StaffWalletSession | null, reason?: 'credential-expired'): void {
+  for (const listener of listeners) listener(session?.wallet || null, reason);
 }
 
 function storedValue(): string | null {
@@ -129,16 +131,16 @@ function writeStaffWalletSession(session: StaffWalletSession): StaffWalletSessio
   return session;
 }
 
-function removeStaffWalletSession(): void {
+function removeStaffWalletSession(reason?: 'credential-expired'): void {
   try {
     if (typeof window !== 'undefined') window.localStorage?.removeItem(STAFF_SESSION_STORAGE_KEY);
   } catch {}
-  notify(null);
+  notify(null, reason);
 }
 
 async function clearMalformedStaffWalletSession(raw: string): Promise<void> {
   await withStaffSessionLock(() => {
-    if (storedValue() === raw) removeStaffWalletSession();
+    if (storedValue() === raw) removeStaffWalletSession('credential-expired');
   });
 }
 
@@ -173,19 +175,19 @@ export async function installStaffWalletSessionIfUnchanged(
 }
 
 export async function clearStaffWalletSession(): Promise<void> {
-  await withStaffSessionLock(removeStaffWalletSession);
+  await withStaffSessionLock(() => removeStaffWalletSession());
 }
 
-async function clearStaffWalletSessionIfCurrent(token: string): Promise<boolean> {
+async function clearStaffWalletSessionIfCurrent(token: string, reason?: 'credential-expired'): Promise<boolean> {
   return withStaffSessionLock(() => {
     const current = readStaffWalletSession();
     if (!current || current.token !== token) return false;
-    removeStaffWalletSession();
+    removeStaffWalletSession(reason);
     return true;
   });
 }
 
-export function subscribeStaffWalletSession(listener: (wallet: string | null) => void): () => void {
+export function subscribeStaffWalletSession(listener: StaffWalletSessionListener): () => void {
   listeners.add(listener);
   if (typeof window === 'undefined') return () => listeners.delete(listener);
   const onStorage = (event: StorageEvent) => {
@@ -352,7 +354,7 @@ export async function ensureStaffWalletSession(forceRefresh = false): Promise<St
     refreshPromise = refreshStaffWalletSession(session)
       .catch(async (error) => {
         if (error instanceof StaffAuthError && error.disposition === 'invalid-credential') {
-          await clearStaffWalletSessionIfCurrent(session.token);
+          await clearStaffWalletSessionIfCurrent(session.token, 'credential-expired');
         }
         throw error;
       })

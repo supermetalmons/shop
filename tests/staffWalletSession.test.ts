@@ -253,6 +253,47 @@ test('staff logout treats an already-invalid remote session as revoked', async (
   }
 });
 
+test('only local staff credential expiry carries renewal provenance', async () => {
+  const originalNow = Date.now;
+  Date.now = () => NOW_MS;
+  const seen: Array<{ wallet: string | null; reason?: 'credential-expired' }> = [];
+  const unsubscribe = subscribeStaffWalletSession((wallet, reason) => seen.push({ wallet, reason }));
+  const session = { wallet: WALLET, token: TOKEN, refreshedAt: NOW_MS, expiresAt: NOW_MS + 100_000 };
+  globalThis.fetch = async () => Response.json({
+    error: { message: 'Authentication is required.' },
+  }, { status: 401 });
+  try {
+    await saveStaffWalletSession(session);
+    seen.length = 0;
+    await assert.rejects(ensureStaffWalletSession(true), /Authentication is required/);
+    assert.deepEqual(seen, [{ wallet: null, reason: 'credential-expired' }]);
+
+    await saveStaffWalletSession(session);
+    seen.length = 0;
+    assert.equal(readStaffWalletSession(session.expiresAt), null);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(seen, [{ wallet: null, reason: 'credential-expired' }]);
+
+    await saveStaffWalletSession(session);
+    seen.length = 0;
+    await logoutStaffWalletSession();
+    assert.deepEqual(seen, [{ wallet: null, reason: undefined }]);
+
+    await saveStaffWalletSession(session);
+    seen.length = 0;
+    dom.window.localStorage.removeItem(staffWalletSessionTestHooks.storageKey);
+    dom.window.dispatchEvent(new dom.window.StorageEvent('storage', {
+      key: staffWalletSessionTestHooks.storageKey,
+      oldValue: JSON.stringify(session),
+      newValue: null,
+    }));
+    assert.deepEqual(seen, [{ wallet: null, reason: undefined }]);
+  } finally {
+    unsubscribe();
+    Date.now = originalNow;
+  }
+});
+
 test('staff refresh cannot overwrite or clear a replacement session', async () => {
   const originalNow = Date.now;
   Date.now = () => NOW_MS;

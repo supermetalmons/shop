@@ -13,6 +13,7 @@ export function useReceiptViewerControls({
   revealOverlayClosing,
   isClosing,
   showToast,
+  walletActionBusy = false,
 }: {
   receiptView: ReturnType<typeof useReceiptView>;
   modals: ReturnType<typeof useCommerceModals>;
@@ -20,6 +21,7 @@ export function useReceiptViewerControls({
   revealOverlayClosing: boolean;
   isClosing: () => boolean;
   showToast: (message: string) => void;
+  walletActionBusy?: boolean;
 }): ReceiptViewerControls {
   const { receiptExplorerHref, receiptViewerOperation, receiptTransferActionTarget, adminIrlRedeemOverlayReceipt } = receiptView;
   const {
@@ -48,12 +50,14 @@ export function useReceiptViewerControls({
         : receiptTransferActionTarget
           ? {
               unavailable:
+                walletActionBusy ||
                 adminIrlRedeeming ||
                 revealOverlayClosing ||
                 !receiptTransferWalletSupported ||
                 Boolean(receiptTransferTarget) ||
                 receiptTransferInFlight,
               onClick: (opener) => {
+                if (walletActionBusy) return;
                 if (revealOverlayClosing || isClosing()) return;
                 if (adminIrlRedeeming) {
                   showToast('Wait for Admin IRL Redeem to finish before transferring');
@@ -70,7 +74,7 @@ export function useReceiptViewerControls({
           : undefined,
     adminIrlRedeem: adminIrlRedeemOverlayReceipt
       ? {
-          loading: adminIrlRedeeming,
+          loading: adminIrlRedeeming || walletActionBusy,
           onClick: () => {
             void handleAdminIrlRedeem(adminIrlRedeemOverlayReceipt);
           },

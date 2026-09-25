@@ -1,5 +1,5 @@
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateDeliveryLamports, canDeliverItemKind } from '../../../shared/shipping.ts';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import { canAdminIrlRedeemSelection } from '../../lib/adminIrlRedeem';
@@ -18,6 +18,7 @@ type SelectionScope = {
 
 export function useShopInventorySelectionState({ connectedWallet, owner }: SelectionScope) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const previousScope = useRef({ connectedWallet, owner });
   const clearSelection = useCallback(() => setSelected(new Set()), []);
   const replaceSelection = useCallback((ids: Iterable<string>) => setSelected(new Set(ids)), []);
   const removeSelected = useCallback((ids: Iterable<string>) => setSelected((current) => {
@@ -34,7 +35,11 @@ export function useShopInventorySelectionState({ connectedWallet, owner }: Selec
   }, []);
 
   useEffect(() => {
-    clearSelection();
+    const previous = previousScope.current;
+    previousScope.current = { connectedWallet, owner };
+    const connectingOwner = !previous.connectedWallet && Boolean(connectedWallet) &&
+      connectedWallet === owner && previous.owner === owner;
+    if (!connectingOwner && (previous.connectedWallet !== connectedWallet || previous.owner !== owner)) clearSelection();
   }, [connectedWallet, owner, clearSelection]);
 
   return { selected, clearSelection, replaceSelection, removeSelected, pruneSelection, toggleSelection };
@@ -49,6 +54,7 @@ type InventorySelectionOptions = SelectionScope & {
   isSignedInWallet: boolean;
   deliveryCountryCode: string;
   dismissalBlocked: boolean;
+  onDismissSelection?: () => void;
   getDropConfig: (dropId?: string) => FrontendDeploymentConfig | undefined;
   canOpenBoxesForDropId: (dropId?: string) => boolean;
   usesClearCard3dRevealForDropId: (dropId?: string) => boolean;
@@ -66,6 +72,7 @@ export function useShopInventorySelection({
   isSignedInWallet,
   deliveryCountryCode,
   dismissalBlocked,
+  onDismissSelection,
   getDropConfig,
   canOpenBoxesForDropId,
   usesClearCard3dRevealForDropId,
@@ -261,11 +268,12 @@ export function useShopInventorySelection({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
+      onDismissSelection?.();
       clearSelection();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedCount, dismissalBlocked, clearSelection]);
+  }, [selectedCount, dismissalBlocked, clearSelection, onDismissSelection]);
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const media = window.matchMedia('(max-width: 720px)');

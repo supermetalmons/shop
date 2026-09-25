@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { useLayoutEffect } from 'react';
+import { PublicKey } from '@solana/web3.js';
 import type { DeliveryOrderSummary, GetProfileStateResponse, ReconcileProfileStateResponse } from '../src/types.ts';
 import {
   useSolanaAuthWithRuntime,
@@ -9,9 +10,18 @@ import {
   type SolanaAuthWalletState,
 } from '../src/hooks/useSolanaAuth.ts';
 import { walletSessionSignInReadiness } from '../src/lib/profileClientLifecycle.ts';
-import type { StaffWalletSession } from '../src/lib/staffWalletSession.ts';
+import {
+  ensureStaffWalletSession,
+  installStaffWalletSessionIfUnchanged,
+  readStaffWalletSession,
+  saveStaffWalletSession,
+  staffWalletSessionTestHooks,
+  subscribeStaffWalletSession,
+  type StaffWalletSession,
+} from '../src/lib/staffWalletSession.ts';
+import { useShopSignIn } from '../src/shop/account/useShopSignIn.ts';
 
-const dom = new JSDOM('<!doctype html><html><body></body></html>');
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://mons.shop' });
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
 Object.defineProperty(globalThis, 'document', { configurable: true, value: dom.window.document });
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: dom.window.navigator });
@@ -84,7 +94,7 @@ class RuntimeHarness {
     this.nextState = readyState(wallet);
     return { wallet };
   };
-  authSubjectListeners = new Set<(uid: string | null) => void>();
+  authSubjectListeners = new Set<(uid: string | null, reason?: 'credential-expired') => void>();
   refreshListeners = new Set<() => void>();
   nextTimerId = 1;
   timers = new Map<number, { at: number; callback: () => void; delay: number }>();
@@ -141,9 +151,9 @@ class RuntimeHarness {
     },
   };
 
-  emitAuthSubject(uid: string | null) {
+  emitAuthSubject(uid: string | null, reason?: 'credential-expired') {
     this.uid = uid;
-    this.authSubjectListeners.forEach((listener) => listener(uid));
+    this.authSubjectListeners.forEach((listener) => listener(uid, reason));
   }
 
   emitRefresh() {
@@ -500,6 +510,7 @@ test('same-wallet cross-tab replacement wins over an in-flight staff exchange', 
   };
   await act(async () => {
     harness.staffSession = replacement;
+    harness.nextState = readyState(WALLET_A);
     harness.emitAuthSubject(WALLET_A);
   });
   await act(async () => exchange.resolve({
@@ -567,4 +578,455 @@ test('same-wallet connectivity changes restart an invalidated initial reconcilia
   await waitFor(() => assert.equal(calls, 2));
   await act(async () => first.resolve({ mergedStripeDeliveryOrders: 0, deliveryRecovery: { nextCheckAt: 1_000 } }));
   await waitFor(() => assert.equal(result.current.deliveryRecoveryNextCheckAt, 5_000));
+});
+
+test('an action joins restoration without waiting for queued profile refreshes', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  const followUp = deferred<GetProfileStateResponse>();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.loadImpl = () => harness.loadCalls === 1 ? initial.promise : followUp.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(harness.loadCalls, 1));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  let refresh!: Promise<boolean>;
+  act(() => {
+    gate = result.current.awaitWalletSessionRestoration(WALLET_A);
+    refresh = result.current.refreshProfileState();
+  });
+  await act(async () => {
+    initial.resolve(readyState(WALLET_A));
+    assert.equal(await gate, 'restored');
+  });
+  assert.equal(harness.loadCalls, 2);
+  assert.equal(harness.authenticateCalls, 0);
+  await act(async () => {
+    followUp.resolve(readyState(WALLET_A));
+    await refresh;
+  });
+});
+
+test('an action accepts a restored wallet when profile sections are unavailable', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.loadImpl = () => initial.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => {
+    initial.resolve({
+      responseMode: 'profile-state',
+      sessionWallet: WALLET_A,
+      profile: { status: 'error', error: { code: 'unavailable', message: 'profile unavailable' } },
+      shipments: { status: 'error', error: { code: 'unavailable', message: 'shipments unavailable' } },
+    });
+    assert.equal(await gate, 'restored');
+  });
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+  assert.equal(harness.authenticateCalls, 0);
+});
+
+test('failed restoration permits sign-in without displaying its internal error', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => initial.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => {
+    initial.reject(Object.assign(new Error('internal restoration error'), { code: 'unavailable' }));
+    assert.equal(await gate, 'sign-in-required');
+  });
+  assert.equal(result.current.error, null);
+  assert.equal(result.current.sessionResolution, 'resolving');
+  assert.deepEqual(harness.timerDelays(), [400]);
+  harness.loadImpl = async () => harness.nextState;
+  await act(async () => result.current.signIn());
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+});
+
+test('a settled missing session permits sign-in without an extra restore request', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  const loadCalls = harness.loadCalls;
+  assert.equal(await result.current.awaitWalletSessionRestoration(WALLET_A), 'sign-in-required');
+  assert.equal(harness.loadCalls, loadCalls);
+});
+
+test('anonymous identity bootstrap does not cancel an action waiting for restoration', async () => {
+  const harness = new RuntimeHarness();
+  harness.uid = null;
+  harness.nextState = emptyState();
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => { assert.equal(await gate, 'sign-in-required'); });
+  assert.match(result.current.authSubject || '', /^auth-anonymous-/);
+});
+
+test('an expired session resets and signs in within the same action', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.loadImpl = () => initial.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(harness.loadCalls, 1));
+  let action!: Promise<{ wallet: string }>;
+  act(() => {
+    action = result.current.awaitWalletSessionRestoration(WALLET_A).then((outcome) => {
+      assert.equal(outcome, 'sign-in-required');
+      return result.current.signIn();
+    });
+  });
+  await act(async () => {
+    harness.loadImpl = async () => harness.nextState;
+    initial.reject(Object.assign(new Error('expired session'), { code: 'unauthenticated' }));
+    assert.deepEqual(await action, { wallet: WALLET_A });
+  });
+  assert.equal(harness.signOutCalls, 1);
+  assert.equal(harness.authenticateCalls, 1);
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+});
+
+test('local staff credential expiry during bootstrap permits a fresh staff sign-in', async (t) => {
+  for (const expiry of ['http-401', 'timestamp'] as const) {
+    await t.test(expiry, async () => {
+      const harness = new RuntimeHarness();
+      const staffWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+      const token = `mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`;
+      const originalNow = Date.now;
+      const now = Date.now();
+      const storedSession = { wallet: staffWallet, token, refreshedAt: now - 86_400_001, expiresAt: now + 100_000 };
+      await saveStaffWalletSession(storedSession);
+      harness.uid = staffWallet;
+      harness.nextState = emptyState();
+      harness.reconcileImpl = () => new Promise(() => {});
+      harness.runtime.isStaffWallet = (wallet) => wallet === staffWallet;
+      harness.runtime.hasStaffSession = (wallet) => readStaffWalletSession()?.wallet === wallet;
+      harness.runtime.currentStaffSession = readStaffWalletSession;
+      harness.runtime.installStaffSession = installStaffWalletSessionIfUnchanged;
+      const bootstrap = deferred<void>();
+      const originalFetch = globalThis.fetch;
+      let refreshCalls = 0;
+      globalThis.fetch = async () => {
+        refreshCalls += 1;
+        return Response.json({ error: { message: 'Staff authentication is required.' } }, { status: 401 });
+      };
+      const unsubscribe = subscribeStaffWalletSession((wallet, reason) => harness.emitAuthSubject(wallet, reason));
+      const ensureAuthenticated = harness.runtime.ensureAuthenticated;
+      harness.runtime.ensureAuthenticated = async () => {
+        await bootstrap.promise;
+        const staffSession = await ensureStaffWalletSession();
+        return staffSession?.wallet || ensureAuthenticated();
+      };
+      let challengeCalls = 0;
+      harness.runtime.createStaffChallenge = async () => {
+        challengeCalls += 1;
+        return { challengeId: 'challenge', message: 'fresh staff challenge', expiresAt: 10_000 };
+      };
+      harness.runtime.authenticateStaffWallet = async () => {
+        harness.nextState = readyState(staffWallet);
+        return { ...storedSession, refreshedAt: Date.now(), expiresAt: Date.now() + 100_000 };
+      };
+      try {
+        const { result, unmount } = renderHook(() => useSolanaAuthWithRuntime(walletState(staffWallet), harness.runtime));
+        const originalSignal = result.current.intentCancellationSignal;
+        let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+        act(() => { gate = result.current.awaitWalletSessionRestoration(staffWallet); });
+        await act(async () => {
+          if (expiry === 'timestamp') Date.now = () => storedSession.expiresAt;
+          bootstrap.resolve();
+          assert.equal(await gate, 'sign-in-required');
+        });
+        assert.equal(originalSignal.aborted, false);
+        assert.equal(refreshCalls, expiry === 'timestamp' ? 0 : 1);
+        await act(async () => result.current.signIn());
+        assert.equal(challengeCalls, 1);
+        assert.equal(result.current.hasAuthenticatedWalletSession(staffWallet), true);
+        assert.equal(originalSignal.aborted, false);
+        unmount();
+      } finally {
+        unsubscribe();
+        globalThis.fetch = originalFetch;
+        Date.now = originalNow;
+        dom.window.localStorage.removeItem(staffWalletSessionTestHooks.storageKey);
+      }
+    });
+  }
+});
+
+test('shop actions continue through wallet selection and real auth restoration', async (t) => {
+  for (const outcome of ['restored', 'signed-out', 'expired', 'failed'] as const) {
+    await t.test(outcome, async () => {
+      const harness = new RuntimeHarness();
+      harness.nextState = emptyState();
+      harness.reconcileImpl = () => new Promise(() => {});
+      const initial = deferred<GetProfileStateResponse>();
+      const signature = deferred<Uint8Array>();
+      let signatureCalls = 0;
+      const messages: string[] = [];
+      const { result, rerender, unmount } = renderHook(
+        ({ wallet, modalVisible }: { wallet: string | null; modalVisible: boolean }) => {
+          const auth = useSolanaAuthWithRuntime({
+            ...walletState(wallet),
+            signMessage: () => { signatureCalls += 1; return signature.promise; },
+          }, harness.runtime);
+          const shopSignIn = useShopSignIn({
+            auth,
+            connectedWallet: wallet || undefined,
+            publicKey: wallet ? new PublicKey(wallet) : null,
+            wallet: { connecting: false, disconnecting: false },
+            walletModalVisible: modalVisible,
+            setVisible: () => undefined,
+            isSignedInWallet: Boolean(wallet && auth.sessionWallet === wallet && auth.authenticated),
+            hasAuthenticatedAccount: Boolean(auth.sessionWallet && auth.authenticated),
+            showToast: (message) => { messages.push(message); },
+            isUserRejectedError: () => false,
+          });
+          return { auth, shopSignIn };
+        },
+        { initialProps: { wallet: null as string | null, modalVisible: true } },
+      );
+      await waitFor(() => assert.equal(result.current.auth.sessionResolution, 'settled'));
+      const intentSignal = result.current.auth.intentCancellationSignal;
+      let action!: Promise<boolean>;
+      act(() => { action = result.current.shopSignIn.ensureSignedIn(); });
+      harness.loadImpl = () => initial.promise;
+      rerender({ wallet: WALLET_A, modalVisible: false });
+      await waitFor(() => assert.equal(harness.loadCalls, 2));
+      await act(async () => {
+        harness.loadImpl = async () => harness.nextState;
+        if (outcome === 'expired' || outcome === 'failed') {
+          initial.reject(Object.assign(new Error('internal restoration failure'), {
+            code: outcome === 'expired' ? 'unauthenticated' : 'unavailable',
+          }));
+        } else {
+          initial.resolve(outcome === 'restored' ? readyState(WALLET_A) : emptyState());
+        }
+      });
+      if (outcome !== 'restored') {
+        await waitFor(() => assert.equal(signatureCalls, 1));
+        await act(async () => { signature.resolve(new Uint8Array(64)); });
+      }
+      assert.equal(await action, true);
+      assert.equal(signatureCalls, outcome === 'restored' ? 0 : 1);
+      assert.equal(result.current.auth.hasAuthenticatedWalletSession(WALLET_A), true);
+      assert.equal(intentSignal.aborted, false);
+      assert.deepEqual(messages, []);
+      unmount();
+    });
+  }
+});
+
+test('an action waits for mismatched-session logout before permitting sign-in', async () => {
+  const harness = new RuntimeHarness();
+  const logout = deferred<void>();
+  harness.signOutImpl = async () => {
+    await logout.promise;
+    harness.nextState = emptyState();
+    harness.emitAuthSubject(null);
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_B), harness.runtime));
+  await waitFor(() => assert.equal(harness.signOutCalls, 1));
+  let finished = false;
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => {
+    gate = result.current.awaitWalletSessionRestoration(WALLET_B).then((value) => {
+      finished = true;
+      return value;
+    });
+  });
+  await act(async () => Promise.resolve());
+  assert.equal(finished, false);
+  await act(async () => {
+    logout.resolve();
+    assert.equal(await gate, 'sign-in-required');
+  });
+  assert.equal(harness.signOutCalls, 1);
+});
+
+test('a new action waits for an explicit logout already in progress', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  const logout = deferred<void>();
+  harness.signOutImpl = async () => {
+    await logout.promise;
+    harness.nextState = emptyState();
+    harness.emitAuthSubject(null);
+  };
+  let signOut!: Promise<void>;
+  act(() => { signOut = result.current.signOut(); });
+  const newIntent = result.current.intentCancellationSignal;
+  let finished = false;
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => {
+    gate = result.current.awaitWalletSessionRestoration(WALLET_A).then((value) => {
+      finished = true;
+      return value;
+    });
+  });
+  await act(async () => Promise.resolve());
+  assert.equal(finished, false);
+  assert.equal(harness.authenticateCalls, 0);
+  await act(async () => {
+    logout.resolve();
+    await signOut;
+    assert.equal(await gate, 'sign-in-required');
+  });
+  assert.equal(newIntent.aborted, false);
+  assert.equal(harness.signOutCalls, 1);
+});
+
+test('failed mismatched-session cleanup rejects the action gate', async () => {
+  const harness = new RuntimeHarness();
+  const logout = deferred<void>();
+  harness.signOutImpl = () => logout.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_B), harness.runtime));
+  await waitFor(() => assert.equal(harness.signOutCalls, 1));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_B); });
+  const rejected = assert.rejects(gate, /Unable to sign in/);
+  await act(async () => {
+    logout.reject(new Error('logout failed'));
+    await rejected;
+  });
+  assert.equal(result.current.error, null);
+  assert.equal(harness.authenticateCalls, 0);
+});
+
+test('a timed-out restoration cannot overwrite a subsequently signed-in session', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.loadImpl = () => initial.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(harness.loadCalls, 1));
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => {
+    harness.advance(20_000);
+    assert.equal(await gate, 'sign-in-required');
+  });
+  harness.loadImpl = async () => harness.nextState;
+  await act(async () => result.current.signIn());
+  await act(async () => initial.resolve(emptyState()));
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+  assert.equal(result.current.sessionWallet, WALLET_A);
+});
+
+test('a profile read started during signing cannot overwrite the newly authenticated session', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const signature = deferred<Uint8Array>();
+  let signatureCalls = 0;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime({
+    ...walletState(WALLET_A),
+    signMessage: () => { signatureCalls += 1; return signature.promise; },
+  }, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  let signedIn = false;
+  let signIn!: Promise<{ wallet: string }>;
+  act(() => { signIn = result.current.signIn().then((value) => { signedIn = true; return value; }); });
+  await waitFor(() => assert.equal(signatureCalls, 1));
+  const stale = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => stale.promise;
+  const previousLoadCalls = harness.loadCalls;
+  await act(async () => harness.emitRefresh());
+  await waitFor(() => assert.equal(harness.loadCalls, previousLoadCalls + 1));
+  harness.loadImpl = async () => harness.nextState;
+  await act(async () => signature.resolve(new Uint8Array(64)));
+  await waitFor(() => assert.equal(signedIn, true));
+  assert.deepEqual(await signIn, { wallet: WALLET_A });
+  await act(async () => stale.resolve(emptyState()));
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+});
+
+test('action restoration waits cancel promptly when their context ends', async (t) => {
+  for (const reason of ['abort', 'wallet-switch', 'disconnect', 'sign-out', 'unmount'] as const) {
+    await t.test(reason, async () => {
+      const harness = new RuntimeHarness();
+      const initial = deferred<GetProfileStateResponse>();
+      const controller = new AbortController();
+      harness.loadImpl = () => initial.promise;
+      const { result, rerender, unmount } = renderHook(
+        ({ wallet }: { wallet: string | null }) => useSolanaAuthWithRuntime(walletState(wallet), harness.runtime),
+        { initialProps: { wallet: WALLET_A as string | null } },
+      );
+      let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+      act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A, controller.signal); });
+      await act(async () => {
+        if (reason === 'abort') controller.abort();
+        if (reason === 'wallet-switch') rerender({ wallet: WALLET_B });
+        if (reason === 'disconnect') rerender({ wallet: null });
+        if (reason === 'sign-out') await result.current.signOut();
+        if (reason === 'unmount') unmount();
+      });
+      assert.equal(await gate, 'cancelled');
+      assert.equal(harness.authenticateCalls, 0);
+      await act(async () => initial.resolve(emptyState()));
+      unmount();
+    });
+  }
+});
+
+test('external same-wallet auth replacement cancels the original intent and restoration wait', async () => {
+  const harness = new RuntimeHarness();
+  const initial = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => initial.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(harness.loadCalls, 1));
+  const originalSignal = result.current.intentCancellationSignal;
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => harness.emitAuthSubject('auth-replacement'));
+  assert.equal(await gate, 'cancelled');
+  assert.equal(originalSignal.aborted, true);
+  assert.notEqual(result.current.intentCancellationSignal, originalSignal);
+  assert.equal(result.current.intentCancellationSignal.aborted, false);
+  await act(async () => initial.resolve(emptyState()));
+});
+
+test('external logout cancels an action even while auth bootstrap is in flight', async () => {
+  const harness = new RuntimeHarness();
+  const bootstrap = deferred<string>();
+  harness.runtime.ensureAuthenticated = () => bootstrap.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  const originalSignal = result.current.intentCancellationSignal;
+  let gate!: ReturnType<typeof result.current.awaitWalletSessionRestoration>;
+  act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
+  await act(async () => harness.emitAuthSubject(null));
+  assert.equal(await gate, 'cancelled');
+  assert.equal(originalSignal.aborted, true);
+  assert.equal(result.current.intentCancellationSignal.aborted, false);
+  assert.equal(harness.authenticateCalls, 0);
+  await act(async () => bootstrap.resolve('auth-a'));
+  assert.equal(harness.loadCalls, 0);
+});
+
+test('sign-in rejects if its final profile refresh outlives the connected wallet', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result, rerender } = renderHook(
+    ({ wallet }: { wallet: string | null }) => useSolanaAuthWithRuntime(walletState(wallet), harness.runtime),
+    { initialProps: { wallet: WALLET_A as string | null } },
+  );
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  const finalRefresh = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => finalRefresh.promise;
+  let signIn!: Promise<{ wallet: string }>;
+  act(() => { signIn = result.current.signIn(); });
+  const rejected = assert.rejects(signIn, /changed during sign-in/);
+  await waitFor(() => assert.equal(harness.authenticateCalls, 1));
+  rerender({ wallet: null });
+  await act(async () => {
+    finalRefresh.resolve(readyState(WALLET_A));
+    await rejected;
+  });
 });

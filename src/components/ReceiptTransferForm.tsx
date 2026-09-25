@@ -14,6 +14,7 @@ export type ReceiptTransferFormProps = {
   feePayer: string;
   onTransfer: (destination: string) => Promise<void>;
   onCancel: () => void;
+  disabled?: boolean;
 };
 
 function readableTransferError(error: unknown): string {
@@ -25,6 +26,7 @@ export function ReceiptTransferForm({
   feePayer,
   onTransfer,
   onCancel,
+  disabled = false,
 }: ReceiptTransferFormProps) {
   const destinationInputRef = useRef<HTMLInputElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -53,7 +55,7 @@ export function ReceiptTransferForm({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (isPending()) return;
+    if (isPending() || disabled) return;
 
     const trimmedDestination = destination.trim();
     setDestination(trimmedDestination);
@@ -107,7 +109,7 @@ export function ReceiptTransferForm({
         <button ref={cancelButtonRef} type="button" onClick={dismiss} disabled={pending}>
           Cancel
         </button>
-        <button ref={submitButtonRef} type="submit" aria-disabled={pending} aria-busy={pending}>
+        <button ref={submitButtonRef} type="submit" aria-disabled={pending || disabled} aria-busy={pending} disabled={disabled && !pending}>
           OK
         </button>
       </div>

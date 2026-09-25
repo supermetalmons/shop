@@ -55,6 +55,7 @@ export type SolanaAuthState = {
 };
 
 export type SessionResolution = 'disabled' | 'resolving' | 'settled';
+export type WalletSessionRestoration = 'restored' | 'sign-in-required' | 'cancelled';
 
 export type SolanaAuthWalletState = {
   connected: boolean;
@@ -64,7 +65,7 @@ export type SolanaAuthWalletState = {
 
 export type SolanaAuthRuntime = {
   currentAuthSubject: () => string | null;
-  subscribeAuthSubject: (listener: (authSubject: string | null) => void) => () => void;
+  subscribeAuthSubject: (listener: (authSubject: string | null, reason?: 'credential-expired') => void) => () => void;
   ensureAuthenticated: () => Promise<string>;
   loadProfileState: () => Promise<GetProfileStateResponse>;
   reconcileProfileState: (options?: ReconcileProfileStateRequest) => Promise<ReconcileProfileStateResponse>;
@@ -99,8 +100,16 @@ type SignInAttempt = {
 
 type RefreshRun = {
   contextGeneration: number;
+  sessionRevision: number;
   queued: boolean;
   promise: Promise<boolean>;
+  attempt: Promise<boolean>;
+};
+
+type SessionReset = {
+  promise: Promise<void>;
+  status: 'pending' | 'complete' | 'failed';
+  error?: unknown;
 };
 
 const authenticateWalletTails = new Map<string, Promise<void>>();
@@ -152,9 +161,9 @@ function subscribeBrowserRefreshEvents(listener: () => void): () => void {
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   currentAuthSubject: () => readStaffWalletSession()?.wallet || currentAnonymousSubject(),
   subscribeAuthSubject: (listener) => {
-    const emit = () => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject());
-    const unsubscribeStaff = subscribeStaffWalletSession(emit);
-    const unsubscribeAnonymous = subscribeAnonymousSession(emit);
+    const emit = (reason?: 'credential-expired') => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject(), reason);
+    const unsubscribeStaff = subscribeStaffWalletSession((_wallet, reason) => emit(reason));
+    const unsubscribeAnonymous = subscribeAnonymousSession(() => emit());
     return () => {
       unsubscribeStaff();
       unsubscribeAnonymous();
@@ -223,6 +232,7 @@ function shipmentsInDisplayOrder(shipments: DeliveryOrderSummary[]): DeliveryOrd
 const PERSISTENT_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000] as const;
 const PROFILE_REFRESH_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000, 30_000, 60_000] as const;
 const PROFILE_REFRESH_INTERVAL_MS = 60_000;
+const ACTION_RESTORATION_TIMEOUT_MS = 20_000;
 
 export function useSolanaAuthWithRuntime(
   walletState: SolanaAuthWalletState,
@@ -233,7 +243,11 @@ export function useSolanaAuthWithRuntime(
   const [state, setState] = useState<SolanaAuthState>(EMPTY_AUTH_STATE);
   const [error, setError] = useState<string | null>(null);
   const [authUserRevision, setAuthUserRevision] = useState(0);
+  const [intentController, setIntentController] = useState(() => new AbortController());
+  const intentControllerRef = useRef(intentController);
   const [sessionResolution, setSessionResolution] = useState<SessionResolution>('disabled');
+  const sessionResolutionRef = useRef(sessionResolution);
+  sessionResolutionRef.current = sessionResolution;
   const lastSignedRef = useRef<{
     wallet: string;
     uid: string;
@@ -242,6 +256,7 @@ export function useSolanaAuthWithRuntime(
     createdAt: number;
   } | null>(null);
   const connectedWalletRef = useRef<string | null>(connectedWallet);
+  const previousConnectedWalletRef = useRef<string | null>(connectedWallet);
   const connectedRef = useRef<boolean>(connected);
   const sessionWalletRef = useRef<string | null>(null);
   const sessionSubjectRef = useRef<string | null>(null);
@@ -249,11 +264,17 @@ export function useSolanaAuthWithRuntime(
   const mismatchSignOutRef = useRef<string | null>(null);
   const mismatchSignOutTimerRef = useRef<unknown>(null);
   const contextGenerationRef = useRef(0);
+  const sessionRevisionRef = useRef(0);
   const ownerGenerationRef = useRef(0);
   const deliveryRecoveryRequestGenerationRef = useRef(0);
   const deliveryRecoveryAppliedGenerationRef = useRef(0);
   const signInAttemptRef = useRef<SignInAttempt | null>(null);
   const refreshRunRef = useRef<RefreshRun | null>(null);
+  const sessionResetRef = useRef<SessionReset | null>(null);
+  const authBootstrapInFlightRef = useRef(0);
+  const restorationGenerationRef = useRef(0);
+  const restorationWaitersRef = useRef(new Set<() => void>());
+  const activeRestorationGatesRef = useRef(0);
   const mountedRef = useRef(true);
   connectedWalletRef.current = connectedWallet;
   connectedRef.current = connected;
@@ -264,16 +285,67 @@ export function useSolanaAuthWithRuntime(
     mismatchSignOutTimerRef.current = null;
   }, [runtime]);
 
+  const cancelRestorationWaits = useCallback(() => {
+    restorationGenerationRef.current += 1;
+    restorationWaitersRef.current.forEach((cancel) => cancel());
+  }, []);
+
+  const invalidateIntentContext = useCallback(() => {
+    const previous = intentControllerRef.current;
+    const next = new AbortController();
+    intentControllerRef.current = next;
+    if (mountedRef.current) setIntentController(next);
+    previous.abort();
+    cancelRestorationWaits();
+  }, [cancelRestorationWaits]);
+
+  useLayoutEffect(() => {
+    const previousWallet = previousConnectedWalletRef.current;
+    previousConnectedWalletRef.current = connectedWallet;
+    if (previousWallet === connectedWallet) return;
+    if (previousWallet) {
+      invalidateIntentContext();
+      return;
+    }
+    cancelRestorationWaits();
+  }, [cancelRestorationWaits, connectedWallet, invalidateIntentContext]);
+
   useLayoutEffect(() => {
     mountedRef.current = true;
+    setIntentController(intentControllerRef.current);
     return () => {
       mountedRef.current = false;
+      invalidateIntentContext();
       contextGenerationRef.current += 1;
       signInAttemptRef.current = null;
       refreshRunRef.current = null;
       clearMismatchSignOutTimer();
     };
-  }, [clearMismatchSignOutTimer]);
+  }, [clearMismatchSignOutTimer, invalidateIntentContext]);
+
+  const ensureAuthSubject = useCallback(async () => {
+    authBootstrapInFlightRef.current += 1;
+    try {
+      return await runtime.ensureAuthenticated();
+    } finally {
+      authBootstrapInFlightRef.current -= 1;
+    }
+  }, [runtime]);
+
+  const resetAuthSession = useCallback(() => {
+    if (sessionResetRef.current?.status === 'pending') return sessionResetRef.current.promise;
+    const reset: SessionReset = { promise: Promise.resolve(), status: 'pending' };
+    sessionResetRef.current = reset;
+    reset.promise = runtime.signOut().then(
+      () => { reset.status = 'complete'; },
+      (resetError) => {
+        reset.status = 'failed';
+        reset.error = resetError;
+        throw resetError;
+      },
+    );
+    return reset.promise;
+  }, [runtime]);
 
   const deactivateOwner = useCallback((loading = false) => {
     sessionWalletRef.current = null;
@@ -285,6 +357,7 @@ export function useSolanaAuthWithRuntime(
   }, []);
 
   const activateOwner = useCallback((wallet: string, uid: string) => {
+    sessionRevisionRef.current += 1;
     const previousWallet = sessionWalletRef.current;
     sessionWalletRef.current = wallet;
     sessionSubjectRef.current = uid;
@@ -315,9 +388,11 @@ export function useSolanaAuthWithRuntime(
       let retryCount = 0;
       const attemptSignOut = () => {
         if (!mountedRef.current || mismatchSignOutRef.current !== mismatchKey) return;
-        void runtime.signOut().catch((signOutError) => {
+        void resetAuthSession().catch((signOutError) => {
           if (!mountedRef.current || mismatchSignOutRef.current !== mismatchKey) return;
-          setError(errorMessage(signOutError, 'Unable to end the previous wallet session'));
+          if (!activeRestorationGatesRef.current) {
+            setError(errorMessage(signOutError, 'Unable to end the previous wallet session'));
+          }
           const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
           retryCount += 1;
           clearMismatchSignOutTimer();
@@ -329,7 +404,7 @@ export function useSolanaAuthWithRuntime(
       };
       attemptSignOut();
     },
-    [clearMismatchSignOutTimer, deactivateOwner, runtime],
+    [clearMismatchSignOutTimer, deactivateOwner, resetAuthSession, runtime],
   );
 
   const applyProfileState = useCallback((response: GetProfileStateResponse, uid: string) => {
@@ -404,19 +479,23 @@ export function useSolanaAuthWithRuntime(
   const refreshProfileState = useCallback((): Promise<boolean> => {
     const requestedGeneration = contextGenerationRef.current;
     const existing = refreshRunRef.current;
-    if (existing && existing.contextGeneration === requestedGeneration) {
+    if (existing && existing.contextGeneration === requestedGeneration &&
+      existing.sessionRevision === sessionRevisionRef.current) {
       existing.queued = true;
       return existing.promise;
     }
     const run: RefreshRun = {
       contextGeneration: requestedGeneration,
+      sessionRevision: sessionRevisionRef.current,
       queued: false,
       promise: Promise.resolve(true),
+      attempt: Promise.resolve(true),
     };
-    const isCurrent = () => mountedRef.current && contextGenerationRef.current === run.contextGeneration;
+    const isCurrent = () => mountedRef.current && contextGenerationRef.current === run.contextGeneration &&
+      sessionRevisionRef.current === run.sessionRevision;
     const execute = async (): Promise<boolean> => {
       try {
-        const uid = await runtime.ensureAuthenticated();
+        const uid = await ensureAuthSubject();
         if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
         const response = await runtime.loadProfileState();
         if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
@@ -429,9 +508,11 @@ export function useSolanaAuthWithRuntime(
           setError(null);
           setSessionResolution('resolving');
           try {
-            await runtime.signOut();
+            await resetAuthSession();
           } catch (signOutError) {
-            setError(errorMessage(signOutError, 'Unable to reset authentication'));
+            if (!activeRestorationGatesRef.current) {
+              setError(errorMessage(signOutError, 'Unable to reset authentication'));
+            }
           }
           throw refreshError;
         }
@@ -446,7 +527,7 @@ export function useSolanaAuthWithRuntime(
           setSessionResolution('settled');
         } else {
           setState((current) => ({ ...current, loading: true }));
-          setError(message);
+          if (!activeRestorationGatesRef.current) setError(message);
           setSessionResolution('resolving');
         }
         throw refreshError;
@@ -456,7 +537,8 @@ export function useSolanaAuthWithRuntime(
       let complete = true;
       do {
         run.queued = false;
-        complete = await execute();
+        run.attempt = execute();
+        complete = await run.attempt;
       } while (run.queued && isCurrent());
       return complete;
     })().finally(() => {
@@ -464,7 +546,88 @@ export function useSolanaAuthWithRuntime(
     });
     refreshRunRef.current = run;
     return run.promise;
-  }, [applyProfileState, deactivateOwner, runtime]);
+  }, [applyProfileState, deactivateOwner, ensureAuthSubject, resetAuthSession, runtime]);
+
+  const awaitWalletSessionRestoration = useCallback(async (
+    expectedWallet: string,
+    signal?: AbortSignal,
+  ): Promise<WalletSessionRestoration> => {
+    const generation = restorationGenerationRef.current;
+    const isCurrent = () => mountedRef.current && !signal?.aborted &&
+      restorationGenerationRef.current === generation && connectedWalletRef.current === expectedWallet;
+    const restored = () => sessionWalletRef.current === expectedWallet &&
+      sessionSubjectRef.current !== null && sessionSubjectRef.current === authSubjectRef.current;
+    if (!isCurrent()) return 'cancelled';
+    if (restored()) return 'restored';
+    if (sessionResolutionRef.current === 'settled' && !refreshRunRef.current && !mismatchSignOutRef.current &&
+      sessionResetRef.current?.status !== 'pending') return 'sign-in-required';
+
+    let cancel!: () => void;
+    const cancelled = new Promise<'cancelled'>((resolve) => { cancel = () => resolve('cancelled'); });
+    let timer: unknown = null;
+    const expired = new Promise<'timed-out'>((resolve) => {
+      timer = runtime.setTimer(() => resolve('timed-out'), ACTION_RESTORATION_TIMEOUT_MS);
+    });
+    const waitFor = (operation: Promise<unknown>) => Promise.race([
+      operation.then(() => 'complete' as const, () => 'failed' as const),
+      cancelled,
+      expired,
+    ]);
+    restorationWaitersRef.current.add(cancel);
+    signal?.addEventListener('abort', cancel, { once: true });
+    activeRestorationGatesRef.current += 1;
+    setError(null);
+    try {
+      while (isCurrent()) {
+        const reset = sessionResetRef.current;
+        if (reset?.status === 'pending') {
+          const outcome = await waitFor(reset.promise);
+          if (!isCurrent() || outcome === 'cancelled') return 'cancelled';
+          if (outcome === 'timed-out') throw new Error('Unable to sign in. Please try again.');
+          if (outcome === 'failed') throw new Error('Unable to sign in. Please try again.', { cause: reset.error });
+          if (restored()) return 'restored';
+          return 'sign-in-required';
+        }
+        if (reset?.status === 'failed' && mismatchSignOutRef.current) {
+          throw new Error('Unable to sign in. Please try again.', { cause: reset.error });
+        }
+        if (restored()) return 'restored';
+
+        let run = refreshRunRef.current;
+        if (!run || run.contextGeneration !== contextGenerationRef.current) {
+          void refreshProfileState().catch(() => undefined);
+          run = refreshRunRef.current;
+        }
+        if (!run) return 'sign-in-required';
+        const resetBeforeAttempt = sessionResetRef.current;
+        const outcome = await waitFor(run.attempt);
+        if (!isCurrent() || outcome === 'cancelled') return 'cancelled';
+        if (restored()) return 'restored';
+        if (outcome === 'timed-out') {
+          if (sessionResetRef.current?.status === 'pending') {
+            throw new Error('Unable to sign in. Please try again.');
+          }
+          contextGenerationRef.current += 1;
+          refreshRunRef.current = null;
+          return 'sign-in-required';
+        }
+        if (sessionResetRef.current?.status === 'pending') continue;
+        if (sessionResetRef.current?.status === 'failed' &&
+          (sessionResetRef.current !== resetBeforeAttempt || mismatchSignOutRef.current)) {
+          throw new Error('Unable to sign in. Please try again.', { cause: sessionResetRef.current.error });
+        }
+        if (outcome === 'failed' || run.contextGeneration === contextGenerationRef.current) {
+          return 'sign-in-required';
+        }
+      }
+      return 'cancelled';
+    } finally {
+      if (timer !== null) runtime.clearTimer(timer);
+      signal?.removeEventListener('abort', cancel);
+      restorationWaitersRef.current.delete(cancel);
+      activeRestorationGatesRef.current -= 1;
+    }
+  }, [refreshProfileState, runtime]);
 
   const beginDeliveryRecoveryScheduleUpdate = useCallback(() => {
     const wallet = sessionWalletRef.current;
@@ -513,7 +676,7 @@ export function useSolanaAuthWithRuntime(
     [beginDeliveryRecoveryScheduleUpdate, refreshProfileState, runtime],
   );
 
-  useEffect(() => runtime.subscribeAuthSubject((nextSubject) => {
+  useEffect(() => runtime.subscribeAuthSubject((nextSubject, reason) => {
     const previousSubject = authSubjectRef.current;
     const activeSignIn = signInAttemptRef.current;
     const invalidatesSession = authSubjectChangeInvalidatesSession({
@@ -528,12 +691,16 @@ export function useSolanaAuthWithRuntime(
       mismatchSignOutRef.current = null;
     }
     if (!invalidatesSession) return;
+    const internalReset = nextSubject === null && sessionResetRef.current?.status === 'pending';
+    const internalBootstrap = authBootstrapInFlightRef.current > 0 &&
+      previousSubject === null && nextSubject !== null;
+    if (!internalReset && !internalBootstrap && reason !== 'credential-expired') invalidateIntentContext();
     contextGenerationRef.current += 1;
     refreshRunRef.current = null;
     deactivateOwner(false);
     setError(null);
     setAuthUserRevision((revision) => revision + 1);
-  }), [clearMismatchSignOutTimer, deactivateOwner, runtime]);
+  }), [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, runtime]);
 
   useLayoutEffect(() => {
     const currentAuthSubject = authSubjectRef.current;
@@ -658,11 +825,14 @@ export function useSolanaAuthWithRuntime(
     if (!publicKey) return Promise.reject(new Error('Select a wallet to sign in.'));
     if (!signMessage) return Promise.reject(new Error('Wallet cannot sign messages'));
     const wallet = publicKey.toBase58();
-    const contextGeneration = contextGenerationRef.current;
+    let contextGeneration = contextGenerationRef.current;
     const existingAttempt = signInAttemptRef.current;
     if (existingAttempt?.wallet === wallet && existingAttempt.contextGeneration === contextGeneration) {
       return existingAttempt.promise;
     }
+    contextGeneration += 1;
+    contextGenerationRef.current = contextGeneration;
+    refreshRunRef.current = null;
     let resolveAttempt!: (result: SignInResult) => void;
     let rejectAttempt!: (error: unknown) => void;
     const promise = new Promise<SignInResult>((resolve, reject) => {
@@ -727,7 +897,7 @@ export function useSolanaAuthWithRuntime(
           session = staffSession;
           ensureAttemptCurrent();
         } else {
-          uid = await runtime.ensureAuthenticated();
+          uid = await ensureAuthSubject();
           attempt.uid = uid;
           ensureAttemptCurrent();
           const reuseWindowMs = 2 * 60 * 1000;
@@ -768,6 +938,10 @@ export function useSolanaAuthWithRuntime(
         activateOwner(wallet, uid);
         setSessionResolution('settled');
         await refreshProfileState().catch(() => undefined);
+        ensureAttemptCurrent();
+        if (sessionWalletRef.current !== wallet || sessionSubjectRef.current !== uid) {
+          throw new Error('Unable to sign in. Please try again.');
+        }
         resolveAttempt({ wallet });
       } catch (signInError) {
         console.error(signInError);
@@ -787,9 +961,10 @@ export function useSolanaAuthWithRuntime(
       }
     })();
     return promise;
-  }, [activateOwner, publicKey, refreshProfileState, runtime, signMessage]);
+  }, [activateOwner, ensureAuthSubject, publicKey, refreshProfileState, runtime, signMessage]);
 
   const signOut = useCallback(async () => {
+    invalidateIntentContext();
     contextGenerationRef.current += 1;
     clearMismatchSignOutTimer();
     mismatchSignOutRef.current = null;
@@ -798,12 +973,12 @@ export function useSolanaAuthWithRuntime(
     setError(null);
     lastSignedRef.current = null;
     try {
-      await runtime.signOut();
+      await resetAuthSession();
     } catch (signOutError) {
       await refreshProfileState().catch(() => false);
       throw signOutError;
     }
-  }, [clearMismatchSignOutTimer, deactivateOwner, refreshProfileState, runtime]);
+  }, [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, refreshProfileState, resetAuthSession]);
 
   const hasAuthenticatedWalletSession = useCallback(
     (wallet: string | null | undefined) => Boolean(
@@ -823,12 +998,14 @@ export function useSolanaAuthWithRuntime(
       ? state
       : { ...EMPTY_AUTH_STATE, loading: Boolean(connectedWallet && state.loading) }),
     sessionResolution: exposedSessionResolution,
+    intentCancellationSignal: intentController.signal,
     authSubject: authSubjectRef.current,
     error,
     signIn,
     signOut,
     reconcileProfile,
     refreshProfileState,
+    awaitWalletSessionRestoration,
     beginDeliveryRecoveryScheduleUpdate,
     hasAuthenticatedWalletSession,
   };
