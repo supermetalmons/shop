@@ -509,7 +509,7 @@ button.link.top__submenu-section:focus-visible {
 
 header.top--shop {
   --top-gap: clamp(8px, 2vw, 12px);
-  --top-wallet-width: clamp(112px, 30vw, 120px);
+  --top-wallet-width: 80px;
   --top-wallet-font-size: 12px;
   --top-wallet-padding-x: 10px;
   --top-wallet-padding-y: 0;
@@ -609,7 +609,6 @@ header.top--shop.top--spacer {
 
 @media (max-width: 360px) {
   header.top--shop {
-    --top-wallet-width: 112px;
     --top-wallet-font-size: 11.5px;
     --top-wallet-padding-x: 9px;
     --top-gap: 6px;
@@ -619,7 +618,6 @@ header.top--shop.top--spacer {
 
 @media (max-width: 300px) {
   header.top--shop {
-    --top-wallet-width: 108px;
     --top-wallet-font-size: 11px;
     --top-wallet-padding-x: 8px;
   }
