@@ -138,7 +138,7 @@
   display: block;
   width: 100%;
   padding: 0;
-  border: 3px solid transparent;
+  border: 5px solid transparent;
   border-radius: 0;
   background: transparent;
   color: inherit;
@@ -149,6 +149,10 @@
 
 .mi-note-cards__selectable:hover:not(:disabled) {
   background: transparent;
+}
+
+.mi-note-cards__selectable--preordered {
+  border-radius: var(--interactive-card-radius);
 }
 
 .mi-note-cards__selectable:disabled {
@@ -163,7 +167,6 @@
 }
 
 .mi-note-preorder-panel {
-  flex-wrap: wrap;
   width: min(500px, calc(100vw - 32px));
   bottom: calc(24px + env(safe-area-inset-bottom, 0px));
 }
@@ -182,26 +185,9 @@
   padding: 12px 18px;
 }
 
-.mi-note-preorder-panel__note,
-.mi-note-preorder-panel__error {
-  flex-basis: 100%;
-  margin: 0;
-  text-align: center;
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.mi-note-preorder-panel__note {
-  color: var(--muted);
-}
-
-.mi-note-preorder-panel__error {
-  color: var(--fg);
-}
-
 @media (max-width: 480px) {
   .mi-note-cards--selection {
-    padding-bottom: calc(210px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
   }
 
   .mi-note-preorder-panel {
@@ -221,11 +207,6 @@
 
   .mi-note-preorder-panel .selection-panel__actions {
     display: contents;
-  }
-
-  .mi-note-preorder-panel__note,
-  .mi-note-preorder-panel__error {
-    grid-column: 1 / -1;
   }
 }
 

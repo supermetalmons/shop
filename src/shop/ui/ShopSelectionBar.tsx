@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { FaBoxOpen, FaPlane } from 'react-icons/fa6';
 import {
   BackgroundLayerPortal
@@ -23,24 +24,11 @@ type ShopSelectionBarProps = Pick<ShopInventorySelection,
   openActionProgressForDropId: (dropId?: string) => string;
   openActionLabelForDropId: (dropId?: string) => string;
 };
-export function ShopSelectionBar({
-  selectedCount,
-  selectedPreview,
-  selectedOverflow,
-  canViewSelected,
-  canOpenSelected,
-  canShipSelected,
-  hasPreorderSelected,
-  selectedBox,
-  clearSelection,
-  handleViewSelectedItem,
-  handleOpenSelectedBox,
-  handleOpenShip,
-  startOpenLoading,
-  openActionProgressForDropId,
-  openActionLabelForDropId,
-}: ShopSelectionBarProps) {
-  return (selectedCount ? (
+
+type SelectionPanelProps = Pick<ShopSelectionBarProps, 'selectedCount' | 'selectedPreview' | 'selectedOverflow' | 'clearSelection'>;
+
+function SelectionPanel({ selectedCount, selectedPreview, selectedOverflow, clearSelection, children }: SelectionPanelProps & { children: ReactNode }) {
+  return selectedCount ? (
     <BackgroundLayerPortal>
       <div className="selection-panel">
         <div className="selection-panel__left">
@@ -78,68 +66,95 @@ export function ShopSelectionBar({
           </div>
         </div>
         <div className="selection-panel__actions">
-          <button
-            type="button"
-            className="quiet"
-            onClick={clearSelection}
-          >
-            Cancel
-          </button>
-          {canViewSelected ? (
-            <button
-              type="button"
-              className="selection-panel__view"
-              onClick={handleViewSelectedItem}
-            >
-              <svg
-                aria-hidden="true"
-                focusable="false"
-                width="16"
-                height="16"
-                viewBox="0 0 16 16"
-                fill="none"
-              >
-                <rect
-                  x="3.25"
-                  y="1.75"
-                  width="9.5"
-                  height="12.5"
-                  rx="2.5"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                />
-              </svg>
-              <span>View</span>
-            </button>
-          ) : null}
-          {canOpenSelected ? (
-            <button
-              type="button"
-              className="selection-panel__open"
-              onClick={handleOpenSelectedBox}
-              disabled={Boolean(startOpenLoading)}
-            >
-              <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
-              <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
-            </button>
-          ) : null}
-          {hasPreorderSelected ? (
-            <button type="button" className="selection-panel__ship" disabled>
-              <FaPlane aria-hidden="true" focusable="false" size={16} />
-              <span>Soon</span>
-            </button>
-          ) : canShipSelected ? (
-            <button
-              type="button"
-              className="selection-panel__ship"
-              onClick={handleOpenShip}
-            >
-              <FaPlane aria-hidden="true" focusable="false" size={16} />
-              <span>Send</span>
-            </button>
-          ) : null}
+          <button type="button" className="quiet" onClick={clearSelection}>Cancel</button>
+          {children}
         </div>
       </div>
     </BackgroundLayerPortal>
-  ) : null);
+  ) : null;
+}
+
+function ViewButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="selection-panel__view"
+      onClick={onClick}
+    >
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="none"
+      >
+        <rect
+          x="3.25"
+          y="1.75"
+          width="9.5"
+          height="12.5"
+          rx="2.5"
+          stroke="currentColor"
+          strokeWidth="1.75"
+        />
+      </svg>
+      <span>View</span>
+    </button>
+  );
+}
+
+export function PreorderSelectionBar({ canViewSelected, handleViewSelectedItem, ...panel }: SelectionPanelProps & Pick<ShopSelectionBarProps, 'canViewSelected' | 'handleViewSelectedItem'>) {
+  return (
+    <SelectionPanel {...panel}>
+      {canViewSelected && <ViewButton onClick={handleViewSelectedItem} />}
+      <button type="button" className="selection-panel__ship" disabled>
+        <FaPlane aria-hidden="true" focusable="false" size={16} />
+        <span>Soon</span>
+      </button>
+    </SelectionPanel>
+  );
+}
+
+export function ShopSelectionBar({
+  selectedCount,
+  selectedPreview,
+  selectedOverflow,
+  canViewSelected,
+  canOpenSelected,
+  canShipSelected,
+  hasPreorderSelected,
+  selectedBox,
+  clearSelection,
+  handleViewSelectedItem,
+  handleOpenSelectedBox,
+  handleOpenShip,
+  startOpenLoading,
+  openActionProgressForDropId,
+  openActionLabelForDropId,
+}: ShopSelectionBarProps) {
+  const panel = { selectedCount, selectedPreview, selectedOverflow, clearSelection };
+  if (hasPreorderSelected) return <PreorderSelectionBar {...panel} canViewSelected={canViewSelected} handleViewSelectedItem={handleViewSelectedItem} />;
+  return (
+    <SelectionPanel {...panel}>
+      {canViewSelected && <ViewButton onClick={handleViewSelectedItem} />}
+      {canOpenSelected ? (
+        <button
+          type="button"
+          className="selection-panel__open"
+          onClick={handleOpenSelectedBox}
+          disabled={Boolean(startOpenLoading)}
+        >
+          <FaBoxOpen aria-hidden="true" focusable="false" size={18} />
+          <span>{startOpenLoading === selectedBox?.id ? openActionProgressForDropId(selectedBox?.dropId) : openActionLabelForDropId(selectedBox?.dropId)}</span>
+        </button>
+      ) : null}
+      {canShipSelected && (
+        <button type="button" className="selection-panel__ship" onClick={handleOpenShip}>
+          <FaPlane aria-hidden="true" focusable="false" size={16} />
+          <span>Send</span>
+        </button>
+      )}
+    </SelectionPanel>
+  );
 }

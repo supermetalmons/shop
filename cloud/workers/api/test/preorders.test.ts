@@ -122,7 +122,7 @@ test('anonymous checkout requires the existing signed wallet binding and uses it
 test('invalid selections and disabled mainnet fail before preparing or signing', async () => {
   const h = harness();
   for (const ids of [[1, 1], [0], [1396], [1, 2, 3, 4]]) assert.equal((await h.prepare(ids)).status, 400);
-  for (const path of ['availability', 'status', 'prepare', 'submit', 'cancel']) {
+  for (const path of ['status', 'prepare', 'submit', 'cancel']) {
     const response = await h.call(path, { preorderId: 'mi_note_cards',
       ...(path === 'prepare' ? { buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() } : {}),
       ...(['submit', 'cancel'].includes(path) ? { orderId: crypto.randomUUID() } : {}),
@@ -289,4 +289,43 @@ test('foreign wallets cannot read, submit, or cancel another order', async () =>
     preorderId: config.preorderId, orderId: prepared.body.order.orderId,
     ...(path === 'submit' ? { transactionBase64: 'buyer-signed' } : {}),
   })).status, 403);
+});
+
+test('mainnet availability is public, collection-scoped, and does not expire or alter orders', async () => {
+  const h = harness();
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const first = await h.prepare([1]);
+  const template = (await h.store.get(first.body.order.orderId))!;
+  const submitted = await h.store.submit(template, { transactionBase64: 'devnet-signed', signature: 'devnet-signature' }, 1000);
+  await h.store.finish(submitted, 'succeeded', 1000);
+  const mainnetOrder = await h.store.reserve({ ...template,
+    orderId: crypto.randomUUID(), requestId: crypto.randomUUID(), preorderId: mainnet.preorderId,
+    cluster: mainnet.cluster, collection: mainnet.collection, cardIds: [2],
+    assets: [{ ...template.assets[0], id: 2, address: Keypair.generate().publicKey.toBase58() }],
+    status: 'prepared',
+  });
+  const mainnetSubmitted = await h.store.submit(mainnetOrder, { transactionBase64: 'mainnet-signed', signature: 'mainnet-signature' }, 1000);
+  await h.store.finish(mainnetSubmitted, 'succeeded', 1000);
+  const expiring = await h.prepare([3]);
+  h.time(1_000_000);
+  const orders = h.database.prepare('SELECT * FROM commerce_preorder_orders ORDER BY order_id').all();
+  const claims = h.database.prepare('SELECT * FROM commerce_preorder_claims ORDER BY order_id').all();
+  const forbidden = async () => { throw new Error('Read-only availability must not authenticate or transact'); };
+  const result = await h.call('availability', { preorderId: mainnet.preorderId }, {
+    verifyIdentity: forbidden, prepare: forbidden, authorize: forbidden, probe: forbidden, send: forbidden,
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.preorderId, mainnet.preorderId);
+  assert.equal(result.body.items.length, 1395);
+  assert.equal(result.body.items[0].status, 'available');
+  assert.equal(result.body.items[1].status, 'preordered');
+  assert.equal(result.body.items[2].status, 'available');
+  assert.deepEqual(h.database.prepare('SELECT * FROM commerce_preorder_orders ORDER BY order_id').all(), orders);
+  assert.deepEqual(h.database.prepare('SELECT * FROM commerce_preorder_claims ORDER BY order_id').all(), claims);
+  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'prepared');
+  assert.equal((await h.call('availability', { preorderId: 'unknown' })).status, 409);
+  const devnet = await h.call('availability', { preorderId: config.preorderId });
+  assert.equal(devnet.body.items[0].status, 'preordered');
+  assert.equal(devnet.body.items[1].status, 'available');
+  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'expired');
 });

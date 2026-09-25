@@ -1,9 +1,10 @@
 import { VersionedTransaction } from '@solana/web3.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { PreorderAvailabilityResponse, PreorderConfig, PreorderOrder } from '../../shared/preorders.ts';
+import type { PreorderConfig, PreorderOrder } from '../../shared/preorders.ts';
 import { createPreorderApi } from '../lib/preorderApi';
 import { ProfileApiError } from '../api/transport';
 import { isUserRejectedError } from '../shop/commerce/transactionSupport';
+import { usePreorderAvailability } from './usePreorderAvailability';
 
 const preorderApi = createPreorderApi();
 const RECOVERY_ERROR_MESSAGE = 'Couldn’t check your preorder. We’ll keep checking.';
@@ -58,12 +59,13 @@ function samePending(left: PendingPreorder | null, right: PendingPreorder | null
 export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi) {
   const { config, active, buyer, signedIn } = options;
   const scope = buyer ? storageKey(config, buyer) : '';
+  const scopeId = `${config.preorderId}:${scope}`;
+  const [checkoutScope, setCheckoutScope] = useState(scopeId);
   const latest = useRef(options);
   latest.current = options;
   const currentScope = useRef(scope);
   currentScope.current = scope;
-  const [availability, setAvailability] = useState<PreorderAvailabilityResponse | null>(null);
-  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const { availability, availabilityError, refreshAvailability } = usePreorderAvailability(config, active, api);
   const [order, setOrder] = useState<PreorderOrder | null>(null);
   const [pending, setPending] = useState<PendingPreorder | null>(null);
   const pendingRef = useRef<PendingPreorder | null>(null);
@@ -75,26 +77,6 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
   const activeOperation = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const completed = useRef(new Set<string>());
-  const [now, setNow] = useState(Date.now);
-  const availabilityRequest = useRef(0);
-  const availabilityInFlight = useRef<string | null>(null);
-
-  const refreshAvailability = useCallback(async () => {
-    if (!config.enabled || availabilityInFlight.current === config.preorderId) return;
-    availabilityInFlight.current = config.preorderId;
-    const request = ++availabilityRequest.current;
-    try {
-      const result = await api.availability(config.preorderId);
-      if (request !== availabilityRequest.current || latest.current.config.preorderId !== config.preorderId) return;
-      setAvailability(result);
-      setAvailabilityError(null);
-    } catch {
-      if (request !== availabilityRequest.current || latest.current.config.preorderId !== config.preorderId) return;
-      setAvailabilityError('Couldn’t check card availability. Try again.');
-    } finally {
-      if (availabilityInFlight.current === config.preorderId) availabilityInFlight.current = null;
-    }
-  }, [api, config]);
 
   const keepPending = useCallback((value: PendingPreorder | null, key: string) => {
     writePending(key, value);
@@ -150,21 +132,6 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
   }, [adoptPending, config.preorderId, keepPending, refreshAvailability]);
 
   useEffect(() => {
-    if (!active || !config.enabled) return;
-    const focus = () => { if (document.visibilityState !== 'hidden') void refreshAvailability(); };
-    focus();
-    const interval = setInterval(focus, 10_000);
-    window.addEventListener('focus', focus);
-    document.addEventListener('visibilitychange', focus);
-    return () => {
-      availabilityRequest.current += 1;
-      clearInterval(interval);
-      window.removeEventListener('focus', focus);
-      document.removeEventListener('visibilitychange', focus);
-    };
-  }, [active, config.enabled, refreshAvailability]);
-
-  useEffect(() => {
     recoveryGeneration.current += 1;
     activeOperation.current = null;
     setOrder(null);
@@ -172,11 +139,12 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
     setPhase('idle');
     phaseRef.current = 'idle';
     setRecoveryReady(false);
-    const saved = scope ? readPending(scope) : null;
+    const saved = config.enabled && scope ? readPending(scope) : null;
     pendingRef.current = saved;
     setPending(saved);
+    setCheckoutScope(scopeId);
     return () => { activeOperation.current = null; };
-  }, [scope]);
+  }, [scope, scopeId, config.enabled]);
 
   useEffect(() => {
     if (!buyer || !signedIn || !config.enabled || (!active && !readPending(scope))) return;
@@ -235,16 +203,10 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
     };
   }, [acceptOrder, active, adoptPending, api, buyer, config.enabled, config.preorderId, recoveryRevision, scope, signedIn]);
 
-  useEffect(() => {
-    if (!activeOrder(order)) return;
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [order]);
-
   const beginOperation = (key: string, initialPhase: CheckoutPhase) => {
     const generation = ++recoveryGeneration.current;
     activeOperation.current = generation;
-    const isCurrent = () => currentScope.current === key && activeOperation.current === generation &&
+    const isCurrent = () => latest.current.config.preorderId === config.preorderId && currentScope.current === key && activeOperation.current === generation &&
       recoveryGeneration.current === generation;
     const setCurrentPhase = (value: CheckoutPhase) => {
       if (!isCurrent()) return;
@@ -261,7 +223,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
   };
 
   const purchase = async (selectedIds: number[]) => {
-    if (!latest.current.active || !config.enabled || phaseRef.current !== 'idle' || order?.status === 'submitted' || pendingRef.current?.submittedAttempt) return;
+    if (!latest.current.active || !config.enabled || checkoutScope !== scopeId || latest.current.config.preorderId !== config.preorderId || phaseRef.current !== 'idle' || order?.status === 'submitted' || pendingRef.current?.submittedAttempt) return;
     const startScope = scope;
     const operation = beginOperation(startScope, 'authenticating');
     setError(null);
@@ -342,7 +304,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
   };
 
   const cancel = async () => {
-    if (!scope || !order || order.status !== 'prepared' || phaseRef.current !== 'idle') return;
+    if (!config.enabled || checkoutScope !== scopeId || !scope || !order || order.status !== 'prepared' || phaseRef.current !== 'idle') return;
     const startScope = scope;
     const operation = beginOperation(startScope, 'cancelling');
     setError(null);
@@ -357,13 +319,17 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
     }
   };
 
+  const currentCheckout = config.enabled && checkoutScope === scopeId;
   return {
-    config, buyer, availability, availabilityError, refreshAvailability, order, pending, phase, error,
+    config, buyer, availability, availabilityError, refreshAvailability,
+    order: currentCheckout ? order : null,
+    pending: currentCheckout ? pending : null,
+    phase: currentCheckout ? phase : 'idle' as const,
+    error: currentCheckout ? error : null,
     purchase, cancel,
-    busy: phase !== 'idle',
-    pendingOrder: activeOrder(order),
-    recoveryReady: !buyer || !signedIn || recoveryReady,
-    remainingSeconds: order ? Math.max(0, Math.ceil((order.expiresAtMs - now) / 1000)) : 0,
+    busy: currentCheckout && phase !== 'idle',
+    pendingOrder: currentCheckout && activeOrder(order),
+    recoveryReady: !config.enabled || !buyer || !signedIn || (currentCheckout && recoveryReady),
   };
 }
 

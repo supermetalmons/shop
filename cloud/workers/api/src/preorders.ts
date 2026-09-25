@@ -46,9 +46,17 @@ const defaults: PreorderDependencies = {
   probe: probePreorderTransaction, send: sendPreorderTransaction, blockhashValid: isPreorderBlockhashValid,
 };
 
-function enabledConfig(preorderId: string): PreorderConfig {
+function collectionConfig(preorderId: string): PreorderConfig {
   const config = getPreorderConfig(preorderId);
-  if (!config?.enabled || config.cluster !== 'devnet') {
+  if (!config) {
+    throw new ProfileReadError('failed-precondition', 409, 'Preorders are not available for this collection.');
+  }
+  return config;
+}
+
+function enabledConfig(preorderId: string): PreorderConfig {
+  const config = collectionConfig(preorderId);
+  if (!config.enabled || config.cluster !== 'devnet') {
     throw new ProfileReadError('failed-precondition', 409, 'Preorders are not available for this collection.');
   }
   return config;
@@ -144,12 +152,12 @@ export async function handlePreorderRequest(
       const parsed = schema.safeParse(raw);
       if (!parsed.success) throw new ProfileReadError('invalid-argument', 400, 'Invalid preorder request.');
       const body = parsed.data;
-      const config = enabledConfig(body.preorderId);
+      const config = path === '/preorders/availability' ? collectionConfig(body.preorderId) : enabledConfig(body.preorderId);
       if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
         throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
       }
       const store = new PreorderStore(env.COMMERCE_DB);
-      await store.expirePrepared(deps.nowMs());
+      if (config.enabled && config.cluster === 'devnet') await store.expirePrepared(deps.nowMs());
       if (path === '/preorders/availability') {
         const claims = new Map((await store.claims(config.cluster, config.collection)).map((claim) => [claim.id, claim.status]));
         return { response: jsonResponse({ preorderId: config.preorderId,

@@ -57,6 +57,7 @@ import { useShopDrop } from './shop/useShopDrop';
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
 const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
+const MI_NOTE_MAINNET_PREORDER = getPreorderConfig('mi_note_cards')!;
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -142,8 +143,8 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     claimOpen: modals.claimOpen && !commerceUiSuspended, showToast, isUserRejectedError,
   });
   const preorderCheckout = usePreorderCheckout({
-    config: MI_NOTE_DEVNET_PREORDER,
-    active: drop.normalizedCurrentPath === '/mi_note_cards_devnet' && !commerceUiSuspended,
+    config: drop.normalizedCurrentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER,
+    active: ['/mi_note_cards', '/mi_note_cards_devnet'].includes(drop.normalizedCurrentPath) && !commerceUiSuspended,
     buyer: connectedWallet,
     signedIn: isSignedInWallet,
     signTransaction: wallet.signTransaction,
@@ -379,7 +380,13 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
         ) : miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
-              <MiNoteCardsGallery preorder={drop.normalizedCurrentPath === '/mi_note_cards_devnet' ? preorderCheckout : undefined} />
+              <MiNoteCardsGallery
+                preorder={preorderCheckout}
+                showToast={showToast}
+                onViewPreordered={(item, originRect, aspectRatio) => reveal.openImageViewer(item, originRect, {
+                  size: 'preorder', aspectRatio, unavailableMessage: 'Preorder image unavailable',
+                })}
+              />
             </Suspense>
           </MiNoteCardsErrorBoundary>
         ) : (

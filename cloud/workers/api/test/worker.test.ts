@@ -4133,7 +4133,8 @@ test('preorder availability applies public GET CORS to successes and errors thro
     const payload = await response.json() as { items: unknown[] };
     assert.equal(payload.items.length, 1395);
     for (const [requestedUrl, requestEnv, method, status] of [
-      [url.replace('mi_note_cards_devnet', 'mi_note_cards'), env(), 'GET', 409],
+      [url.replace('mi_note_cards_devnet', 'mi_note_cards'), env({ commerceDb: commerce.db }), 'GET', 200],
+      [url.replace('mi_note_cards_devnet', 'unknown'), env(), 'GET', 409],
       [url.replace('?preorderId=mi_note_cards_devnet', ''), env(), 'GET', 400],
       [url, env({ commerceState: 'paused' }), 'GET', 503],
       [url, env(), 'POST', 405],

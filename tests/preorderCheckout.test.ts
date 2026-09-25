@@ -712,3 +712,74 @@ for (const resolution of ['empty', 'matching'] as const) {
     assert.equal(calls.cancel.length, 0);
   });
 }
+
+test('anonymous mainnet loads public availability without recovering or purchasing', async () => {
+  const { api, options, calls } = runtime();
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const requested: string[] = [];
+  api.availability = async (preorderId) => {
+    requested.push(preorderId);
+    return { preorderId, items: [{ id: 1, status: 'preordered' }] };
+  };
+  api.status = async () => { throw new Error('Mainnet must not recover checkout'); };
+  const { result } = renderHook(() => usePreorderCheckout({ ...options, config: mainnet, buyer: undefined, signedIn: false }, api));
+  await waitFor(() => assert.equal(result.current.availability?.preorderId, mainnet.preorderId));
+  assert.deepEqual(requested, [mainnet.preorderId]);
+  await act(async () => { await result.current.purchase([1]); await result.current.cancel(); });
+  assert.equal(calls.prepare.length, 0);
+  assert.equal(calls.cancel.length, 0);
+  assert.equal(result.current.pending, null);
+  assert.equal(result.current.error, null);
+});
+
+test('collection changes hide old availability and errors and discard late responses', async () => {
+  const { api, options } = runtime();
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  type Availability = Awaited<ReturnType<typeof api.availability>>;
+  const requests: { preorderId: string; resolve: (value: Availability) => void; reject: (error: Error) => void }[] = [];
+  api.availability = (preorderId) => new Promise((resolve, reject) => { requests.push({ preorderId, resolve, reject }); });
+  const observed: { preorderId: string; data: Availability | null; error: string | null }[] = [];
+  const { result, rerender } = renderHook((nextConfig) => {
+    const value = usePreorderCheckout({ ...options, config: nextConfig, buyer: undefined, signedIn: false }, api);
+    observed.push({ preorderId: nextConfig.preorderId, data: value.availability, error: value.availabilityError });
+    return value;
+  }, { initialProps: config });
+  const reply = (index: number): Availability => ({ preorderId: requests[index].preorderId, items: [{ id: 1, status: 'preordered' }] });
+  await act(async () => { requests[0].resolve(reply(0)); });
+  assert.equal(result.current.availability?.preorderId, config.preorderId);
+  rerender(mainnet);
+  assert.equal(result.current.availability, null);
+  await act(async () => { requests[1].reject(new Error('Offline')); });
+  assert.ok(result.current.availabilityError);
+  rerender(config);
+  assert.equal(result.current.availability, null);
+  assert.equal(result.current.availabilityError, null);
+  rerender(mainnet);
+  await act(async () => { requests[2].resolve(reply(2)); });
+  assert.equal(result.current.availability, null);
+  await act(async () => { requests[3].resolve(reply(3)); });
+  assert.equal(result.current.availability?.preorderId, mainnet.preorderId);
+  assert.ok(observed.every((value) => !value.data || value.data.preorderId === value.preorderId));
+  assert.equal(observed.find((value) => value.preorderId === mainnet.preorderId)?.error, null);
+});
+
+test('switching collections during signing clears checkout presentation and ignores the old result', async () => {
+  const { api, options, calls } = runtime();
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  api.availability = async (preorderId) => ({ preorderId, items: [{ id: 1, status: 'available' }] });
+  let finishSigning!: (value: VersionedTransaction) => void;
+  options.signTransaction = () => new Promise((resolve) => { finishSigning = resolve; });
+  const { result, rerender } = renderHook((nextConfig) => usePreorderCheckout({ ...options, config: nextConfig }, api), { initialProps: config });
+  let purchase!: Promise<void>;
+  act(() => { purchase = result.current.purchase([1]); });
+  await waitFor(() => assert.equal(result.current.phase, 'signing'));
+  rerender(mainnet);
+  assert.equal(result.current.order, null);
+  assert.equal(result.current.pending, null);
+  assert.equal(result.current.error, null);
+  assert.equal(result.current.busy, false);
+  assert.equal(result.current.phase, 'idle');
+  await act(async () => { finishSigning(transaction); await purchase; });
+  assert.equal(calls.submit.length, 0);
+  assert.equal(result.current.error, null);
+});
