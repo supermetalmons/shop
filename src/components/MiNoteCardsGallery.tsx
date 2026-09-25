@@ -10,10 +10,6 @@ import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 import '../styles/mi-note-cards.css';
 
-const MI_NOTE_OPENSEA_URLS = new Map(miNoteCollections.flatMap(({ contractAddress, tokens }) => (
-  tokens.map(({ id, mid }) => [mid, `https://opensea.io/item/ethereum/${contractAddress}/${id}`] as const)
-)));
-
 type MiNoteCardsGalleryProps = {
   preorder?: PreorderCheckout;
 };
@@ -222,7 +218,6 @@ export default function MiNoteCardsGallery({ preorder }: MiNoteCardsGalleryProps
                   onDragStart={(event) => event.preventDefault()}
                 />
               );
-              const artwork = isPreordered ? <span className="mi-note-cards__preorder-artwork">{image}</span> : image;
               return (
               <figure key={card.mid} className="mi-note-cards__item">
                 {preorderEnabled ? (
@@ -236,22 +231,9 @@ export default function MiNoteCardsGallery({ preorder }: MiNoteCardsGalleryProps
                       ? current.filter((id) => id !== card.clean_card_id)
                       : [...current, card.clean_card_id])}
                   >
-                    {artwork}
+                    {image}
                   </button>
-                ) : artwork}
-                <figcaption className="mi-note-cards__name">
-                  <a
-                    className="mi-note-cards__link"
-                    href={MI_NOTE_OPENSEA_URLS.get(card.mid)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    draggable={false}
-                    onDragStart={(event) => event.preventDefault()}
-                  >
-                    {card.name}
-                  </a>
-                  {preorderEnabled && unavailable && <span className="mi-note-cards__availability">{availabilityStatus === 'reserved' ? 'Reserved' : 'Preordered'}</span>}
-                </figcaption>
+                ) : image}
               </figure>
               );
             })}

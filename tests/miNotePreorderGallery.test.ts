@@ -26,13 +26,15 @@ function checkout(): PreorderCheckout {
   };
 }
 
-test('devnet gallery keeps the artwork and captions while selecting a maximum of three canonical IDs', async () => {
+test('devnet gallery keeps only artwork while selecting a maximum of three canonical IDs', async () => {
   Math.random = () => 0;
   const preorder = checkout();
   let purchased: number[] = [];
   preorder.purchase = async (ids) => { purchased = ids; };
   const view = render(createElement(MiNoteCardsGallery, { preorder }));
   assert.equal(view.getAllByRole('img').length, 300);
+  assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
+  assert.equal(view.queryByRole('link'), null);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
@@ -61,7 +63,7 @@ test('reservation clears selection and keeps original artwork until the preorder
   const reserved = view.getByRole('button', { name: 'Reserved preorder #1: Angel Lady' }) as HTMLButtonElement;
   assert.equal(reserved.disabled, true);
   assert.equal(reserved.getAttribute('aria-pressed'), 'false');
-  assert.equal(view.getByText('Reserved').className, 'mi-note-cards__availability');
+  assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
   assert.equal((view.getByRole('button', { name: /Preordered preorder #2:/ }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByRole('img', { name: 'watercolor milady' }).getAttribute('src'), 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/2.webp');
@@ -101,6 +103,8 @@ test('mainnet gallery has no selectable purchase controls or notify button', () 
   assert.equal(view.queryByRole('button', { name: /Select preorder/ }), null);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getAllByRole('img').length, 300);
+  assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
+  assert.equal(view.queryByRole('link'), null);
   assert.equal(view.container.querySelector('.mi-note-cards__image--preordered'), null);
 });
 
