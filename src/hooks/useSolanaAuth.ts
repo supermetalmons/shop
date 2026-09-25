@@ -65,7 +65,7 @@ export type SolanaAuthWalletState = {
 
 export type SolanaAuthRuntime = {
   currentAuthSubject: () => string | null;
-  subscribeAuthSubject: (listener: (authSubject: string | null, reason?: 'credential-expired') => void) => () => void;
+  subscribeAuthSubject: (listener: (authSubject: string | null, reason?: 'credential-expired' | 'session-renewed') => void) => () => void;
   ensureAuthenticated: () => Promise<string>;
   loadProfileState: () => Promise<GetProfileStateResponse>;
   reconcileProfileState: (options?: ReconcileProfileStateRequest) => Promise<ReconcileProfileStateResponse>;
@@ -161,9 +161,9 @@ function subscribeBrowserRefreshEvents(listener: () => void): () => void {
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   currentAuthSubject: () => readStaffWalletSession()?.wallet || currentAnonymousSubject(),
   subscribeAuthSubject: (listener) => {
-    const emit = (reason?: 'credential-expired') => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject(), reason);
+    const emit = (reason?: 'credential-expired' | 'session-renewed') => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject(), reason);
     const unsubscribeStaff = subscribeStaffWalletSession((_wallet, reason) => emit(reason));
-    const unsubscribeAnonymous = subscribeAnonymousSession(() => emit());
+    const unsubscribeAnonymous = subscribeAnonymousSession((_subject, reason) => emit(reason));
     return () => {
       unsubscribeStaff();
       unsubscribeAnonymous();
@@ -694,7 +694,7 @@ export function useSolanaAuthWithRuntime(
     const internalReset = nextSubject === null && sessionResetRef.current?.status === 'pending';
     const internalBootstrap = authBootstrapInFlightRef.current > 0 &&
       previousSubject === null && nextSubject !== null;
-    if (!internalReset && !internalBootstrap && reason !== 'credential-expired') invalidateIntentContext();
+    if (!internalReset && !internalBootstrap && reason !== 'credential-expired' && reason !== 'session-renewed') invalidateIntentContext();
     contextGenerationRef.current += 1;
     refreshRunRef.current = null;
     deactivateOwner(false);

@@ -12,7 +12,9 @@ export type AnonymousSession = {
   expiresAt: number;
 };
 
-const listeners = new Set<(subject: string | null) => void>();
+type AnonymousSessionListener = (subject: string | null, reason?: 'session-renewed') => void;
+
+const listeners = new Set<AnonymousSessionListener>();
 let ensurePromise: Promise<AnonymousSession> | null = null;
 let fallbackMutationTail: Promise<unknown> = Promise.resolve();
 let validatedSubject: string | null = null;
@@ -59,8 +61,8 @@ function readSession(nowMs = Date.now()): AnonymousSession | null {
   return memorySession;
 }
 
-function notify(session: AnonymousSession | null): void {
-  for (const listener of listeners) listener(session?.subject || null);
+function notify(session: AnonymousSession | null, reason?: 'session-renewed'): void {
+  for (const listener of listeners) listener(session?.subject || null, reason);
 }
 
 function writeSession(session: AnonymousSession): AnonymousSession {
@@ -69,7 +71,7 @@ function writeSession(session: AnonymousSession): AnonymousSession {
     window.localStorage?.setItem(STORAGE_KEY, JSON.stringify(session));
   } catch {}
   validatedSubject = session.subject;
-  notify(session);
+  notify(session, 'session-renewed');
   return session;
 }
 
@@ -206,7 +208,7 @@ export function currentAnonymousSubject(nowMs = Date.now()): string | null {
   return readSession(nowMs)?.subject || null;
 }
 
-export function subscribeAnonymousSession(listener: (subject: string | null) => void): () => void {
+export function subscribeAnonymousSession(listener: AnonymousSessionListener): () => void {
   listeners.add(listener);
   if (typeof window === 'undefined') return () => listeners.delete(listener);
   const onStorage = (event: StorageEvent) => {

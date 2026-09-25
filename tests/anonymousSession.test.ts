@@ -55,11 +55,11 @@ test('anonymous session creates, persists non-secret metadata, and reuses the ca
   }
 });
 
-test('anonymous session refreshes on demand and publishes subject changes', async () => {
+test('anonymous session marks local renewals without marking external changes or logout', async () => {
   const originalNow = Date.now;
   Date.now = () => NOW_MS;
-  const seen: Array<string | null> = [];
-  const unsubscribe = subscribeAnonymousSession((subject) => seen.push(subject));
+  const seen: Array<{ subject: string | null; reason?: 'session-renewed' }> = [];
+  const unsubscribe = subscribeAnonymousSession((subject, reason) => seen.push({ subject, reason }));
   let subject = SUBJECT;
   globalThis.fetch = async () => Response.json({
     subject,
@@ -70,7 +70,17 @@ test('anonymous session refreshes on demand and publishes subject changes', asyn
     await ensureAnonymousSession(true);
     subject = 'anon:223e4567-e89b-42d3-a456-426614174000';
     await ensureAnonymousSession(true);
-    assert.deepEqual(seen, [SUBJECT, subject]);
+    window.dispatchEvent(new dom.window.StorageEvent('storage', {
+      key: anonymousSessionTestHooks.storageKey,
+      newValue: JSON.stringify({ subject: SUBJECT, refreshedAt: NOW_MS, expiresAt: NOW_MS + 86_400_000 }),
+    }));
+    await logoutAnonymousSession();
+    assert.deepEqual(seen, [
+      { subject: SUBJECT, reason: 'session-renewed' },
+      { subject, reason: 'session-renewed' },
+      { subject: SUBJECT, reason: undefined },
+      { subject: null, reason: undefined },
+    ]);
   } finally {
     unsubscribe();
     Date.now = originalNow;

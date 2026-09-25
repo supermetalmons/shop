@@ -159,11 +159,10 @@ export function useShopSignIn(options: ShopSignInOptions) {
               return isCurrentWallet(activeAttempt, walletAddress) && latestRef.current.auth.hasAuthenticatedWalletSession(walletAddress)
                 ? walletAddress : null;
             } catch (error) {
+              if (latestRef.current.isUserRejectedError(error)) return null;
               if (isCurrentWallet(activeAttempt, walletAddress)) {
                 if (latestRef.current.auth.hasAuthenticatedWalletSession(walletAddress)) return walletAddress;
-                if (!latestRef.current.isUserRejectedError(error)) {
-                  latestRef.current.showToast(error instanceof Error ? error.message : 'Failed to sign in. Please try again.');
-                }
+                latestRef.current.showToast(error instanceof Error ? error.message : 'Failed to sign in. Please try again.');
               }
               return null;
             } finally {

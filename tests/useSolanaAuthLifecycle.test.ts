@@ -20,6 +20,12 @@ import {
   type StaffWalletSession,
 } from '../src/lib/staffWalletSession.ts';
 import { useShopSignIn } from '../src/shop/account/useShopSignIn.ts';
+import {
+  anonymousSessionTestHooks,
+  currentAnonymousSubject,
+  ensureAnonymousSession,
+  subscribeAnonymousSession,
+} from '../src/lib/anonymousSession.ts';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://mons.shop' });
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
@@ -94,7 +100,7 @@ class RuntimeHarness {
     this.nextState = readyState(wallet);
     return { wallet };
   };
-  authSubjectListeners = new Set<(uid: string | null, reason?: 'credential-expired') => void>();
+  authSubjectListeners = new Set<(uid: string | null, reason?: 'credential-expired' | 'session-renewed') => void>();
   refreshListeners = new Set<() => void>();
   nextTimerId = 1;
   timers = new Map<number, { at: number; callback: () => void; delay: number }>();
@@ -151,7 +157,7 @@ class RuntimeHarness {
     },
   };
 
-  emitAuthSubject(uid: string | null, reason?: 'credential-expired') {
+  emitAuthSubject(uid: string | null, reason?: 'credential-expired' | 'session-renewed') {
     this.uid = uid;
     this.authSubjectListeners.forEach((listener) => listener(uid, reason));
   }
@@ -665,6 +671,58 @@ test('anonymous identity bootstrap does not cancel an action waiting for restora
   act(() => { gate = result.current.awaitWalletSessionRestoration(WALLET_A); });
   await act(async () => { assert.equal(await gate, 'sign-in-required'); });
   assert.match(result.current.authSubject || '', /^auth-anonymous-/);
+});
+
+test('anonymous cookie renewal preserves a pending action when cached metadata has an old subject', async () => {
+  const harness = new RuntimeHarness();
+  const originalFetch = globalThis.fetch;
+  const now = Date.now();
+  const oldSubject = 'anon:123e4567-e89b-42d3-a456-426614174000';
+  const nextSubject = 'anon:223e4567-e89b-42d3-a456-426614174000';
+  anonymousSessionTestHooks.resetValidation();
+  dom.window.localStorage.setItem(anonymousSessionTestHooks.storageKey, JSON.stringify({
+    subject: oldSubject, refreshedAt: now, expiresAt: now + 86_400_000,
+  }));
+  const renewal = deferred<void>();
+  globalThis.fetch = async () => {
+    await renewal.promise;
+    return Response.json({ subject: nextSubject, refreshedAt: now, expiresAt: now + 86_400_000 });
+  };
+  harness.nextState = emptyState();
+  harness.runtime.currentAuthSubject = currentAnonymousSubject;
+  harness.runtime.subscribeAuthSubject = subscribeAnonymousSession;
+  harness.runtime.ensureAuthenticated = async () => (await ensureAnonymousSession()).subject;
+  let signatures = 0;
+  const wallet = {
+    ...walletState(WALLET_A),
+    signMessage: async () => { signatures += 1; return new Uint8Array(64); },
+  };
+  const { result, unmount } = renderHook(() => useSolanaAuthWithRuntime(wallet, harness.runtime));
+  try {
+    assert.equal(result.current.authSubject, oldSubject);
+    const originalSignal = result.current.intentCancellationSignal;
+    let action!: Promise<{ wallet: string }>;
+    act(() => {
+      action = result.current.awaitWalletSessionRestoration(WALLET_A).then((outcome) => {
+        assert.equal(outcome, 'sign-in-required');
+        return result.current.signIn();
+      });
+    });
+    await act(async () => {
+      renewal.resolve();
+      assert.deepEqual(await action, { wallet: WALLET_A });
+    });
+    assert.equal(result.current.authSubject, nextSubject);
+    assert.equal(originalSignal.aborted, false);
+    assert.equal(signatures, 1);
+    assert.equal(harness.authenticateCalls, 1);
+    assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+  } finally {
+    unmount();
+    globalThis.fetch = originalFetch;
+    dom.window.localStorage.removeItem(anonymousSessionTestHooks.storageKey);
+    anonymousSessionTestHooks.resetValidation();
+  }
 });
 
 test('an expired session resets and signs in within the same action', async () => {

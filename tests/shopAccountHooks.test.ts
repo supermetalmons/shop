@@ -386,6 +386,31 @@ test('a valid authenticated session survives profile loading errors during sign-
   assert.deepEqual(messages, []);
 });
 
+test('rejecting sign-in cancels the action even if a background refresh restores the session', async () => {
+  const signature = deferred<{ wallet: string }>();
+  const messages: string[] = [];
+  let signatures = 0;
+  let restored = false;
+  const initial = signInOptions({
+    showToast: (message) => messages.push(message),
+    isUserRejectedError: (error) => error instanceof Error && error.message === 'User rejected the request',
+  });
+  initial.auth.hasAuthenticatedWalletSession = () => restored;
+  initial.auth.signIn = () => { signatures += 1; return signature.promise; };
+  const { result } = renderHook(useShopSignIn, { initialProps: initial });
+  let action!: Promise<boolean>;
+  act(() => { action = result.current.ensureSignedIn(); });
+  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => {
+    restored = true;
+    signature.reject(new Error('User rejected the request'));
+    assert.equal(await action, false);
+  });
+  await act(async () => assert.equal(await result.current.ensureSignedIn(), true));
+  assert.equal(signatures, 1);
+  assert.deepEqual(messages, []);
+});
+
 test('a rejected shared signature cancels quietly or shows one actionable error', async (t) => {
   for (const userRejected of [true, false]) {
     await t.test(userRejected ? 'user rejection stays silent' : 'other failures are shown once', async () => {
