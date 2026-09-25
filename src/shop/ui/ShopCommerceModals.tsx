@@ -141,7 +141,7 @@ export function ShopCommerceModals({
           </div>
         </div>
 
-        {!connectedWallet || !publicKey ? <div className="muted small">Connect a wallet to ship items.</div> : null}
+        {!connectedWallet || !publicKey ? <div className="muted small">Sign in to ship items.</div> : null}
         <DeliveryForm
           mode="modal"
           onSubmit={handleShip}

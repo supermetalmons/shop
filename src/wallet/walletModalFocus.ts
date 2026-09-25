@@ -35,6 +35,9 @@ function isVisibleWalletChoice(element: HTMLElement): boolean {
 export function prepareWalletModalDialog(dialog: HTMLElement): HTMLElement | null {
   const title = dialog.querySelector<HTMLElement>('.wallet-adapter-modal-title');
   const labelledBy = dialog.getAttribute('aria-labelledby')?.trim();
+  if (title && title.textContent !== 'Sign In') {
+    title.textContent = 'Sign In';
+  }
   if (title && !title.id) {
     title.id = labelledBy?.split(/\s+/)[0] || WALLET_MODAL_TITLE_ID;
   }
@@ -46,7 +49,7 @@ export function prepareWalletModalDialog(dialog: HTMLElement): HTMLElement | nul
     '.wallet-adapter-modal-button-close',
   );
   if (closeButton && !hasAccessibleLabel(closeButton)) {
-    closeButton.setAttribute('aria-label', 'Close wallet selector');
+    closeButton.setAttribute('aria-label', 'Close sign-in dialog');
   }
 
   return (

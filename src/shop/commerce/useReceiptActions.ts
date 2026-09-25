@@ -405,7 +405,7 @@ export function useReceiptActions({
     const operationWalletSessionGeneration = receiptTransferWalletSessionGenerationRef.current;
     const wallet = connectedWallet;
     if (!wallet || owner !== wallet) {
-      throw new Error('Connect the receipt owner wallet to transfer');
+      throw new Error('Sign in with the receipt owner wallet to transfer.');
     }
     if (connectedWalletRef.current !== wallet) {
       throw new Error(RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE);

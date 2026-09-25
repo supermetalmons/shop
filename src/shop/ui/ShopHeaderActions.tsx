@@ -41,7 +41,6 @@ type ShopHeaderActionsProps = Pick<ShopAccount,
 > & {
   interactive: boolean;
   showHeaderWalletButton: boolean;
-  connectedWallet: string | undefined;
   handleHeaderWalletSignIn: () => Promise<void>;
   adminMenuDevnetDrops: FrontendDeploymentConfig[];
 };
@@ -68,7 +67,6 @@ export function ShopHeaderActions({
   owner,
   interactive,
   showHeaderWalletButton,
-  connectedWallet,
   handleHeaderWalletSignIn,
   adminMenuDevnetDrops,
 }: ShopHeaderActionsProps) {
@@ -103,10 +101,9 @@ export function ShopHeaderActions({
       type="button"
       className="top__wallet-button secondary-light"
       onClick={interactive ? handleHeaderWalletSignIn : undefined}
-      aria-label={interactive ? (connectedWallet ? 'Sign in with Solana' : 'Connect wallet and sign in with Solana') : undefined}
       tabIndex={interactive ? undefined : -1}
     >
-      <span>Connect Wallet</span>
+      <span>Sign In</span>
     </button>
   ) : (
     <div className="top__wallet-spacer" aria-hidden="true" />

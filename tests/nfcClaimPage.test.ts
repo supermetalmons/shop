@@ -59,7 +59,7 @@ function PageContents() {
         type: 'button',
         tabIndex: interactive ? undefined : -1,
         onClick: interactive ? () => setVisible(true) : undefined,
-      }, 'Connect wallet'),
+      }, 'Sign In'),
     }),
     pathname === '/nfc' ? createElement(NfcClaimPage) : createElement('main', null, 'Home shop'),
   );
@@ -170,7 +170,7 @@ test('NFC uses the shared home header and ordinary focus and scrolling on deskto
     const claim = view.getByRole('button', { name: 'Claim' });
     assert.ok(view.getByRole('banner'));
     assert.ok(view.getByRole('heading', { name: 'mons.shop' }));
-    assert.ok(view.getByRole('button', { name: 'Connect wallet' }));
+    assert.ok(view.getByRole('button', { name: 'Sign In' }));
     assert.equal(view.queryByRole('dialog'), null);
     assert.notEqual(document.activeElement, claim);
     assert.equal(document.body.style.overflow, 'auto');
@@ -226,15 +226,26 @@ test('the standard header navigates home and browser history restores the NFC pa
   assertPageIsUnlocked();
 });
 
-test('opening and closing the normal wallet picker preserves the NFC page, Claim button, and scrolling', async () => {
+test('opening and reopening the sign-in picker prepares its accessible title and preserves the NFC page', async (t) => {
+  const viewport = controlledViewport(t, 0);
   document.body.style.overflow = 'auto';
   const view = renderPage();
   const claim = view.getByRole('button', { name: 'Claim' });
-  const connect = view.getByRole('button', { name: 'Connect wallet' });
+  const connect = view.getByRole('button', { name: 'Sign In' });
   connect.focus();
   fireEvent.click(connect);
 
-  assert.ok(view.getByRole('dialog'));
+  const dialog = view.getByRole('dialog');
+  const close = dialog.querySelector<HTMLButtonElement>('.wallet-adapter-modal-button-close')!;
+  close.focus();
+  viewport.flushFrame();
+
+  assert.equal(view.getByRole('dialog', { name: 'Sign In' }), dialog);
+  assert.ok(within(dialog).getByRole('heading', { name: 'Sign In' }));
+  assert.equal(within(dialog).getByRole('button', { name: 'Close sign-in dialog' }), close);
+  assert.equal(document.activeElement, close);
+  fireEvent.keyDown(close, { key: 'Tab' });
+  assert.equal(document.activeElement, close);
   assert.equal(document.body.style.overflow, 'hidden');
   assert.ok(document.querySelector('.background-blur-layer__viewport--active'));
   assert.ok(claim.isConnected);
@@ -249,13 +260,25 @@ test('opening and closing the normal wallet picker preserves the NFC page, Claim
   assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
   assert.equal(document.body.style.overflow, 'auto');
   assertPageIsUnlocked();
+
+  fireEvent.click(connect);
+  viewport.flushFrame();
+  const reopened = view.getByRole('dialog', { name: 'Sign In' });
+  assert.notEqual(reopened, dialog);
+  assert.ok(within(reopened).getByRole('heading', { name: 'Sign In' }));
+  fireEvent.click(within(reopened).getByRole('button', { name: 'Close sign-in dialog' }));
+  await waitFor(() => {
+    if (view.queryByRole('dialog')) throw new Error('Wallet picker has not closed yet');
+  });
+  assert.equal(view.getByRole('button', { name: 'Claim' }), claim);
+  assertPageIsUnlocked();
 });
 
 test('entering NFC waits for an open wallet picker before resetting scroll, and later picker use preserves scroll', async (t) => {
   const viewport = controlledViewport(t, 600);
   document.body.style.overflow = 'auto';
   const view = renderPage(walletState(), '/');
-  fireEvent.click(view.getByRole('button', { name: 'Connect wallet' }));
+  fireEvent.click(view.getByRole('button', { name: 'Sign In' }));
   assert.ok(view.getByRole('dialog'));
 
   act(() => navigate('/nfc'));
@@ -276,7 +299,7 @@ test('entering NFC waits for an open wallet picker before resetting scroll, and 
   assertPageIsUnlocked();
 
   viewport.setScrollY(350);
-  fireEvent.click(view.getByRole('button', { name: 'Connect wallet' }));
+  fireEvent.click(view.getByRole('button', { name: 'Sign In' }));
   viewport.flushFrame();
   fireEvent.keyDown(window, { key: 'Escape' });
   await waitFor(() => {

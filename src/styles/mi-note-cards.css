@@ -183,6 +183,14 @@
   flex: 0 0 auto;
 }
 
+.mi-note-preorder-panel .selection-panel__preview {
+  gap: 4px;
+}
+
+.mi-note-preorder-panel .selection-panel__thumb + .selection-panel__thumb {
+  margin-left: 0;
+}
+
 .mi-note-preorder-panel__submit {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;

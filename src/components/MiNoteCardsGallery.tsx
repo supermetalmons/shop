@@ -172,7 +172,7 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
   } : null;
   const submitting = preorder?.order?.status === 'submitted' || preorder?.pending?.submittedAttempt;
   const canResume = !preorder?.pending || Boolean(preorder.pending.requestId);
-  const actionLabel = preorder?.phase === 'authenticating' ? 'Connecting…'
+  const actionLabel = preorder?.phase === 'authenticating' ? 'Signing in…'
     : preorder?.phase === 'preparing' ? 'Preparing…'
     : preorder?.phase === 'signing' ? 'Check wallet…'
     : preorder?.phase === 'submitting' || submitting ? 'Confirming…'

@@ -18,7 +18,6 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
   const props: Parameters<typeof ShopHeaderActions>[0] = {
     interactive: false,
     showHeaderWalletButton: true,
-    connectedWallet: undefined,
     handleHeaderWalletSignIn: async () => { signIns += 1; },
     canUseAdminMenu: true,
     canUseAdminViewer: false,
@@ -43,7 +42,7 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
     adminMenuDevnetDrops: [],
   };
   const view = render(createElement(ShopHeaderActions, props));
-  const passiveWallet = view.getByRole('button', { name: 'Connect Wallet' });
+  const passiveWallet = view.getByRole('button', { name: 'Sign In' });
   fireEvent.click(passiveWallet);
   assert.equal(signIns, 0);
   assert.equal(passiveWallet.tabIndex, -1);
@@ -51,7 +50,7 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
   assert.equal(view.getAllByRole('button').every((button) => button.tabIndex === -1), true);
 
   view.rerender(createElement(ShopHeaderActions, { ...props, interactive: true }));
-  const activeWallet = view.getByRole('button', { name: 'Connect wallet and sign in with Solana' });
+  const activeWallet = view.getByRole('button', { name: 'Sign In' });
   fireEvent.click(activeWallet);
   assert.equal(signIns, 1);
   assert.equal(activeWallet.tabIndex, 0);

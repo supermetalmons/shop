@@ -370,7 +370,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
             {...account}
             interactive={interactive}
             showHeaderWalletButton={showHeaderWalletButton}
-            connectedWallet={connectedWallet}
             handleHeaderWalletSignIn={signIn.handleHeaderWalletSignIn}
             adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
           />}

@@ -45,20 +45,10 @@ body .wallet-adapter-modal {
 }
 
 .wallet-adapter-modal-title {
-  color: transparent;
+  color: var(--fg);
   text-align: left;
   align-self: stretch;
   padding: 32px 28px 20px;
-  font-size: 0;
-  line-height: 0;
-  font-weight: 600;
-}
-
-.wallet-adapter-modal-title::after {
-  content: 'Connect a wallet';
-  color: var(--fg);
-  display: block;
-  text-align: left;
   font-size: 20px;
   line-height: 1.35;
   font-weight: 600;
@@ -178,4 +168,3 @@ button.wallet-adapter-modal-button-close:hover {
     background: rgba(255, 255, 255, 0.08) !important;
   }
 }
-

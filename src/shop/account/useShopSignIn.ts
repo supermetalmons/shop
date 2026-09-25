@@ -50,7 +50,7 @@ export function useShopSignIn({
     if (readiness === 'authenticated') return true;
     if (signInPromiseRef.current) return signInPromiseRef.current;
     if (readiness === 'resolving') {
-      showToast('Restoring wallet session…');
+      showToast('Restoring your session…');
       return false;
     }
 

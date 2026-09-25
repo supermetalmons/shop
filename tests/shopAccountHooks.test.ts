@@ -126,7 +126,7 @@ test('header and shipment sign-in share a pending signature and wait for session
   const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
   await act(async () => { assert.equal(await result.current.ensureSignedIn(), false); });
   assert.equal(calls, 0);
-  assert.deepEqual(messages, ['Restoring wallet session…']);
+  assert.deepEqual(messages, ['Restoring your session…']);
 
   rerender({ ...initial, auth: { ...initial.auth, sessionResolution: 'settled' } });
   let header!: Promise<void>;

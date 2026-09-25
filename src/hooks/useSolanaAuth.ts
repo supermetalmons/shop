@@ -655,7 +655,7 @@ export function useSolanaAuthWithRuntime(
       (unmountedError as Error & { code?: string }).code = 'wallet-changed';
       return Promise.reject(unmountedError);
     }
-    if (!publicKey) return Promise.reject(new Error('Connect a wallet first'));
+    if (!publicKey) return Promise.reject(new Error('Select a wallet to sign in.'));
     if (!signMessage) return Promise.reject(new Error('Wallet cannot sign messages'));
     const wallet = publicKey.toBase58();
     const contextGeneration = contextGenerationRef.current;

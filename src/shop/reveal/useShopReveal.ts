@@ -150,7 +150,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       return;
     }
     if (!connectedWallet || !publicKey) {
-      throw new Error(`Connect wallet to open a ${boxLabelForDropId(item.dropId)}`);
+      throw new Error(`Sign in to open a ${boxLabelForDropId(item.dropId)}.`);
     }
     console.info('[mons] sending inventory asset to the vault', {
       assetId: item.id,
@@ -368,7 +368,7 @@ export function useShopReveal(options: ShopRevealOptions) {
   const ensureRevealOverlayAdvanceAllowed = useCallback(() => {
     if (blockViewerModeAction()) return false;
     if (!connectedWallet || !publicKey) {
-      showToast('Connect wallet first');
+      showToast('Sign in to continue.');
       return false;
     }
     return true;

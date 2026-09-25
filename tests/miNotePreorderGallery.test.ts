@@ -180,7 +180,7 @@ test('checkout progress is communicated only through the action button', () => {
   fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
   const states: [Partial<PreorderCheckout>, string][] = [
     [{}, 'Preorder'],
-    [{ phase: 'authenticating', busy: true }, 'Connecting…'],
+    [{ phase: 'authenticating', busy: true }, 'Signing in…'],
     [{ phase: 'preparing', busy: true }, 'Preparing…'],
     [{ phase: 'signing', busy: true }, 'Check wallet…'],
     [{ phase: 'submitting', busy: true }, 'Confirming…'],

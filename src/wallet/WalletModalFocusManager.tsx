@@ -36,6 +36,7 @@ export function WalletModalFocusManager() {
         '.wallet-adapter-modal[role="dialog"]',
       );
       if (!dialog) return;
+      prepareWalletModalDialog(dialog);
       document.addEventListener('keydown', handleKeyDown);
       document.addEventListener('focusin', handleFocusIn);
       if (!dialog.contains(document.activeElement)) {

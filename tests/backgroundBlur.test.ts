@@ -488,7 +488,8 @@ test('wallet dialog preparation repairs labels and prefers a usable wallet choic
   const preferred = prepareWalletModalDialog(dialog as unknown as HTMLElement);
 
   assert.equal(title.id, 'wallet-adapter-modal-title');
-  assert.equal(closeButton.getAttribute('aria-label'), 'Close wallet selector');
+  assert.equal(title.textContent, 'Sign In');
+  assert.equal(closeButton.getAttribute('aria-label'), 'Close sign-in dialog');
   assert.equal(preferred, walletChoice);
 
   const labelledCloseButton = element({
