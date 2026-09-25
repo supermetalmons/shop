@@ -325,13 +325,13 @@ export default function MiNoteCardsGallery({ preorder, showToast, onViewPreorder
               }}>Cancel</button>
               <button
                 type="button"
-                className="mint-panel__submit mi-note-preorder-panel__submit"
+                className="mi-note-preorder-panel__submit"
                 aria-label={`${actionLabel} for ${totalPrice} SOL`}
                 disabled={preorder.busy || Boolean(submitting) || !canResume || !preorder.recoveryReady || !preorder.availability || Boolean(preorder.availabilityError)}
                 onClick={() => { void preorder.purchase(panelIds); }}
               >
-                <span className="mint-panel__submit-text" aria-live="polite" aria-atomic="true">{actionLabel}</span>
-                <span className="mint-panel__submit-price">{totalPrice} SOL</span>
+                <span className="mi-note-preorder-panel__label" aria-live="polite" aria-atomic="true">{actionLabel}</span>
+                {` • ${totalPrice} SOL`}
               </button>
             </div>
           </div>

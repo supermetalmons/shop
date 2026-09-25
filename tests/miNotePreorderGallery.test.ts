@@ -197,7 +197,7 @@ test('checkout progress is communicated only through the action button', () => {
     view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, ...state } }));
     const action = view.getByRole('button', { name: `${label} for 0.25 SOL` });
     const panel = action.closest('.mi-note-preorder-panel')!;
-    assert.equal(panel.textContent, `Cancel${label}0.25 SOL`);
+    assert.equal(panel.textContent, `Cancel${label} • 0.25 SOL`);
     assert.equal(panel.querySelector('p'), null);
     assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-live'), 'polite');
   }
@@ -219,7 +219,7 @@ test('checkout errors toast once per occurrence without an error-only panel', ()
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, error }, showToast }));
   assert.deepEqual(messages, [error, error]);
   assert.equal(view.queryByText(error), null);
-  assert.equal(document.querySelector('.mi-note-preorder-panel')?.textContent, 'CancelPreorder0.25 SOL');
+  assert.equal(document.querySelector('.mi-note-preorder-panel')?.textContent, 'CancelPreorder • 0.25 SOL');
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, error: 'Your preorder expired.' }, showToast }));
   assert.deepEqual(messages, [error, error, 'Your preorder expired.']);
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, config: getPreorderConfig('mi_note_cards')!, error }, showToast }));
