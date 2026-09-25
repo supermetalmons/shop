@@ -726,11 +726,18 @@ running the command: expected authority public key, hosted
 `collectionMetadataUri`, symbol, description, image URL, `sellerFeeBasisPoints`
 (explicitly use `0` for no royalties), and royalty creators with address/share
 entries totaling 100. The stub already supplies `mi_note_cards`, `Mi Note Cards`,
-`https://mons.shop`, and `isMainnet: true`; use `isMainnet: false` for a devnet rehearsal.
+`https://mons.shop`, and `isMainnet: true`.
 An optional `solanaRpcUrl` overrides the cluster's default RPC. Publish the
 collection metadata JSON and image yourself first. Its name, symbol, description,
 image, `external_url`, `seller_fee_basis_points`, and `properties.creators` must
 match the configuration; the tool validates hosted metadata and does not upload it.
+
+The dedicated `mi_note_cards_devnet` configuration reuses the mainnet metadata
+and authority with the devnet RPC. Deploy it with the same deployer key:
+
+```bash
+npm run deploy-preorder-collection -- mi_note_cards_devnet
+```
 
 Run in an interactive terminal. After validating the configuration, metadata,
 and RPC cluster, the command uses the existing hidden private-key prompt
