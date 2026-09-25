@@ -78,6 +78,7 @@
     "extend:shared-devnet": "node --experimental-strip-types scripts/extend-shared-devnet-program.ts",
     "verify:mainnet-uri-migrations": "node --experimental-strip-types scripts/verify-mainnet-uri-migrations.ts",
     "deploy-receipt-pool": "node --experimental-strip-types scripts/deploy-receipt-pool.ts",
+    "deploy-preorder-collection": "node --experimental-strip-types scripts/deploy-preorder-collection.ts",
     "upgrade-onchain": "node --experimental-strip-types scripts/upgrade-onchain.ts",
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
     "set-mint-prices": "node --experimental-strip-types scripts/setMintPrices.ts",

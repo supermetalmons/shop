@@ -714,6 +714,54 @@ configuration.
 
 ## On-chain deployments and metadata compatibility
 
+Create a reusable preorder collection from
+`scripts/newPreorderCollections/mi_note_cards.ts`:
+
+```bash
+npm run deploy-preorder-collection -- mi_note_cards
+```
+
+Fill every unfinished field in its typed `NEW_PREORDER_COLLECTION` export before
+running the command: expected authority public key, hosted
+`collectionMetadataUri`, symbol, description, image URL, `sellerFeeBasisPoints`
+(explicitly use `0` for no royalties), and royalty creators with address/share
+entries totaling 100. The stub already supplies `mi_note_cards`, `Mi Note Cards`,
+`https://mons.shop`, and `isMainnet: true`; use `isMainnet: false` for a devnet rehearsal.
+An optional `solanaRpcUrl` overrides the cluster's default RPC. Publish the
+collection metadata JSON and image yourself first. Its name, symbol, description,
+image, `external_url`, `seller_fee_basis_points`, and `properties.creators` must
+match the configuration; the tool validates hosted metadata and does not upload it.
+
+Run in an interactive terminal. After validating the configuration, metadata,
+and RPC cluster, the command uses the existing hidden private-key prompt
+(base58 or JSON array), and checks the key against the expected authority. It
+simulates collection creation, shows its details and estimated SOL cost, and
+requires `y` before sending. Private keys stay in memory.
+
+The command creates a mutable Metaplex Core collection with Royalties,
+BubblegumV2, and UpdateDelegate plugins. The admin is its root update authority
+and sole initial delegate. It creates no NFTs, receipt tree, custom program, or
+active shop-drop registry entry. Royalties are collection resale settings;
+future preorder checkout payment splits are configured separately.
+
+After finalized verification, the public result is saved in
+`scripts/preorderCollectionDeployments/<cluster>/<collectionId>.json`, and the
+command prints a ready-to-copy `coreCollectionPubkey` assignment. Rerunning the
+same command verifies and returns the existing collection instead of deploying
+another. Public pending journals and per-collection locks live under
+`.cache/preorder-collection-deployments`. Preserve pending journals during
+interrupted or ambiguous submissions and rerun the command for recovery. Remove
+a stale lock only after verifying that its owning process has stopped; keep the
+pending journal. Do not delete pending journals to bypass a recovery block.
+
+For a later drop, set its `coreCollectionPubkey` to the saved address and grant
+that drop's config PDA permission through the collection's UpdateDelegate plugin
+before ordinary drop deployment. The collection admin must match the future
+drop's deployer/allowed initializer, or its authority must be transferred first.
+`reuseProgramIdFromDropId` independently chooses the existing minting program;
+it does not grant collection permissions. The preorder deployment command does
+not add future drop delegates.
+
 Provision a reusable cluster-scoped receipt pool:
 
 ```bash

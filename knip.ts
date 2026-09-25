@@ -14,6 +14,7 @@ const config = {
         'cloud/workers/api/runtime-test/*.test.ts',
         'cloud/workers/frontend/test/*.test.ts',
         'scripts/newDrops/*.ts',
+        'scripts/newPreorderCollections/*.ts',
         'scripts/ops/*.ts',
         'tests/api/*.test.ts',
         'tests/*.test.ts',

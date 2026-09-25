@@ -2004,7 +2004,7 @@ type MplCoreCollectionPluginRecord = {
   offset: number;
 };
 
-function readMplCoreCollectionPluginRecords(data: Buffer): MplCoreCollectionPluginRecord[] | null {
+export function readMplCoreCollectionPluginRecords(data: Buffer): MplCoreCollectionPluginRecord[] | null {
   let o = 0;
   if (!canRead(data, o, 1)) return null;
   const key = data[o];
