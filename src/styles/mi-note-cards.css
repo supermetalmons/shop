@@ -31,13 +31,13 @@ body:has(.drop-page-frame--mi-note-cards) {
 .mi-note-cards--empty .mi-note-cards__content {
   flex: 1;
   justify-content: center;
-  padding-block: 32px calc(clamp(64px, 10vh, 96px) + 36px);
+  padding-block: 32px calc(clamp(64px, 10vh, 96px) + 40px);
 }
 
 .mi-note-cards__header {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   margin-bottom: 4px;
 }
 
