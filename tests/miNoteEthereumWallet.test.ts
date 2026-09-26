@@ -5,6 +5,7 @@ import type { EIP1193Provider, EIP6963ProviderDetail, EthereumProviderListener }
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
+const { createElement, Profiler } = await import('react');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { getInjectedWalletIconSrc, listInjectedEthereumProviders } = await import('../src/wallet/injectedEthereumProviders.ts');
 dom.window.close();
@@ -55,6 +56,71 @@ async function waitForRequests(wallet: MockWallet, count = 1) {
 async function settle(wallet: MockWallet, index = 0, accounts: unknown = [ADDRESS]) {
   await act(async () => { wallet.requests[index].resolve(accounts); });
 }
+
+function renderWallet(active = true, reactStrictMode = false) {
+  type Snapshot = { active: boolean; ready: boolean; status: string; address: string | null };
+  const commits: Snapshot[] = [];
+  let snapshot: Snapshot;
+  const view = renderHook(({ active }) => {
+    const wallet = useMiNoteEthereumWallet(active);
+    snapshot = { active, ready: wallet.ready, status: wallet.status, address: wallet.address };
+    return wallet;
+  }, {
+    initialProps: { active },
+    reactStrictMode,
+    wrapper: ({ children }) => createElement(Profiler, { id: 'wallet', onRender: () => commits.push(snapshot) }, children),
+  });
+  return { ...view, commits };
+}
+
+test('a fresh activation resolves readiness without requesting accounts when no wallet is remembered', () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result, commits, rerender } = renderWallet();
+  assert.equal(commits[0].ready, false);
+  assert.equal(result.current.ready, true);
+  assert.equal(result.current.status, 'disconnected');
+  rerender({ active: false });
+  const activationStart = commits.length;
+  rerender({ active: true });
+  assert.equal(commits[activationStart].ready, false);
+  assert.equal(result.current.ready, true);
+  assert.equal(wallet.requests.length, 0);
+});
+
+test('remembered wallet readiness stays unresolved through the initial commit, discovery, and passive account read', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns }));
+  const { result, commits } = renderWallet();
+  assert.deepEqual(commits[0], { active: true, ready: false, status: 'disconnected', address: null });
+  assert.equal(wallet.requests.length, 0);
+  assert.ok(commits.every(({ ready }) => !ready));
+  await waitForRequests(wallet);
+  assert.equal(wallet.requests[0].method, 'eth_accounts');
+  assert.equal(result.current.ready, false);
+  assert.ok(commits.every(({ ready }) => !ready));
+  await settle(wallet);
+  assert.equal(result.current.ready, true);
+  assert.ok(commits.filter(({ ready }) => ready).every(({ status, address }) => status === 'connected' && address === ADDRESS.toLowerCase()));
+});
+
+test('returning after an earlier resolved activation is unresolved from its first commit while a saved wallet restores', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result, commits, rerender } = renderWallet();
+  assert.equal(result.current.ready, true);
+  rerender({ active: false });
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns }));
+  const activationStart = commits.length;
+  rerender({ active: true });
+  assert.equal(commits[activationStart].ready, false);
+  await waitForRequests(wallet);
+  assert.ok(commits.slice(activationStart).every(({ ready }) => !ready));
+  await settle(wallet);
+  assert.equal(result.current.ready, true);
+  assert.equal(result.current.address, ADDRESS.toLowerCase());
+});
 
 test('inactive Mi Notes never discover providers or request accounts', () => {
   const wallet = makeWallet();
@@ -197,7 +263,7 @@ test('cancel and tab switching detach pending sessions and ignore stale account 
 test('switching tabs retains an established wallet and continues to reflect its account changes', async () => {
   const wallet = makeWallet();
   wallet.install();
-  const { result, rerender } = renderHook(({ active }) => useMiNoteEthereumWallet(active), { initialProps: { active: true } });
+  const { result, rerender, commits } = renderWallet();
   act(() => result.current.connect());
   await waitForRequests(wallet);
   await settle(wallet);
@@ -206,7 +272,9 @@ test('switching tabs retains an established wallet and continues to reflect its 
   assert.equal(wallet.listenerCount(), 3);
   act(() => wallet.emit('accountsChanged', [OTHER_ADDRESS]));
   assert.equal(result.current.address, OTHER_ADDRESS);
+  const activationStart = commits.length;
   rerender({ active: true });
+  assert.ok(commits.slice(activationStart).every(({ ready, address }) => ready && address === OTHER_ADDRESS));
   assert.equal(wallet.requests.length, 1);
 });
 
@@ -242,13 +310,17 @@ test('remembered wallet restores only on entering Your and derives its account f
   const wallet = makeWallet('new-session-uuid');
   wallet.install();
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns, address: OTHER_ADDRESS }));
-  const { result, rerender } = renderHook(({ active }) => useMiNoteEthereumWallet(active), { initialProps: { active: false } });
+  const { result, rerender, commits } = renderWallet(false);
   assert.equal(wallet.requests.length, 0);
+  const activationStart = commits.length;
   rerender({ active: true });
+  assert.equal(commits[activationStart].ready, false);
   assert.equal(result.current.status, 'restoring');
   await waitForRequests(wallet);
+  assert.ok(commits.slice(activationStart).every(({ ready }) => !ready));
   assert.equal(wallet.requests[0].method, 'eth_accounts');
   await settle(wallet);
+  assert.equal(result.current.ready, true);
   assert.equal(result.current.address, ADDRESS.toLowerCase());
 });
 
@@ -263,7 +335,9 @@ for (const scenario of ['missing', 'ambiguous', 'legacy-with-announcement'] as c
       ? { type: 'legacy' }
       : { type: 'announced', rdns: scenario === 'missing' ? 'org.missing' : first.wallet.info.rdns }));
     const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+    assert.equal(result.current.ready, false);
     await waitFor(() => assert.equal(result.current.status, 'disconnected'));
+    assert.equal(result.current.ready, true);
     assert.equal(first.requests.length + second.requests.length, 0);
     assert.equal(result.current.error, null);
   });
@@ -290,11 +364,13 @@ for (const scenario of ['unavailable', 'rejected'] as const) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns }));
     const { result } = renderHook(() => useMiNoteEthereumWallet(true));
     await waitForRequests(wallet);
+    assert.equal(result.current.ready, false);
     await act(async () => {
       if (scenario === 'unavailable') wallet.requests[0].resolve([]);
       else wallet.requests[0].reject(new Error('locked'));
     });
     assert.equal(result.current.status, 'disconnected');
+    assert.equal(result.current.ready, true);
     assert.equal(result.current.error, null);
     assert.deepEqual(wallet.requests.map(({ method }) => method), ['eth_accounts']);
     assert.equal(wallet.listenerCount(), 0);
@@ -337,14 +413,18 @@ test('leaving Your during restoration discards that account read even after a fr
   const wallet = makeWallet();
   wallet.install();
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns }));
-  const { result, rerender } = renderHook(({ active }) => useMiNoteEthereumWallet(active), { initialProps: { active: true } });
+  const { result, rerender, commits } = renderWallet();
   await waitForRequests(wallet);
   rerender({ active: false });
   assert.equal(wallet.listenerCount(), 0);
+  const activationStart = commits.length;
   rerender({ active: true });
+  assert.equal(commits[activationStart].ready, false);
   await waitForRequests(wallet, 2);
+  assert.ok(commits.slice(activationStart).every(({ ready }) => !ready));
   await settle(wallet, 1, [OTHER_ADDRESS]);
   await settle(wallet);
+  assert.equal(result.current.ready, true);
   assert.equal(result.current.address, OTHER_ADDRESS);
   assert.equal(wallet.listenerCount(), 3);
 });
@@ -443,9 +523,12 @@ test('StrictMode restoration requests one current account read and retains only 
   const wallet = makeWallet();
   wallet.install();
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ type: 'announced', rdns: wallet.wallet.info.rdns }));
-  const { result, unmount } = renderHook(() => useMiNoteEthereumWallet(true), { reactStrictMode: true });
+  const { result, unmount, commits } = renderWallet(true, true);
+  assert.equal(commits[0].ready, false);
   await waitForRequests(wallet);
+  assert.ok(commits.every(({ ready }) => !ready));
   await settle(wallet);
+  assert.equal(result.current.ready, true);
   assert.equal(result.current.status, 'connected');
   assert.equal(wallet.requests.length, 1);
   assert.equal(wallet.listenerCount(), 3);

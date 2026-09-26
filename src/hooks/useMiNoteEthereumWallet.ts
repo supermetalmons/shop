@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizeMiNoteAddress } from '../../shared/miNoteCards.ts';
 import {
   getLegacyInjectedProvider,
@@ -66,6 +66,8 @@ function legacyWallet(): EIP6963ProviderDetail | null {
 }
 
 export function useMiNoteEthereumWallet(active: boolean) {
+  const activationScope = useMemo(() => ({ active }), [active]);
+  const [initializedScope, setInitializedScope] = useState<typeof activationScope | null>(null);
   const [state, setState] = useState<WalletState>(disconnectedState);
   const stateRef = useRef(state);
   const activeRef = useRef(active);
@@ -240,8 +242,10 @@ export function useMiNoteEthereumWallet(active: boolean) {
         });
       }
     }
+    setInitializedScope(activationScope);
     return unsubscribe;
-  }, [active, cancel, readWallet, update]);
+  }, [active, activationScope, cancel, readWallet, update]);
 
-  return { ...state, connect, selectWallet, cancel, disconnect };
+  const ready = state.status !== 'restoring' && (sessionRef.current?.established === true || initializedScope === activationScope);
+  return { ...state, ready, connect, selectWallet, cancel, disconnect };
 }

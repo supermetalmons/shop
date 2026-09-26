@@ -21,7 +21,7 @@ const ADDRESS = '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe';
 const DISPLAY_ADDRESS = '0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE';
 const ETH_SESSION = { token: 'test-token', address: ADDRESS, preorderId: 'mi_note_cards_devnet', expiresAtMs: Date.now() + 3_600_000 };
 const WALLET: ComponentProps<typeof Gallery>['wallet'] = {
-  address: ADDRESS, provider: { request: async () => [] }, status: 'connected', wallets: [], error: null,
+  address: ADDRESS, provider: { request: async () => [] }, status: 'connected', ready: true, wallets: [], error: null,
   connect: () => {}, selectWallet: () => {}, cancel: () => {}, disconnect: () => {},
 };
 const VERIFICATION: ComponentProps<typeof Gallery>['verification'] = { ready: true, session: ETH_SESSION, verifying: false, error: null, verify: async () => {}, invalidate: () => {} };

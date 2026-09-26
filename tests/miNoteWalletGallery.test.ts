@@ -96,15 +96,15 @@ function rig() {
     },
     prepare: forbidden, submit: forbidden, cancel: forbidden, status: async () => ({ order: null }),
   };
-  function Harness({ admin = false, preorderId = config.preorderId }: { admin?: boolean; preorderId?: string }) {
+  function Harness({ admin = false, preorderId = config.preorderId, active = true }: { admin?: boolean; preorderId?: string; active?: boolean }) {
     const collection = getPreorderConfig(preorderId)!;
-    const wallet = useMiNoteEthereumWallet(true);
-    const verification = useMiNoteVerification(true, collection.preorderId, wallet);
-    const preorder = usePreorderCheckout({ config: collection, active: true, buyer: admin ? ADMIN : undefined, signedIn: admin,
+    const wallet = useMiNoteEthereumWallet(active);
+    const verification = useMiNoteVerification(active, collection.preorderId, wallet);
+    const preorder = usePreorderCheckout({ config: collection, active, buyer: admin ? ADMIN : undefined, signedIn: admin,
       ethereumSession: verification.session, onEthereumSessionInvalid: verification.invalidate,
       signTransaction: undefined, ensureSignedIn: async () => false, onSucceeded: () => {},
     }, api);
-    return createElement(MiNoteCardsGallery, { preorder, wallet, verification, onAdminSignIn: async () => {} });
+    return active ? createElement(MiNoteCardsGallery, { preorder, wallet, verification, onAdminSignIn: async () => {} }) : null;
   }
   return { Harness, authCalls, responses, get lookupCount() { return lookupCount; }, get logoutCount() { return logoutCount; },
     partial: () => { ownershipStatus = 'partial'; }, complete: () => { ownershipStatus = 'success'; } };
@@ -137,6 +137,31 @@ function assertConnecting(view: ReturnType<typeof render>) {
   assertIntroduction(view, true);
   assert.equal(view.queryByRole('status'), null);
   assertUnsigned(view);
+}
+
+function assertQuiet(view: ReturnType<typeof render>) {
+  assertIntroduction(view, false);
+  assert.equal(view.container.querySelector('.mi-note-cards__content')?.textContent, '');
+  assert.equal(view.queryByRole('button'), null);
+  assert.equal(view.queryByRole('status'), null);
+  assert.equal(view.getAllByRole('link').length, 3);
+  assertUnsigned(view);
+}
+
+function committedGalleryContent() {
+  const commits: string[] = [];
+  const onRender = () => {
+    const content = document.querySelector('.mi-note-cards__content');
+    if (content) commits.push(content.textContent ?? '');
+  };
+  return { commits, onRender };
+}
+
+function rememberVerifiedWallet(preorderId = config.preorderId) {
+  window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
+  window.sessionStorage.setItem('mons.shop.mi-note.ethereum-session', JSON.stringify({
+    token: 'saved-session', address: ADDRESS, preorderId, expiresAtMs: Date.now() + 3_600_000,
+  }));
 }
 
 function installPicker(...wallets: ReturnType<typeof provider>[]) {
@@ -200,6 +225,76 @@ test('reload restores a matching verified wallet quietly and disconnect prevents
   const disconnected = await act(async () => render(createElement(context.Harness, { admin: true })));
   assert.ok(disconnected.getByRole('button', { name: 'Connect Ethereum Wallet' }));
   assertIntroduction(disconnected, true);
+});
+
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  for (const reactStrictMode of [false, true]) {
+    test(`${preorderId} never commits sign-in content during delayed restoration with StrictMode ${reactStrictMode}`, async () => {
+      const accounts = deferred<unknown>();
+      const wallet = provider(); Object.assign(window, { ethereum: wallet });
+      wallet.responses.eth_accounts = () => accounts.promise;
+      rememberVerifiedWallet(preorderId);
+      const collection = getPreorderConfig(preorderId)!;
+      window.localStorage.setItem(`mons:preorder:v1:${collection.cluster}:${collection.collection}:${ADMIN}`, JSON.stringify({
+        requestId: 'saved-preorder', cardIds: [1], ethereumAddress: ADDRESS,
+      }));
+      const context = rig();
+      const observed = committedGalleryContent();
+      const view = render(createElement(Profiler, { id: 'passive-restoration', onRender: observed.onRender },
+        createElement(context.Harness, { admin: true, preorderId })), { reactStrictMode });
+      assertQuiet(view);
+      await waitFor(() => assert.deepEqual(wallet.calls, ['eth_accounts']));
+      assertQuiet(view);
+      assert.ok(observed.commits.length > 0);
+      assert.ok(observed.commits.every(content => content === ''));
+      assert.equal(context.lookupCount, 0);
+      await act(async () => accounts.resolve([ADDRESS]));
+      await waitFor(() => assert.equal(view.getAllByRole('img').length, 10));
+      assert.ok(view.getByRole('button', { name: 'Disconnect' }));
+      assert.ok(view.getByTitle(DISPLAY_ADDRESS));
+      assertIntroduction(view, false);
+      assert.ok(observed.commits.every(content => !/Preorder Mi Note Cards|One unique card|Connect Ethereum Wallet|Connecting|Switch back|Cancel your previous preorder|Abandon preparation/.test(content)));
+      assert.deepEqual(wallet.calls, ['eth_accounts']);
+      assert.deepEqual(context.authCalls, []);
+    });
+  }
+}
+
+test('entering and reentering Mi Notes keeps restoration quiet and discards an interrupted account read', async () => {
+  const firstAccounts = deferred<unknown>(); const currentAccounts = deferred<unknown>();
+  const wallet = provider(); Object.assign(window, { ethereum: wallet });
+  wallet.responses.eth_accounts = () => wallet.calls.length === 1 ? firstAccounts.promise : currentAccounts.promise;
+  rememberVerifiedWallet();
+  const context = rig();
+  const observed = committedGalleryContent();
+  const page = (active: boolean) => createElement(Profiler, { id: 'passive-navigation', onRender: observed.onRender },
+    createElement(context.Harness, { admin: true, active }));
+  const view = render(page(false), { reactStrictMode: true });
+  assert.deepEqual(wallet.calls, []);
+  view.rerender(page(true));
+  assertQuiet(view);
+  await waitFor(() => assert.deepEqual(wallet.calls, ['eth_accounts']));
+  view.rerender(page(false));
+  assert.equal(view.queryByRole('main'), null);
+  view.rerender(page(true));
+  assertQuiet(view);
+  await waitFor(() => assert.deepEqual(wallet.calls, ['eth_accounts', 'eth_accounts']));
+  assert.ok(observed.commits.length > 0);
+  assert.ok(observed.commits.every(content => content === ''));
+  await act(async () => currentAccounts.resolve([ADDRESS]));
+  await waitFor(() => assert.equal(view.getAllByRole('img').length, 10));
+  assert.ok(view.getByTitle(DISPLAY_ADDRESS));
+  await act(async () => firstAccounts.resolve([OTHER_ADDRESS]));
+  assert.ok(view.getByTitle(DISPLAY_ADDRESS));
+  assert.equal(view.queryByTitle(OTHER_DISPLAY_ADDRESS), null);
+  assert.ok(observed.commits.every(content => !/Preorder Mi Note Cards|Connect Ethereum Wallet|Connecting/.test(content)));
+  view.rerender(page(false));
+  const returningCommit = observed.commits.length;
+  await act(async () => view.rerender(page(true)));
+  assert.ok(view.getByRole('button', { name: 'Disconnect' }));
+  assert.ok(observed.commits.slice(returningCommit).every(content => content.includes('Disconnect')));
+  assert.deepEqual(wallet.calls, ['eth_accounts', 'eth_accounts']);
+  assert.deepEqual(context.authCalls, []);
 });
 
 test('wallet picker remains inline and supports cancellation and provider selection', async () => {
@@ -352,25 +447,71 @@ test('missing wallet returns silently to the enabled Connect button', async () =
   assert.deepEqual(context.authCalls, []);
 });
 
-for (const savedSession of ['missing', 'expired', 'different collection']) {
+for (const savedSession of ['missing', 'expired', 'different collection', 'different account', 'malformed']) {
   test(`passive restoration with ${savedSession} verification waits for an explicit Connect click`, async () => {
+    const accounts = deferred<unknown>();
     const wallet = provider(); Object.assign(window, { ethereum: wallet });
+    wallet.responses.eth_accounts = () => accounts.promise;
     window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
     if (savedSession !== 'missing') window.sessionStorage.setItem('mons.shop.mi-note.ethereum-session', JSON.stringify({
-      token: 'saved-session', address: ADDRESS,
+      token: 'saved-session', address: savedSession === 'different account' ? OTHER_ADDRESS : ADDRESS,
       preorderId: savedSession === 'different collection' ? 'mi_note_cards' : config.preorderId,
       expiresAtMs: Date.now() + (savedSession === 'expired' ? -1 : 3_600_000),
     }));
+    if (savedSession === 'malformed') window.sessionStorage.setItem('mons.shop.mi-note.ethereum-session', '{');
     const context = rig();
-    const view = render(createElement(context.Harness, { admin: true }), { reactStrictMode: true });
-    assertConnecting(view);
+    const observed = committedGalleryContent();
+    const view = render(createElement(Profiler, { id: 'invalid-passive-session', onRender: observed.onRender },
+      createElement(context.Harness, { admin: true })), { reactStrictMode: true });
+    assertQuiet(view);
+    await waitFor(() => assert.deepEqual(wallet.calls, ['eth_accounts']));
+    assert.ok(observed.commits.length > 0);
+    assert.ok(observed.commits.every(content => content === ''));
+    await act(async () => accounts.resolve([ADDRESS]));
     await waitFor(() => assert.equal((view.getByRole('button', { name: 'Connect Ethereum Wallet' }) as HTMLButtonElement).disabled, false));
+    assertIntroduction(view, true);
     assertUnsigned(view);
+    assert.ok(observed.commits.every(content => content === '' || content.includes('Connect Ethereum Wallet')));
     assert.deepEqual(wallet.calls, ['eth_accounts']);
     assert.deepEqual(context.authCalls, []);
+    delete wallet.responses.eth_accounts;
     await connectAndVerify(view);
     assert.equal(wallet.calls.filter(call => call === 'eth_requestAccounts').length, 0);
     assert.equal(wallet.calls.filter(call => call === 'personal_sign').length, 1);
+  });
+}
+
+for (const failure of ['missing provider', 'rejected accounts', 'empty accounts']) {
+  test(`passive restoration with ${failure} commits only the resolved Connect state`, async () => {
+    const accounts = deferred<unknown>();
+    const wallet = provider();
+    if (failure !== 'missing provider') {
+      Object.assign(window, { ethereum: wallet });
+      wallet.responses.eth_accounts = async () => {
+        await accounts.promise;
+        if (failure === 'rejected accounts') throw new Error('Wallet locked');
+        return [];
+      };
+    }
+    rememberVerifiedWallet();
+    const context = rig();
+    const observed = committedGalleryContent();
+    const view = render(createElement(Profiler, { id: 'failed-passive-wallet', onRender: observed.onRender },
+      createElement(context.Harness, { admin: true })), { reactStrictMode: true });
+    assertQuiet(view);
+    if (failure !== 'missing provider') {
+      await waitFor(() => assert.deepEqual(wallet.calls, ['eth_accounts']));
+      assert.ok(observed.commits.every(content => content === ''));
+      await act(async () => accounts.resolve(undefined));
+    }
+    await waitFor(() => assert.equal((view.getByRole('button', { name: 'Connect Ethereum Wallet' }) as HTMLButtonElement).disabled, false));
+    assertIntroduction(view, true);
+    assertUnsigned(view);
+    assert.equal(observed.commits[0], '');
+    assert.ok(observed.commits.every(content => content === '' || content.includes('Connect Ethereum Wallet')));
+    assert.deepEqual(wallet.calls, failure === 'missing provider' ? [] : ['eth_accounts']);
+    assert.deepEqual(context.authCalls, []);
+    assert.equal(context.lookupCount, 0);
   });
 }
 

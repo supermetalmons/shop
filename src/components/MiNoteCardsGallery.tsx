@@ -44,7 +44,7 @@ function MiNoteWalletControls({ wallet, verification, verified }: Pick<MiNoteCar
   const disconnectRef = useRef<HTMLButtonElement>(null);
   const attempt = useRef<WalletSignInAttempt | null>(null);
   const [pendingAttempt, setPendingAttempt] = useState<WalletSignInAttempt | null>(null);
-  const busy = Boolean(pendingAttempt) || !verification.ready || verification.verifying || wallet.status === 'connecting' || wallet.status === 'restoring';
+  const busy = Boolean(pendingAttempt) || !wallet.ready || !verification.ready || verification.verifying || wallet.status === 'connecting' || wallet.status === 'restoring';
   const previous = useRef({ status: wallet.status, busy, verified });
 
   const finishAttempt = useCallback((current: WalletSignInAttempt) => {
@@ -107,53 +107,65 @@ function MiNoteWalletControls({ wallet, verification, verified }: Pick<MiNoteCar
     previous.current = { status: wallet.status, busy, verified };
   }, [busy, verified, wallet.status]);
 
+  if (!wallet.ready || (!verification.ready && !pendingAttempt)) return null;
+
   return (
-    <div className="mi-note-cards__wallet">
-      {verified && displayAddress ? (
-        <div className="mi-note-cards__connection">
-          <span className="mi-note-cards__address" title={displayAddress}>
-            {displayAddress.slice(0, 6)}…{displayAddress.slice(-4)}
-          </span>
-          <button ref={disconnectRef} type="button" className="ghost" onClick={() => { verification.invalidate(); wallet.disconnect(); }}>
-            Disconnect
+    <>
+      {!verified && wallet.status !== 'choosing' && <header className="mi-note-cards__header">
+        <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
+        <div className="mi-note-cards__intro">
+          <p>One unique card for each Mi Note.</p>
+          <p>Preorders are open until October 8.</p>
+          <p>Cards reveal and public mint for the remaining cards on October 9.</p>
+        </div>
+      </header>}
+      <div className="mi-note-cards__wallet">
+        {verified && displayAddress ? (
+          <div className="mi-note-cards__connection">
+            <span className="mi-note-cards__address" title={displayAddress}>
+              {displayAddress.slice(0, 6)}…{displayAddress.slice(-4)}
+            </span>
+            <button ref={disconnectRef} type="button" className="ghost" onClick={() => { verification.invalidate(); wallet.disconnect(); }}>
+              Disconnect
+            </button>
+          </div>
+        ) : wallet.status === 'choosing' ? (
+          <div
+            className="mi-note-cards__wallet-picker"
+            role="group"
+            aria-label="Select Ethereum wallet"
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.stopPropagation();
+              cancel();
+            }}
+          >
+            <p className="mi-note-cards__message">Select a wallet</p>
+            {wallet.wallets.map((choice, index) => {
+              const icon = getInjectedWalletIconSrc(choice.info.icon);
+              return (
+                <button
+                  key={choice.info.uuid}
+                  ref={index === 0 ? firstWalletRef : undefined}
+                  type="button"
+                  className="secondary-light mi-note-cards__wallet-choice"
+                  onClick={() => wallet.selectWallet(choice)}
+                >
+                  {icon && <img className="mi-note-cards__wallet-icon" src={icon} alt="" />}
+                  <span>{choice.info.name}</span>
+                </button>
+              );
+            })}
+            <button type="button" className="ghost" onClick={cancel}>Cancel</button>
+          </div>
+        ) : (
+          <button ref={connectRef} type="button" disabled={busy} onClick={connect}>
+            {busy ? 'Connecting...' : 'Connect Ethereum Wallet'}
           </button>
-        </div>
-      ) : wallet.status === 'choosing' ? (
-        <div
-          className="mi-note-cards__wallet-picker"
-          role="group"
-          aria-label="Select Ethereum wallet"
-          onKeyDown={(event) => {
-            if (event.key !== 'Escape') return;
-            event.preventDefault();
-            event.stopPropagation();
-            cancel();
-          }}
-        >
-          <p className="mi-note-cards__message">Select a wallet</p>
-          {wallet.wallets.map((choice, index) => {
-            const icon = getInjectedWalletIconSrc(choice.info.icon);
-            return (
-              <button
-                key={choice.info.uuid}
-                ref={index === 0 ? firstWalletRef : undefined}
-                type="button"
-                className="secondary-light mi-note-cards__wallet-choice"
-                onClick={() => wallet.selectWallet(choice)}
-              >
-                {icon && <img className="mi-note-cards__wallet-icon" src={icon} alt="" />}
-                <span>{choice.info.name}</span>
-              </button>
-            );
-          })}
-          <button type="button" className="ghost" onClick={cancel}>Cancel</button>
-        </div>
-      ) : (
-        <button ref={connectRef} type="button" disabled={busy} onClick={connect}>
-          {busy ? 'Connecting...' : 'Connect Ethereum Wallet'}
-        </button>
-      )}
-    </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -250,14 +262,6 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     <>
       <main className={`mi-note-cards${cards.length === 0 ? ' mi-note-cards--empty' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
         <div className="mi-note-cards__content">
-          {!verified && wallet.status !== 'choosing' && <header className="mi-note-cards__header">
-            <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
-            <div className="mi-note-cards__intro">
-              <p>One unique card for each Mi Note.</p>
-              <p>Preorders are open until October 8.</p>
-              <p>Cards reveal and public mint for the remaining cards on October 9.</p>
-            </div>
-          </header>}
           <MiNoteWalletControls key={preorder?.config.preorderId} wallet={wallet} verification={verification} verified={verified} />
           {verified && (
             <>
@@ -273,7 +277,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               </div>}
             </>
           )}
-          {pendingHidden && <div className="mi-note-cards__wallet">
+          {wallet.ready && verification.ready && pendingHidden && <div className="mi-note-cards__wallet">
             <p className="mi-note-cards__message" role="status">{submitting ? 'Confirming your previous preorder…'
               : pendingAddress ? 'Switch back to the Ethereum wallet for your pending preorder, or cancel it.'
               : 'Cancel your previous preorder to start with a verified Ethereum wallet.'}</p>
