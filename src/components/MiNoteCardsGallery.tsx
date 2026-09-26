@@ -260,7 +260,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
 
   return (
     <>
-      <main className={`mi-note-cards${cards.length === 0 ? ' mi-note-cards--empty' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
+      <main className={`mi-note-cards${!verified ? ' mi-note-cards--connect' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
         <div className="mi-note-cards__content">
           <MiNoteWalletControls key={preorder?.config.preorderId} wallet={wallet} verification={verification} verified={verified} />
           {verified && (
@@ -269,7 +269,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
                 <p className="mi-note-cards__message">Sign in with the admin Solana wallet to use the devnet test cards.</p>
                 {onAdminSignIn && <button type="button" disabled={preorder?.busy} onClick={() => { void onAdminSignIn(); }}>Sign in with Solana</button>}
               </div>}
-              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message" role="status">Loading...</p>}
+              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message mi-note-cards__message--loading" role="status">Loading...</p>}
               {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message" role="status">No Mi Notes available for preorder.</p>}
               {(preorder?.availabilityError || scopedAvailability?.ownershipStatus === 'partial') && <div className="mi-note-cards__error">
                 <p className="mi-note-cards__message" role="alert">{preorder?.availabilityError || 'Some cards couldn’t be loaded.'}</p>

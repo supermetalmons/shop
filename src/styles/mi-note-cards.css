@@ -28,7 +28,11 @@ body:has(.drop-page-frame--mi-note-cards) {
   gap: 24px;
 }
 
-.mi-note-cards--empty .mi-note-cards__content {
+.mi-note-cards__content:has(> .mi-note-cards__message--loading) {
+  flex: 1;
+}
+
+.mi-note-cards--connect .mi-note-cards__content {
   flex: 1;
   justify-content: center;
   padding-block: 32px calc(clamp(64px, 10vh, 96px) + 40px);
@@ -137,6 +141,10 @@ body:has(.drop-page-frame--mi-note-cards) {
   color: var(--mi-note-muted);
   text-align: center;
   font-size: 14px;
+}
+
+.mi-note-cards__message--loading {
+  margin-block: auto;
 }
 
 .mi-note-cards__wallet-picker {
