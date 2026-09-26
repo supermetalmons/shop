@@ -4,7 +4,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import miNoteCollections from '../../mi_note_eth.json';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
-import { preorderImageUrl } from '../../shared/preorders';
+import { preorderImageUrl, type PreorderAvailabilityResponse } from '../../shared/preorders';
 import type { MiNoteVerification } from '../hooks/useMiNoteVerification';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
@@ -29,6 +29,25 @@ const MI_NOTE_COLLECTION_LINKS = [
   { label: 'Mi Note 2', href: 'https://opensea.io/collection/mi-note2' },
   { label: 'Mi Note 3', href: 'https://opensea.io/collection/mi-note-3' },
 ];
+
+function useMiNoteCardOrder(scope: string, items: PreorderAvailabilityResponse['items'] | undefined) {
+  const [order, setOrder] = useState<{ scope: string; unpreordered: number[]; preordered: number[] }>(
+    () => ({ scope, unpreordered: [], preordered: [] }),
+  );
+  const nextOrder = useMemo(() => {
+    const current = order.scope === scope ? order : { scope, unpreordered: [], preordered: [] };
+    const known = new Set([...current.unpreordered, ...current.preordered]);
+    const added = items?.filter(({ id }) => !known.has(id)) ?? [];
+    if (!added.length) return current;
+    return {
+      scope,
+      unpreordered: [...current.unpreordered, ...added.filter(({ status }) => status !== 'preordered').map(({ id }) => id)],
+      preordered: [...current.preordered, ...added.filter(({ status }) => status === 'preordered').map(({ id }) => id)],
+    };
+  }, [items, order, scope]);
+  if (nextOrder !== order) setOrder(nextOrder);
+  return nextOrder;
+}
 
 type WalletSignInAttempt = { verify: MiNoteVerification['verify'] | null };
 
@@ -174,10 +193,15 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     verification.session.preorderId === preorder?.config.preorderId);
   const scopedAvailability = verified && preorder?.availability?.ethereumAddress === wallet.address &&
     preorder.availability.preorderId === preorder.config.preorderId ? preorder.availability : null;
-  const cards = useMemo(() => scopedAvailability?.items.flatMap(({ id }) => {
-    const card = MI_NOTE_CARDS_BY_ID.get(id);
-    return card ? [card] : [];
-  }) ?? [], [scopedAvailability]);
+  const orderScope = `${preorder?.config.preorderId ?? ''}:${wallet.address ?? ''}:${preorder?.authenticatedBuyer ?? ''}`;
+  const cardOrder = useMiNoteCardOrder(orderScope, scopedAvailability?.items);
+  const cards = useMemo(() => {
+    const visible = new Set(scopedAvailability?.items.map(({ id }) => id));
+    return [...cardOrder.unpreordered, ...cardOrder.preordered].flatMap((id) => {
+      const card = visible.has(id) ? MI_NOTE_CARDS_BY_ID.get(id) : undefined;
+      return card ? [card] : [];
+    });
+  }, [cardOrder, scopedAvailability]);
   const selectionScope = `${preorder?.config.preorderId}:${verification.session?.token ?? ''}`;
   const renderedScope = useRef(selectionScope);
   const selectionCurrent = renderedScope.current === selectionScope;

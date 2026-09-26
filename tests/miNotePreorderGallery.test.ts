@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach } from 'node:test';
-import { createElement, type ComponentProps } from 'react';
+import { createElement, Profiler, type ComponentProps } from 'react';
 import { getPreorderConfig } from '../shared/preorders.ts';
 import type { PreorderCheckout } from '../src/hooks/usePreorderCheckout.ts';
 import type { createPreorderApi } from '../src/lib/preorderApi.ts';
@@ -35,11 +35,26 @@ after(() => dom.window.close());
 
 function checkout(): PreorderCheckout {
   return {
-    config: getPreorderConfig('mi_note_cards_devnet')!, buyer: undefined, ethereumAddress: ADDRESS,
+    config: getPreorderConfig('mi_note_cards_devnet')!, buyer: undefined, authenticatedBuyer: undefined, ethereumAddress: ADDRESS,
     availability: { preorderId: 'mi_note_cards_devnet', ethereumAddress: ADDRESS, ownershipStatus: 'success', requiresAdminSignIn: false, items: Array.from({ length: 10 }, (_, index) => ({ id: index + 1, status: 'available' })) },
     availabilityError: null, refreshAvailability: async () => {}, order: null, pending: null, phase: 'idle',
     error: null, purchase: async () => {}, cancel: async () => {}, busy: false, pendingOrder: false, recoveryReady: true,
   };
+}
+
+function gridCardIds(): number[] {
+  return Array.from(document.querySelectorAll('.mi-note-cards__grid button'), (button) =>
+    Number(button.getAttribute('aria-label')!.match(/preorder #(\d+):/)![1]));
+}
+
+function orderingCheckout(preorderId: string): PreorderCheckout {
+  const preorder = checkout();
+  return { ...preorder, config: getPreorderConfig(preorderId)!, authenticatedBuyer: 'buyer-a', availability: {
+    ...preorder.availability!, preorderId, items: [
+      { id: 5, status: 'preordered' }, { id: 4, status: 'available' }, { id: 2, status: 'reserved' },
+      { id: 1, status: 'preordered' }, { id: 3, status: 'available' },
+    ],
+  } };
 }
 
 function expectCollectionLinks(view: ReturnType<typeof render>) {
@@ -513,6 +528,113 @@ test('switching between devnet purchasing and mainnet gallery clears prior selec
 });
 
 for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} groups cards on the first commit and updates preorder artwork without moving cards`, () => {
+    let preorder = orderingCheckout(preorderId);
+    const committed: number[][] = [];
+    const opened: string[] = [];
+    const element = () => createElement(Profiler, { id: preorderId, onRender: () => { committed.push(gridCardIds()); } },
+      createElement(MiNoteCardsGallery, { preorder, onViewPreordered: (item) => { opened.push(item.id); return true; } }));
+    const view = render(element(), { reactStrictMode: true });
+    const expected = [4, 2, 3, 5, 1];
+    assert.deepEqual(gridCardIds(), expected);
+    assert.ok(committed.length > 0);
+    assert.ok(committed.every((ids) => JSON.stringify(ids) === JSON.stringify(expected)));
+    const four = view.getByRole('button', { name: /Select preorder #4:/ });
+    const image = four.querySelector('img')!;
+    const originalImage = image.getAttribute('src');
+    for (const status of ['reserved', 'preordered'] as const) {
+      preorder = { ...preorder, availability: { ...preorder.availability!, items: preorder.availability!.items.map((item) =>
+        item.id === 4 ? { ...item, status } : item.id === 2 ? { ...item, status: 'available' } : item) } };
+      view.rerender(element());
+      assert.deepEqual(gridCardIds(), expected);
+      assert.equal(view.getByRole('button', { name: new RegExp(`${status === 'reserved' ? 'Reserved' : 'Preordered'} preorder #4:`) }), four);
+      assert.equal(image.getAttribute('src'), status === 'reserved' ? originalImage : 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/4.webp');
+      assert.equal(image.classList.contains('mi-note-cards__image--preordered'), status === 'preordered');
+    }
+    fireEvent.click(four);
+    fireEvent.click(view.getByRole('button', { name: 'View' }));
+    assert.deepEqual(opened, [`${preorderId}:4`]);
+    assert.ok(committed.every((ids) => JSON.stringify(ids) === JSON.stringify(expected)));
+  });
+
+  test(`${preorderId} retains order through polling, retry, token renewal, and partial ownership`, () => {
+    let preorder = orderingCheckout(preorderId);
+    let retries = 0;
+    preorder.refreshAvailability = async () => { retries += 1; };
+    let verification = { ...VERIFICATION, session: { ...ETH_SESSION, preorderId } };
+    const element = () => createElement(MiNoteCardsGallery, { preorder, verification });
+    const view = render(element());
+    const expected = [4, 2, 3, 5, 1];
+    const polled = { ...preorder.availability!, items: [...preorder.availability!.items].reverse().map((item) =>
+      item.id === 4 ? { ...item, status: 'preordered' as const } : item) };
+    preorder = { ...preorder, availability: polled };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), expected);
+    preorder = { ...preorder, availabilityError: 'Temporarily offline' };
+    view.rerender(element());
+    fireEvent.click(view.getByRole('button', { name: 'Try again' }));
+    assert.equal(retries, 1);
+    assert.deepEqual(gridCardIds(), expected);
+    preorder = { ...preorder, availability: null, availabilityError: null };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), []);
+    verification = { ...verification, session: { ...verification.session, token: 'renewed-token', expiresAtMs: Date.now() + 7_200_000 } };
+    preorder = { ...preorder, availability: polled };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), expected);
+    preorder = { ...preorder, buyer: 'buyer-a' };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), expected);
+    preorder = { ...preorder, buyer: undefined, availability: { ...polled, ownershipStatus: 'partial', items: [
+      { id: 7, status: 'preordered' }, { id: 1, status: 'preordered' }, { id: 6, status: 'available' },
+      { id: 4, status: 'preordered' }, { id: 8, status: 'reserved' },
+    ] } };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), [4, 6, 8, 1, 7]);
+    preorder = { ...preorder, availability: { ...polled, items: [
+      { id: 7, status: 'preordered' }, { id: 6, status: 'preordered' }, { id: 5, status: 'preordered' },
+      { id: 2, status: 'available' }, { id: 8, status: 'available' }, { id: 1, status: 'preordered' },
+      { id: 3, status: 'available' }, { id: 4, status: 'preordered' },
+    ] } };
+    view.rerender(element());
+    assert.deepEqual(gridCardIds(), [4, 2, 3, 6, 8, 5, 1, 7]);
+  });
+
+  for (const reset of ['remount', 'account', 'ethereum', 'collection'] as const) {
+    test(`${preorderId} regroups current statuses after ${reset}`, () => {
+      let preorder = orderingCheckout(preorderId);
+      let wallet = WALLET;
+      let verification = { ...VERIFICATION, session: { ...ETH_SESSION, preorderId } };
+      let instance = 0;
+      const element = () => createElement(MiNoteCardsGallery, { key: instance, preorder, wallet, verification });
+      const view = render(element());
+      preorder = { ...preorder, availability: { ...preorder.availability!, items: preorder.availability!.items.map((item) =>
+        item.id === 4 ? { ...item, status: 'preordered' } : item) } };
+      view.rerender(element());
+      assert.deepEqual(gridCardIds(), [4, 2, 3, 5, 1]);
+      if (reset === 'remount') instance += 1;
+      if (reset === 'account') preorder = { ...preorder, authenticatedBuyer: 'buyer-b' };
+      if (reset === 'ethereum') {
+        const address = '0x1111111111111111111111111111111111111111';
+        wallet = { ...wallet, address };
+        verification = { ...verification, session: { ...verification.session, address, token: 'another-wallet' } };
+        preorder = { ...preorder, ethereumAddress: address, availability: { ...preorder.availability!, ethereumAddress: address } };
+      }
+      if (reset === 'collection') {
+        const next = preorderId === 'mi_note_cards' ? 'mi_note_cards_devnet' : 'mi_note_cards';
+        verification = { ...verification, session: { ...verification.session, preorderId: next } };
+        preorder = { ...preorder, config: getPreorderConfig(next)!, availability: { ...preorder.availability!, preorderId: next } };
+      }
+      const nextAvailability = preorder.availability;
+      preorder = { ...preorder, availability: null };
+      view.rerender(element());
+      assert.deepEqual(gridCardIds(), []);
+      preorder = { ...preorder, availability: nextAvailability };
+      view.rerender(element());
+      assert.deepEqual(gridCardIds(), [2, 3, 5, 4, 1]);
+    });
+  }
+
   test(`${preorderId} selects one completed preorder and opens its artwork without purchasing`, () => {
     Math.random = () => 0;
     const preorder = checkout();

@@ -402,7 +402,8 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
 
   const currentCheckout = config.enabled && checkoutScope === scopeId;
   return {
-    config, buyer, ethereumAddress: options.ethereumSession?.address ?? null, availability, availabilityError, refreshAvailability,
+    config, buyer, authenticatedBuyer: options.authenticatedBuyer,
+    ethereumAddress: options.ethereumSession?.address ?? null, availability, availabilityError, refreshAvailability,
     order: currentCheckout ? order : null,
     pending: currentCheckout ? pending : null,
     phase: currentCheckout ? phase : 'idle' as const,
