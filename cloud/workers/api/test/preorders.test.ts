@@ -5,8 +5,9 @@ import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
 import { PreorderStore, listPreorderInventoryAssets } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { loadMiNoteEligibility } from '../src/miNoteEligibility.ts';
-import { verifyRequestIdentity } from '../src/requestIdentity.ts';
+import { RequestIdentityError, verifyRequestIdentity } from '../src/requestIdentity.ts';
 import { handleAnonymousAuthRequest } from '../src/anonymousAuth.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
@@ -16,6 +17,12 @@ const OTHER = Keypair.generate().publicKey.toBase58();
 const ETHEREUM = '0x0000000000000000000000000000000000000001';
 const OTHER_ETHEREUM = '0x0000000000000000000000000000000000000002';
 type Overrides = NonNullable<Parameters<typeof handlePreorderRequest>[3]>;
+
+function gate() {
+  const started = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  return { ...release, started: started.promise, enter: async () => { started.resolve(); await release.promise; } };
+}
 
 function harness(options?: Parameters<typeof createCommerceD1Harness>[0]) {
   const database = createCommerceD1Harness(options);
@@ -126,6 +133,375 @@ test('availability permits verified Ethereum access before a Solana wallet has s
   h.signedIn(true);
   const invalidCredentials = await h.call('availability', { preorderId: config.preorderId }, { verifyIdentity: verifyRequestIdentity });
   assert.equal(invalidCredentials.status, 401);
+});
+
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} availability overlaps prerequisites before overlapping ownership and claims`, { timeout: 2000 }, async (t) => {
+    const h = harness();
+    h.database.exec(`CREATE TABLE auth_wallet_bindings (
+      auth_subject TEXT PRIMARY KEY, wallet TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, revision INTEGER NOT NULL,
+      reconcile_lease_id TEXT, reconcile_lease_expires_at_ms INTEGER)`);
+    h.database.prepare('INSERT INTO auth_wallet_bindings VALUES (?, ?, 1000, 1, NULL, NULL)').run('buyer-session', BUYER);
+    const control = gate(), expiry = gate(), ethereum = gate(), identity = gate(), binding = gate();
+    const ownership = gate(), claims = gate();
+    t.after(() => { for (const step of [control, expiry, ethereum, identity, binding, ownership, claims]) step.resolve(); });
+    const prepare = h.db.prepare.bind(h.db);
+    t.mock.method(h.db, 'prepare', (sql: string) => {
+      const statement = prepare(sql);
+      const step = sql.includes('FROM commerce_authority_control') ? control : sql.includes('FROM auth_wallet_bindings') ? binding : null;
+      if (step) {
+        const first = statement.first.bind(statement);
+        t.mock.method(statement, 'first', async <T>() => { await step.enter(); return first<T>(); });
+        const bind = statement.bind.bind(statement);
+        t.mock.method(statement, 'bind', (...values: unknown[]) => {
+          const bound = bind(...values);
+          const boundFirst = bound.first.bind(bound);
+          t.mock.method(bound, 'first', async <T>() => { await step.enter(); return boundFirst<T>(); });
+          return bound;
+        });
+      }
+      return statement;
+    });
+    const expirePrepared = PreorderStore.prototype.expirePrepared;
+    const readClaims = PreorderStore.prototype.claims;
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async function (this: PreorderStore, nowMs: number) {
+      await expiry.enter();
+      return expirePrepared.call(this, nowMs);
+    });
+    const claimRead = t.mock.method(PreorderStore.prototype, 'claims', async function (this: PreorderStore, cluster: string, collection: string) {
+      await claims.enter();
+      return readClaims.call(this, cluster, collection);
+    });
+    let ownershipCalls = 0;
+    const pending = h.call('availability', { preorderId }, {
+      verifyEthereumSession: async (...args) => { await ethereum.enter(); return h.deps.verifyEthereumSession!(...args); },
+      verifyIdentity: async () => { await identity.enter(); return { kind: 'anonymous', authSubject: 'buyer-session' }; },
+      eligibility: async (args) => {
+        ownershipCalls += 1;
+        assert.equal(args.address, ETHEREUM);
+        assert.equal(args.buyer, BUYER);
+        await ownership.enter();
+        return h.deps.eligibility!(args);
+      },
+    });
+    await Promise.all([control.started, ethereum.started, identity.started]);
+    assert.equal(expire.mock.callCount(), 0);
+    control.resolve();
+    await expiry.started;
+    ethereum.resolve();
+    identity.resolve();
+    await binding.started;
+    assert.equal(ownershipCalls, 0);
+    assert.equal(claimRead.mock.callCount(), 0);
+    binding.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(ownershipCalls, 0);
+    assert.equal(claimRead.mock.callCount(), 0);
+    expiry.resolve();
+    await Promise.all([ownership.started, claims.started]);
+    claims.resolve();
+    ownership.resolve();
+    assert.equal((await pending).status, 200);
+  });
+}
+
+for (const failure of ['maintenance', 'expiry', 'ethereum', 'identity'] as const) {
+  test(`availability stops before ownership and preserves ${failure} failure precedence`, { timeout: 2000 }, async (t) => {
+    const h = harness();
+    const commerce = gate();
+    t.after(() => commerce.resolve());
+    const prepare = h.db.prepare.bind(h.db);
+    t.mock.method(h.db, 'prepare', (sql: string) => {
+      const statement = prepare(sql);
+      if (sql.includes('FROM commerce_authority_control')) {
+        const first = statement.first.bind(statement);
+        t.mock.method(statement, 'first', async <T>() => {
+          await commerce.enter();
+          const row = await first<Record<string, unknown>>();
+          return (failure === 'maintenance' ? { ...row, authority_state: 'paused' } : row) as T;
+        });
+      }
+      return statement;
+    });
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async () => {
+      if (failure === 'expiry') throw new ProfileReadError('unavailable', 503, 'Reservation cleanup failed.');
+    });
+    const claims = t.mock.method(PreorderStore.prototype, 'claims');
+    let ethereumCalls = 0, identityCalls = 0, ownershipCalls = 0;
+    const pending = h.call('availability', { preorderId: config.preorderId }, {
+      verifyEthereumSession: (...args) => {
+        ethereumCalls += 1;
+        if (failure !== 'identity') throw new MiNoteAuthError('unauthenticated', 401, 'Verify your Ethereum wallet.');
+        return h.deps.verifyEthereumSession!(...args);
+      },
+      verifyIdentity: async () => { identityCalls += 1; throw new RequestIdentityError('invalid-token'); },
+      eligibility: async (args) => { ownershipCalls += 1; return h.deps.eligibility!(args); },
+    });
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await commerce.started;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    commerce.resolve();
+    const result = await pending;
+    const expected = {
+      maintenance: [503, 'unavailable', 'Preorders are temporarily unavailable for maintenance.'],
+      expiry: [503, 'unavailable', 'Reservation cleanup failed.'],
+      ethereum: [401, 'unauthenticated', 'Verify your Ethereum wallet.'],
+      identity: [401, 'unauthenticated', 'Authentication is required.'],
+    }[failure];
+    assert.deepEqual([result.status, result.body.error.code, result.body.error.message], expected);
+    assert.equal(ethereumCalls, 1);
+    assert.equal(identityCalls, 1);
+    assert.equal(expire.mock.callCount(), failure === 'maintenance' ? 0 : 1);
+    assert.equal(ownershipCalls, 0);
+    assert.equal(claims.mock.callCount(), 0);
+  });
+}
+
+for (const failure of ['maintenance', 'expiry', 'ethereum'] as const) {
+  test(`availability returns ${failure} failure before unrelated authentication reads finish`, { timeout: 2000 }, async (t) => {
+    const h = harness();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const session = gate(), buyer = gate();
+    t.after(() => { session.resolve(); buyer.resolve(); });
+    let lateFailures = 0;
+    let identitySignal: AbortSignal | undefined;
+    const prepare = h.db.prepare.bind(h.db);
+    t.mock.method(h.db, 'prepare', (sql: string) => {
+      const statement = prepare(sql);
+      if (failure === 'maintenance' && sql.includes('FROM commerce_authority_control')) {
+        const first = statement.first.bind(statement);
+        t.mock.method(statement, 'first', async <T>() => ({ ...await first<Record<string, unknown>>(), authority_state: 'paused' }) as T);
+      }
+      if (failure === 'ethereum' && sql.includes('FROM auth_wallet_bindings')) {
+        const bind = statement.bind.bind(statement);
+        t.mock.method(statement, 'bind', (...values: unknown[]) => {
+          const bound = bind(...values);
+          t.mock.method(bound, 'first', async () => { await buyer.enter(); lateFailures += 1; throw new Error('Late binding failure'); });
+          return bound;
+        });
+      }
+      return statement;
+    });
+    t.mock.method(PreorderStore.prototype, 'expirePrepared', async () => {
+      if (failure === 'expiry') throw new ProfileReadError('unavailable', 503, 'Reservation cleanup failed.');
+    });
+    const claims = t.mock.method(PreorderStore.prototype, 'claims');
+    let ownershipCalls = 0;
+    const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, {
+      headers: { Authorization: 'test-session' },
+    });
+    const pending = handlePreorderRequest(request, h.env, {}, { ...h.deps,
+      timeoutMs: 100,
+      verifyEthereumSession: async () => {
+        if (failure !== 'ethereum') { await session.enter(); lateFailures += 1; throw new Error('Late session failure'); }
+        await buyer.started;
+        throw new MiNoteAuthError('unauthenticated', 401, 'Verify your Ethereum wallet.');
+      },
+      verifyIdentity: async (_request, _db, signal) => {
+        identitySignal = signal;
+        if (failure === 'ethereum') return { kind: 'anonymous', authSubject: 'buyer-session' };
+        await buyer.enter();
+        lateFailures += 1;
+        throw new Error('Late identity failure');
+      },
+      eligibility: async (args) => { ownershipCalls += 1; return h.deps.eligibility!(args); },
+    });
+    await Promise.all(failure === 'ethereum' ? [buyer.started] : [session.started, buyer.started]);
+    const result = await pending;
+    const body = await result.response.json() as { error: { code: string; message: string } };
+    assert.equal(result.response.status, failure === 'ethereum' ? 401 : 503);
+    assert.equal(body.error.message, {
+      maintenance: 'Preorders are temporarily unavailable for maintenance.',
+      expiry: 'Reservation cleanup failed.',
+      ethereum: 'Verify your Ethereum wallet.',
+    }[failure]);
+    assert.equal(ownershipCalls, 0);
+    assert.equal(claims.mock.callCount(), 0);
+    assert.equal(lateFailures, 0);
+    assert.equal(identitySignal?.aborted, true);
+    assert.equal(request.signal.aborted, false);
+    session.resolve();
+    buyer.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(lateFailures, failure === 'ethereum' ? 1 : 2);
+  });
+}
+
+test('availability preserves provider-failure logging when optional identity times out', { timeout: 2000 }, async (t) => {
+  const h = harness();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const read = gate();
+  t.after(() => read.resolve());
+  const prepare = h.db.prepare.bind(h.db);
+  t.mock.method(h.db, 'prepare', (sql: string) => {
+    const statement = prepare(sql);
+    if (sql.includes('FROM anonymous_auth_sessions')) {
+      const bind = statement.bind.bind(statement);
+      t.mock.method(statement, 'bind', (...values: unknown[]) => {
+        const bound = bind(...values);
+        t.mock.method(bound, 'first', async () => { await read.enter(); throw new Error('Late identity failure'); });
+        return bound;
+      });
+    }
+    return statement;
+  });
+  const claims = t.mock.method(PreorderStore.prototype, 'claims');
+  const eligibility = t.mock.fn(h.deps.eligibility!);
+  const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, {
+    headers: { Origin: 'https://mons.shop', 'X-Mons-CSRF': '1',
+      Cookie: `__Host-mons_anon_v1=mons_anon_v1.00000000-0000-4000-8000-000000000001.${'a'.repeat(43)}` },
+  });
+  const pending = handlePreorderRequest(request, h.env, {}, { ...h.deps,
+    timeoutMs: 100, verifyIdentity: verifyRequestIdentity, eligibility,
+  });
+  await read.started;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  t.mock.timers.tick(100);
+  const result = await pending;
+  assert.equal(result.response.status, 504);
+  assert.deepEqual(await result.response.json(), {
+    ok: false, error: { code: 'deadline-exceeded', message: 'Preorder request timed out.' },
+  });
+  assert.equal(result.authOutcome, 'provider-failure');
+  assert.equal(eligibility.mock.callCount(), 0);
+  assert.equal(claims.mock.callCount(), 0);
+  read.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test('availability observes concurrent failures and preserves ownership failure precedence', { timeout: 2000 }, async (t) => {
+  const h = harness();
+  const ownership = gate(), claims = gate();
+  t.after(() => { ownership.resolve(); claims.resolve(); });
+  t.mock.method(PreorderStore.prototype, 'claims', async () => {
+    await claims.enter();
+    throw new ProfileReadError('unavailable', 503, 'Claim lookup failed.');
+  });
+  let settled = false;
+  const pending = h.call('availability', { preorderId: config.preorderId }, {
+    eligibility: async () => {
+      await ownership.enter();
+      throw new ProfileReadError('unavailable', 503, 'Ownership lookup failed.');
+    },
+  });
+  void pending.then(() => { settled = true; });
+  await Promise.all([ownership.started, claims.started]);
+  claims.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  ownership.resolve();
+  const result = await pending;
+  assert.equal(result.status, 503);
+  assert.equal(result.body.error.message, 'Ownership lookup failed.');
+});
+
+test('availability retains the ownership deadline after a concurrent claims failure', { timeout: 2000 }, async (t) => {
+  const h = harness();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const started = Promise.withResolvers<AbortSignal>();
+  const claims = t.mock.method(PreorderStore.prototype, 'claims', async () => {
+    throw new ProfileReadError('unavailable', 503, 'Claim lookup failed.');
+  });
+  let settled = false;
+  const pending = h.call('availability', { preorderId: config.preorderId }, {
+    timeoutMs: 100,
+    eligibility: async ({ deadline }) => {
+      started.resolve(deadline.signal);
+      return new Promise((_, reject) => deadline.signal.addEventListener('abort', () => reject(deadline.signal.reason), { once: true }));
+    },
+  });
+  void pending.then(() => { settled = true; });
+  const signal = await started.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(claims.mock.callCount(), 1);
+  assert.equal(settled, false);
+  assert.equal(signal.aborted, false);
+  t.mock.timers.tick(100);
+  const result = await pending;
+  assert.equal(signal.aborted, true);
+  assert.equal(result.status, 504);
+  assert.equal(result.body.error.code, 'deadline-exceeded');
+});
+
+for (const ownershipFails of [false, true]) {
+  test(`availability ${ownershipFails ? 'returns ownership failure before stalled claims finish' : 'bounds stalled claims after ownership succeeds'}`, { timeout: 2000 }, async (t) => {
+    const h = harness();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const claims = gate();
+    t.after(() => claims.resolve());
+    let lateFailure = false;
+    t.mock.method(PreorderStore.prototype, 'claims', async () => {
+      await claims.enter();
+      lateFailure = true;
+      throw new Error('Late claims failure');
+    });
+    const pending = h.call('availability', { preorderId: config.preorderId }, {
+      timeoutMs: 100,
+      eligibility: async (args) => {
+        if (ownershipFails) throw new ProfileReadError('unavailable', 503, 'Ownership lookup failed.');
+        return h.deps.eligibility!(args);
+      },
+    });
+    await claims.started;
+    if (!ownershipFails) t.mock.timers.tick(100);
+    const result = await pending;
+    assert.equal(result.status, ownershipFails ? 503 : 504);
+    assert.equal(result.body.error.code, ownershipFails ? 'unavailable' : 'deadline-exceeded');
+    assert.equal(lateFailure, false);
+    claims.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(lateFailure, true);
+  });
+}
+
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} availability returns partial ownership when a provider deadline expires`, { timeout: 2000 }, async (t) => {
+    const h = harness();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const started = Promise.withResolvers<void>();
+    const pending = h.call('availability', { preorderId }, {
+      timeoutMs: 100,
+      eligibility: async ({ deadline }) => {
+        started.resolve();
+        await new Promise<void>((resolve) => deadline.signal.addEventListener('abort', () => resolve(), { once: true }));
+        return { cardIds: [9, 2], unavailableCardIds: [1], ownershipStatus: 'partial', requiresAdminSignIn: false };
+      },
+    });
+    await started.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(100);
+    const result = await pending;
+    assert.equal(result.status, 200);
+    assert.equal(result.body.ownershipStatus, 'partial');
+    assert.equal(result.body.requiresAdminSignIn, false);
+    assert.deepEqual(result.body.items, [{ id: 9, status: 'available' }, { id: 2, status: 'available' }]);
+  });
+}
+
+test('availability cancels without waiting for stalled claims', { timeout: 2000 }, async (t) => {
+  const h = harness();
+  const controller = new AbortController();
+  const started = Promise.withResolvers<AbortSignal>();
+  const claims = gate();
+  t.after(() => claims.resolve());
+  t.mock.method(PreorderStore.prototype, 'claims', async () => { await claims.enter(); return []; });
+  const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, { signal: controller.signal });
+  const pending = handlePreorderRequest(request, h.env, {}, { ...h.deps,
+    eligibility: async ({ deadline }) => {
+      started.resolve(deadline.signal);
+      return new Promise((_, reject) => deadline.signal.addEventListener('abort', () => reject(deadline.signal.reason), { once: true }));
+    },
+  });
+  const [signal] = await Promise.all([started.promise, claims.started]);
+  const reason = new ProfileReadError('aborted', 409, 'Availability request cancelled.');
+  controller.abort(reason);
+  assert.equal(signal.aborted, true);
+  assert.equal(signal.reason, reason);
+  const result = await pending;
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
 });
 
 for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {

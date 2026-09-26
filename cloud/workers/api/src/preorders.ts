@@ -6,7 +6,7 @@ import {
 import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
-import { readBoundedRequestJson } from './boundedRequest.js';
+import { raceWithSignal, readBoundedRequestJson } from './boundedRequest.js';
 import type { DeferredWork } from './deferredWork.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import { ProfileReadError } from './dataAccess.js';
@@ -19,7 +19,7 @@ import {
   authorizePreorderTransaction, isPreorderBlockhashValid, preparePreorderTransaction,
   probePreorderTransaction, sendPreorderTransaction,
 } from './preorderTransaction.js';
-import { requestIdentitySubject, resolveRequestWallet, verifyRequestIdentity, type RequestAuthContext } from './requestIdentity.js';
+import { RequestIdentityError, requestIdentitySubject, resolveRequestWallet, verifyRequestIdentity, type RequestAuthContext } from './requestIdentity.js';
 
 export const PREORDER_PATHS = ['/preorders/availability', '/preorders/prepare', '/preorders/submit', '/preorders/cancel', '/preorders/status'] as const;
 const idSchema = z.string().min(1).max(80);
@@ -159,6 +159,11 @@ async function enforcePrepareLimit(env: Env, request: Request, buyer: string, su
   }
 }
 
+async function observeResult<T>(start: () => Promise<T>): Promise<PromiseSettledResult<T>> {
+  try { return { status: 'fulfilled', value: await start() }; }
+  catch (reason) { return { status: 'rejected', reason }; }
+}
+
 export async function handlePreorderRequest(
   request: Request, env: Env, authContext: RequestAuthContext = {}, overrides: Partial<PreorderDependencies> = {},
   defer?: DeferredWork,
@@ -188,38 +193,67 @@ export async function handlePreorderRequest(
       const body = parsed.data;
       const includeRecoveries = path === '/preorders/status' && 'includeRecoveries' in body && body.includeRecoveries === true;
       const config = path === '/preorders/availability' ? collectionConfig(body.preorderId) : enabledConfig(body.preorderId);
-      if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
-        throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
-      }
       const store = new PreorderStore(env.COMMERCE_DB);
-      if (config.enabled && !includeRecoveries) await store.expirePrepared(deps.nowMs());
+      const checkCommerce = async () => {
+        if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
+          throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
+        }
+        if (config.enabled && !includeRecoveries) await store.expirePrepared(deps.nowMs());
+      };
       const eligibility = (address: string, buyer: string | null, fresh: boolean) => deps.eligibility({
         request, env, config, address, buyer, fresh, deadline, metrics,
         dependencies: { providerFetch: dependencies.providerFetch, cache: deps.cache, log: deps.log, now: deps.nowMs },
         defer: defer ?? ((work) => deferred.push(work)),
       });
       if (path === '/preorders/availability') {
-        const session = await deps.verifyEthereumSession(request, env.OPS_DB, config.preorderId, deps.nowMs());
-        let optionalBuyer: string | null = null;
-        if (authContext.verifiedStaffIdentity || request.headers.has('Authorization') || request.headers.get('Cookie')?.trim()) {
-          const identity = await authenticate();
-          optionalBuyer = await resolveRequestWallet(identity, async (subject) => {
-            const resolution = await resolveD1AuthWalletBinding(env.OPS_DB, subject, deadline.signal);
-            return 'reason' in resolution ? null : resolution.wallet;
-          });
+        deadline.signal.throwIfAborted();
+        const reads = new AbortController();
+        const readSignal = AbortSignal.any([deadline.signal, reads.signal]);
+        try {
+          const commerceCheck = observeResult(checkCommerce);
+          const sessionRead = observeResult(() => raceWithSignal(
+            deps.verifyEthereumSession(request, env.OPS_DB, config.preorderId, deps.nowMs()), readSignal,
+          ));
+          const buyerRead = observeResult(() => raceWithSignal((async () => {
+            if (!authContext.verifiedStaffIdentity && !request.headers.has('Authorization') && !request.headers.get('Cookie')?.trim()) return null;
+            const identity = await deps.verifyIdentity(request, env.OPS_DB, readSignal, deps.nowMs(), authContext);
+            return resolveRequestWallet(identity, async (subject) => {
+              const resolution = await resolveD1AuthWalletBinding(env.OPS_DB, subject, readSignal);
+              return 'reason' in resolution ? null : resolution.wallet;
+            });
+          })(), readSignal));
+          const commerceResult = await commerceCheck;
+          if (commerceResult.status === 'rejected') throw commerceResult.reason;
+          const sessionResult = await sessionRead;
+          if (sessionResult.status === 'rejected') throw sessionResult.reason;
+          const buyerResult = await buyerRead;
+          if (buyerResult.status === 'rejected') throw deadline.timedOut() && buyerResult.reason === deadline.signal.reason
+            ? new RequestIdentityError('provider-timeout') : buyerResult.reason;
+          deadline.signal.throwIfAborted();
+          const session = sessionResult.value;
+          const optionalBuyer = buyerResult.value;
+          authenticated = true;
+          const ownershipRead = observeResult(() => eligibility(session.address, optionalBuyer, false));
+          const claimsRead = observeResult(() => raceWithSignal(store.claims(config.cluster, config.collection), readSignal));
+          const ownershipResult = await ownershipRead;
+          if (ownershipResult.status === 'rejected') throw ownershipResult.reason;
+          const claimsResult = await claimsRead;
+          if (claimsResult.status === 'rejected') throw claimsResult.reason;
+          const owned = ownershipResult.value;
+          const claims = new Map(claimsResult.value.map((claim) => [claim.id, claim]));
+          return { response: jsonResponse({ preorderId: config.preorderId, ethereumAddress: session.address,
+            ownershipStatus: owned.ownershipStatus, requiresAdminSignIn: owned.requiresAdminSignIn,
+            items: owned.cardIds.flatMap((id) => {
+              const claim = claims.get(id);
+              if (claim && claim.buyer !== optionalBuyer) return [];
+              return [{ id, status: claim?.status ?? 'available' }];
+            }) }, 200),
+            metrics, authOutcome: 'accepted' as const };
+        } finally {
+          reads.abort();
         }
-        authenticated = true;
-        const owned = await eligibility(session.address, optionalBuyer, false);
-        const claims = new Map((await store.claims(config.cluster, config.collection)).map((claim) => [claim.id, claim]));
-        return { response: jsonResponse({ preorderId: config.preorderId, ethereumAddress: session.address,
-          ownershipStatus: owned.ownershipStatus, requiresAdminSignIn: owned.requiresAdminSignIn,
-          items: owned.cardIds.flatMap((id) => {
-            const claim = claims.get(id);
-            if (claim && claim.buyer !== optionalBuyer) return [];
-            return [{ id, status: claim?.status ?? 'available' }];
-          }) }, 200),
-          metrics, authOutcome: 'accepted' as const };
       }
+      await checkCommerce();
       const identity = await authenticate();
       const buyer = await resolveRequestWallet(identity, async (subject) => {
         const resolution = await resolveD1AuthWalletBinding(env.OPS_DB, subject, deadline.signal);
