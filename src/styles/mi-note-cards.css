@@ -1,9 +1,83 @@
+body:has(.drop-page-frame--mi-note-cards) {
+  --page-padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  min-height: 100dvh;
+}
+
+.drop-page-frame--mi-note-cards {
+  min-height: calc(100vh - var(--page-padding-top) - var(--page-padding-bottom));
+  min-height: calc(100dvh - var(--page-padding-top) - var(--page-padding-bottom));
+}
+
 .mi-note-cards {
   --mi-note-muted: color-mix(in srgb, var(--fg) 70%, var(--bg));
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   width: 100%;
-  padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   user-select: none;
   -webkit-user-select: none;
+}
+
+.mi-note-cards--selection {
+  padding-bottom: 92px;
+}
+
+.mi-note-cards__content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mi-note-cards--empty .mi-note-cards__content {
+  flex: 1;
+  justify-content: center;
+  padding-block: 32px;
+}
+
+.mi-note-cards__intro {
+  width: min(100%, 380px);
+  margin-inline: auto;
+  color: var(--mi-note-muted);
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.mi-note-cards__intro p {
+  margin: 0;
+}
+
+.mi-note-cards__intro p + p {
+  margin-top: 12px;
+}
+
+.mi-note-cards__footer {
+  margin-top: auto;
+  padding-top: 32px;
+}
+
+.mi-note-cards__footer nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(12px, 4vw, 24px);
+}
+
+.mi-note-cards__footer a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  color: var(--mi-note-muted);
+  border-radius: 4px;
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+
+.mi-note-cards__footer a:hover {
+  color: var(--fg);
 }
 
 .mi-note-cards__grid {
@@ -14,14 +88,15 @@
 }
 
 .mi-note-cards__title {
-  margin: 0 0 24px;
+  margin: 0 0 12px;
   text-align: center;
   font-size: clamp(24px, 4vw, 32px);
   line-height: 1.2;
   font-weight: 600;
 }
 
-.mi-note-cards button:focus-visible {
+.mi-note-cards button:focus-visible,
+.mi-note-cards__footer a:focus-visible {
   box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
 
@@ -31,7 +106,7 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  margin: 0 0 24px;
+  margin: 0;
 }
 
 .mi-note-cards__wallet button {
@@ -182,7 +257,7 @@
 
 @media (max-width: 480px) {
   .mi-note-cards--selection {
-    padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: 160px;
   }
 
   .mi-note-preorder-panel {

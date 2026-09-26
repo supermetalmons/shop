@@ -41,6 +41,34 @@ function checkout(): PreorderCheckout {
   };
 }
 
+function expectCollectionLinks(view: ReturnType<typeof render>) {
+  const links = view.getAllByRole('link');
+  assert.deepEqual(links.map(link => link.getAttribute('href')), [
+    'https://opensea.io/collection/minote',
+    'https://opensea.io/collection/mi-note2',
+    'https://opensea.io/collection/mi-note-3',
+  ]);
+  for (const [index, link] of links.entries()) {
+    const label = ['Mi Note', 'Mi Note 2', 'Mi Note 3'][index];
+    assert.equal(view.getByRole('link', { name: `${label} (opens in a new tab)` }), link);
+    assert.equal(link.textContent?.replace('↗', '').trim(), label);
+    assert.equal(link.getAttribute('target'), '_blank');
+    const rel = link.getAttribute('rel')?.split(/\s+/) ?? [];
+    assert.ok(rel.includes('noopener'));
+    assert.ok(rel.includes('noreferrer'));
+  }
+  assert.equal(view.container.querySelector('.mi-note-cards__grid a'), null);
+}
+
+function expectIntroduction(view: ReturnType<typeof render>, visible: boolean) {
+  assert.equal(Boolean(view.queryByRole('heading', { name: 'Preorder Mi Note Cards' })), visible);
+  for (const text of [
+    'One unique card for each Mi Note.',
+    'Preorders are open until October 8.',
+    'Cards reveal and public mint for the remaining cards on October 9.',
+  ]) assert.equal(Boolean(view.queryByText(text)), visible);
+}
+
 test('devnet gallery rotates the oldest selection and keeps the panel and purchase in selection order', async () => {
   Math.random = () => 0;
   const preorder = checkout();
@@ -49,7 +77,8 @@ test('devnet gallery rotates the oldest selection and keeps the panel and purcha
   const view = render(createElement(MiNoteCardsGallery, { preorder }));
   assert.equal(view.getAllByRole('img').length, 10);
   assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
-  assert.equal(view.queryByRole('link'), null);
+  expectCollectionLinks(view);
+  expectIntroduction(view, false);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
@@ -138,7 +167,8 @@ test('disabled collection gallery has no selectable purchase controls or notify 
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
   assert.equal(view.getAllByRole('img').length, 10);
   assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
-  assert.equal(view.queryByRole('link'), null);
+  expectCollectionLinks(view);
+  expectIntroduction(view, false);
   assert.equal(view.container.querySelector('.mi-note-cards__image--preordered'), null);
 });
 
@@ -563,7 +593,7 @@ test('completed preorder selection clears when availability or gallery scope cha
   assert.equal(view.queryByRole('button', { name: 'View' }), null);
 });
 
-test('both routes show the preorder title and require verification without address browsing', () => {
+test('both routes show the introduction and collections before cards and require verification without address browsing', () => {
   for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     window.history.replaceState(null, '', `/${preorderId}?address=0x1111111111111111111111111111111111111111`);
     const preorder = checkout();
@@ -572,11 +602,18 @@ test('both routes show the preorder title and require verification without addre
       wallet: { ...WALLET, address: null, provider: null, status: 'disconnected' },
       verification: { ...VERIFICATION, session: null },
     }));
-    assert.ok(view.getByRole('heading', { name: 'Preorder Mi Note Cards' }));
+    expectIntroduction(view, true);
+    expectCollectionLinks(view);
     assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
     assert.equal(view.queryByRole('tablist'), null);
     assert.equal(view.queryByRole('img'), null);
     assert.equal(preorder.config.enabled, true);
+    view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, availability: {
+      ...preorder.availability!, preorderId, items: [],
+    } } }));
+    assert.ok(view.getByText('No Mi Notes available for preorder.'));
+    expectIntroduction(view, true);
+    expectCollectionLinks(view);
     view.unmount();
   }
 });
@@ -587,6 +624,8 @@ test('connected wallets explicitly sign before any card or purchase is displayed
     verification: { ...VERIFICATION, session: null, verify: async () => { verified += 1; } },
   }));
   assert.equal(view.queryByRole('img'), null);
+  expectIntroduction(view, true);
+  expectCollectionLinks(view);
   fireEvent.click(view.getByRole('button', { name: 'Verify Ethereum Wallet' }));
   assert.equal(verified, 1);
   view.rerender(createElement(Gallery, { preorder: checkout(), wallet: WALLET,
@@ -600,11 +639,14 @@ test('only eligible IDs are shown and another wallet cannot reuse their availabi
   preorder.availability!.items = preorder.availability!.items.filter(item => [2, 7].includes(item.id));
   const view = render(createElement(MiNoteCardsGallery, { preorder }));
   assert.equal(view.getAllByRole('img').length, 2);
+  expectIntroduction(view, false);
   assert.equal(view.queryByRole('button', { name: /Select preorder #1:/ }), null);
   fireEvent.click(view.getByRole('button', { name: /Select preorder #2:/ }));
   view.rerender(createElement(Gallery, { preorder, wallet: { ...WALLET, address: '0x1111111111111111111111111111111111111111' }, verification: VERIFICATION }));
   assert.equal(view.queryByRole('img'), null);
   assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
+  expectIntroduction(view, true);
+  expectCollectionLinks(view);
 });
 
 test('initial Solana sign-in preserves picks while eligibility refreshes and removes newly ineligible picks', () => {
@@ -614,10 +656,13 @@ test('initial Solana sign-in preserves picks while eligibility refreshes and rem
   fireEvent.click(view.getByRole('button', { name: /Select preorder #2:/ }));
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'buyer', availability: null } }));
   assert.ok(view.getByLabelText('2 cards selected'));
+  assert.ok(view.getByText('Loading...'));
+  expectIntroduction(view, true);
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'buyer', availability: {
     ...preorder.availability!, items: preorder.availability!.items.filter(item => item.id !== 1),
   } } }));
   assert.ok(view.getByLabelText('1 cards selected'));
+  expectIntroduction(view, false);
   assert.equal(view.getByRole('button', { name: /Select preorder #2:/ }).getAttribute('aria-pressed'), 'true');
 });
 

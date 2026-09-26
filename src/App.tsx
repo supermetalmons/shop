@@ -386,6 +386,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     'drop-page-frame',
     drop.routeDrop || drop.upcomingDropRoute || drop.normalizedCurrentPath === '/' ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
+    miNoteCardsPage ? 'drop-page-frame--mi-note-cards' : '',
   ].filter(Boolean).join(' ');
 
   return (

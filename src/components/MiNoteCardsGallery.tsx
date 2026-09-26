@@ -22,8 +22,13 @@ type MiNoteCardsGalleryProps = {
 };
 
 const MI_NOTE_CARDS_BY_ID = new Map(miNoteCollections.flatMap(({ tokens }) => tokens.map((card) => [card.clean_card_id, card] as const)));
+const MI_NOTE_COLLECTION_LINKS = [
+  { label: 'Mi Note', href: 'https://opensea.io/collection/minote' },
+  { label: 'Mi Note 2', href: 'https://opensea.io/collection/mi-note2' },
+  { label: 'Mi Note 3', href: 'https://opensea.io/collection/mi-note-3' },
+];
 
-function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'>) {
+function MiNoteWalletControls({ wallet, verification, showIntro }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'> & { showIntro: boolean }) {
   const connectRef = useRef<HTMLButtonElement>(null);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const disconnectRef = useRef<HTMLButtonElement>(null);
@@ -46,18 +51,21 @@ function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryP
 
   return (
     <div className="mi-note-cards__wallet">
-      {wallet.address ? (
+      {wallet.address && (
         <div className="mi-note-cards__connection">
           <span className="mi-note-cards__address" title={wallet.address}>
             {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
           </span>
-          {!verification.session && <button type="button" disabled={verification.verifying} onClick={() => { void verification.verify(); }}>
-            {verification.verifying ? 'Check Ethereum wallet…' : 'Verify Ethereum Wallet'}
-          </button>}
           <button ref={disconnectRef} type="button" className="ghost" onClick={() => { verification.invalidate(); wallet.disconnect(); }}>
             Disconnect
           </button>
         </div>
+      )}
+      {showIntro && <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>}
+      {wallet.address ? (
+        !verification.session && <button type="button" disabled={verification.verifying} onClick={() => { void verification.verify(); }}>
+          {verification.verifying ? 'Check Ethereum wallet…' : 'Verify Ethereum Wallet'}
+        </button>
       ) : wallet.status === 'choosing' ? (
         <div
           className="mi-note-cards__wallet-picker"
@@ -199,18 +207,17 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
 
   return (
     <>
-      <main className={`mi-note-cards${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
-        <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
-        <div>
-          <MiNoteWalletControls wallet={wallet} verification={verification} />
+      <main className={`mi-note-cards${cards.length === 0 ? ' mi-note-cards--empty' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
+        <div className="mi-note-cards__content">
+          <MiNoteWalletControls wallet={wallet} verification={verification} showIntro={cards.length === 0} />
           {verified && (
             <>
               {scopedAvailability?.requiresAdminSignIn && <div className="mi-note-cards__wallet">
                 <p className="mi-note-cards__message">Sign in with the admin Solana wallet to use the devnet test cards.</p>
                 {onAdminSignIn && <button type="button" disabled={preorder?.busy} onClick={() => { void onAdminSignIn(); }}>Sign in with Solana</button>}
               </div>}
-              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message" role="status">Loading your cards…</p>}
-              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message" role="status">No Mi Note cards found.</p>}
+              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message" role="status">Loading...</p>}
+              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message" role="status">No Mi Notes available for preorder.</p>}
               {(preorder?.availabilityError || scopedAvailability?.ownershipStatus === 'partial') && <div className="mi-note-cards__error">
                 <p className="mi-note-cards__message" role="alert">{preorder?.availabilityError || 'Some cards couldn’t be loaded.'}</p>
                 <button type="button" className="ghost" onClick={() => { void preorder?.refreshAvailability(); }}>Try again</button>
@@ -224,7 +231,12 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
             {preorder?.order?.status === 'prepared' && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Cancel preorder</button>}
             {canAbandon && preorder && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Abandon preparation</button>}
           </div>}
-          <div className="mi-note-cards__grid">
+          {cards.length === 0 && <div className="mi-note-cards__intro">
+            <p>One unique card for each Mi Note.</p>
+            <p>Preorders are open until October 8.</p>
+            <p>Cards reveal and public mint for the remaining cards on October 9.</p>
+          </div>}
+          <div className="mi-note-cards__grid" hidden={cards.length === 0}>
             {cards.map((card) => {
               const availabilityStatus = availability.get(card.clean_card_id);
               const isPreordered = availabilityStatus === 'preordered';
@@ -271,6 +283,15 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
             })}
           </div>
         </div>
+        <footer className="mi-note-cards__footer">
+          <nav aria-label="Mi Note collections">
+            {MI_NOTE_COLLECTION_LINKS.map(({ label, href }) => (
+              <a key={href} href={href} target="_blank" rel="noopener noreferrer" aria-label={`${label} (opens in a new tab)`}>
+                {label} <span aria-hidden="true">↗</span>
+              </a>
+            ))}
+          </nav>
+        </footer>
       </main>
       {viewableItem && (
         <PreorderSelectionBar
