@@ -28,7 +28,7 @@ const MI_NOTE_COLLECTION_LINKS = [
   { label: 'Mi Note 3', href: 'https://opensea.io/collection/mi-note-3' },
 ];
 
-function MiNoteWalletControls({ wallet, verification, showIntro }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'> & { showIntro: boolean }) {
+function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'>) {
   const connectRef = useRef<HTMLButtonElement>(null);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const disconnectRef = useRef<HTMLButtonElement>(null);
@@ -61,7 +61,6 @@ function MiNoteWalletControls({ wallet, verification, showIntro }: Pick<MiNoteCa
           </button>
         </div>
       )}
-      {showIntro && <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>}
       {wallet.address ? (
         !verification.session && <button type="button" disabled={verification.verifying} onClick={() => { void verification.verify(); }}>
           {verification.verifying ? 'Check Ethereum wallet…' : 'Verify Ethereum Wallet'}
@@ -209,7 +208,15 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     <>
       <main className={`mi-note-cards${cards.length === 0 ? ' mi-note-cards--empty' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
         <div className="mi-note-cards__content">
-          <MiNoteWalletControls wallet={wallet} verification={verification} showIntro={cards.length === 0} />
+          {cards.length === 0 && <header className="mi-note-cards__header">
+            <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
+            <div className="mi-note-cards__intro">
+              <p>One unique card for each Mi Note.</p>
+              <p>Preorders are open until October 8.</p>
+              <p>Cards reveal and public mint for the remaining cards on October 9.</p>
+            </div>
+          </header>}
+          <MiNoteWalletControls wallet={wallet} verification={verification} />
           {verified && (
             <>
               {scopedAvailability?.requiresAdminSignIn && <div className="mi-note-cards__wallet">
@@ -230,11 +237,6 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               : 'Cancel your previous preorder to start with a verified Ethereum wallet.'}</p>
             {preorder?.order?.status === 'prepared' && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Cancel preorder</button>}
             {canAbandon && preorder && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Abandon preparation</button>}
-          </div>}
-          {cards.length === 0 && <div className="mi-note-cards__intro">
-            <p>One unique card for each Mi Note.</p>
-            <p>Preorders are open until October 8.</p>
-            <p>Cards reveal and public mint for the remaining cards on October 9.</p>
           </div>}
           <div className="mi-note-cards__grid" hidden={cards.length === 0}>
             {cards.map((card) => {
