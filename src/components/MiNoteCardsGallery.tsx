@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import miNoteCollections from '../../mi_note_eth.json';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
@@ -28,30 +28,80 @@ const MI_NOTE_COLLECTION_LINKS = [
   { label: 'Mi Note 3', href: 'https://opensea.io/collection/mi-note-3' },
 ];
 
-function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'>) {
+type WalletSignInAttempt = { verify: MiNoteVerification['verify'] | null };
+
+function MiNoteWalletControls({ wallet, verification, verified }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'> & { verified: boolean }) {
   const connectRef = useRef<HTMLButtonElement>(null);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const disconnectRef = useRef<HTMLButtonElement>(null);
-  const previousStatus = useRef(wallet.status);
-  const busy = wallet.status === 'connecting' || wallet.status === 'restoring';
+  const attempt = useRef<WalletSignInAttempt | null>(null);
+  const [pendingAttempt, setPendingAttempt] = useState<WalletSignInAttempt | null>(null);
+  const busy = Boolean(pendingAttempt) || !verification.ready || verification.verifying || wallet.status === 'connecting' || wallet.status === 'restoring';
+  const previous = useRef({ status: wallet.status, busy, verified });
+
+  const finishAttempt = useCallback((current: WalletSignInAttempt) => {
+    if (attempt.current !== current) return;
+    attempt.current = null;
+    setPendingAttempt(null);
+  }, []);
+
+  const startVerification = useCallback((current: WalletSignInAttempt, verify: MiNoteVerification['verify']) => {
+    if (attempt.current !== current) return;
+    current.verify = verify;
+    void verify().catch(() => undefined).finally(() => finishAttempt(current));
+  }, [finishAttempt]);
 
   useEffect(() => {
-    if (wallet.status === 'choosing') {
+    const current = pendingAttempt;
+    if (!current || attempt.current !== current) return;
+    if (verified || (current.verify && current.verify !== verification.verify)) {
+      finishAttempt(current);
+    } else if (!current.verify) {
+      if (wallet.status === 'connected' && wallet.address && wallet.provider && verification.ready) {
+        startVerification(current, verification.verify);
+      } else if (wallet.status === 'disconnected') {
+        finishAttempt(current);
+      }
+    }
+  }, [finishAttempt, pendingAttempt, startVerification, verification.ready, verification.verify, verified, wallet.address, wallet.provider, wallet.status]);
+
+  useEffect(() => () => {
+    const current = attempt.current;
+    attempt.current = null;
+    if (current && !current.verify) wallet.cancel();
+  }, [wallet.cancel]);
+
+  const connect = () => {
+    if (attempt.current || busy || verified) return;
+    const current: WalletSignInAttempt = { verify: null };
+    attempt.current = current;
+    setPendingAttempt(current);
+    wallet.connect();
+  };
+
+  const cancel = () => {
+    if (attempt.current) finishAttempt(attempt.current);
+    wallet.cancel();
+  };
+
+  useEffect(() => {
+    if (wallet.status === 'choosing' && previous.current.status !== 'choosing') {
       firstWalletRef.current?.focus();
     } else if (
-      previousStatus.current !== wallet.status &&
-      previousStatus.current !== 'disconnected' &&
-      previousStatus.current !== 'restoring' &&
+      !busy &&
+      (previous.current.status !== wallet.status || previous.current.busy || previous.current.verified !== verified) &&
+      (previous.current.status !== 'disconnected' || previous.current.busy) &&
+      previous.current.status !== 'restoring' &&
       document.activeElement === document.body
     ) {
-      (wallet.address ? disconnectRef : connectRef).current?.focus();
+      (verified ? disconnectRef : connectRef).current?.focus();
     }
-    previousStatus.current = wallet.status;
-  }, [wallet.address, wallet.status]);
+    previous.current = { status: wallet.status, busy, verified };
+  }, [busy, verified, wallet.status]);
 
   return (
     <div className="mi-note-cards__wallet">
-      {wallet.address && (
+      {verified && wallet.address ? (
         <div className="mi-note-cards__connection">
           <span className="mi-note-cards__address" title={wallet.address}>
             {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
@@ -60,11 +110,6 @@ function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryP
             Disconnect
           </button>
         </div>
-      )}
-      {wallet.address ? (
-        !verification.session && <button type="button" disabled={verification.verifying} onClick={() => { void verification.verify(); }}>
-          {verification.verifying ? 'Check Ethereum wallet…' : 'Verify Ethereum Wallet'}
-        </button>
       ) : wallet.status === 'choosing' ? (
         <div
           className="mi-note-cards__wallet-picker"
@@ -74,7 +119,7 @@ function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryP
             if (event.key !== 'Escape') return;
             event.preventDefault();
             event.stopPropagation();
-            wallet.cancel();
+            cancel();
           }}
         >
           <p className="mi-note-cards__message">Select a wallet</p>
@@ -93,30 +138,19 @@ function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryP
               </button>
             );
           })}
-          <button type="button" className="ghost" onClick={wallet.cancel}>Cancel</button>
+          <button type="button" className="ghost" onClick={cancel}>Cancel</button>
         </div>
       ) : (
-        <>
-          <button ref={connectRef} type="button" disabled={busy} onClick={wallet.connect}>
-            {wallet.status === 'connecting' ? 'Connecting…' : 'Connect Ethereum Wallet'}
-          </button>
-          {busy && (
-            <p className="mi-note-cards__message" role="status">
-              {wallet.status === 'restoring' ? 'Reconnecting wallet…' : 'Check your wallet to connect.'}
-            </p>
-          )}
-        </>
+        <button ref={connectRef} type="button" disabled={busy} onClick={connect}>
+          {busy ? 'Connecting...' : 'Connect Ethereum Wallet'}
+        </button>
       )}
-      {wallet.address && !verification.session && <p className="mi-note-cards__message" role="status">
-        Sign a message to verify ownership and view your cards.
-      </p>}
-      {(wallet.error || verification.error) && <p className="mi-note-cards__message" role="alert">{wallet.error || verification.error}</p>}
     </div>
   );
 }
 
 export default function MiNoteCardsGallery({ preorder, wallet, verification, onAdminSignIn, onCancelPendingSignIn, showToast, onViewPreordered }: MiNoteCardsGalleryProps) {
-  const verified = Boolean(verification.session && verification.session.address === wallet.address &&
+  const verified = Boolean(wallet.status === 'connected' && wallet.provider && verification.session && verification.session.expiresAtMs > Date.now() && verification.session.address === wallet.address &&
     verification.session.preorderId === preorder?.config.preorderId);
   const scopedAvailability = verified && preorder?.availability?.ethereumAddress === wallet.address &&
     preorder.availability.preorderId === preorder.config.preorderId ? preorder.availability : null;
@@ -216,7 +250,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               <p>Cards reveal and public mint for the remaining cards on October 9.</p>
             </div>
           </header>}
-          <MiNoteWalletControls wallet={wallet} verification={verification} />
+          <MiNoteWalletControls key={preorder?.config.preorderId} wallet={wallet} verification={verification} verified={verified} />
           {verified && (
             <>
               {scopedAvailability?.requiresAdminSignIn && <div className="mi-note-cards__wallet">

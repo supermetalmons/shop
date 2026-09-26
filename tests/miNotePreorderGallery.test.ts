@@ -23,7 +23,7 @@ const WALLET: ComponentProps<typeof Gallery>['wallet'] = {
   address: ADDRESS, provider: { request: async () => [] }, status: 'connected', wallets: [], error: null,
   connect: () => {}, selectWallet: () => {}, cancel: () => {}, disconnect: () => {},
 };
-const VERIFICATION: ComponentProps<typeof Gallery>['verification'] = { session: ETH_SESSION, verifying: false, error: null, verify: async () => {}, invalidate: () => {} };
+const VERIFICATION: ComponentProps<typeof Gallery>['verification'] = { ready: true, session: ETH_SESSION, verifying: false, error: null, verify: async () => {}, invalidate: () => {} };
 function MiNoteCardsGallery(props: Omit<ComponentProps<typeof Gallery>, 'wallet' | 'verification'> & Partial<Pick<ComponentProps<typeof Gallery>, 'wallet' | 'verification'>>) {
   const preorderId = props.preorder?.config.preorderId ?? ETH_SESSION.preorderId;
   return createElement(Gallery, { wallet: WALLET, verification: { ...VERIFICATION, session: { ...ETH_SESSION, preorderId, token: `test-${preorderId}` } }, ...props });
@@ -618,20 +618,48 @@ test('both routes show the introduction and collections before cards and require
   }
 });
 
-test('connected wallets explicitly sign before any card or purchase is displayed', async () => {
+test('connected wallets use Connect to sign before showing their address or cards', async () => {
   let verified = 0;
   const view = render(createElement(Gallery, { preorder: checkout(), wallet: WALLET,
     verification: { ...VERIFICATION, session: null, verify: async () => { verified += 1; } },
   }));
   assert.equal(view.queryByRole('img'), null);
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  assert.equal(view.queryByTitle(ADDRESS), null);
+  assert.equal(view.queryByRole('status'), null);
   expectIntroduction(view, true);
   expectCollectionLinks(view);
-  fireEvent.click(view.getByRole('button', { name: 'Verify Ethereum Wallet' }));
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' })); });
   assert.equal(verified, 1);
   view.rerender(createElement(Gallery, { preorder: checkout(), wallet: WALLET,
     verification: { ...VERIFICATION, session: null, verifying: true },
   }));
-  assert.equal((view.getByRole('button', { name: 'Check Ethereum wallet…' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Connecting...' }) as HTMLButtonElement).disabled, true);
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+});
+
+test('wallet controls require an unexpired session matching the connected wallet and collection', () => {
+  const preorder = checkout();
+  const view = render(createElement(Gallery, { preorder, wallet: WALLET, verification: VERIFICATION }));
+  assert.ok(view.getByRole('button', { name: 'Disconnect' }));
+  assert.ok(view.getByTitle(ADDRESS));
+  for (const session of [
+    null,
+    { ...ETH_SESSION, expiresAtMs: Date.now() - 1 },
+    { ...ETH_SESSION, address: '0x1111111111111111111111111111111111111111' },
+    { ...ETH_SESSION, preorderId: 'mi_note_cards' },
+  ]) {
+    view.rerender(createElement(Gallery, { preorder, wallet: WALLET, verification: { ...VERIFICATION, session } }));
+    assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+    assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+    assert.equal(view.queryByTitle(ADDRESS), null);
+    assert.equal(view.queryByRole('img'), null);
+  }
+  view.rerender(createElement(Gallery, { preorder, wallet: { ...WALLET, provider: null }, verification: VERIFICATION }));
+  assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  assert.equal(view.queryByTitle(ADDRESS), null);
+  assert.equal(view.queryByRole('img'), null);
 });
 
 test('only eligible IDs are shown and another wallet cannot reuse their availability', () => {

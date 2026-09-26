@@ -122,7 +122,7 @@ export function useMiNoteVerification(
     }
   }, [api, scope]);
 
-  return { session: session && session.expiresAtMs > Date.now() ? session : null,
+  return { ready: state?.scope === scope, session: session && session.expiresAtMs > Date.now() ? session : null,
     verifying: state?.scope === scope && state.verifying, error: state?.scope === scope ? state.error : null, verify, invalidate };
 }
 

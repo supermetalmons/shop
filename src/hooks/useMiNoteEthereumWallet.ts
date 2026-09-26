@@ -87,7 +87,14 @@ export function useMiNoteEthereumWallet(active: boolean) {
 
   const cancel = useCallback(() => {
     operation.current += 1;
-    if (sessionRef.current?.established) return;
+    const session = sessionRef.current;
+    if (session?.established) {
+      if (stateRef.current.status === 'connecting') {
+        session.revision += 1;
+        update({ ...stateRef.current, status: 'connected' });
+      }
+      return;
+    }
     releaseSession();
     update(disconnectedState);
   }, [releaseSession, update]);
@@ -99,9 +106,10 @@ export function useMiNoteEthereumWallet(active: boolean) {
     update(disconnectedState);
   }, [releaseSession, update]);
 
-  const readWallet = useCallback((wallet: EIP6963ProviderDetail, remembered: RememberedWallet | null, interactive: boolean) => {
+  const readWallet = useCallback((provider: EIP1193Provider, remembered: RememberedWallet | null, interactive: boolean) => {
+    const established = sessionRef.current?.established === true && stateRef.current.provider === provider;
     releaseSession();
-    const session: WalletSession = { remembered, established: false, revision: 0, cleanup: () => {} };
+    const session: WalletSession = { remembered, established, revision: 0, cleanup: () => {} };
     sessionRef.current = session;
     const current = () => mounted.current && sessionRef.current === session && (session.established || activeRef.current);
     const applyAccounts = (accounts: unknown, showEmptyError: boolean) => {
@@ -114,7 +122,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
       }
       session.established = true;
       rememberWallet(session.remembered);
-      update({ address, provider: wallet.provider, status: 'connected', wallets: [], error: null });
+      update({ address, provider, status: 'connected', wallets: [], error: null });
     };
     const fail = (error: unknown, showError: boolean) => {
       if (!current()) return;
@@ -124,7 +132,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
     const readAccounts = async (method: 'eth_accounts' | 'eth_requestAccounts', showError: boolean) => {
       const revision = ++session.revision;
       try {
-        const accounts = await wallet.provider.request({ method });
+        const accounts = await provider.request({ method });
         if (current() && session.revision === revision) applyAccounts(accounts, showError);
       } catch (error) {
         if (current() && session.revision === revision) fail(error, showError);
@@ -143,12 +151,12 @@ export function useMiNoteEthereumWallet(active: boolean) {
     ] as const;
     session.cleanup = () => {
       for (const [event, listener] of listeners) {
-        try { wallet.provider.removeListener?.(event, listener); } catch {}
+        try { provider.removeListener?.(event, listener); } catch {}
       }
     };
     try {
-      if (wallet.provider.on && wallet.provider.removeListener) {
-        for (const [event, listener] of listeners) wallet.provider.on(event, listener);
+      if (provider.on && provider.removeListener) {
+        for (const [event, listener] of listeners) provider.on(event, listener);
       }
       void readAccounts(interactive ? 'eth_requestAccounts' : 'eth_accounts', interactive);
     } catch (error) {
@@ -157,7 +165,14 @@ export function useMiNoteEthereumWallet(active: boolean) {
   }, [disconnect, releaseSession, update]);
 
   const connect = useCallback(() => {
-    if (!mounted.current || !activeRef.current || stateRef.current.status !== 'disconnected') return;
+    if (!mounted.current || !activeRef.current) return;
+    const current = stateRef.current;
+    if (current.status === 'connected' && current.provider) {
+      update({ ...current, status: 'connecting', error: null });
+      readWallet(current.provider, sessionRef.current?.remembered ?? null, false);
+      return;
+    }
+    if (current.status !== 'disconnected') return;
     const attempt = ++operation.current;
     update({ ...disconnectedState, status: 'connecting' });
     void listInjectedEthereumProviders().then((wallets) => {
@@ -166,10 +181,10 @@ export function useMiNoteEthereumWallet(active: boolean) {
         update({ ...disconnectedState, status: 'choosing', wallets });
       } else if (wallets.length === 1) {
         const wallet = wallets[0];
-        readWallet(wallet, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } : null, true);
+        readWallet(wallet.provider, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } : null, true);
       } else {
         const wallet = legacyWallet();
-        if (wallet) readWallet(wallet, { type: 'legacy' }, true);
+        if (wallet) readWallet(wallet.provider, { type: 'legacy' }, true);
         else update({ ...disconnectedState, error: 'No Ethereum wallet found. Install a wallet extension or open this page in your wallet’s browser.' });
       }
     }).catch((error: unknown) => {
@@ -184,7 +199,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
     if (!stateRef.current.wallets.includes(wallet)) return;
     operation.current += 1;
     update({ ...disconnectedState, status: 'connecting' });
-    readWallet(wallet, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } : null, true);
+    readWallet(wallet.provider, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } : null, true);
   }, [readWallet, update]);
 
   useEffect(() => {
@@ -218,7 +233,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
           const wallet = remembered.type === 'legacy' && wallets.length === 0
             ? legacyWallet()
             : matches.length === 1 ? matches[0] : null;
-          if (wallet) readWallet(wallet, remembered, false);
+          if (wallet) readWallet(wallet.provider, remembered, false);
           else update(disconnectedState);
         }).catch(() => {
           if (mounted.current && activeRef.current && operation.current === attempt) update(disconnectedState);
