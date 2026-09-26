@@ -247,7 +247,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     setSelectedPreordered((current) => current !== null && availability.get(current) === 'preordered' ? current : null);
   }, [availability, scopedAvailability]);
   useEffect(() => {
-    if (preorder?.order && !['prepared', 'submitted'].includes(preorder.order.status)) setSelected([]);
+    if (preorder?.order && (!['prepared', 'submitted'].includes(preorder.order.status) || preorder.order.confirmedSlot != null)) setSelected([]);
   }, [preorder?.order]);
   useEffect(() => {
     if (purchaseLocked) setSelectedPreordered(null);
@@ -270,7 +270,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     name: `Preorder #${preorderedCard.clean_card_id}`,
     image: preorderImageUrl(preorder.config, preorderedCard.clean_card_id),
   } : null;
-  const submitting = preorder?.order?.status === 'submitted' || preorder?.pending?.submittedAttempt;
+  const submitting = preorder?.order?.status === 'submitted' && preorder.order.confirmedSlot == null || preorder?.pending?.submittedAttempt;
   const canAbandon = Boolean(preorder?.pending && !preorder.pending.orderId && !preorder.pending.submittedAttempt && !preorder.pendingOrder);
   const canResume = !preorder?.pending || Boolean(preorder.pending.requestId);
   const preordering = Boolean(preorder?.busy || submitting || !preorder?.recoveryReady);

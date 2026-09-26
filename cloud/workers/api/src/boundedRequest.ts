@@ -9,6 +9,7 @@ export interface BoundedRequestOptions {
   maxBytes: number;
   signal: AbortSignal;
   createError: (failure: RequestBodyFailure) => Error;
+  onBodyBytes?: (bytes: number) => void;
 }
 
 export interface RequestDeadline {
@@ -282,6 +283,7 @@ export async function readBoundedRequestBytes(
     options.signal.removeEventListener('abort', onAbort);
   }
 
+  options.onBodyBytes?.(size);
   return size === bytes.byteLength ? bytes : bytes.slice(0, size);
 }
 

@@ -117,13 +117,18 @@ export function handlePublicMethodNotAllowed(request: Request, allowMethods = 'P
 export async function parseJsonRequestBody<T>(
   request: Request,
   validate: (value: unknown) => value is T,
+  options: { maxBytes?: number; maxBytesForValue?: (value: T) => number } = {},
 ): Promise<T> {
+  let bodyBytes = 0;
   const value = await readBoundedRequestJson(request, {
-    maxBytes: MAX_REQUEST_BODY_BYTES,
+    maxBytes: options.maxBytes ?? MAX_REQUEST_BODY_BYTES,
     signal: request.signal,
     createError: () => new Error('invalid-request'),
+    onBodyBytes: bytes => { bodyBytes = bytes; },
   });
   if (!validate(value)) throw new Error('invalid-request');
+  const limit = options.maxBytesForValue?.(value) ?? options.maxBytes ?? MAX_REQUEST_BODY_BYTES;
+  if (bodyBytes > limit || Number(request.headers.get('Content-Length')) > limit) throw new Error('invalid-request');
   return value;
 }
 

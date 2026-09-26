@@ -16,6 +16,7 @@ const orderSchema = z.object({
   signed_transaction: z.string().min(1).max(4096).nullable(),
   assets_json: z.string(), blockhash_context_slot: z.number().int().nonnegative(),
   last_valid_block_height: z.number().int().nonnegative(),
+  confirmed_slot: z.number().int().nonnegative().nullable(),
 });
 const assetsSchema = z.array(z.object({
   id: z.number().refine(isPreorderCardId), address: publicKey,
@@ -37,7 +38,7 @@ export function parsePreorderRecoveryArgs(argv: string[]): Options {
 
 async function readOrder(query: CommerceAuthorityQuery, orderId: string): Promise<RecoveryOrder> {
   const rows = await query(`SELECT order_id, preorder_id, cluster, collection, buyer, status, signature, signed_transaction,
-    assets_json, blockhash_context_slot, last_valid_block_height FROM commerce_preorder_orders WHERE order_id = ${sqlString(orderId)}`);
+    assets_json, blockhash_context_slot, last_valid_block_height, confirmed_slot FROM commerce_preorder_orders WHERE order_id = ${sqlString(orderId)}`);
   if (rows.length !== 1) throw new Error('Preorder not found.');
   const parsed = orderSchema.safeParse(rows[0]);
   if (!parsed.success) throw new Error('Preorder recovery record is invalid.');
@@ -88,12 +89,16 @@ export async function recoverPreorder(options: Options, dependencies: Dependenci
   if (order.status === 'submitted') {
     if (!order.signature || !order.signed_transaction) throw new Error('Submitted preorder has no signed transaction.');
     outcome = await dependencies.probe(order);
-    if (outcome.status === 'pending') throw new Error('Outcome remains uncertain. Reservation preserved; use an archive with complete history.');
+    if (outcome.status === 'pending' || outcome.status === 'confirmed') {
+      throw new Error('Outcome remains uncertain. Reservation preserved; wait for finalization or use an archive with complete history.');
+    }
     if (options.write) {
-      const status = outcome.status === 'confirmed' ? 'succeeded' : outcome.status;
+      const status = outcome.status === 'finalized' ? 'succeeded' : outcome.status;
       await dependencies.query(`UPDATE commerce_preorder_orders SET status = ${sqlString(status)},
+        ${outcome.status === 'finalized' ? `confirmed_slot = MAX(COALESCE(confirmed_slot, ${outcome.slot}), ${outcome.slot}),` : ''}
         updated_at_ms = ${COMMERCE_D1_NOW_MS_SQL}, revision = revision + 1
         WHERE order_id = ${sqlString(order.order_id)} AND status = 'submitted'
+          AND confirmed_slot IS ${order.confirmed_slot === null ? 'NULL' : order.confirmed_slot}
           AND signature = ${sqlString(order.signature)} AND signed_transaction = ${sqlString(order.signed_transaction)}
         RETURNING order_id`);
       order = await readOrder(dependencies.query, options.orderId);

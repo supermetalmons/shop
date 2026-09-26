@@ -214,7 +214,6 @@ const productionExportBaseline = [
   ["src/api/profile.ts","exports","profileOrders"],
   ["src/api/profile.ts","exports","saveProfileAddressRequest"],
   ["src/api/shop.ts","exports","createShopApiClient"],
-  ["src/api/transport.ts","exports","profileApiTimeoutMs"],
   ["src/api/transport.ts","exports","requestProfileApi"],
   ["src/components/MintPreview.tsx","exports","mintPanelPreviewQuantity"],
   ["src/components/ModalFocusScope.tsx","exports","shouldMoveFocusIntoModalScope"],

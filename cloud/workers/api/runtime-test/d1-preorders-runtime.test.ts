@@ -61,7 +61,42 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE order_id = ?').bind(winner.orderId).run(), /permanent/);
     }
     await assert.rejects(db.prepare('DELETE FROM commerce_preorder_orders WHERE order_id = ?').bind(winner.orderId).run(), /permanent/);
-    for (const [index, status] of (['expired', 'failed', 'confirmed'] as const).entries()) {
+    const repeatBuyer = Keypair.generate().publicKey.toBase58();
+    const early = await store.reserve(candidate(repeatBuyer, [20]));
+    const submittedEarly = await store.submit(early, { transactionBase64: 'signed-early', signature: 'signature-early' }, 2000);
+    const confirmedEarly = await store.confirm(submittedEarly, 550, 3000);
+    assert.equal(confirmedEarly.status, 'submitted');
+    assert.equal(confirmedEarly.confirmedSlot, 550);
+    assert.equal(await store.active(config.preorderId, repeatBuyer), null);
+    const nextOrders = await Promise.allSettled([
+      store.reserve(candidate(repeatBuyer, [21])), store.reserve(candidate(repeatBuyer, [22])),
+    ]);
+    assert.equal(nextOrders.filter((result) => result.status === 'fulfilled').length, 1);
+    const nextOrder = nextOrders.find((result) => result.status === 'fulfilled');
+    assert.ok(nextOrder?.status === 'fulfilled');
+    const discovery = await store.recoveries(config.preorderId, repeatBuyer);
+    assert.equal(discovery.foreground?.orderId, nextOrder.value.orderId);
+    assert.deepEqual(discovery.orders.map(order => order.orderId), [early.orderId]);
+    assert.equal(discovery.nextCursor, null);
+    const discoveryBuyer = Keypair.generate().publicKey.toBase58();
+    const discoveryPrepared = await store.reserve(candidate(discoveryBuyer, [24]));
+    const discoverySubmitted = await store.submit(discoveryPrepared, { transactionBase64: 'signed-discovery', signature: 'signature-discovery' }, 2000);
+    const [snapshot] = await Promise.all([
+      store.recoveries(config.preorderId, discoveryBuyer),
+      store.confirm(discoverySubmitted, 580, 3000),
+    ]);
+    assert.deepEqual([...(snapshot.foreground ? [snapshot.foreground] : []), ...snapshot.orders].map(order => order.orderId), [discoveryPrepared.orderId]);
+    assert.equal(snapshot.foreground ? snapshot.foreground.confirmedSlot : snapshot.orders[0]?.confirmedSlot, snapshot.foreground ? null : 580);
+    assert.equal((await store.get(discoveryPrepared.orderId))?.confirmedSlot, 580);
+    await assert.rejects(store.reserve(candidate(Keypair.generate().publicKey.toBase58(), [20])), /already reserved/);
+    const staleExpiry = await store.finish(submittedEarly, 'expired', 4000);
+    assert.equal(staleExpiry.status, 'submitted');
+    assert.equal(staleExpiry.confirmedSlot, 550);
+    const finalizedEarly = await store.finish(confirmedEarly, 'succeeded', 5000, 560);
+    assert.equal(finalizedEarly.confirmedSlot, 560);
+    assert.deepEqual(await store.confirm(submittedEarly, 570, 6000), finalizedEarly);
+    await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE order_id = ?').bind(early.orderId).run(), /permanent/);
+    for (const [index, status] of (['expired', 'failed', 'finalized'] as const).entries()) {
       const buyer = Keypair.generate().publicKey.toBase58();
       const source = candidate(buyer, [10 + index]);
       source.assets = source.cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() }));
@@ -72,17 +107,17 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       }, 2000);
       const dependencies = {
         query: async (sql: string) => (await db.prepare(sql).all<Record<string, unknown>>()).results,
-        probe: async () => ({ status }),
+        probe: async () => ({ status, slot: 120 }),
       };
       const preview = await recoverPreorder({ orderId: source.orderId, write: false }, dependencies);
       assert.equal(preview.verifiedOutcome, status);
       assert.deepEqual(await store.get(source.orderId), submitted);
       assert.ok((await store.claims(config.cluster, config.collection)).some((claim) => claim.orderId === source.orderId));
       const recovered = await recoverPreorder({ orderId: source.orderId, write: true }, dependencies);
-      assert.equal(recovered.status, status === 'confirmed' ? 'succeeded' : status);
+      assert.equal(recovered.status, status === 'finalized' ? 'succeeded' : status);
       const claimed = (await store.claims(config.cluster, config.collection)).some((claim) => claim.orderId === source.orderId);
-      assert.equal(claimed, status === 'confirmed');
-      if (status === 'confirmed') {
+      assert.equal(claimed, status === 'finalized');
+      if (status === 'finalized') {
         await assert.rejects(store.reserve(candidate(Keypair.generate().publicKey.toBase58(), source.cardIds)), /already reserved/);
       } else {
         const replacement = await store.reserve(candidate(buyer, source.cardIds));

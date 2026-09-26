@@ -82,6 +82,7 @@ export type PreorderOrder = {
   status: PreorderOrderStatus;
   expiresAtMs: number;
   signature: string | null;
+  confirmedSlot?: number | null;
 };
 export type PreorderAvailabilityResponse = {
   preorderId: string;
@@ -95,3 +96,7 @@ export type PreorderPrepareResponse = { order: PreorderOrder; transactionBase64:
 export type PreorderSubmitRequest = { preorderId: string; orderId: string; transactionBase64: string };
 export type PreorderCancelRequest = { preorderId: string; orderId: string };
 export type PreorderStatusResponse = { order: PreorderOrder | null };
+export type PreorderRecoveryResponse = PreorderStatusResponse & {
+  recoveries: PreorderOrder[];
+  nextRecoveryCursor: string | null;
+};

@@ -47,6 +47,7 @@ const migrationNames = [
   '0019_preorder_buyer_index.sql',
   '0020_preorder_expiry_index.sql',
   '0021_preorder_ethereum_ownership.sql',
+  '0022_preorder_confirmation.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -99,7 +100,30 @@ test('preorder Ethereum identity migration is required for deployment and its gu
   database.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 = 21): DatabaseSync {
+test('preorder confirmation migration is required for deployment and its recovery guards are verified', () => {
+  const previous = currentDatabase(false, 21);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /confirmation migration/);
+  previous.close();
+  for (const [type, name] of [
+    ['trigger', 'commerce_preorder_confirmation_guard'],
+    ['index', 'commerce_preorder_confirmed_recovery'],
+    ['index', 'commerce_preorder_inventory_buyer'],
+  ] as const) {
+    const database = currentDatabase(false);
+    database.exec(`DROP ${type} ${name}`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
+    database.close();
+  }
+  const database = currentDatabase(false);
+  database.exec(`DROP INDEX commerce_preorder_active_buyer;
+    CREATE UNIQUE INDEX commerce_preorder_active_buyer ON commerce_preorder_orders (cluster, collection, buyer)
+      WHERE status IN ('prepared', 'submitted')`);
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
+  database.close();
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 = 22): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

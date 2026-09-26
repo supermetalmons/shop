@@ -192,6 +192,7 @@ export function createCommerceD1Harness(
     observeStatement?: CommerceD1StatementObserver;
     notificationOutboxMode?: 'legacy' | 'table';
     preorderEthereumMigration?: boolean;
+    preorderConfirmationMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -218,6 +219,9 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0020_preorder_expiry_index.sql', 'utf8'));
   if (options.preorderEthereumMigration !== false) {
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0021_preorder_ethereum_ownership.sql', 'utf8'));
+    if (options.preorderConfirmationMigration !== false) {
+      database.exec(readFileSync('cloud/workers/api/commerce-migrations/0022_preorder_confirmation.sql', 'utf8'));
+    }
   }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
   return {

@@ -1,4 +1,4 @@
-import type { PreorderAvailabilityResponse, PreorderCancelRequest, PreorderOrder, PreorderPrepareRequest, PreorderPrepareResponse, PreorderStatusResponse, PreorderSubmitRequest } from '../../shared/preorders.ts';
+import type { PreorderAvailabilityResponse, PreorderCancelRequest, PreorderOrder, PreorderPrepareRequest, PreorderPrepareResponse, PreorderRecoveryResponse, PreorderStatusResponse, PreorderSubmitRequest } from '../../shared/preorders.ts';
 import { getPreorderConfig, isPreorderCardId, PREORDER_CARD_COUNT } from '../../shared/preorders.ts';
 import { MI_NOTE_SESSION_HEADER, type MiNoteEthereumSession } from '../../shared/miNoteAuth';
 import { normalizeMiNoteAddress } from '../../shared/miNoteCards';
@@ -27,7 +27,7 @@ function invalidResponse(): Error {
   return new Error('Preorder API returned an invalid response.');
 }
 
-function parseOrder(value: unknown, preorderId: string): PreorderOrder {
+export function parsePreorderOrder(value: unknown, preorderId: string): PreorderOrder {
   const config = getPreorderConfig(preorderId);
   if (!config || !record(value) || value.preorderId !== preorderId ||
     typeof value.orderId !== 'string' || !value.orderId || value.orderId.length > 128 ||
@@ -41,6 +41,8 @@ function parseOrder(value: unknown, preorderId: string): PreorderOrder {
     new Set(value.assets.map((asset) => (asset as { id: number }).id)).size !== value.assets.length ||
     new Set(value.assets.map((asset) => (asset as { address: string }).address)).size !== value.assets.length ||
     !['prepared', 'submitted', 'succeeded', 'failed', 'expired', 'cancelled'].includes(String(value.status)) ||
+    (value.confirmedSlot != null && (!Number.isSafeInteger(value.confirmedSlot) || Number(value.confirmedSlot) < 0 ||
+      !['submitted', 'succeeded', 'failed', 'expired'].includes(String(value.status)) || value.signature === null)) ||
     !Number.isSafeInteger(value.expiresAtMs) || Number(value.expiresAtMs) <= 0 ||
     (value.signature !== null && (typeof value.signature !== 'string' || !isBase58Bytes(value.signature, 64)))
   ) throw invalidResponse();
@@ -86,11 +88,11 @@ export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
       if (!allowNull) throw invalidResponse();
       return { order: null };
     }
-    const order = parseOrder(payload.order, preorderId);
+    const order = parsePreorderOrder(payload.order, preorderId);
     if (orderId && order.orderId !== orderId) throw invalidResponse();
     return { order };
   }
-  return {
+  const api = {
     async availability(preorderId: string, session: MiNoteEthereumSession, signedIn = false): Promise<PreorderAvailabilityResponse> {
       const payload = await request('availability', { preorderId }, undefined, session, signedIn);
       if (!record(payload) || payload.preorderId !== preorderId || !Array.isArray(payload.items) ||
@@ -105,7 +107,7 @@ export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
       const payload = await request('prepare', null, input, session);
       if (!record(payload) || (payload.transactionBase64 !== null &&
         (typeof payload.transactionBase64 !== 'string' || !payload.transactionBase64 || payload.transactionBase64.length > 4096))) throw invalidResponse();
-      const order = parseOrder(payload.order, input.preorderId);
+      const order = parsePreorderOrder(payload.order, input.preorderId);
       if (order.buyer !== input.buyer || order.ethereumAddress !== session.address || order.cardIds.length !== input.cardIds.length ||
         !order.cardIds.every((id) => input.cardIds.includes(id))) throw invalidResponse();
       return { order, transactionBase64: payload.transactionBase64 as string | null };
@@ -119,5 +121,17 @@ export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
     async status(preorderId: string, orderId?: string): Promise<PreorderStatusResponse> {
       return orderResult(await request('status', null, { preorderId, ...(orderId ? { orderId } : {}) }), preorderId, orderId);
     },
+    async recoveries(preorderId: string, recoveryCursor?: string): Promise<PreorderRecoveryResponse> {
+      const payload = await request('status', null, { preorderId, includeRecoveries: true, ...(recoveryCursor ? { recoveryCursor } : {}) });
+      const result = orderResult(payload, preorderId);
+      if (!record(payload) || !Array.isArray(payload.recoveries) || payload.recoveries.length > 20 ||
+        !(payload.nextRecoveryCursor === null || typeof payload.nextRecoveryCursor === 'string' && payload.nextRecoveryCursor.length > 0 && payload.nextRecoveryCursor.length <= 1024)) throw invalidResponse();
+      const recoveries = payload.recoveries.map(value => parsePreorderOrder(value, preorderId));
+      if (recoveries.some(order => order.status !== 'submitted' || order.confirmedSlot == null) ||
+        new Set(recoveries.map(order => order.orderId)).size !== recoveries.length ||
+        result.order && (result.order.status !== 'prepared' && result.order.status !== 'submitted' || result.order.confirmedSlot != null)) throw invalidResponse();
+      return { ...result, recoveries, nextRecoveryCursor: payload.nextRecoveryCursor as string | null };
+    },
   };
+  return api as Omit<typeof api, 'recoveries'> & Partial<Pick<typeof api, 'recoveries'>>;
 }

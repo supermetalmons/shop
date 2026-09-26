@@ -205,6 +205,39 @@ test('pending submission disables selection and cancellation for the verified Et
   assert.equal(view.getByText('Preordering...').getAttribute('aria-live'), 'polite');
 });
 
+test('confirmed success has the completed artwork and controls while another preorder can be selected', () => {
+  Math.random = () => 0;
+  const preorder = checkout();
+  preorder.pending = { ethereumAddress: ADDRESS, requestId: 'request-1', orderId: 'order-1', cardIds: [1], submittedAttempt: true };
+  const view = render(createElement(MiNoteCardsGallery, { preorder }));
+  const confirmed: PreorderCheckout = { ...preorder, pending: null, order: {
+    orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: preorder.config.authority,
+    ethereumAddress: ADDRESS, cardIds: [1], assets: [{ id: 1, address: preorder.config.collection }],
+    status: 'submitted', confirmedSlot: 500, signature: null, expiresAtMs: Date.now() + 120_000,
+  }, availability: { ...preorder.availability!, items: preorder.availability!.items.map(item => item.id === 1 ? { ...item, status: 'preordered' } : item) } };
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: confirmed }));
+  assert.equal(view.queryByRole('button', { name: 'Preordering...' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Cancel' }), null);
+  assert.equal((view.getByRole('button', { name: 'Preordered preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1.webp');
+  fireEvent.click(view.getByRole('button', { name: /Select preorder #2:/ }));
+  assert.equal((view.getByRole('button', { name: 'Preorder for 0.25 SOL' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByText(/finalizing/i), null);
+  const rolledBack: PreorderCheckout = { ...confirmed, availability: {
+    ...confirmed.availability!, items: confirmed.availability!.items.map(item => item.id === 1 ? { ...item, status: 'reserved' } : item),
+  } };
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: rolledBack }));
+  assert.equal((view.getByRole('button', { name: 'Reserved preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, true);
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
+  assert.equal(view.getByRole('button', { name: /Select preorder #2:/ }).getAttribute('aria-pressed'), 'true');
+  assert.equal((view.getByRole('button', { name: 'Preorder for 0.25 SOL' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByText('Loading...'), null);
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...rolledBack, availabilityError: 'Couldn’t check card availability. Try again.' } }));
+  assert.equal(view.getByRole('button', { name: /Select preorder #2:/ }).getAttribute('aria-pressed'), 'true');
+  assert.equal((view.getByRole('button', { name: 'Preorder for 0.25 SOL' }) as HTMLButtonElement).disabled, true);
+  assert.equal(view.queryByText('Loading...'), null);
+});
+
 test('unavailable cards and busy checkout never evict an existing selection', async () => {
   Math.random = () => 0;
   const preorder = checkout();

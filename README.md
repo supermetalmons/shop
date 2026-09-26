@@ -102,13 +102,30 @@ wallet different from the collection authority. The wallet signs the prepared
 transaction without broadcasting it; the API adds the collection signature,
 records the fully signed transaction, and broadcasts it. Reservations start at
 checkout, last at most 120 seconds before submission, and cannot be extended by
-retrying. Each order records its verified Ethereum wallet, and one active order
-is allowed per Solana buyer and preorder collection. Preparation and initial
+retrying. Each order records its verified Ethereum wallet, and one unconfirmed
+checkout is allowed per Solana buyer and preorder collection. Preparation and initial
 submission require both the recorded Ethereum identity and the Solana buyer.
 Submitted transactions retain their reservations until finalized
-success, failure, or verified expiry. Status polling and scheduled reconciliation
-recover interrupted purchases. A successful card ID can never be purchased again,
+success, failure, or verified expiry. Once the server verifies successful
+`confirmed` execution, the shop shows its normal Preordered success, updates the
+artwork and inventory, and allows another preorder immediately. The order remains
+submitted internally while finalization continues in the background. Status polling
+and scheduled reconciliation recover interrupted purchases. A finalized successful card ID can never be purchased again,
 even if its NFT is later transferred or burned.
+
+Each confirmed order has its own recovery record, scoped to its Solana buyer,
+network, collection, and order ID. Recovery continues across shop routes and resumes
+after reloads and while a restored signed-in owner has no wallet connection;
+server discovery restores outstanding confirmations if local storage
+is cleared. Discovery reads the foreground order and recovery page from one database
+snapshot without waiting for foreground RPC
+checks. Foreground submissions are checked every second, background recoveries
+every three seconds while the page is visible, with bounded concurrency and backoff
+after provider errors. Finalization does not repeat the success notification.
+Only a verified failure or expiry reverses the affected order's artwork and inventory
+and displays an error. Slow finalization and RPC timeouts never release card claims
+or undo a confirmed purchase. Historical errors are not replayed after local storage
+has been cleared.
 
 Status, cancellation, and recovery use Solana authentication and remain
 available after Ethereum verification expires or the Ethereum account changes.
@@ -134,8 +151,8 @@ combinations and all mainnet requests use real holdings. Test inventory keeps
 normal pricing, reservations, and permanent duplicate-preorder protection.
 
 Reserved gallery cards keep their original artwork, display a muted Reserved
-label, and cannot be selected until the reservation is lifted. Only successfully
-minted preorders display preorder artwork after finalized confirmation. Purchased
+label, and cannot be selected until the reservation is lifted. Successfully
+confirmed preorders display preorder artwork immediately. Purchased
 assets appear in owner inventory with a disabled Soon button and plane icon.
 Selecting one preorder also offers View, which opens its full image over a
 blurred background. The devnet preorder collection is public in inventory;
@@ -149,8 +166,24 @@ removed after verifying the hosted set.
 Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
 gallery. Available and reserved gallery artwork keeps its original corners.
 
+Optimistic inventory entries use the actual asset addresses and remain separate
+from cached inventory. Owned assets stay visible and recoverable until both a
+finalized account read and the collection index confirm them. Finalized reads can
+remove transferred or burned assets immediately. Stale indexer results cannot
+restore them without a newer finalized ownership check. Recovery records retain
+each account read's slot and reject older or conflicting same-slot evidence. Older
+successful orders without a stored mint slot retain indexed items; direct account
+recovery can still add verified owned assets. Finalized receipts apply even while
+local order status is catching up, including when the owner is signed out. Older
+browser records migrate into an isolated storage version so older tabs cannot
+overwrite these checks. Tab-local fallback records incorporate newer shared
+ownership evidence and terminal outcomes while keeping their writes isolated.
+Inventory is installed before its
+overlay is retired, preserving selections. Preorder and ordinary mint recovery
+share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
+
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0021_preorder_ethereum_ownership.sql`, followed by the API
+migrations through `0022_preorder_confirmation.sql`, followed by the API
 release and then the frontend. The normal API deployment command applies the
 migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
@@ -177,6 +210,8 @@ window. Missing history, RPC errors, or an uncertain outcome preserve the
 reservation. Successful purchases keep their permanent card claims. The command
 does not sign or broadcast transactions, and has no force-unlock option. If a
 database write is interrupted, rerun the same command to finish claim cleanup.
+Normal status polling does not invalidate verified recovery; a change to the
+submission or its confirmation evidence still blocks an outdated recovery write.
 
 Multiple Ethereum wallets appear in an inline picker, using EIP-6963 discovery
 with a legacy `window.ethereum` fallback. The selected wallet is remembered

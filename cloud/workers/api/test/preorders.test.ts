@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Keypair } from '@solana/web3.js';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
-import { PreorderStore, listSucceededPreorderAssets } from '../src/preorderStore.ts';
+import { PreorderStore, listPreorderInventoryAssets } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
 import { loadMiNoteEligibility } from '../src/miNoteEligibility.ts';
 import { verifyRequestIdentity } from '../src/requestIdentity.ts';
@@ -17,15 +17,15 @@ const ETHEREUM = '0x0000000000000000000000000000000000000001';
 const OTHER_ETHEREUM = '0x0000000000000000000000000000000000000002';
 type Overrides = NonNullable<Parameters<typeof handlePreorderRequest>[3]>;
 
-function harness() {
-  const database = createCommerceD1Harness();
+function harness(options?: Parameters<typeof createCommerceD1Harness>[0]) {
+  const database = createCommerceD1Harness(options);
   const store = new PreorderStore(database.db);
   let now = 1000;
   let wallet = BUYER;
   let ethereumAddress = ETHEREUM;
   let signedIn = true;
   let ownedIds = Array.from({ length: 1395 }, (_, index) => index + 1);
-  let outcome: 'pending' | 'confirmed' | 'failed' | 'expired' = 'pending';
+  let outcome: 'pending' | 'confirmed' | 'finalized' | 'failed' | 'expired' = 'pending';
   let valid = true;
   let prepares = 0;
   let authorizations = 0;
@@ -52,13 +52,11 @@ function harness() {
       if (signedTransactionBase64 !== 'buyer-signed') throw new Error('unexpected transaction');
       return { transactionBase64: 'fully-signed', signature: 'signature' };
     },
-    probe: async () => ({ status: outcome }),
-    send: async () => {
+    probe: async () => ({ status: outcome, slot: 550 }),
+    send: async ({ transactionBase64 }) => {
       sends += 1;
       const rows = database.database.prepare("SELECT * FROM commerce_preorder_orders WHERE status = 'submitted'").all();
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].signed_transaction, 'fully-signed');
-      assert.equal(rows[0].signature, 'signature');
+      assert.ok(rows.some((row) => row.signed_transaction === transactionBase64 && row.signature === 'signature'));
       return 'signature';
     },
   };
@@ -254,7 +252,7 @@ test('devnet stub availability and mint authorization isolate both Ethereum test
     assert.equal((await h.prepare([index ? 1 : 11], crypto.randomUUID(), realEligibility)).status, 403);
     const prepared = await h.prepare([firstId], crypto.randomUUID(), realEligibility);
     assert.equal(prepared.status, 200);
-    h.outcome('confirmed');
+    h.outcome('finalized');
     const submitted = await h.call('submit', { preorderId: config.preorderId, orderId: prepared.body.order.orderId, transactionBase64: 'buyer-signed' }, realEligibility);
     assert.equal(submitted.body.order.status, 'succeeded');
   }
@@ -296,7 +294,7 @@ test('mainnet prepares and submits verified owned cards through the same checkou
   assert.equal(order.cluster, 'mainnet-beta');
   assert.equal(order.collection, mainnet.collection);
   assert.equal(order.ethereumAddress, ETHEREUM);
-  h.outcome('confirmed');
+  h.outcome('finalized');
   const submitted = await h.call('submit', { preorderId: mainnet.preorderId, orderId: order.orderId, transactionBase64: 'buyer-signed' });
   assert.equal(submitted.body.order.status, 'succeeded');
 });
@@ -312,7 +310,7 @@ test('submitted legacy orders and submitted retries recover without Ethereum ver
     eligibility: async () => { throw new Error('Submitted funds must remain recoverable'); },
   };
   assert.equal((await h.call('submit', input, noEthereum)).body.order.status, 'submitted');
-  h.outcome('confirmed');
+  h.outcome('finalized');
   assert.equal((await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId }, noEthereum)).body.order.status, 'succeeded');
 });
 
@@ -442,7 +440,7 @@ test('the first broadcast precedes recovery probes and survives a failed probe',
   });
   assert.equal(result.body.order.status, 'submitted');
   assert.equal(h.counts().sends, 1);
-  h.outcome('confirmed');
+  h.outcome('finalized');
   await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId });
   assert.equal((await h.store.get(prepared.body.order.orderId))!.status, 'succeeded');
   assert.equal(h.counts().sends, 1);
@@ -488,7 +486,7 @@ test('finalized success permanently consumes IDs and exposes recent assets for v
   const h = harness();
   const prepared = await h.prepare([1, 1395]);
   await h.call('submit', { preorderId: config.preorderId, orderId: prepared.body.order.orderId, transactionBase64: 'buyer-signed' });
-  h.outcome('confirmed');
+  h.outcome('finalized');
   const result = await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId });
   assert.equal(result.body.order.status, 'succeeded');
   assert.equal((await h.call('availability', { preorderId: config.preorderId })).body.items[1394].status, 'preordered');
@@ -498,7 +496,7 @@ test('finalized success permanently consumes IDs and exposes recent assets for v
   assert.equal((await h.prepare([1])).status, 409);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_claims'), /permanent/);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_orders'), /permanent/);
-  assert.deepEqual((await listSucceededPreorderAssets(h.db, BUYER)).map((asset) => asset.id), [1, 1395]);
+  assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map((asset) => asset.id), [1, 1395]);
 });
 
 test('finalized failure or expiry releases claims but retains transaction history', async () => {
@@ -560,4 +558,228 @@ test('mainnet availability is verified, collection-scoped, and expires unsigned 
   assert.equal(devnet.body.items[0].status, 'preordered');
   assert.equal(devnet.body.items[1].status, 'available');
   assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'expired');
+});
+
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} confirmed success keeps card claims while permitting the next checkout`, async () => {
+    const h = harness();
+    const prepare = (cardIds: number[]) => h.call('prepare', { preorderId, buyer: BUYER, cardIds, requestId: crypto.randomUUID() });
+    const first = await prepare([1]);
+    h.outcome('confirmed');
+    const confirmed = await h.call('submit', { preorderId, orderId: first.body.order.orderId, transactionBase64: 'buyer-signed' });
+    assert.equal(confirmed.body.order.status, 'submitted');
+    assert.equal(confirmed.body.order.confirmedSlot, 550);
+    assert.equal((await h.call('availability', { preorderId })).body.items.find((item: { id: number }) => item.id === 1).status, 'preordered');
+    assert.equal((await h.store.active(preorderId, BUYER)), null);
+    assert.equal((await prepare([1])).status, 409);
+    const second = await prepare([2]);
+    assert.equal(second.status, 200);
+    assert.equal((await prepare([3])).status, 409);
+    const snapshot = await h.call('status', { preorderId, includeRecoveries: true });
+    assert.equal(snapshot.body.order.orderId, second.body.order.orderId);
+    assert.deepEqual(snapshot.body.recoveries.map((order: { orderId: string }) => order.orderId), [first.body.order.orderId]);
+    assert.equal(snapshot.body.nextRecoveryCursor, null);
+    const uncertain = await h.call('status', { preorderId, orderId: first.body.order.orderId }, {
+      probe: async () => { throw new Error('RPC timeout'); },
+    });
+    assert.equal(uncertain.body.order.status, 'submitted');
+    assert.equal(uncertain.body.order.confirmedSlot, 550);
+    const cancelled = await h.call('cancel', { preorderId, orderId: first.body.order.orderId });
+    assert.equal(cancelled.body.order.status, 'submitted');
+    const finalized = await h.call('status', { preorderId, orderId: first.body.order.orderId }, {
+      probe: async () => ({ status: 'finalized', slot: 560 }),
+    });
+    assert.equal(finalized.body.order.status, 'succeeded');
+    assert.equal(finalized.body.order.confirmedSlot, 560);
+    await assert.rejects(h.db.prepare('DELETE FROM commerce_preorder_claims WHERE order_id = ?')
+      .bind(first.body.order.orderId).run(), /permanent/);
+    assert.equal((await h.call('status', { preorderId, includeRecoveries: true })).body.recoveries.length, 0);
+  });
+}
+
+test('confirmed rollback releases only its own claims while another checkout remains active', async () => {
+  for (const outcome of ['failed', 'expired'] as const) {
+    const h = harness();
+    const prepared = await h.prepare([1]);
+    h.outcome('confirmed');
+    await h.call('submit', { preorderId: config.preorderId, orderId: prepared.body.order.orderId, transactionBase64: 'buyer-signed' });
+    const next = await h.prepare([2]);
+    h.outcome(outcome);
+    const rolledBack = await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId });
+    assert.equal(rolledBack.body.order.status, outcome);
+    assert.equal(rolledBack.body.order.confirmedSlot, 550);
+    assert.deepEqual((await h.store.claims(config.cluster, config.collection)).map((claim) => claim.id), [2]);
+    assert.equal((await h.store.active(config.preorderId, BUYER))?.orderId, next.body.order.orderId);
+  }
+});
+
+test('confirmation CAS cannot revive terminal orders and a stale terminal write cannot erase confirmation', async () => {
+  const h = harness();
+  const prepared = await h.prepare([1]);
+  const source = (await h.store.get(prepared.body.order.orderId))!;
+  const submitted = await h.store.submit(source, { signature: 'signature', transactionBase64: 'fully-signed' }, 1100);
+  const confirmed = await h.store.confirm(submitted, 550, 1200);
+  const staleFailure = await h.store.finish(submitted, 'failed', 1300);
+  assert.equal(staleFailure.status, 'submitted');
+  assert.equal(staleFailure.confirmedSlot, 550);
+  await assert.rejects(h.db.prepare(`UPDATE commerce_preorder_orders SET confirmed_slot = NULL,
+    revision = revision + 1 WHERE order_id = ?`).bind(confirmed.orderId).run(), /confirmation is permanent/);
+  const terminal = await h.store.finish(confirmed, 'failed', 1400);
+  const staleConfirmation = await h.store.confirm(submitted, 560, 1500);
+  assert.deepEqual(staleConfirmation, terminal);
+  assert.equal((await h.store.claims(config.cluster, config.collection)).length, 0);
+});
+
+test('recovery discovery is paginated, wallet scoped, stable through finalization, and does not probe every order', async () => {
+  const h = harness();
+  const orders = [];
+  for (let id = 1; id <= 22; id += 1) {
+    const prepared = await h.prepare([id]);
+    const source = (await h.store.get(prepared.body.order.orderId))!;
+    const submitted = await h.store.submit(source, { signature: 'signature', transactionBase64: 'fully-signed' }, 1000);
+    orders.push(await h.store.confirm(submitted, 500 + id, 1000));
+  }
+  orders.sort((left, right) => left.orderId.localeCompare(right.orderId));
+  h.time(2000);
+  const foreground = await h.prepare([23]);
+  assert.equal(foreground.status, 200);
+  const noProbe: Overrides = { probe: async () => { throw new Error('Discovery must only read recovery snapshots'); } };
+  const first = await h.call('status', { preorderId: config.preorderId, includeRecoveries: true }, noProbe);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.order.orderId, foreground.body.order.orderId);
+  assert.deepEqual(first.body.recoveries.map((order: { orderId: string }) => order.orderId), orders.slice(0, 20).map((order) => order.orderId));
+  assert.equal(typeof first.body.nextRecoveryCursor, 'string');
+  await h.store.finish(orders[0], 'succeeded', 1100, 600);
+  const second = await h.call('status', { preorderId: config.preorderId, includeRecoveries: true,
+    recoveryCursor: first.body.nextRecoveryCursor }, noProbe);
+  assert.equal(second.body.order.orderId, foreground.body.order.orderId);
+  assert.deepEqual(second.body.recoveries.map((order: { orderId: string }) => order.orderId), orders.slice(20).map((order) => order.orderId));
+  assert.equal(second.body.nextRecoveryCursor, null);
+  const legacy = await h.call('status', { preorderId: config.preorderId });
+  assert.equal(legacy.body.order.orderId, orders[1].orderId);
+  assert.equal('recoveries' in legacy.body, false);
+  assert.equal((await h.call('status', { preorderId: config.preorderId, includeRecoveries: true, recoveryCursor: 'invalid' })).status, 400);
+  assert.equal((await h.call('status', { preorderId: config.preorderId, includeRecoveries: true, orderId: orders[1].orderId })).status, 400);
+  assert.equal((await h.call('status', { preorderId: config.preorderId, recoveryCursor: first.body.nextRecoveryCursor })).status, 400);
+  h.wallet(OTHER);
+  const other = await h.call('status', { preorderId: config.preorderId, includeRecoveries: true });
+  assert.equal(other.body.order, null);
+  assert.deepEqual(other.body.recoveries, []);
+  assert.deepEqual((await h.call('status', { preorderId: 'mi_note_cards', includeRecoveries: true })).body.recoveries, []);
+});
+
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  for (const boundary of ['before', 'after'] as const) {
+    test(`${preorderId} discovery retains an order confirmed ${boundary} its snapshot read`, async context => {
+      let confirm: (() => void) | undefined;
+      let advanced = false;
+      const advance = (stage: typeof boundary, observation: { method: string; sql: string }) => {
+        if (stage !== boundary || !confirm || !['first', 'all'].includes(observation.method) ||
+          !observation.sql.includes('commerce_preorder_orders')) return;
+        const update = confirm;
+        confirm = undefined;
+        advanced = true;
+        update();
+      };
+      const h = harness({
+        observeCall: observation => { if ('sql' in observation) advance('before', observation); },
+        observeStatement: observation => advance('after', observation),
+      });
+      context.after(() => h.database.close());
+      const prepared = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() });
+      const submitted = await h.store.submit((await h.store.get(prepared.body.order.orderId))!,
+        { signature: 'signature', transactionBase64: 'fully-signed' }, 1100);
+      confirm = () => {
+        const changed = h.database.prepare(`UPDATE commerce_preorder_orders SET confirmed_slot = 550,
+          updated_at_ms = 1200, next_check_at_ms = 16200, revision = revision + 1
+          WHERE order_id = ? AND revision = ? AND status = 'submitted'`).run(submitted.orderId, submitted.revision);
+        assert.equal(changed.changes, 1);
+      };
+      let rpcCalls = 0;
+      const unexpected = async (): Promise<never> => { rpcCalls++; throw new Error('Discovery must not contact RPC'); };
+      const result = await h.call('status', { preorderId, includeRecoveries: true }, {
+        probe: unexpected, send: unexpected, blockhashValid: unexpected,
+      });
+      assert.equal(result.status, 200);
+      assert.equal(advanced, true);
+      assert.equal(rpcCalls, 0);
+      const discovered = [result.body.order, ...result.body.recoveries].filter(Boolean);
+      assert.deepEqual(discovered.map(order => order.orderId), [submitted.orderId]);
+      assert.equal(result.body.nextRecoveryCursor, null);
+      if (boundary === 'before') {
+        assert.equal(result.body.order, null);
+        assert.equal(result.body.recoveries[0].confirmedSlot, 550);
+      } else {
+        assert.equal(result.body.order.confirmedSlot, null);
+        assert.deepEqual(result.body.recoveries, []);
+      }
+      assert.equal((await h.store.get(submitted.orderId))?.confirmedSlot, 550);
+    });
+  }
+}
+
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  for (const foregroundStatus of ['prepared', 'submitted'] as const) {
+    test(`${preorderId} recovery discovery reads ${foregroundStatus} foreground snapshots during RPC outages`, async () => {
+      const h = harness();
+      const prepare = (cardIds: number[]) => h.call('prepare', { preorderId, buyer: BUYER, cardIds, requestId: crypto.randomUUID() });
+      const first = await prepare([1]);
+      h.outcome('confirmed');
+      await h.call('submit', { preorderId, orderId: first.body.order.orderId, transactionBase64: 'buyer-signed' });
+      h.time(2000);
+      const second = await prepare([2]);
+      let foreground = (await h.store.get(second.body.order.orderId))!;
+      if (foregroundStatus === 'submitted') {
+        foreground = await h.store.submit(foreground, { signature: 'signature', transactionBase64: 'fully-signed' }, 2000);
+      }
+      const recovery = (await h.store.get(first.body.order.orderId))!;
+      let rpcCalls = 0;
+      const unavailable = async (): Promise<never> => { rpcCalls += 1; throw new Error('RPC outage'); };
+      const outage: Overrides = { blockhashValid: unavailable, probe: unavailable, send: unavailable };
+      const discovery = await h.call('status', { preorderId, includeRecoveries: true }, outage);
+      assert.equal(discovery.status, 200);
+      assert.equal(discovery.body.order.orderId, foreground.orderId);
+      assert.equal(discovery.body.order.status, foregroundStatus);
+      assert.deepEqual(discovery.body.recoveries.map((order: { orderId: string }) => order.orderId), [recovery.orderId]);
+      assert.equal(rpcCalls, 0);
+      assert.deepEqual(await h.store.get(foreground.orderId), foreground);
+      assert.deepEqual(await h.store.get(recovery.orderId), recovery);
+      if (foregroundStatus === 'prepared') {
+        h.time(foreground.expiresAtMs + 1);
+        const overdue = await h.call('status', { preorderId, includeRecoveries: true }, outage);
+        assert.equal(overdue.status, 200);
+        assert.equal(overdue.body.order.status, 'prepared');
+        assert.deepEqual(await h.store.get(foreground.orderId), foreground);
+        assert.equal(rpcCalls, 0);
+      }
+      h.outcome('finalized');
+      const legacy = await h.call('status', { preorderId });
+      assert.equal(legacy.body.order.orderId, recovery.orderId);
+      assert.equal(legacy.body.order.status, 'succeeded');
+      assert.equal('recoveries' in legacy.body, false);
+      const individual = await h.call('status', { preorderId, orderId: foreground.orderId });
+      assert.equal(individual.body.order.status, foregroundStatus === 'prepared' ? 'expired' : 'succeeded');
+    });
+  }
+}
+
+test('bounded preorder inventory candidates prioritize requested older assets without losing confirmation evidence', async () => {
+  const h = harness();
+  const orders = [];
+  for (let id = 1; id <= 17; id += 1) {
+    h.time(1000 + id);
+    const prepared = await h.prepare([id]);
+    const submitted = await h.store.submit((await h.store.get(prepared.body.order.orderId))!,
+      { signature: 'signature', transactionBase64: 'fully-signed' }, 1000 + id);
+    orders.push(await h.store.confirm(submitted, 500 + id, 1000 + id));
+  }
+  const recent = await listPreorderInventoryAssets(h.db, BUYER);
+  assert.equal(recent.length, 15);
+  assert.equal(recent.some((asset) => asset.id === 1), false);
+  const requested = await listPreorderInventoryAssets(h.db, BUYER, [orders[0].assets[0].address]);
+  assert.equal(requested.length, 15);
+  assert.deepEqual(requested[0], { ...orders[0].assets[0], preorderId: config.preorderId, status: 'submitted', confirmedSlot: 501 });
+  assert.deepEqual(await listPreorderInventoryAssets(h.db, OTHER, [orders[0].assets[0].address]), []);
+  await h.store.finish(orders[0], 'failed', 2000);
+  assert.equal((await listPreorderInventoryAssets(h.db, BUYER, [orders[0].assets[0].address])).some((asset) => asset.id === 1), false);
 });

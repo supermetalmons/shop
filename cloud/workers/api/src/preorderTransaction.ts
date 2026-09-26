@@ -358,7 +358,7 @@ export async function probePreorderTransaction(
     blockhashContextSlot: number;
   },
   overrides: Partial<Dependencies> = {},
-): Promise<{ status: 'confirmed' | 'failed' | 'expired' | 'pending'; slot?: number }> {
+): Promise<{ status: 'confirmed' | 'finalized'; slot: number } | { status: 'failed' | 'expired' | 'pending'; slot?: number }> {
   assertEnabled(args.config);
   const transaction = decodeTransaction(args.transactionBase64);
   verifyAllSignatures(transaction);
@@ -368,12 +368,22 @@ export async function probePreorderTransaction(
   const finalized = await connection.getTransaction(args.signature, { commitment: 'finalized', maxSupportedTransactionVersion: 0 });
   if (finalized) {
     if (
-      !finalized.meta ||
+      !finalized.meta || !Number.isSafeInteger(finalized.slot) || finalized.slot < 0 ||
       !Buffer.from(finalized.transaction.message.serialize()).equals(Buffer.from(transaction.message.serialize())) ||
       finalized.transaction.signatures.length !== transaction.signatures.length ||
       finalized.transaction.signatures.some((signature, index) => signature !== bs58.encode(transaction.signatures[index]))
     ) throw unavailable('Finalized preorder transaction could not be verified.');
-    return { status: finalized.meta.err === null ? 'confirmed' : 'failed', slot: finalized.slot };
+    return { status: finalized.meta.err === null ? 'finalized' : 'failed', slot: finalized.slot };
+  }
+  const confirmed = await connection.getTransaction(args.signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+  if (confirmed) {
+    if (
+      !confirmed.meta || !Number.isSafeInteger(confirmed.slot) || confirmed.slot < 0 ||
+      !Buffer.from(confirmed.transaction.message.serialize()).equals(Buffer.from(transaction.message.serialize())) ||
+      confirmed.transaction.signatures.length !== transaction.signatures.length ||
+      confirmed.transaction.signatures.some((signature, index) => signature !== bs58.encode(transaction.signatures[index]))
+    ) throw unavailable('Confirmed preorder transaction could not be verified.');
+    if (confirmed.meta.err === null) return { status: 'confirmed', slot: confirmed.slot };
   }
   const epoch = await connection.getEpochInfo('finalized');
   if (epoch.blockHeight === undefined || !Number.isSafeInteger(epoch.blockHeight) || !Number.isSafeInteger(epoch.absoluteSlot)) {

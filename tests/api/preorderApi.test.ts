@@ -17,6 +17,20 @@ const order: PreorderOrder = {
   expiresAtMs: 123_456, signature: null,
 };
 
+test('confirmed order markers are validated and recovery pagination uses the opt-in status envelope', async () => {
+  const confirmed = { ...order, status: 'submitted', signature: bs58.encode(new Uint8Array(64).fill(1)), confirmedSlot: 500 };
+  const payload = { order: null, recoveries: [confirmed], nextRecoveryCursor: 'next-page' };
+  const runtime = client(payload);
+  assert.deepEqual(await runtime.api.recoveries!(config.preorderId, 'previous-page'), payload);
+  assert.deepEqual(JSON.parse(String(runtime.calls[0].init?.body)), { preorderId: config.preorderId, includeRecoveries: true, recoveryCursor: 'previous-page' });
+  for (const confirmedSlot of [-1, 1.5, '500']) {
+    await assert.rejects(client({ order: { ...confirmed, confirmedSlot } }).api.status(config.preorderId, order.orderId), /invalid response/);
+  }
+  for (const recoveries of [[{ ...confirmed, confirmedSlot: null }], [confirmed, confirmed], [{ ...confirmed, status: 'succeeded' }]]) {
+    await assert.rejects(client({ ...payload, recoveries }).api.recoveries!(config.preorderId), /invalid response/);
+  }
+});
+
 function client(payload: unknown, status = 200) {
   const calls: { input: string; init: RequestInit | undefined }[] = [];
   let credentialCalls = 0;

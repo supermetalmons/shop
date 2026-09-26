@@ -22,7 +22,7 @@ async function harness(context: TestContext, options: { prepared?: boolean; orde
     collection: config.collection, buyer: Keypair.generate().publicKey.toBase58(), requestId: 'request-1',
     ethereumAddress: '0x0000000000000000000000000000000000000001',
     cardIds: [1, 2], assets: [1, 2].map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })),
-    status: 'prepared', signature: null, signedTransaction: null, preparedTransaction: 'prepared-transaction',
+    status: 'prepared', signature: null, confirmedSlot: null, signedTransaction: null, preparedTransaction: 'prepared-transaction',
     blockhash: Keypair.generate().publicKey.toBase58(), blockhashContextSlot: 10,
     lastValidBlockHeight: 100, createdAtMs: 1000, expiresAtMs: 121000, revision: 1,
     ...options.order,
@@ -71,7 +71,7 @@ test('preorder recovery CLI defaults to read-only and requires an explicit write
 });
 
 test('dry-run verifies submitted outcomes without mutating orders or claims', async (context) => {
-  for (const status of ['expired', 'failed', 'confirmed'] as const) {
+  for (const status of ['expired', 'failed', 'finalized'] as const) {
     await context.test(status, async (context) => {
       const h = await harness(context);
       h.outcome({ status, slot: 120 });
@@ -92,14 +92,14 @@ test('mainnet recovery uses its configured collection and preserves verified suc
   const h = await harness(context, { order: {
     preorderId: mainnet.preorderId, cluster: mainnet.cluster, collection: mainnet.collection,
   } });
-  h.outcome({ status: 'confirmed', slot: 120 });
+  h.outcome({ status: 'finalized', slot: 120 });
   const preview = await h.run(false, { probe: async (record) => {
     assert.equal(record.cluster, 'mainnet-beta');
     assert.equal(record.collection, mainnet.collection);
     return h.dependencies.probe(record);
   } });
   assert.equal(preview.status, 'submitted');
-  assert.equal(preview.verifiedOutcome, 'confirmed');
+  assert.equal(preview.verifiedOutcome, 'finalized');
   assertReadOnly(h.sql);
   const result = await h.run(true);
   assert.equal(result.status, 'succeeded');
@@ -148,10 +148,10 @@ test('verified expiry and failure release claims only after the terminal state i
 
 test('verified success permanently retains the claims and a rerun is read-only', async (context) => {
   const h = await harness(context);
-  h.outcome({ status: 'confirmed', slot: 120 });
+  h.outcome({ status: 'finalized', slot: 120 });
   const result = await h.run(true);
   assert.equal(result.status, 'succeeded');
-  assert.equal(result.verifiedOutcome, 'confirmed');
+  assert.equal(result.verifiedOutcome, 'finalized');
   assert.deepEqual(h.claims(), [1, 2]);
   assert.equal(h.sql.some((sql) => /^\s*DELETE\b/i.test(sql)), false);
   h.sql.length = 0;
@@ -174,6 +174,69 @@ test('pending outcomes and archive RPC errors preserve all recovery information'
       assertReadOnly(h.sql);
     });
   }
+});
+
+test('confirmed-only recovery cannot finish an order or release its claims', async (context) => {
+  const h = await harness(context);
+  const confirmed = await h.store.confirm(h.order, 110, 2500);
+  h.outcome({ status: 'confirmed', slot: 110 });
+  for (const write of [false, true]) {
+    await assert.rejects(h.run(write), /wait for finalization/);
+    assert.deepEqual(await h.store.get(h.order.orderId), confirmed);
+    assert.deepEqual(h.claims(), [1, 2]);
+  }
+  assertReadOnly(h.sql);
+  h.outcome({ status: 'finalized', slot: 120 });
+  assert.equal((await h.run(true)).status, 'succeeded');
+  assert.equal((await h.store.get(h.order.orderId))?.confirmedSlot, 120);
+});
+
+test('a concurrent confirmation fences an older recovery write', async (context) => {
+  const h = await harness(context);
+  await assert.rejects(h.run(true, { probe: async () => {
+    await h.store.confirm(h.order, 110, 2500);
+    return { status: 'expired' };
+  } }), /changed during recovery/);
+  assert.equal((await h.store.get(h.order.orderId))?.status, 'submitted');
+  assert.equal((await h.store.get(h.order.orderId))?.confirmedSlot, 110);
+  assert.deepEqual(h.claims(), [1, 2]);
+});
+
+test('housekeeping during archive verification does not invalidate unchanged submission evidence', async (context) => {
+  for (const confirmed of [false, true]) for (const status of ['expired', 'finalized'] as const) {
+    await context.test(`${confirmed ? 'confirmed' : 'unconfirmed'} ${status}`, async (context) => {
+      const h = await harness(context);
+      const initial = confirmed ? await h.store.confirm(h.order, 110, 2500) : h.order;
+      h.outcome({ status, slot: 120 });
+      const result = await h.run(true, { probe: async (record) => {
+        assert.equal(record.confirmed_slot, initial.confirmedSlot);
+        for (let index = 0; index < 3; index += 1) {
+          await h.store.defer((await h.store.get(h.order.orderId))!, 3000 + index);
+        }
+        return h.dependencies.probe(record);
+      } });
+      const persisted = (await h.store.get(h.order.orderId))!;
+      assert.equal(result.status, status === 'finalized' ? 'succeeded' : 'expired');
+      assert.equal(persisted.revision, initial.revision + 4);
+      assert.equal(persisted.confirmedSlot, status === 'finalized' ? 120 : initial.confirmedSlot);
+      assert.equal(h.probeCalls(), 1);
+      assert.deepEqual(h.claims(), status === 'finalized' ? [1, 2] : []);
+    });
+  }
+});
+
+test('uncertain archive evidence preserves claims despite concurrent housekeeping', async (context) => {
+  const h = await harness(context);
+  const confirmed = await h.store.confirm(h.order, 110, 2500);
+  await assert.rejects(h.run(true, { probe: async () => {
+    await h.store.defer(confirmed, 3000);
+    return { status: 'pending' };
+  } }), /uncertain/);
+  const persisted = (await h.store.get(h.order.orderId))!;
+  assert.equal(persisted.status, 'submitted');
+  assert.equal(persisted.confirmedSlot, 110);
+  assert.deepEqual(h.claims(), [1, 2]);
+  assertReadOnly(h.sql);
 });
 
 test('a failed terminal write never attempts claim deletion', async (context) => {
@@ -231,6 +294,18 @@ test('a concurrent successful finalization wins over an older expiry result', as
   assert.equal(h.sql.some((sql) => /^\s*DELETE\b/i.test(sql)), false);
 });
 
+test('a concurrent terminal failure cannot be revived by an older successful proof', async (context) => {
+  const h = await harness(context);
+  const confirmed = await h.store.confirm(h.order, 110, 2500);
+  const result = await h.run(true, { probe: async () => {
+    await h.store.finish(confirmed, 'failed', 3000);
+    return { status: 'finalized', slot: 120 };
+  } });
+  assert.equal(result.status, 'failed');
+  assert.equal((await h.store.get(h.order.orderId))?.confirmedSlot, 110);
+  assert.deepEqual(h.claims(), []);
+});
+
 test('missing, mismatched and malformed orders cannot be probed or mutated', async (context) => {
   for (const [name, transform] of [
     ['missing', () => []],
@@ -245,6 +320,8 @@ test('missing, mismatched and malformed orders cannot be probed or mutated', asy
     ['missing signature', (rows: Record<string, unknown>[]) => [{ ...rows[0], signature: null }]],
     ['missing transaction', (rows: Record<string, unknown>[]) => [{ ...rows[0], signed_transaction: null }]],
     ['negative block height', (rows: Record<string, unknown>[]) => [{ ...rows[0], last_valid_block_height: -1 }]],
+    ['negative confirmation slot', (rows: Record<string, unknown>[]) => [{ ...rows[0], confirmed_slot: -1 }]],
+    ['missing confirmation slot', (rows: Record<string, unknown>[]) => [{ ...rows[0], confirmed_slot: undefined }]],
   ] as const) {
     await context.test(name, async (context) => {
       const h = await harness(context);

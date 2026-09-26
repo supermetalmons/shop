@@ -55,6 +55,7 @@ function fixture(config = CONFIG) {
     latestSlot: 101,
     blockhashValid: true,
     finalized: null as VersionedTransactionResponse | null,
+    confirmed: null as VersionedTransactionResponse | null,
     epochHeight: 500,
     epochSlot: 600,
     accountSlot: 600,
@@ -93,9 +94,9 @@ function fixture(config = CONFIG) {
       return { context: { slot: state.latestSlot }, value: state.blockhashValid };
     },
     getTransaction: async (_signature: string, options: { commitment?: string; maxSupportedTransactionVersion?: number }) => {
-      assert.equal(options.commitment, 'finalized');
+      assert.ok(options.commitment === 'finalized' || options.commitment === 'confirmed');
       assert.equal(options.maxSupportedTransactionVersion, 0);
-      return state.finalized;
+      return options.commitment === 'finalized' ? state.finalized : state.confirmed;
     },
     getEpochInfo: async (commitment: string) => {
       assert.equal(commitment, 'finalized');
@@ -233,7 +234,7 @@ for (const config of [CONFIG, MAINNET_CONFIG]) {
     const validity = { ...args, blockhash: BLOCKHASH, minContextSlot: 101 };
     assert.equal(await isPreorderBlockhashValid(validity, deps), true);
     state.finalized = finalized(transaction);
-    assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+    assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'finalized', slot: 550 });
 
     state.genesis = config.cluster === 'devnet' ? MAINNET_GENESIS : GENESIS;
     state.sent = null;
@@ -369,12 +370,43 @@ function finalized(transaction: VersionedTransaction, err: null | { InstructionE
 test('recovery confirms only the exact finalized transaction, independent of later NFT ownership', async () => {
   const { state, deps, probeArgs, transaction } = await authorizedFixture();
   state.finalized = finalized(transaction);
-  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'finalized', slot: 550 });
   state.finalized = finalized(transaction, { InstructionError: [1, 'InsufficientFunds'] });
   assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'failed', slot: 550 });
   state.finalized = finalized(transaction);
   state.finalized.transaction.signatures[0] = bs58.encode(new Uint8Array(64).fill(2));
   await assert.rejects(probePreorderTransaction(probeArgs, deps), /could not be verified/);
+});
+
+test('verified confirmed execution is optimistic while finalized execution remains authoritative', async () => {
+  const { state, deps, probeArgs, transaction } = await authorizedFixture();
+  state.confirmed = finalized(transaction);
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+  state.confirmed = finalized(transaction, { InstructionError: [1, 'InsufficientFunds'] });
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'pending' });
+  state.confirmed = finalized(transaction);
+  state.finalized = { ...finalized(transaction), slot: 560 };
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'finalized', slot: 560 });
+  state.finalized = finalized(transaction, { InstructionError: [1, 'InsufficientFunds'] });
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'failed', slot: 550 });
+});
+
+test('confirmed execution requires exact transaction evidence and does not trust signature status alone', async () => {
+  const { state, deps, probeArgs, transaction } = await authorizedFixture();
+  state.history = { slot: 550, confirmations: 1, confirmationStatus: 'confirmed', err: null };
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'pending' });
+  for (const change of [
+    (value: VersionedTransactionResponse) => { value.meta = null; },
+    (value: VersionedTransactionResponse) => { value.slot = -1; },
+    (value: VersionedTransactionResponse) => { value.transaction.signatures[0] = bs58.encode(new Uint8Array(64).fill(2)); },
+    (value: VersionedTransactionResponse) => { value.transaction.signatures.pop(); },
+    (value: VersionedTransactionResponse) => { value.transaction.message = decode(probeArgs.transactionBase64).message;
+      value.transaction.message.recentBlockhash = Keypair.generate().publicKey.toBase58(); },
+  ]) {
+    state.confirmed = finalized(transaction);
+    change(state.confirmed);
+    await assert.rejects(probePreorderTransaction(probeArgs, deps), /Confirmed preorder transaction could not be verified/);
+  }
 });
 
 test('recovery never expires a still-valid transaction and checks finalized absence plus historical status', async () => {
@@ -413,7 +445,7 @@ test('prefunded system accounts do not block verified expiry of an unpaid preord
   state.minimumLedgerSlot = probeArgs.blockhashContextSlot + 1;
   assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'pending' });
   state.finalized = finalized(transaction);
-  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'finalized', slot: 550 });
 });
 
 test('Core, malformed, and other initialized accounts still prevent uncertain expiry', async () => {
@@ -441,7 +473,7 @@ test('recovery keeps absent attempts reserved when either RPC history floor has 
   state.minimumLedgerSlot = probeArgs.blockhashContextSlot + 1;
   assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'pending' });
   state.finalized = finalized(transaction);
-  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+  assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'finalized', slot: 550 });
   state.finalized = null;
   state.firstAvailableBlock = probeArgs.blockhashContextSlot;
   state.minimumLedgerSlot = probeArgs.blockhashContextSlot;

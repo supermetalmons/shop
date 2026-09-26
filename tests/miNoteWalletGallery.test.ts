@@ -471,7 +471,7 @@ for (const savedSession of ['missing', 'expired', 'different collection', 'diffe
     await waitFor(() => assert.equal((view.getByRole('button', { name: 'Connect Ethereum Wallet' }) as HTMLButtonElement).disabled, false));
     assertIntroduction(view, true);
     assertUnsigned(view);
-    assert.ok(observed.commits.every(content => content === '' || content.includes('Connect Ethereum Wallet')));
+    assert.ok(observed.commits.every(content => content === '' || String(content).includes('Connect Ethereum Wallet')));
     assert.deepEqual(wallet.calls, ['eth_accounts']);
     assert.deepEqual(context.authCalls, []);
     delete wallet.responses.eth_accounts;

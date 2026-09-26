@@ -29,7 +29,11 @@ const prepareSchema = z.object({
   requestId: z.string().uuid(), cardIds: z.array(z.number().int().min(1).max(PREORDER_CARD_COUNT)).min(1).max(3),
 }).strict();
 const submitSchema = orderSchema.extend({ transactionBase64: z.string().min(1).max(2000) });
-const statusSchema = z.object({ preorderId: idSchema, orderId: z.string().uuid().optional() }).strict();
+const statusSchema = z.object({
+  preorderId: idSchema, orderId: z.string().uuid().optional(), includeRecoveries: z.literal(true).optional(),
+  recoveryCursor: z.string().min(1).max(256).optional(),
+}).strict().refine((input) => (!input.includeRecoveries || !input.orderId) &&
+  (input.recoveryCursor === undefined || input.includeRecoveries === true));
 const availabilitySchema = z.object({ preorderId: idSchema }).strict();
 
 type PreorderDependencies = {
@@ -105,8 +109,22 @@ async function reconcileOrder(
     ...args, signature: order.signature!, transactionBase64: order.signedTransaction!,
     assets: order.assets, lastValidBlockHeight: order.lastValidBlockHeight, blockhashContextSlot: order.blockhashContextSlot,
   });
+  if (outcome.status === 'confirmed') {
+    const confirmed = await store.confirm(order, outcome.slot, dependencies.nowMs());
+    if (order.confirmedSlot == null && confirmed.status === 'submitted' && confirmed.confirmedSlot != null) {
+      console.log({ event: 'preorder_confirmed', orderId: order.orderId, preorderId: order.preorderId, slot: confirmed.confirmedSlot });
+    }
+    return confirmed;
+  }
   if (outcome.status !== 'pending') {
-    return store.finish(order, outcome.status === 'confirmed' ? 'succeeded' : outcome.status, dependencies.nowMs());
+    const finished = await store.finish(order, outcome.status === 'finalized' ? 'succeeded' : outcome.status,
+      dependencies.nowMs(), outcome.status === 'finalized' ? outcome.slot : undefined);
+    if (finished.status !== 'submitted') {
+      console.log({ event: finished.status === 'succeeded' ? 'preorder_finalized'
+        : finished.confirmedSlot != null ? 'preorder_optimistic_rollback' : 'preorder_resolved',
+        orderId: order.orderId, preorderId: order.preorderId, status: finished.status, confirmedSlot: finished.confirmedSlot ?? null });
+    }
+    return finished;
   }
   if (options.rebroadcast) {
     await broadcastOrder(order, args, dependencies);
@@ -168,12 +186,13 @@ export async function handlePreorderRequest(
       const parsed = schema.safeParse(raw);
       if (!parsed.success) throw new ProfileReadError('invalid-argument', 400, 'Invalid preorder request.');
       const body = parsed.data;
+      const includeRecoveries = path === '/preorders/status' && 'includeRecoveries' in body && body.includeRecoveries === true;
       const config = path === '/preorders/availability' ? collectionConfig(body.preorderId) : enabledConfig(body.preorderId);
       if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
         throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
       }
       const store = new PreorderStore(env.COMMERCE_DB);
-      if (config.enabled) await store.expirePrepared(deps.nowMs());
+      if (config.enabled && !includeRecoveries) await store.expirePrepared(deps.nowMs());
       const eligibility = (address: string, buyer: string | null, fresh: boolean) => deps.eligibility({
         request, env, config, address, buyer, fresh, deadline, metrics,
         dependencies: { providerFetch: dependencies.providerFetch, cache: deps.cache, log: deps.log, now: deps.nowMs },
@@ -224,7 +243,7 @@ export async function handlePreorderRequest(
         const active = await store.active(config.preorderId, buyer);
         if (active) {
           const current = await reconcileOrder(active, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
-          if (current.status === 'prepared' || current.status === 'submitted') {
+          if (current.status === 'prepared' || current.status === 'submitted' && current.confirmedSlot == null) {
             throw new ProfileReadError('failed-precondition', 409, 'Finish or cancel your current preorder first.', { order: publicPreorder(current) });
           }
         }
@@ -245,8 +264,15 @@ export async function handlePreorderRequest(
         assertRequestMatches(order, ids, session.address);
         return { response: jsonResponse(preparedResponse(order), 200), metrics, authOutcome: 'accepted' as const };
       }
+      if (includeRecoveries) {
+        const cursor = 'recoveryCursor' in body && typeof body.recoveryCursor === 'string' ? body.recoveryCursor : undefined;
+        const page = await store.recoveries(config.preorderId, buyer, cursor);
+        return { response: jsonResponse({ order: page.foreground ? publicPreorder(page.foreground) : null,
+          recoveries: page.orders.map(publicPreorder), nextRecoveryCursor: page.nextCursor }, 200),
+          metrics, authOutcome: 'accepted' as const };
+      }
       const orderId = 'orderId' in body && typeof body.orderId === 'string' ? body.orderId : undefined;
-      let order = orderId ? await store.get(orderId) : await store.active(config.preorderId, buyer);
+      let order = orderId ? await store.get(orderId) : await store.legacyActive(config.preorderId, buyer);
       let broadcastAttempted = false;
       if (order && (order.buyer !== buyer || order.preorderId !== config.preorderId)) {
         throw new ProfileReadError('permission-denied', 403, 'This preorder belongs to another wallet or collection.');

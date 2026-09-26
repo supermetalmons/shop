@@ -20,6 +20,9 @@ export type ShopExpectedAssetIds = {
 
 export type ShopInventoryRequest = ShopApiBaseRequest & {
   expectedAssetIds?: ShopExpectedAssetIds;
+  includePreorderResolutions?: boolean;
+  includePreorderResolutionSlots?: true;
+  preorderMinContextSlots?: Record<string, number>;
 };
 
 export type ShopPendingOpenBoxesRequest = ShopApiBaseRequest;
@@ -81,7 +84,11 @@ export type ShopPendingOpenBox = {
 export type ShopInventoryResponse = {
   ok: true;
   items: ShopInventoryItem[];
+  resolvedPreorderAssetIds?: string[];
+  preorderAssetResolutions?: ShopPreorderAssetResolution[];
 };
+
+export type ShopPreorderAssetResolution = { id: string; slot: number; owned: boolean };
 
 export type ShopPendingOpenBoxesResponse = {
   ok: true;
@@ -148,9 +155,18 @@ function isExactShopExpectedAssetIds(
 }
 
 export function isExactShopInventoryRequest(value: unknown): value is ShopInventoryRequest {
-  if (!isRecord(value) || !isExactShopApiBaseRequest(value, ['expectedAssetIds'])) return false;
-  return value.expectedAssetIds === undefined ||
-    isExactShopExpectedAssetIds(value.expectedAssetIds, value.includeDevnet === true);
+  if (!isRecord(value) || !isExactShopApiBaseRequest(value, ['expectedAssetIds', 'includePreorderResolutions', 'includePreorderResolutionSlots', 'preorderMinContextSlots']) ||
+    value.includePreorderResolutions !== undefined && typeof value.includePreorderResolutions !== 'boolean' ||
+    value.includePreorderResolutionSlots !== undefined && (value.includePreorderResolutionSlots !== true || value.includePreorderResolutions !== true)) return false;
+  if (value.expectedAssetIds !== undefined && !isExactShopExpectedAssetIds(value.expectedAssetIds,
+    value.includeDevnet === true || value.includePreorderResolutions === true)) return false;
+  if (value.preorderMinContextSlots === undefined) return true;
+  if (value.includePreorderResolutionSlots !== true || !isRecord(value.preorderMinContextSlots)) return false;
+  const entries = Object.entries(value.preorderMinContextSlots);
+  const expected = value.expectedAssetIds as ShopExpectedAssetIds | undefined;
+  const ids = new Set([...(expected?.['mainnet-beta'] ?? []), ...(expected?.devnet ?? [])]);
+  return entries.length <= SHOP_EXPECTED_ASSET_IDS_MAX && entries.every(([id, slot]) =>
+    isBase58Bytes(id, 32) && ids.has(id) && Number.isSafeInteger(slot) && Number(slot) >= 0);
 }
 
 export function isExactShopPendingOpenBoxesRequest(value: unknown): value is ShopPendingOpenBoxesRequest {
@@ -270,12 +286,30 @@ function isExactShopPackStatusBreakdown(value: unknown): value is PackStatusBrea
 }
 
 export function isExactShopInventoryResponse(value: unknown): value is ShopInventoryResponse {
-  return isRecord(value) &&
-    hasExactKeys(value, ['ok', 'items']) &&
+  if (!(isRecord(value) &&
+    hasExactKeys(value, ['ok', 'items'], ['resolvedPreorderAssetIds', 'preorderAssetResolutions']) &&
     value.ok === true &&
     Array.isArray(value.items) &&
     value.items.length <= SHOP_API_MAX_RESPONSE_ITEMS &&
-    value.items.every(isExactShopInventoryItem);
+    value.items.every(isExactShopInventoryItem) &&
+    (value.resolvedPreorderAssetIds === undefined || Array.isArray(value.resolvedPreorderAssetIds) &&
+      value.resolvedPreorderAssetIds.length <= SHOP_EXPECTED_ASSET_IDS_MAX &&
+      value.resolvedPreorderAssetIds.every((id) => typeof id === 'string' && isBase58Bytes(id, 32)) &&
+      new Set(value.resolvedPreorderAssetIds).size === value.resolvedPreorderAssetIds.length))) return false;
+  if (value.preorderAssetResolutions === undefined) return true;
+  if (!Array.isArray(value.preorderAssetResolutions) || value.preorderAssetResolutions.length > SHOP_EXPECTED_ASSET_IDS_MAX) return false;
+  const resolved = new Set(value.resolvedPreorderAssetIds as string[] | undefined);
+  const seen = new Set<string>();
+  const items = value.items as ShopInventoryItem[];
+  if (value.preorderAssetResolutions.length !== resolved.size) return false;
+  return value.preorderAssetResolutions.every(proof => {
+    if (!isRecord(proof) || !hasExactKeys(proof, ['id', 'slot', 'owned']) || typeof proof.id !== 'string' ||
+      !isBase58Bytes(proof.id, 32) || !resolved.has(proof.id) || seen.has(proof.id) ||
+      !Number.isSafeInteger(proof.slot) || Number(proof.slot) < 0 || typeof proof.owned !== 'boolean') return false;
+    seen.add(proof.id);
+    const present = items.filter(item => item.id === proof.id);
+    return proof.owned ? present.length === 1 && present[0].kind === 'preorder' : present.length === 0;
+  });
 }
 
 export function isExactShopPendingOpenBoxesResponse(value: unknown): value is ShopPendingOpenBoxesResponse {

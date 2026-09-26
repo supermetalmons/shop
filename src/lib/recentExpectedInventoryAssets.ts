@@ -103,13 +103,14 @@ export function takeRecentExpectedInventoryAssetsFromState(
   state: RecentExpectedInventoryAssetState,
   includeDevnet: boolean,
   now: number,
+  maxEntries = SHOP_EXPECTED_ASSET_IDS_MAX,
 ): { expectedAssetIds?: ShopExpectedAssetIds; state: RecentExpectedInventoryAssetState } {
   const current = normalizeState(state, now);
   if (!current.entries.length) return { state: current };
   const selected: RecentExpectedInventoryAsset[] = [];
   let cursor = current.cursor;
   let scanned = 0;
-  while (scanned < current.entries.length && selected.length < SHOP_EXPECTED_ASSET_IDS_MAX) {
+  while (scanned < current.entries.length && selected.length < Math.min(maxEntries, SHOP_EXPECTED_ASSET_IDS_MAX)) {
     const entry = current.entries[cursor];
     if (includeDevnet || entry.cluster === 'mainnet-beta') selected.push(entry);
     cursor = (cursor + 1) % current.entries.length;
@@ -244,14 +245,14 @@ export function takeRecentExpectedInventoryAssets(
 export function prepareRecentExpectedInventoryAssets(
   owner: string,
   includeDevnet: boolean,
-  options: StoreOptions = {},
+  options: StoreOptions & { maxEntries?: number } = {},
 ): RecentExpectedInventoryAssetSelection {
   const normalizedOwner = owner.trim();
   const storage = resolveStorage(options);
   if (!normalizedOwner || !storage) return { commit: () => undefined };
   const selectedAt = options.now ?? Date.now();
   const current = readState(normalizedOwner, storage, selectedAt);
-  const result = takeRecentExpectedInventoryAssetsFromState(current, includeDevnet, selectedAt);
+  const result = takeRecentExpectedInventoryAssetsFromState(current, includeDevnet, selectedAt, options.maxEntries);
   const fingerprint = stateFingerprint(current);
   writeState(normalizedOwner, storage, current);
   return {

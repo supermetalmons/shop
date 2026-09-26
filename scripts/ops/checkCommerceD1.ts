@@ -58,6 +58,14 @@ const PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [s
   commerce_preorder_order_insert_guard: ['trigger', '339733b8e21416c6093a5709a0ba66ff0a8c9d532ad56ebf692dc86a84bf7418'],
   commerce_preorder_order_update_guard: ['trigger', '42ccd00e40b38e03ad5aede8e3bd1f6579dec89b9e4dd924dae39301c72bb9b7'],
 };
+const PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
+  ...PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS,
+  commerce_preorder_orders: ['table', '22b63cb91686a54e5a74248187c3f8a583f6fa4c9442d4ad22301937f57931e4'],
+  commerce_preorder_active_buyer: ['index', 'bd33880aea35825dc71c2957262b3fa9a2f8a9d6e314487f7c6b2854ac536fb9'],
+  commerce_preorder_confirmation_guard: ['trigger', 'c51062e946a9d4473aff51e3f808bc6c7f0056745cd386d05a8b8abc5f922ed5'],
+  commerce_preorder_confirmed_recovery: ['index', '79f8695108f0e6eb4ab3b0a4c94ef620945693033fb308cd55f2922c18aff7ca'],
+  commerce_preorder_inventory_buyer: ['index', '515862b3632b470be6112c17192ec070ad4793334bddf23f6a10aa741f7d8ab9'],
+};
 
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
@@ -282,7 +290,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 21) ||
+    (migrations.length < 13 || migrations.length > 22) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -303,7 +311,8 @@ export function checkCommerceD1(
     (migrations.length >= 18 && migrations[17].name !== '0018_preorders.sql') ||
     (migrations.length >= 19 && migrations[18].name !== '0019_preorder_buyer_index.sql') ||
     (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql') ||
-    (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql')
+    (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql') ||
+    (migrations.length >= 22 && migrations[21].name !== '0022_preorder_confirmation.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -324,8 +333,11 @@ export function checkCommerceD1(
 
   const preordersReady = migrations.some((migration) => migration.name === '0018_preorders.sql');
   const preorderEthereumReady = migrations.some((migration) => migration.name === '0021_preorder_ethereum_ownership.sql');
+  const preorderConfirmationReady = migrations.some((migration) => migration.name === '0022_preorder_confirmation.sql');
+  const preorderSchema = preorderConfirmationReady ? PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS
+    : preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS;
   if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
-  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS)) {
+  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(preorderSchema)) {
     const schema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Commerce D1 preorder schema ${name} is invalid.`);
   }
@@ -346,6 +358,7 @@ export function checkCommerceD1(
     }
   }
   if (options.forDeployment && !preorderEthereumReady) fail('Commerce D1 preorder Ethereum ownership migration is required for deployment.');
+  if (options.forDeployment && !preorderConfirmationReady) fail('Commerce D1 preorder confirmation migration is required for deployment.');
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -549,7 +562,7 @@ export function checkCommerceD1(
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
-    ...(preordersReady ? Object.entries(PREORDER_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
+    ...(preordersReady ? Object.entries(preorderSchema).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     'commerce_authority_transition_guard',
     'commerce_authority_update_guard',
     'commerce_authority_delete_guard',

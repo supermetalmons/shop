@@ -40,6 +40,7 @@ import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
 import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 import { createCommerceD1Harness, d1Database as sqliteD1Database } from './commerceD1Harness.ts';
+import { PreorderStore, type StoredPreorder } from '../src/preorderStore.ts';
 
 const {
   handleRequest: rawHandleRequest,
@@ -4385,6 +4386,7 @@ test('new preorder inventory recovers recorded assets before DAS indexing and ch
     statement.first = async () => ({ authority_state: 'd1', revision: 1, documents_revision: 0 }) as never;
     statement.all = async <T>() => ({ success: true, meta: { duration: 0, size_after: 0, rows_read: 0, rows_written: 0, last_row_id: 0, changed_db: false, changes: 0 }, results: (sql.includes('commerce_preorder_orders') ? [{
       preorder_id: preorder.preorderId,
+      status: 'succeeded', confirmed_slot: null,
       assets_json: JSON.stringify([{ id: 1, address: owned }, { id: 2, address: transferred }]),
     }] : []) as T[] });
     return statement;
@@ -4525,4 +4527,281 @@ test('client cancellation during indexing recovery does not return completed pre
   await recoveryStarted.promise;
   controller.abort(new Error('Client disconnected during preorder recovery'));
   assert.equal((await pending).status, 499);
+});
+
+function preorderInventoryRecoveryDb(rows: Array<{ preorder_id: string; assets_json: string; status: 'submitted' | 'succeeded'; confirmed_slot: number | null }>): D1Database {
+  return d1Database((sql) => {
+    const statement = {} as D1PreparedStatement;
+    statement.bind = () => statement;
+    statement.all = async <T>() => ({ success: true, meta: { duration: 0, size_after: 0, rows_read: 0, rows_written: 0, last_row_id: 0, changed_db: false, changes: 0 },
+      results: (sql.includes('commerce_preorder_orders') ? rows : []) as T[] });
+    return statement;
+  });
+}
+
+function preorderInventoryAccount(preorderId: string, id: number, owner = OWNER) {
+  const config = getPreorderConfig(preorderId)!;
+  const string = (value: string) => {
+    const bytes = Buffer.from(value);
+    const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length);
+    return Buffer.concat([size, bytes]);
+  };
+  const data = Buffer.concat([Buffer.from([1]), new PublicKey(owner).toBuffer(), Buffer.from([2]),
+    new PublicKey(config.collection).toBuffer(), string(`Preorder #${id}`), string(preorderMetadataUri(config, id)), Buffer.from([0])]);
+  return { owner: MPL_CORE_PROGRAM_ADDRESS, executable: false, data: [data.toString('base64'), 'base64'] };
+}
+
+test('legacy preorder inventory preserves indexed assets without a known mint slot even with client slot floors', async context => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const address = assetId('legacy-preorder-unknown-mint-slot');
+  const commerce = createCommerceD1Harness();
+  context.after(() => commerce.database.close());
+  const store = new PreorderStore(commerce.db);
+  const prepared: StoredPreorder = { orderId: crypto.randomUUID(), requestId: crypto.randomUUID(), preorderId: config.preorderId,
+    cluster: config.cluster, collection: config.collection, buyer: OWNER, ethereumAddress: '0x0000000000000000000000000000000000000001',
+    status: 'prepared', cardIds: [1], assets: [{ id: 1, address }], signature: null, signedTransaction: null,
+    preparedTransaction: 'prepared', blockhash: address, blockhashContextSlot: 200, lastValidBlockHeight: 300,
+    expiresAtMs: 121000, createdAtMs: 1000, revision: 1 };
+  await store.reserve(prepared);
+  const submitted = await store.submit(prepared, { signature: SIGNATURE, transactionBase64: 'signed' }, 2000);
+  const succeeded = await store.finish(submitted, 'succeeded', 3000);
+  assert.equal(succeeded.confirmedSlot, null);
+  const indexed = { id: address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+    grouping: [{ group_key: 'collection', group_value: config.collection }], content: { json_uri: preorderMetadataUri(config, 1) } };
+  for (const slot of [199, 250]) {
+    for (const mode of ['legacy', 'ids', 'slots'] as const) {
+      await context.test(`${mode} read at slot ${slot}`, async () => {
+        const providerFetch: ProviderFetch = async (_input, init) => {
+          const body = JSON.parse(String(init?.body));
+          if (body.method === 'getMultipleAccounts') {
+            assert.deepEqual(body.params[0], [address]);
+            assert.equal(body.params[1].commitment, 'finalized');
+            assert.equal(body.params[1].minContextSlot, mode === 'slots' ? slot : undefined);
+            return rpcResult(body.id, { context: { slot }, value: [null] });
+          }
+          if (body.method === 'getAssetBatch') return rpcResult(body.id, [indexed]);
+          return rpcCursorSearchResult(body, body.params?.grouping?.[1] === config.collection ? [indexed] : []);
+        };
+        const response = await handleRequest(request('/inventory', { owner: OWNER,
+          ...(mode !== 'legacy' ? { includePreorderResolutions: true } : {}),
+          ...(mode === 'slots' ? { includePreorderResolutionSlots: true, expectedAssetIds: { 'mainnet-beta': [address] },
+            preorderMinContextSlots: { [address]: slot } } : {}),
+        }), env({ commerceDb: commerce.db }), quietDependencies(providerFetch));
+        assert.equal(response.status, 200);
+        const body = await response.json() as import('../../../../shared/shopApi.ts').ShopInventoryResponse;
+        assert.deepEqual(body.items.map(item => item.id), [address]);
+        assert.equal(body.resolvedPreorderAssetIds, undefined);
+        assert.deepEqual(body.preorderAssetResolutions, mode === 'slots' ? [] : undefined);
+        assert.deepEqual(Object.keys(body).sort(), mode === 'slots' ? ['items', 'ok', 'preorderAssetResolutions'] : ['items', 'ok']);
+        assert.deepEqual(await store.get(prepared.orderId), succeeded);
+        assert.equal((await store.claims(config.cluster, config.collection)).length, 1);
+      });
+    }
+  }
+});
+
+test('legacy preorder ownership recovery remains available without emitting unknown-slot resolution receipts', async context => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const address = assetId('legacy-preorder-positive-recovery');
+  const commerceDb = preorderInventoryRecoveryDb([{ preorder_id: config.preorderId,
+    assets_json: JSON.stringify([{ id: 7, address }]), status: 'succeeded', confirmed_slot: null }]);
+  const indexed = { id: address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+    grouping: [{ group_key: 'collection', group_value: config.collection }], content: { json_uri: preorderMetadataUri(config, 7) } };
+  for (const indexedAlready of [false, true]) await context.test(indexedAlready ? 'indexed' : 'not indexed', async () => {
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'getMultipleAccounts') return rpcResult(body.id, {
+        context: { slot: 250 }, value: [preorderInventoryAccount(config.preorderId, 7)],
+      });
+      return rpcCursorSearchResult(body, indexedAlready && body.params?.grouping?.[1] === config.collection ? [indexed] : []);
+    };
+    const response = await handleRequest(request('/inventory', {
+      owner: OWNER, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+    }), env({ commerceDb }), quietDependencies(providerFetch));
+    assert.equal(response.status, 200);
+    const body = await response.json() as import('../../../../shared/shopApi.ts').ShopInventoryResponse;
+    assert.deepEqual(body.items.map(item => item.id), [address]);
+    assert.equal(body.resolvedPreorderAssetIds, undefined);
+    assert.deepEqual(body.preorderAssetResolutions, []);
+  });
+});
+
+test('preorder resolution receipts require finalized reads and remove transferred, burned, or absent stale DAS assets', async () => {
+  const config = getPreorderConfig('mi_note_cards_devnet')!;
+  const addresses = ['confirmed', 'transferred', 'burned', 'absent', 'malformed'].map((name) => assetId(`preorder-resolution-${name}`));
+  const assets = addresses.map((address, index) => ({ id: index + 1, address }));
+  const commerceDb = preorderInventoryRecoveryDb([
+    { preorder_id: config.preorderId, assets_json: JSON.stringify(assets.slice(0, 1)), status: 'submitted', confirmed_slot: 100 },
+    { preorder_id: config.preorderId, assets_json: JSON.stringify(assets.slice(1, 4)), status: 'succeeded', confirmed_slot: 200 },
+    { preorder_id: config.preorderId, assets_json: JSON.stringify(assets.slice(4)), status: 'succeeded', confirmed_slot: 200 },
+  ]);
+  const indexed = assets.map((asset) => ({
+    id: asset.address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+    grouping: [{ group_key: 'collection', group_value: config.collection }], content: { json_uri: preorderMetadataUri(config, asset.id) },
+  }));
+  const reads: string[] = [];
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getMultipleAccounts') {
+      reads.push(body.params[1].commitment);
+      const confirmed = body.params[1].commitment === 'confirmed';
+      assert.equal(body.params[1].minContextSlot, confirmed ? 100 : 200);
+      assert.deepEqual(body.params[0], confirmed ? addresses.slice(0, 1) : addresses.slice(1));
+      return rpcResult(body.id, { context: { slot: 210 }, value: confirmed ? [preorderInventoryAccount(config.preorderId, 1)] : [
+        preorderInventoryAccount(config.preorderId, 2, config.collection),
+        { owner: MPL_CORE_PROGRAM_ADDRESS, executable: false, data: ['AA==', 'base64'] },
+        null,
+        { owner: MPL_CORE_PROGRAM_ADDRESS, executable: false, data: ['invalid base64', 'base64'] },
+      ] });
+    }
+    if (body.method === 'getAssetBatch') return rpcResult(body.id, indexed);
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === config.collection ? indexed : []);
+  };
+  const response = await handleRequest(request('/inventory', {
+    owner: OWNER, includePreorderResolutions: true, expectedAssetIds: { devnet: addresses },
+  }), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  const body = await response.json() as { items: Array<{ id: string }>; resolvedPreorderAssetIds: string[] };
+  assert.deepEqual(reads, ['confirmed', 'finalized']);
+  assert.deepEqual(body.items.map((item) => item.id), [addresses[0], addresses[4]]);
+  assert.deepEqual(body.resolvedPreorderAssetIds, addresses.slice(1, 4));
+});
+
+test('preorder inventory keeps resolution pending on stale, malformed, or failed finalized RPC reads', async (context) => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const address = assetId('preorder-resolution-uncertain');
+  const commerceDb = preorderInventoryRecoveryDb([{ preorder_id: config.preorderId,
+    assets_json: JSON.stringify([{ id: 7, address }]), status: 'succeeded', confirmed_slot: 200 }]);
+  const indexed = { id: address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+    grouping: [{ group_key: 'collection', group_value: config.collection }], content: { json_uri: preorderMetadataUri(config, 7) } };
+  for (const failure of ['stale', 'malformed', 'error'] as const) await context.test(failure, async () => {
+    const providerFetch: ProviderFetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.method === 'getMultipleAccounts') {
+        if (failure === 'error') throw new Error('RPC unavailable');
+        return rpcResult(body.id, { context: { slot: failure === 'stale' ? 199 : 200 }, value: [failure === 'malformed'
+          ? { owner: MPL_CORE_PROGRAM_ADDRESS, executable: false, data: ['AQ==', 'base64'] } : null] });
+      }
+      return rpcCursorSearchResult(body, body.params?.grouping?.[1] === config.collection ? [indexed] : []);
+    };
+    const response = await handleRequest(request('/inventory', { owner: OWNER, includePreorderResolutions: true }), env({ commerceDb }), quietDependencies(providerFetch));
+    assert.equal(response.status, 200);
+    const body = await response.json() as { items: Array<{ id: string }>; resolvedPreorderAssetIds?: string[] };
+    assert.deepEqual(body.items.map((item) => item.id), [address]);
+    assert.equal(body.resolvedPreorderAssetIds, undefined);
+  });
+});
+
+test('preorder resolution fields are opt-in for legacy inventory clients', async () => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const address = assetId('preorder-resolution-legacy');
+  const commerceDb = preorderInventoryRecoveryDb([{ preorder_id: config.preorderId,
+    assets_json: JSON.stringify([{ id: 7, address }]), status: 'succeeded', confirmed_slot: 200 }]);
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    return body.method === 'getMultipleAccounts' ? rpcResult(body.id, { context: { slot: 200 }, value: [null] })
+      : rpcCursorSearchResult(body, []);
+  };
+  const response = await handleRequest(request('/inventory'), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.deepEqual(await response.json(), { ok: true, items: [] });
+  const optedIn = await handleRequest(request('/inventory', { owner: OWNER, includePreorderResolutions: true }), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.deepEqual(await optedIn.json(), { ok: true, items: [], resolvedPreorderAssetIds: [address] });
+});
+
+test('slot-aware preorder receipts reject older account snapshots and preserve permanent claims', async context => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const address = assetId('preorder-slot-proof');
+  const commerce = createCommerceD1Harness();
+  context.after(() => commerce.database.close());
+  const store = new PreorderStore(commerce.db);
+  const prepared: StoredPreorder = { orderId: crypto.randomUUID(), requestId: crypto.randomUUID(), preorderId: config.preorderId,
+    cluster: config.cluster, collection: config.collection, buyer: OWNER, ethereumAddress: '0x0000000000000000000000000000000000000001',
+    status: 'prepared', cardIds: [1], assets: [{ id: 1, address }], signature: null, signedTransaction: null,
+    preparedTransaction: 'prepared', blockhash: address, blockhashContextSlot: 100, lastValidBlockHeight: 200,
+    expiresAtMs: 121000, createdAtMs: 1000, revision: 1 };
+  await store.reserve(prepared);
+  const submitted = await store.submit(prepared, { signature: SIGNATURE, transactionBase64: 'signed' }, 2000);
+  const succeeded = await store.finish(submitted, 'succeeded', 3000, 200);
+  const claims = await store.claims(config.cluster, config.collection);
+  let slot = 250;
+  let owned = false;
+  let indexed = true;
+  let unavailable = false;
+  let expectedFloor = 200;
+  const indexedAsset = { id: address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+    grouping: [{ group_key: 'collection', group_value: config.collection }], content: { json_uri: preorderMetadataUri(config, 1) } };
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getMultipleAccounts') {
+      assert.deepEqual(body.params[0], [address]);
+      assert.equal(body.params[1].commitment, 'finalized');
+      assert.equal(body.params[1].minContextSlot, expectedFloor);
+      if (unavailable) return Response.json({ jsonrpc: '2.0', id: body.id,
+        error: { code: -32016, message: 'Minimum context slot has not been reached' } });
+      return rpcResult(body.id, { context: { slot }, value: [owned ? preorderInventoryAccount(config.preorderId, 1) : null] });
+    }
+    if (body.method === 'getAssetBatch') return rpcResult(body.id, [indexedAsset]);
+    return rpcCursorSearchResult(body, indexed && body.params?.grouping?.[1] === config.collection ? [indexedAsset] : []);
+  };
+  const body = { owner: OWNER, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+    expectedAssetIds: { 'mainnet-beta': [address] } };
+  const load = async (floor?: number) => {
+    expectedFloor = Math.max(200, floor ?? 0);
+    const response = await handleRequest(request('/inventory', { ...body,
+      ...(floor !== undefined ? { preorderMinContextSlots: { [address]: floor } } : {}) }),
+    env({ commerceDb: commerce.db }), quietDependencies(providerFetch));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await store.get(prepared.orderId), succeeded);
+    assert.deepEqual(await store.claims(config.cluster, config.collection), claims);
+    return await response.json() as import('../../../../shared/shopApi.ts').ShopInventoryResponse;
+  };
+  assert.deepEqual(await load(), { ok: true, items: [], resolvedPreorderAssetIds: [address],
+    preorderAssetResolutions: [{ id: address, slot: 250, owned: false }] });
+  owned = true;
+  slot = 249;
+  const stale = await load(250);
+  assert.deepEqual(stale.preorderAssetResolutions, []);
+  assert.equal(stale.resolvedPreorderAssetIds, undefined);
+  slot = 251;
+  const restored = await load(250);
+  assert.deepEqual(restored.preorderAssetResolutions, [{ id: address, slot: 251, owned: true }]);
+  assert.deepEqual(restored.resolvedPreorderAssetIds, [address]);
+  assert.equal(restored.items[0].id, address);
+  indexed = false;
+  assert.deepEqual((await load(250)).preorderAssetResolutions, []);
+  indexed = true;
+  unavailable = true;
+  const future = await load(Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(future.preorderAssetResolutions, []);
+  assert.equal(future.resolvedPreorderAssetIds, undefined);
+  unavailable = false;
+  expectedFloor = 200;
+  const legacy = await handleRequest(request('/inventory', { owner: OWNER, includePreorderResolutions: true }),
+    env({ commerceDb: commerce.db }), quietDependencies(providerFetch));
+  const legacyBody = await legacy.json() as import('../../../../shared/shopApi.ts').ShopInventoryResponse;
+  assert.deepEqual(legacyBody.resolvedPreorderAssetIds, [address]);
+  assert.equal(Object.hasOwn(legacyBody, 'preorderAssetResolutions'), false);
+});
+
+test('slot-floor inventory requests allow bounded 2 KiB bodies while legacy requests retain the 1 KiB limit', async () => {
+  const ids = Array.from({ length: 15 }, (_, index) => assetId(`max-slot-floor-${index}`));
+  const body = { owner: OWNER, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+    expectedAssetIds: { 'mainnet-beta': ids }, preorderMinContextSlots: Object.fromEntries(ids.map(id => [id, Number.MAX_SAFE_INTEGER])) };
+  const encoded = JSON.stringify(body);
+  assert.ok(Buffer.byteLength(encoded) > 1024 && Buffer.byteLength(encoded) <= 2048);
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const requestBody = JSON.parse(String(init?.body));
+    return requestBody.method === 'getAssetBatch' ? rpcResult(requestBody.id, []) : rpcCursorSearchResult(requestBody, []);
+  };
+  const response = await handleRequest(request('/inventory', body), env(), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true, items: [], preorderAssetResolutions: [] });
+  for (const content of [`${JSON.stringify({ owner: OWNER })}${' '.repeat(1024)}`, `${encoded}${' '.repeat(2048)}`]) {
+    const oversized = new Request('https://api.mons.shop/inventory', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' }, body: content });
+    assert.equal((await handleRequest(oversized, env(), quietDependencies(providerFetch))).status, 400);
+  }
+  const invalid = await handleRequest(request('/inventory', { ...body, preorderMinContextSlots: { [assetId('not-selected-floor')]: 250 } }),
+    env(), quietDependencies(async () => { throw new Error('Invalid floor must not reach provider'); }));
+  assert.equal(invalid.status, 400);
 });

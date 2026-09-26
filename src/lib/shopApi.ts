@@ -7,6 +7,7 @@ import {
   type ShopInventoryRequest,
   type ShopInventoryItem,
   type ShopPendingOpenBoxesRequest,
+  type ShopPreorderAssetResolution,
 } from '../../shared/shopApi.ts';
 import type { PackStatusBreakdown } from '../../shared/contracts.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
@@ -26,6 +27,9 @@ export type DropFetchOptions = {
 
 export type InventoryFetchOptions = DropFetchOptions & {
   expectedAssetIds?: ShopExpectedAssetIds;
+  onResolvedPreorderAssetIds?: (assetIds: readonly string[]) => void;
+  onPreorderAssetResolutions?: (proofs: readonly ShopPreorderAssetResolution[]) => void;
+  preorderMinContextSlots?: Record<string, number>;
 };
 
 async function requestShopApi(
@@ -106,6 +110,10 @@ export async function fetchInventory(owner: string, options: InventoryFetchOptio
     owner,
     ...(options.includeDevnet === true ? { includeDevnet: true } : {}),
     ...(hasExpectedAssetIds ? { expectedAssetIds } : {}),
+    ...(options.onResolvedPreorderAssetIds || options.onPreorderAssetResolutions ? { includePreorderResolutions: true } : {}),
+    ...(options.onPreorderAssetResolutions ? { includePreorderResolutionSlots: true,
+      ...(options.preorderMinContextSlots && Object.keys(options.preorderMinContextSlots).length ? { preorderMinContextSlots: options.preorderMinContextSlots } : {}),
+    } : {}),
   };
   const payload = await postShopApi(
     '/inventory',
@@ -113,6 +121,9 @@ export async function fetchInventory(owner: string, options: InventoryFetchOptio
     options.signal,
   );
   if (!isExactShopInventoryResponse(payload)) throw new Error('Shop API returned an invalid inventory response');
+  options.signal?.throwIfAborted();
+  if (payload.resolvedPreorderAssetIds) options.onResolvedPreorderAssetIds?.(payload.resolvedPreorderAssetIds);
+  if (payload.preorderAssetResolutions) options.onPreorderAssetResolutions?.(payload.preorderAssetResolutions);
   return payload.items.map(normalizeInventoryItem);
 }
 

@@ -120,6 +120,48 @@ test('inventory client serializes expected asset IDs by cluster without changing
   });
 });
 
+test('inventory client opts into validated preorder resolution receipts only for a consumer', async () => {
+  const assetId = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+  const receipts: string[][] = [];
+  await withFetch((async (_input, init) => {
+    assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, includePreorderResolutions: true });
+    return Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetId] });
+  }) as typeof fetch, async () => {
+    assert.deepEqual(await fetchInventory(OWNER, { onResolvedPreorderAssetIds: (ids) => { receipts.push([...ids]); } }), []);
+  });
+  assert.deepEqual(receipts, [[assetId]]);
+  await withFetch((async () => Response.json({ ok: true, items: [], resolvedPreorderAssetIds: ['invalid'] })) as typeof fetch, async () => {
+    await assert.rejects(fetchInventory(OWNER, { onResolvedPreorderAssetIds: () => assert.fail('Invalid receipt must not resolve optimism') }), /invalid inventory response/);
+  });
+});
+
+test('inventory slot proofs send known floors and require valid matching ownership metadata', async () => {
+  const assetId = OWNER;
+  const resolutions = [{ id: assetId, slot: 250, owned: false }];
+  const observed: unknown[] = [];
+  const options = { expectedAssetIds: { 'mainnet-beta': [assetId] }, preorderMinContextSlots: { [assetId]: 250 },
+    onPreorderAssetResolutions: (proofs: unknown) => { observed.push(proofs); } };
+  await withFetch((async (_input, init) => {
+    assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, expectedAssetIds: options.expectedAssetIds,
+      includePreorderResolutions: true, includePreorderResolutionSlots: true, preorderMinContextSlots: { [assetId]: 250 } });
+    return Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetId], preorderAssetResolutions: resolutions });
+  }) as typeof fetch, async () => { assert.deepEqual(await fetchInventory(OWNER, options), []); });
+  assert.deepEqual(observed, [resolutions]);
+  for (const proof of [{ id: assetId, slot: -1, owned: false }, { id: assetId, slot: 1.5, owned: false },
+    { id: assetId, slot: '250', owned: false }, { id: assetId, slot: 250, owned: true },
+    { id: assetId, owned: false }, { id: 'invalid', slot: 250, owned: false }]) {
+    await withFetch((async () => Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetId], preorderAssetResolutions: [proof] })) as typeof fetch,
+      async () => { await assert.rejects(fetchInventory(OWNER, options), /invalid inventory response/); });
+  }
+  assert.equal(observed.length, 1);
+});
+
+test('a legacy inventory response never becomes a slot proof for a new consumer', async () => {
+  await withFetch((async () => Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [OWNER] })) as typeof fetch, async () => {
+    assert.deepEqual(await fetchInventory(OWNER, { onPreorderAssetResolutions: () => assert.fail('Legacy receipt has no finalized slot') }), []);
+  });
+});
+
 test('pack-status client uses api.mons.shop GET without browser caching', async () => {
   await withFetch((async (input, init) => {
     assert.equal(String(input), 'https://api.mons.shop/pack-status/card_nft_2');

@@ -4,8 +4,9 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { createCommerceD1Harness } from '../cloud/workers/api/test/commerceD1Harness.ts';
-import { listSucceededPreorderAssets, PreorderStore, type StoredPreorder } from '../cloud/workers/api/src/preorderStore.ts';
+import { listPreorderInventoryAssets, PreorderStore, type StoredPreorder } from '../cloud/workers/api/src/preorderStore.ts';
 import { getPreorderConfig } from '../shared/preorders.ts';
+import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 
 test('preorder migration preserves complete triggers under remote D1 SQL parsing', (context) => {
   const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
@@ -34,16 +35,36 @@ test('preorder migration preserves complete triggers under remote D1 SQL parsing
   assert.equal(actual.filter((row) => row.type === 'trigger').length, 6);
 });
 
+test('confirmation migration has the same guards and indexes when split for remote D1', (context) => {
+  const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
+  const migrationName = '0022_preorder_confirmation.sql';
+  const sql = readFileSync(new URL(migrationName, directory), 'utf8');
+  assert.doesNotMatch(sql, /\bSELECT\s+CASE\b/i);
+  const whole = new DatabaseSync(':memory:');
+  const split = new DatabaseSync(':memory:');
+  context.after(() => { whole.close(); split.close(); });
+  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql') && name < migrationName).sort()) {
+    const previous = readFileSync(new URL(name, directory), 'utf8');
+    whole.exec(previous);
+    split.exec(previous);
+  }
+  whole.exec(sql);
+  for (const statement of unstable_splitSqlQuery(sql)) split.prepare(statement).run();
+  const schema = (database: DatabaseSync) => database.prepare("SELECT type, name, sql FROM sqlite_schema WHERE name GLOB 'commerce_preorder_*' ORDER BY name")
+    .all().map((row) => ({ type: row.type, name: row.name, fingerprint: sqlSchemaFingerprint(String(row.sql)) }));
+  assert.deepEqual(schema(split), schema(whole));
+});
+
 test('recent preorder inventory uses the buyer index without scanning or sorting order history', async (context) => {
   let query = '';
   const { database, db } = createCommerceD1Harness({ observeCall(call) {
     if (call.method === 'all') query = call.sql;
   } });
   context.after(() => database.close());
-  assert.deepEqual(await listSucceededPreorderAssets(db, 'buyer'), []);
+  assert.deepEqual(await listPreorderInventoryAssets(db, 'buyer'), []);
   assert.ok(query.includes('commerce_preorder_orders'));
   const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all('buyer').map((row) => String(row.detail)).join('\n');
-  assert.match(plan, /SEARCH commerce_preorder_orders USING INDEX commerce_preorder_succeeded_buyer/);
+  assert.match(plan, /SEARCH commerce_preorder_orders USING INDEX commerce_preorder_(?:succeeded|inventory)_buyer/);
   assert.doesNotMatch(plan, /SCAN commerce_preorder_orders|TEMP B-TREE/);
 });
 
@@ -102,6 +123,7 @@ test('Ethereum ownership migration preserves submitted legacy orders and fences 
   const statements = unstable_splitSqlQuery(sql);
   assert.equal(statements.length, 5);
   for (const statement of statements) database.prepare(statement).run();
+  database.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0022_preorder_confirmation.sql', import.meta.url), 'utf8'));
   const store = new PreorderStore(db);
   const prepared = (await store.get('legacy-1'))!;
   const submitted = (await store.get('legacy-2'))!;

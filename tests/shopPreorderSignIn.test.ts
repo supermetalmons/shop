@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { useRef, useState } from 'react';
 import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { getPreorderConfig, type PreorderOrder } from '../shared/preorders.ts';
 import type { createPreorderApi } from '../src/lib/preorderApi.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -49,6 +50,7 @@ function rig() {
     restoration: 0, signIn: 0, transactionSign: 0, recovery: 0,
     prepare: [] as Parameters<PreorderApi['prepare']>[0][],
     submit: [] as Parameters<PreorderApi['submit']>[0][],
+    succeeded: [] as string[],
   };
   const messages: string[] = [];
   let preparedOrder: PreorderOrder | null = null;
@@ -58,7 +60,7 @@ function rig() {
     prepare: async (input) => {
       calls.prepare.push(input);
       preparedOrder = {
-        orderId: 'order-1', preorderId: config.preorderId, buyer: input.buyer, ethereumAddress: ethereumSession.address, cardIds: input.cardIds,
+        orderId: `order-${calls.prepare.length}`, preorderId: config.preorderId, buyer: input.buyer, ethereumAddress: ethereumSession.address, cardIds: input.cardIds,
         assets: input.cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })),
         status: 'prepared', expiresAtMs: Date.now() + 120_000, signature: null,
       };
@@ -119,7 +121,7 @@ function rig() {
       ethereumSession: props.ethereumAddress === secondEthereumSession.address ? secondEthereumSession : ethereumSession,
       ensureSignedIn: continuation.ensureActionSignedIn,
       signTransaction: publicKey ? async (tx) => { calls.transactionSign += 1; tx.sign([payer]); return tx; } : undefined,
-      onSucceeded: () => {},
+      onSucceeded: (order) => { calls.succeeded.push(order.orderId); },
     }, api);
     const handlers = useShopActionHandlers({
       continuation, preorder, owner: connectedWallet, routeDropId: config.preorderId,
@@ -136,6 +138,141 @@ function rig() {
   };
   return { ...view, api, initial, connect, buyer, restoration, signInApproval, recovered, calls, messages };
 }
+
+for (const lateResponse of ['success', 'error'] as const) {
+  test(`matching confirmation releases the real preorder action before a late HTTP ${lateResponse}`, async () => {
+    const context = rig();
+    const responses = [deferred<{ order: PreorderOrder }>(), deferred<{ order: PreorderOrder }>()];
+    context.api.submit = async input => {
+      context.calls.submit.push(input);
+      return responses[context.calls.submit.length - 1].promise;
+    };
+    let firstCompleted = false;
+    act(() => { void context.result.current.handlers.handlePreorder([1]).then(() => { firstCompleted = true; }); });
+    context.connect();
+    await act(async () => { context.restoration.resolve('restored'); context.recovered.resolve({ order: null }); });
+    await waitFor(() => assert.equal(context.calls.submit.length, 1));
+    assert.equal(context.result.current.continuation.pendingAction?.phase, 'running');
+    const signed = VersionedTransaction.deserialize(Buffer.from(context.calls.submit[0].transactionBase64, 'base64'));
+    const confirmed: PreorderOrder = { ...context.result.current.preorder.order!, status: 'submitted', confirmedSlot: 500,
+      signature: bs58.encode(signed.signatures[0]) };
+    await act(async () => {
+      const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+      window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+      window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
+    });
+    await waitFor(() => assert.equal(firstCompleted, true));
+    assert.equal(context.result.current.continuation.pendingAction, null);
+    assert.equal(context.result.current.preorder.pending, null);
+    assert.deepEqual(context.calls.succeeded, ['order-1']);
+    let secondCompletion!: Promise<void>;
+    act(() => { secondCompletion = context.result.current.handlers.handlePreorder([2]); });
+    await waitFor(() => assert.equal(context.calls.submit.length, 2));
+    await act(async () => {
+      if (lateResponse === 'success') responses[0].resolve({ order: confirmed });
+      else responses[0].reject(new Error('Late response failure'));
+    });
+    assert.equal(context.result.current.continuation.pendingAction?.phase, 'running');
+    assert.equal(context.result.current.preorder.pending?.orderId, 'order-2');
+    assert.equal(context.result.current.preorder.phase, 'submitting');
+    assert.equal(context.result.current.preorder.error, null);
+    assert.deepEqual(context.calls.succeeded, ['order-1']);
+    assert.deepEqual(context.messages, []);
+    const secondSigned = VersionedTransaction.deserialize(Buffer.from(context.calls.submit[1].transactionBase64, 'base64'));
+    const secondConfirmed: PreorderOrder = { ...context.result.current.preorder.order!, status: 'submitted', confirmedSlot: 501,
+      signature: bs58.encode(secondSigned.signatures[0]) };
+    await act(async () => { responses[1].resolve({ order: secondConfirmed }); await secondCompletion; });
+    assert.equal(context.result.current.continuation.pendingAction, null);
+    assert.deepEqual(context.calls.succeeded, ['order-1', 'order-2']);
+  });
+
+  test(`confirmation settles the live action while preserving another tab's newer preorder before late HTTP ${lateResponse}`, async () => {
+    const context = rig();
+    const responses = [deferred<{ order: PreorderOrder }>(), deferred<{ order: PreorderOrder }>()];
+    context.api.submit = async input => {
+      context.calls.submit.push(input);
+      return responses[context.calls.submit.length - 1].promise;
+    };
+    let firstCompleted = false;
+    act(() => { void context.result.current.handlers.handlePreorder([1]).then(() => { firstCompleted = true; }); });
+    context.connect();
+    await act(async () => { context.restoration.resolve('restored'); context.recovered.resolve({ order: null }); });
+    await waitFor(() => assert.equal(context.calls.submit.length, 1));
+    const signed = VersionedTransaction.deserialize(Buffer.from(context.calls.submit[0].transactionBase64, 'base64'));
+    const confirmed: PreorderOrder = { ...context.result.current.preorder.order!, status: 'submitted', confirmedSlot: 500,
+      signature: bs58.encode(signed.signatures[0]) };
+    const next: PreorderOrder = { ...confirmed, orderId: 'order-B', cardIds: [2],
+      assets: [{ id: 2, address: Keypair.generate().publicKey.toBase58() }], status: 'prepared', confirmedSlot: null, signature: null };
+    const nextPending = { requestId: 'request-B', orderId: next.orderId, cardIds: next.cardIds, ethereumAddress: ethereumSession.address };
+    const foregroundKey = `mons:preorder:v1:${config.cluster}:${config.collection}:${context.buyer}`;
+    const recoveryKey = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+    context.api.status = async (_preorderId, orderId) => ({ order: orderId === next.orderId ? next : orderId === confirmed.orderId ? confirmed : null });
+    await act(async () => {
+      window.localStorage.setItem(foregroundKey, JSON.stringify(nextPending));
+      window.localStorage.setItem(recoveryKey, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+      const keys = lateResponse === 'success' ? [recoveryKey, foregroundKey] : [foregroundKey, recoveryKey];
+      for (const key of keys) window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
+    });
+    await waitFor(() => assert.equal(firstCompleted, true));
+    await waitFor(() => assert.equal(context.result.current.preorder.order?.orderId, next.orderId));
+    assert.equal(context.result.current.continuation.pendingAction, null);
+    assert.equal(context.result.current.preorder.phase, 'idle');
+    assert.equal(context.result.current.preorder.pending?.orderId, next.orderId);
+    assert.deepEqual(JSON.parse(window.localStorage.getItem(foregroundKey)!), nextPending);
+    assert.deepEqual(context.calls.succeeded, ['order-1']);
+    context.api.prepare = async input => {
+      context.calls.prepare.push(input);
+      assert.equal(input.requestId, nextPending.requestId);
+      return { order: next, transactionBase64: context.calls.submit[0].transactionBase64 };
+    };
+    let secondCompletion!: Promise<void>;
+    act(() => { secondCompletion = context.result.current.handlers.handlePreorder([2]); });
+    await waitFor(() => assert.equal(context.calls.submit.length, 2));
+    await act(async () => {
+      window.dispatchEvent(new dom.window.StorageEvent('storage', { key: recoveryKey }));
+      if (lateResponse === 'success') responses[0].resolve({ order: confirmed });
+      else responses[0].reject(new Error('Late response failure'));
+    });
+    assert.equal(context.result.current.preorder.phase, 'submitting');
+    assert.equal(context.result.current.preorder.pending?.orderId, next.orderId);
+    assert.equal(context.result.current.continuation.pendingAction?.phase, 'running');
+    assert.equal(context.result.current.preorder.error, null);
+    assert.deepEqual(context.calls.succeeded, ['order-1']);
+    assert.deepEqual(context.messages, []);
+    const secondSigned = VersionedTransaction.deserialize(Buffer.from(context.calls.submit[1].transactionBase64, 'base64'));
+    await act(async () => {
+      responses[1].resolve({ order: { ...next, status: 'submitted', confirmedSlot: 501, signature: bs58.encode(secondSigned.signatures[0]) } });
+      await secondCompletion;
+    });
+    assert.deepEqual(context.calls.succeeded, ['order-1', 'order-B']);
+  });
+}
+
+test('matching confirmation releases the running action after navigation cleared the active checkout operation', async () => {
+  const context = rig();
+  const response = deferred<{ order: PreorderOrder }>();
+  context.api.submit = async input => { context.calls.submit.push(input); return response.promise; };
+  act(() => { void context.result.current.handlers.handlePreorder([1]); });
+  context.connect();
+  await act(async () => { context.restoration.resolve('restored'); context.recovered.resolve({ order: null }); });
+  await waitFor(() => assert.equal(context.calls.submit.length, 1));
+  const signed = VersionedTransaction.deserialize(Buffer.from(context.calls.submit[0].transactionBase64, 'base64'));
+  const confirmed: PreorderOrder = { ...context.result.current.preorder.order!, status: 'submitted', confirmedSlot: 500,
+    signature: bs58.encode(signed.signatures[0]) };
+  await act(async () => { context.rerender({ connected: true, scopeKey: '/another-drop' }); });
+  assert.equal(context.result.current.continuation.pendingAction?.phase, 'running');
+  await act(async () => {
+    const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+    window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+    window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
+  });
+  await waitFor(() => assert.equal(context.result.current.continuation.pendingAction, null));
+  assert.equal(context.result.current.preorder.pending, null);
+  assert.deepEqual(context.calls.succeeded, ['order-1']);
+  await act(async () => { response.reject(new Error('Late response failure')); });
+  assert.equal(context.result.current.preorder.error, null);
+  assert.deepEqual(context.messages, []);
+});
 
 async function waitForAvailabilityRefresh() {
   const context = rig();

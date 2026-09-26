@@ -40,6 +40,18 @@ export function usePreorderAvailability(config: PreorderConfig, active: boolean,
     }
   }, [api, scope]);
 
+  const invalidatePreorderedAvailability = useCallback((cardIds: readonly number[]) => {
+    if (currentScope.current !== scope) return;
+    request.current += 1;
+    inFlight.current = null;
+    const ids = new Set(cardIds);
+    setState((previous) => {
+      if (previous?.scope !== scope || !previous.availability) return previous;
+      return { ...previous, availability: { ...previous.availability, items: previous.availability.items.map((item) =>
+        ids.has(item.id) ? { ...item, status: 'reserved' as const } : item) } };
+    });
+  }, [scope]);
+
   useEffect(() => {
     if (!active || !session) return;
     const refresh = () => { if (document.visibilityState !== 'hidden') void refreshAvailability(); };
@@ -60,5 +72,6 @@ export function usePreorderAvailability(config: PreorderConfig, active: boolean,
     availability: state?.scope === scope ? state.availability : null,
     availabilityError: state?.scope === scope ? state.error : null,
     refreshAvailability,
+    invalidatePreorderedAvailability,
   };
 }
