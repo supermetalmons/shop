@@ -196,13 +196,13 @@ test('pending submission disables selection and cancellation for the verified Et
   assert.equal(view.queryByRole('button', { name: 'Connect Ethereum Wallet' }), null);
   assert.equal((view.getByRole('button', { name: 'Select preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
-  assert.equal((view.getByRole('button', { name: 'Confirming… for 0.25 SOL' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Preordering...' }) as HTMLButtonElement).disabled, true);
   assert.equal((view.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled, true);
   fireEvent.click(view.getByRole('button', { name: /Select preorder #2:/ }));
   assert.equal(view.queryAllByRole('button', { pressed: true }).length, 0);
   assert.ok(view.getByLabelText('1 cards selected'));
   assert.equal(view.queryByRole('status'), null);
-  assert.equal(view.getByText('Confirming…').getAttribute('aria-live'), 'polite');
+  assert.equal(view.getByText('Preordering...').getAttribute('aria-live'), 'polite');
 });
 
 test('unavailable cards and busy checkout never evict an existing selection', async () => {
@@ -236,28 +236,39 @@ test('checkout progress is communicated only through the action button', () => {
   const preorder = checkout();
   const view = render(createElement(MiNoteCardsGallery, { preorder }));
   fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
-  const states: [Partial<PreorderCheckout>, string][] = [
-    [{}, 'Preorder'],
-    [{ phase: 'authenticating', busy: true }, 'Signing in…'],
-    [{ phase: 'preparing', busy: true }, 'Preparing…'],
-    [{ phase: 'signing', busy: true }, 'Check wallet…'],
-    [{ phase: 'submitting', busy: true }, 'Confirming…'],
-    [{ phase: 'cancelling', busy: true }, 'Cancelling…'],
-    [{ recoveryReady: false }, 'Checking…'],
+  const states: [Partial<PreorderCheckout>, string, boolean][] = [
+    [{}, 'Preorder', false],
+    [{ phase: 'idle', busy: true }, 'Preordering...', true],
+    [{ phase: 'authenticating', busy: true }, 'Preordering...', true],
+    [{ phase: 'preparing', busy: true }, 'Preordering...', true],
+    [{ phase: 'signing', busy: true }, 'Preordering...', true],
+    [{ phase: 'submitting', busy: true }, 'Preordering...', true],
+    [{ phase: 'cancelling', busy: true }, 'Preordering...', true],
+    [{ recoveryReady: false }, 'Preordering...', true],
+    [{
+      order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
+        status: 'submitted', expiresAtMs: Date.now() + 118_000, signature: 'signature-1' },
+    }, 'Preordering...', true],
+    [{ pending: { ethereumAddress: ADDRESS, requestId: 'request-1', cardIds: [1] } }, 'Preorder', false],
     [{
       pending: { ethereumAddress: ADDRESS, requestId: 'request-1', orderId: 'order-1', cardIds: [1] },
       pendingOrder: true,
       order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
         status: 'prepared', expiresAtMs: Date.now() + 118_000, signature: null },
-    }, 'Continue preorder'],
+    }, 'Preorder', false],
   ];
-  for (const [state, label] of states) {
+  for (const [state, label, disabled] of states) {
     view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, ...state } }));
-    const action = view.getByRole('button', { name: `${label} for 0.25 SOL` });
+    const action = view.getByRole('button', { name: label === 'Preorder' ? 'Preorder for 0.25 SOL' : label }) as HTMLButtonElement;
     const panel = action.closest('.mi-note-preorder-panel')!;
-    assert.equal(panel.textContent, `Cancel${label} • 0.25 SOL`);
+    const visibleLabel = label === 'Preorder' ? 'Preorder • 0.25 SOL' : label;
+    assert.equal(action.textContent, visibleLabel);
+    assert.equal(action.disabled, disabled);
+    assert.equal(panel.textContent, `Cancel${visibleLabel}`);
+    assert.equal(within(panel as HTMLElement).getByRole('button', { name: 'Cancel' }).textContent, 'Cancel');
     assert.equal(panel.querySelector('p'), null);
     assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-live'), 'polite');
+    assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-atomic'), 'true');
   }
 });
 
@@ -277,7 +288,7 @@ test('pending sign-in can be cancelled and losing verification cancels the origi
   assert.equal(cancelled, 1);
   view.rerender(createElement(MiNoteCardsGallery, { preorder, verification: { ...VERIFICATION, session: null }, onCancelPendingSignIn }));
   assert.equal(cancelled, 2);
-  assert.equal(view.queryByRole('button', { name: /Signing in/ }), null);
+  assert.equal(view.queryByRole('button', { name: 'Preordering...' }), null);
 });
 
 test('checkout errors toast once per occurrence without an error-only panel', () => {
@@ -340,7 +351,7 @@ test('restoring a pending preorder clears unrelated picks and resumes only the s
   } }));
   assert.equal(card.getAttribute('aria-pressed'), 'false');
   assert.match(document.querySelector<HTMLElement>('.selection-panel__thumb')!.style.backgroundImage, /mid\/1.webp/);
-  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Continue preorder for 0.25 SOL' })); });
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Preorder for 0.25 SOL' })); });
   assert.deepEqual(purchased, [2]);
   view.rerender(createElement(MiNoteCardsGallery, { preorder: connected }));
   assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
@@ -425,14 +436,14 @@ test('a completed order from another Ethereum wallet does not hide a failed prep
   assert.equal(current.pending?.ethereumAddress, ADDRESS);
   assert.equal(current.order?.ethereumAddress, completed.ethereumAddress);
   assert.equal(view.queryByText(/Switch back to the Ethereum wallet/), null);
-  const retry = view.getByRole('button', { name: 'Continue preorder for 0.25 SOL' }) as HTMLButtonElement;
+  const retry = view.getByRole('button', { name: 'Preorder for 0.25 SOL' }) as HTMLButtonElement;
   assert.equal(retry.disabled, false);
   assert.ok(view.getByLabelText('1 cards selected'));
   await act(async () => { fireEvent.click(retry); });
   assert.equal(requests.length, 2);
   assert.equal(requests[0].requestId, requests[1].requestId);
   assert.deepEqual(requests[1].cardIds, [1]);
-  assert.ok(view.getByRole('button', { name: 'Continue preorder for 0.25 SOL' }));
+  assert.ok(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
 });
 
 test('a failed preparation can be abandoned after switching Ethereum wallets and reloading', async () => {
@@ -460,7 +471,7 @@ test('a failed preparation can be abandoned after switching Ethereum wallets and
   fireEvent.click(firstCard);
   await act(async () => { fireEvent.click(first.getByRole('button', { name: 'Preorder for 0.25 SOL' })); });
   assert.ok(current.pending?.requestId);
-  assert.ok(first.getByRole('button', { name: 'Abandon preparation' }));
+  assert.ok(first.getByRole('button', { name: 'Cancel' }));
   first.rerender(createElement(Harness, { session: second }));
   await first.findByRole('button', { name: /Select preorder #2:/ });
   first.unmount();
@@ -889,7 +900,7 @@ test('another Ethereum wallet and legacy pending orders expose cancellation with
     const view = render(createElement(MiNoteCardsGallery, { preorder }));
     assert.ok(view.getByRole('button', { name: 'Cancel preorder' }));
     assert.equal(view.queryByLabelText('1 cards selected'), null);
-    assert.equal(view.queryByRole('button', { name: /Continue preorder/ }), null);
+    assert.equal(view.queryByRole('button', { name: 'Preorder for 0.25 SOL' }), null);
     view.unmount();
   }
 });

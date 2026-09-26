@@ -273,13 +273,8 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
   const submitting = preorder?.order?.status === 'submitted' || preorder?.pending?.submittedAttempt;
   const canAbandon = Boolean(preorder?.pending && !preorder.pending.orderId && !preorder.pending.submittedAttempt && !preorder.pendingOrder);
   const canResume = !preorder?.pending || Boolean(preorder.pending.requestId);
-  const actionLabel = preorder?.phase === 'authenticating' ? 'Signing in…'
-    : preorder?.phase === 'preparing' ? 'Preparing…'
-    : preorder?.phase === 'signing' ? 'Check wallet…'
-    : preorder?.phase === 'submitting' || submitting ? 'Confirming…'
-    : preorder?.phase === 'cancelling' ? 'Cancelling…'
-    : !preorder?.recoveryReady ? 'Checking…'
-    : preorder?.pending ? 'Continue preorder' : 'Preorder';
+  const preordering = Boolean(preorder?.busy || submitting || !preorder?.recoveryReady);
+  const actionLabel = preordering ? 'Preordering...' : 'Preorder';
   const totalPrice = preorder ? (panelIds.length * preorder.config.unitPriceLamports / 1_000_000_000).toLocaleString('en-US', { maximumFractionDigits: 9 }) : '';
 
   return (
@@ -402,16 +397,16 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
                 else if (canAbandon) { setSelected([]); void preorder.cancel(); }
                 else if (preorder.pendingOrder) void preorder.cancel();
                 else setSelected([]);
-              }}>{canAbandon ? 'Abandon preparation' : 'Cancel'}</button>
+              }}>Cancel</button>
               <button
                 type="button"
                 className="mi-note-preorder-panel__submit"
-                aria-label={`${actionLabel} for ${totalPrice} SOL`}
-                disabled={preorder.busy || Boolean(submitting) || !canResume || !preorder.recoveryReady || !preorder.availability || Boolean(preorder.availabilityError)}
+                aria-label={preordering ? actionLabel : `${actionLabel} for ${totalPrice} SOL`}
+                disabled={preordering || !canResume || !preorder.availability || Boolean(preorder.availabilityError)}
                 onClick={() => { void preorder.purchase(panelIds); }}
               >
                 <span className="mi-note-preorder-panel__label" aria-live="polite" aria-atomic="true">{actionLabel}</span>
-                {` • ${totalPrice} SOL`}
+                {!preordering && ` • ${totalPrice} SOL`}
               </button>
             </div>
           </div>
