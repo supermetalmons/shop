@@ -18,7 +18,7 @@ body:has(.drop-page-frame--mi-note-cards) {
   -webkit-user-select: none;
 }
 
-.mi-note-cards--selection {
+.mi-note-cards--selection > .mi-note-cards__content {
   padding-bottom: 92px;
 }
 
@@ -28,7 +28,7 @@ body:has(.drop-page-frame--mi-note-cards) {
   gap: 24px;
 }
 
-.mi-note-cards__content:has(> .mi-note-cards__message--loading) {
+.mi-note-cards__content:has(> .mi-note-cards__message--centered) {
   flex: 1;
 }
 
@@ -143,7 +143,7 @@ body:has(.drop-page-frame--mi-note-cards) {
   font-size: 14px;
 }
 
-.mi-note-cards__message--loading {
+.mi-note-cards__message--centered {
   margin-block: auto;
 }
 
@@ -262,7 +262,7 @@ body:has(.drop-page-frame--mi-note-cards) {
 }
 
 @media (max-width: 480px) {
-  .mi-note-cards--selection {
+  .mi-note-cards--selection > .mi-note-cards__content {
     padding-bottom: 160px;
   }
 

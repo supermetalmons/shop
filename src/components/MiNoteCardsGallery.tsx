@@ -269,8 +269,8 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
                 <p className="mi-note-cards__message">Sign in with the admin Solana wallet to use the devnet test cards.</p>
                 {onAdminSignIn && <button type="button" disabled={preorder?.busy} onClick={() => { void onAdminSignIn(); }}>Sign in with Solana</button>}
               </div>}
-              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message mi-note-cards__message--loading" role="status">Loading...</p>}
-              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message" role="status">No Mi Notes available for preorder.</p>}
+              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message mi-note-cards__message--centered" role="status">Loading...</p>}
+              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message mi-note-cards__message--centered" role="status">No Mi Notes available for preorder.</p>}
               {(preorder?.availabilityError || scopedAvailability?.ownershipStatus === 'partial') && <div className="mi-note-cards__error">
                 <p className="mi-note-cards__message" role="alert">{preorder?.availabilityError || 'Some cards couldn’t be loaded.'}</p>
                 <button type="button" className="ghost" onClick={() => { void preorder?.refreshAvailability(); }}>Try again</button>
