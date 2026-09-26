@@ -102,11 +102,6 @@ body:has(.drop-page-frame--mi-note-cards) {
   font-weight: 600;
 }
 
-.mi-note-cards button:focus-visible,
-.mi-note-cards__footer a:focus-visible {
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
-}
-
 .mi-note-cards__wallet,
 .mi-note-cards__error {
   display: flex;
@@ -230,10 +225,6 @@ body:has(.drop-page-frame--mi-note-cards) {
 
 .mi-note-cards__selectable--selected:not(.mi-note-cards__selectable--preordered) {
   box-shadow: 0 0 0 3px var(--accent);
-}
-
-.mi-note-cards__selectable--selected:not(.mi-note-cards__selectable--preordered):focus-visible {
-  box-shadow: 0 0 0 3px var(--accent), 0 0 0 5px var(--bg), 0 0 0 7px var(--accent);
 }
 
 .mi-note-preorder-panel {

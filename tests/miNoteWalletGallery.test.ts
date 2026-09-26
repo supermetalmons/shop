@@ -21,6 +21,8 @@ dom.window.close();
 
 const ADDRESS = '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe';
 const OTHER_ADDRESS = '0x5bfce4149f520fe0823dc8c0afaf979121e824ec';
+const DISPLAY_ADDRESS = '0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE';
+const OTHER_DISPLAY_ADDRESS = '0x5BFce4149F520FE0823Dc8C0aFaF979121e824EC';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const SIGNATURE = `0x${'12'.repeat(65)}`;
 const config = getPreorderConfig('mi_note_cards_devnet')!;
@@ -246,7 +248,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     await act(async () => verification.resolve());
     await waitFor(() => assert.equal(view.getAllByRole('img').length, 10));
     assert.ok(view.getByRole('button', { name: 'Disconnect' }));
-    assert.ok(view.getByTitle(ADDRESS));
+    assert.ok(view.getByTitle(DISPLAY_ADDRESS));
     assert.equal(view.queryByRole('button', { name: /Connect/ }), null);
     assert.deepEqual(wallet.calls, ['eth_requestAccounts', 'eth_chainId', 'personal_sign', 'eth_accounts']);
   });
@@ -280,7 +282,7 @@ for (const failure of ['connection', 'network', 'signature rejected', 'signature
     await connectAndVerify(view);
     await waitFor(() => assert.ok(view.getByRole('button', { name: /Select preorder #11:/ })));
     assert.equal(wallet.calls.filter(call => call === 'eth_requestAccounts').length, failure === 'connection' ? 2 : 1);
-    assert.ok(view.getByTitle(OTHER_ADDRESS));
+    assert.ok(view.getByTitle(OTHER_DISPLAY_ADDRESS));
   });
 }
 
@@ -317,7 +319,7 @@ test('Connect refreshes a request-only provider after rejection and signs its ne
   wallet.change(OTHER_ADDRESS);
   await connectAndVerify(view);
   await waitFor(() => assert.ok(view.getByRole('button', { name: /Select preorder #11:/ })));
-  assert.ok(view.getByTitle(OTHER_ADDRESS));
+  assert.ok(view.getByTitle(OTHER_DISPLAY_ADDRESS));
   assert.deepEqual(wallet.calls.slice(3), ['eth_accounts', 'eth_chainId', 'personal_sign', 'eth_accounts']);
 });
 
@@ -425,9 +427,9 @@ test('cancelled account refresh preserves the established wallet and saved verif
   view.rerender(createElement(context.Harness, { admin: true }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Disconnect' })));
   await waitFor(() => assert.equal(view.getAllByRole('img').length, 10));
-  assert.ok(view.getByTitle(ADDRESS));
+  assert.ok(view.getByTitle(DISPLAY_ADDRESS));
   await act(async () => accounts.resolve([OTHER_ADDRESS]));
-  assert.ok(view.getByTitle(ADDRESS));
+  assert.ok(view.getByTitle(DISPLAY_ADDRESS));
   assert.equal(window.sessionStorage.getItem('mons.shop.mi-note.ethereum-session'), session);
   assert.deepEqual(context.authCalls, ['challenge', 'verify']);
   await act(async () => wallet.change(OTHER_ADDRESS));

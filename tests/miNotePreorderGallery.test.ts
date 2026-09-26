@@ -18,6 +18,7 @@ const { useShopFeedback } = await import('../src/shop/ui/useShopFeedback.ts');
 const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
 cssImports.deregister();
 const ADDRESS = '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe';
+const DISPLAY_ADDRESS = '0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE';
 const ETH_SESSION = { token: 'test-token', address: ADDRESS, preorderId: 'mi_note_cards_devnet', expiresAtMs: Date.now() + 3_600_000 };
 const WALLET: ComponentProps<typeof Gallery>['wallet'] = {
   address: ADDRESS, provider: { request: async () => [] }, status: 'connected', wallets: [], error: null,
@@ -625,7 +626,7 @@ test('connected wallets use Connect to sign before showing their address or card
   }));
   assert.equal(view.queryByRole('img'), null);
   assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
-  assert.equal(view.queryByTitle(ADDRESS), null);
+  assert.equal(view.queryByTitle(DISPLAY_ADDRESS), null);
   assert.equal(view.queryByRole('status'), null);
   expectIntroduction(view, true);
   expectCollectionLinks(view);
@@ -642,7 +643,7 @@ test('wallet controls require an unexpired session matching the connected wallet
   const preorder = checkout();
   const view = render(createElement(Gallery, { preorder, wallet: WALLET, verification: VERIFICATION }));
   assert.ok(view.getByRole('button', { name: 'Disconnect' }));
-  assert.ok(view.getByTitle(ADDRESS));
+  assert.ok(view.getByTitle(DISPLAY_ADDRESS));
   for (const session of [
     null,
     { ...ETH_SESSION, expiresAtMs: Date.now() - 1 },
@@ -652,14 +653,30 @@ test('wallet controls require an unexpired session matching the connected wallet
     view.rerender(createElement(Gallery, { preorder, wallet: WALLET, verification: { ...VERIFICATION, session } }));
     assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
     assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
-    assert.equal(view.queryByTitle(ADDRESS), null);
+    assert.equal(view.queryByTitle(DISPLAY_ADDRESS), null);
     assert.equal(view.queryByRole('img'), null);
   }
   view.rerender(createElement(Gallery, { preorder, wallet: { ...WALLET, provider: null }, verification: VERIFICATION }));
   assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
   assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
-  assert.equal(view.queryByTitle(ADDRESS), null);
+  assert.equal(view.queryByTitle(DISPLAY_ADDRESS), null);
   assert.equal(view.queryByRole('img'), null);
+});
+
+test('Ethereum address labels use EIP-55 casing before truncation', () => {
+  for (const [checksummed, label] of [
+    ['0x52908400098527886E0F7030069857D2E4169EE7', '0x5290…9EE7'],
+    ['0xde709f2102306220921060314715629080e2fb77', '0xde70…fb77'],
+    ['0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed', '0x5aAe…eAed'],
+    ['0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359', '0xfB69…d359'],
+  ]) {
+    const address = checksummed.toLowerCase();
+    const view = render(createElement(Gallery, { preorder: checkout(), wallet: { ...WALLET, address },
+      verification: { ...VERIFICATION, session: { ...ETH_SESSION, address } },
+    }));
+    assert.equal(view.getByTitle(checksummed).textContent, label);
+    view.unmount();
+  }
 });
 
 test('only eligible IDs are shown and another wallet cannot reuse their availability', () => {

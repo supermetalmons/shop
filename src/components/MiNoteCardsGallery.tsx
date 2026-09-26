@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { keccak_256 } from '@noble/hashes/sha3';
+import { bytesToHex } from '@noble/hashes/utils';
 import miNoteCollections from '../../mi_note_eth.json';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
@@ -31,6 +33,12 @@ const MI_NOTE_COLLECTION_LINKS = [
 type WalletSignInAttempt = { verify: MiNoteVerification['verify'] | null };
 
 function MiNoteWalletControls({ wallet, verification, verified }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'> & { verified: boolean }) {
+  const displayAddress = useMemo(() => {
+    if (!wallet.address) return null;
+    const address = wallet.address.slice(2).toLowerCase();
+    const hash = bytesToHex(keccak_256(address));
+    return `0x${Array.from(address, (char, index) => Number.parseInt(hash[index], 16) >= 8 ? char.toUpperCase() : char).join('')}`;
+  }, [wallet.address]);
   const connectRef = useRef<HTMLButtonElement>(null);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const disconnectRef = useRef<HTMLButtonElement>(null);
@@ -101,10 +109,10 @@ function MiNoteWalletControls({ wallet, verification, verified }: Pick<MiNoteCar
 
   return (
     <div className="mi-note-cards__wallet">
-      {verified && wallet.address ? (
+      {verified && displayAddress ? (
         <div className="mi-note-cards__connection">
-          <span className="mi-note-cards__address" title={wallet.address}>
-            {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
+          <span className="mi-note-cards__address" title={displayAddress}>
+            {displayAddress.slice(0, 6)}…{displayAddress.slice(-4)}
           </span>
           <button ref={disconnectRef} type="button" className="ghost" onClick={() => { verification.invalidate(); wallet.disconnect(); }}>
             Disconnect
