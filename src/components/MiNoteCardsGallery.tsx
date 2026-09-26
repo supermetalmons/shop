@@ -233,7 +233,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               const image = (
                 <img
                   className={`mi-note-cards__image${isPreordered ? ' mi-note-cards__image--preordered' : ''}`}
-                  src={isPreordered ? preorderImageUrl(preorder!.config, card.clean_card_id) : card.mid.replace('/mid/', '/thumbs/')}
+                  src={isPreordered ? preorderImageUrl(preorder!.config, card.clean_card_id) : card.mid}
                   alt={card.name}
                   loading="lazy"
                   decoding="async"
@@ -293,7 +293,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               <div className="selection-panel__preview" aria-label={`${panelIds.length} cards selected`}>
                 {panelIds.map((id, index) => (
                   <div key={id} className="selection-panel__thumb" aria-hidden="true" style={{
-                    backgroundImage: `url("${MI_NOTE_CARDS_BY_ID.get(id)?.mid.replace('/mid/', '/thumbs/')}")`,
+                    backgroundImage: `url("${MI_NOTE_CARDS_BY_ID.get(id)?.mid}")`,
                     zIndex: index + 1,
                   }} />
                 ))}

@@ -51,7 +51,7 @@ test('devnet gallery rotates the oldest selection and keeps the panel and purcha
   assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
   assert.equal(view.queryByRole('link'), null);
   assert.equal(view.queryByRole('button', { name: 'Notify me' }), null);
-  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
   const one = view.getByRole('button', { name: 'Select preorder #1: Angel Lady' });
   const card = (id: number) => view.getByRole('button', { name: new RegExp(`Select preorder #${id}:`) });
@@ -97,7 +97,7 @@ test('reservation clears selection and keeps original artwork until the preorder
   assert.equal(reserved.disabled, true);
   assert.equal(reserved.getAttribute('aria-pressed'), 'false');
   assert.equal(view.container.querySelector('.mi-note-cards__grid')?.textContent, '');
-  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   assert.equal((view.getByRole('button', { name: /Preordered preorder #2:/ }) as HTMLButtonElement).disabled, false);
   assert.equal(view.getByRole('img', { name: 'watercolor milady' }).getAttribute('src'), 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/2.webp');
   assert.equal(view.getByRole('img', { name: 'Angel Lady' }).classList.contains('mi-note-cards__image--preordered'), false);
@@ -117,13 +117,13 @@ test('cancellation or expiry restores available cards without changing their ori
   const reserved = { ...available, availability: { ...available.availability!, items: available.availability!.items.map((item) => ({ ...item, status: item.id === 1 ? 'reserved' as const : item.status })) } };
   const view = render(createElement(MiNoteCardsGallery, { preorder: reserved }));
   assert.equal((view.getByRole('button', { name: 'Reserved preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, true);
-  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   view.rerender(createElement(MiNoteCardsGallery, { preorder: available }));
   assert.equal(view.queryByText('Reserved'), null);
   const card = view.getByRole('button', { name: 'Select preorder #1: Angel Lady' }) as HTMLButtonElement;
   assert.equal(card.disabled, false);
   assert.equal(card.getAttribute('aria-pressed'), 'false');
-  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   fireEvent.click(card);
   assert.equal(card.getAttribute('aria-pressed'), 'true');
   assert.ok(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
@@ -149,7 +149,7 @@ test('pending submission disables selection and cancellation for the verified Et
   const view = render(createElement(MiNoteCardsGallery, { preorder }));
   assert.equal(view.queryByRole('button', { name: 'Connect Ethereum Wallet' }), null);
   assert.equal((view.getByRole('button', { name: 'Select preorder #1: Angel Lady' }) as HTMLButtonElement).disabled, true);
-  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/thumbs/0.webp');
+  assert.equal(view.getByRole('img', { name: 'Angel Lady' }).getAttribute('src'), 'https://cdn.lil.org/player/mi_note/mid/0.webp');
   assert.equal((view.getByRole('button', { name: 'Confirming… for 0.25 SOL' }) as HTMLButtonElement).disabled, true);
   assert.equal((view.getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled, true);
   fireEvent.click(view.getByRole('button', { name: /Select preorder #2:/ }));
@@ -293,7 +293,7 @@ test('restoring a pending preorder clears unrelated picks and resumes only the s
       assets: [], status: 'prepared', expiresAtMs: Date.now() + 60_000, signature: null },
   } }));
   assert.equal(card.getAttribute('aria-pressed'), 'false');
-  assert.match(document.querySelector<HTMLElement>('.selection-panel__thumb')!.style.backgroundImage, /thumbs\/1.webp/);
+  assert.match(document.querySelector<HTMLElement>('.selection-panel__thumb')!.style.backgroundImage, /mid\/1.webp/);
   await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Continue preorder for 0.25 SOL' })); });
   assert.deepEqual(purchased, [2]);
   view.rerender(createElement(MiNoteCardsGallery, { preorder: connected }));
