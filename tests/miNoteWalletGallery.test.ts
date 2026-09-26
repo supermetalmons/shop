@@ -100,7 +100,7 @@ function rig() {
     const collection = getPreorderConfig(preorderId)!;
     const wallet = useMiNoteEthereumWallet(active);
     const verification = useMiNoteVerification(active, collection.preorderId, wallet);
-    const preorder = usePreorderCheckout({ config: collection, active, buyer: admin ? ADMIN : undefined, signedIn: admin,
+    const preorder = usePreorderCheckout({ config: collection, active, buyer: admin ? ADMIN : undefined, signedIn: admin, authenticatedBuyer: admin ? ADMIN : undefined,
       ethereumSession: verification.session, onEthereumSessionInvalid: verification.invalidate,
       signTransaction: undefined, ensureSignedIn: async () => false, onSucceeded: () => {},
     }, api);

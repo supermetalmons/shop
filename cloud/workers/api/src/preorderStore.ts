@@ -79,11 +79,11 @@ export class PreorderStore {
     ]);
   }
 
-  async claims(cluster: string, collection: string): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string }>> {
-    const result = await this.db.prepare(`SELECT claims.card_id, claims.order_id, orders.status
+  async claims(cluster: string, collection: string): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string }>> {
+    const result = await this.db.prepare(`SELECT claims.card_id, claims.order_id, orders.status, orders.buyer
       FROM commerce_preorder_claims AS claims JOIN commerce_preorder_orders AS orders ON orders.order_id = claims.order_id
       WHERE claims.cluster = ? AND claims.collection = ?`).bind(cluster, collection).all<Record<string, unknown>>();
-    return result.results.map((row) => ({ id: Number(row.card_id), orderId: String(row.order_id),
+    return result.results.map((row) => ({ id: Number(row.card_id), orderId: String(row.order_id), buyer: String(row.buyer),
       status: row.status === 'succeeded' ? 'preordered' : 'reserved' }));
   }
 

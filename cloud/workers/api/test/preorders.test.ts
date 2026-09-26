@@ -130,6 +130,51 @@ test('availability permits verified Ethereum access before a Solana wallet has s
   assert.equal(invalidCredentials.status, 401);
 });
 
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} availability shows claimed cards only to their original Solana buyer with current Ethereum ownership`, async () => {
+    const h = harness();
+    h.holdings([1, 2, 3, 4, 5]);
+    const claim = async (buyer: string, id: number, succeeded: boolean) => {
+      h.wallet(buyer);
+      const prepared = await h.call('prepare', { preorderId, buyer, cardIds: [id], requestId: crypto.randomUUID() });
+      assert.equal(prepared.status, 200);
+      if (succeeded) {
+        const order = (await h.store.get(prepared.body.order.orderId))!;
+        const submitted = await h.store.submit(order, { transactionBase64: 'signed', signature: `signature-${id}` }, 1000);
+        await h.store.finish(submitted, 'succeeded', 1000);
+      }
+    };
+    const availability = async () => {
+      const response = await h.call('availability', { preorderId });
+      assert.equal(response.status, 200);
+      return response.body.items;
+    };
+    await claim(BUYER, 1, true);
+    await claim(OTHER, 2, true);
+    await claim(BUYER, 3, false);
+    await claim(OTHER, 4, false);
+
+    assert.deepEqual(await availability(), [
+      { id: 2, status: 'preordered' }, { id: 4, status: 'reserved' }, { id: 5, status: 'available' },
+    ]);
+    h.wallet(BUYER);
+    assert.deepEqual(await availability(), [
+      { id: 1, status: 'preordered' }, { id: 3, status: 'reserved' }, { id: 5, status: 'available' },
+    ]);
+    h.signedIn(false);
+    assert.deepEqual(await availability(), [{ id: 5, status: 'available' }]);
+
+    h.ethereum(OTHER_ETHEREUM);
+    h.holdings([1, 2, 5]);
+    h.signedIn(true);
+    assert.deepEqual(await availability(), [{ id: 1, status: 'preordered' }, { id: 5, status: 'available' }]);
+    h.wallet(OTHER);
+    assert.deepEqual(await availability(), [{ id: 2, status: 'preordered' }, { id: 5, status: 'available' }]);
+    h.holdings([5]);
+    assert.deepEqual(await availability(), [{ id: 5, status: 'available' }]);
+  });
+}
+
 test('signed-in availability POST verifies the real anonymous cookie binding while ETH-only GET needs no Solana session', async () => {
   const h = harness();
   h.database.exec(`CREATE TABLE anonymous_auth_sessions (
@@ -448,6 +493,8 @@ test('finalized success permanently consumes IDs and exposes recent assets for v
   assert.equal(result.body.order.status, 'succeeded');
   assert.equal((await h.call('availability', { preorderId: config.preorderId })).body.items[1394].status, 'preordered');
   h.wallet(OTHER);
+  const availability = await h.call('availability', { preorderId: config.preorderId });
+  assert.equal(availability.body.items.some((item: { id: number }) => item.id === 1 || item.id === 1395), false);
   assert.equal((await h.prepare([1])).status, 409);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_claims'), /permanent/);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_orders'), /permanent/);

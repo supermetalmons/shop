@@ -49,7 +49,7 @@ function runtime() {
     status: async () => ({ order: null }),
   };
   const options = {
-    config, active: true, buyer, signedIn: true, ethereumSession,
+    config, active: true, buyer, signedIn: true, authenticatedBuyer: buyer, ethereumSession,
     ensureSignedIn: async () => true,
     signTransaction: async (tx: VersionedTransaction) => { calls.signed += 1; tx.sign([payer]); return tx; },
     onSucceeded: (value: PreorderOrder) => { calls.succeeded.push(value); },
@@ -126,7 +126,7 @@ test('switching buyer during wallet prompt prevents submission of the old transa
   const { api, options, calls } = runtime();
   let finishSigning!: (value: VersionedTransaction) => void;
   options.signTransaction = async () => new Promise((resolve) => { finishSigning = resolve; });
-  const { result, rerender } = renderHook((buyerValue) => usePreorderCheckout({ ...options, buyer: buyerValue }, api), { initialProps: buyer });
+  const { result, rerender } = renderHook((buyerValue) => usePreorderCheckout({ ...options, buyer: buyerValue, authenticatedBuyer: buyerValue }, api), { initialProps: buyer });
   let purchase!: Promise<void>;
   act(() => { purchase = result.current.purchase([1]); });
   await waitFor(() => assert.equal(result.current.phase, 'signing'));
@@ -310,7 +310,8 @@ for (const change of ['buyer', 'route'] as const) {
     act(() => { abandonment = result.current.cancel(); });
     await waitFor(() => assert.equal(typeof finishStatus, 'function'));
     api.status = async () => ({ order: null });
-    rerender(change === 'buyer' ? { ...options, buyer: Keypair.generate().publicKey.toBase58() }
+    const nextBuyer = Keypair.generate().publicKey.toBase58();
+    rerender(change === 'buyer' ? { ...options, buyer: nextBuyer, authenticatedBuyer: nextBuyer }
       : { ...options, config: getPreorderConfig('mi_note_cards')!, ethereumSession: mainnetSession });
     await act(async () => { finishStatus({ order: null }); await abandonment; });
     assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), saved);
@@ -967,7 +968,7 @@ test('returning to an earlier wallet does not revive its old signing operation o
   const { api, options, calls } = runtime();
   let finishOldSigning!: (value: VersionedTransaction) => void;
   options.signTransaction = async () => new Promise((resolve) => { finishOldSigning = resolve; });
-  const view = renderHook((buyerValue) => usePreorderCheckout({ ...options, buyer: buyerValue }, api), { initialProps: buyer });
+  const view = renderHook((buyerValue) => usePreorderCheckout({ ...options, buyer: buyerValue, authenticatedBuyer: buyerValue }, api), { initialProps: buyer });
   let oldPurchase!: Promise<void>;
   act(() => { oldPurchase = view.result.current.purchase([1]); });
   await waitFor(() => assert.equal(view.result.current.phase, 'signing'));
@@ -1016,7 +1017,7 @@ test('another tab restoring sign-in preserves the active request and wallet sign
   };
   api.status = async () => ({ order: serverOrder });
   const firstTab = renderHook(() => usePreorderCheckout(options, api));
-  const restoredTab = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn }, api), { initialProps: false });
+  const restoredTab = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn, authenticatedBuyer: signedIn ? buyer : undefined }, api), { initialProps: false });
   await waitFor(() => assert.equal(firstTab.result.current.recoveryReady, true));
   let purchase!: Promise<void>;
   act(() => { purchase = firstTab.result.current.purchase([1]); });
@@ -1047,7 +1048,7 @@ test('sign-in recovery preserves a same-order submission attempt newer than its 
   const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
   const previous = { requestId: 'request-1', cardIds: submitted.cardIds, orderId: submitted.orderId, ethereumAddress: ethereumSession.address };
   window.localStorage.setItem(key, JSON.stringify(previous));
-  const view = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn }, api), { initialProps: false });
+  const view = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn, authenticatedBuyer: signedIn ? buyer : undefined }, api), { initialProps: false });
   assert.equal(view.result.current.pending?.submittedAttempt, undefined);
   const latest = { ...previous, submittedAttempt: true };
   const saved = JSON.stringify(latest);
@@ -1062,7 +1063,7 @@ test('sign-in recovery preserves a same-order submission attempt newer than its 
 test('recovery preserves the current stored order when its status response is invalid', async () => {
   const { api, options } = runtime();
   const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-  const view = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn }, api), { initialProps: false });
+  const view = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn, authenticatedBuyer: signedIn ? buyer : undefined }, api), { initialProps: false });
   const prepared = order();
   const saved = {
     requestId: 'another-request', cardIds: prepared.cardIds, orderId: 'another-order', submittedAttempt: true,
@@ -1093,7 +1094,7 @@ test('sign-in restoration follows the new checkout instead of clearing it for an
     },
   };
   window.localStorage.setItem(key, JSON.stringify({ requestId: 'request-1', cardIds: previous.cardIds, orderId: previous.orderId, submittedAttempt: true }));
-  const restoredTab = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn }, restoredApi), { initialProps: false });
+  const restoredTab = renderHook((signedIn) => usePreorderCheckout({ ...options, signedIn, authenticatedBuyer: signedIn ? buyer : undefined }, restoredApi), { initialProps: false });
   window.localStorage.removeItem(key);
   let finishSigning!: (value: VersionedTransaction) => void;
   options.signTransaction = async () => {
@@ -1310,10 +1311,10 @@ test('Ethereum-verified mainnet loads availability before Solana sign-in without
   const requested: string[] = [];
   api.availability = async (preorderId) => {
     requested.push(preorderId);
-    return { ...ownership, preorderId, items: [{ id: 1, status: 'preordered' }] };
+    return { ...ownership, preorderId, items: [{ id: 1, status: 'available' }] };
   };
   api.status = async () => { throw new Error('Mainnet must not recover checkout'); };
-  const { result } = renderHook(() => usePreorderCheckout({ ...options, config: mainnet, ethereumSession: mainnetSession, buyer: undefined, signedIn: false }, api));
+  const { result } = renderHook(() => usePreorderCheckout({ ...options, config: mainnet, ethereumSession: mainnetSession, buyer: undefined, signedIn: false, authenticatedBuyer: undefined }, api));
   await waitFor(() => assert.equal(result.current.availability?.preorderId, mainnet.preorderId));
   assert.deepEqual(requested, [mainnet.preorderId]);
   await act(async () => { await result.current.purchase([1]); await result.current.cancel(); });
@@ -1323,6 +1324,53 @@ test('Ethereum-verified mainnet loads availability before Solana sign-in without
   assert.equal(result.current.error, null);
 });
 
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  for (const change of ['switching buyers', 'signing out'] as const) {
+    test(`${preorderId} restores disconnected buyers' preorders and ${change} discards prior availability`, async () => {
+      const { api, options } = runtime();
+      const nextBuyer = Keypair.generate().publicKey.toBase58();
+      const nextAuthenticatedBuyer = change === 'switching buyers' ? nextBuyer : undefined;
+      type Availability = Awaited<ReturnType<typeof api.availability>>;
+      const requests: { authenticated: boolean | undefined; resolve: (value: Availability) => void }[] = [];
+      api.availability = (_preorderId, _session, authenticated) => new Promise((resolve) => {
+        requests.push({ authenticated, resolve });
+      });
+      api.status = async () => { throw new Error('Disconnected viewing must not recover checkout'); };
+      const observed: { authenticatedBuyer: string | undefined; availability: Availability | null }[] = [];
+      const { result, rerender } = renderHook((authenticatedBuyer: string | undefined) => {
+        const value = usePreorderCheckout({
+          ...options, config: getPreorderConfig(preorderId)!, ethereumSession: sessionFor(preorderId),
+          buyer: undefined, signedIn: false, signTransaction: undefined, authenticatedBuyer,
+        }, api);
+        observed.push({ authenticatedBuyer, availability: value.availability });
+        return value;
+      }, { initialProps: buyer });
+      const previous: Availability = { ...ownership, preorderId, items: [{ id: 1, status: 'preordered' }, { id: 2, status: 'available' }] };
+      await act(async () => { requests[0].resolve(previous); });
+      assert.deepEqual(result.current.availability, previous);
+
+      let previousRefresh!: Promise<void>;
+      act(() => { previousRefresh = result.current.refreshAvailability(); });
+      assert.equal(requests.length, 2);
+      rerender(nextAuthenticatedBuyer);
+      assert.equal(result.current.availability, null);
+      assert.equal(observed.find((value) => value.authenticatedBuyer === nextAuthenticatedBuyer)?.availability, null);
+      assert.deepEqual(requests.map((request) => request.authenticated), [true, true, Boolean(nextAuthenticatedBuyer)]);
+
+      const current: Availability = { ...ownership, preorderId, items: [
+        { id: 2, status: 'available' },
+        ...(nextAuthenticatedBuyer ? [{ id: 3, status: 'preordered' as const }] : []),
+      ] };
+      await act(async () => { requests[2].resolve(current); });
+      assert.deepEqual(result.current.availability, current);
+      await act(async () => { requests[1].resolve(previous); await previousRefresh; });
+      assert.deepEqual(result.current.availability, current);
+      assert.ok(observed.filter((value) => value.authenticatedBuyer === nextAuthenticatedBuyer)
+        .every((value) => !value.availability || value.availability === current));
+    });
+  }
+}
+
 test('collection changes hide old availability and errors and discard late responses', async () => {
   const { api, options } = runtime();
   const mainnet = getPreorderConfig('mi_note_cards')!;
@@ -1331,7 +1379,7 @@ test('collection changes hide old availability and errors and discard late respo
   api.availability = (preorderId) => new Promise((resolve, reject) => { requests.push({ preorderId, resolve, reject }); });
   const observed: { preorderId: string; data: Availability | null; error: string | null }[] = [];
   const { result, rerender } = renderHook((nextConfig) => {
-    const value = usePreorderCheckout({ ...options, config: nextConfig, ethereumSession: sessionFor(nextConfig.preorderId), buyer: undefined, signedIn: false }, api);
+    const value = usePreorderCheckout({ ...options, config: nextConfig, ethereumSession: sessionFor(nextConfig.preorderId), buyer: undefined, signedIn: false, authenticatedBuyer: undefined }, api);
     observed.push({ preorderId: nextConfig.preorderId, data: value.availability, error: value.availabilityError });
     return value;
   }, { initialProps: config });
@@ -1382,7 +1430,7 @@ test('an inactive collection refresh cannot block or overwrite a newly active co
   const requests: { preorderId: string; resolve: (value: Availability) => void }[] = [];
   api.availability = (preorderId) => new Promise((resolve) => { requests.push({ preorderId, resolve }); });
   const { result, rerender } = renderHook(({ nextConfig, active }) => usePreorderCheckout({
-    ...options, config: nextConfig, ethereumSession: sessionFor(nextConfig.preorderId), active, buyer: undefined, signedIn: false,
+    ...options, config: nextConfig, ethereumSession: sessionFor(nextConfig.preorderId), active, buyer: undefined, signedIn: false, authenticatedBuyer: undefined,
   }, api), { initialProps: { nextConfig: config, active: false } });
   act(() => { void result.current.refreshAvailability(); });
   rerender({ nextConfig: mainnet, active: true });

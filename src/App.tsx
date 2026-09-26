@@ -167,6 +167,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
     active: preorderActive,
     buyer: connectedWallet,
     signedIn: isSignedInWallet,
+    authenticatedBuyer: account.authenticatedWallet,
     ethereumSession: ethereumVerification.session,
     onEthereumSessionInvalid: ethereumVerification.invalidate,
     signTransaction: wallet.signTransaction,

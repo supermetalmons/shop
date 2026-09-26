@@ -191,10 +191,14 @@ export async function handlePreorderRequest(
         }
         authenticated = true;
         const owned = await eligibility(session.address, optionalBuyer, false);
-        const claims = new Map((await store.claims(config.cluster, config.collection)).map((claim) => [claim.id, claim.status]));
+        const claims = new Map((await store.claims(config.cluster, config.collection)).map((claim) => [claim.id, claim]));
         return { response: jsonResponse({ preorderId: config.preorderId, ethereumAddress: session.address,
           ownershipStatus: owned.ownershipStatus, requiresAdminSignIn: owned.requiresAdminSignIn,
-          items: owned.cardIds.map((id) => ({ id, status: claims.get(id) || 'available' })) }, 200),
+          items: owned.cardIds.flatMap((id) => {
+            const claim = claims.get(id);
+            if (claim && claim.buyer !== optionalBuyer) return [];
+            return [{ id, status: claim?.status ?? 'available' }];
+          }) }, 200),
           metrics, authOutcome: 'accepted' as const };
       }
       const identity = await authenticate();

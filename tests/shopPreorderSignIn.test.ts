@@ -115,7 +115,7 @@ function rig() {
       showToast: (message) => { messages.push(message); },
     });
     const preorder = usePreorderCheckout({
-      config, active: props.scopeKey === initial.scopeKey, buyer: connectedWallet, signedIn: authenticated,
+      config, active: props.scopeKey === initial.scopeKey, buyer: connectedWallet, signedIn: authenticated, authenticatedBuyer: authenticatedWallet ?? undefined,
       ethereumSession: props.ethereumAddress === secondEthereumSession.address ? secondEthereumSession : ethereumSession,
       ensureSignedIn: continuation.ensureActionSignedIn,
       signTransaction: publicKey ? async (tx) => { calls.transactionSign += 1; tx.sign([payer]); return tx; } : undefined,

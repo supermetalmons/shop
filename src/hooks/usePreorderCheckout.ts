@@ -18,6 +18,7 @@ type CheckoutOptions = {
   active: boolean;
   buyer: string | undefined;
   signedIn: boolean;
+  authenticatedBuyer: string | undefined;
   ethereumSession: MiNoteEthereumSession | null;
   onEthereumSessionInvalid?: () => void;
   signTransaction: ((transaction: VersionedTransaction) => Promise<VersionedTransaction>) | undefined;
@@ -70,7 +71,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api = preorderApi)
   const currentScope = useRef(scope);
   currentScope.current = scope;
   const { availability, availabilityError, refreshAvailability } = usePreorderAvailability(config, active, api,
-    options.ethereumSession, signedIn ? buyer : undefined, options.onEthereumSessionInvalid);
+    options.ethereumSession, options.authenticatedBuyer, options.onEthereumSessionInvalid);
   const [order, setOrder] = useState<PreorderOrder | null>(null);
   const [pending, setPending] = useState<PendingPreorder | null>(null);
   const pendingRef = useRef<PendingPreorder | null>(null);

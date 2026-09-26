@@ -353,7 +353,7 @@ for (const [status, code, message] of [
     let current!: PreorderCheckout;
     function Harness() {
       current = usePreorderCheckout({
-        config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer: initial.config.collection, signedIn: true,
+        config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer: initial.config.collection, signedIn: true, authenticatedBuyer: initial.config.collection,
         ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
       }, api);
       return createElement(MiNoteCardsGallery, { preorder: current });
@@ -397,7 +397,7 @@ test('a completed order from another Ethereum wallet does not hide a failed prep
   let current!: PreorderCheckout;
   function Harness() {
     current = usePreorderCheckout({
-      config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer: initial.config.collection, signedIn: true,
+      config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer: initial.config.collection, signedIn: true, authenticatedBuyer: initial.config.collection,
       ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
     }, api);
     return createElement(MiNoteCardsGallery, { preorder: current });
@@ -433,7 +433,7 @@ test('a failed preparation can be abandoned after switching Ethereum wallets and
   let current!: PreorderCheckout;
   function Harness({ session }: { session: typeof ETH_SESSION }) {
     current = usePreorderCheckout({
-      config: initial.config, active: true, ethereumSession: session, buyer: initial.config.collection, signedIn: true,
+      config: initial.config, active: true, ethereumSession: session, buyer: initial.config.collection, signedIn: true, authenticatedBuyer: initial.config.collection,
       ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
     }, api);
     return createElement(MiNoteCardsGallery, { preorder: current, wallet: { ...WALLET, address: session.address },
@@ -739,7 +739,7 @@ test('legacy request-only recovery restores card selection after confirming no s
   let current!: PreorderCheckout;
   function Harness() {
     current = usePreorderCheckout({
-      config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer, signedIn: true,
+      config: initial.config, active: true, ethereumSession: ETH_SESSION, buyer, signedIn: true, authenticatedBuyer: buyer,
       ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
     }, api);
     return createElement(MiNoteCardsGallery, { preorder: current });
@@ -789,7 +789,7 @@ for (const ethereumAddress of [null, ADDRESS, '0x1111111111111111111111111111111
     };
     let current!: PreorderCheckout;
     function Harness() {
-      current = usePreorderCheckout({ config: initial.config, active: true, buyer, signedIn: true, ethereumSession: ETH_SESSION,
+      current = usePreorderCheckout({ config: initial.config, active: true, buyer, signedIn: true, authenticatedBuyer: buyer, ethereumSession: ETH_SESSION,
         ensureSignedIn: async () => true, signTransaction: forbidden, onSucceeded: () => {},
       }, api);
       return createElement(MiNoteCardsGallery, { preorder: current });
