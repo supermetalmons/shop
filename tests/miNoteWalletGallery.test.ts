@@ -113,6 +113,16 @@ function rig() {
 async function connectAndVerify(view: ReturnType<typeof render>) {
   fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Disconnect' })));
+  assertIntroduction(view, false);
+}
+
+function assertIntroduction(view: ReturnType<typeof render>, visible: boolean) {
+  assert.equal(Boolean(view.queryByRole('heading', { name: 'Preorder Mi Note Cards' })), visible);
+  for (const text of [
+    'One unique card for each Mi Note.',
+    'Preorders are open until October 8.',
+    'Cards reveal and public mint for the remaining cards on October 9.',
+  ]) assert.equal(Boolean(view.queryByText(text)), visible);
 }
 
 function assertUnsigned(view: ReturnType<typeof render>) {
@@ -124,6 +134,7 @@ function assertUnsigned(view: ReturnType<typeof render>) {
 
 function assertConnecting(view: ReturnType<typeof render>) {
   assert.equal((view.getByRole('button', { name: 'Connecting...' }) as HTMLButtonElement).disabled, true);
+  assertIntroduction(view, true);
   assert.equal(view.queryByRole('status'), null);
   assertUnsigned(view);
 }
@@ -179,13 +190,16 @@ test('reload restores a matching verified wallet quietly and disconnect prevents
   first.unmount();
   const restored = render(createElement(context.Harness, { admin: true }), { reactStrictMode: true });
   await waitFor(() => assert.equal(restored.getAllByRole('img').length, 10));
+  assertIntroduction(restored, false);
   assert.equal(wallet.calls.filter(call => call === 'personal_sign').length, 1);
   await act(async () => fireEvent.click(restored.getByRole('button', { name: 'Disconnect' })));
   assert.equal(restored.queryByRole('img'), null);
+  assertIntroduction(restored, true);
   await waitFor(() => assert.equal(context.logoutCount, 1));
   restored.unmount();
   const disconnected = await act(async () => render(createElement(context.Harness, { admin: true })));
   assert.ok(disconnected.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  assertIntroduction(disconnected, true);
 });
 
 test('wallet picker remains inline and supports cancellation and provider selection', async () => {
@@ -195,12 +209,15 @@ test('wallet picker remains inline and supports cancellation and provider select
   const view = render(createElement(context.Harness, { admin: true }));
   fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
   await waitFor(() => assert.ok(document.activeElement === view.getByRole('button', { name: 'Wallet 0' })));
+  assertIntroduction(view, false);
   fireEvent.keyDown(view.getByRole('button', { name: 'Wallet 0' }), { key: 'Escape' });
   assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  assertIntroduction(view, true);
   assert.deepEqual(context.authCalls, []);
   assert.equal(one.calls.length + two.calls.length, 0);
   fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Wallet 1' })));
+  assertIntroduction(view, false);
   fireEvent.click(view.getByRole('button', { name: 'Wallet 1' }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: /Select preorder #11:/ })));
   assert.equal(one.calls.length, 0);
@@ -217,6 +234,7 @@ test('a rejected wallet selected from the picker restores focus to Connect', asy
   await waitFor(() => assert.ok(document.activeElement === view.getByRole('button', { name: 'Wallet 0' })));
   fireEvent.click(view.getByRole('button', { name: 'Wallet 0' }));
   await waitFor(() => assert.ok(document.activeElement === view.getByRole('button', { name: 'Connect Ethereum Wallet' })));
+  assertIntroduction(view, true);
   assertUnsigned(view);
 });
 
@@ -231,6 +249,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     context.responses.challenge = async response => { await challenge.promise; return response; };
     context.responses.verify = async response => { await verification.promise; return response; };
     const view = render(createElement(context.Harness, { admin: true, preorderId }));
+    assertIntroduction(view, true);
     fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
     assertConnecting(view);
     await waitFor(() => assert.deepEqual(wallet.calls, ['eth_requestAccounts']));
@@ -250,6 +269,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     assert.ok(view.getByRole('button', { name: 'Disconnect' }));
     assert.ok(view.getByTitle(DISPLAY_ADDRESS));
     assert.equal(view.queryByRole('button', { name: /Connect/ }), null);
+    assertIntroduction(view, false);
     assert.deepEqual(wallet.calls, ['eth_requestAccounts', 'eth_chainId', 'personal_sign', 'eth_accounts']);
   });
 }

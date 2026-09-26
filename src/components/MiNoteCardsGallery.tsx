@@ -250,7 +250,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     <>
       <main className={`mi-note-cards${cards.length === 0 ? ' mi-note-cards--empty' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
         <div className="mi-note-cards__content">
-          {cards.length === 0 && <header className="mi-note-cards__header">
+          {!verified && wallet.status !== 'choosing' && <header className="mi-note-cards__header">
             <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
             <div className="mi-note-cards__intro">
               <p>One unique card for each Mi Note.</p>

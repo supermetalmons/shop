@@ -594,7 +594,7 @@ test('completed preorder selection clears when availability or gallery scope cha
   assert.equal(view.queryByRole('button', { name: 'View' }), null);
 });
 
-test('both routes show the introduction and collections before cards and require verification without address browsing', () => {
+test('both routes show the introduction before verification and keep collections visible without address browsing', () => {
   for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     window.history.replaceState(null, '', `/${preorderId}?address=0x1111111111111111111111111111111111111111`);
     const preorder = checkout();
@@ -613,7 +613,7 @@ test('both routes show the introduction and collections before cards and require
       ...preorder.availability!, preorderId, items: [],
     } } }));
     assert.ok(view.getByText('No Mi Notes available for preorder.'));
-    expectIntroduction(view, true);
+    expectIntroduction(view, false);
     expectCollectionLinks(view);
     view.unmount();
   }
@@ -702,7 +702,7 @@ test('initial Solana sign-in preserves picks while eligibility refreshes and rem
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'buyer', availability: null } }));
   assert.ok(view.getByLabelText('2 cards selected'));
   assert.ok(view.getByText('Loading...'));
-  expectIntroduction(view, true);
+  expectIntroduction(view, false);
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, buyer: 'buyer', availability: {
     ...preorder.availability!, items: preorder.availability!.items.filter(item => item.id !== 1),
   } } }));
