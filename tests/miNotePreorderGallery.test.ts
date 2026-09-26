@@ -9,7 +9,7 @@ import { ProfileApiError } from '../src/api/transport.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
-const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor, within } = await import('@testing-library/react');
 const cssImports = registerHooks({ load(url, context, nextLoad) {
   return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context);
 } });
@@ -43,7 +43,7 @@ function checkout(): PreorderCheckout {
 }
 
 function expectCollectionLinks(view: ReturnType<typeof render>) {
-  const links = view.getAllByRole('link');
+  const links = within(view.getByRole('navigation', { name: 'Mi Note collections' })).getAllByRole('link');
   assert.deepEqual(links.map(link => link.getAttribute('href')), [
     'https://opensea.io/collection/minote',
     'https://opensea.io/collection/mi-note2',
@@ -612,7 +612,7 @@ test('both routes show the introduction before verification and keep collections
     view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, availability: {
       ...preorder.availability!, preorderId, items: [],
     } } }));
-    assert.ok(view.getByText('No Mi Notes available for preorder.'));
+    assert.ok(view.getByText('No Mi Notes available for preorder'));
     expectIntroduction(view, false);
     expectCollectionLinks(view);
     view.unmount();

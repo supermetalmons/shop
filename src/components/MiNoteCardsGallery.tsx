@@ -270,7 +270,11 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
                 {onAdminSignIn && <button type="button" disabled={preorder?.busy} onClick={() => { void onAdminSignIn(); }}>Sign in with Solana</button>}
               </div>}
               {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message mi-note-cards__message--centered" role="status">Loading...</p>}
-              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message mi-note-cards__message--centered" role="status">No Mi Notes available for preorder.</p>}
+              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message mi-note-cards__message--centered mi-note-cards__message--empty" role="status">
+                <span>No Mi Notes available for preorder</span>
+                <br /><br />
+                <a href="https://opensea.io/collection/mi-note-3" target="_blank" rel="noopener noreferrer" aria-label="Get on OpenSea (opens in a new tab)">Get on OpenSea</a>
+              </p>}
               {(preorder?.availabilityError || scopedAvailability?.ownershipStatus === 'partial') && <div className="mi-note-cards__error">
                 <p className="mi-note-cards__message" role="alert">{preorder?.availabilityError || 'Some cards couldn’t be loaded.'}</p>
                 <button type="button" className="ghost" onClick={() => { void preorder?.refreshAvailability(); }}>Try again</button>

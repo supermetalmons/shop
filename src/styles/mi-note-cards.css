@@ -147,6 +147,19 @@ body:has(.drop-page-frame--mi-note-cards) {
   margin-block: auto;
 }
 
+.mi-note-cards__message--empty {
+  transform: translateY(-24px);
+}
+
+.mi-note-cards__message a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.mi-note-cards__message a:hover {
+  color: var(--accent-hover);
+}
+
 .mi-note-cards__wallet-picker {
   display: flex;
   flex-direction: column;
