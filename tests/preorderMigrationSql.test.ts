@@ -55,7 +55,7 @@ test('expiry touches prepared orders and current claims without scanning permane
   const config = getPreorderConfig('mi_note_cards_devnet')!;
   const reserve = (id: number, expiresAtMs = 2000): Promise<StoredPreorder> => store.reserve({
     orderId: crypto.randomUUID(), preorderId: config.preorderId, cluster: config.cluster, collection: config.collection,
-    buyer: `buyer-${id}`, requestId: crypto.randomUUID(), cardIds: [id], assets: [{ id, address: `asset-${id}` }],
+    buyer: `buyer-${id}`, ethereumAddress: '0x0000000000000000000000000000000000000001', requestId: crypto.randomUUID(), cardIds: [id], assets: [{ id, address: `asset-${id}` }],
     status: 'prepared', expiresAtMs, signature: null, preparedTransaction: 'partial', signedTransaction: null,
     blockhash: 'hash', blockhashContextSlot: 1, lastValidBlockHeight: 100, createdAtMs: 1000, revision: 1,
   });
@@ -78,4 +78,37 @@ test('expiry touches prepared orders and current claims without scanning permane
   assert.equal((await store.get(submitted.orderId))!.status, 'submitted');
   assert.deepEqual((await store.claims(config.cluster, config.collection)).map((claim) => claim.id).sort(), [3, 4, 5]);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').get()!.count, 5);
+});
+
+test('Ethereum ownership migration preserves submitted legacy orders and fences unsigned legacy submission', async (context) => {
+  const { database, db } = createCommerceD1Harness({ preorderEthereumMigration: false });
+  context.after(() => database.close());
+  const config = getPreorderConfig('mi_note_cards_devnet')!;
+  for (const id of [1, 2]) {
+    database.prepare(`INSERT INTO commerce_preorder_orders (
+      order_id, preorder_id, cluster, collection, buyer, request_id, card_ids_json, assets_json,
+      status, prepared_transaction, blockhash, blockhash_context_slot, last_valid_block_height,
+      expires_at_ms, created_at_ms, updated_at_ms, next_check_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'prepared', 'partial', 'hash', 1, 100, 121000, 1000, 1000, 121000)`)
+      .run(`legacy-${id}`, config.preorderId, config.cluster, config.collection, `buyer-${id}`, `request-${id}`,
+        JSON.stringify([id]), JSON.stringify([{ id, address: `asset-${id}` }]));
+    database.prepare('INSERT INTO commerce_preorder_claims VALUES (?, ?, ?, ?)')
+      .run(config.cluster, config.collection, id, `legacy-${id}`);
+  }
+  database.exec(`UPDATE commerce_preorder_orders SET status = 'submitted', signature = 'signature',
+    signed_transaction = 'signed', revision = revision + 1 WHERE order_id = 'legacy-2'`);
+  const sql = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0021_preorder_ethereum_ownership.sql', import.meta.url), 'utf8');
+  assert.doesNotMatch(sql, /\bSELECT\s+CASE\b/i);
+  const statements = unstable_splitSqlQuery(sql);
+  assert.equal(statements.length, 5);
+  for (const statement of statements) database.prepare(statement).run();
+  const store = new PreorderStore(db);
+  const prepared = (await store.get('legacy-1'))!;
+  const submitted = (await store.get('legacy-2'))!;
+  assert.equal(prepared.ethereumAddress, null);
+  assert.equal(submitted.ethereumAddress, null);
+  await assert.rejects(store.submit(prepared, { transactionBase64: 'signed', signature: 'signature' }, 2000), /invalid preorder transition/);
+  assert.equal((await store.finish(prepared, 'cancelled', 2000)).status, 'cancelled');
+  assert.equal((await store.finish(submitted, 'succeeded', 2000)).status, 'succeeded');
+  assert.deepEqual((await store.claims(config.cluster, config.collection)).map((claim) => claim.id), [2]);
 });

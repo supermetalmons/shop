@@ -106,6 +106,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       '0004_repair_ready_notification_cursor.sql',
       '0005_remove_redundant_anonymous_auth_subject_index.sql',
       '0006_cover_expiry_cleanup_indexes.sql',
+      '0007_mi_note_auth.sql',
     ]);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
       FROM sqlite_schema

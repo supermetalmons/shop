@@ -106,13 +106,14 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(miNotePreflight.status, 204);
     assert.equal(miNotePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(miNotePreflight.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
-    const miNoteMissingAddress = await worker.fetch('https://api.mons.shop/mi-note-cards', {
+    assert.equal(miNotePreflight.headers.get('access-control-allow-methods'), 'GET, POST, OPTIONS');
+    assert.match(miNotePreflight.headers.get('access-control-allow-headers') || '', /X-Mi-Note-Session/);
+    const miNoteMissingPreorder = await worker.fetch('https://api.mons.shop/mi-note-cards', {
       headers: { Origin: 'https://mons.shop' },
     });
-    assert.equal(miNoteMissingAddress.status, 400);
-    assert.deepEqual(await miNoteMissingAddress.json(), { ok: false, error: 'invalid-request' });
-    assert.equal(miNoteMissingAddress.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
+    assert.equal(miNoteMissingPreorder.status, 400);
+    assert.deepEqual(await miNoteMissingPreorder.json(), { ok: false, error: 'invalid-request' });
+    assert.equal(miNoteMissingPreorder.headers.get('access-control-allow-methods'), 'GET, POST, OPTIONS');
 
     const inventoryPreflight = await worker.fetch('https://api.mons.shop/inventory', {
       method: 'OPTIONS',

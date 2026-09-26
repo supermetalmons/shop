@@ -7,9 +7,13 @@ import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { readBoundedRequestJson } from './boundedRequest.js';
+import type { DeferredWork } from './deferredWork.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import { ProfileReadError } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { MiNoteAuthError, verifyMiNoteSession } from './miNoteAuth.js';
+import { assertMiNoteEligibility, loadMiNoteEligibility } from './miNoteEligibility.js';
+import type { WorkerDependencies } from './publicRouteSupport.js';
 import { PreorderStore, publicPreorder, type StoredPreorder } from './preorderStore.js';
 import {
   authorizePreorderTransaction, isPreorderBlockhashValid, preparePreorderTransaction,
@@ -26,6 +30,7 @@ const prepareSchema = z.object({
 }).strict();
 const submitSchema = orderSchema.extend({ transactionBase64: z.string().min(1).max(2000) });
 const statusSchema = z.object({ preorderId: idSchema, orderId: z.string().uuid().optional() }).strict();
+const availabilitySchema = z.object({ preorderId: idSchema }).strict();
 
 type PreorderDependencies = {
   nowMs: () => number;
@@ -38,12 +43,17 @@ type PreorderDependencies = {
   probe: typeof probePreorderTransaction;
   send: typeof sendPreorderTransaction;
   blockhashValid: typeof isPreorderBlockhashValid;
+  verifyEthereumSession: typeof verifyMiNoteSession;
+  eligibility: typeof loadMiNoteEligibility;
+  cache: WorkerDependencies['cache'];
+  log: WorkerDependencies['log'];
 };
 
 const defaults: PreorderDependencies = {
   nowMs: Date.now, providerFetch: (input, init) => fetch(input, init), timeoutMs: 45_000,
   verifyIdentity: verifyRequestIdentity, prepare: preparePreorderTransaction, authorize: authorizePreorderTransaction,
   probe: probePreorderTransaction, send: sendPreorderTransaction, blockhashValid: isPreorderBlockhashValid,
+  verifyEthereumSession: verifyMiNoteSession, eligibility: loadMiNoteEligibility, cache: null, log: (entry) => console.log(entry),
 };
 
 function collectionConfig(preorderId: string): PreorderConfig {
@@ -56,7 +66,7 @@ function collectionConfig(preorderId: string): PreorderConfig {
 
 function enabledConfig(preorderId: string): PreorderConfig {
   const config = collectionConfig(preorderId);
-  if (!config.enabled || config.cluster !== 'devnet') {
+  if (!config.enabled) {
     throw new ProfileReadError('failed-precondition', 409, 'Preorders are not available for this collection.');
   }
   return config;
@@ -105,7 +115,10 @@ async function reconcileOrder(
   return (await store.get(order.orderId))!;
 }
 
-function assertRequestMatches(order: StoredPreorder, ids: number[]): void {
+function assertRequestMatches(order: StoredPreorder, ids: number[], ethereumAddress: string): void {
+  if (order.ethereumAddress !== ethereumAddress) {
+    throw new ProfileReadError('permission-denied', 403, 'This preorder belongs to another verified Ethereum wallet.');
+  }
   if (order.cardIds.length !== ids.length || order.cardIds.some((id, index) => id !== ids[index])) {
     throw new ProfileReadError('failed-precondition', 409, 'This request ID belongs to a different selection.');
   }
@@ -130,24 +143,27 @@ async function enforcePrepareLimit(env: Env, request: Request, buyer: string, su
 
 export async function handlePreorderRequest(
   request: Request, env: Env, authContext: RequestAuthContext = {}, overrides: Partial<PreorderDependencies> = {},
+  defer?: DeferredWork,
 ) {
   const dependencies = { ...defaults, ...overrides };
   const path = new URL(request.url).pathname;
-  const expectedMethod = path.endsWith('/availability') ? 'GET' : 'POST';
-  if (request.method !== expectedMethod) {
+  const availabilityRequest = path === '/preorders/availability';
+  const expectedMethods = availabilityRequest ? ['GET', 'POST'] : ['POST'];
+  if (!expectedMethods.includes(request.method)) {
     await request.body?.cancel().catch(() => undefined);
     return { response: jsonResponse({ error: { code: 'invalid-argument', message: 'Method not allowed.' } }, 405,
-      { headers: { Allow: `${expectedMethod}, OPTIONS` } }), metrics: { upstreamCalls: 0, providerDurationMs: 0 }, authOutcome: 'rejected' as const };
+      { headers: { Allow: `${expectedMethods.join(', ')}, OPTIONS` } }), metrics: { upstreamCalls: 0, providerDurationMs: 0 }, authOutcome: 'rejected' as const };
   }
-  return withAuthenticatedRequest(request, { authContext, opsDb: env.OPS_DB, dependencies,
+  const deferred: Promise<unknown>[] = [];
+  const result = await withAuthenticatedRequest(request, { authContext, opsDb: env.OPS_DB, dependencies,
     timeoutMessage: 'Preorder request timed out.' }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
     const deps = { ...dependencies, providerFetch: trackedFetch };
     let authenticated = false;
     try {
-      const raw = expectedMethod === 'GET' ? Object.fromEntries(new URL(request.url).searchParams)
+      const raw = request.method === 'GET' ? Object.fromEntries(new URL(request.url).searchParams)
         : await readBoundedRequestJson(request, { maxBytes: 4096, signal: deadline.signal,
           createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid preorder request.') });
-      const schema = path.endsWith('/prepare') ? prepareSchema : path.endsWith('/submit') ? submitSchema
+      const schema = availabilityRequest ? availabilitySchema : path.endsWith('/prepare') ? prepareSchema : path.endsWith('/submit') ? submitSchema
         : path.endsWith('/cancel') ? orderSchema : statusSchema;
       const parsed = schema.safeParse(raw);
       if (!parsed.success) throw new ProfileReadError('invalid-argument', 400, 'Invalid preorder request.');
@@ -157,11 +173,28 @@ export async function handlePreorderRequest(
         throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
       }
       const store = new PreorderStore(env.COMMERCE_DB);
-      if (config.enabled && config.cluster === 'devnet') await store.expirePrepared(deps.nowMs());
+      if (config.enabled) await store.expirePrepared(deps.nowMs());
+      const eligibility = (address: string, buyer: string | null, fresh: boolean) => deps.eligibility({
+        request, env, config, address, buyer, fresh, deadline, metrics,
+        dependencies: { providerFetch: dependencies.providerFetch, cache: deps.cache, log: deps.log, now: deps.nowMs },
+        defer: defer ?? ((work) => deferred.push(work)),
+      });
       if (path === '/preorders/availability') {
+        const session = await deps.verifyEthereumSession(request, env.OPS_DB, config.preorderId, deps.nowMs());
+        let optionalBuyer: string | null = null;
+        if (authContext.verifiedStaffIdentity || request.headers.has('Authorization') || request.headers.get('Cookie')?.trim()) {
+          const identity = await authenticate();
+          optionalBuyer = await resolveRequestWallet(identity, async (subject) => {
+            const resolution = await resolveD1AuthWalletBinding(env.OPS_DB, subject, deadline.signal);
+            return 'reason' in resolution ? null : resolution.wallet;
+          });
+        }
+        authenticated = true;
+        const owned = await eligibility(session.address, optionalBuyer, false);
         const claims = new Map((await store.claims(config.cluster, config.collection)).map((claim) => [claim.id, claim.status]));
-        return { response: jsonResponse({ preorderId: config.preorderId,
-          items: Array.from({ length: PREORDER_CARD_COUNT }, (_, index) => ({ id: index + 1, status: claims.get(index + 1) || 'available' })) }, 200),
+        return { response: jsonResponse({ preorderId: config.preorderId, ethereumAddress: session.address,
+          ownershipStatus: owned.ownershipStatus, requiresAdminSignIn: owned.requiresAdminSignIn,
+          items: owned.cardIds.map((id) => ({ id, status: claims.get(id) || 'available' })) }, 200),
           metrics, authOutcome: 'accepted' as const };
       }
       const identity = await authenticate();
@@ -176,9 +209,10 @@ export async function handlePreorderRequest(
         if (canonicalWalletAddress(input.buyer) !== buyer) throw new ProfileReadError('permission-denied', 403, 'Wallet session does not match the buyer.');
         const ids = [...input.cardIds].sort((left, right) => left - right);
         if (new Set(ids).size !== ids.length) throw new ProfileReadError('invalid-argument', 400, 'Select each card only once.');
+        const session = await deps.verifyEthereumSession(request, env.OPS_DB, config.preorderId, deps.nowMs());
         let existing = await store.request(config.preorderId, buyer, input.requestId);
         if (existing) {
-          assertRequestMatches(existing, ids);
+          assertRequestMatches(existing, ids, session.address);
           existing = await reconcileOrder(existing, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
           return { response: jsonResponse(preparedResponse(existing), 200), metrics, authOutcome: 'accepted' as const };
         }
@@ -195,18 +229,19 @@ export async function handlePreorderRequest(
           const reserved = await store.get(orderId);
           if (reserved) await reconcileOrder(reserved, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
         }
+        assertMiNoteEligibility(await eligibility(session.address, buyer, true), ids);
         const prepared = await deps.prepare({ ...rpcArgs(env, config, deps, deadline.signal), buyer, ids, cosignerSecret: env.COSIGNER_SECRET });
         const nowMs = deps.nowMs();
-        const order = await store.reserve({ orderId: crypto.randomUUID(), preorderId: config.preorderId, buyer,
+        const order = await store.reserve({ orderId: crypto.randomUUID(), preorderId: config.preorderId, buyer, ethereumAddress: session.address,
           cardIds: ids, assets: prepared.assets, status: 'prepared', expiresAtMs: nowMs + PREORDER_RESERVATION_TTL_MS,
           signature: null, cluster: config.cluster, collection: config.collection, requestId: input.requestId,
           preparedTransaction: prepared.transactionBase64, signedTransaction: null, blockhash: prepared.blockhash,
           blockhashContextSlot: prepared.blockhashContextSlot, lastValidBlockHeight: prepared.lastValidBlockHeight,
           createdAtMs: nowMs, revision: 1 });
-        assertRequestMatches(order, ids);
+        assertRequestMatches(order, ids, session.address);
         return { response: jsonResponse(preparedResponse(order), 200), metrics, authOutcome: 'accepted' as const };
       }
-      const orderId = 'orderId' in body ? body.orderId : undefined;
+      const orderId = 'orderId' in body && typeof body.orderId === 'string' ? body.orderId : undefined;
       let order = orderId ? await store.get(orderId) : await store.active(config.preorderId, buyer);
       let broadcastAttempted = false;
       if (order && (order.buyer !== buyer || order.preorderId !== config.preorderId)) {
@@ -218,6 +253,13 @@ export async function handlePreorderRequest(
       } else if (order && path === '/preorders/submit' && order.status === 'prepared') {
         order = await reconcileOrder(order, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
         if (order.status === 'prepared') {
+          if (!order.ethereumAddress) throw new ProfileReadError('failed-precondition', 409, 'Cancel this older preorder and select your verified cards again.');
+          const session = await deps.verifyEthereumSession(request, env.OPS_DB, config.preorderId, deps.nowMs());
+          assertRequestMatches(order, order.cardIds, session.address);
+          assertMiNoteEligibility(await eligibility(session.address, buyer, true), order.cardIds);
+          if (session.expiresAtMs <= deps.nowMs()) {
+            throw new ProfileReadError('unauthenticated', 401, 'Verify your Ethereum wallet again before preordering.');
+          }
           const input = submitSchema.parse(body);
           const authorized = await deps.authorize({ preparedTransactionBase64: order.preparedTransaction,
             signedTransactionBase64: input.transactionBase64, buyer, authority: config.authority, cosignerSecret: env.COSIGNER_SECRET });
@@ -245,12 +287,14 @@ export async function handlePreorderRequest(
     } catch (error) {
       const failure = classifyAuthenticatedRequestError(error, { authenticated, timedOut: deadline.timedOut(),
         timeoutPrecedence: 'after-known-errors', timeoutMessage: 'Preorder request timed out.',
-        internalMessage: 'Preorder request failed.', mapDomainError: () => undefined });
+        internalMessage: 'Preorder request failed.', mapDomainError: (error) => error instanceof MiNoteAuthError ? { error } : undefined });
       if (failure.unexpected) console.error({ event: 'preorder_request_failed', error: error instanceof Error ? error.name : 'UnknownError' });
       return { response: jsonResponse(apiErrorBody(failure.error), httpStatusForApiErrorCode(failure.error.code, 503)),
         metrics, authOutcome: failure.authOutcome };
     }
   });
+  await Promise.all(deferred);
+  return result;
 }
 
 export async function reconcilePendingPreorders(env: Env, signal: AbortSignal, overrides: Partial<PreorderDependencies> = {}): Promise<number> {

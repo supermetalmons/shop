@@ -99,6 +99,8 @@
   },
   "homepage": "https://github.com/supermetalmons/shop#readme",
   "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-ledger": "^0.9.29",
     "@solana/wallet-adapter-phantom": "^0.9.29",

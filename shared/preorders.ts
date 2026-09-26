@@ -40,7 +40,7 @@ export const PREORDER_CONFIGS: readonly PreorderConfig[] = [
     preorderId: 'mi_note_cards',
     cluster: 'mainnet-beta',
     collection: 'BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG',
-    enabled: false,
+    enabled: true,
   },
 ];
 
@@ -76,6 +76,7 @@ export type PreorderOrder = {
   orderId: string;
   preorderId: string;
   buyer: string;
+  ethereumAddress: string | null;
   cardIds: number[];
   assets: PreorderAsset[];
   status: PreorderOrderStatus;
@@ -84,6 +85,9 @@ export type PreorderOrder = {
 };
 export type PreorderAvailabilityResponse = {
   preorderId: string;
+  ethereumAddress: string;
+  ownershipStatus: 'success' | 'partial';
+  requiresAdminSignIn: boolean;
   items: { id: number; status: 'available' | 'reserved' | 'preordered' }[];
 };
 export type PreorderPrepareRequest = { preorderId: string; buyer: string; cardIds: number[]; requestId: string };

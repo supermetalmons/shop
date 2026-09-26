@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { sha256Hex } from '../src/sessionSecrets.ts';
+import { MI_NOTE_SESSION_HEADER } from '../../../../shared/miNoteAuth.ts';
 import bs58 from 'bs58';
 import {
   Connection,
@@ -36,7 +39,7 @@ import type { ProviderFetch } from '../src/publicRouteSupport.ts';
 import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
 import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
-import { createCommerceD1Harness } from './commerceD1Harness.ts';
+import { createCommerceD1Harness, d1Database as sqliteD1Database } from './commerceD1Harness.ts';
 
 const {
   handleRequest: rawHandleRequest,
@@ -4117,113 +4120,79 @@ test('pending opens omit missing or unresolved assets but reject unexpected and 
   }
 });
 
-test('preorder availability applies public GET CORS to successes and errors through the Worker', async (context) => {
+test('Mi Note routes require Ethereum verification and preserve private GET CORS', async (context) => {
+  const database = new DatabaseSync(':memory:');
+  database.exec(readFileSync(new URL('../ops-migrations/0001_current_schema.sql', import.meta.url), 'utf8'));
+  database.exec(readFileSync(new URL('../ops-migrations/0007_mi_note_auth.sql', import.meta.url), 'utf8'));
+  context.after(() => database.close());
   const commerce = createCommerceD1Harness();
   context.after(() => commerce.database.close());
-  const dependencies = { log: () => {} };
-  const url = 'https://api.mons.shop/preorders/availability?preorderId=mi_note_cards_devnet';
+  const address = '0x000533f50ddd7f2fc4efd06137b0c1a12cfb7bb9';
+  const requestEnv = { ...env({ opsDb: sqliteD1Database(database), commerceDb: commerce.db, alchemyApiKey: 'alchemy-test-key' }), OPENSEA_API_KEY: 'opensea-test-key' };
+  let providerCalls = 0;
+  const dependencies: RequestDependencies = { cache: null, log: () => {}, providerFetch: async (input) => {
+    providerCalls += 1;
+    return new URL(String(input)).hostname === 'api.opensea.io'
+      ? Response.json({ nfts: [], next: null })
+      : Response.json({ ownedNfts: [] });
+  } };
   for (const origin of ['https://mons.shop', 'http://localhost:5173']) {
-    const response = await handleRequest(new Request(url, { headers: { Origin: origin } }),
-      env({ commerceDb: commerce.db }), dependencies);
-    assert.equal(response.status, 200);
-    assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
-    assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-    assert.equal(response.headers.get('Vary'), 'Origin');
-    assert.equal(response.headers.get('Cache-Control'), 'no-store');
-    const payload = await response.json() as { items: unknown[] };
-    assert.equal(payload.items.length, 1395);
-    for (const [requestedUrl, requestEnv, method, status] of [
-      [url.replace('mi_note_cards_devnet', 'mi_note_cards'), env({ commerceDb: commerce.db }), 'GET', 200],
-      [url.replace('mi_note_cards_devnet', 'unknown'), env(), 'GET', 409],
-      [url.replace('?preorderId=mi_note_cards_devnet', ''), env(), 'GET', 400],
-      [url, env({ commerceState: 'paused' }), 'GET', 503],
-      [url, env(), 'POST', 405],
-      [url, env(), 'OPTIONS', 204],
-    ] as const) {
-      const result = await handleRequest(new Request(requestedUrl, { method, headers: { Origin: origin } }), requestEnv, dependencies);
-      assert.equal(result.status, status);
-      assert.equal(result.headers.get('Access-Control-Allow-Origin'), origin);
-      assert.equal(result.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-    }
-  }
-  for (const origin of ['', 'https://example.com']) {
-    const rejected = await handleRequest(new Request(url, { headers: origin ? { Origin: origin } : {} }), env(), dependencies);
-    assert.equal(rejected.status, 403);
-    assert.equal(rejected.headers.has('Access-Control-Allow-Origin'), false);
-  }
-});
-
-test('Mi Note GET route is public and preserves method, origin, and error policies', async () => {
-  const address = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
-  const url = `https://api.mons.shop/mi-note-cards?address=${address}`;
-  let calls = 0;
-  const dependencies: RequestDependencies = {
-    cache: null,
-    log: () => {},
-    providerFetch: async (input, init) => {
-      calls += 1;
-      assert.equal(init?.method, 'GET');
-      const providerUrl = new URL(String(input));
-      if (providerUrl.hostname === 'api.opensea.io') {
-        assert.equal(providerUrl.searchParams.get('collection'), 'minote');
-        return Response.json({ nfts: [], next: null });
+    const sessionId = crypto.randomUUID();
+    const secret = origin === 'https://mons.shop' ? 'A'.repeat(43) : 'B'.repeat(43);
+    const token = `mons_mi_note_v1.${sessionId}.${secret}`;
+    const now = Date.now();
+    const anonymousId = crypto.randomUUID();
+    const anonymousSecret = `${secret.slice(0, -1)}z`;
+    database.prepare('INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      anonymousId, await sha256Hex(anonymousSecret), `anon:${anonymousId}`, new URL(origin).hostname, now, now, now + 30 * 24 * 60 * 60 * 1000,
+    );
+    database.prepare('INSERT INTO auth_wallet_bindings VALUES (?, ?, ?, 1, NULL, NULL)').run(`anon:${anonymousId}`, OWNER, now);
+    const cookieName = origin.startsWith('https:') ? '__Host-mons_anon_v1' : 'mons_anon_dev_v1';
+    database.prepare('INSERT INTO mi_note_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      sessionId, crypto.randomUUID(), await sha256Hex(secret), address, 'mi_note_cards_devnet', origin, now, now + 3_600_000,
+    );
+    for (const path of ['/preorders/availability', '/mi-note-cards']) {
+      const url = `https://api.mons.shop${path}?preorderId=mi_note_cards_devnet`;
+      const before = providerCalls;
+      const missing = await handleRequest(new Request(url, { headers: { Origin: origin } }), requestEnv, dependencies);
+      assert.equal(missing.status, 401);
+      assert.equal(providerCalls, before);
+      const response = await handleRequest(new Request(url, { headers: { Origin: origin, [MI_NOTE_SESSION_HEADER]: token } }), requestEnv, dependencies);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
+      assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mi-Note-Session/);
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      const body = await response.json() as { items?: unknown[] };
+      if (path === '/preorders/availability') assert.deepEqual(body.items, []);
+      if (path === '/preorders/availability') {
+        const signedInRead = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+          method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Mons-CSRF': '1',
+            Cookie: `${cookieName}=mons_anon_v1.${anonymousId}.${anonymousSecret}`, [MI_NOTE_SESSION_HEADER]: token },
+          body: JSON.stringify({ preorderId: 'mi_note_cards_devnet' }),
+        }), requestEnv, dependencies);
+        assert.equal(signedInRead.status, 200);
       }
-      assert.equal(providerUrl.pathname, '/nft/v3/alchemy-test-key/getNFTsForOwner');
-      return Response.json({ ownedNfts: [{
-        contractAddress: '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f', tokenId: '1', balance: '1',
-      }] });
-    },
-  };
-  const response = await handleRequest(new Request(url, {
-    headers: { Origin: 'https://mons.shop', Authorization: 'Bearer unrelated' },
-  }), { ...env({ alchemyApiKey: 'alchemy-test-key', commerceState: 'paused' }), OPENSEA_API_KEY: 'opensea-test-key' }, dependencies);
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    ok: true,
-    tokenIdsByContract: {
-      '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': ['1'],
-      '0xc22bd85e6d6c058226f46a693f0df4054496db5b': [],
-      '0x495f947276749ce646f68ac8c248420045cb7b5e': [],
-    },
-    resultsByContract: {
-      '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': { status: 'success', provider: 'alchemy', visibilityLimited: false },
-      '0xc22bd85e6d6c058226f46a693f0df4054496db5b': { status: 'success', provider: 'alchemy', visibilityLimited: false },
-      '0x495f947276749ce646f68ac8c248420045cb7b5e': { status: 'success', provider: 'opensea', visibilityLimited: true },
-    },
-  });
-  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  assert.equal(response.headers.get('Cache-Control'), 'no-store');
-  assert.equal(calls, 2);
-
-  for (const method of ['POST', 'PUT', 'HEAD']) {
-    const rejected = await handleRequest(new Request(url, {
-      method, headers: { Origin: 'https://mons.shop' },
-    }), env(), dependencies);
-    assert.equal(rejected.status, 405);
-    assert.equal(rejected.headers.get('Allow'), 'GET, OPTIONS');
-    assert.equal(rejected.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  }
-  for (const origin of ['', 'https://example.com']) {
-    for (const method of ['GET', 'OPTIONS']) {
-      const rejected = await handleRequest(new Request(url, {
-        method, headers: origin ? { Origin: origin } : {},
-      }), env(), dependencies);
-      assert.equal(rejected.status, 403);
-      assert.equal(rejected.headers.has('Access-Control-Allow-Origin'), false);
+      const forwarded = new Request(`${origin}${path}?preorderId=mi_note_cards_devnet`, {
+        headers: { Referer: `${origin}/mi_note_cards_devnet`, [MI_NOTE_SESSION_HEADER]: token },
+      });
+      assert.equal(forwarded.headers.has('Origin'), false);
+      assert.equal((await handleRequest(forwarded, requestEnv, dependencies)).status, 200);
+      const wrongDrop = await handleRequest(new Request(url.replace('mi_note_cards_devnet', 'mi_note_cards'), {
+        headers: { Origin: origin, [MI_NOTE_SESSION_HEADER]: token },
+      }), requestEnv, dependencies);
+      assert.equal(wrongDrop.status, 401);
+      const preflight = await handleRequest(new Request(url, { method: 'OPTIONS', headers: { Origin: origin } }), requestEnv, dependencies);
+      assert.equal(preflight.status, 204);
+      assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
+      assert.match(preflight.headers.get('Access-Control-Allow-Headers') || '', /X-Mi-Note-Session/);
+      const invalidOrigin = await handleRequest(new Request(url, { headers: { Origin: 'https://example.com', [MI_NOTE_SESSION_HEADER]: token } }), requestEnv, dependencies);
+      assert.equal(invalidOrigin.status, 403);
+      assert.equal(invalidOrigin.headers.has('Access-Control-Allow-Origin'), false);
+      const unsupported = await handleRequest(new Request(url, { method: 'PUT', headers: { Origin: origin } }), requestEnv, dependencies);
+      assert.equal(unsupported.status, 405);
     }
   }
-  const preflight = await handleRequest(new Request(url, {
-    method: 'OPTIONS', headers: { Origin: 'https://mons.shop' },
-  }), env(), dependencies);
-  assert.equal(preflight.status, 204);
-  assert.equal(preflight.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  const unavailable = await handleRequest(new Request(url, {
-    headers: { Origin: 'http://localhost:5173' },
-  }), env(), dependencies);
-  assert.equal(unavailable.status, 502);
-  assert.equal(unavailable.headers.get('Access-Control-Allow-Origin'), 'http://localhost:5173');
-  assert.equal(unavailable.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  assert.equal(calls, 2);
 });
 
 test('public inventory includes preorder assets and excludes other devnet collections in fallback queries', async () => {

@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import type { InventoryItem } from '../types';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
+import { profileApiTimeoutMs } from '../api/transport';
 import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
 import type { useShopActionContinuation } from './account/useShopActionContinuation';
 import type { useShopInventoryQueries } from './inventory/useShopInventoryQueries';
@@ -87,9 +88,11 @@ export function useShopActionHandlers(options: ActionHandlersOptions) {
     if (options.blockViewerModeAction()) return Promise.resolve();
     const cardIds = [...ids];
     const preorderId = options.preorder.config.preorderId;
+    const ethereumAddress = options.preorder.ethereumAddress;
     return continuation.run({
       key: 'preorder', requirement: 'sign-in', cancelled: undefined,
-      isCurrent: () => latest.current.preorder.config.preorderId === preorderId,
+      readinessTimeoutMs: 2 * profileApiTimeoutMs('/preorders/availability') + 5_000,
+      isCurrent: () => latest.current.preorder.config.preorderId === preorderId && latest.current.preorder.ethereumAddress === ethereumAddress,
       ready: () => {
         const current = latest.current.preorder;
         if (current.recoveryReady && current.pending) return true;

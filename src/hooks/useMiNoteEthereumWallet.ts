@@ -7,6 +7,7 @@ import {
   subscribeInjectedEthereumProviders,
   type EIP6963ProviderDetail,
   type EthereumProviderListener,
+  type EIP1193Provider,
 } from '../wallet/injectedEthereumProviders';
 
 const WALLET_STORAGE_KEY = 'mons.shop.mi-note.ethereum-wallet';
@@ -15,6 +16,7 @@ type RememberedWallet = { type: 'announced'; rdns: string } | { type: 'legacy' }
 export type MiNoteEthereumWalletStatus = 'disconnected' | 'restoring' | 'connecting' | 'choosing' | 'connected';
 type WalletState = {
   address: string | null;
+  provider: EIP1193Provider | null;
   status: MiNoteEthereumWalletStatus;
   wallets: EIP6963ProviderDetail[];
   error: string | null;
@@ -26,7 +28,7 @@ type WalletSession = {
   cleanup: () => void;
 };
 
-const disconnectedState: WalletState = { address: null, status: 'disconnected', wallets: [], error: null };
+const disconnectedState: WalletState = { address: null, provider: null, status: 'disconnected', wallets: [], error: null };
 
 function readRememberedWallet(): RememberedWallet | null {
   try {
@@ -112,7 +114,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
       }
       session.established = true;
       rememberWallet(session.remembered);
-      update({ address, status: 'connected', wallets: [], error: null });
+      update({ address, provider: wallet.provider, status: 'connected', wallets: [], error: null });
     };
     const fail = (error: unknown, showError: boolean) => {
       if (!current()) return;

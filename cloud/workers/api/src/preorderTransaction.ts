@@ -25,6 +25,7 @@ import { SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 
 const CORE_PROGRAM = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 
 type ProviderArgs = {
   config: PreorderConfig;
@@ -64,7 +65,7 @@ function unavailable(message: string): ProfileReadError {
 }
 
 function assertEnabled(config: PreorderConfig): void {
-  if (!config.enabled || config.cluster !== 'devnet') {
+  if (!config.enabled || config.cluster !== 'devnet' && config.cluster !== 'mainnet-beta') {
     throw new ProfileReadError('failed-precondition', 412, 'Preorders are not enabled for this collection.');
   }
 }
@@ -208,8 +209,9 @@ function verifyAllSignatures(transaction: VersionedTransaction): void {
   }
 }
 
-async function verifyCluster(connection: PreorderConnection): Promise<void> {
-  if (await connection.getGenesisHash() !== DEVNET_GENESIS) {
+async function verifyCluster(connection: PreorderConnection, config: PreorderConfig): Promise<void> {
+  const expectedGenesis = config.cluster === 'devnet' ? DEVNET_GENESIS : MAINNET_GENESIS;
+  if (await connection.getGenesisHash() !== expectedGenesis) {
     throw unavailable('Preorder RPC is connected to the wrong cluster.');
   }
 }
@@ -231,7 +233,7 @@ export async function preparePreorderTransaction(
   cosigner(args.cosignerSecret, args.config.authority);
   const deps = dependencies(overrides);
   const connection = deps.createConnection(args);
-  await verifyCluster(connection);
+  await verifyCluster(connection, args.config);
   const chain = await connection.getMultipleAccountsInfoAndContext([
     CORE_PROGRAM, publicKey(args.config.collection, 'Collection'),
   ], { commitment: 'confirmed' });
@@ -271,7 +273,8 @@ export async function preparePreorderTransaction(
   });
   if (simulation.context.slot < latest.context.slot) throw unavailable('Preorder provider returned a stale simulation.');
   if (simulation.value.err) {
-    throw new ProfileReadError('failed-precondition', 412, 'Preorder simulation failed. Check your devnet SOL balance and retry.');
+    const network = args.config.cluster === 'devnet' ? 'devnet SOL' : 'SOL';
+    throw new ProfileReadError('failed-precondition', 412, `Preorder simulation failed. Check your ${network} balance and retry.`);
   }
   return {
     transactionBase64,
@@ -324,7 +327,7 @@ export async function isPreorderBlockhashValid(
 ): Promise<boolean> {
   assertEnabled(args.config);
   const connection = dependencies(overrides).createConnection(args);
-  await verifyCluster(connection);
+  await verifyCluster(connection, args.config);
   const result = await connection.isBlockhashValid(args.blockhash, { commitment: 'confirmed', minContextSlot: args.minContextSlot });
   if (result.context.slot < args.minContextSlot) throw unavailable('Preorder provider returned stale blockhash data.');
   return result.value;
@@ -338,7 +341,7 @@ export async function sendPreorderTransaction(
   const transaction = decodeTransaction(args.transactionBase64);
   verifyAllSignatures(transaction);
   const connection = dependencies(overrides).createConnection(args);
-  await verifyCluster(connection);
+  await verifyCluster(connection, args.config);
   const signature = await connection.sendRawTransaction(transactionBytes(transaction), {
     skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3,
   });
@@ -361,7 +364,7 @@ export async function probePreorderTransaction(
   verifyAllSignatures(transaction);
   if (args.signature !== bs58.encode(transaction.signatures[0])) throw invalid('Stored preorder signature does not match its transaction.');
   const connection = dependencies(overrides).createConnection(args);
-  await verifyCluster(connection);
+  await verifyCluster(connection, args.config);
   const finalized = await connection.getTransaction(args.signature, { commitment: 'finalized', maxSupportedTransactionVersion: 0 });
   if (finalized) {
     if (

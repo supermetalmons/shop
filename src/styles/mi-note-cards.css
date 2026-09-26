@@ -13,32 +13,12 @@
   gap: 12px;
 }
 
-.mi-note-cards__tabs {
-  display: flex;
-  width: fit-content;
-  margin: 0 auto 24px;
-  padding: 4px;
-  border-radius: 980px;
-  background: var(--surface);
-}
-
-.mi-note-cards__tabs button {
-  min-width: 88px;
-  min-height: 44px;
-  padding: 10px 22px;
-  background: transparent;
-  color: var(--mi-note-muted);
-}
-
-.mi-note-cards__tabs button:hover:not(:disabled) {
-  background: transparent;
-  color: var(--fg);
-}
-
-.mi-note-cards__tabs button[aria-selected='true'] {
-  background: var(--bg);
-  color: var(--fg);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+.mi-note-cards__title {
+  margin: 0 0 24px;
+  text-align: center;
+  font-size: clamp(24px, 4vw, 32px);
+  line-height: 1.2;
+  font-weight: 600;
 }
 
 .mi-note-cards button:focus-visible {

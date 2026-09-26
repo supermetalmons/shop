@@ -46,6 +46,7 @@ const migrationNames = [
   '0018_preorders.sql',
   '0019_preorder_buyer_index.sql',
   '0020_preorder_expiry_index.sql',
+  '0021_preorder_ethereum_ownership.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -87,7 +88,18 @@ test('preorder expiry index is required for deployment and its definition is ver
   database.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 = 20): DatabaseSync {
+test('preorder Ethereum identity migration is required for deployment and its guards are verified', () => {
+  const previous = currentDatabase(false, 20);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /Ethereum ownership migration/);
+  previous.close();
+  const database = currentDatabase(false);
+  database.exec('DROP TRIGGER commerce_preorder_order_update_guard');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
+  database.close();
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 = 21): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

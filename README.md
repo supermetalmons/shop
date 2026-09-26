@@ -80,22 +80,58 @@ automatically treated as live code.
 
 ## Mi Note cards
 
-`/mi_note_cards_devnet` adds preorder checkout to the same gallery on Solana
-devnet. `/mi_note_cards` remains browse-only. Neither page has a Notify me button.
-Select up to three available cards, then use Preorder to purchase them in one
+`/mi_note_cards_devnet` offers preorder checkout on Solana devnet, and
+`/mi_note_cards` offers it on Solana mainnet. Both display **Preorder Mi Note
+Cards** and only show cards eligible for the verified Ethereum wallet. Select
+up to three available cards, then use Preorder to purchase them in one
 transaction. Each costs 0.25 SOL, split equally between the two configured
-recipients; the buyer also pays NFT creation and network costs. Ethereum wallet
-holdings filter the gallery but do not determine preorder eligibility.
+recipients; the buyer also pays NFT creation and network costs.
+
+Connect an Ethereum wallet and sign the server-issued message with
+`personal_sign` before viewing cards. Each challenge is single-use, expires
+after five minutes, and binds the wallet, shop origin, preorder collection,
+nonce, and expiration. Verification lasts one hour. The browser stores the
+session in `sessionStorage` and sends it with `X-Mi-Note-Session`; Ops D1 stores
+only the session secret's hash. Ethereum verification is independent of the
+shop's Solana sign-in. Cached browsing results never authorize a purchase:
+the API checks fresh Ethereum ownership both when preparing the order and
+before adding the collection signature.
 
 Preorder checkout uses the shop's Solana wallet sign-in and requires a buyer
 wallet different from the collection authority. The wallet signs the prepared
 transaction without broadcasting it; the API adds the collection signature,
 records the fully signed transaction, and broadcasts it. Reservations start at
 checkout, last at most 120 seconds before submission, and cannot be extended by
-retrying. Submitted transactions retain their reservations until finalized
+retrying. Each order records its verified Ethereum wallet, and one active order
+is allowed per Solana buyer and preorder collection. Preparation and initial
+submission require both the recorded Ethereum identity and the Solana buyer.
+Submitted transactions retain their reservations until finalized
 success, failure, or verified expiry. Status polling and scheduled reconciliation
 recover interrupted purchases. A successful card ID can never be purchased again,
 even if its NFT is later transferred or burned.
+
+Status, cancellation, and recovery use Solana authentication and remain
+available after Ethereum verification expires or the Ethereum account changes.
+An active order for another Ethereum wallet can be cancelled or resumed after
+switching back; its card thumbnails are hidden from the current wallet.
+An unresolved preparation offers **Abandon preparation**, which rechecks the
+server before clearing the local request. Any recovered order stays available
+for cancellation or confirmation; possible submissions are never discarded.
+Unsigned orders created before Ethereum verification was introduced must be
+cancelled or expire. Already-submitted orders keep recovering normally.
+
+For devnet testing only, the authenticated Solana buyer
+`A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz` gets the following inventory
+instead of real holdings after verifying the corresponding Ethereum wallet:
+
+| Ethereum wallet | Eligible card IDs |
+| --- | --- |
+| `0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE` | 1–10 |
+| `0x5BFce4149F520FE0823Dc8C0aFaF979121e824EC` | 11–20 |
+
+These test wallets offer admin Solana sign-in when needed. Other wallet
+combinations and all mainnet requests use real holdings. Test inventory keeps
+normal pricing, reservations, and permanent duplicate-preorder protection.
 
 Reserved gallery cards keep their original artwork, display a muted Reserved
 label, and cannot be selected until the reservation is lifted. Only successfully
@@ -113,14 +149,18 @@ removed after verifying the hosted set.
 Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
 gallery. Available and reserved gallery artwork keeps its original corners.
 
-Deployment requires commerce migrations through `0020_preorder_expiry_index.sql` and the API release
-before deploying the frontend. The normal API deployment command applies the
-migration and validates its schema. The existing `COSIGNER_SECRET` must match the
-collection authority; no additional signing secret is required. Mainnet checkout
-stays disabled in the shared configuration and the API's devnet restriction.
+Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
+migrations through `0021_preorder_ethereum_ownership.sql`, followed by the API
+release and then the frontend. The normal API deployment command applies the
+migrations and validates their schemas. The existing `COSIGNER_SECRET` must
+match the collection authority; no additional signing secret is required.
+Both existing collections are enabled in the shared configuration. Preparation,
+broadcasting, blockhash validation, and reconciliation verify the RPC genesis
+hash against the configured devnet or mainnet cluster.
 
 If an old submitted preorder stays unresolved after the RPC prunes its history,
-use the recovery command with a trusted devnet archive. Set
+use the recovery command with a trusted archive for that order's devnet or
+mainnet cluster. Set
 `PREORDER_ARCHIVE_RPC_URL` in your shell (keep any RPC credentials out of command
 arguments), then preview and apply the verified result:
 
@@ -129,36 +169,38 @@ npm run recover-preorder -- <order-id>
 npm run recover-preorder -- <order-id> --write
 ```
 
-Recovery verifies the exact finalized transaction, or proves expiry by checking
+Recovery validates the stored collection and cluster against the enabled
+configuration and checks the archive RPC's genesis hash. It verifies the exact
+finalized transaction, or proves expiry by checking
 absent assets and complete, linked finalized blocks across its possible landing
 window. Missing history, RPC errors, or an uncertain outcome preserve the
 reservation. Successful purchases keep their permanent card claims. The command
 does not sign or broadcast transactions, and has no force-unlock option. If a
 database write is interrupted, rerun the same command to finish claim cleanup.
 
-`/mi_note_cards` opens the All tab with 300 random cards. The Your tab connects
-an installed Ethereum wallet to show its cards. Multiple wallets appear in an
-inline picker, using EIP-6963 discovery with a legacy `window.ethereum` fallback.
-The selected wallet is remembered locally; opening Your on a later visit quietly
-checks its authorized accounts. Only the Connect action requests wallet access.
-Disconnect clears the remembered choice. This connection is separate from the
-shop's Solana wallet and requires no signature or network switch.
+Multiple Ethereum wallets appear in an inline picker, using EIP-6963 discovery
+with a legacy `window.ethereum` fallback. The selected wallet is remembered
+locally; later visits quietly check its authorized accounts before restoring a
+matching verification session. Connect requests wallet access, and Verify
+requests the signature. Disconnect clears the remembered choice. All/Your tabs,
+random browsing, and the `?address=` gallery override have been removed.
 
-Add one Ethereum address parameter, such as
-`/mi_note_cards?address=0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9`, to view that
-address directly without tabs or a wallet connection. Both ownership views show
-only tokens that have images in `mi_note_eth.json`. Cards appear together in
-catalog order: Mi Note 3, Mi Note 2, then original Mi Note. A failed collection
-leaves the other collections available. Invalid or empty addresses and empty
-ownership leave the address-link grid empty. Your displays loading, empty, and
-retryable error states, including a warning when some collections fail while
-keeping successfully loaded cards visible. Account changes clear obsolete cards
-before loading the new account's holdings; All preserves its random sample while
-switching tabs.
+Cards with images in `mi_note_eth.json` appear in catalog order: Mi Note 3,
+Mi Note 2, then original Mi Note. Loading, empty, and retryable error states
+cover ownership lookup failures. Partial provider failures can leave cards
+from successfully read collections visible, but cannot authorize cards whose
+ownership could not be checked. Account changes clear obsolete cards,
+selections, and pending asynchronous results. Solana sign-in changes refresh
+eligibility so the devnet test inventory appears only for the admin buyer.
 
-The browser calls `GET /mi-note-cards?address=...` on the API Worker and receives
-one JSON response after both provider lookups finish. The Worker starts these
-lookups concurrently:
+Holdings and preorder availability endpoints require Ethereum verification,
+derive the address from its session, and scope results to that wallet. The
+holdings endpoint is `GET /mi-note-cards?preorderId=...`; verification uses
+`POST /mi-note-cards/auth/challenge`, `/verify`, and `/logout`. Availability uses
+`GET /preorders/availability?preorderId=...` for Ethereum-only browsing and
+`POST /preorders/availability` with `{ preorderId }` for signed-in Solana
+sessions, preserving the usual Origin and CSRF checks. The Worker reuses
+these concurrent ownership lookups:
 
 - Alchemy NFT API v3 on Ethereum Mainnet queries Mi Note 2 contract
   `0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f` and Mi Note 3 contract
@@ -191,8 +233,8 @@ on the same Worker. Both keys belong only in the API Worker.
 For local live verification, provide them through the process environment or
 an ignored `.dev.vars` file in `cloud/workers/api/`, start the API Worker
 locally, and set `VITE_MONS_API_ORIGIN=http://localhost:8787` for the frontend.
-For this JSON rollout, deploy the frontend first, then the API Worker, so the
-browser uses the JSON contract before the API change takes effect.
+Apply the database migrations and deploy the API Worker before the frontend so
+the authentication endpoints and ownership enforcement are ready for checkout.
 
 ## Anonymous Auth and legacy-provider retirement
 

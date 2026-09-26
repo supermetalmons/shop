@@ -40,7 +40,7 @@ export type ReadRequestDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-function isAllowedProfileOrigin(origin: string): boolean {
+export function isAllowedProfileOrigin(origin: string): boolean {
   let url: URL;
   try {
     url = new URL(origin);
@@ -58,11 +58,11 @@ function isAllowedProfileOrigin(origin: string): boolean {
   return match?.[1] === 'candidate' || /^[0-9a-f]{8}$/i.test(match?.[1] || '');
 }
 
-function profileCorsHeaders(origin: string): Record<string, string> {
+function profileCorsHeaders(origin: string, allowMethods = PROFILE_CORS_ALLOW_METHODS, extraHeader?: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': PROFILE_CORS_ALLOW_METHODS,
-    'Access-Control-Allow-Headers': PROFILE_CORS_ALLOW_HEADERS,
+    'Access-Control-Allow-Methods': allowMethods,
+    'Access-Control-Allow-Headers': `${PROFILE_CORS_ALLOW_HEADERS}${extraHeader ? `, ${extraHeader}` : ''}`,
     'Access-Control-Expose-Headers': STRIPE_CHECKOUT_RETRY_HEADER,
     'Access-Control-Max-Age': '86400',
     'Timing-Allow-Origin': origin,
@@ -73,6 +73,8 @@ function profileCorsHeaders(origin: string): Record<string, string> {
 export function handleProfileCorsPreflight(
   request: Request,
   isAllowedOrigin: (origin: string) => boolean = isAllowedProfileOrigin,
+  allowMethods = PROFILE_CORS_ALLOW_METHODS,
+  extraHeader?: string,
 ): Response {
   const origin = request.headers.get('Origin') || '';
   if (!isAllowedOrigin(origin)) {
@@ -80,7 +82,7 @@ export function handleProfileCorsPreflight(
   }
   return new Response(null, {
     status: 204,
-    headers: { ...profileCorsHeaders(origin), 'Cache-Control': 'no-store' },
+    headers: { ...profileCorsHeaders(origin, allowMethods, extraHeader), 'Cache-Control': 'no-store' },
   });
 }
 
@@ -89,13 +91,13 @@ export function isProfileRequestOriginAllowed(request: Request): boolean {
   return !origin || isAllowedProfileOrigin(origin);
 }
 
-export function applyProfileCors(request: Request, response: Response): Response {
+export function applyProfileCors(request: Request, response: Response, allowMethods = PROFILE_CORS_ALLOW_METHODS, extraHeader?: string): Response {
   const origin = request.headers.get('Origin');
   if (!origin) return response;
   if (!isAllowedProfileOrigin(origin)) {
     return errorResponse(new ProfileReadError('permission-denied', 403, 'Origin is not allowed.'));
   }
-  for (const [key, value] of Object.entries(profileCorsHeaders(origin))) response.headers.set(key, value);
+  for (const [key, value] of Object.entries(profileCorsHeaders(origin, allowMethods, extraHeader))) response.headers.set(key, value);
   return response;
 }
 

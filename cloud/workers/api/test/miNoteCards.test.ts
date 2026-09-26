@@ -10,6 +10,7 @@ import {
   type MiNoteContractAddress,
 } from '../../../../shared/miNoteCards.ts';
 import { handleMiNoteCards } from '../src/miNoteCards.ts';
+import { MiNoteAuthError } from '../src/miNoteAuth.ts';
 
 const OWNER = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
 const ORIGIN = 'https://mons.shop';
@@ -74,7 +75,9 @@ function ownership(two: string[] = ['1'], three: string[] = [], original: string
 }
 
 function request(search = `?address=${OWNER}`, options: RequestInit = {}) {
-  return new Request(`https://api.mons.shop${MI_NOTE_CARDS_API_PATH}${search}`, {
+  const query = new URLSearchParams(search);
+  if (!query.has('preorderId')) query.set('preorderId', 'mi_note_cards');
+  return new Request(`https://api.mons.shop${MI_NOTE_CARDS_API_PATH}?${query}`, {
     ...options,
     headers: { Origin: ORIGIN, 'CF-Connecting-IP': '192.0.2.1', ...options.headers },
   });
@@ -109,6 +112,7 @@ function setup(options: Partial<Dependencies> & { nfts?: ProviderFetch; opensea?
     },
     log: (entry) => logs.push(entry),
     now: () => NOW,
+    verifySession: async (_request, _db, preorderId) => ({ sessionId: 'proof', address: OWNER.toLowerCase(), preorderId, origin: ORIGIN, createdAtMs: NOW, expiresAtMs: NOW + 3_600_000 }),
     ...overrides,
   };
   const env = {
@@ -138,6 +142,17 @@ function memoryCache() {
   };
 }
 
+test('mi note holdings require verification and reject a different requested wallet before querying providers', async () => {
+  const unauthenticated = setup({ verifySession: async () => { throw new MiNoteAuthError('unauthenticated', 401, 'Verify your Ethereum wallet.'); } });
+  assert.equal((await unauthenticated.run()).response.status, 401);
+  assert.equal(unauthenticated.calls.length, 0);
+  const verified = setup();
+  assert.equal((await verified.run(request('?address=0x0000000000000000000000000000000000000001'))).response.status, 403);
+  assert.equal(verified.calls.length, 0);
+  assert.equal((await verified.run(request(''))).response.status, 200);
+  assert.equal(verified.calls[0].url.searchParams.get('owner'), OWNER.toLowerCase());
+});
+
 function cacheUrl(contract: MiNoteContractAddress, version = 4) {
   return `https://api.mons.shop${MI_NOTE_CARDS_API_PATH}?address=${OWNER.toLowerCase()}&contract=${contract}&version=${version}`;
 }
@@ -150,7 +165,7 @@ function cachedOwnership(contract: MiNoteContractAddress, ids: string[] = [], pr
 
 function assertCors(response: Response, origin = ORIGIN) {
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
-  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
   assert.equal(response.headers.get('Vary'), 'Origin');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 }
@@ -260,8 +275,8 @@ test('mi note OpenSea original results exclude unrelated shared-contract tokens'
   assert.deepEqual(await (await fixture.run()).response.json(), ownership(['1'], [], [ORIGINAL_IDS[0], ORIGINAL_IDS[165]]));
 });
 
-for (const search of ['', '?address=', '?address=garbage', `?address=${OWNER}&address=${OWNER}`, '?address=vitalik.eth']) {
-  test(`mi note ownership rejects invalid address query ${search || '(missing)'}`, async () => {
+for (const search of ['?preorderId=', '?preorderId=unknown', '?preorderId=mi_note_cards&preorderId=mi_note_cards', '?address=', '?address=garbage', `?address=${OWNER}&address=${OWNER}`, '?address=vitalik.eth']) {
+  test(`mi note ownership rejects invalid ownership query ${search || '(missing)'}`, async () => {
     const fixture = setup();
     const result = await fixture.run(request(search));
     assert.equal(result.response.status, 400);
@@ -271,9 +286,9 @@ for (const search of ['', '?address=', '?address=garbage', `?address=${OWNER}&ad
   });
 }
 
-test('mi note ownership rejects missing or disallowed origins', async () => {
+test('mi note ownership rejects disallowed origins', async () => {
   const fixture = setup();
-  for (const origin of ['', 'https://example.com']) {
+  for (const origin of ['https://example.com']) {
     const input = request();
     if (origin) input.headers.set('Origin', origin);
     else input.headers.delete('Origin');

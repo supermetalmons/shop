@@ -6,6 +6,8 @@ import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { usePreorderCheckout } from './hooks/usePreorderCheckout';
+import { useMiNoteEthereumWallet } from './hooks/useMiNoteEthereumWallet';
+import { useMiNoteVerification } from './hooks/useMiNoteVerification';
 import { getPreorderConfig } from '../shared/preorders';
 import { useStripeCheckoutInventoryRecovery } from './hooks/useStripeCheckoutInventoryRecovery';
 import { useStripeCheckoutRecovery } from './hooks/useStripeCheckoutRecovery';
@@ -156,11 +158,17 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const walletActionBusy = Boolean(pendingAction);
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
+  const preorderConfig = drop.normalizedCurrentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
+  const preorderActive = ['/mi_note_cards', '/mi_note_cards_devnet'].includes(drop.normalizedCurrentPath) && !commerceUiSuspended;
+  const ethereumWallet = useMiNoteEthereumWallet(preorderActive);
+  const ethereumVerification = useMiNoteVerification(preorderActive, preorderConfig.preorderId, ethereumWallet);
   const preorderCheckout = usePreorderCheckout({
-    config: drop.normalizedCurrentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER,
-    active: ['/mi_note_cards', '/mi_note_cards_devnet'].includes(drop.normalizedCurrentPath) && !commerceUiSuspended,
+    config: preorderConfig,
+    active: preorderActive,
     buyer: connectedWallet,
     signedIn: isSignedInWallet,
+    ethereumSession: ethereumVerification.session,
+    onEthereumSessionInvalid: ethereumVerification.invalidate,
     signTransaction: wallet.signTransaction,
     ensureSignedIn: continuation.ensureActionSignedIn,
     onSucceeded: () => {
@@ -409,6 +417,9 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
               <MiNoteCardsGallery
+                wallet={ethereumWallet}
+                verification={ethereumVerification}
+                onAdminSignIn={actionHandlers.handleHeaderSignIn}
                 preorder={{
                   ...preorderCheckout,
                   purchase: actionHandlers.handlePreorder,

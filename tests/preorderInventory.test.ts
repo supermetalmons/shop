@@ -34,14 +34,17 @@ test('preorders use exact trusted collection and canonical numeric metadata IDs'
   assert.equal(preorderIdFromMetadataUri(config, 'https://evil.example/preorder/json/1.json'), null);
 });
 
-test('only the enabled preorder collection is publicly included on devnet', () => {
+test('both preorder collections are public while other devnet inventory stays hidden', () => {
   const publicDevnet = listShopInventoryCollectionScopes(false).filter((scope) => scope.solanaCluster === 'devnet');
   assert.deepEqual(publicDevnet, [{ solanaCluster: 'devnet', collectionMint: config.collection }]);
   const mainnet = getPreorderConfig('mi_note_cards')!;
-  assert.equal(mainnet.enabled, false);
+  assert.equal(mainnet.enabled, true);
   assert.equal(mainnet.unitPriceLamports, 250_000_000);
   assert.equal(config.unitPriceLamports, mainnet.unitPriceLamports);
-  assert.equal(listShopInventoryCollectionScopes(false).some((scope) => scope.collectionMint === mainnet.collection), false);
+  assert.equal(listShopInventoryCollectionScopes(false).some((scope) => scope.collectionMint === mainnet.collection), true);
+  const mainnetItem = transformShopInventoryItem({ ...asset, grouping: [{ group_key: 'collection', group_value: mainnet.collection }] }, 'mainnet-beta');
+  assert.equal(mainnetItem?.dropId, mainnet.preorderId);
+  assert.equal(isExactShopInventoryResponse({ ok: true, items: [mainnetItem] }), true);
 });
 
 test('preorder inventory cannot be mistaken for redeemable cards', () => {

@@ -128,6 +128,8 @@ import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import { MI_NOTE_CARDS_API_PATH } from '../../../../shared/miNoteCards.js';
 import { handleMiNoteCards } from './miNoteCards.js';
 import { handlePreorderRequest, PREORDER_PATHS } from './preorders.js';
+import { handleMiNoteAuthRequest, MI_NOTE_AUTH_PATHS } from './miNoteAuth.js';
+import { MI_NOTE_SESSION_HEADER } from '../../../../shared/miNoteAuth.js';
 
 type WorkerRouteCorsPolicy =
   | 'none'
@@ -135,6 +137,7 @@ type WorkerRouteCorsPolicy =
   | 'rpc'
   | 'profile'
   | 'staff-auth'
+  | 'mi-note'
   | 'pack-status';
 
 type WorkerRouteStaffPolicy = 'skip' | 'optional' | 'required';
@@ -599,15 +602,20 @@ async function dispatchMiNoteCards(context: WorkerRouteContext): Promise<WorkerR
 }
 
 const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
-  ...PREORDER_PATHS.map((path) => exactRoute(path, path === '/preorders/availability' ? Object.freeze({
-    commerceMutation: false, cors: 'public', profileOriginGate: false, publicMethods: 'GET, OPTIONS',
-    staff: 'skip', unexpectedError: 'public',
-  }) : profilePolicy({ commerceMutation: true }), async (context) => {
-    const result = await handlePreorderRequest(context.request, context.env, context.authContext);
+  ...MI_NOTE_AUTH_PATHS.map((path) => exactRoute(path, Object.freeze({
+    commerceMutation: false, cors: 'mi-note', profileOriginGate: true,
+    staff: 'skip', unexpectedError: 'profile',
+  }), async (context) => ({ response: await handleMiNoteAuthRequest(context.request, context.env, path) }))),
+  ...PREORDER_PATHS.map((path) => exactRoute(path, Object.freeze({
+    commerceMutation: path !== '/preorders/availability', cors: 'mi-note', profileOriginGate: true,
+    staff: 'optional', unexpectedError: 'profile',
+  }), async (context) => {
+    const result = await handlePreorderRequest(context.request, context.env, context.authContext, {
+      cache: context.dependencies.cache, log: context.dependencies.log, providerFetch: context.dependencies.providerFetch,
+    }, context.defer);
     addMetrics(context.metrics, result);
-    const origin = path === '/preorders/availability' ? publicRequestOrigin(context.request) : null;
     return {
-      response: origin ? applyPublicCors(result.response, origin, 'GET, OPTIONS') : result.response,
+      response: result.response,
       logFields: { profileAuthOutcome: result.authOutcome },
     };
   })),
@@ -616,11 +624,10 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
     MI_NOTE_CARDS_API_PATH,
     Object.freeze({
       commerceMutation: false,
-      cors: 'public',
-      profileOriginGate: false,
-      publicMethods: 'GET, OPTIONS',
-      staff: 'skip',
-      unexpectedError: 'public',
+      cors: 'mi-note',
+      profileOriginGate: true,
+      staff: 'optional',
+      unexpectedError: 'profile',
     }),
     dispatchMiNoteCards,
   ),
@@ -910,6 +917,7 @@ export function workerRoutePreflightResponse(
   request: Request,
 ): Response | undefined {
   if (request.method !== 'OPTIONS') return undefined;
+  if (route.cors === 'mi-note') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
   if (route.cors === 'profile') return handleProfileCorsPreflight(request);
   if (route.cors === 'staff-auth') {
     return handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
@@ -942,6 +950,7 @@ export function applyWorkerRouteCors(
   request: Request,
   response: Response,
 ): Response {
+  if (route.cors === 'mi-note') return applyProfileCors(request, response, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
   return route.cors === 'profile' || route.cors === 'staff-auth'
     ? applyProfileCors(request, response)
     : response;
@@ -978,7 +987,9 @@ export function unexpectedWorkerRouteResponse(
           ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
           : {}),
       },
-    }, 503, receiptClaimRetryHeaders(route.logRoute)));
+    }, 503, receiptClaimRetryHeaders(route.logRoute)),
+    route.cors === 'mi-note' ? 'GET, POST, OPTIONS' : undefined,
+    route.cors === 'mi-note' ? MI_NOTE_SESSION_HEADER : undefined);
   }
   return sharedJsonResponse({ ok: false, error: 'internal' }, 500);
 }

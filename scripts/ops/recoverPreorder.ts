@@ -10,7 +10,7 @@ import { verifyArchivedPreorderAbsence } from '../shared/preorderArchive.ts';
 
 const publicKey = z.string().refine((value) => isBase58Bytes(value, 32));
 const orderSchema = z.object({
-  order_id: z.string(), preorder_id: z.string(), cluster: z.literal('devnet'), collection: publicKey, buyer: publicKey,
+  order_id: z.string(), preorder_id: z.string(), cluster: z.enum(['devnet', 'mainnet-beta']), collection: publicKey, buyer: publicKey,
   status: z.enum(['prepared', 'submitted', 'succeeded', 'failed', 'expired', 'cancelled']),
   signature: z.string().refine((value) => isBase58Bytes(value, 64)).nullable(),
   signed_transaction: z.string().min(1).max(4096).nullable(),
@@ -25,7 +25,7 @@ type RecoveryOutcome = Awaited<ReturnType<typeof probePreorderTransaction>>;
 type Options = { orderId: string; write: boolean };
 type Dependencies = { query: CommerceAuthorityQuery; probe: (order: RecoveryOrder) => Promise<RecoveryOutcome> };
 
-const usage = 'Usage: npm run recover-preorder -- <order-id> [--write]\nSet PREORDER_ARCHIVE_RPC_URL to a trusted devnet archival RPC. Without --write, verification is read-only.';
+const usage = 'Usage: npm run recover-preorder -- <order-id> [--write]\nSet PREORDER_ARCHIVE_RPC_URL to a trusted archival RPC for the order\'s cluster (devnet or mainnet-beta). Without --write, verification is read-only.';
 
 export function parsePreorderRecoveryArgs(argv: string[]): Options {
   const [orderId, ...flags] = argv;
@@ -50,7 +50,7 @@ async function readOrder(query: CommerceAuthorityQuery, orderId: string): Promis
   }
   const config = getPreorderConfig(order.preorder_id);
   if (order.order_id !== orderId || !config?.enabled || config.cluster !== order.cluster || config.collection !== order.collection) {
-    throw new Error('Preorder collection does not match the enabled devnet configuration.');
+    throw new Error('Preorder collection does not match its enabled cluster configuration.');
   }
   if (order.status === 'prepared') throw new Error('This preorder is not submitted; use normal checkout cancellation or expiry.');
   return order;
@@ -58,7 +58,7 @@ async function readOrder(query: CommerceAuthorityQuery, orderId: string): Promis
 
 async function probeArchive(order: RecoveryOrder): Promise<RecoveryOutcome> {
   const rpcUrl = process.env.PREORDER_ARCHIVE_RPC_URL;
-  if (!rpcUrl) throw new Error('Set PREORDER_ARCHIVE_RPC_URL to a trusted devnet archival RPC.');
+  if (!rpcUrl) throw new Error(`Set PREORDER_ARCHIVE_RPC_URL to a trusted ${order.cluster} archival RPC.`);
   let endpoint: URL;
   try { endpoint = new URL(rpcUrl); } catch { throw new Error('PREORDER_ARCHIVE_RPC_URL is invalid.'); }
   if (endpoint.protocol !== 'https:') throw new Error('PREORDER_ARCHIVE_RPC_URL must use HTTPS.');
@@ -78,7 +78,7 @@ async function probeArchive(order: RecoveryOrder): Promise<RecoveryOutcome> {
       verifyArchivedAbsence: (args) => verifyArchivedPreorderAbsence(connection, args),
     });
   } catch {
-    throw new Error('Archive verification failed. Use a trusted devnet RPC with complete finalized block history; no recovery writes were made.');
+    throw new Error(`Archive verification failed. Use a trusted ${order.cluster} RPC with complete finalized block history; no recovery writes were made.`);
   }
 }
 

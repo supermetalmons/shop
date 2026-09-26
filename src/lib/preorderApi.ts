@@ -1,8 +1,11 @@
 import type { PreorderAvailabilityResponse, PreorderCancelRequest, PreorderOrder, PreorderPrepareRequest, PreorderPrepareResponse, PreorderStatusResponse, PreorderSubmitRequest } from '../../shared/preorders.ts';
 import { getPreorderConfig, isPreorderCardId, PREORDER_CARD_COUNT } from '../../shared/preorders.ts';
+import { MI_NOTE_SESSION_HEADER, type MiNoteEthereumSession } from '../../shared/miNoteAuth';
+import { normalizeMiNoteAddress } from '../../shared/miNoteCards';
 import { isBase58Bytes } from '../../shared/solanaRpcProxy.ts';
-import { callProfileApi, type AuthenticatedApiCall } from '../api/transport';
-import { monsApiOrigin } from './monsApiOrigin';
+import { callProfileApi, profileApiTimeoutMs, ProfileApiError, type AuthenticatedApiCall } from '../api/transport';
+import { AUTHENTICATED_API_ORIGIN } from './authenticatedApiOrigin';
+import { readMiNoteResponse } from './miNoteResponse';
 
 type ApiDependencies = {
   fetch: typeof fetch;
@@ -12,7 +15,7 @@ type ApiDependencies = {
 
 const defaultDependencies: ApiDependencies = {
   fetch: (input, init) => fetch(input, init),
-  publicOrigin: monsApiOrigin,
+  publicOrigin: () => AUTHENTICATED_API_ORIGIN,
   authenticatedCall: callProfileApi,
 };
 
@@ -28,6 +31,7 @@ function parseOrder(value: unknown, preorderId: string): PreorderOrder {
   const config = getPreorderConfig(preorderId);
   if (!config || !record(value) || value.preorderId !== preorderId ||
     typeof value.orderId !== 'string' || !value.orderId || value.orderId.length > 128 ||
+    (value.ethereumAddress !== null && normalizeMiNoteAddress(value.ethereumAddress) !== value.ethereumAddress) ||
     typeof value.buyer !== 'string' || !isBase58Bytes(value.buyer, 32) ||
     !Array.isArray(value.cardIds) || value.cardIds.length < 1 || value.cardIds.length > config.maxItems ||
     !value.cardIds.every(isPreorderCardId) || new Set(value.cardIds).size !== value.cardIds.length ||
@@ -45,10 +49,15 @@ function parseOrder(value: unknown, preorderId: string): PreorderOrder {
 
 export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
   const dependencies = { ...defaultDependencies, ...overrides };
-  async function request(action: 'availability' | 'prepare' | 'submit' | 'cancel' | 'status', query: Record<string, string> | null, body?: unknown): Promise<unknown> {
-    if (action !== 'availability') return dependencies.authenticatedCall(`/preorders/${action}`, body, undefined, { replaySafe: true });
+  async function request(action: 'availability' | 'prepare' | 'submit' | 'cancel' | 'status', query: Record<string, string> | null, body?: unknown, session?: MiNoteEthereumSession, signedIn = false): Promise<unknown> {
+    const headers: Record<string, string> = session ? { [MI_NOTE_SESSION_HEADER]: session.token } : {};
+    if (action !== 'availability') return dependencies.authenticatedCall(`/preorders/${action}`, body, undefined, { replaySafe: true, headers });
+    if (signedIn) {
+      try { return await dependencies.authenticatedCall('/preorders/availability', query, undefined, { replaySafe: true, headers }); }
+      catch (error) { if (!(error instanceof ProfileApiError) || error.status !== 401) throw error; }
+    }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 65_000);
+    const timeout = setTimeout(() => controller.abort(), profileApiTimeoutMs('/preorders/availability'));
     try {
       const suffix = query ? `?${new URLSearchParams(query)}` : '';
       const origin = dependencies.publicOrigin();
@@ -56,14 +65,15 @@ export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
         method: 'GET',
         cache: 'no-store',
         credentials: 'omit',
+        headers,
         signal: controller.signal,
       });
-      const payload: unknown = await response.json();
+      const payload = await readMiNoteResponse(response, controller.signal, 128 * 1024);
       if (!response.ok) {
         const error = record(payload) ? payload.error : null;
         const message = record(error) && typeof error.message === 'string' ? error.message
           : typeof error === 'string' ? error.replaceAll('-', ' ') : 'Preorder request failed.';
-        throw new Error(message);
+        throw new ProfileApiError({ message, status: response.status, code: record(error) && typeof error.code === 'string' ? error.code : 'unavailable' });
       }
       return payload;
     } finally {
@@ -81,26 +91,27 @@ export function createPreorderApi(overrides: Partial<ApiDependencies> = {}) {
     return { order };
   }
   return {
-    async availability(preorderId: string): Promise<PreorderAvailabilityResponse> {
-      const payload = await request('availability', { preorderId });
+    async availability(preorderId: string, session: MiNoteEthereumSession, signedIn = false): Promise<PreorderAvailabilityResponse> {
+      const payload = await request('availability', { preorderId }, undefined, session, signedIn);
       if (!record(payload) || payload.preorderId !== preorderId || !Array.isArray(payload.items) ||
-        payload.items.length !== PREORDER_CARD_COUNT || !payload.items.every((item) => record(item) && isPreorderCardId(item.id) &&
+        payload.ethereumAddress !== session.address || !['success', 'partial'].includes(String(payload.ownershipStatus)) ||
+        typeof payload.requiresAdminSignIn !== 'boolean' || payload.items.length > PREORDER_CARD_COUNT || !payload.items.every((item) => record(item) && isPreorderCardId(item.id) &&
           ['available', 'reserved', 'preordered'].includes(String(item.status))) ||
         new Set(payload.items.map((item) => (item as { id: number }).id)).size !== payload.items.length
       ) throw invalidResponse();
       return payload as unknown as PreorderAvailabilityResponse;
     },
-    async prepare(input: PreorderPrepareRequest): Promise<PreorderPrepareResponse> {
-      const payload = await request('prepare', null, input);
+    async prepare(input: PreorderPrepareRequest, session: MiNoteEthereumSession): Promise<PreorderPrepareResponse> {
+      const payload = await request('prepare', null, input, session);
       if (!record(payload) || (payload.transactionBase64 !== null &&
         (typeof payload.transactionBase64 !== 'string' || !payload.transactionBase64 || payload.transactionBase64.length > 4096))) throw invalidResponse();
       const order = parseOrder(payload.order, input.preorderId);
-      if (order.buyer !== input.buyer || order.cardIds.length !== input.cardIds.length ||
+      if (order.buyer !== input.buyer || order.ethereumAddress !== session.address || order.cardIds.length !== input.cardIds.length ||
         !order.cardIds.every((id) => input.cardIds.includes(id))) throw invalidResponse();
       return { order, transactionBase64: payload.transactionBase64 as string | null };
     },
-    async submit(input: PreorderSubmitRequest): Promise<PreorderStatusResponse> {
-      return orderResult(await request('submit', null, input), input.preorderId, input.orderId, false);
+    async submit(input: PreorderSubmitRequest, session: MiNoteEthereumSession): Promise<PreorderStatusResponse> {
+      return orderResult(await request('submit', null, input, session), input.preorderId, input.orderId, false);
     },
     async cancel(input: PreorderCancelRequest): Promise<PreorderStatusResponse> {
       return orderResult(await request('cancel', null, input), input.preorderId, input.orderId, false);

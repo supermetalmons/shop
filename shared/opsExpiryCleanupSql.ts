@@ -5,6 +5,24 @@ type OpsExpiryCleanupStatement = {
 };
 
 export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
+  miNoteAuthSessions: {
+    indexName: 'mi_note_auth_sessions_expires_at_ms',
+    limit: 500,
+    sql: `DELETE FROM mi_note_auth_sessions
+      WHERE session_id IN (
+        SELECT session_id FROM mi_note_auth_sessions
+        WHERE expires_at_ms <= ? ORDER BY expires_at_ms, session_id LIMIT ?
+      )`,
+  },
+  miNoteAuthChallenges: {
+    indexName: 'mi_note_auth_challenges_expires_at_ms',
+    limit: 500,
+    sql: `DELETE FROM mi_note_auth_challenges
+      WHERE challenge_id IN (
+        SELECT challenge_id FROM mi_note_auth_challenges
+        WHERE expires_at_ms <= ? ORDER BY expires_at_ms, challenge_id LIMIT ?
+      )`,
+  },
   anonymousAuthSessions: {
     indexName: 'anonymous_auth_sessions_expires_at_ms',
     limit: 500,

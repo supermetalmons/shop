@@ -5,6 +5,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createTestHarness } from 'wrangler';
+import { MI_NOTE_SESSION_HEADER } from '../../../../shared/miNoteAuth.ts';
+import { sha256Hex } from '../src/sessionSecrets.ts';
 import {
   MI_NOTE_2_CONTRACT_ADDRESS,
   MI_NOTE_3_CONTRACT_ADDRESS,
@@ -25,7 +27,7 @@ const ALLOW_HEADERS = { Origin: ORIGIN };
 type Provider = (url: URL) => Promise<Response>;
 
 function requestUrl(owner: number, path = '/mi-note-cards'): string {
-  return `https://api.mons.shop${path}?address=0x${owner.toString(16).padStart(40, '0')}`;
+  return `https://api.mons.shop${path}?preorderId=mi_note_cards_devnet&address=0x${owner.toString(16).padStart(40, '0')}`;
 }
 
 function originalBody() {
@@ -50,7 +52,7 @@ function modernBody(pageKey: string | null = 'complete') {
 
 function assertHeaders(response: { headers: { get(name: string): string | null } }): void {
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), ORIGIN);
-  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.equal(response.headers.get('Vary'), 'Origin');
   assert.match(response.headers.get('Content-Type') || '', /^application\/json/);
@@ -98,8 +100,10 @@ test('Mi Note ownership uses fixed providers and one bounded JSON response in wo
   await writeFile(fixturePath, `
 import { handleRequest } from ${JSON.stringify(resolve('cloud/workers/api/src/index.ts'))};
 import { handleMiNoteCards } from ${JSON.stringify(resolve('cloud/workers/api/src/miNoteCards.ts'))};
+import { apiServiceRequest } from ${JSON.stringify(resolve('cloud/workers/frontend/src/index.ts'))};
 export default {
   async fetch(request, env, ctx) {
+    request = apiServiceRequest(request) || request;
     const url = new URL(request.url);
     if (url.pathname === '/test-cache') {
       const entries = await request.json();
@@ -149,6 +153,8 @@ export default {
       compatibility_date: productionConfig.compatibility_date,
       compatibility_flags: productionConfig.compatibility_flags,
       vars: { ALCHEMY_MI_NOTE_API_KEY: ALCHEMY_KEY, OPENSEA_API_KEY: OPENSEA_KEY },
+      d1_databases: productionConfig.d1_databases.filter((database: Record<string, unknown>) => database.binding === 'OPS_DB')
+        .map((database: Record<string, unknown>) => ({ ...database, migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)) })),
     } }],
   });
   let provider: Provider = async () => { throw new Error('Unexpected provider request'); };
@@ -160,7 +166,42 @@ export default {
       requests.push({ url, method: init?.method, headers: new Headers(init?.headers) });
       return provider(url);
     });
-    const worker = server.getWorker('mi-note-cards-runtime');
+    const nativeWorker = server.getWorker<Env>('mi-note-cards-runtime');
+    await nativeWorker.applyD1Migrations('OPS_DB');
+    const runtimeEnv = await nativeWorker.getEnv();
+    const sessions = new Map<string, string>();
+    const worker = { fetch: async (urlValue: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
+      const url = new URL(urlValue);
+      if (url.pathname === '/test-cache') return nativeWorker.fetch(urlValue, init);
+      const address = url.searchParams.get('address')!;
+      let token = sessions.get(address);
+      if (!token) {
+        const sessionId = crypto.randomUUID();
+        const secret = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+        const now = Date.now();
+        await runtimeEnv.OPS_DB.prepare('INSERT INTO mi_note_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(sessionId, crypto.randomUUID(), await sha256Hex(secret), address, 'mi_note_cards_devnet', ORIGIN, now, now + 3_600_000).run();
+        token = `mons_mi_note_v1.${sessionId}.${secret}`;
+        sessions.set(address, token);
+      }
+      const headers = new Headers(init?.headers);
+      headers.set(MI_NOTE_SESSION_HEADER, token);
+      return nativeWorker.fetch(urlValue, { ...init, headers: Object.fromEntries(headers) });
+    } };
+
+    await context.test('ownership refuses unverified callers before contacting providers', async () => {
+      const before = requests.length;
+      const denied = await nativeWorker.fetch(requestUrl(1), { headers: ALLOW_HEADERS });
+      assert.equal(denied.status, 401);
+      assert.equal(requests.length, before);
+    });
+
+    await context.test('frontend service proxy accepts same-origin GET without an Origin header', async () => {
+      provider = async (url) => Response.json(url.hostname === 'api.opensea.io' ? originalBody() : modernBody());
+      const response = await worker.fetch(requestUrl(9, '/api/mi-note-cards').replace('https://api.mons.shop', ORIGIN));
+      assert.equal(response.status, 200);
+      assert.ok(isExactMiNoteCardsResponse(await response.json()));
+    });
 
     await context.test('paginates only assigned providers and returns JSON for the old Accept header', async () => {
       const before = requests.length;

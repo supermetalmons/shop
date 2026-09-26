@@ -18,6 +18,7 @@ function decode(row: Record<string, unknown> | null): StoredPreorder | null {
   if (!row) return null;
   return {
     orderId: String(row.order_id), preorderId: String(row.preorder_id), buyer: String(row.buyer),
+    ethereumAddress: row.ethereum_address == null ? null : String(row.ethereum_address),
     cluster: String(row.cluster), collection: String(row.collection), requestId: String(row.request_id),
     cardIds: JSON.parse(String(row.card_ids_json)), assets: JSON.parse(String(row.assets_json)),
     status: row.status as PreorderOrder['status'], signature: row.signature === null ? null : String(row.signature),
@@ -31,7 +32,7 @@ function decode(row: Record<string, unknown> | null): StoredPreorder | null {
 
 export function publicPreorder(order: StoredPreorder): PreorderOrder {
   return {
-    orderId: order.orderId, preorderId: order.preorderId, buyer: order.buyer, cardIds: order.cardIds,
+    orderId: order.orderId, preorderId: order.preorderId, buyer: order.buyer, ethereumAddress: order.ethereumAddress, cardIds: order.cardIds,
     assets: order.assets, status: order.status, expiresAtMs: order.expiresAtMs, signature: order.signature,
   };
 }
@@ -90,11 +91,11 @@ export class PreorderStore {
     try {
       await this.db.batch([
         this.db.prepare(`INSERT INTO commerce_preorder_orders (
-          order_id, preorder_id, cluster, collection, buyer, request_id, card_ids_json, assets_json,
+          order_id, preorder_id, cluster, collection, buyer, ethereum_address, request_id, card_ids_json, assets_json,
           status, prepared_transaction, blockhash, blockhash_context_slot, last_valid_block_height,
           expires_at_ms, created_at_ms, updated_at_ms, next_check_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .bind(order.orderId, order.preorderId, order.cluster, order.collection, order.buyer, order.requestId,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(order.orderId, order.preorderId, order.cluster, order.collection, order.buyer, order.ethereumAddress, order.requestId,
             JSON.stringify(order.cardIds), JSON.stringify(order.assets), order.preparedTransaction, order.blockhash,
             order.blockhashContextSlot, order.lastValidBlockHeight, order.expiresAtMs, order.createdAtMs,
             order.createdAtMs, order.expiresAtMs),

@@ -20,6 +20,7 @@ async function harness(context: TestContext, options: { prepared?: boolean; orde
   const source: StoredPreorder = {
     orderId: 'preorder-recovery-1', preorderId: config.preorderId, cluster: config.cluster,
     collection: config.collection, buyer: Keypair.generate().publicKey.toBase58(), requestId: 'request-1',
+    ethereumAddress: '0x0000000000000000000000000000000000000001',
     cardIds: [1, 2], assets: [1, 2].map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })),
     status: 'prepared', signature: null, signedTransaction: null, preparedTransaction: 'prepared-transaction',
     blockhash: Keypair.generate().publicKey.toBase58(), blockhashContextSlot: 10,
@@ -84,6 +85,40 @@ test('dry-run verifies submitted outcomes without mutating orders or claims', as
       assertReadOnly(h.sql);
     });
   }
+});
+
+test('mainnet recovery uses its configured collection and preserves verified success claims', async (context) => {
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const h = await harness(context, { order: {
+    preorderId: mainnet.preorderId, cluster: mainnet.cluster, collection: mainnet.collection,
+  } });
+  h.outcome({ status: 'confirmed', slot: 120 });
+  const preview = await h.run(false, { probe: async (record) => {
+    assert.equal(record.cluster, 'mainnet-beta');
+    assert.equal(record.collection, mainnet.collection);
+    return h.dependencies.probe(record);
+  } });
+  assert.equal(preview.status, 'submitted');
+  assert.equal(preview.verifiedOutcome, 'confirmed');
+  assertReadOnly(h.sql);
+  const result = await h.run(true);
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(h.claims(), [1, 2]);
+});
+
+test('mainnet recovery retains uncertain orders and releases only verified expiry', async (context) => {
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const h = await harness(context, { order: {
+    preorderId: mainnet.preorderId, cluster: mainnet.cluster, collection: mainnet.collection,
+  } });
+  h.outcome({ status: 'pending' });
+  await assert.rejects(h.run(true), /uncertain/);
+  assert.deepEqual(await h.store.get(h.order.orderId), h.order);
+  assert.deepEqual(h.claims(), [1, 2]);
+  assertReadOnly(h.sql);
+  h.outcome({ status: 'expired' });
+  assert.equal((await h.run(true)).status, 'expired');
+  assert.deepEqual(h.claims(), []);
 });
 
 test('verified expiry and failure release claims only after the terminal state is persisted', async (context) => {
@@ -200,9 +235,11 @@ test('missing, mismatched and malformed orders cannot be probed or mutated', asy
   for (const [name, transform] of [
     ['missing', () => []],
     ['wrong order ID', (rows: Record<string, unknown>[]) => [{ ...rows[0], order_id: 'other-order' }]],
-    ['mainnet cluster', (rows: Record<string, unknown>[]) => [{ ...rows[0], cluster: 'mainnet-beta' }]],
+    ['mismatched cluster', (rows: Record<string, unknown>[]) => [{ ...rows[0], cluster: 'mainnet-beta' }]],
+    ['unsupported cluster', (rows: Record<string, unknown>[]) => [{ ...rows[0], cluster: 'testnet' }]],
     ['wrong collection', (rows: Record<string, unknown>[]) => [{ ...rows[0], collection: Keypair.generate().publicKey.toBase58() }]],
-    ['disabled preorder', (rows: Record<string, unknown>[]) => [{ ...rows[0], preorder_id: 'mi_note_cards' }]],
+    ['mismatched preorder', (rows: Record<string, unknown>[]) => [{ ...rows[0], preorder_id: 'mi_note_cards' }]],
+    ['unknown preorder', (rows: Record<string, unknown>[]) => [{ ...rows[0], preorder_id: 'unknown-preorder' }]],
     ['invalid buyer', (rows: Record<string, unknown>[]) => [{ ...rows[0], buyer: 'invalid' }]],
     ['invalid signature', (rows: Record<string, unknown>[]) => [{ ...rows[0], signature: 'invalid' }]],
     ['missing signature', (rows: Record<string, unknown>[]) => [{ ...rows[0], signature: null }]],

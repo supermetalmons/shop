@@ -2,239 +2,167 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { afterEach, beforeEach } from 'node:test';
 import { createElement } from 'react';
-import miNoteCollections from '../mi_note_eth.json';
-import {
-  MI_NOTE_CONTRACT_ADDRESSES,
-  MI_NOTE_CONTRACT_ADDRESS,
-  type MiNoteCardsResponse,
-} from '../shared/miNoteCards.ts';
+import { getPreorderConfig, type PreorderAvailabilityResponse } from '../shared/preorders.ts';
+import type { createPreorderApi } from '../src/lib/preorderApi.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
-const cssImports = registerHooks({
-  load(url, context, nextLoad) {
-    return url.endsWith('.css')
-      ? { format: 'module', source: '', shortCircuit: true }
-      : nextLoad(url, context);
-  },
-});
+const cssImports = registerHooks({ load(url, context, nextLoad) {
+  return url.endsWith('.css') ? { format: 'module', source: '', shortCircuit: true } : nextLoad(url, context);
+} });
 const { default: MiNoteCardsGallery } = await import('../src/components/MiNoteCardsGallery.tsx');
+const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
+const { useMiNoteVerification } = await import('../src/hooks/useMiNoteVerification.ts');
+const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
 cssImports.deregister();
 dom.window.close();
 
-const ADDRESS = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
-const OTHER_ADDRESS = '0x1111111111111111111111111111111111111111';
-const CARD = miNoteCollections.find(({ contractAddress }) => contractAddress === MI_NOTE_CONTRACT_ADDRESSES[0])!.tokens[0];
+const ADDRESS = '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe';
+const OTHER_ADDRESS = '0x5bfce4149f520fe0823dc8c0afaf979121e824ec';
+const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const config = getPreorderConfig('mi_note_cards_devnet')!;
 const originalFetch = globalThis.fetch;
+beforeEach(() => { ({ dom } = setupFrontendDom()); });
+afterEach(() => { cleanup(); globalThis.fetch = originalFetch; dom.window.close(); });
 
-beforeEach(() => {
-  ({ dom } = setupFrontendDom());
-  window.history.replaceState(null, '', '/mi_note_cards');
-});
-
-afterEach(() => {
-  cleanup();
-  globalThis.fetch = originalFetch;
-  dom.window.close();
-});
-
-function provider(accounts = [ADDRESS]) {
-  const listeners = new Map<string, Set<(value: unknown) => void>>();
+function provider(initialAddress = ADDRESS) {
+  let address = initialAddress;
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const calls: string[] = [];
   return {
     calls,
     request: async ({ method }: { method: string }) => {
       calls.push(method);
-      return accounts;
+      if (method === 'eth_chainId') return '0x1';
+      if (method === 'personal_sign') return `0x${'12'.repeat(65)}`;
+      return [address];
     },
-    on: (name: string, listener: (value: unknown) => void) => {
-      const group = listeners.get(name) ?? new Set();
-      group.add(listener);
-      listeners.set(name, group);
+    on(name: string, listener: (...args: unknown[]) => void) {
+      const group = listeners.get(name) ?? new Set(); group.add(listener); listeners.set(name, group);
     },
-    removeListener: (name: string, listener: (value: unknown) => void) => listeners.get(name)?.delete(listener),
-    emit: (name: string, value: unknown) => {
-      if (name === 'accountsChanged') accounts = value as string[];
-      listeners.get(name)?.forEach((listener) => listener(value));
-    },
+    removeListener(name: string, listener: (...args: unknown[]) => void) { listeners.get(name)?.delete(listener); },
+    change(next: string) { address = next; listeners.get('accountsChanged')?.forEach(listener => listener([next])); },
   };
 }
 
-function captureRequests() {
-  const requests: Array<{ url: string; signal: AbortSignal; resolve: (response: Response) => void }> = [];
-  globalThis.fetch = ((input, init) => new Promise<Response>((resolve) => {
-    requests.push({ url: String(input), signal: init!.signal!, resolve });
-  })) as typeof fetch;
-  return requests;
-}
-
-function holdings(withCard = true): MiNoteCardsResponse {
-  return {
-    ok: true,
-    tokenIdsByContract: Object.fromEntries(MI_NOTE_CONTRACT_ADDRESSES.map((contract, index) => [contract, index === 0 && withCard ? [CARD.id] : []])),
-    resultsByContract: Object.fromEntries(MI_NOTE_CONTRACT_ADDRESSES.map((contract) => [contract, {
-      status: 'success',
-      provider: contract === MI_NOTE_CONTRACT_ADDRESS ? 'opensea' : 'alchemy',
-      visibilityLimited: contract === MI_NOTE_CONTRACT_ADDRESS,
-    }])),
-  } as MiNoteCardsResponse;
-}
-
-function gallery() {
-  return render(createElement(MiNoteCardsGallery));
-}
-
-async function connect(view: ReturnType<typeof gallery>) {
-  fireEvent.click(view.getByRole('tab', { name: 'Your' }));
-  fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Disconnect' })));
-}
-
-test('connecting in Your loads holdings, account changes discard old cards, and All retains its sample', async () => {
-  const wallet = provider();
-  Object.assign(window, { ethereum: wallet });
-  const requests = captureRequests();
-  const view = gallery();
-  const sample = view.getAllByRole('img').map((image) => image.getAttribute('src'));
-  assert.equal(requests.length, 0);
-  await connect(view);
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts']);
-  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}`);
-  assert.match(view.getByRole('status').textContent!, /Loading your cards/);
-  await act(async () => requests[0].resolve(Response.json(holdings())));
-  assert.equal(view.getAllByRole('img').length, 1);
-  assert.equal(view.getByRole('img').getAttribute('alt'), CARD.name);
-
-  act(() => wallet.emit('accountsChanged', [OTHER_ADDRESS]));
-  assert.equal(view.queryAllByRole('img').length, 0);
-  assert.equal(requests[1].url, `https://api.mons.shop/mi-note-cards?address=${OTHER_ADDRESS}`);
-  fireEvent.click(view.getByRole('tab', { name: 'All' }));
-  assert.equal(requests[1].signal.aborted, true);
-  await act(async () => requests[1].resolve(Response.json(holdings())));
-  assert.deepEqual(view.getAllByRole('img').map((image) => image.getAttribute('src')), sample);
-  fireEvent.click(view.getByRole('tab', { name: 'Your' }));
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts']);
-  assert.equal(requests.length, 3);
-  fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
-  assert.equal(requests[2].signal.aborted, true);
-  assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  assert.equal(window.localStorage.length, 0);
-});
-
-test('ownership errors are retryable and an empty successful response shows the empty state', async () => {
-  Object.assign(window, { ethereum: provider() });
-  const requests = captureRequests();
-  const view = gallery();
-  await connect(view);
-  await act(async () => requests[0].resolve(Response.json({ ok: false, error: 'provider-unavailable' }, { status: 502 })));
-  assert.equal(view.getByRole('alert').textContent, 'Couldn’t load your cards.');
-  fireEvent.click(view.getByRole('button', { name: 'Try again' }));
-  assert.equal(requests.length, 2);
-  assert.equal(view.queryByRole('alert'), null);
-  await act(async () => requests[1].resolve(Response.json(holdings(false))));
-  assert.equal(view.getByRole('status').textContent, 'No Mi Note cards found.');
-});
-
-for (const withCard of [false, true]) {
-  test(`partial ownership ${withCard ? 'retains available cards' : 'does not report an empty wallet'} and can be retried`, async () => {
-    Object.assign(window, { ethereum: provider() });
-    const requests = captureRequests();
-    const view = gallery();
-    await connect(view);
-    await waitFor(() => assert.equal(requests.length, 1));
-    const partial = holdings(withCard);
-    partial.resultsByContract[MI_NOTE_CONTRACT_ADDRESSES[1]] = { status: 'error', error: 'provider-timeout' };
-    if (!withCard) partial.resultsByContract[MI_NOTE_CONTRACT_ADDRESSES[0]] = { status: 'error', error: 'provider-unavailable' };
-    await act(async () => requests[0].resolve(Response.json(partial)));
-    assert.equal(view.getByRole('alert').textContent, 'Some cards couldn’t be loaded.');
-    assert.equal(view.queryByText('No Mi Note cards found.'), null);
-    assert.deepEqual(view.queryAllByRole('img').map((image) => image.getAttribute('alt')), withCard ? [CARD.name] : []);
-    fireEvent.click(view.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => assert.equal(requests.length, 2));
-    await act(async () => requests[1].resolve(Response.json(holdings(withCard))));
-    assert.equal(view.queryByRole('alert'), null);
-    assert.equal(view.queryByRole('button', { name: 'Try again' }), null);
-    assert.deepEqual(view.queryAllByRole('img').map((image) => image.getAttribute('alt')), withCard ? [CARD.name] : []);
-    if (!withCard) assert.equal(view.getByRole('status').textContent, 'No Mi Note cards found.');
-  });
-}
-
-test('a remembered wallet restores only on entering Your and disconnect prevents later restoration', async () => {
-  const wallet = provider();
-  Object.assign(window, { ethereum: wallet });
-  const requests = captureRequests();
-  const first = gallery();
-  await connect(first);
-  first.unmount();
-  const second = gallery();
-  assert.equal(second.getByRole('tab', { name: 'All' }).getAttribute('aria-selected'), 'true');
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts']);
-  assert.equal(requests.length, 1);
-  fireEvent.click(second.getByRole('tab', { name: 'Your' }));
-  await waitFor(() => assert.ok(second.getByRole('button', { name: 'Disconnect' })));
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts', 'eth_accounts']);
-  assert.equal(requests.length, 2);
-  fireEvent.click(second.getByRole('button', { name: 'Disconnect' }));
-  second.unmount();
-  const third = gallery();
-  fireEvent.click(third.getByRole('tab', { name: 'Your' }));
-  assert.ok(third.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts', 'eth_accounts']);
-});
-
-test('multiple wallets are selected inline with cancel and keyboard focus restoration', async () => {
-  const first = provider();
-  const second = provider([OTHER_ADDRESS]);
-  window.addEventListener('eip6963:requestProvider', () => {
-    for (const [index, wallet] of [first, second].entries()) {
-      window.dispatchEvent(new dom.window.CustomEvent('eip6963:announceProvider', { detail: {
-        info: { uuid: `wallet-${index}`, name: `Wallet ${index + 1}`, rdns: `wallet.${index}`, icon: 'data:image/png;base64,' },
-        provider: wallet,
-      } }));
+function rig() {
+  let challenged = ADDRESS;
+  let ownershipStatus: 'success' | 'partial' = 'success';
+  let lookupCount = 0;
+  let logoutCount = 0;
+  const authCalls: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    assert.equal(new Headers(init?.headers).get('X-Mons-CSRF'), '1');
+    const action = String(input).split('/').at(-1)!;
+    authCalls.push(action);
+    if (action === 'challenge') {
+      challenged = JSON.parse(String(init?.body)).address;
+      return Response.json({ challengeId: 'challenge', message: 'Verify Mi Note ownership', expiresAtMs: Date.now() + 300_000 });
     }
-  });
-  const requests = captureRequests();
-  const view = gallery();
-  fireEvent.keyDown(view.getByRole('tab', { name: 'All' }), { key: 'ArrowRight' });
-  const yourTab = view.getByRole('tab', { name: 'Your' });
-  assert.equal(yourTab.getAttribute('aria-selected'), 'true');
-  assert.equal(document.activeElement, yourTab);
+    if (action === 'verify') return Response.json({ token: `verified-${challenged}`, address: challenged,
+      preorderId: config.preorderId, expiresAtMs: Date.now() + 3_600_000 });
+    logoutCount += 1;
+    return Response.json({ ok: true });
+  };
+  const forbidden = async (): Promise<never> => { throw new Error('Viewing must not start a purchase'); };
+  const api: ReturnType<typeof createPreorderApi> = {
+    availability: async (preorderId, session, signedIn) => {
+      lookupCount += 1;
+      const start = session.address === ADDRESS ? 1 : 11;
+      return { preorderId, ethereumAddress: session.address, ownershipStatus, requiresAdminSignIn: !signedIn,
+        items: signedIn ? Array.from({ length: 10 }, (_, index) => ({ id: start + index, status: 'available' })) : [],
+      } satisfies PreorderAvailabilityResponse;
+    },
+    prepare: forbidden, submit: forbidden, cancel: forbidden, status: async () => ({ order: null }),
+  };
+  function Harness({ admin = false }: { admin?: boolean }) {
+    const wallet = useMiNoteEthereumWallet(true);
+    const verification = useMiNoteVerification(true, config.preorderId, wallet);
+    const preorder = usePreorderCheckout({ config, active: true, buyer: admin ? ADMIN : undefined, signedIn: admin,
+      ethereumSession: verification.session, onEthereumSessionInvalid: verification.invalidate,
+      signTransaction: undefined, ensureSignedIn: async () => false, onSucceeded: () => {},
+    }, api);
+    return createElement(MiNoteCardsGallery, { preorder, wallet, verification, onAdminSignIn: async () => {} });
+  }
+  return { Harness, authCalls, get lookupCount() { return lookupCount; }, get logoutCount() { return logoutCount; },
+    partial: () => { ownershipStatus = 'partial'; }, complete: () => { ownershipStatus = 'success'; } };
+}
+
+async function connectAndVerify(view: ReturnType<typeof render>) {
   fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  await waitFor(() => assert.ok(view.getByRole('group', { name: 'Select Ethereum wallet' })));
-  assert.equal(document.activeElement, view.getByRole('button', { name: 'Wallet 1' }));
-  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
-  assert.equal(view.queryByRole('group'), null);
-  assert.equal(document.activeElement, view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  assert.equal(first.calls.length + second.calls.length, 0);
-  fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
-  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Wallet 2' })));
-  fireEvent.click(view.getByRole('button', { name: 'Wallet 2' }));
-  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Disconnect' })));
-  assert.deepEqual(first.calls, []);
-  assert.deepEqual(second.calls, ['eth_requestAccounts']);
-  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${OTHER_ADDRESS}`);
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Verify Ethereum Wallet' })));
+  fireEvent.click(view.getByRole('button', { name: 'Verify Ethereum Wallet' }));
+}
+
+test('Ethereum verifies before listings; admin sign-in refreshes test IDs and changing ETH clears cards', async () => {
+  const wallet = provider(); Object.assign(window, { ethereum: wallet });
+  const context = rig();
+  const view = render(createElement(context.Harness));
+  assert.equal(view.queryByRole('img'), null);
+  assert.equal(context.lookupCount, 0);
+  await connectAndVerify(view);
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Sign in with Solana' })));
+  assert.deepEqual(context.authCalls, ['challenge', 'verify']);
+  assert.deepEqual(wallet.calls, ['eth_requestAccounts', 'eth_chainId', 'personal_sign', 'eth_accounts']);
+  assert.equal(view.queryByRole('img'), null);
+  view.rerender(createElement(context.Harness, { admin: true }));
+  await waitFor(() => assert.equal(view.getAllByRole('img').length, 10));
+  assert.ok(view.getByRole('button', { name: /Select preorder #1:/ }));
+  act(() => wallet.change(OTHER_ADDRESS));
+  assert.equal(view.queryByRole('img'), null);
+  fireEvent.click(view.getByRole('button', { name: 'Verify Ethereum Wallet' }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: /Select preorder #11:/ })));
+  assert.equal(view.queryByRole('button', { name: /Select preorder #1:/ }), null);
 });
 
-test('address links bypass wallet restoration and preserve the gallery without tabs', async () => {
-  const wallet = provider();
-  Object.assign(window, { ethereum: wallet });
-  const requests = captureRequests();
-  const first = gallery();
-  await connect(first);
+test('partial ownership keeps eligible cards and retry replaces the partial status', async () => {
+  const wallet = provider(); Object.assign(window, { ethereum: wallet });
+  const context = rig(); context.partial();
+  const view = render(createElement(context.Harness, { admin: true }));
+  await connectAndVerify(view);
+  await waitFor(() => assert.ok(view.getByText('Some cards couldn’t be loaded.')));
+  assert.equal(view.getAllByRole('img').length, 10);
+  context.complete(); fireEvent.click(view.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => assert.ok(!view.queryByText('Some cards couldn’t be loaded.')));
+});
+
+test('reload restores a matching verified wallet quietly and disconnect prevents future restoration', async () => {
+  const wallet = provider(); Object.assign(window, { ethereum: wallet });
+  const context = rig();
+  const first = render(createElement(context.Harness, { admin: true }));
+  await connectAndVerify(first);
+  await waitFor(() => assert.equal(first.getAllByRole('img').length, 10));
   first.unmount();
-  window.history.replaceState(null, '', `/mi_note_cards?address=${OTHER_ADDRESS}`);
-  const linked = gallery();
-  assert.equal(linked.queryByRole('tablist'), null);
-  assert.equal(linked.queryByRole('button', { name: 'Connect Ethereum Wallet' }), null);
-  assert.equal(linked.queryByRole('status'), null);
-  assert.deepEqual(wallet.calls, ['eth_requestAccounts']);
-  assert.equal(requests[1].url, `https://api.mons.shop/mi-note-cards?address=${OTHER_ADDRESS}`);
-  const partial = holdings();
-  partial.resultsByContract[MI_NOTE_CONTRACT_ADDRESSES[1]] = { status: 'error', error: 'provider-timeout' };
-  await act(async () => requests[1].resolve(Response.json(partial)));
-  assert.equal(linked.getByRole('img').getAttribute('alt'), CARD.name);
-  assert.equal(linked.queryByRole('alert'), null);
-  assert.equal(linked.queryByRole('status'), null);
-  assert.equal(linked.queryByRole('button', { name: 'Try again' }), null);
+  const restored = render(createElement(context.Harness, { admin: true }));
+  await waitFor(() => assert.equal(restored.getAllByRole('img').length, 10));
+  assert.equal(wallet.calls.filter(call => call === 'personal_sign').length, 1);
+  fireEvent.click(restored.getByRole('button', { name: 'Disconnect' }));
+  assert.equal(restored.queryByRole('img'), null);
+  await waitFor(() => assert.equal(context.logoutCount, 1));
+  restored.unmount();
+  const disconnected = render(createElement(context.Harness, { admin: true }));
+  assert.ok(disconnected.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+});
+
+test('wallet picker remains inline and supports cancellation and provider selection', async () => {
+  const one = provider(); const two = provider(OTHER_ADDRESS);
+  const context = rig();
+  window.addEventListener('eip6963:requestProvider', () => {
+    for (const [index, wallet] of [one, two].entries()) window.dispatchEvent(new dom.window.CustomEvent('eip6963:announceProvider', {
+      detail: { provider: wallet, info: { uuid: String(index), name: `Wallet ${index}`, rdns: `wallet.${index}`, icon: '' } },
+    }));
+  });
+  const view = render(createElement(context.Harness, { admin: true }));
+  fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  await waitFor(() => assert.ok(document.activeElement === view.getByRole('button', { name: 'Wallet 0' })));
+  fireEvent.keyDown(view.getByRole('button', { name: 'Wallet 0' }), { key: 'Escape' });
+  assert.ok(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  fireEvent.click(view.getByRole('button', { name: 'Connect Ethereum Wallet' }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Wallet 1' })));
+  fireEvent.click(view.getByRole('button', { name: 'Wallet 1' }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Verify Ethereum Wallet' })));
+  assert.equal(one.calls.length, 0);
+  fireEvent.click(view.getByRole('button', { name: 'Verify Ethereum Wallet' }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: /Select preorder #11:/ })));
 });

@@ -36,7 +36,7 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const config = getPreorderConfig('mi_note_cards_devnet')!;
     const candidate = (buyer: string, ids: number[]): StoredPreorder => ({
       orderId: crypto.randomUUID(), preorderId: config.preorderId, cluster: config.cluster, collection: config.collection,
-      buyer, requestId: crypto.randomUUID(), cardIds: ids, assets: ids.map((id) => ({ id, address: `asset-${buyer}-${id}` })),
+      buyer, ethereumAddress: '0x0000000000000000000000000000000000000001', requestId: crypto.randomUUID(), cardIds: ids, assets: ids.map((id) => ({ id, address: `asset-${buyer}-${id}` })),
       status: 'prepared', preparedTransaction: 'partial', signedTransaction: null, signature: null,
       blockhash: 'blockhash', blockhashContextSlot: 1, lastValidBlockHeight: 100,
       expiresAtMs: 121_000, createdAtMs: 1000, revision: 1,

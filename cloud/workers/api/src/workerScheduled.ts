@@ -5,6 +5,7 @@ import { reconcilePendingDeliveryPackStatusProjections } from './deliveryPackSta
 import { reconcilePendingReadyToShipNotifications } from './readyToShipNotificationReconciliation.js';
 import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransferRateLimit.js';
 import { cleanupExpiredStaffAuthState } from './staffWalletAuth.js';
+import { cleanupExpiredMiNoteAuthState } from './miNoteAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
@@ -68,6 +69,15 @@ async function cleanupScheduledOpsState(
       }
       if (anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore) {
         console.error({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
+      }
+    },
+    async function cleanupMiNoteAuth() {
+      const result = await cleanupExpiredMiNoteAuthState(env.OPS_DB, Date.now());
+      if (result.challengesDeleted > 0 || result.sessionsDeleted > 0) {
+        console.log({ event: 'mi_note_auth_cleanup_completed', ...result });
+      }
+      if (result.limitReached && result.hasMore) {
+        console.error({ event: 'mi_note_auth_cleanup_backlog', ...result });
       }
     },
   ];

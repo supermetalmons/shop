@@ -8,7 +8,7 @@ import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIP
 
 type ExpectedExactRoute = readonly [
   pathname: string,
-  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'pack-status',
+  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'pack-status',
   profileOriginGate: boolean,
   staff: 'skip' | 'optional' | 'required',
   commerceMutation: boolean,
@@ -17,13 +17,16 @@ type ExpectedExactRoute = readonly [
 ];
 
 const EXPECTED_EXACT_ROUTES = [
-  ['/preorders/availability', 'public', false, 'skip', false, 'public', '/preorders/availability'],
-  ['/preorders/prepare', 'profile', true, 'optional', true, 'profile', '/preorders/prepare'],
-  ['/preorders/submit', 'profile', true, 'optional', true, 'profile', '/preorders/submit'],
-  ['/preorders/cancel', 'profile', true, 'optional', true, 'profile', '/preorders/cancel'],
-  ['/preorders/status', 'profile', true, 'optional', true, 'profile', '/preorders/status'],
+  ['/mi-note-cards/auth/challenge', 'mi-note', true, 'skip', false, 'profile', '/mi-note-cards/auth/challenge'],
+  ['/mi-note-cards/auth/verify', 'mi-note', true, 'skip', false, 'profile', '/mi-note-cards/auth/verify'],
+  ['/mi-note-cards/auth/logout', 'mi-note', true, 'skip', false, 'profile', '/mi-note-cards/auth/logout'],
+  ['/preorders/availability', 'mi-note', true, 'optional', false, 'profile', '/preorders/availability'],
+  ['/preorders/prepare', 'mi-note', true, 'optional', true, 'profile', '/preorders/prepare'],
+  ['/preorders/submit', 'mi-note', true, 'optional', true, 'profile', '/preorders/submit'],
+  ['/preorders/cancel', 'mi-note', true, 'optional', true, 'profile', '/preorders/cancel'],
+  ['/preorders/status', 'mi-note', true, 'optional', true, 'profile', '/preorders/status'],
   ['/health', 'none', false, 'optional', false, 'internal', '/health'],
-  ['/mi-note-cards', 'public', false, 'skip', false, 'public', '/mi-note-cards'],
+  ['/mi-note-cards', 'mi-note', true, 'optional', false, 'profile', '/mi-note-cards'],
   ['/internal/notifications/enqueue', 'none', false, 'optional', false, 'internal', '/internal/notifications/enqueue'],
   ['/checkout/session', 'profile', true, 'optional', true, 'profile', '/checkout/session'],
   ['/webhooks/stripe', 'none', false, 'optional', true, 'stripe-webhook', '/webhooks/stripe'],
@@ -115,16 +118,19 @@ test('exact Worker routes are unique, complete, policy-stable, and dispatchable'
   }
 });
 
-test('unexpected Mi Note errors retain GET public CORS', () => {
-  const route = workerRouteRegistry.resolve('/mi-note-cards');
-  assert.equal(route.publicMethods, 'GET, OPTIONS');
-  const response = unexpectedWorkerRouteResponse(route, new Request('https://api.mons.shop/mi-note-cards', {
-    headers: { Origin: 'https://mons.shop' },
-  }));
-  assert.equal(response.status, 503);
-  assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
-  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+test('unexpected Mi Note errors retain the verification CORS policy', () => {
+  for (const path of ['/mi-note-cards', '/preorders/availability', '/mi-note-cards/auth/verify']) {
+    const route = workerRouteRegistry.resolve(path);
+    assert.equal(route.cors, 'mi-note');
+    const response = unexpectedWorkerRouteResponse(route, new Request(`https://api.mons.shop${path}`, {
+      headers: { Origin: 'https://mons.shop' },
+    }));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
+    assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
+    assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mi-Note-Session/);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  }
 });
 
 test('pack-status route resolution distinguishes valid, invalid, and nonmatching paths', () => {

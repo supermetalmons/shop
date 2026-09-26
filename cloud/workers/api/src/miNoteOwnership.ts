@@ -19,7 +19,7 @@ const ORIGINAL_ID_SET = new Set(ORIGINAL_COLLECTION.tokens.map((token) => token.
 
 type ProviderContext = {
   providerFetch: WorkerDependencies['providerFetch'];
-  metrics: WorkerRequestMetrics;
+  metrics: Pick<WorkerRequestMetrics, 'upstreamCalls' | 'providerDurationMs'>;
   signal: AbortSignal;
 };
 

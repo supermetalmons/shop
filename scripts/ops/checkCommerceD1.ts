@@ -52,6 +52,12 @@ const PREORDER_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, st
 });
 const PREORDER_BUYER_INDEX_FINGERPRINT = '03d0921e2fe4834a986d2d2aae6dc1b2ba40d323a5f5c146f061af7db60c90f9';
 const PREORDER_EXPIRY_INDEX_FINGERPRINT = '6e75d815ecd1bd2ed85f545e17b0b5c212259dfbb7c59e2c29040b16a4d5ac01';
+const PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
+  ...PREORDER_SCHEMA_FINGERPRINTS,
+  commerce_preorder_orders: ['table', 'ac7078da7591fba9f0d174a5cb3316e1abe9b1f824d076261aa0430a67af269c'],
+  commerce_preorder_order_insert_guard: ['trigger', '339733b8e21416c6093a5709a0ba66ff0a8c9d532ad56ebf692dc86a84bf7418'],
+  commerce_preorder_order_update_guard: ['trigger', '42ccd00e40b38e03ad5aede8e3bd1f6579dec89b9e4dd924dae39301c72bb9b7'],
+};
 
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
@@ -276,7 +282,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 20) ||
+    (migrations.length < 13 || migrations.length > 21) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -296,7 +302,8 @@ export function checkCommerceD1(
     (migrations.length >= 17 && migrations[16].name !== '0017_receipt_claim_workflow.sql') ||
     (migrations.length >= 18 && migrations[17].name !== '0018_preorders.sql') ||
     (migrations.length >= 19 && migrations[18].name !== '0019_preorder_buyer_index.sql') ||
-    (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql')
+    (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql') ||
+    (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -316,8 +323,9 @@ export function checkCommerceD1(
   if (options.forDeployment && !receiptClaimWorkflowReady) fail('Commerce D1 receipt claim Workflow migration is required for deployment.');
 
   const preordersReady = migrations.some((migration) => migration.name === '0018_preorders.sql');
+  const preorderEthereumReady = migrations.some((migration) => migration.name === '0021_preorder_ethereum_ownership.sql');
   if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
-  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(PREORDER_SCHEMA_FINGERPRINTS)) {
+  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS)) {
     const schema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Commerce D1 preorder schema ${name} is invalid.`);
   }
@@ -337,6 +345,7 @@ export function checkCommerceD1(
       fail('Commerce D1 preorder expiry index is invalid.');
     }
   }
+  if (options.forDeployment && !preorderEthereumReady) fail('Commerce D1 preorder Ethereum ownership migration is required for deployment.');
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list

@@ -30,6 +30,8 @@ const CORE = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const CONFIG = { ...getPreorderConfig('mi_note_cards_devnet')!, authority: ADMIN.publicKey.toBase58() };
 const SECRET = bs58.encode(ADMIN.secretKey);
 const GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+const MAINNET_CONFIG = { ...getPreorderConfig('mi_note_cards')!, authority: ADMIN.publicKey.toBase58(), enabled: true };
 
 function account(data: Buffer, owner = CORE, executable = false) {
   return { data, owner, executable, lamports: 3_000_000, rentEpoch: 0 };
@@ -42,9 +44,9 @@ function collectionData() {
   return data;
 }
 
-function fixture() {
+function fixture(config = CONFIG) {
   const state = {
-    genesis: GENESIS,
+    genesis: config.cluster === 'devnet' ? GENESIS : MAINNET_GENESIS,
     program: account(Buffer.alloc(0), SystemProgram.programId, true),
     collection: account(collectionData()),
     simulationError: null as unknown,
@@ -113,7 +115,7 @@ function fixture() {
     },
   };
   const args = {
-    config: CONFIG,
+    config,
     buyer: BUYER.publicKey.toBase58(),
     ids: [1393, 1394, 1395],
     cosignerSecret: SECRET,
@@ -132,8 +134,8 @@ function encode(transaction: VersionedTransaction): string {
   return Buffer.from(transaction.serialize()).toString('base64');
 }
 
-async function preparedFixture() {
-  const setup = fixture();
+async function preparedFixture(config = CONFIG) {
+  const setup = fixture(config);
   const prepared = await preparePreorderTransaction(setup.args, setup.deps);
   const signed = decode(prepared.transactionBase64);
   signed.sign([BUYER]);
@@ -147,8 +149,8 @@ async function preparedFixture() {
   return { ...setup, prepared, signed, authorization };
 }
 
-async function authorizedFixture() {
-  const setup = await preparedFixture();
+async function authorizedFixture(config = CONFIG) {
+  const setup = await preparedFixture(config);
   const authorized = authorizePreorderTransaction(setup.authorization);
   const transaction = decode(authorized.transactionBase64);
   return {
@@ -215,12 +217,42 @@ test('preorder accepts the two catalog endpoints without changing their identity
   assert.deepEqual(prepared.assets.map(({ id }) => id), [1, 1395]);
 });
 
-test('preorder rejects mainnet and disabled collections before accessing the provider', async () => {
+test('preorder rejects unsupported clusters and disabled collections before accessing the provider', async () => {
   const { args } = fixture();
   const deps = { createConnection: () => { throw new Error('Unexpected provider access'); } };
-  await assert.rejects(preparePreorderTransaction({ ...args, config: { ...CONFIG, cluster: 'mainnet-beta' } }, deps), /not enabled/);
+  await assert.rejects(preparePreorderTransaction({ ...args, config: { ...CONFIG, cluster: 'testnet' } }, deps), /not enabled/);
   await assert.rejects(preparePreorderTransaction({ ...args, config: { ...CONFIG, enabled: false } }, deps), /not enabled/);
 });
+
+for (const config of [CONFIG, MAINNET_CONFIG]) {
+  test(`${config.cluster} preparation, broadcast, blockhash validation and recovery require the configured genesis`, async () => {
+    const { state, args, deps, authorized, probeArgs, transaction } = await authorizedFixture(config);
+    const message = TransactionMessage.decompile(transaction.message);
+    assert.equal(message.instructions[3].keys[1].pubkey.toBase58(), config.collection);
+    assert.equal(await sendPreorderTransaction({ ...args, ...authorized }, deps), authorized.signature);
+    const validity = { ...args, blockhash: BLOCKHASH, minContextSlot: 101 };
+    assert.equal(await isPreorderBlockhashValid(validity, deps), true);
+    state.finalized = finalized(transaction);
+    assert.deepEqual(await probePreorderTransaction(probeArgs, deps), { status: 'confirmed', slot: 550 });
+
+    state.genesis = config.cluster === 'devnet' ? MAINNET_GENESIS : GENESIS;
+    state.sent = null;
+    state.simulated = null;
+    await assert.rejects(preparePreorderTransaction(args, deps), /wrong cluster/);
+    await assert.rejects(sendPreorderTransaction({ ...args, ...authorized }, deps), /wrong cluster/);
+    await assert.rejects(isPreorderBlockhashValid(validity, deps), /wrong cluster/);
+    await assert.rejects(probePreorderTransaction(probeArgs, deps), /wrong cluster/);
+    assert.equal(state.sent, null);
+    assert.equal(state.simulated, null);
+  });
+
+  test(`${config.cluster} simulation failure identifies the correct SOL balance`, async () => {
+    const { args, deps, state } = fixture(config);
+    state.simulationError = { InstructionError: [1, 'InsufficientFunds'] };
+    await assert.rejects(preparePreorderTransaction(args, deps),
+      config.cluster === 'devnet' ? /Check your devnet SOL balance/ : /Check your SOL balance/);
+  });
+}
 
 test('preorder rejects the wrong RPC cluster, Core executable, collection owner and authority', async () => {
   for (const change of [

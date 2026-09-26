@@ -3,12 +3,12 @@ import test from 'node:test';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import { runScheduledReconciliations, type ScheduledReconcilers } from '../src/workerScheduled.ts';
 
-type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions';
-const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions'];
+type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions' | 'mi_note_auth_sessions';
+const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions', 'mi_note_auth_sessions'];
 
 function cleanupDatabase(options: {
   onBatch?: (table: CleanupTable) => void | Promise<void>;
-  deleted?: Partial<Record<CleanupTable | 'staff_auth_challenges', number>>;
+  deleted?: Partial<Record<CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges', number>>;
   hasMore?: boolean;
 } = {}) {
   const calls: CleanupTable[] = [];
@@ -28,7 +28,7 @@ function cleanupDatabase(options: {
         await options.onBatch?.(table);
         return statements.map(({ sql }) => {
           const deletedTable = sql.match(/^DELETE FROM (\w+)/)?.[1];
-          const deleted = options.deleted?.[deletedTable as CleanupTable | 'staff_auth_challenges'] || 0;
+          const deleted = options.deleted?.[deletedTable as CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges'] || 0;
           return {
             success: true,
             meta: { changes: deleted },

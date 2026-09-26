@@ -9,6 +9,7 @@ const OPS_D1_MIGRATIONS = [
   '0004_repair_ready_notification_cursor.sql',
   '0005_remove_redundant_anonymous_auth_subject_index.sql',
   '0006_cover_expiry_cleanup_indexes.sql',
+  '0007_mi_note_auth.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
@@ -44,6 +45,8 @@ function expiryCleanupQueryPlanSpec(
 }
 
 export const OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS = {
+  miNoteAuthSessions: expiryCleanupQueryPlanSpec(OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthSessions, 'Mi Note session cleanup'),
+  miNoteAuthChallenges: expiryCleanupQueryPlanSpec(OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthChallenges, 'Mi Note challenge cleanup'),
   anonymousAuthSessions: expiryCleanupQueryPlanSpec(
     OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions,
     'anonymous-auth session cleanup',
@@ -79,6 +82,8 @@ export type OpsD1IntegrityInput = {
   expiryCleanupQueryPlans: OpsD1ExpiryCleanupQueryPlans;
   foreignKeyCheck: OpsD1Row[];
   migrations: OpsD1Row[];
+  miNoteAuthChallengeExpiryIndexColumns: OpsD1Row[];
+  miNoteAuthSessionExpiryIndexColumns: OpsD1Row[];
   profileAddressColumns: OpsD1Row[];
   profileCounts: OpsD1Row[];
   profileColumns: OpsD1Row[];
@@ -113,6 +118,10 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  ['mi_note_auth_challenges', { fingerprint: 'a4f038e92fabc0dd7e8a24d3d9024c183c6dd14712fe20dd48461ee826d9370c', type: 'table', tableName: 'mi_note_auth_challenges' }],
+  ['mi_note_auth_challenges_expires_at_ms', { fingerprint: '884f06a33c788bdb89ff9062b3ef5e115fe70c6ef44539de471191ebcc1effd0', type: 'index', tableName: 'mi_note_auth_challenges' }],
+  ['mi_note_auth_sessions', { fingerprint: '364c625d11c296754a2f9cb970016ead77d379f7b71bed4836f22832b7094410', type: 'table', tableName: 'mi_note_auth_sessions' }],
+  ['mi_note_auth_sessions_expires_at_ms', { fingerprint: '10d69a40cc84e66bda2c653676d5216350413aa758ff89e5a10b7e340a2fb6b3', type: 'index', tableName: 'mi_note_auth_sessions' }],
   ['reveal_submission_storage_control', { fingerprint: '44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a', type: 'table', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
@@ -575,6 +584,10 @@ export function assertOpsD1Integrity(
     expectedAnonymousAuthSessionColumns,
     'anonymous_auth_sessions',
   );
+  assertExactIndexColumns(input.miNoteAuthSessionExpiryIndexColumns,
+    [['expires_at_ms', 7], ['session_id', 0]], 'Ops D1 Mi Note session expiry index');
+  assertExactIndexColumns(input.miNoteAuthChallengeExpiryIndexColumns,
+    [['expires_at_ms', 6], ['challenge_id', 0]], 'Ops D1 Mi Note challenge expiry index');
   assertExactColumns(
     input.workerControlColumns,
     expectedWorkerControlColumns,
@@ -683,11 +696,17 @@ export function readRemoteOpsD1Integrity(
 ): OpsD1IntegrityReport {
   const {
     anonymousAuthSessionsQueryPlan,
+    miNoteAuthSessionsQueryPlan,
+    miNoteAuthChallengesQueryPlan,
     staffAuthSessionsQueryPlan,
     staffAuthChallengesQueryPlan,
     rateLimitBucketsQueryPlan,
     ...rows
   } = queryBatch({
+    miNoteAuthSessionExpiryIndexColumns: 'PRAGMA index_info(mi_note_auth_sessions_expires_at_ms)',
+    miNoteAuthChallengeExpiryIndexColumns: 'PRAGMA index_info(mi_note_auth_challenges_expires_at_ms)',
+    miNoteAuthSessionsQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.miNoteAuthSessions.sql,
+    miNoteAuthChallengesQueryPlan: OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.miNoteAuthChallenges.sql,
     anonymousAuthSessionColumns: 'PRAGMA table_info(anonymous_auth_sessions)',
     anonymousAuthSessionCounts: 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions',
     anonymousAuthSessionExpiryIndexColumns: 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
@@ -737,6 +756,8 @@ export function readRemoteOpsD1Integrity(
           'reveal_submissions',
           'staff_auth_challenges',
           'staff_auth_sessions',
+          'mi_note_auth_sessions',
+          'mi_note_auth_challenges',
           'auth_wallet_bindings',
           'worker_controls'
         )
@@ -749,6 +770,8 @@ export function readRemoteOpsD1Integrity(
     ...rows,
     expiryCleanupQueryPlans: {
       anonymousAuthSessions: anonymousAuthSessionsQueryPlan,
+      miNoteAuthSessions: miNoteAuthSessionsQueryPlan,
+      miNoteAuthChallenges: miNoteAuthChallengesQueryPlan,
       staffAuthSessions: staffAuthSessionsQueryPlan,
       staffAuthChallenges: staffAuthChallengesQueryPlan,
       rateLimitBuckets: rateLimitBucketsQueryPlan,

@@ -5,6 +5,7 @@ import {
   MI_NOTE_CONTRACT_ADDRESSES,
   MI_NOTE_CARDS_API_PATH,
   MAX_MI_NOTE_TOKEN_IDS,
+  MAX_MI_NOTE_RESPONSE_BYTES,
   isCanonicalMiNoteTokenIds,
   isExactMiNoteCardsResponse,
   miNoteAddressFromSearch,
@@ -25,21 +26,23 @@ import {
 } from './miNoteOwnership.js';
 import {
   PUBLIC_RATE_LIMITS,
-  applyPublicCors,
   observePublicRateLimit,
-  publicRequestOrigin,
 } from './publicRequestPolicy.js';
+import { applyProfileCors, isProfileRequestOriginAllowed } from './profileReadSupport.js';
 import type { WorkerDependencies, WorkerRequestMetrics } from './publicRouteSupport.js';
+import { getPreorderConfig } from '../../../../shared/preorders.js';
+import { MiNoteAuthError, verifyMiNoteSession } from './miNoteAuth.js';
+import { MI_NOTE_SESSION_HEADER } from '../../../../shared/miNoteAuth.js';
 
-const MAX_CACHE_BYTES = 1024 * 1024;
 const CACHE_TTL_MS = 60_000;
 const CACHE_EXPIRY_HEADER = 'X-Mi-Note-Cards-Expires-At';
 
 type MiNoteCardsDependencies = Pick<WorkerDependencies, 'cache' | 'providerFetch' | 'log'> & {
   timeoutMs?: number;
   now?: () => number;
+  verifySession?: typeof verifyMiNoteSession;
 };
-type MiNoteCardsEnv = Pick<Env, 'ALCHEMY_MI_NOTE_API_KEY' | 'OPENSEA_API_KEY' | 'PUBLIC_SHOP_RATE_LIMITER'>;
+type MiNoteCardsEnv = Pick<Env, 'ALCHEMY_MI_NOTE_API_KEY' | 'OPENSEA_API_KEY' | 'PUBLIC_SHOP_RATE_LIMITER'> & Partial<Pick<Env, 'OPS_DB'>>;
 type CollectionOwnership = {
   contractAddress: MiNoteContractAddress;
   tokenIds: string[];
@@ -91,7 +94,7 @@ async function readCachedOwnership(
       return null;
     }
     const body = await readBoundedResponseJson(cached, {
-      maxBytes: MAX_CACHE_BYTES, contentType: 'require-json', signal, createError: miNoteProviderFailure,
+      maxBytes: MAX_MI_NOTE_RESPONSE_BYTES, contentType: 'require-json', signal, createError: miNoteProviderFailure,
     });
     if (expiresAt <= now()) return null;
     if (isCachedOwnership(body, contract)) return body;
@@ -103,12 +106,12 @@ async function readCachedOwnership(
   return null;
 }
 
-async function collectOwnership(args: {
+export async function collectMiNoteOwnership(args: {
   request: Request;
   address: string;
   env: MiNoteCardsEnv;
   dependencies: MiNoteCardsDependencies;
-  metrics: WorkerRequestMetrics;
+  metrics: Pick<WorkerRequestMetrics, 'upstreamCalls' | 'providerDurationMs'>;
   deadline: RequestDeadline;
   defer: DeferredWork;
 }): Promise<{ body: MiNoteCardsResponse; cacheStatus: string; successes: number }> {
@@ -183,14 +186,18 @@ export async function handleMiNoteCards(
   metrics: WorkerRequestMetrics,
   defer: DeferredWork,
 ): Promise<{ response: Response; cacheStatus?: string }> {
-  const origin = publicRequestOrigin(request);
   const result = (response: Response, cacheStatus?: string) => ({
-    response: origin ? applyPublicCors(response, origin, 'GET, OPTIONS') : response,
+    response: applyProfileCors(request, response, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER),
     ...(cacheStatus ? { cacheStatus } : {}),
   });
-  if (!origin) return result(jsonResponse({ ok: false, error: 'origin-not-allowed' }, 403));
-  const { address } = miNoteAddressFromSearch(new URL(request.url).search);
-  if (!address) return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
+  if (!isProfileRequestOriginAllowed(request)) return result(jsonResponse({ ok: false, error: 'origin-not-allowed' }, 403));
+  const url = new URL(request.url);
+  const { address, present } = miNoteAddressFromSearch(url.search);
+  const preorderIds = url.searchParams.getAll('preorderId');
+  const preorderId = preorderIds[0];
+  if (preorderIds.length !== 1 || !getPreorderConfig(preorderId) || (present && !address)) {
+    return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
+  }
   const deadline = createRequestDeadline(request, {
     timeoutMs: dependencies.timeoutMs ?? 30_000, timeoutMessage: 'Mi note ownership request timed out',
   });
@@ -198,14 +205,19 @@ export async function handleMiNoteCards(
     ok: false, error: deadline.timedOut() ? 'provider-timeout' : 'provider-unavailable',
   }, deadline.timedOut() ? 504 : 502);
   try {
+    const session = await (dependencies.verifySession ?? verifyMiNoteSession)(request, env.OPS_DB, preorderId, (dependencies.now ?? Date.now)());
+    if (present && address !== session.address) {
+      throw new MiNoteAuthError('permission-denied', 403, 'This address does not match your verified Ethereum wallet.');
+    }
     await raceWithSignal(observePublicRateLimit({
       binding: env.PUBLIC_SHOP_RATE_LIMITER, keyScope: MI_NOTE_CARDS_API_PATH, limit: PUBLIC_RATE_LIMITS.shop,
       log: dependencies.log, request, route: MI_NOTE_CARDS_API_PATH,
     }), deadline.signal);
-    const collected = await collectOwnership({ request, address, env, dependencies, metrics, deadline, defer });
+    const collected = await collectMiNoteOwnership({ request, address: session.address, env, dependencies, metrics, deadline, defer });
     return result(collected.successes ? jsonResponse(collected.body, 200) : failureResponse(), collected.cacheStatus);
   } catch (error) {
     if (deadline.clientAborted()) throw error;
+    if (error instanceof MiNoteAuthError) return result(jsonResponse({ ok: false, error: { code: error.code, message: error.message } }, error.status));
     return result(failureResponse());
   } finally {
     deadline.dispose();

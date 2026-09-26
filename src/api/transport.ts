@@ -163,6 +163,7 @@ export type AuthenticatedApiPath =
   | '/admin/irl-redeem/prepare'
   | '/boxes/reveal'
   | '/preorders/prepare'
+  | '/preorders/availability'
   | '/preorders/submit'
   | '/preorders/cancel'
   | '/preorders/status'

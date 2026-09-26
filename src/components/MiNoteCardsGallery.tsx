@@ -1,11 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import miNoteCollections from '../../mi_note_eth.json';
-import { miNoteAddressFromSearch } from '../../shared/miNoteCards';
-import { useMiNoteCards } from '../hooks/useMiNoteCards';
-import { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
+import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
 import { preorderImageUrl } from '../../shared/preorders';
-import { subscribeToNavigation } from '../navigation';
+import type { MiNoteVerification } from '../hooks/useMiNoteVerification';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 import { PreorderSelectionBar } from '../shop/ui/ShopSelectionBar';
@@ -15,6 +13,9 @@ import '../styles/mi-note-cards.css';
 
 type MiNoteCardsGalleryProps = {
   preorder?: PreorderCheckout;
+  wallet: ReturnType<typeof useMiNoteEthereumWallet>;
+  verification: MiNoteVerification;
+  onAdminSignIn?: () => Promise<void>;
   onCancelPendingSignIn?: () => void;
   showToast?: (message: string) => void;
   onViewPreordered?: (item: ReceiptViewerSource, originRect: DOMRect | null, aspectRatio?: number) => boolean;
@@ -22,9 +23,7 @@ type MiNoteCardsGalleryProps = {
 
 const MI_NOTE_CARDS_BY_ID = new Map(miNoteCollections.flatMap(({ tokens }) => tokens.map((card) => [card.clean_card_id, card] as const)));
 
-const currentSearch = () => window.location.search;
-
-function MiNoteWalletControls({ wallet }: { wallet: ReturnType<typeof useMiNoteEthereumWallet> }) {
+function MiNoteWalletControls({ wallet, verification }: Pick<MiNoteCardsGalleryProps, 'wallet' | 'verification'>) {
   const connectRef = useRef<HTMLButtonElement>(null);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const disconnectRef = useRef<HTMLButtonElement>(null);
@@ -52,7 +51,10 @@ function MiNoteWalletControls({ wallet }: { wallet: ReturnType<typeof useMiNoteE
           <span className="mi-note-cards__address" title={wallet.address}>
             {wallet.address.slice(0, 6)}…{wallet.address.slice(-4)}
           </span>
-          <button ref={disconnectRef} type="button" className="ghost" onClick={wallet.disconnect}>
+          {!verification.session && <button type="button" disabled={verification.verifying} onClick={() => { void verification.verify(); }}>
+            {verification.verifying ? 'Check Ethereum wallet…' : 'Verify Ethereum Wallet'}
+          </button>}
+          <button ref={disconnectRef} type="button" className="ghost" onClick={() => { verification.invalidate(); wallet.disconnect(); }}>
             Disconnect
           </button>
         </div>
@@ -98,23 +100,26 @@ function MiNoteWalletControls({ wallet }: { wallet: ReturnType<typeof useMiNoteE
           )}
         </>
       )}
-      {wallet.error && <p className="mi-note-cards__message" role="alert">{wallet.error}</p>}
+      {wallet.address && !verification.session && <p className="mi-note-cards__message" role="status">
+        Sign a message to verify ownership and view your cards.
+      </p>}
+      {(wallet.error || verification.error) && <p className="mi-note-cards__message" role="alert">{wallet.error || verification.error}</p>}
     </div>
   );
 }
 
-export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, showToast, onViewPreordered }: MiNoteCardsGalleryProps) {
-  const search = useSyncExternalStore(subscribeToNavigation, currentSearch);
-  const request = useMemo(() => miNoteAddressFromSearch(search), [search]);
-  const [tab, setTab] = useState<'all' | 'your'>('all');
-  const tabsRef = useRef<Array<HTMLButtonElement | null>>([]);
-  const tabsId = useId();
-  const yourView = !request.present && tab === 'your';
-  const wallet = useMiNoteEthereumWallet(yourView);
-  const { cards, status, retry } = useMiNoteCards(request.present
-    ? request.address ? { mode: 'owned', address: request.address } : { mode: 'inactive' }
-    : tab === 'all' ? { mode: 'all' }
-    : wallet.address ? { mode: 'owned', address: wallet.address } : { mode: 'inactive' });
+export default function MiNoteCardsGallery({ preorder, wallet, verification, onAdminSignIn, onCancelPendingSignIn, showToast, onViewPreordered }: MiNoteCardsGalleryProps) {
+  const verified = Boolean(verification.session && verification.session.address === wallet.address &&
+    verification.session.preorderId === preorder?.config.preorderId);
+  const scopedAvailability = verified && preorder?.availability?.ethereumAddress === wallet.address &&
+    preorder.availability.preorderId === preorder.config.preorderId ? preorder.availability : null;
+  const cards = useMemo(() => scopedAvailability?.items.flatMap(({ id }) => {
+    const card = MI_NOTE_CARDS_BY_ID.get(id);
+    return card ? [card] : [];
+  }) ?? [], [scopedAvailability]);
+  const selectionScope = `${preorder?.config.preorderId}:${verification.session?.token ?? ''}`;
+  const renderedScope = useRef(selectionScope);
+  const selectionCurrent = renderedScope.current === selectionScope;
   const [selected, setSelected] = useState<number[]>([]);
   const [selectedPreordered, setSelectedPreordered] = useState<number | null>(null);
   const selectedPreorderedButton = useRef<HTMLButtonElement>(null);
@@ -123,9 +128,8 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
   cancelPendingSignIn.current = onCancelPendingSignIn;
   const lastToastedError = useRef<string | null>(null);
   const availability = useMemo(() => new Map(
-    preorder?.availability?.preorderId === preorder?.config.preorderId
-      ? preorder?.availability?.items.map((item) => [item.id, item.status]) : [],
-  ), [preorder?.availability, preorder?.config.preorderId]);
+    scopedAvailability?.items.map((item) => [item.id, item.status]) ?? [],
+  ), [scopedAvailability]);
   const preorderEnabled = preorder?.config.enabled === true;
   const purchaseLocked = Boolean(preorder?.busy || preorder?.pending);
 
@@ -140,10 +144,11 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
   }, [preorderEnabled, preorder?.error, showToast]);
 
   useEffect(() => {
+    renderedScope.current = selectionScope;
     cancelPendingSignIn.current?.();
     setSelected([]);
     setSelectedPreordered(null);
-  }, [search, tab, wallet.address, preorderEnabled, preorder?.config.preorderId]);
+  }, [selectionScope, preorderEnabled]);
   useEffect(() => {
     if (previousBuyer.current && previousBuyer.current !== preorder?.buyer) {
       setSelected([]);
@@ -152,9 +157,10 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
     previousBuyer.current = preorder?.buyer;
   }, [preorder?.buyer]);
   useEffect(() => {
+    if (!scopedAvailability) return;
     setSelected((current) => current.filter((id) => availability.get(id) === 'available'));
     setSelectedPreordered((current) => current !== null && availability.get(current) === 'preordered' ? current : null);
-  }, [availability]);
+  }, [availability, scopedAvailability]);
   useEffect(() => {
     if (preorder?.order && !['prepared', 'submitted'].includes(preorder.order.status)) setSelected([]);
   }, [preorder?.order]);
@@ -164,8 +170,13 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
     if (pendingIds) setSelected((current) => current.filter((id) => pendingIds.includes(id)));
   }, [purchaseLocked, preorder?.pending]);
 
-  const panelIds = preorder?.pending?.cardIds ?? selected;
-  const preorderedCard = selectedPreordered === null ? undefined : MI_NOTE_CARDS_BY_ID.get(selectedPreordered);
+  const pendingAddress = preorder?.pending?.ethereumAddress ?? (
+    preorder?.pending?.orderId === preorder?.order?.orderId ? preorder?.order?.ethereumAddress : null
+  );
+  const pendingMatches = verified && pendingAddress === wallet.address;
+  const pendingHidden = Boolean(preorder?.pending && !pendingMatches);
+  const panelIds = !verified || !selectionCurrent || pendingHidden ? [] : preorder?.pending?.cardIds ?? selected;
+  const preorderedCard = !verified || !selectionCurrent || selectedPreordered === null ? undefined : MI_NOTE_CARDS_BY_ID.get(selectedPreordered);
   const viewableItem: InventoryItem | null = preorderedCard && preorder && availability.get(preorderedCard.clean_card_id) === 'preordered' && !purchaseLocked ? {
     id: `${preorder.config.preorderId}:${preorderedCard.clean_card_id}`,
     dropId: preorder.config.preorderId,
@@ -175,6 +186,7 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
     image: preorderImageUrl(preorder.config, preorderedCard.clean_card_id),
   } : null;
   const submitting = preorder?.order?.status === 'submitted' || preorder?.pending?.submittedAttempt;
+  const canAbandon = Boolean(preorder?.pending && !preorder.pending.orderId && !preorder.pending.submittedAttempt && !preorder.pendingOrder);
   const canResume = !preorder?.pending || Boolean(preorder.pending.requestId);
   const actionLabel = preorder?.phase === 'authenticating' ? 'Signing in…'
     : preorder?.phase === 'preparing' ? 'Preparing…'
@@ -185,74 +197,39 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
     : preorder?.pending ? 'Continue preorder' : 'Preorder';
   const totalPrice = preorder ? (panelIds.length * preorder.config.unitPriceLamports / 1_000_000_000).toLocaleString('en-US', { maximumFractionDigits: 9 }) : '';
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    let next: 'all' | 'your';
-    if (event.key === 'Home') next = 'all';
-    else if (event.key === 'End') next = 'your';
-    else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') next = tab === 'all' ? 'your' : 'all';
-    else return;
-    event.preventDefault();
-    setTab(next);
-    tabsRef.current[next === 'all' ? 0 : 1]?.focus();
-  };
-
   return (
     <>
       <main className={`mi-note-cards${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
-        {!request.present && (
-          <div className="mi-note-cards__tabs" role="tablist" aria-label="Mi Note cards">
-            {(['all', 'your'] as const).map((value, index) => (
-              <button
-                key={value}
-                ref={(element) => { tabsRef.current[index] = element; }}
-                type="button"
-                role="tab"
-                id={`${tabsId}-${value}`}
-                aria-controls={`${tabsId}-panel`}
-                aria-selected={tab === value}
-                tabIndex={tab === value ? 0 : -1}
-                onClick={() => setTab(value)}
-                onKeyDown={handleTabKeyDown}
-              >
-                {value === 'all' ? 'All' : 'Your'}
-              </button>
-            ))}
-          </div>
-        )}
-        <div
-          role={request.present ? undefined : 'tabpanel'}
-          id={request.present ? undefined : `${tabsId}-panel`}
-          aria-labelledby={request.present ? undefined : `${tabsId}-${tab}`}
-        >
-          {preorder?.availabilityError && (
-            <div className="mi-note-cards__error">
-              <p className="mi-note-cards__message" role="alert">{preorder.availabilityError}</p>
-              <button type="button" className="ghost" onClick={() => { void preorder.refreshAvailability(); }}>Try again</button>
-            </div>
-          )}
-          {yourView && <MiNoteWalletControls wallet={wallet} />}
-          {yourView && wallet.address && (
+        <h1 className="mi-note-cards__title">Preorder Mi Note Cards</h1>
+        <div>
+          <MiNoteWalletControls wallet={wallet} verification={verification} />
+          {verified && (
             <>
-              {status === 'loading' && <p className="mi-note-cards__message" role="status">Loading your cards…</p>}
-              {status === 'success' && cards.length === 0 && (
-                <p className="mi-note-cards__message" role="status">No Mi Note cards found.</p>
-              )}
-              {(status === 'error' || status === 'partial') && (
-                <div className="mi-note-cards__error">
-                  <p className="mi-note-cards__message" role="alert">
-                    {status === 'partial' ? 'Some cards couldn’t be loaded.' : 'Couldn’t load your cards.'}
-                  </p>
-                  <button type="button" className="ghost" onClick={retry}>Try again</button>
-                </div>
-              )}
+              {scopedAvailability?.requiresAdminSignIn && <div className="mi-note-cards__wallet">
+                <p className="mi-note-cards__message">Sign in with the admin Solana wallet to use the devnet test cards.</p>
+                {onAdminSignIn && <button type="button" disabled={preorder?.busy} onClick={() => { void onAdminSignIn(); }}>Sign in with Solana</button>}
+              </div>}
+              {!scopedAvailability && !preorder?.availabilityError && <p className="mi-note-cards__message" role="status">Loading your cards…</p>}
+              {scopedAvailability?.ownershipStatus === 'success' && cards.length === 0 && <p className="mi-note-cards__message" role="status">No Mi Note cards found.</p>}
+              {(preorder?.availabilityError || scopedAvailability?.ownershipStatus === 'partial') && <div className="mi-note-cards__error">
+                <p className="mi-note-cards__message" role="alert">{preorder?.availabilityError || 'Some cards couldn’t be loaded.'}</p>
+                <button type="button" className="ghost" onClick={() => { void preorder?.refreshAvailability(); }}>Try again</button>
+              </div>}
             </>
           )}
+          {pendingHidden && <div className="mi-note-cards__wallet">
+            <p className="mi-note-cards__message" role="status">{submitting ? 'Confirming your previous preorder…'
+              : pendingAddress ? 'Switch back to the Ethereum wallet for your pending preorder, or cancel it.'
+              : 'Cancel your previous preorder to start with a verified Ethereum wallet.'}</p>
+            {preorder?.order?.status === 'prepared' && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Cancel preorder</button>}
+            {canAbandon && preorder && <button type="button" className="ghost" disabled={preorder.busy} onClick={() => { void preorder.cancel(); }}>Abandon preparation</button>}
+          </div>}
           <div className="mi-note-cards__grid">
             {cards.map((card) => {
               const availabilityStatus = availability.get(card.clean_card_id);
               const isPreordered = availabilityStatus === 'preordered';
               const unavailable = availabilityStatus === 'reserved' || availabilityStatus === 'preordered';
-              const isSelected = isPreordered ? selectedPreordered === card.clean_card_id : selected.includes(card.clean_card_id);
+              const isSelected = selectionCurrent && (isPreordered ? selectedPreordered === card.clean_card_id : selected.includes(card.clean_card_id));
               const image = (
                 <img
                   className={`mi-note-cards__image${isPreordered ? ' mi-note-cards__image--preordered' : ''}`}
@@ -323,11 +300,12 @@ export default function MiNoteCardsGallery({ preorder, onCancelPendingSignIn, sh
               </div>
             </div>
             <div className="selection-panel__actions">
-              <button type="button" className="quiet" disabled={!onCancelPendingSignIn && (preorder.busy || Boolean(submitting) || Boolean(preorder.pending && !preorder.order))} onClick={() => {
+              <button type="button" className="quiet" disabled={!onCancelPendingSignIn && (preorder.busy || Boolean(submitting) || Boolean(preorder.pending && !preorder.order && !canAbandon))} onClick={() => {
                 if (onCancelPendingSignIn) onCancelPendingSignIn();
+                else if (canAbandon) { setSelected([]); void preorder.cancel(); }
                 else if (preorder.pendingOrder) void preorder.cancel();
                 else setSelected([]);
-              }}>Cancel</button>
+              }}>{canAbandon ? 'Abandon preparation' : 'Cancel'}</button>
               <button
                 type="button"
                 className="mi-note-preorder-panel__submit"

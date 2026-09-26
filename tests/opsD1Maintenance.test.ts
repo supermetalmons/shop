@@ -24,6 +24,7 @@ const schemaSql = [
   '0004_repair_ready_notification_cursor.sql',
   '0005_remove_redundant_anonymous_auth_subject_index.sql',
   '0006_cover_expiry_cleanup_indexes.sql',
+  '0007_mi_note_auth.sql',
 ].map((name) => readFileSync(
   new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
   'utf8',
@@ -116,6 +117,8 @@ function expiryCleanupQueryPlans(
       db,
       OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,
     ),
+    miNoteAuthSessions: queryRows(db, OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.miNoteAuthSessions.sql),
+    miNoteAuthChallenges: queryRows(db, OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.miNoteAuthChallenges.sql),
     staffAuthSessions: queryRows(
       db,
       OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthSessions.sql,
@@ -139,6 +142,8 @@ function integrityInput(
   try {
     prepareDatabase?.(db);
     return {
+      miNoteAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(mi_note_auth_sessions_expires_at_ms)'),
+      miNoteAuthChallengeExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(mi_note_auth_challenges_expires_at_ms)'),
       anonymousAuthSessionColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_sessions)'),
       anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
       anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
@@ -152,6 +157,7 @@ function integrityInput(
         { name: '0004_repair_ready_notification_cursor.sql' },
         { name: '0005_remove_redundant_anonymous_auth_subject_index.sql' },
         { name: '0006_cover_expiry_cleanup_indexes.sql' },
+        { name: '0007_mi_note_auth.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -195,6 +201,8 @@ function integrityInput(
           'reveal_submissions',
           'staff_auth_challenges',
           'staff_auth_sessions',
+          'mi_note_auth_sessions',
+          'mi_note_auth_challenges',
           'worker_controls'
         )
         ORDER BY name`),
@@ -221,7 +229,7 @@ test('Ops integrity reads all checks in one command without changing the report'
       calls += 1;
       assert.equal(args.includes('--file'), false);
       const statements = unstable_splitSqlQuery(args[args.indexOf('--command') + 1]);
-      assert.equal(statements.length, 27);
+      assert.equal(statements.length, 31);
       return JSON.stringify(statements.map((sql) => ({ success: true, results: queryRows(db, sql) })));
     });
     assert.deepEqual(readRemoteOpsD1Integrity(runner.queryBatch), assertOpsD1Integrity(expected));

@@ -9,12 +9,6 @@ import {
   type ShopPendingOpenBoxesRequest,
 } from '../../shared/shopApi.ts';
 import type { PackStatusBreakdown } from '../../shared/contracts.ts';
-import {
-  isExactMiNoteCardsResponse,
-  MAX_MI_NOTE_RESPONSE_BYTES,
-  MI_NOTE_CARDS_API_PATH,
-  type MiNoteCardsResponse,
-} from '../../shared/miNoteCards.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
   normalizeBoxDisplayImage,
@@ -138,78 +132,4 @@ export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Pro
     throw new Error('Shop API returned an invalid pack-status response');
   }
   return payload.packStatus;
-}
-
-export async function fetchMiNoteHoldings(
-  address: string,
-  signal?: AbortSignal,
-): Promise<MiNoteCardsResponse> {
-  signal?.throwIfAborted();
-  const invalidResponse = () => new Error('Shop API returned an invalid Mi Note cards response');
-  const controller = new AbortController();
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let rejectAborted: (reason: unknown) => void;
-  const aborted = new Promise<never>((_resolve, reject) => { rejectAborted = reject; });
-  const abortRead = () => {
-    rejectAborted(controller.signal.reason);
-    void reader?.cancel(controller.signal.reason).catch(() => {});
-  };
-  const abort = () => controller.abort(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
-  const timeout = setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), CLIENT_TIMEOUT_MS);
-  controller.signal.addEventListener('abort', abortRead, { once: true });
-  signal?.addEventListener('abort', abort, { once: true });
-  try {
-    const response = await Promise.race([
-      fetch(`${monsApiOrigin()}${MI_NOTE_CARDS_API_PATH}?address=${encodeURIComponent(address)}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-        signal: controller.signal,
-      }).then((result) => {
-        if (controller.signal.aborted) {
-          void result.body?.cancel(controller.signal.reason).catch(() => {});
-          throw controller.signal.reason;
-        }
-        return result;
-      }),
-      aborted,
-    ]);
-    if (!response.body) throw invalidResponse();
-    reader = response.body.getReader();
-    if (response.ok && response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
-      throw invalidResponse();
-    }
-    const contentLength = Number(response.headers.get('Content-Length'));
-    if (contentLength > MAX_MI_NOTE_RESPONSE_BYTES) throw invalidResponse();
-    const decoder = new TextDecoder('utf-8', { fatal: true });
-    const parts: string[] = [];
-    let bytes = 0;
-    while (true) {
-      const chunk = await Promise.race([reader.read(), aborted]);
-      controller.signal.throwIfAborted();
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > MAX_MI_NOTE_RESPONSE_BYTES) throw invalidResponse();
-      parts.push(decoder.decode(chunk.value, { stream: true }));
-    }
-    parts.push(decoder.decode());
-    let payload: unknown;
-    try { payload = JSON.parse(parts.join('')); } catch {
-      if (response.ok) throw invalidResponse();
-    }
-    if (!response.ok) {
-      const code = isExactShopApiErrorResponse(payload) ? payload.error : `http-${response.status}`;
-      throw new Error(`Shop API request failed: ${code}`);
-    }
-    if (!isExactMiNoteCardsResponse(payload)) throw invalidResponse();
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-    signal?.removeEventListener('abort', abort);
-    controller.signal.removeEventListener('abort', abortRead);
-    if (reader) {
-      void reader.cancel().catch(() => {});
-      reader.releaseLock();
-    }
-  }
 }
