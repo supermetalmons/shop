@@ -274,7 +274,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
   const canAbandon = Boolean(preorder?.pending && !preorder.pending.orderId && !preorder.pending.submittedAttempt && !preorder.pendingOrder);
   const canResume = !preorder?.pending || Boolean(preorder.pending.requestId);
   const preordering = Boolean(preorder?.busy || submitting || !preorder?.recoveryReady);
-  const actionLabel = preordering ? 'Preordering...' : 'Preorder';
+  const actionLabel = preorder?.busy || submitting ? 'Preordering...' : !preorder?.recoveryReady ? 'Preparing...' : 'Preorder';
   const totalPrice = preorder ? (panelIds.length * preorder.config.unitPriceLamports / 1_000_000_000).toLocaleString('en-US', { maximumFractionDigits: 9 }) : '';
 
   return (

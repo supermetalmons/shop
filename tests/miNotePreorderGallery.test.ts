@@ -264,46 +264,61 @@ test('unavailable cards and busy checkout never evict an existing selection', as
   assert.deepEqual(purchased, [1, 2, 3]);
 });
 
-test('checkout progress is communicated only through the action button', () => {
-  Math.random = () => 0;
-  const preorder = checkout();
-  const view = render(createElement(MiNoteCardsGallery, { preorder }));
-  fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
-  const states: [Partial<PreorderCheckout>, string, boolean][] = [
-    [{}, 'Preorder', false],
-    [{ phase: 'idle', busy: true }, 'Preordering...', true],
-    [{ phase: 'authenticating', busy: true }, 'Preordering...', true],
-    [{ phase: 'preparing', busy: true }, 'Preordering...', true],
-    [{ phase: 'signing', busy: true }, 'Preordering...', true],
-    [{ phase: 'submitting', busy: true }, 'Preordering...', true],
-    [{ phase: 'cancelling', busy: true }, 'Preordering...', true],
-    [{ recoveryReady: false }, 'Preordering...', true],
-    [{
-      order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
-        status: 'submitted', expiresAtMs: Date.now() + 118_000, signature: 'signature-1' },
-    }, 'Preordering...', true],
-    [{ pending: { ethereumAddress: ADDRESS, requestId: 'request-1', cardIds: [1] } }, 'Preorder', false],
-    [{
-      pending: { ethereumAddress: ADDRESS, requestId: 'request-1', orderId: 'order-1', cardIds: [1] },
-      pendingOrder: true,
-      order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
-        status: 'prepared', expiresAtMs: Date.now() + 118_000, signature: null },
-    }, 'Preorder', false],
-  ];
-  for (const [state, label, disabled] of states) {
-    view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, ...state } }));
-    const action = view.getByRole('button', { name: label === 'Preorder' ? 'Preorder for 0.25 SOL' : label }) as HTMLButtonElement;
-    const panel = action.closest('.mi-note-preorder-panel')!;
-    const visibleLabel = label === 'Preorder' ? 'Preorder • 0.25 SOL' : label;
-    assert.equal(action.textContent, visibleLabel);
-    assert.equal(action.disabled, disabled);
-    assert.equal(panel.textContent, `Cancel${visibleLabel}`);
-    assert.equal(within(panel as HTMLElement).getByRole('button', { name: 'Cancel' }).textContent, 'Cancel');
-    assert.equal(panel.querySelector('p'), null);
-    assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-live'), 'polite');
-    assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-atomic'), 'true');
-  }
-});
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${preorderId} checkout progress is communicated only through the action button`, () => {
+    Math.random = () => 0;
+    const preorder = checkout();
+    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.availability = { ...preorder.availability!, preorderId };
+    const view = render(createElement(MiNoteCardsGallery, { preorder: { ...preorder, recoveryReady: false } }));
+    fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
+    const states: [Partial<PreorderCheckout>, string, boolean][] = [
+      [{ recoveryReady: false }, 'Preparing...', true],
+      [{}, 'Preorder', false],
+      [{ phase: 'idle', busy: true }, 'Preordering...', true],
+      [{ phase: 'authenticating', busy: true }, 'Preordering...', true],
+      [{ phase: 'preparing', busy: true }, 'Preordering...', true],
+      [{ phase: 'signing', busy: true }, 'Preordering...', true],
+      [{ phase: 'submitting', busy: true }, 'Preordering...', true],
+      [{ phase: 'cancelling', busy: true }, 'Preordering...', true],
+      [{ phase: 'preparing', busy: true, recoveryReady: false }, 'Preordering...', true],
+      [{
+        order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
+          status: 'submitted', expiresAtMs: Date.now() + 118_000, signature: 'signature-1' },
+      }, 'Preordering...', true],
+      [{
+        recoveryReady: false,
+        order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
+          status: 'submitted', expiresAtMs: Date.now() + 118_000, signature: 'signature-1' },
+      }, 'Preordering...', true],
+      [{ pending: { ethereumAddress: ADDRESS, requestId: 'request-1', cardIds: [1], submittedAttempt: true } }, 'Preordering...', true],
+      [{
+        recoveryReady: false,
+        pending: { ethereumAddress: ADDRESS, requestId: 'request-1', cardIds: [1], submittedAttempt: true },
+      }, 'Preordering...', true],
+      [{ pending: { ethereumAddress: ADDRESS, requestId: 'request-1', cardIds: [1] } }, 'Preorder', false],
+      [{
+        pending: { ethereumAddress: ADDRESS, requestId: 'request-1', orderId: 'order-1', cardIds: [1] },
+        pendingOrder: true,
+        order: { ethereumAddress: ADDRESS, orderId: 'order-1', preorderId: preorder.config.preorderId, buyer: 'buyer', cardIds: [1], assets: [],
+          status: 'prepared', expiresAtMs: Date.now() + 118_000, signature: null },
+      }, 'Preorder', false],
+    ];
+    for (const [state, label, disabled] of states) {
+      view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, ...state } }));
+      const action = view.getByRole('button', { name: label === 'Preorder' ? 'Preorder for 0.25 SOL' : label }) as HTMLButtonElement;
+      const panel = action.closest('.mi-note-preorder-panel')!;
+      const visibleLabel = label === 'Preorder' ? 'Preorder • 0.25 SOL' : label;
+      assert.equal(action.textContent, visibleLabel);
+      assert.equal(action.disabled, disabled);
+      assert.equal(panel.textContent, `Cancel${visibleLabel}`);
+      assert.equal(within(panel as HTMLElement).getByRole('button', { name: 'Cancel' }).textContent, 'Cancel');
+      assert.equal(panel.querySelector('p'), null);
+      assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-live'), 'polite');
+      assert.equal(view.getByText(label, { exact: true }).getAttribute('aria-atomic'), 'true');
+    }
+  });
+}
 
 test('pending sign-in can be cancelled and losing verification cancels the original preorder', () => {
   Math.random = () => 0;
