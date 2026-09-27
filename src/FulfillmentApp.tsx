@@ -276,7 +276,7 @@ export default function FulfillmentApp({
     onReset: resetOrderUi,
   });
 
-  const manualReviewVisible = manualReviewCheckouts.length > 0 || manualReviewHasMore || manualReviewLoading || Boolean(manualReviewError);
+  const manualReviewVisible = manualReviewCheckouts.length > 0 || manualReviewHasMore || Boolean(manualReviewError);
   const manualReviewCount = `${manualReviewCheckouts.length}${manualReviewHasMore ? '+' : ''}`;
   useEffect(() => {
     if (!manualReviewVisible && manualReviewMenuOpen) {
