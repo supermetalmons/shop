@@ -26,12 +26,31 @@ test('preorders use exact trusted collection and canonical numeric metadata IDs'
   assert.equal(transformShopInventoryItem({ ...asset, burnt: true }, 'devnet'), null);
   assert.equal(transformShopInventoryItem({ ...asset, interface: 'V1_NFT' }, 'devnet'), null);
   assert.equal(transformShopInventoryItem({ ...asset, grouping: [{ group_key: 'collection', group_value: asset.id }] }, 'devnet'), null);
-  for (const suffix of ['0.json', '1396.json', '01.json', '1.0.json', 'f1.json', '1.json?v=1', '1.json#x', '../1.json']) {
+  for (const suffix of ['0.json', '1399.json', '01.json', '1.0.json', 'f1.json', '1.json?v=1', '1.json#x', '../1.json']) {
     const uri = `${config.metadataBase}${suffix}`;
     assert.equal(preorderIdFromMetadataUri(config, uri), null, uri);
     assert.equal(transformShopInventoryItem({ ...asset, content: { json_uri: uri } }, 'devnet'), null, uri);
   }
   assert.equal(preorderIdFromMetadataUri(config, 'https://evil.example/preorder/json/1.json'), null);
+});
+
+test('new preorder cards retain their metadata IDs and images in both collection inventories', () => {
+  for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+    const preorderConfig = getPreorderConfig(preorderId)!;
+    for (const id of [1396, 1397, 1398]) {
+      const uri = preorderMetadataUri(preorderConfig, id);
+      const item = transformShopInventoryItem({ ...asset,
+        grouping: [{ group_key: 'collection', group_value: preorderConfig.collection }],
+        content: { json_uri: uri, metadata: { name: `Preorder #${id}` } },
+      }, preorderConfig.cluster);
+      assert.equal(preorderIdFromMetadataUri(preorderConfig, uri), id);
+      assert.deepEqual(item, {
+        id: asset.id, dropId: preorderId, name: `Preorder #${id}`, kind: 'preorder', preorderId: id,
+        rawImage: `https://cdn.lil.org/nft/mi_note_cards/preorder/v1/${id}.webp`,
+      });
+      assert.equal(isExactShopInventoryResponse({ ok: true, items: [item] }), true);
+    }
+  }
 });
 
 test('both preorder collections are public while other devnet inventory stays hidden', () => {
@@ -52,7 +71,7 @@ test('preorder inventory cannot be mistaken for redeemable cards', () => {
   assert.equal(canDeliverItemKind(undefined, 'preorder'), false);
   assert.equal(canDeliverItemKind('card_nft_2', 'preorder'), false);
   for (const invalid of [
-    { ...item, preorderId: undefined }, { ...item, preorderId: 1396 },
+    { ...item, preorderId: undefined }, { ...item, preorderId: 1399 },
     { ...item, dudeId: 1 }, { ...item, boxId: '1' },
     { ...item, dropId: 'card_nft_2' }, { ...item, kind: 'dude' },
   ]) assert.equal(isExactShopInventoryResponse({ ok: true, items: [invalid] }), false);

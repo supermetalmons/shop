@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Keypair } from '@solana/web3.js';
-import { getPreorderConfig } from '../../../../shared/preorders.ts';
+import { getPreorderConfig, PREORDER_CARD_COUNT } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
 import { PreorderStore, listPreorderInventoryAssets } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
@@ -31,7 +31,7 @@ function harness(options?: Parameters<typeof createCommerceD1Harness>[0]) {
   let wallet = BUYER;
   let ethereumAddress = ETHEREUM;
   let signedIn = true;
-  let ownedIds = Array.from({ length: 1395 }, (_, index) => index + 1);
+  let ownedIds = Array.from({ length: PREORDER_CARD_COUNT }, (_, index) => index + 1);
   let outcome: 'pending' | 'confirmed' | 'finalized' | 'failed' | 'expired' = 'pending';
   let valid = true;
   let prepares = 0;
@@ -728,7 +728,7 @@ test('anonymous checkout requires the existing signed wallet binding and uses it
 
 test('invalid selections and unknown collections fail before preparing or signing', async () => {
   const h = harness();
-  for (const ids of [[1, 1], [0], [1396], [1, 2, 3, 4]]) assert.equal((await h.prepare(ids)).status, 400);
+  for (const ids of [[1, 1], [0], [1399], [1, 2, 3, 4]]) assert.equal((await h.prepare(ids)).status, 400);
   for (const path of ['status', 'prepare', 'submit', 'cancel']) {
     const response = await h.call(path, { preorderId: 'unknown',
       ...(path === 'prepare' ? { buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() } : {}),
@@ -858,21 +858,25 @@ test('an uncertain first broadcast retains its transaction for status retry', as
   assert.deepEqual(h.counts(), { prepares: 1, authorizations: 1, sends: 1 });
 });
 
-test('finalized success permanently consumes IDs and exposes recent assets for verified inventory recovery', async () => {
+test('finalized success permanently consumes new IDs and exposes recent assets for verified inventory recovery', async () => {
   const h = harness();
-  const prepared = await h.prepare([1, 1395]);
+  const cardIds = [1396, 1397, 1398];
+  const prepared = await h.prepare(cardIds);
+  assert.equal(prepared.status, 200);
+  assert.deepEqual(prepared.body.order.cardIds, cardIds);
   await h.call('submit', { preorderId: config.preorderId, orderId: prepared.body.order.orderId, transactionBase64: 'buyer-signed' });
   h.outcome('finalized');
   const result = await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId });
   assert.equal(result.body.order.status, 'succeeded');
-  assert.equal((await h.call('availability', { preorderId: config.preorderId })).body.items[1394].status, 'preordered');
+  assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items.slice(-3),
+    cardIds.map((id) => ({ id, status: 'preordered' })));
   h.wallet(OTHER);
   const availability = await h.call('availability', { preorderId: config.preorderId });
-  assert.equal(availability.body.items.some((item: { id: number }) => item.id === 1 || item.id === 1395), false);
-  assert.equal((await h.prepare([1])).status, 409);
+  assert.equal(availability.body.items.some((item: { id: number }) => cardIds.includes(item.id)), false);
+  assert.equal((await h.prepare([1398])).status, 409);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_claims'), /permanent/);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_orders'), /permanent/);
-  assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map((asset) => asset.id), [1, 1395]);
+  assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map((asset) => asset.id), cardIds);
 });
 
 test('finalized failure or expiry releases claims but retains transaction history', async () => {
@@ -923,7 +927,7 @@ test('mainnet availability is verified, collection-scoped, and expires unsigned 
   });
   assert.equal(result.status, 200);
   assert.equal(result.body.preorderId, mainnet.preorderId);
-  assert.equal(result.body.items.length, 1395);
+  assert.equal(result.body.items.length, PREORDER_CARD_COUNT);
   assert.equal(result.body.items[0].status, 'available');
   assert.equal(result.body.items[1].status, 'preordered');
   assert.equal(result.body.items[2].status, 'available');

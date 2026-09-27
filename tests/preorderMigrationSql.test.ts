@@ -55,6 +55,57 @@ test('confirmation migration has the same guards and indexes when split for remo
   assert.deepEqual(schema(split), schema(whole));
 });
 
+for (const mode of ['whole', 'remote split'] as const) {
+  test(`card range migration preserves orders, claims and guards when applied ${mode}`, async (context) => {
+    const { database, db } = createCommerceD1Harness({ preorderCardRangeMigration: false });
+    context.after(() => database.close());
+    const store = new PreorderStore(db);
+    const config = getPreorderConfig('mi_note_cards_devnet')!;
+    const reserve = (id: number): Promise<StoredPreorder> => store.reserve({
+      orderId: `range-${id}`, preorderId: config.preorderId, cluster: config.cluster, collection: config.collection,
+      buyer: `buyer-${id}`, ethereumAddress: '0x0000000000000000000000000000000000000001', requestId: `request-${id}`,
+      cardIds: [id], assets: [{ id, address: `asset-${id}` }], status: 'prepared', expiresAtMs: 2000,
+      signature: null, preparedTransaction: 'partial', signedTransaction: null, blockhash: 'hash',
+      blockhashContextSlot: 1, lastValidBlockHeight: 100, createdAtMs: 1000, revision: 1,
+    });
+    await reserve(1);
+    await store.submit(await reserve(2), { transactionBase64: 'signed-2', signature: 'signature-2' }, 1500);
+    await store.finish(await store.submit(await reserve(1395), {
+      transactionBase64: 'signed-1395', signature: 'signature-1395',
+    }, 1500), 'succeeded', 1600);
+    const claims = () => database.prepare('SELECT * FROM commerce_preorder_claims ORDER BY card_id').all();
+    const orders = () => database.prepare('SELECT * FROM commerce_preorder_orders ORDER BY order_id').all();
+    const guards = () => database.prepare(`SELECT type, name, sql FROM sqlite_schema
+      WHERE name GLOB 'commerce_preorder_*' AND type IN ('index', 'trigger') ORDER BY name`).all();
+    const before = { claims: claims(), orders: orders(), guards: guards() };
+    const sql = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0023_preorder_card_range.sql', import.meta.url), 'utf8');
+    assert.doesNotMatch(sql, /\bSELECT\s+CASE\b/i);
+    if (mode === 'whole') database.exec(sql);
+    else {
+      const statements = unstable_splitSqlQuery(sql);
+      assert.equal(statements.length, 8);
+      for (const statement of statements) database.prepare(statement).run();
+    }
+    assert.deepEqual({ claims: claims(), orders: orders(), guards: guards() }, before);
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.equal(database.prepare("SELECT strict FROM pragma_table_list WHERE name = 'commerce_preorder_claims'").get()!.strict, 1);
+    for (const id of [1396, 1397, 1398]) await reserve(id);
+    assert.deepEqual(claims().map((claim) => claim.card_id), [1, 2, 1395, 1396, 1397, 1398]);
+    for (const id of [0, 1399]) {
+      await assert.rejects(reserve(id), /CHECK constraint/);
+      assert.equal(await store.get(`range-${id}`), null);
+    }
+    assert.throws(() => database.prepare('INSERT INTO commerce_preorder_claims VALUES (?, ?, ?, ?)')
+      .run(config.cluster, config.collection, 3, 'range-1'), /invalid preorder claim/);
+    assert.throws(() => database.exec('UPDATE commerce_preorder_claims SET card_id = 3 WHERE card_id = 1'), /immutable/);
+    for (const id of [1, 2, 1395, 1398]) {
+      assert.throws(() => database.prepare('DELETE FROM commerce_preorder_claims WHERE card_id = ?').run(id), /permanent/);
+    }
+    await store.finish((await store.get('range-1398'))!, 'cancelled', 1700);
+    assert.equal(claims().some((claim) => claim.card_id === 1398), false);
+  });
+}
+
 test('recent preorder inventory uses the buyer index without scanning or sorting order history', async (context) => {
   let query = '';
   const { database, db } = createCommerceD1Harness({ observeCall(call) {

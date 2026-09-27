@@ -48,6 +48,7 @@ const migrationNames = [
   '0020_preorder_expiry_index.sql',
   '0021_preorder_ethereum_ownership.sql',
   '0022_preorder_confirmation.sql',
+  '0023_preorder_card_range.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -123,7 +124,27 @@ test('preorder confirmation migration is required for deployment and its recover
   database.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 = 22): DatabaseSync {
+test('preorder card range migration is required for deployment and its table and claim guards are verified', () => {
+  const previous = currentDatabase(false, 22);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /card range migration/);
+  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0023_preorder_card_range.sql');
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder schema commerce_preorder_claims/);
+  previous.close();
+  for (const [type, name] of [
+    ['index', 'commerce_preorder_claim_order'],
+    ['trigger', 'commerce_preorder_claim_insert_guard'],
+    ['trigger', 'commerce_preorder_claim_update_guard'],
+    ['trigger', 'commerce_preorder_claim_delete_guard'],
+  ] as const) {
+    const database = currentDatabase(false);
+    database.exec(`DROP ${type} ${name}`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
+    database.close();
+  }
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 = 23): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

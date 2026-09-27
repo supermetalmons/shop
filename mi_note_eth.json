@@ -9782,6 +9782,27 @@
         "name": "The Crying Emo Kid in a Gengar Hood",
         "original": "https://cdn.lil.org/player/mi_note_3/124.jpg",
         "mid": "https://cdn.lil.org/player/mi_note_3/mid/124.webp"
+      },
+      {
+        "id": "125",
+        "clean_card_id": 1396,
+        "name": "Blue Reaper",
+        "original": "https://cdn.lil.org/player/mi_note_3/125.jpg",
+        "mid": "https://cdn.lil.org/player/mi_note_3/mid/125.webp"
+      },
+      {
+        "id": "126",
+        "clean_card_id": 1397,
+        "name": "Fallen Angel Drifella",
+        "original": "https://cdn.lil.org/player/mi_note_3/126.jpg",
+        "mid": "https://cdn.lil.org/player/mi_note_3/mid/126.webp"
+      },
+      {
+        "id": "127",
+        "clean_card_id": 1398,
+        "name": "Oni Reaper",
+        "original": "https://cdn.lil.org/player/mi_note_3/127.jpg",
+        "mid": "https://cdn.lil.org/player/mi_note_3/mid/127.webp"
       }
     ]
   }

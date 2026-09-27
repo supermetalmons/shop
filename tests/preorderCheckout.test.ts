@@ -78,6 +78,40 @@ test('selection alone does not reserve; purchase signs once and submits exclusiv
   assert.equal(window.localStorage.length, 0);
 });
 
+for (const persisted of [false, true]) {
+  test(`${persisted ? 'persisted' : 'fresh'} checkout accepts all three new cards`, async () => {
+    const { api, options, calls } = runtime();
+    const cardIds = [1396, 1397, 1398];
+    const prepared = { ...order(), cardIds, assets: cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })) };
+    const saved = { requestId: 'new-cards-request', cardIds, ethereumAddress: ethereumSession.address };
+    if (persisted) window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify(saved));
+    api.prepare = async (input) => { calls.prepare.push(input); return { order: prepared, transactionBase64 }; };
+    api.submit = async (input) => { calls.submit.push(input); return { order: { ...prepared, status: 'submitted' } }; };
+    const { result } = renderHook(() => usePreorderCheckout(options, api));
+    await waitFor(() => assert.equal(result.current.recoveryReady, true));
+    if (persisted) assert.deepEqual(result.current.pending, saved);
+    await act(async () => { await result.current.purchase(persisted ? [1] : [1398, 1396, 1397]); });
+    assert.deepEqual(calls.prepare[0].cardIds, cardIds);
+    if (persisted) assert.equal(calls.prepare[0].requestId, saved.requestId);
+    assert.equal(calls.signed, 1);
+    assert.equal(calls.submit.length, 1);
+    assert.deepEqual(result.current.order?.cardIds, cardIds);
+    assert.equal(result.current.order?.status, 'submitted');
+  });
+}
+
+test('checkout rejects card 1399 in current selections and persisted recovery', async () => {
+  const { api, options, calls } = runtime();
+  window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify({
+    requestId: 'out-of-range-request', cardIds: [1399], ethereumAddress: ethereumSession.address,
+  }));
+  const { result } = renderHook(() => usePreorderCheckout(options, api));
+  await waitFor(() => assert.equal(result.current.recoveryReady, true));
+  assert.equal(result.current.pending, null);
+  await act(async () => { await result.current.purchase([1399]); });
+  assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
+});
+
 test('wallet rejection cancels the preparation and never submits', async () => {
   const { api, options, calls } = runtime();
   options.signTransaction = async () => { throw new Error('User rejected request.'); };

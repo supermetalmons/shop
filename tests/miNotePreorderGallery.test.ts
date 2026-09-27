@@ -131,6 +131,37 @@ test('devnet gallery rotates the oldest selection and keeps the panel and purcha
   assert.equal(view.queryByRole('button', { name: /Preorder .*SOL/ }), null);
 });
 
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${preorderId} displays and purchases the three new Mi Note 3 cards`, async () => {
+    const cards = [
+      { id: 1396, tokenId: 125, name: 'Blue Reaper' },
+      { id: 1397, tokenId: 126, name: 'Fallen Angel Drifella' },
+      { id: 1398, tokenId: 127, name: 'Oni Reaper' },
+    ];
+    const preorder = checkout();
+    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.availability = { ...preorder.availability!, preorderId,
+      items: cards.map(({ id }) => ({ id, status: 'available' })) };
+    let purchased: number[] = [];
+    preorder.purchase = async (ids) => { purchased = ids; };
+    const view = render(createElement(MiNoteCardsGallery, { preorder }));
+    for (const card of cards) {
+      assert.equal(view.getByRole('img', { name: card.name }).getAttribute('src'),
+        `https://cdn.lil.org/player/mi_note_3/mid/${card.tokenId}.webp`);
+      fireEvent.click(view.getByRole('button', { name: `Select preorder #${card.id}: ${card.name}` }));
+    }
+    await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Preorder for 0.75 SOL' })); });
+    assert.deepEqual(purchased, [1396, 1397, 1398]);
+    view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder,
+      availability: { ...preorder.availability, items: cards.map(({ id }) => ({ id, status: 'preordered' as const })) },
+    } }));
+    for (const card of cards) {
+      assert.equal(view.getByRole('img', { name: card.name }).getAttribute('src'),
+        `https://cdn.lil.org/nft/mi_note_cards/preorder/v1/${card.id}.webp`);
+    }
+  });
+}
+
 test('reservation clears selection and keeps original artwork until the preorder succeeds', () => {
   Math.random = () => 0;
   const preorder = checkout();

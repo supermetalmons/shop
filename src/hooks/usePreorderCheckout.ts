@@ -1,7 +1,7 @@
 import { VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PreorderConfig, PreorderOrder } from '../../shared/preorders.ts';
+import { isPreorderCardId, type PreorderConfig, type PreorderOrder } from '../../shared/preorders.ts';
 import { createPreorderApi } from '../lib/preorderApi';
 import { ProfileApiError } from '../api/transport';
 import { isUserRejectedError } from '../shop/commerce/transactionSupport';
@@ -45,7 +45,7 @@ function readPending(key: string): PendingPreorder | null {
     const value = JSON.parse(window.localStorage.getItem(key) || 'null') as PendingPreorder | null;
     if (!value || (value.requestId !== null && typeof value.requestId !== 'string') ||
       !Array.isArray(value.cardIds) || value.cardIds.length < 1 || value.cardIds.length > 3 ||
-      !value.cardIds.every((id) => Number.isSafeInteger(id) && id >= 1 && id <= 1395) ||
+      !value.cardIds.every(isPreorderCardId) ||
       (value.orderId !== undefined && typeof value.orderId !== 'string')) return null;
     return value;
   } catch {
@@ -379,7 +379,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       if (previous && !previous.requestId) throw new Error('Cancel your existing preorder before starting another.');
       const cardIds = previous?.cardIds ?? [...selectedIds].sort((left, right) => left - right);
       if (!cardIds.length || cardIds.length > config.maxItems || new Set(cardIds).size !== cardIds.length ||
-        !cardIds.every((id) => Number.isSafeInteger(id) && id >= 1 && id <= 1395)) return;
+        !cardIds.every(isPreorderCardId)) return;
       const requestId = previous?.requestId ?? crypto.randomUUID();
       keepPending({ requestId, cardIds, ethereumAddress: ethereumSession.address, ...(previous?.orderId ? { orderId: previous.orderId } : {}) }, startScope);
       operation.setCurrentPhase('preparing');

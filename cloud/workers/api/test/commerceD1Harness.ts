@@ -193,6 +193,7 @@ export function createCommerceD1Harness(
     notificationOutboxMode?: 'legacy' | 'table';
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
+    preorderCardRangeMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -221,6 +222,9 @@ export function createCommerceD1Harness(
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0021_preorder_ethereum_ownership.sql', 'utf8'));
     if (options.preorderConfirmationMigration !== false) {
       database.exec(readFileSync('cloud/workers/api/commerce-migrations/0022_preorder_confirmation.sql', 'utf8'));
+      if (options.preorderCardRangeMigration !== false) {
+        database.exec(readFileSync('cloud/workers/api/commerce-migrations/0023_preorder_card_range.sql', 'utf8'));
+      }
     }
   }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');

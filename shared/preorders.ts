@@ -1,6 +1,6 @@
 import type { SolanaCluster } from './deploymentCore.js';
 
-export const PREORDER_CARD_COUNT = 1395;
+export const PREORDER_CARD_COUNT = 1398;
 export const PREORDER_RESERVATION_TTL_MS = 120_000;
 export const PREORDER_PAYMENT_RECIPIENTS = [
   'BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf',
