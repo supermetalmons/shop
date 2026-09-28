@@ -222,13 +222,21 @@ matching verification session. Connect requests wallet access, and Verify
 requests the signature. Disconnect clears the remembered choice. All/Your tabs,
 random browsing, and the `?address=` gallery override have been removed.
 
-Cards with images in `mi_note_eth.json` appear in catalog order: Mi Note 3,
-Mi Note 2, then original Mi Note. Loading, empty, and retryable error states
+The root `mi_note_cards.json` is the shared catalog. Its `ethereumCollections`
+contains the three existing Ethereum collections used by the gallery, ownership
+checks, and preorder eligibility. Cards with images appear in catalog order:
+Mi Note 3, Mi Note 2, then original Mi Note. Loading, empty, and retryable error states
 cover ownership lookup failures. Partial provider failures can leave cards
 from successfully read collections visible, but cannot authorize cards whose
 ownership could not be checked. Account changes clear obsolete cards,
 selections, and pending asynchronous results. Solana sign-in changes refresh
 eligibility so the devnet test inventory appears only for the admin buyer.
+
+Its `specialCards` list reserves IDs 1401–1407 for a later public sale;
+these cards currently have no sale or preorder eligibility. The preorder range in
+`shared/preorders.ts` remains 1–1400, and the next unallocated card ID is 1408.
+Future preorder expansion must exclude the reserved special IDs; increasing the
+numeric bound alone would incorrectly admit them.
 
 Holdings and preorder availability endpoints require Ethereum verification,
 derive the address from its session, and scope results to that wallet. The

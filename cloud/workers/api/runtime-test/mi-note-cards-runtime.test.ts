@@ -20,9 +20,9 @@ import {
 const ORIGIN = 'https://mons.shop';
 const ALCHEMY_KEY = 'alchemy-runtime-test-key';
 const OPENSEA_KEY = 'opensea-runtime-test-key';
-const ORIGINAL_ID = (JSON.parse(readFileSync('mi_note_eth.json', 'utf8')) as {
-  contractAddress: string; tokens: { id: string }[];
-}[]).find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!.tokens[72].id;
+const ORIGINAL_ID = (JSON.parse(readFileSync('mi_note_cards.json', 'utf8')) as {
+  ethereumCollections: { contractAddress: string; tokens: { id: string }[] }[];
+}).ethereumCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!.tokens[72].id;
 const ALLOW_HEADERS = { Origin: ORIGIN };
 type Provider = (url: URL) => Promise<Response>;
 

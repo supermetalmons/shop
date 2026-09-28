@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
-import miNoteCollections from '../../mi_note_eth.json';
+import miNoteCatalog from '../../mi_note_cards.json';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
 import { preorderImageUrl, type PreorderAvailabilityResponse } from '../../shared/preorders';
@@ -23,7 +23,7 @@ type MiNoteCardsGalleryProps = {
   onViewPreordered?: (item: ReceiptViewerSource, originRect: DOMRect | null, aspectRatio?: number) => boolean;
 };
 
-const MI_NOTE_CARDS_BY_ID = new Map(miNoteCollections.flatMap(({ tokens }) => tokens.map((card) => [card.clean_card_id, card] as const)));
+const MI_NOTE_CARDS_BY_ID = new Map(miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map((card) => [card.clean_card_id, card] as const)));
 const MI_NOTE_COLLECTION_LINKS = [
   { label: 'Mi Note', href: 'https://opensea.io/collection/minote' },
   { label: 'Mi Note 2', href: 'https://opensea.io/collection/mi-note2' },

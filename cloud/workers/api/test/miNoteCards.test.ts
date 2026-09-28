@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import miNoteCollections from '../../../../mi_note_eth.json';
+import miNoteCatalog from '../../../../mi_note_cards.json';
 import {
   MI_NOTE_CONTRACT_ADDRESS,
   MI_NOTE_2_CONTRACT_ADDRESS,
@@ -18,7 +18,7 @@ const API_KEY = 'private-alchemy-test-key';
 const OPENSEA_KEY = 'private-opensea-test-key';
 const NOW = 1_800_000_000_000;
 const EXPIRY_HEADER = 'X-Mi-Note-Cards-Expires-At';
-const ORIGINAL_IDS = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!.tokens.map((token) => token.id);
+const ORIGINAL_IDS = miNoteCatalog.ethereumCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!.tokens.map((token) => token.id);
 type Dependencies = Parameters<typeof handleMiNoteCards>[2];
 type Metrics = Parameters<typeof handleMiNoteCards>[3];
 type ProviderFetch = Dependencies['providerFetch'];

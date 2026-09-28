@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import miNoteCollections from '../../../../mi_note_eth.json';
+import miNoteCatalog from '../../../../mi_note_cards.json';
 import { MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS, MI_NOTE_CONTRACT_ADDRESS } from '../../../../shared/miNoteCards.ts';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { createRequestDeadline } from '../src/boundedRequest.ts';
@@ -8,7 +8,7 @@ import { assertMiNoteEligibility, loadMiNoteEligibility } from '../src/miNoteEli
 
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const TEST_ETHEREUM = ['0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe', '0x5bfce4149f520fe0823dc8c0afaf979121e824ec'];
-const tokens = (contract: string) => miNoteCollections.find((collection) => collection.contractAddress === contract)!.tokens;
+const tokens = (contract: string) => miNoteCatalog.ethereumCollections.find((collection) => collection.contractAddress === contract)!.tokens;
 const original = tokens(MI_NOTE_CONTRACT_ADDRESS);
 const two = tokens(MI_NOTE_2_CONTRACT_ADDRESS);
 const three = tokens(MI_NOTE_3_CONTRACT_ADDRESS);

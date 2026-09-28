@@ -1,4 +1,4 @@
-import miNoteCollections from '../../../../mi_note_eth.json';
+import miNoteCatalog from '../../../../mi_note_cards.json';
 import {
   MI_NOTE_CONTRACT_ADDRESS,
   MI_NOTE_MODERN_CONTRACT_ADDRESSES,
@@ -14,7 +14,7 @@ const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_PAGES = 100;
 const PAGE_SIZE = 100;
 const MAX_UINT256 = (1n << 256n) - 1n;
-const ORIGINAL_COLLECTION = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!;
+const ORIGINAL_COLLECTION = miNoteCatalog.ethereumCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!;
 const ORIGINAL_ID_SET = new Set(ORIGINAL_COLLECTION.tokens.map((token) => token.id));
 
 type ProviderContext = {

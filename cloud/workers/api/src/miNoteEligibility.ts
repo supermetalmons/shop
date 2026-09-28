@@ -1,4 +1,4 @@
-import miNoteCollections from '../../../../mi_note_eth.json';
+import miNoteCatalog from '../../../../mi_note_cards.json';
 import { MI_NOTE_CONTRACT_ADDRESSES, type MiNoteContractAddress } from '../../../../shared/miNoteCards.js';
 import type { PreorderConfig } from '../../../../shared/preorders.js';
 import type { RequestDeadline } from './boundedRequest.js';
@@ -14,7 +14,7 @@ const DEVNET_TEST_WALLETS: Readonly<Record<string, number>> = {
 };
 const CATALOG = MI_NOTE_CONTRACT_ADDRESSES.map((contract) => ({
   contract,
-  tokens: miNoteCollections.find((collection) => collection.contractAddress.toLowerCase() === contract)!.tokens,
+  tokens: miNoteCatalog.ethereumCollections.find((collection) => collection.contractAddress.toLowerCase() === contract)!.tokens,
 }));
 
 export type MiNoteEligibility = {
