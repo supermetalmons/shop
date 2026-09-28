@@ -22,6 +22,7 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows:
+    auto
     minmax(var(--drops-panel-full-min-height), 1fr)
     minmax(var(--drops-panel-half-min-height), 1fr)
     minmax(var(--drops-panel-full-min-height), 1fr);
@@ -31,8 +32,9 @@
 
 .drops-panel__grid--with-drifella-items {
   grid-template-rows:
-    minmax(var(--drops-panel-full-min-height), auto)
+    auto
     minmax(var(--drops-panel-full-min-height), 1fr)
+    minmax(var(--drops-panel-full-min-height), auto)
     minmax(var(--drops-panel-half-min-height), 1fr)
     minmax(var(--drops-panel-half-min-height), 1fr)
     minmax(var(--drops-panel-full-min-height), 1fr);
@@ -193,6 +195,35 @@
   border: 1px dashed rgba(134, 134, 139, 0.45);
 }
 
+.drops-panel__tile--mi-note-cards:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--accent);
+}
+
+.drops-panel__mi-note-images {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(12px, 3cqw, 32px);
+  width: min(100%, 720px);
+  padding: clamp(20px, 3cqw, 32px) clamp(12px, 3.5cqw, 40px) clamp(22px, 3cqw, 34px);
+  pointer-events: none;
+}
+
+.drops-panel__mi-note-frame {
+  display: block;
+  align-self: center;
+  width: 100%;
+  aspect-ratio: var(--drops-panel-image-aspect-ratio);
+}
+
+.drops-panel__mi-note-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: var(--interactive-card-radius);
+  -webkit-user-drag: none;
+}
+
 @container (max-width: 620px) {
   .drops-panel__grid {
     --drops-panel-gap: clamp(6px, 2.6cqw, 12px);
@@ -201,6 +232,7 @@
     --drops-panel-full-min-height: var(--drops-panel-half-min-height);
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows:
+      auto
       minmax(var(--drops-panel-card-nft-2-min-height), auto)
       minmax(var(--drops-panel-half-min-height), auto)
       minmax(var(--drops-panel-full-min-height), auto);
@@ -208,8 +240,9 @@
 
   .drops-panel__grid--with-drifella-items {
     grid-template-rows:
-      minmax(var(--drops-panel-full-min-height), auto)
+      auto
       minmax(var(--drops-panel-card-nft-2-min-height), auto)
+      minmax(var(--drops-panel-full-min-height), auto)
       auto
       minmax(var(--drops-panel-half-min-height), auto)
       auto;
@@ -290,4 +323,3 @@
     font-size: clamp(15px, 5.2vw, 18px);
   }
 }
-

@@ -17,6 +17,23 @@ const upcomingDropRoutes = listUpcomingDropRoutes();
 const CARD_NFT_BINDER_FLAT_IMAGE_URL = 'https://cdn.lil.org/nft/card_nft_binder/flat.webp';
 const CARD_NFT_BINDER_FLAT_IMAGE_DIMENSIONS = { width: 1298, height: 1242 };
 const showsTbaOnMain = false;
+const miNotePreviews = [
+  {
+    name: 'Mi Note☆Hamster☆',
+    image: '/images/mi-note-preorders/1266-420.webp',
+    imageDimensions: { width: 420, height: 631 },
+  },
+  {
+    name: 'Niqab Angel',
+    image: '/images/mi-note-preorders/879-420.webp',
+    imageDimensions: { width: 420, height: 618 },
+  },
+  {
+    name: 'Mi Note☆Unicorn #4',
+    image: '/images/mi-note-preorders/1236-420.webp',
+    imageDimensions: { width: 420, height: 634 },
+  },
+];
 
 function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return undefined;
@@ -141,6 +158,44 @@ function dropPanelImageFrameStyle(dimensions: DropPanelImageDimensions | undefin
   };
 }
 
+function handleDropPanelClick(evt: MouseEvent<HTMLAnchorElement>) {
+  if (evt.defaultPrevented || evt.button !== 0 || evt.metaKey || evt.altKey || evt.ctrlKey || evt.shiftKey) {
+    return;
+  }
+
+  evt.preventDefault();
+  navigate(evt.currentTarget.pathname);
+}
+
+function MiNoteCardsTile() {
+  return (
+    <a
+      className="drops-panel__tile drops-panel__tile--full drops-panel__tile--mi-note-cards"
+      href="/mi_note_cards"
+      aria-label="Mi Note Cards"
+      draggable={false}
+      onClick={handleDropPanelClick}
+      onDragStart={(evt) => evt.preventDefault()}
+    >
+      <span className="drops-panel__title">Mi Note Cards</span>
+      <span className="drops-panel__mi-note-images">
+        {miNotePreviews.map((preview) => (
+          <span key={preview.image} className="drops-panel__mi-note-frame" style={dropPanelImageFrameStyle(preview.imageDimensions)}>
+            <img
+              src={preview.image}
+              alt={`${preview.name}, Mi Note Preorder`}
+              width={preview.imageDimensions.width}
+              height={preview.imageDimensions.height}
+              decoding="async"
+              draggable={false}
+            />
+          </span>
+        ))}
+      </span>
+    </a>
+  );
+}
+
 function DropPanelTile({ item }: { item: DropPanelItem }) {
   const packImages = item.images || [];
   const hasImagePack = packImages.length > 0;
@@ -153,15 +208,6 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
     .filter(Boolean)
     .join(' ');
 
-  const handleClick = (evt: MouseEvent<HTMLAnchorElement>) => {
-    if (evt.defaultPrevented || evt.button !== 0 || evt.metaKey || evt.altKey || evt.ctrlKey || evt.shiftKey) {
-      return;
-    }
-
-    evt.preventDefault();
-    navigate(item.path);
-  };
-
   return (
     <a
       className={tileClassName}
@@ -169,7 +215,7 @@ function DropPanelTile({ item }: { item: DropPanelItem }) {
       aria-label={item.title}
       draggable={false}
       style={dropPanelTileStyle(item)}
-      onClick={handleClick}
+      onClick={handleDropPanelClick}
       onDragStart={(evt) => evt.preventDefault()}
     >
       <span className="drops-panel__title">{item.title}</span>
@@ -241,6 +287,24 @@ export function DropsPanel() {
   const cardNftBinder = resolveUpcomingTileSource('card_nft_binder', 'Card NFT Binder');
 
   const items: DropPanelItem[] = [
+    {
+      key: 'card_nft_2',
+      size: 'full',
+      image: cardNft2.image,
+      images: cardNft2PackImages,
+      imageDimensionsBySrc: CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC,
+      alt: cardNft2.alt,
+      title: cardNft2.title,
+      path: cardNft2.path,
+      imageMaxWidth: '62%',
+      imageMaxHeight: 'clamp(160px, 23.5cqw, 236px)',
+      compactImageMaxHeight: 'clamp(124px, 28cqw, 156px)',
+      imageScale: 0.98,
+      imageGap: 'clamp(28px, 3.3cqw, 38px)',
+      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
+      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
+      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+    },
     ...(showsTbaOnMain
       ? [
           {
@@ -285,24 +349,6 @@ export function DropsPanel() {
       compactImageBottomSpace: showsTbaOnMain
         ? 'clamp(14px, 4cqw, 20px)'
         : 'clamp(12px, 3.4cqw, 18px)',
-    },
-    {
-      key: 'card_nft_2',
-      size: 'full',
-      image: cardNft2.image,
-      images: cardNft2PackImages,
-      imageDimensionsBySrc: CARD_NFT_2_PACK_IMAGE_DIMENSIONS_BY_SRC,
-      alt: cardNft2.alt,
-      title: cardNft2.title,
-      path: cardNft2.path,
-      imageMaxWidth: '62%',
-      imageMaxHeight: 'clamp(160px, 23.5cqw, 236px)',
-      compactImageMaxHeight: 'clamp(124px, 28cqw, 156px)',
-      imageScale: 0.98,
-      imageGap: 'clamp(28px, 3.3cqw, 38px)',
-      compactImageGap: 'clamp(12px, 3.8cqw, 18px)',
-      imageBottomSpace: 'clamp(28px, 3.4cqw, 38px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
     },
     {
       key: 'little_swag_boxes',
@@ -402,6 +448,7 @@ export function DropsPanel() {
       <div
         className={`drops-panel__grid drops-panel__grid--with-drifella-items${showsTbaOnMain ? '' : ' drops-panel__grid--without-tba'}`}
       >
+        <MiNoteCardsTile />
         {items.map((item) => (
           <DropPanelTile key={item.key} item={item} />
         ))}
