@@ -49,6 +49,7 @@ const migrationNames = [
   '0021_preorder_ethereum_ownership.sql',
   '0022_preorder_confirmation.sql',
   '0023_preorder_card_range.sql',
+  '0024_preorder_card_range_1400.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -144,7 +145,18 @@ test('preorder card range migration is required for deployment and its table and
   }
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 = 23): DatabaseSync {
+test('preorder card range 1400 migration is required for deployment and its table is verified', () => {
+  const previous = currentDatabase(false, 23);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /card range 1400 migration/);
+  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0024_preorder_card_range_1400.sql');
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder schema commerce_preorder_claims/);
+  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0024_preorder_card_range_1400.sql', import.meta.url), 'utf8'));
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  previous.close();
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 = 24): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

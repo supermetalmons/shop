@@ -65,21 +65,26 @@ test('eligibility maps contract token ownership to clean card IDs in gallery ord
   assert.throws(() => assertMiNoteEligibility(result, [original[1].clean_card_id]), /only preorder cards owned/);
 });
 
-test('Mi Note 3 tokens 125–127 authorize only their corresponding new card IDs', async (context) => {
-  const h = fixture();
-  context.after(h.dispose);
-  h.originalIds([]);
-  h.threeIds(['127', '125', '126']);
-  const result = await loadMiNoteEligibility(h.args);
-  assert.deepEqual(result.cardIds, [1396, 1397, 1398, two[0].clean_card_id]);
-  assert.equal(result.ownershipStatus, 'success');
-  assert.doesNotThrow(() => assertMiNoteEligibility(result, [1396, 1397, 1398]));
-  assert.throws(() => assertMiNoteEligibility(result, [1395]), /only preorder cards owned/);
-  h.threeIds(['125']);
-  const partialHoldings = await loadMiNoteEligibility({ ...h.args, fresh: true });
-  assert.doesNotThrow(() => assertMiNoteEligibility(partialHoldings, [1396]));
-  for (const id of [1397, 1398]) assert.throws(() => assertMiNoteEligibility(partialHoldings, [id]), /only preorder cards owned/);
-});
+for (const { tokenIds, cardIds, unownedId } of [
+  { tokenIds: ['125', '126', '127'], cardIds: [1396, 1397, 1398], unownedId: 1395 },
+  { tokenIds: ['128', '129'], cardIds: [1399, 1400], unownedId: 1398 },
+]) {
+  test(`Mi Note 3 tokens ${tokenIds.join(', ')} authorize only their corresponding card IDs`, async (context) => {
+    const h = fixture();
+    context.after(h.dispose);
+    h.originalIds([]);
+    h.threeIds([...tokenIds].reverse());
+    const result = await loadMiNoteEligibility(h.args);
+    assert.deepEqual(result.cardIds, [...cardIds, two[0].clean_card_id]);
+    assert.equal(result.ownershipStatus, 'success');
+    assert.doesNotThrow(() => assertMiNoteEligibility(result, cardIds));
+    assert.throws(() => assertMiNoteEligibility(result, [unownedId]), /only preorder cards owned/);
+    h.threeIds([tokenIds[0]]);
+    const partialHoldings = await loadMiNoteEligibility({ ...h.args, fresh: true });
+    assert.doesNotThrow(() => assertMiNoteEligibility(partialHoldings, [cardIds[0]]));
+    for (const id of cardIds.slice(1)) assert.throws(() => assertMiNoteEligibility(partialHoldings, [id]), /only preorder cards owned/);
+  });
+}
 
 test('availability can use its ownership cache while purchase checks always fetch current holdings', async (context) => {
   const h = fixture();

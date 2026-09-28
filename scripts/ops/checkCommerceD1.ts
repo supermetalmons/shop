@@ -70,6 +70,10 @@ const PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly 
   ...PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS,
   commerce_preorder_claims: ['table', '84dc3065ba58bb6dd1fbb80bcf486dd79d7c9843df923d1a5d8dc5d899021aee'],
 };
+const PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
+  ...PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS,
+  commerce_preorder_claims: ['table', 'b43ebdcffc1aafce08778c69d669f434ce6177339f519b761cc8477d117ab6f8'],
+};
 
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
@@ -294,7 +298,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 23) ||
+    (migrations.length < 13 || migrations.length > 24) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -317,7 +321,8 @@ export function checkCommerceD1(
     (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql') ||
     (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql') ||
     (migrations.length >= 22 && migrations[21].name !== '0022_preorder_confirmation.sql') ||
-    (migrations.length >= 23 && migrations[22].name !== '0023_preorder_card_range.sql')
+    (migrations.length >= 23 && migrations[22].name !== '0023_preorder_card_range.sql') ||
+    (migrations.length >= 24 && migrations[23].name !== '0024_preorder_card_range_1400.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -340,7 +345,9 @@ export function checkCommerceD1(
   const preorderEthereumReady = migrations.some((migration) => migration.name === '0021_preorder_ethereum_ownership.sql');
   const preorderConfirmationReady = migrations.some((migration) => migration.name === '0022_preorder_confirmation.sql');
   const preorderCardRangeReady = migrations.some((migration) => migration.name === '0023_preorder_card_range.sql');
-  const preorderSchema = preorderCardRangeReady ? PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS
+  const preorderCardRange1400Ready = migrations.some((migration) => migration.name === '0024_preorder_card_range_1400.sql');
+  const preorderSchema = preorderCardRange1400Ready ? PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS
+    : preorderCardRangeReady ? PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS
     : preorderConfirmationReady ? PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS
     : preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS;
   if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
@@ -367,6 +374,7 @@ export function checkCommerceD1(
   if (options.forDeployment && !preorderEthereumReady) fail('Commerce D1 preorder Ethereum ownership migration is required for deployment.');
   if (options.forDeployment && !preorderConfirmationReady) fail('Commerce D1 preorder confirmation migration is required for deployment.');
   if (options.forDeployment && !preorderCardRangeReady) fail('Commerce D1 preorder card range migration is required for deployment.');
+  if (options.forDeployment && !preorderCardRange1400Ready) fail('Commerce D1 preorder card range 1400 migration is required for deployment.');
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list

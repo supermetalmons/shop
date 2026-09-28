@@ -160,8 +160,10 @@ other devnet collections keep
 their existing visibility rules. Preorder configuration lives in
 `shared/preorders.ts`, separately from ordinary pack drops. Metadata uses
 `https://cdn.lil.org/nft/mi_note_cards/preorder/json/<id>.json`; its numeric ID is
-the source catalog's `clean_card_id`. Generated local metadata copies have been
-removed after verifying the hosted set.
+the source catalog's `clean_card_id`. Local metadata copies have been removed
+after verifying the hosted set. Metadata and images for cards 1399–1400 are
+published and verified on the CDN; see [the release notes](releases/mi-note-cards-1399-1400/README.md)
+for asset links and deployment order.
 
 Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
 gallery. Available and reserved gallery artwork keeps its original corners.
@@ -183,7 +185,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0023_preorder_card_range.sql`, followed by the API
+migrations through `0024_preorder_card_range_1400.sql`, followed by the API
 release and then the frontend. The normal API deployment command applies the
 migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.

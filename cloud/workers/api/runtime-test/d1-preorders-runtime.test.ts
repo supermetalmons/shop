@@ -125,18 +125,18 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
         await store.finish(replacement, 'cancelled', 3000);
       }
     }
-    const newCards = await store.reserve(candidate(Keypair.generate().publicKey.toBase58(), [1396, 1397, 1398]));
+    const newCards = await store.reserve(candidate(Keypair.generate().publicKey.toBase58(), [1398, 1399, 1400]));
     assert.deepEqual((await store.claims(config.cluster, config.collection))
-      .filter((claim) => claim.orderId === newCards.orderId).map((claim) => claim.id), [1396, 1397, 1398]);
-    for (const id of [0, 1399]) {
+      .filter((claim) => claim.orderId === newCards.orderId).map((claim) => claim.id), [1398, 1399, 1400]);
+    for (const id of [0, 1401]) {
       const invalid = candidate(Keypair.generate().publicKey.toBase58(), [id]);
       await assert.rejects(store.reserve(invalid), /CHECK constraint/);
       assert.equal(await store.get(invalid.orderId), null);
     }
-    await assert.rejects(db.prepare('UPDATE commerce_preorder_claims SET card_id = 100 WHERE card_id = 1398').run(), /immutable/);
-    await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE card_id = 1398').run(), /permanent/);
+    await assert.rejects(db.prepare('UPDATE commerce_preorder_claims SET card_id = 100 WHERE card_id = 1400').run(), /immutable/);
+    await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE card_id = 1400').run(), /permanent/);
     await store.finish(newCards, 'cancelled', 3000);
-    assert.equal((await store.claims(config.cluster, config.collection)).some((claim) => claim.id >= 1396), false);
+    assert.equal((await store.claims(config.cluster, config.collection)).some((claim) => claim.id >= 1398), false);
   } finally {
     await server.close();
   }

@@ -89,7 +89,7 @@ test('dry-run verifies submitted outcomes without mutating orders or claims', as
 
 test('mainnet recovery uses its configured collection and preserves verified success claims', async (context) => {
   const mainnet = getPreorderConfig('mi_note_cards')!;
-  const cardIds = [1396, 1397, 1398];
+  const cardIds = [1398, 1399, 1400];
   const h = await harness(context, { order: {
     preorderId: mainnet.preorderId, cluster: mainnet.cluster, collection: mainnet.collection,
     cardIds, assets: cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })),
@@ -351,7 +351,7 @@ test('invalid asset records are rejected before archive verification or database
   for (const [name, assets] of [
     ['invalid JSON', '{'],
     ['no assets', '[]'],
-    ['out-of-range ID', JSON.stringify([{ id: 1399, address }])],
+    ['out-of-range ID', JSON.stringify([{ id: 1401, address }])],
     ['invalid address', JSON.stringify([{ id: 1, address: 'invalid' }])],
     ['duplicate ID', JSON.stringify([{ id: 1, address }, { id: 1, address: otherAddress }])],
     ['duplicate address', JSON.stringify([{ id: 1, address }, { id: 2, address }])],

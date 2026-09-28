@@ -79,9 +79,9 @@ test('selection alone does not reserve; purchase signs once and submits exclusiv
 });
 
 for (const persisted of [false, true]) {
-  test(`${persisted ? 'persisted' : 'fresh'} checkout accepts all three new cards`, async () => {
+  test(`${persisted ? 'persisted' : 'fresh'} checkout accepts both new cards alongside an existing card`, async () => {
     const { api, options, calls } = runtime();
-    const cardIds = [1396, 1397, 1398];
+    const cardIds = [1398, 1399, 1400];
     const prepared = { ...order(), cardIds, assets: cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })) };
     const saved = { requestId: 'new-cards-request', cardIds, ethereumAddress: ethereumSession.address };
     if (persisted) window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify(saved));
@@ -90,7 +90,7 @@ for (const persisted of [false, true]) {
     const { result } = renderHook(() => usePreorderCheckout(options, api));
     await waitFor(() => assert.equal(result.current.recoveryReady, true));
     if (persisted) assert.deepEqual(result.current.pending, saved);
-    await act(async () => { await result.current.purchase(persisted ? [1] : [1398, 1396, 1397]); });
+    await act(async () => { await result.current.purchase(persisted ? [1] : [1400, 1398, 1399]); });
     assert.deepEqual(calls.prepare[0].cardIds, cardIds);
     if (persisted) assert.equal(calls.prepare[0].requestId, saved.requestId);
     assert.equal(calls.signed, 1);
@@ -100,15 +100,15 @@ for (const persisted of [false, true]) {
   });
 }
 
-test('checkout rejects card 1399 in current selections and persisted recovery', async () => {
+test('checkout rejects card 1401 in current selections and persisted recovery', async () => {
   const { api, options, calls } = runtime();
   window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify({
-    requestId: 'out-of-range-request', cardIds: [1399], ethereumAddress: ethereumSession.address,
+    requestId: 'out-of-range-request', cardIds: [1401], ethereumAddress: ethereumSession.address,
   }));
   const { result } = renderHook(() => usePreorderCheckout(options, api));
   await waitFor(() => assert.equal(result.current.recoveryReady, true));
   assert.equal(result.current.pending, null);
-  await act(async () => { await result.current.purchase([1399]); });
+  await act(async () => { await result.current.purchase([1401]); });
   assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
 });
 

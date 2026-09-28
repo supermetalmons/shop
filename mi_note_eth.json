@@ -9803,6 +9803,20 @@
         "name": "Oni Reaper",
         "original": "https://cdn.lil.org/player/mi_note_3/127.jpg",
         "mid": "https://cdn.lil.org/player/mi_note_3/mid/127.webp"
+      },
+      {
+        "id": "128",
+        "clean_card_id": 1399,
+        "name": "Azure Fallen Angel Drifella",
+        "original": "https://cdn.lil.org/player/mi_note_3/128.jpg",
+        "mid": "https://cdn.lil.org/player/mi_note_3/mid/128.webp"
+      },
+      {
+        "id": "129",
+        "clean_card_id": 1400,
+        "name": "Azure Holy Knight",
+        "original": "https://cdn.lil.org/player/mi_note_3/129.jpg",
+        "mid": "https://cdn.lil.org/player/mi_note_3/mid/129.webp"
       }
     ]
   }

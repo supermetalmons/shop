@@ -118,7 +118,7 @@ function fixture(config = CONFIG) {
   const args = {
     config,
     buyer: BUYER.publicKey.toBase58(),
-    ids: [1396, 1397, 1398],
+    ids: [1398, 1399, 1400],
     cosignerSecret: SECRET,
     apiKey: 'test',
     fetch: async () => { throw new Error('Unexpected fetch'); },
@@ -205,7 +205,7 @@ test('preorder transaction mints exact IDs and atomically splits the full item s
   });
 });
 
-for (const ids of [[], [0], [1399], [1.5], [1, 1], [1, 2, 3, 4]]) {
+for (const ids of [[], [0], [1401], [1.5], [1, 1], [1, 2, 3, 4]]) {
   test(`preorder refuses invalid selected IDs ${JSON.stringify(ids)}`, async () => {
     const { args, deps } = fixture();
     await assert.rejects(preparePreorderTransaction({ ...args, ids }, deps), /one and three different/);
@@ -214,8 +214,8 @@ for (const ids of [[], [0], [1399], [1.5], [1, 1], [1, 2, 3, 4]]) {
 
 test('preorder accepts the two catalog endpoints without changing their identity', async () => {
   const { args, deps } = fixture();
-  const prepared = await preparePreorderTransaction({ ...args, ids: [1, 1398] }, deps);
-  assert.deepEqual(prepared.assets.map(({ id }) => id), [1, 1398]);
+  const prepared = await preparePreorderTransaction({ ...args, ids: [1, 1400] }, deps);
+  assert.deepEqual(prepared.assets.map(({ id }) => id), [1, 1400]);
 });
 
 test('preorder rejects unsupported clusters and disabled collections before accessing the provider', async () => {

@@ -132,11 +132,11 @@ test('devnet gallery rotates the oldest selection and keeps the panel and purcha
 });
 
 for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
-  test(`${preorderId} displays and purchases the three new Mi Note 3 cards`, async () => {
+  test(`${preorderId} displays and purchases both new Mi Note 3 cards alongside an existing card`, async () => {
     const cards = [
-      { id: 1396, tokenId: 125, name: 'Blue Reaper' },
-      { id: 1397, tokenId: 126, name: 'Fallen Angel Drifella' },
       { id: 1398, tokenId: 127, name: 'Oni Reaper' },
+      { id: 1399, tokenId: 128, name: 'Azure Fallen Angel Drifella' },
+      { id: 1400, tokenId: 129, name: 'Azure Holy Knight' },
     ];
     const preorder = checkout();
     preorder.config = getPreorderConfig(preorderId)!;
@@ -151,7 +151,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       fireEvent.click(view.getByRole('button', { name: `Select preorder #${card.id}: ${card.name}` }));
     }
     await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Preorder for 0.75 SOL' })); });
-    assert.deepEqual(purchased, [1396, 1397, 1398]);
+    assert.deepEqual(purchased, [1398, 1399, 1400]);
     view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder,
       availability: { ...preorder.availability, items: cards.map(({ id }) => ({ id, status: 'preordered' as const })) },
     } }));
