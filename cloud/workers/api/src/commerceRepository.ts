@@ -161,7 +161,7 @@ export class D1CommerceRepository {
     const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1' AND document_path = ?
-      LIMIT 1`).bind(key.path));
+      LIMIT 1`).bind(key.path), false, key.kind === 'stripe_checkout');
     if (result.results.length > 1) throw unavailableCommerce();
     const document = result.results[0] ? parseRow(result.results[0]) : null;
     if (document && (
@@ -350,6 +350,8 @@ export class D1CommerceRepository {
     const query = staleStripeFulfillmentsQuery(cutoffMs);
     const result = await this.readBatchWithAuthority(
       () => this.db.prepare(query.sql).bind(...query.bindings),
+      false,
+      true,
     );
     reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
@@ -363,6 +365,7 @@ export class D1CommerceRepository {
     const query = dueStripeTerminalNotificationsQuery({ dueAtMs, limit });
     const result = await this.readNotificationBatch(
       () => this.db.prepare(query.sql).bind(...query.bindings),
+      true,
     );
     reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
@@ -394,6 +397,8 @@ export class D1CommerceRepository {
   ): Promise<CommerceDocumentRecord[]> {
     const result = await this.readBatchWithAuthority(
       () => this.db.prepare(query.sql).bind(...query.bindings),
+      false,
+      kind === 'stripe_checkout',
     );
     const documents = result.results.map(parseRow);
     reportInefficientQuery(operation, kind, result, documents.length);
@@ -403,11 +408,12 @@ export class D1CommerceRepository {
   private async readBatchWithAuthority(
     statement: () => D1PreparedStatement,
     allowPaused = false,
+    requireCheckoutState = false,
   ): Promise<D1Result<Record<string, unknown>>> {
     let results: D1Result<Record<string, unknown>>[];
     try {
       results = await this.db.batch<Record<string, unknown>>([
-        authorityStatement(this.db),
+        authorityStatement(this.db, requireCheckoutState),
         statement(),
       ]);
     } catch (error) {
@@ -426,15 +432,17 @@ export class D1CommerceRepository {
     ) throw unavailableCommerce();
     const control = parseAuthorityControl(authorityResult.results[0]);
     if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
+    if (requireCheckoutState && authorityResult.results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
     return dataResult;
   }
 
-  private async readNotificationBatch(statement: () => D1PreparedStatement): Promise<D1Result<Record<string, unknown>>> {
+  private async readNotificationBatch(statement: () => D1PreparedStatement, requireCheckoutState = false): Promise<D1Result<Record<string, unknown>>> {
     const results = await this.db.batch<Record<string, unknown>>([
-      notificationOutboxAuthorityStatement(this.db), statement(),
+      notificationOutboxAuthorityStatement(this.db, requireCheckoutState), statement(),
     ]);
     if (results.length !== 2 || !results[1].success || !Array.isArray(results[1].results)) throw unavailableCommerceData();
     requireNotificationOutboxAuthority(results[0]);
+    if (requireCheckoutState && results[0].results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
     return results[1];
   }
 }

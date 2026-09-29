@@ -1,5 +1,6 @@
 import { createD1MaintenanceRunner } from './d1MaintenanceRunner.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
+import { hydrateStripeCheckoutState, parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
 
 export type CommerceD1Row = Record<string, unknown>;
 
@@ -220,7 +221,45 @@ export function parseCommerceD1DocumentRow(row: CommerceD1Row): CommerceD1Docume
 }
 
 export function queryRemoteCommerceDocuments(sql: string): CommerceD1Document[] {
-  return queryRemoteCommerceD1(sql).map(parseCommerceD1DocumentRow);
+  return parseCurrentCommerceD1DocumentRows(queryRemoteCommerceD1(sql), queryRemoteCommerceD1);
+}
+
+export function hasStripeCheckoutStateSchema(query: typeof queryRemoteCommerceD1): boolean {
+  const tables = query(`SELECT name FROM sqlite_schema WHERE type = 'table'
+    AND name IN ('commerce_stripe_checkout_state', 'commerce_stripe_checkout_state_control')`);
+  if (tables.length === 0) return false;
+  if (tables.length !== 2) return fail('Stripe checkout state schema is incomplete.');
+  return true;
+}
+
+export function parseCurrentCommerceD1DocumentRows(
+  rows: CommerceD1Row[],
+  query: typeof queryRemoteCommerceD1,
+): CommerceD1Document[] {
+  const documents = rows.map(parseCommerceD1DocumentRow);
+  const checkouts = documents.filter((document) => document.kind === 'stripe_checkout');
+  if (!checkouts.length) return documents;
+  if (!hasStripeCheckoutStateSchema(query)) return documents;
+  const controls = query('SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1');
+  if (controls.length !== 1 || !['legacy', 'table'].includes(String(controls[0].storage_mode))) {
+    return fail('Stripe checkout state control is invalid.');
+  }
+  if (controls[0].storage_mode === 'legacy') return documents;
+  const states = new Map<string, ReturnType<typeof parseStripeCheckoutStateRow>>();
+  for (let offset = 0; offset < checkouts.length; offset += 25) {
+    const paths = checkouts.slice(offset, offset + 25).map((document) => sqlString(document.path));
+    for (const row of query(`SELECT * FROM commerce_stripe_checkout_state WHERE document_path IN (${paths.join(', ')})`)) {
+      const state = parseStripeCheckoutStateRow(row);
+      if (states.has(state.documentPath)) return fail('Stripe checkout state contains duplicate records.');
+      states.set(state.documentPath, state);
+    }
+  }
+  return documents.map((document) => {
+    if (document.kind !== 'stripe_checkout') return document;
+    const state = states.get(document.path);
+    if (!state || state.documentVersion !== document.version) return fail(`Stripe checkout state is missing or stale: ${document.path}.`);
+    return { ...document, data: hydrateStripeCheckoutState(document.data, state) };
+  });
 }
 
 export function readRemoteCommerceAuthority(): CommerceD1Authority {

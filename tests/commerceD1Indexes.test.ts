@@ -1304,6 +1304,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       new URL('../cloud/workers/api/commerce-migrations/0016_shipment_history_pagination.sql', import.meta.url),
       'utf8',
     ));
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0026_stripe_checkout_state.sql', import.meta.url),
+      'utf8',
+    ));
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
       'owner',
@@ -1396,7 +1400,7 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       planDetails(db, duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
       /commerce_documents_pack_projection/,
     );
-    assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkouts_reconciliation_due/);
+    assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkout_state_reconciliation_due/);
     const terminalNotificationPlan = planDetails(db, dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
     assert.match(terminalNotificationPlan, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);
     assert.doesNotMatch(terminalNotificationPlan, /USE TEMP B-TREE/);

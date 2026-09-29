@@ -53,10 +53,9 @@ test('checkout reconciliation transitions retain sparse records and unknown fiel
   const identity = { dropId: 'drop', sessionId: 'session' };
   const legacy = { nested: [true, null, 'retained'] };
   seedCommerceDocument(harness, { key, data: {
+    status: 'created',
     legacy,
-    fulfillmentQueueReenqueuedAt: 'invalid',
     lastFulfillmentReconciliationError: { name: false },
-    lastFulfillmentReconciliationErrorAt: 'invalid',
   } });
   const initial = await getStripeCheckout(repository, key);
   assert.equal(initial?.fulfillmentQueueReenqueuedAtMs, undefined);
@@ -73,12 +72,12 @@ test('checkout reconciliation transitions retain sparse records and unknown fiel
   assert.deepEqual(checkout?.lastFulfillmentReconciliationError, { name: 'RetryError', message: 'retry later' });
   assert.deepEqual(checkout?.fields.legacy, legacy);
   assert.equal(checkout?.fields.updatedAt, nowMs + 10);
-  assert.equal(checkout?.status, '');
+  assert.equal(checkout?.status, 'created');
   await assert.rejects(markStripeCheckoutReenqueued(commerce, { ...identity, sessionId: 'missing' }),
     (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'failed-precondition');
 });
 
-test('typed checkout reads preserve sparse lifecycle records and normalize malformed optional fields', async (context) => {
+test('typed checkout reads preserve sparse lifecycle records and historical metadata', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
@@ -87,16 +86,14 @@ test('typed checkout reads preserve sparse lifecycle records and normalize malfo
   seedCommerceDocument(harness, {
     key,
     data: {
-      status: false,
-      processingAttemptId: 42,
-      processingLeaseExpiresAt: 'invalid',
+      status: 'created',
       processingStartedAt: 1_800_000_000_000,
       historicalField: { retained: true },
     },
   });
   const checkout = await getStripeCheckout(repository, key);
   assert.ok(checkout);
-  assert.equal(checkout.status, '');
+  assert.equal(checkout.status, 'created');
   assert.equal(checkout.processingAttemptId, '');
   assert.equal(checkout.processingLeaseExpiresAtMs, undefined);
   assert.equal(checkout.processingStartedAtMs, 1_800_000_000_000);
@@ -107,6 +104,21 @@ test('typed checkout reads preserve sparse lifecycle records and normalize malfo
   });
   assert.equal((await getStripeCheckout(repository, key))?.processingAttemptId, 'current');
   assert.deepEqual((await repository.get(key))?.data.historicalField, { retained: true });
+});
+
+test('typed checkout persistence rejects malformed operational state without changing the record', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.stripeCheckout('drop', 'session');
+  seedCommerceDocument(harness, { key, data: { status: 'created', historicalField: { retained: true } } });
+  const initial = await repository.get(key);
+  for (const fields of [{ status: false }, { processingAttemptId: 42 }, { processingLeaseExpiresAt: 'invalid' },
+    { fulfillmentQueueReenqueuedAt: 'invalid' }, { lastFulfillmentReconciliationErrorAt: 'invalid' }]) {
+    await assert.rejects(repository.run(1_800_000_000_100, (unit) => unit.update(key, stripeCheckoutWriteData(fields))),
+      { code: 'invalid-argument' });
+    assert.deepEqual(await repository.get(key), initial);
+  }
 });
 
 test('validated checkout reads reuse contract normalization and reject mismatched identity', async (context) => {
@@ -160,7 +172,7 @@ test('Stripe checkout commerce applies native fields, deletes, increments, and t
   const key = commerceKeys.stripeCheckout('drop', 'session');
   seedCommerceDocument(harness, {
     key,
-    data: { removed: 'old', processingAttemptCount: 2, status: 'pending' },
+    data: { removed: 'old', processingAttemptCount: 2, status: 'fulfillment_pending' },
   });
   const repository = new D1CommerceRepository(harness.db);
   const updatedAt = commerceFieldValue.serverTimestamp();

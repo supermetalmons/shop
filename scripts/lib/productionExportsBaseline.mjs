@@ -17,7 +17,6 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/deliveryPrepare.ts","exports","deliveryPrepareTestHooks"],
   ["cloud/workers/api/src/deliveryReceipts.ts","exports","deliveryReceiptTestHooks"],
   ["cloud/workers/api/src/deliveryReceiptStore.ts","exports","assignmentClaimCompatible"],
-  ["cloud/workers/api/src/deliveryRecoveryStore.ts","exports","deliveryRecoveryEligibility"],
   ["cloud/workers/api/src/dropConfig.ts","exports","requireApiDrop"],
   ["cloud/workers/api/src/index.ts","exports","AdminIrlRedeemFinalizeWorkflowV1"],
   ["cloud/workers/api/src/index.ts","exports","default"],

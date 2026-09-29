@@ -8,9 +8,10 @@ import {
 import { CommerceRepositoryError } from './commerceRepositoryTypes.js';
 import { NOTIFICATION_OUTBOX_COLUMNS, notificationOutboxDueQuery } from './commerceQueries.js';
 
-export function notificationOutboxAuthorityStatement(db: D1Database): D1PreparedStatement {
+export function notificationOutboxAuthorityStatement(db: D1Database, includeCheckoutState = false): D1PreparedStatement {
   return db.prepare(`SELECT authority_state,
     (SELECT storage_mode FROM commerce_notification_outbox_control WHERE singleton = 1) AS storage_mode
+    ${includeCheckoutState ? ', (SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1) AS checkout_state_mode' : ''}
     FROM commerce_authority_control WHERE singleton = 1`);
 }
 

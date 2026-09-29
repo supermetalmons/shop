@@ -5,6 +5,7 @@ import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.js';
 import type { FulfillmentManualReviewCursor } from '../../../../shared/contracts.js';
 import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.js';
+import { stripeCheckoutStateSelectColumns } from './stripeCheckoutStateStore.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -39,7 +40,8 @@ const DOCUMENT_COLUMN_NAMES = [
   'processed_at_nanos',
 ] as const;
 
-export const COMMERCE_DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+export const COMMERCE_DOCUMENT_COLUMNS = `${DOCUMENT_COLUMNS}, ${stripeCheckoutStateSelectColumns()}`;
 const SHIPMENT_FIELDS = [
   'source', 'dropId', 'deliveryId', 'status', 'items', 'stripeCheckoutSessionId',
   'createdAt', 'processingAt', 'processedAt', 'fulfillmentStatus',
@@ -70,8 +72,9 @@ export function notificationOutboxDueQuery(args: { family?: NotificationOutboxFa
   };
 }
 
-function qualifiedDocumentColumns(alias: string): string {
-  return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
+function qualifiedDocumentColumns(alias: string, checkoutState = false): string {
+  const columns = DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
+  return checkoutState ? `${columns}, ${stripeCheckoutStateSelectColumns(alias)}` : columns;
 }
 
 export function stripeChargebackLinkedSessionsQuery(paymentIntentId: string): CommerceSqlQuery {
@@ -142,7 +145,7 @@ export function fulfillmentOrdersQuery(args: FulfillmentOrdersQueryArgs): Commer
         (processed_at_seconds = ? AND processed_at_nanos = ? AND document_path < ?)
       )`;
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents INDEXED BY commerce_documents_drop_processed_cursor
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
@@ -168,7 +171,10 @@ export function manualReviewCheckoutsQuery(args: ManualReviewCheckoutsQueryArgs)
       WHERE EXISTS (SELECT 1 FROM commerce_authority_control
         WHERE singleton = 1 AND authority_state = 'd1')
         AND document_kind = 'stripe_checkout' AND drop_id = ?
-        AND status = 'fulfillment_failed' AND manual_refund_review_required = 1
+        AND manual_refund_review_required = 1
+        AND EXISTS (SELECT 1 FROM commerce_stripe_checkout_state AS checkout_state
+          WHERE checkout_state.document_path = commerce_documents.document_path
+            AND checkout_state.status = 'fulfillment_failed')
         AND json_type(document_json, '$.manualRefundReviewRequired') = 'true'
         AND length(CAST(manual_review_session_id AS BLOB)) <= 256
         AND length(CAST(document_path AS BLOB)) <= 512${cursor === undefined ? '' : `
@@ -184,7 +190,7 @@ export function manualReviewCheckoutsQuery(args: ManualReviewCheckoutsQueryArgs)
 
 export function legacyClaimAssignmentsQuery(args: Readonly<{ code: string }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
         AND document_kind = 'box_assignment' AND irl_claim_code = ?
@@ -196,7 +202,7 @@ export function legacyClaimAssignmentsQuery(args: Readonly<{ code: string }>): C
 
 export function adminIrlRedeemWorkflowStatusQuery(operationId: string): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE
         authority.singleton = 1 AND
@@ -264,10 +270,11 @@ export function deliveryRecoveryPageQuery(args: DeliveryRecoveryPageQuery): Comm
       CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
         AND document.document_kind = 'delivery_order' AND document.owner = ? AND document.status = ?
-        ${args.dropId === undefined ? '' : 'AND document.drop_id = ?'}
+        ${args.dropId === undefined ? '' : 'AND document.drop_id = ? AND document.document_path >= ? AND document.document_path < ?'}
         ${args.startAfterPath === undefined ? '' : 'AND document.document_path > ?'}
       ORDER BY document.document_path ASC LIMIT ?`,
-    bindings: [args.owner, args.phase, ...(args.dropId === undefined ? [] : [args.dropId]),
+    bindings: [args.owner, args.phase, ...(args.dropId === undefined ? [] : [args.dropId,
+      `drops/${args.dropId}/deliveryOrders/`, `drops/${args.dropId}/deliveryOrders0`]),
       ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]), args.limit],
   };
 }
@@ -301,7 +308,8 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
   const bindings = [
     ...(args.owner === undefined ? [] : [args.owner]),
     ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
-    ...(args.dropId === undefined ? [] : [args.dropId]),
+    ...(args.dropId === undefined ? [] : [args.dropId,
+      `drops/${args.dropId}/deliveryOrders/`, `drops/${args.dropId}/deliveryOrders0`]),
   ];
   return {
     sql: `SELECT ${qualifiedDocumentColumns('document')}
@@ -313,7 +321,7 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
     CROSS JOIN commerce_documents AS document`}
     WHERE outbox.parent_path = document.document_path
       AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
-      AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}${args.dropId === undefined ? '' : ' AND document.drop_id = ?'}
+      AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}${args.dropId === undefined ? '' : ` AND document.drop_id = ? AND ${orderedPath} >= ? AND ${orderedPath} < ?`}
     ORDER BY ${orderedPath} ASC
     LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
     bindings: [...bindings, args.limit],
@@ -343,7 +351,7 @@ export function duePackStatusProjectionsQuery(args: Readonly<{
   limit: number;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${DOCUMENT_COLUMNS}
       FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
       WHERE
         authority.singleton = 1 AND
@@ -360,19 +368,20 @@ export function duePackStatusProjectionsQuery(args: Readonly<{
 
 export function staleStripeFulfillmentsQuery(cutoffMs: number): CommerceSqlQuery {
   return {
-    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+    sql: `SELECT ${qualifiedDocumentColumns('document', true)}
       FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_checkouts_reconciliation_due
+      CROSS JOIN commerce_stripe_checkout_state AS checkout_state INDEXED BY commerce_stripe_checkout_state_reconciliation_due
+      CROSS JOIN commerce_documents AS document
       WHERE
         authority.singleton = 1 AND
         authority.authority_state = 'd1' AND
-        document_kind = 'stripe_checkout' AND
-        fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
-        status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
-        json_type(document_json, '$.updatedAt') IN ('integer', 'real') AND
-        json_type(document_json, '$.lastStripeWebhookEventId') = 'text' AND
-        CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) ASC, document_path ASC
+        document.document_path = checkout_state.document_path AND
+        document.document_kind = 'stripe_checkout' AND
+        document.fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
+        checkout_state.status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
+        json_type(document.document_json, '$.lastStripeWebhookEventId') = 'text' AND
+        checkout_state.updated_at_ms <= ?
+      ORDER BY checkout_state.updated_at_ms ASC, checkout_state.document_path ASC
       LIMIT 100`,
     bindings: [cutoffMs],
   };
@@ -383,7 +392,7 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
   limit: number;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${qualifiedDocumentColumns('document')}
+    sql: `SELECT ${qualifiedDocumentColumns('document', true)}
       FROM commerce_notification_outbox_stripe_due AS due INDEXED BY commerce_notification_outbox_stripe_due_at
       CROSS JOIN commerce_notification_outbox AS outbox
       CROSS JOIN commerce_documents AS document
@@ -392,8 +401,10 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
         AND outbox.family = 'stripe_terminal' AND outbox.state = 'pending'
         AND due.next_attempt_at_ms <= ? AND outbox.next_attempt_at_ms = due.next_attempt_at_ms
         AND document.document_kind = 'stripe_checkout'
-        AND ((outbox.outcome = 'fulfilled' AND document.status = 'fulfilled') OR
-          (outbox.outcome = 'manual_review' AND document.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1))
+        AND EXISTS (SELECT 1 FROM commerce_stripe_checkout_state AS checkout_state
+          WHERE checkout_state.document_path = document.document_path
+            AND ((outbox.outcome = 'fulfilled' AND checkout_state.status = 'fulfilled') OR
+              (outbox.outcome = 'manual_review' AND checkout_state.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1)))
       ORDER BY due.next_attempt_at_ms, due.parent_path
       LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
     bindings: [args.dueAtMs, args.limit],

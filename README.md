@@ -26,6 +26,9 @@ control, rate-limit state, and shipment and fulfillment data.
 - The `mons-shop-commerce` D1 database is the permanent authority for delivery
   orders, assignments, claim codes, Stripe checkouts, and related commerce
   documents.
+- Stripe checkout lifecycle, processing leases, and retry timestamps use
+  `commerce_stripe_checkout_state`. Checkout metadata remains in commerce
+  documents; legacy lifecycle fields are frozen after activation.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -385,6 +388,16 @@ accepts staged legacy inventory. Use the
 Notification deployment also requires active table storage, or a fully paused and
 verified preparation for the initial publication. Follow the
 [notification outbox cutover runbook](scripts/docs/notification_outbox_cutover.md).
+
+Stripe checkout state migration `0026_stripe_checkout_state.sql` requires a
+coordinated pause, preparation, compatible API publication, and one-way
+activation before resuming Commerce. Follow the
+[checkout state cutover](scripts/docs/stripe_checkout_state_cutover.md) for the
+initial deployment; `deploy:api` verifies this readiness. Inspect state with
+`npm run stripe-checkout-state-control -- status`. Preparation is resumable,
+does not broadcast transactions or send emails, and retains checkout versions,
+processing claims, and retry history. Publish the frontend after API activation
+and resumption so the delivery recovery cursor API is available first.
 
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,

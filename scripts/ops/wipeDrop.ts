@@ -34,6 +34,7 @@ import {
 import {
   acquireCommerceAuthorityLease,
   executeRemoteCommerceD1File,
+  hasStripeCheckoutStateSchema,
   queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
   readRemoteCommerceAuthority,
@@ -146,6 +147,7 @@ export type CommerceD1Plan = {
   missingClaimCodes: string[];
   targetDocumentCount: number;
   notificationOutboxCount: number;
+  stripeCheckoutStateCount: number | null;
 };
 
 export function sameCommerceD1Plan(
@@ -906,6 +908,7 @@ export function buildCommerceD1PlanFromDocuments(args: {
   inventory: CommerceD1InventorySnapshot;
   targetDocuments: CommerceD1Document[];
   notificationOutboxCount?: number;
+  stripeCheckoutStateCount?: number;
 }): CommerceD1Plan {
   const dropId = validateDropId(args.dropId, 'drop id');
   const targetAssignments = args.targetDocuments.filter((document) => document.kind === 'box_assignment');
@@ -990,6 +993,8 @@ export function buildCommerceD1PlanFromDocuments(args: {
     missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.has(code))),
     targetDocumentCount: args.targetDocuments.length,
     notificationOutboxCount: safeInteger(args.notificationOutboxCount ?? 0, 'Notification outbox count'),
+    stripeCheckoutStateCount: args.stripeCheckoutStateCount === undefined
+      ? null : safeInteger(args.stripeCheckoutStateCount, 'Stripe checkout state count'),
   };
 }
 
@@ -1011,6 +1016,10 @@ export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
     inventory: readRemoteCommerceInventory(dropId),
     notificationOutboxCount: safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
       FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}`)[0]?.count, 'Notification outbox count'),
+    stripeCheckoutStateCount: hasStripeCheckoutStateSchema(queryRemoteCommerceD1)
+      ? safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
+        FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}`)[0]?.count, 'Stripe checkout state count')
+      : undefined,
     targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
     claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
     assignmentDocuments: commerceDocuments(`document_kind = 'box_assignment'`),
@@ -1648,6 +1657,7 @@ function printPlan(args: {
   console.log(`- authority revision: ${commercePlan.authority.revision}`);
   console.log(`- documents revision: ${commercePlan.authority.documentsRevision}`);
   console.log(`- notification outbox rows to delete: ${commercePlan.notificationOutboxCount}`);
+  if (commercePlan.stripeCheckoutStateCount !== null) console.log(`- Stripe checkout state rows to delete: ${commercePlan.stripeCheckoutStateCount}`);
   console.log(`- figure inventory mode: ${commercePlan.inventory.mode}`);
   console.log(`- available figure rows to delete: ${commercePlan.inventory.availableCount}`);
   if (commercePlan.inventory.metadata) {
@@ -4744,6 +4754,11 @@ export function applySynchronousWipePhases<TPrepared>(args: {
   args.applyPreparedRepo(prepared);
 }
 
+function stripeCheckoutDropPredicate(dropId: string): string {
+  const prefix = `drops/${dropId}/stripeCheckouts/`;
+  return `substr(document_path, 1, ${prefix.length}) = ${sqlString(prefix)}`;
+}
+
 export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, nowMs: number): string {
   requireExecutableCommerceD1Wipe(plan.authority);
   if (!guardId || !Number.isSafeInteger(nowMs) || nowMs < 0) fail('Commerce D1 wipe metadata is invalid.');
@@ -4759,6 +4774,7 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
     : `NOT EXISTS (SELECT 1 FROM commerce_inventory_drops WHERE drop_id = ${sqlString(dropId)})`;
   const inventoryExpectation = `${metadataExpectation}
       AND (SELECT COUNT(*) FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}) = ${plan.notificationOutboxCount}
+      ${plan.stripeCheckoutStateCount === null ? '' : `AND (SELECT COUNT(*) FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}) = ${plan.stripeCheckoutStateCount}`}
       AND (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)}) = ${inventory.availableCount}
       AND (SELECT dude_inventory_mode FROM commerce_authority_control WHERE singleton = 1) = ${sqlString(inventory.mode)}
       AND EXISTS (SELECT 1 FROM commerce_authority_control_lease
@@ -4828,6 +4844,7 @@ function readCommerceD1WipeOutcome(
       ${claimCountSql} AS claim_count,
       (SELECT COUNT(*) FROM commerce_notification_outbox
         WHERE drop_id = ${sqlString(dropId)}) AS notification_outbox_count,
+      ${plan.stripeCheckoutStateCount === null ? '0' : `(SELECT COUNT(*) FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)})`} AS stripe_checkout_state_count,
       (SELECT COUNT(*) FROM commerce_inventory_drops
         WHERE drop_id = ${sqlString(dropId)}) AS inventory_count,
       (SELECT COUNT(*) FROM commerce_available_dudes
@@ -4847,6 +4864,7 @@ function readCommerceD1WipeOutcome(
   const targetCount = Number(row.target_count);
   const claimCount = Number(row.claim_count);
   const notificationOutboxCount = Number(row.notification_outbox_count);
+  const stripeCheckoutStateCount = plan.stripeCheckoutStateCount === null ? 0 : Number(row.stripe_checkout_state_count);
   const inventoryCount = Number(row.inventory_count);
   const availableCount = Number(row.available_count);
   const guardCount = Number(row.guard_count);
@@ -4862,6 +4880,7 @@ function readCommerceD1WipeOutcome(
     !Number.isSafeInteger(targetCount) ||
     !Number.isSafeInteger(claimCount) ||
     !Number.isSafeInteger(notificationOutboxCount) ||
+    !Number.isSafeInteger(stripeCheckoutStateCount) ||
     !Number.isSafeInteger(inventoryCount) ||
     !Number.isSafeInteger(availableCount) ||
     !Number.isSafeInteger(guardCount)
@@ -4873,6 +4892,7 @@ function readCommerceD1WipeOutcome(
     targetCount === 0 &&
     claimCount === 0 &&
     notificationOutboxCount === 0 &&
+    stripeCheckoutStateCount === 0 &&
     inventoryCount === 0 &&
     availableCount === 0 &&
     guardCount === expectedGuardCount

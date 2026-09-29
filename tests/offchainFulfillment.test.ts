@@ -221,7 +221,7 @@ async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: stri
 
 function commerceDocumentWriteBatches(calls: readonly CommerceD1CallObservation[]) {
   return calls.filter((call) => call.method === 'batch'
-    && call.statements.some((statement) => /INSERT INTO commerce_documents/.test(statement.sql)));
+    && call.statements.some((statement) => /\b(?:INSERT INTO|UPDATE|DELETE FROM) commerce_documents\b/.test(statement.sql)));
 }
 
 function commerceDocumentReadBatches(calls: readonly CommerceD1CallObservation[]) {

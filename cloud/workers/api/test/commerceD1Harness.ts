@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
 import { parseNotificationOutboxRecord, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.ts';
+import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../../../../shared/stripeCheckoutState.ts';
 import type {
   CommerceDocumentData,
   CommerceDocumentKey,
@@ -116,7 +117,7 @@ export type CommerceD1Harness = {
   db: D1Database;
 };
 
-function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table'): void {
+function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table', checkoutStateMode: 'legacy' | 'table'): void {
   database.exec('BEGIN IMMEDIATE');
   try {
     database.exec(`INSERT INTO commerce_authority_control_lease (
@@ -135,6 +136,11 @@ function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'le
     UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', source_documents_revision = 0,
       prepared_at_ms = 0 WHERE singleton = 1;
     UPDATE commerce_notification_outbox_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
+    ${checkoutStateMode === 'table' ? `UPDATE commerce_stripe_checkout_state_control
+      SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1;
+    UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready',
+      prepared_at_ms = 0 WHERE singleton = 1;
+    UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
     UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
       updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -191,6 +197,7 @@ export function createCommerceD1Harness(
     observeCall?: CommerceD1CallObserver;
     observeStatement?: CommerceD1StatementObserver;
     notificationOutboxMode?: 'legacy' | 'table';
+    stripeCheckoutStateMode?: 'legacy' | 'table';
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
@@ -232,7 +239,8 @@ export function createCommerceD1Harness(
       }
     }
   }
-  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table');
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0026_stripe_checkout_state.sql', 'utf8'));
+  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table');
   return {
     database,
     db: d1Database(
@@ -388,6 +396,18 @@ function writeCommerceDocument(
   const updateTime = seed.updateTime || '2026-01-01T00:00:00.000Z';
   const createTime = seed.createTime || updateTime;
   const version = seed.version ?? 1;
+  const typedCheckout = seed.key.kind === 'stripe_checkout' && harness.database.prepare(
+    'SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1',
+  ).get()?.storage_mode === 'table';
+  const guardId = crypto.randomUUID();
+  let data = seed.data;
+  if (typedCheckout) {
+    const existing = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(seed.key.path);
+    data = stripeCheckoutStateMetadata(seed.data, existing ? JSON.parse(String(existing.document_json)) : {});
+    harness.database.prepare(`INSERT INTO commerce_commit_guards
+      (guard_id, expectations_json, expected_documents_revision, created_at_ms, stripe_checkout_paths_json)
+      VALUES (?, '[]', NULL, 0, ?)`).run(guardId, JSON.stringify([seed.key.path]));
+  }
   harness.database.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time, processed_at_seconds, processed_at_nanos
@@ -406,13 +426,22 @@ function writeCommerceDocument(
     seed.key.kind,
     seed.key.dropId,
     seed.key.documentId,
-    JSON.stringify(seed.data),
+    JSON.stringify(data),
     version,
     createTime,
     updateTime,
     seed.processedAt?.seconds ?? null,
     seed.processedAt?.nanos ?? null,
   );
+  if (typedCheckout) {
+    const row = stripeCheckoutStateRow(stripeCheckoutStateFromDocument(seed.key.path, seed.data, version));
+    const columns = Object.keys(row);
+    harness.database.prepare(`INSERT INTO commerce_stripe_checkout_state (${columns.join(', ')})
+      VALUES (${columns.map(() => '?').join(', ')}) ON CONFLICT(document_path) DO UPDATE SET
+      ${columns.filter((column) => column !== 'document_path').map((column) => `${column} = excluded.${column}`).join(', ')}`)
+      .run(...columns.map((column) => row[column]));
+    harness.database.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').run(guardId);
+  }
 }
 
 export function applyCommerceDocumentFixtureEpoch(

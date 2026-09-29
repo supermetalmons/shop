@@ -76,10 +76,23 @@ function checkoutEnvironment(
 }
 
 function conflictDatabase(db: D1Database, conflicts: number): D1Database {
+  const commits = new WeakSet<D1PreparedStatement>();
   return {
     ...db,
+    prepare: (sql) => {
+      const statement = db.prepare(sql);
+      if (/INSERT INTO commerce_commit_guards/.test(sql)) {
+        const bind = statement.bind.bind(statement);
+        statement.bind = (...values) => {
+          const bound = bind(...values);
+          commits.add(bound);
+          return bound;
+        };
+      }
+      return statement;
+    },
     batch: async (statements) => {
-      if (statements.length >= 4 && conflicts > 0) {
+      if (statements.some((statement) => commits.has(statement)) && conflicts > 0) {
         conflicts -= 1;
         throw new Error('transaction conflict');
       }
@@ -171,7 +184,7 @@ function checkoutDocument(options: {
     unitAmountCents: 100,
     livemode: options.livemode === true,
     createdAt: 'created',
-    updatedAt: 'updated',
+    updatedAt: Date.parse('2026-08-20T10:00:00Z'),
   });
   document.status = options.status || STRIPE_CHECKOUT_STATUS.CREATED;
   if (options.deliveryId) document.deliveryId = options.deliveryId;

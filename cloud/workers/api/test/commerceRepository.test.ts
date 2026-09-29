@@ -331,11 +331,11 @@ test('manual review reads select flagged checkouts in the requested drop', async
   seedCommerceDocuments(harness, [
     { key: commerceKeys.stripeCheckout('drop', 'a'), data: { manualRefundReviewRequired: true, status: 'fulfillment_failed' } },
     { key: commerceKeys.stripeCheckout('drop', 'b'), data: { manualRefundReviewRequired: true, status: 'fulfillment_failed' } },
-    { key: commerceKeys.stripeCheckout('drop', 'false'), data: { manualRefundReviewRequired: false } },
-    { key: commerceKeys.stripeCheckout('drop', 'missing'), data: {} },
+    { key: commerceKeys.stripeCheckout('drop', 'false'), data: { status: 'created', manualRefundReviewRequired: false } },
+    { key: commerceKeys.stripeCheckout('drop', 'missing'), data: { status: 'created' } },
     { key: commerceKeys.stripeCheckout('drop', 'processing'), data: { manualRefundReviewRequired: true, status: 'processing' } },
     { key: commerceKeys.stripeCheckout('drop', 'numeric-flag'), data: { manualRefundReviewRequired: 1, status: 'fulfillment_failed' } },
-    { key: commerceKeys.stripeCheckout('other', 'wrong-drop'), data: { manualRefundReviewRequired: true } },
+    { key: commerceKeys.stripeCheckout('other', 'wrong-drop'), data: { status: 'fulfillment_failed', manualRefundReviewRequired: true } },
     { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: { manualRefundReviewRequired: true } },
   ]);
   const records = await repository.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 });
@@ -529,7 +529,7 @@ test('ready-notification recovery selects unclaimed and expired leases in due or
       key: commerceKeys.deliveryOrder('drop', state),
       data: { ...pending, buyerOrderReceivedEmailState: state, shipperReadyToShipEmailState: state },
     })),
-    { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: pending },
+    { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: { ...pending, status: 'fulfilled' } },
   ]);
   seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', 'unclaimed'));
   for (const [id, dueAtMs] of [['a', 10], ['b', 10], ['future', 11], ['older', 5]] as const) {
@@ -600,7 +600,7 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
     })),
     {
       key: commerceKeys.stripeCheckout('drop', 'missing-due'),
-      data: { stripeTerminalNotificationState: 'pending' },
+      data: { status: 'created', stripeTerminalNotificationState: 'pending' },
     },
     { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: pending },
   ]);
@@ -652,7 +652,7 @@ test('delivery-order owner pagination uses a distinct indexed keyset query', asy
     { key: commerceKeys.deliveryOrder('other', '4'), data: { owner: ownerA } },
     { key: commerceKeys.deliveryOrder('drop', '5'), data: {} },
     { key: commerceKeys.deliveryOrder('drop', '6'), data: { owner: 'anonymous:subject' } },
-    { key: commerceKeys.stripeCheckout('drop', 'checkout'), data: { owner: ownerA } },
+    { key: commerceKeys.stripeCheckout('drop', 'checkout'), data: { status: 'created', owner: ownerA } },
   ]);
   const repository = new D1CommerceRepository(harness.db);
 
@@ -735,7 +735,7 @@ test('delivery recovery queries use the composite owner-status index without imp
     },
     {
       key: commerceKeys.stripeCheckout('drop', 'wrong-kind'),
-      data: { owner: 'owner-a', status: 'prepared' },
+      data: { owner: 'owner-a', status: 'processing' },
     },
   ]);
   const repository = new D1CommerceRepository(harness.db);
@@ -1374,12 +1374,12 @@ test('point-read writes retain per-document version conflicts', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.stripeCheckout('drop', 'checkout');
-  await repository.run(10, async (unit) => unit.create(key, { status: 'open' }));
+  await repository.run(10, async (unit) => unit.create(key, { status: 'created' }));
 
   const stale = await repository.begin(11);
   await stale.get(key);
-  await stale.update(key, { status: 'complete' });
-  await repository.run(12, async (unit) => unit.update(key, { status: 'paid' }));
+  await stale.update(key, { status: 'fulfilled' });
+  await repository.run(12, async (unit) => unit.update(key, { status: 'fulfillment_pending' }));
 
   await assert.rejects(
     stale.commit(),
@@ -1924,7 +1924,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   const staleCall = calls.at(-1);
   assert.equal(staleCall?.method, 'batch');
   if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
-  assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
+  assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkout_state_reconciliation_due/);
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryDueStripeTerminalNotifications(1)),
     [],

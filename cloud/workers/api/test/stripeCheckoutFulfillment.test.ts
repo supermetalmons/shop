@@ -218,6 +218,7 @@ test('Stripe pack-status repair skips unsupported drops and rejects inconsistent
     data: {
       dropId: 'card_nft_2',
       sessionId: 'cs_test_repair',
+      status: 'fulfilled',
       deliveryId: 123,
       livemode: true,
     },

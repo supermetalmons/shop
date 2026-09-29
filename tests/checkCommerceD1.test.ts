@@ -24,6 +24,7 @@ import {
   stripeChargebackMatchedDocumentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
+import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
 
 const migrationNames = [
   '0001_current_schema.sql',
@@ -51,6 +52,7 @@ const migrationNames = [
   '0023_preorder_card_range.sql',
   '0024_preorder_card_range_1400.sql',
   '0025_preorder_scoped_expiry.sql',
+  '0026_stripe_checkout_state.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -64,6 +66,63 @@ test('preorder migration is required for deployment and its unique claims and pe
     assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema/);
     database.close();
   }
+});
+
+test('Stripe checkout state migration is required for deployment while the previous baseline remains inspectable', () => {
+  const previous = currentDatabase(false, 25);
+  try {
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+    assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /Stripe checkout state migration/);
+  } finally { previous.close(); }
+});
+
+test('Stripe checkout state schema checks reject missing state guards and reconciliation indexes', () => {
+  for (const [type, name] of [
+    ['TRIGGER', 'commerce_stripe_checkout_state_update_guard'],
+    ['TRIGGER', 'commerce_commit_guard_stripe_checkout_finish'],
+    ['INDEX', 'commerce_stripe_checkout_state_reconciliation_due'],
+  ]) {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`DROP ${type} ${name}`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /Stripe checkout state schema is invalid/);
+    } finally { database.close(); }
+  }
+});
+
+test('active checkout health uses authoritative state and rejects missing or stale parent versions', async () => {
+  const database = currentDatabase();
+  try {
+    database.exec(`INSERT INTO commerce_authority_control_lease VALUES
+      (1, '00000000-0000-4000-8000-000000000907', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
+      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+      DELETE FROM commerce_authority_control_lease`);
+    const query = localQuery(database);
+    const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
+    await runStripeCheckoutStateControl(['prepare', '--write', '--expected-revision', revision], { query });
+    await runStripeCheckoutStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+    assert.equal(checkCommerceD1(query).stripeCheckoutStateRows, 256);
+    assert.equal(checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT checkout.*,')
+      ? { ...row, document_version: Number(row.document_version) + 1, parent_version: Number(row.parent_version) + 1 }
+      : row)).stripeCheckoutStateRows, 256);
+    const updateGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_update_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
+      UPDATE commerce_stripe_checkout_state SET status = 'fulfilled' WHERE document_path = 'drops/drop/stripeCheckouts/0';
+      ${updateGuard}`);
+    assert.equal(checkCommerceD1(query).stripeCheckoutStateMode, 'table');
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
+      UPDATE commerce_stripe_checkout_state SET document_version = 2 WHERE document_path = 'drops/drop/stripeCheckouts/0';
+      ${updateGuard}`);
+    assert.throws(() => checkCommerceD1(query), /parent or version is invalid/);
+    const deleteGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_delete_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_delete_guard;
+      DELETE FROM commerce_stripe_checkout_state WHERE document_path = 'drops/drop/stripeCheckouts/0';
+      ${deleteGuard}`);
+    assert.throws(() => checkCommerceD1(query), /differs from source/);
+  } finally { database.close(); }
 });
 
 test('preorder buyer index is required for deployment and its definition is verified', () => {
@@ -168,7 +227,7 @@ test('preorder scoped expiry migration is required for deployment and its index 
   previous.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 = 25): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 = 26): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -329,6 +388,9 @@ test('Commerce D1 checker accepts the current schema using complete production q
       notificationOutboxPreparation: 'idle',
       notificationOutboxGroups: 0,
       notificationOutboxFailures: [],
+      stripeCheckoutStateMode: 'legacy',
+      stripeCheckoutStatePreparation: 'idle',
+      stripeCheckoutStateRows: 0,
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 513,
@@ -426,6 +488,9 @@ test('Commerce D1 checker accepts the exact empty post-migration state', () => {
       notificationOutboxPreparation: 'idle',
       notificationOutboxGroups: 0,
       notificationOutboxFailures: [],
+      stripeCheckoutStateMode: 'legacy',
+      stripeCheckoutStatePreparation: 'idle',
+      stripeCheckoutStateRows: 0,
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 0,
@@ -609,6 +674,10 @@ test('API deployment requires activation even after inventory preparation and ac
     database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
       UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
       UPDATE commerce_notification_outbox_control SET storage_mode = 'table'`);
+    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated Stripe checkout state/);
+    database.exec(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing', source_documents_revision = 0;
+      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 0;
+      UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table'`);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).inventoryMode, 'rows');
     assert.equal(checkCommerceD1(query, { forDeployment: true }).availableDudes, 0);
     database.exec(`UPDATE commerce_authority_control
@@ -945,7 +1014,9 @@ test('API deployment accepts a fully paused verified notification preparation be
     seedInventory(database);
     database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
     database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1`);
+      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1;
+      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing', source_documents_revision = 0;
+      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 1`);
     const result = checkCommerceD1(localQuery(database), { forDeployment: true });
     assert.equal(result.notificationOutboxMode, 'legacy');
     assert.equal(result.notificationOutboxPreparation, 'ready');

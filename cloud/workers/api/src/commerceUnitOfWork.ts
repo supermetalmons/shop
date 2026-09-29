@@ -1,6 +1,7 @@
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
+  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
@@ -50,6 +51,12 @@ import {
   type NotificationOutboxRecord,
 } from '../../../../shared/notificationOutbox.js';
 import { NotificationOutboxRepository, notificationOutboxWriteStatement } from './notificationOutboxRepository.js';
+import {
+  STRIPE_CHECKOUT_STATE_FIELDS,
+  stripeCheckoutStateFromDocument,
+  stripeCheckoutStateMetadata,
+} from '../../../../shared/stripeCheckoutState.js';
+import { stripeCheckoutStateWriteStatement } from './stripeCheckoutStateStore.js';
 
 type PendingDocument = StoredDocument | null;
 
@@ -100,6 +107,7 @@ function parseConflictResult(result: D1Result<Record<string, unknown>>): boolean
 
 export class CommerceUnitOfWork {
   private authorityChecked = false;
+  private checkoutStateChecked = false;
   private closed = false;
   private readonly deliveryOwnerExpectations = new Map<string, number>();
   private readonly expectations = new Map<string, DocumentExpectation>();
@@ -313,14 +321,16 @@ export class CommerceUnitOfWork {
     const statements: D1PreparedStatement[] = [
       this.db.prepare(`INSERT INTO commerce_commit_guards (
         guard_id, expectations_json, delivery_owner_expectations_json,
-        expected_documents_revision, created_at_ms, notification_outbox_expectations_json
-      ) VALUES (?, ?, ?, ?, ?, ?)`).bind(
+        expected_documents_revision, created_at_ms, notification_outbox_expectations_json, stripe_checkout_paths_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
         guardId,
         documentExpectationsJson,
         deliveryOwnerExpectationsJson,
         null,
         timestampMilliseconds(this.commitTimestamp),
         this.serializedOutboxExpectations(),
+        JSON.stringify(Array.from(this.pending, ([path, document]) =>
+          (document ?? this.original.get(path))?.key.kind === 'stripe_checkout' ? path : null).filter(Boolean)),
       ),
     ];
     for (const [path, document] of this.pending) {
@@ -328,7 +338,12 @@ export class CommerceUnitOfWork {
         statements.push(this.db.prepare('DELETE FROM commerce_documents WHERE document_path = ?').bind(path));
         continue;
       }
-      statements.push(this.db.prepare(`INSERT INTO commerce_documents (
+      const original = this.original.get(path);
+      if (document.key.kind === 'stripe_checkout' && original && document.rawData === original.rawData) {
+        statements.push(this.db.prepare(`UPDATE commerce_documents SET version = ?, update_time = ?
+          WHERE document_path = ?`).bind(document.version, document.updateTime, path));
+      } else {
+        statements.push(this.db.prepare(`INSERT INTO commerce_documents (
         document_path, document_kind, drop_id, document_id, document_json,
         version, create_time, update_time, processed_at_seconds, processed_at_nanos
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -346,13 +361,18 @@ export class CommerceUnitOfWork {
         document.key.kind,
         document.key.dropId,
         document.key.documentId,
-        JSON.stringify(document.data),
+        JSON.stringify(document.rawData),
         document.version,
         document.createTime,
         document.updateTime,
         document.processedAt?.seconds ?? null,
         document.processedAt?.nanos ?? null,
       ));
+      }
+      if (document.key.kind === 'stripe_checkout') {
+        statements.push(stripeCheckoutStateWriteStatement(this.db,
+          stripeCheckoutStateFromDocument(path, document.data, document.version)));
+      }
     }
     for (const outbox of this.pendingOutboxes.values()) {
       statements.push(notificationOutboxWriteStatement(this.db, outbox));
@@ -365,7 +385,7 @@ export class CommerceUnitOfWork {
       await this.db.batch(statements);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (/authority is not d1|notification outbox is unavailable/i.test(message)) {
+      if (/authority is not d1|notification outbox is unavailable|stripe checkout state is unavailable/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
       if (/transaction conflict|UNIQUE constraint|cannot start a transaction within a transaction/i.test(message)) {
@@ -521,12 +541,20 @@ export class CommerceUnitOfWork {
     const keysByPath = new Map(keys.map((key) => [key.path, key]));
     const paths = Array.from(keysByPath.keys());
     const placeholders = paths.map(() => '?').join(', ');
+    const checkCheckoutState = !this.checkoutStateChecked && keys.some((key) => key.kind === 'stripe_checkout');
     await this.readBatch([
       this.db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
         WHERE document_path IN (${placeholders})`).bind(...paths),
       this.db.prepare(`SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
         WHERE document_path IN (${placeholders})`).bind(...paths),
-    ], ([revisionResult, documentResult]) => {
+      ...(checkCheckoutState ? [this.db.prepare('SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1')] : []),
+    ], ([revisionResult, documentResult, checkoutStateResult]) => {
+      if (checkCheckoutState) {
+        if (checkoutStateResult.results.length !== 1 || checkoutStateResult.results[0].storage_mode !== 'table') {
+          throw unavailableCommerce();
+        }
+        this.checkoutStateChecked = true;
+      }
       const revisions = new Map<string, number>();
       for (const row of revisionResult.results) {
         if (
@@ -591,9 +619,13 @@ export class CommerceUnitOfWork {
     const now = this.commitTimestamp;
     const materialized = materializeDocument(data, now);
     const commitTime = timestampString(now);
+    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, materialized.data, this.nextDocumentVersion(key, null));
     return {
       createTime: commitTime,
       data: materialized.data,
+      rawData: key.kind === 'stripe_checkout'
+        ? stripeCheckoutStateMetadata(materialized.data, this.original.get(key.path)?.rawData ?? {})
+        : materialized.data,
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
@@ -610,9 +642,13 @@ export class CommerceUnitOfWork {
     const materialized = materializeDocument(data, now);
     const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
+    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, materialized.data, version);
     return {
       createTime: current?.createTime || commitTime,
       data: materialized.data,
+      rawData: key.kind === 'stripe_checkout'
+        ? stripeCheckoutStateMetadata(materialized.data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {})
+        : materialized.data,
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
@@ -628,7 +664,9 @@ export class CommerceUnitOfWork {
   ): StoredDocument {
     if (requireExisting && !current) throw new CommerceWriteConflict('failed-precondition');
     const now = this.commitTimestamp;
-    const data = current ? cloneData(current.data) : {};
+    const stateOnly = key.kind === 'stripe_checkout' && Object.keys(updates).every((field) =>
+      STRIPE_CHECKOUT_STATE_FIELDS.includes(field as typeof STRIPE_CHECKOUT_STATE_FIELDS[number]));
+    const data = current ? stateOnly ? { ...current.data } : cloneData(current.data) : {};
     let processedAt = current?.processedAt || null;
     for (const [fieldPath, update] of Object.entries(updates)) {
       if (!fieldPath || fieldPath.split('.').some((part) => !part)) {
@@ -643,14 +681,33 @@ export class CommerceUnitOfWork {
     }
     const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
+    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, data, version);
+    const rawData = key.kind === 'stripe_checkout'
+      ? stateOnly && current ? current.rawData : this.checkoutMetadata(key, data, current)
+      : data;
     return {
       createTime: current?.createTime || commitTime,
       data,
+      rawData,
       key,
       processedAt,
       updateTime: commitTime,
       version,
     };
+  }
+
+  private checkoutMetadata(key: CommerceDocumentKey, data: CommerceDocumentData, current: StoredDocument | null): CommerceDocumentData {
+    const metadata = stripeCheckoutStateMetadata(data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {});
+    if (current && JSON.stringify(metadata) === JSON.stringify(current.rawData)) return current.rawData;
+    return metadata;
+  }
+
+  private validateCheckoutState(key: CommerceDocumentKey, data: CommerceDocumentData, version: number): void {
+    try {
+      stripeCheckoutStateFromDocument(key.path, data, version);
+    } catch {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout state.');
+    }
   }
 
   private nextDocumentVersion(key: CommerceDocumentKey, current: StoredDocument | null): number {

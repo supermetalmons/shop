@@ -79,8 +79,10 @@ export function deliveryOwner(value: string): string {
   return value;
 }
 
-export function authorityStatement(db: D1Database): D1PreparedStatement {
-  return db.prepare(COMMERCE_AUTHORITY_SELECT);
+export function authorityStatement(db: D1Database, includeCheckoutState = false): D1PreparedStatement {
+  return db.prepare(includeCheckoutState ? `SELECT authority_state, revision, documents_revision,
+    (SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1) AS checkout_state_mode
+    FROM commerce_authority_control WHERE singleton = 1` : COMMERCE_AUTHORITY_SELECT);
 }
 
 export function parseAuthorityControl(row: unknown): CommerceAuthorityControl {

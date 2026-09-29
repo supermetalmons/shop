@@ -16,10 +16,13 @@ import {
 } from './commerceRepositoryTypes.js';
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
 import { isObject, unavailableCommerceData } from './commerceRepositorySupport.js';
+import { hydrateStripeCheckoutState } from '../../../../shared/stripeCheckoutState.js';
+import { stripeCheckoutStateFromJoinedRow } from './stripeCheckoutStateStore.js';
 
 export type StoredDocument = {
   createTime: string;
   data: CommerceDocumentData;
+  rawData: CommerceDocumentData;
   key: CommerceDocumentKey;
   processedAt: CommerceTimestamp | null;
   updateTime: string;
@@ -278,7 +281,10 @@ export function parseRow(value: unknown): StoredDocument {
   }
   return {
     createTime,
-    data: data as CommerceDocumentData,
+    data: key.kind === 'stripe_checkout'
+      ? hydrateStripeCheckoutState(data as CommerceDocumentData, stripeCheckoutStateFromJoinedRow(row, documentPath, version))
+      : data as CommerceDocumentData,
+    rawData: data as CommerceDocumentData,
     key,
     processedAt: processedAt as CommerceTimestamp | null,
     updateTime,

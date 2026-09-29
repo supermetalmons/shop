@@ -15,6 +15,7 @@ import {
   withCommerceWipeAuthorityLease,
 } from '../scripts/ops/wipeDrop.ts';
 import { acquireCommerceAuthorityLease } from '../scripts/shared/commerceD1Maintenance.ts';
+import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
 import type {
   CommerceD1Authority,
   CommerceD1Document,
@@ -51,6 +52,7 @@ function document(
     ['claim_code', 'claimCodes'],
     ['dude_assignment', 'dudeAssignments'],
     ['dude_pool', 'meta'],
+    ['stripe_checkout', 'stripeCheckouts'],
   ]).get(kind);
   if (!collection) throw new Error(`Unsupported test kind: ${kind}`);
   const path = kind === 'claim_code'
@@ -661,4 +663,32 @@ test('Commerce D1 wipe snapshots notification rows and cascades them with their 
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM commerce_notification_outbox WHERE drop_id = 'target'").get()!.count, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM commerce_notification_outbox WHERE drop_id = 'other'").get()!.count, 1);
   verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:outbox:', (sql) => db.prepare(sql).all().map((row) => ({ ...row })));
+});
+
+test('Commerce D1 wipe guards checkout state counts and verifies parent cascades preserve other drops', async (context) => {
+  const db = database();
+  context.after(() => db.close());
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0026_stripe_checkout_state.sql', 'utf8'));
+  const target = document('stripe_checkout', 'target', 'cs_target', { status: 'fulfilled' });
+  const other = document('stripe_checkout', 'other', 'cs_other', { status: 'fulfilled' });
+  insertDocumentEpoch(db, [target, other]);
+  pauseCommerce(db);
+  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
+  await runStripeCheckoutStateControl(['prepare', '--write', '--expected-revision', revision], { query });
+  await runStripeCheckoutStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+  insertAuthorityLease(db);
+  const wipePlan = buildCommerceD1PlanFromDocuments({
+    authority: { ...authority, documentsRevision: 1 }, dropId: 'target', inventory: emptyInventory,
+    targetDocuments: [target], assignmentDocuments: [], claimDocuments: [], stripeCheckoutStateCount: 1,
+  });
+  assert.equal(sameCommerceD1Plan(wipePlan, { ...wipePlan, stripeCheckoutStateCount: 2 }), false);
+  assert.throws(() => executeTransaction(db, buildCommerceD1WipeSql({ ...wipePlan, stripeCheckoutStateCount: 0 }, 'stale-checkout', 67_000)), /commerce wipe conflict/);
+  executeTransaction(db, buildCommerceD1WipeSql(wipePlan, 'wipe:target:checkout', 67_000));
+  assert.deepEqual(query('SELECT document_path FROM commerce_stripe_checkout_state'), [{ document_path: other.path }]);
+  verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:checkout:', query);
+  assert.throws(() => verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:checkout:', (sql) => query(sql).map((row) => ({
+    ...row, stripe_checkout_state_count: 1,
+  }))), /verification failed/);
 });

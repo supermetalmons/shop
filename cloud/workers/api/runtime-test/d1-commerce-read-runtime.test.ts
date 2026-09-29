@@ -25,14 +25,21 @@ import {
   type CommerceTimestamp,
 } from '../src/commerceRepository.ts';
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
+import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata } from '../../../../shared/stripeCheckoutState.ts';
+import { stripeCheckoutStateWriteStatement } from '../src/stripeCheckoutStateStore.ts';
+
+function batchDocuments(db: D1Database, statements: Array<D1PreparedStatement | D1PreparedStatement[]>): Promise<D1Result[]> {
+  return db.batch(statements.flat());
+}
 
 function insertDocument(
   db: D1Database,
   key: CommerceDocumentKey,
   data: CommerceDocumentData,
   processedAt: CommerceTimestamp | null = null,
-): D1PreparedStatement {
-  return db.prepare(`INSERT INTO commerce_documents (
+): D1PreparedStatement[] {
+  const metadata = key.kind === 'stripe_checkout' ? stripeCheckoutStateMetadata(data, {}) : data;
+  const statement = db.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time, processed_at_seconds, processed_at_nanos
   ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).bind(
@@ -40,12 +47,22 @@ function insertDocument(
     key.kind,
     key.dropId,
     key.documentId,
-    JSON.stringify(Object.fromEntries(Object.entries(data).filter(([name]) => !LEGACY_NOTIFICATION_FIELDS.includes(name as typeof LEGACY_NOTIFICATION_FIELDS[number])))),
+    JSON.stringify(Object.fromEntries(Object.entries(metadata).filter(([name]) => !LEGACY_NOTIFICATION_FIELDS.includes(name as typeof LEGACY_NOTIFICATION_FIELDS[number])))),
     '2026-01-01T00:00:00.000Z',
     '2026-01-01T00:00:00.000Z',
     processedAt?.seconds ?? null,
     processedAt?.nanos ?? null,
   );
+  if (key.kind !== 'stripe_checkout') return [statement];
+  const guardId = crypto.randomUUID();
+  return [
+    db.prepare(`INSERT INTO commerce_commit_guards
+      (guard_id, expectations_json, expected_documents_revision, created_at_ms, stripe_checkout_paths_json)
+      VALUES (?, '[]', NULL, 0, ?)`).bind(guardId, JSON.stringify([key.path])),
+    statement,
+    stripeCheckoutStateWriteStatement(db, stripeCheckoutStateFromDocument(key.path, { status: 'created', ...data }, 1)),
+    db.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId),
+  ];
 }
 
 function insertOutbox(
@@ -107,13 +124,13 @@ test('document-path migration backfills a populated Commerce D1 in the real runt
     await worker.applyD1Migrations('COMMERCE_DB');
     const env = await worker.getEnv();
     const key = commerceKeys.claimCode('BACKFILL');
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       insertDocument(env.COMMERCE_DB, key, { status: 'unused' }),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET documents_revision = documents_revision + 1, updated_at_ms = updated_at_ms + 1
         WHERE singleton = 1`),
     ]);
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
         singleton, lease_token, acquired_at_ms, expires_at_ms
       ) VALUES (
@@ -211,6 +228,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0023_preorder_card_range.sql',
       '0024_preorder_card_range_1400.sql',
       '0025_preorder_scoped_expiry.sql',
+      '0026_stripe_checkout_state.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -233,7 +251,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
         updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
       WHERE singleton = 1 AND authority_state = 'paused'`).run());
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -242,6 +260,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
       env.COMMERCE_DB.prepare(`UPDATE commerce_notification_outbox_control SET preparation_state = 'ready',
         source_documents_revision = 0, prepared_at_ms = 0 WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_notification_outbox_control SET storage_mode = 'table' WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing',
+        source_documents_revision = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready',
+        source_documents_revision = 0, prepared_at_ms = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table' WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -260,7 +283,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const workflowOperationId = `airf-v1-${'a'.repeat(64)}`;
     const duplicateWorkflowOperationId = `airf-v1-${'b'.repeat(64)}`;
     const missingWorkflowOperationId = `airf-v1-${'c'.repeat(64)}`;
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       ...['1', '2', '3'].map((id) => insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('shipment-runtime', id), {
         owner: shipmentOwner, status: 'ready_to_ship', createdAt: Number(id),
         ...(id === '1' ? { processedAt: 0, processingAt: 999 } : {}),
@@ -361,7 +384,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
           updated_at_ms = updated_at_ms + 1
         WHERE singleton = 1`),
     ]);
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       insertOutbox(env.COMMERCE_DB, deliveryKey, 0),
       ...[10, 11].map((expiry) => insertOutbox(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', `notification-${expiry}`), expiry)),
       insertOutbox(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), 10, 'stripe_terminal'),
@@ -642,7 +665,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual((await repository.get(bulkExistingKey))?.data, { value: 'bulk-update' });
 
     for (let offset = 0; offset < 128; offset += 32) {
-      await env.COMMERCE_DB.batch([
+      await batchDocuments(env.COMMERCE_DB, [
         ...Array.from({ length: 32 }, (_, index) => insertDocument(
           env.COMMERCE_DB,
           commerceKeys.deliveryOrder('runtime', `paused-${offset + index}`),
@@ -662,7 +685,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       ]);
     }
     for (let offset = 0; offset < 128; offset += 32) {
-      await env.COMMERCE_DB.batch(Array.from({ length: 32 }, (_, index) =>
+      await batchDocuments(env.COMMERCE_DB, Array.from({ length: 32 }, (_, index) =>
         insertOutbox(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', `paused-${offset + index}`), 1_000)));
     }
     let observedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
@@ -729,8 +752,13 @@ test('commerce repository reads and transaction guards run through the real D1 r
       assert.deepEqual(observedBatchSizes, [3], firstAccess);
       if (firstAccess === 'mutation') await unit.update(checkoutKey, { startupProbe: true });
       else assert.equal((await unit.get(checkoutKey))?.key.path, checkoutKey.path);
-      assert.deepEqual(observedBatchSizes, [3, 2], firstAccess);
+      assert.deepEqual(observedBatchSizes, [3, 3], firstAccess);
+      const secondCheckoutKey = commerceKeys.stripeCheckout('runtime', 'cs_terminal');
+      if (firstAccess === 'mutation') await unit.update(secondCheckoutKey, { startupProbe: true });
+      else assert.equal((await unit.get(secondCheckoutKey))?.key.path, secondCheckoutKey.path);
+      assert.deepEqual(observedBatchSizes, [3, 3, 2], firstAccess);
       assert.equal(observedPreparedSql.filter((sql) => /FROM commerce_authority_control WHERE singleton = 1/.test(sql)).length, 1);
+      assert.equal(observedPreparedSql.filter((sql) => /^SELECT storage_mode FROM commerce_stripe_checkout_state_control/.test(sql)).length, 1);
       unit.rollback();
     }
 
@@ -830,7 +858,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.equal(emptyRecoveryRowsRead >= 0, true);
     assert.equal(emptyRecoveryRowsRead <= 4, true);
 
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'recovery-processing'), {
         owner: 'paused-owner',
         status: 'processing',
@@ -877,24 +905,24 @@ test('commerce repository reads and transaction guards run through the real D1 r
       const completedKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `completed-${offset + index}`));
       const otherKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `other-${offset + index}`));
       const ineligibleKeys = Array.from({ length: 50 }, (_, index) => commerceKeys.deliveryOrder('notification-load', `ineligible-${offset + index}`));
-      await env.COMMERCE_DB.batch([
+      await batchDocuments(env.COMMERCE_DB, [
         ...completedKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'ready_to_ship' })),
         ...otherKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: 'other-notification-owner', status: 'ready_to_ship' })),
         ...ineligibleKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'processing' })),
         env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
       ]);
-      await env.COMMERCE_DB.batch([...otherKeys, ...ineligibleKeys].map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
+      await batchDocuments(env.COMMERCE_DB, [...otherKeys, ...ineligibleKeys].map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
     }
     observedBatchResults = undefined;
     assert.deepEqual(await observedRepository.queryPendingReadyNotifications({ owner: notificationOwner, limit: 8 }), []);
     const emptyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(emptyNotificationRowsRead <= 4, true, `Empty notification lookup read ${emptyNotificationRowsRead} rows`);
     const activeNotificationKeys = ['active-1', 'active-2'].map((id) => commerceKeys.deliveryOrder('notification-load', id));
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       ...activeNotificationKeys.map((key) => insertDocument(env.COMMERCE_DB, key, { owner: notificationOwner, status: 'ready_to_ship' })),
       env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
     ]);
-    await env.COMMERCE_DB.batch(activeNotificationKeys.map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
+    await batchDocuments(env.COMMERCE_DB, activeNotificationKeys.map((key) => insertOutbox(env.COMMERCE_DB, key, 1_000)));
     observedBatchResults = undefined;
     observedPreparedSql.length = 0;
     assert.deepEqual((await observedRepository.queryPendingReadyNotifications({ owner: notificationOwner, limit: 1 }))
@@ -928,7 +956,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const indexedPaymentIntentId = 'pi_indexed';
     const indexedCheckoutKey = commerceKeys.stripeCheckout('stripe-indexes', indexedSessionId);
     const indexedDeliveryKey = commerceKeys.deliveryOrder('stripe-indexes', 'indexed');
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       insertDocument(env.COMMERCE_DB, indexedCheckoutKey, {
         stripePaymentIntentId: indexedPaymentIntentId,
       }),
@@ -939,7 +967,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       }),
     ]);
     for (let offset = 0; offset < 600; offset += 100) {
-      await env.COMMERCE_DB.batch(Array.from({ length: 100 }, (_, index) => {
+      await batchDocuments(env.COMMERCE_DB, Array.from({ length: 100 }, (_, index) => {
         const id = offset + index;
         return [
           insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('stripe-indexes', `cs_live_unrelated_${id}`), {
@@ -987,13 +1015,13 @@ test('commerce repository reads and transaction guards run through the real D1 r
 
     for (let offset = 0; offset < 1000; offset += 50) {
       const keys = Array.from({ length: 50 }, (_, index) => commerceKeys.stripeCheckout('stripe-due-load', `cs_inactive_${offset + index}`));
-      await env.COMMERCE_DB.batch([
+      await batchDocuments(env.COMMERCE_DB, [
         ...keys.map((key, index) => insertDocument(env.COMMERCE_DB, key, {
           status: index % 2 ? 'processing' : 'fulfillment_pending', manualRefundReviewRequired: true,
         })),
         env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
       ]);
-      await env.COMMERCE_DB.batch(keys.map((key) => insertOutbox(env.COMMERCE_DB, key, 0, 'stripe_terminal', 'manual_review')));
+      await batchDocuments(env.COMMERCE_DB, keys.map((key) => insertOutbox(env.COMMERCE_DB, key, 0, 'stripe_terminal', 'manual_review')));
     }
     const suspendedKey = commerceKeys.stripeCheckout('stripe-due-load', 'cs_inactive_0');
     const suspendedOutbox = await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal');
@@ -1009,20 +1037,20 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const stripeDueKeys = ['cs_due_a', 'cs_due_b', 'cs_due_earlier', 'cs_due_future']
       .map((id) => commerceKeys.stripeCheckout('stripe-due-load', id));
     const stripeDueTimes = [2, 2, 1, 6];
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       ...stripeDueKeys.map((key) => insertDocument(env.COMMERCE_DB, key, {
         status: 'fulfillment_failed', manualRefundReviewRequired: true,
       })),
       env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
     ]);
-    await env.COMMERCE_DB.batch(stripeDueKeys.map((key, index) =>
+    await batchDocuments(env.COMMERCE_DB, stripeDueKeys.map((key, index) =>
       insertOutbox(env.COMMERCE_DB, key, stripeDueTimes[index], 'stripe_terminal', 'manual_review')));
     observedBatchResults = undefined;
     observedPreparedSql.length = 0;
     assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 2)).map((record) => record.key.path),
       [stripeDueKeys[2].path, stripeDueKeys[0].path]);
     const matchedStripeDueRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
-    assert.ok(Number.isSafeInteger(matchedStripeDueRowsRead) && matchedStripeDueRowsRead <= 12,
+    assert.ok(Number.isSafeInteger(matchedStripeDueRowsRead) && matchedStripeDueRowsRead <= 16,
       `Matching Stripe notification query read ${matchedStripeDueRowsRead} rows`);
     const stripeDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_stripe_due_at'));
     assert.ok(stripeDueSql);
@@ -1047,7 +1075,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     await pausedWriteUnit.get(claimKey);
     const claimBeforePause = await repository.get(claimKey);
 
-    await env.COMMERCE_DB.batch([
+    await batchDocuments(env.COMMERCE_DB, [
       env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
         singleton, lease_token, acquired_at_ms, expires_at_ms
       ) VALUES (
