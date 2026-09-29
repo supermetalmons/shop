@@ -85,6 +85,32 @@ test('checkout state-only writes preserve frozen JSON and bump the parent withou
   assert.equal((await repository.get(key))?.data.status, 'fulfilled');
 });
 
+test('checkout updates persist timestamp projections even when the metadata JSON is unchanged', async (context) => {
+  for (const clear of [false, true]) {
+    const writes: string[] = [];
+    const harness = createCommerceD1Harness({
+      observeStatement: ({ method, sql }) => { if (method === 'run') writes.push(sql); },
+    });
+    context.after(() => harness.database.close());
+    seedCommerceDocument(harness, { key,
+      data: { status: 'created', ...(clear ? {} : { processedAt: 1000 }) },
+      processedAt: { seconds: 1, nanos: 1 },
+    });
+    const repository = new D1CommerceRepository(harness.db);
+    const before = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(key.path)!.document_json;
+    await repository.run(Date.now(), (unit) => unit.update(key, {
+      processedAt: clear ? commerceFieldValue.delete() : commerceFieldValue.timestamp(1, 2),
+    }));
+    const current = (await repository.get(key))!;
+    assert.deepEqual(current.processedAt, clear ? null : { seconds: 1, nanos: 2 });
+    assert.equal(current.version, 2);
+    assert.equal(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(key.path)!.document_json, before);
+    const parentWrites = writes.filter((sql) => /(?:INSERT INTO|UPDATE) commerce_documents\b/.test(sql));
+    assert.equal(parentWrites.length, 1);
+    assert.doesNotMatch(parentWrites[0], /document_json/);
+  }
+});
+
 test('checkout state shares optimistic conflicts and commits terminal outbox rows atomically', async () => {
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, { key, data: { status: 'fulfillment_pending', updatedAt: 100 } });

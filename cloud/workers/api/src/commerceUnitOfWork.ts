@@ -340,8 +340,10 @@ export class CommerceUnitOfWork {
       }
       const original = this.original.get(path);
       if (document.key.kind === 'stripe_checkout' && original && document.rawData === original.rawData) {
-        statements.push(this.db.prepare(`UPDATE commerce_documents SET version = ?, update_time = ?
-          WHERE document_path = ?`).bind(document.version, document.updateTime, path));
+        statements.push(this.db.prepare(`UPDATE commerce_documents SET version = ?, update_time = ?,
+          processed_at_seconds = ?, processed_at_nanos = ? WHERE document_path = ?`).bind(
+          document.version, document.updateTime, document.processedAt?.seconds ?? null,
+          document.processedAt?.nanos ?? null, path));
       } else {
         statements.push(this.db.prepare(`INSERT INTO commerce_documents (
         document_path, document_kind, drop_id, document_id, document_json,

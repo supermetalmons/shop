@@ -2,6 +2,7 @@ import { isCommerceDocumentSegment } from './commerceDocumentPath.ts';
 
 export const DELIVERY_RECOVERY_PAGE_SIZE = 8;
 export const DELIVERY_RECOVERY_CURSOR_MAX_LENGTH = 1024;
+export const DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH = 256;
 export const DELIVERY_RECOVERY_PHASES = ['processing', 'prepared', 'ready'] as const;
 
 export type DeliveryRecoveryPhase = typeof DELIVERY_RECOVERY_PHASES[number];
@@ -24,7 +25,7 @@ function isDeliveryRecoveryCursor(value: unknown): value is DeliveryRecoveryCurs
     cursor.version === 1 && typeof cursor.owner === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(cursor.owner) &&
     (cursor.dropId === null || (typeof cursor.dropId === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(cursor.dropId))) &&
     typeof cursor.force === 'boolean' && DELIVERY_RECOVERY_PHASES.some((phase) => cursor.phase === phase) &&
-    typeof cursor.path === 'string' && cursor.path.length <= 512 && parts.length === 4 &&
+    typeof cursor.path === 'string' && cursor.path.length <= DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH && parts.length === 4 &&
     parts[0] === 'drops' && parts[2] === 'deliveryOrders' &&
     isCommerceDocumentSegment(parts[1]) && isCommerceDocumentSegment(parts[3]) &&
     (cursor.dropId === null || parts[1] === cursor.dropId);

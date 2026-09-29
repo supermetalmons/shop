@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DELIVERY_RECOVERY_CURSOR_MAX_LENGTH,
+  DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH,
   decodeDeliveryRecoveryCursor,
   encodeDeliveryRecoveryCursor,
   type DeliveryRecoveryCursor,
@@ -35,6 +37,26 @@ test('recovery cursors round trip strict wallet, drop, force and immutable phase
     btoa(JSON.stringify({ ...cursor, owner: 'not-a-wallet' })),
     btoa(JSON.stringify({ ...cursor, path: 'drops/other/deliveryOrders/42' })),
   ]) assert.equal(decodeDeliveryRecoveryCursor(value), null);
+});
+
+test('recovery cursor path bounds cover valid delivery ids and worst-case ASCII escaping', () => {
+  const owner = '1'.repeat(44);
+  const dropId = 'd'.repeat(64);
+  const valid = { ...cursor, owner, dropId, path: `drops/${dropId}/deliveryOrders/${Number.MAX_SAFE_INTEGER}` };
+  assert.deepEqual(decodeDeliveryRecoveryCursor(encodeDeliveryRecoveryCursor(valid)), valid);
+  for (const scope of [null, dropId]) {
+    const prefix = `drops/${scope ?? 'd'}/deliveryOrders/`;
+    for (const escaped of ['"', '\\']) {
+      const path = prefix + escaped.repeat(DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH - prefix.length);
+      const boundary = { ...cursor, owner, dropId: scope, path };
+      const encoded = encodeDeliveryRecoveryCursor(boundary);
+      assert.ok(encoded.length <= DELIVERY_RECOVERY_CURSOR_MAX_LENGTH);
+      assert.deepEqual(decodeDeliveryRecoveryCursor(encoded), boundary);
+      assert.throws(() => encodeDeliveryRecoveryCursor({ ...boundary, path: `${path}x` }), /Invalid delivery recovery cursor/);
+      assert.equal(decodeDeliveryRecoveryCursor(btoa(JSON.stringify({ ...boundary, path: `${path}x` }))
+        .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')), null);
+    }
+  }
 });
 
 test('recovery response decoding preserves legacy shape and validates optional continuation', () => {

@@ -6,6 +6,7 @@ import type { NotificationOutboxFamily } from '../../../../shared/notificationOu
 import type { FulfillmentManualReviewCursor } from '../../../../shared/contracts.js';
 import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.js';
 import { stripeCheckoutStateSelectColumns } from './stripeCheckoutStateStore.js';
+import { DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH } from '../../../../shared/deliveryRecoveryPagination.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -263,13 +264,14 @@ export type DeliveryRecoveryPageQuery = Readonly<{
 }>;
 
 export function deliveryRecoveryPageQuery(args: DeliveryRecoveryPageQuery): CommerceSqlQuery {
-  if (args.phase === 'ready') return pendingReadyNotificationsQuery(args);
+  if (args.phase === 'ready') return pendingReadyNotificationsQuery(args, true);
   return {
     sql: `SELECT ${qualifiedDocumentColumns('document')}
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
       WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
         AND document.document_kind = 'delivery_order' AND document.owner = ? AND document.status = ?
+        AND length(CAST(document.document_path AS BLOB)) <= ${DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH}
         ${args.dropId === undefined ? '' : 'AND document.drop_id = ? AND document.document_path >= ? AND document.document_path < ?'}
         ${args.startAfterPath === undefined ? '' : 'AND document.document_path > ?'}
       ORDER BY document.document_path ASC LIMIT ?`,
@@ -301,7 +303,7 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
   owner?: string;
   dropId?: string;
   startAfterPath?: string;
-}>): CommerceSqlQuery {
+}>, recoveryPage = false): CommerceSqlQuery {
   const ownerPredicate = args.owner === undefined ? '' : ' AND pending.owner = ? AND document.owner = pending.owner';
   const orderedPath = args.owner === undefined ? 'outbox.parent_path' : 'pending.parent_path';
   const cursorPredicate = args.startAfterPath === undefined ? '' : ` AND ${orderedPath} > ?`;
@@ -321,6 +323,7 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
     CROSS JOIN commerce_documents AS document`}
     WHERE outbox.parent_path = document.document_path
       AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
+      ${recoveryPage ? `AND length(CAST(document.document_path AS BLOB)) <= ${DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH}` : ''}
       AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}${args.dropId === undefined ? '' : ` AND document.drop_id = ? AND ${orderedPath} >= ? AND ${orderedPath} < ?`}
     ORDER BY ${orderedPath} ASC
     LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,

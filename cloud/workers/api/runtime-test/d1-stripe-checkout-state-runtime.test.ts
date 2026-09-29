@@ -114,6 +114,15 @@ test('real D1 expands checkout storage without disrupting legacy writes, then ac
     assert.equal((await repository.get(key))!.version, 4);
     await assert.rejects(db.prepare("UPDATE commerce_documents SET document_json = json_set(document_json, '$.status', 'processing'), version = version + 1 WHERE document_path = ?").bind(key.path).run(), /stripe checkout state is unavailable/);
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_commit_guards').first<{ count: number }>())!.count, 0);
+    const projectionKey = commerceKeys.stripeCheckout('drop', 'cs_projection');
+    await repository.run(Date.now(), (unit) => unit.create(projectionKey, {
+      status: 'created', processedAt: commerceFieldValue.timestamp(1, 1),
+    }));
+    await repository.run(Date.now(), (unit) => unit.update(projectionKey, {
+      processedAt: commerceFieldValue.timestamp(1, 2),
+    }));
+    assert.deepEqual((await repository.get(projectionKey))!.processedAt, { seconds: 1, nanos: 2 });
+    await repository.run(Date.now(), (unit) => unit.delete(projectionKey));
     await db.batch([lease(db),
       db.prepare(`UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
         paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1`),

@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { parseStripeCheckoutStateControlArgs, runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
-import { parseCommerceD1DocumentRow, parseCurrentCommerceD1DocumentRows } from '../scripts/shared/commerceD1Maintenance.ts';
+import { parseCommerceD1DocumentRow, queryRemoteCommerceDocuments } from '../scripts/shared/commerceD1Maintenance.ts';
 import { planStripeCheckoutStateBackfill } from '../scripts/shared/stripeCheckoutStateMaintenance.ts';
 import { parseStripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
 
@@ -65,12 +65,12 @@ test('maintenance reads support populated pre-cutover schemas and reject partial
   const previous = database(context, false);
   insert(previous, 'cs_old');
   const queryPrevious = query(previous);
-  assert.equal(parseCurrentCommerceD1DocumentRows(queryPrevious('SELECT * FROM commerce_documents'), queryPrevious)[0].data.status, 'processing');
+  assert.equal(queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', queryPrevious)[0].data.status, 'processing');
   const current = database(context);
   insert(current, 'cs_new');
   const queryCurrent = query(current);
   current.exec('DROP TABLE commerce_stripe_checkout_state_control');
-  assert.throws(() => parseCurrentCommerceD1DocumentRows(queryCurrent('SELECT * FROM commerce_documents'), queryCurrent), /schema is incomplete/);
+  assert.throws(() => queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', queryCurrent), /schema is incomplete/);
 });
 
 test('checkout preparation preserves fields and document versions and activation is one-way', async (context) => {
@@ -150,20 +150,83 @@ test('active maintenance reads hydrate table state and never reimport frozen leg
   insert(db, 'cs_1');
   const normal = query(db);
   const source = normal('SELECT * FROM commerce_documents');
-  assert.equal(parseCurrentCommerceD1DocumentRows(source, normal)[0].data.status, 'processing');
+  assert.equal(queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal)[0].data.status, 'processing');
   pause(db);
   await execute(db, 'prepare');
   await execute(db, 'activate');
   db.exec("DROP TRIGGER commerce_stripe_checkout_state_update_guard; UPDATE commerce_stripe_checkout_state SET status = 'fulfilled', updated_at_ms = 3000");
-  const hydrated = parseCurrentCommerceD1DocumentRows(source, normal)[0];
+  const hydrated = queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal)[0];
   assert.equal(hydrated.data.status, 'fulfilled');
   assert.equal(hydrated.data.updatedAt, 3000);
   assert.equal(parseCommerceD1DocumentRow(source[0]).data.status, 'processing');
   await execute(db, 'prepare');
   assert.equal(normal('SELECT status FROM commerce_stripe_checkout_state')[0].status, 'fulfilled');
   db.exec('UPDATE commerce_stripe_checkout_state SET document_version = 2');
-  assert.throws(() => parseCurrentCommerceD1DocumentRows(source, normal), /missing or stale/);
+  assert.throws(() => queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal), /missing or stale/);
   await assert.rejects(execute(db, 'prepare'), /differs from source/);
+});
+
+test('maintenance reads keep metadata, parent versions, and state together across a concurrent checkout update', async (context) => {
+  const db = database(context);
+  insert(db, 'cs_1', { snapshotLabel: 'original' });
+  pause(db);
+  await execute(db, 'prepare');
+  await execute(db, 'activate');
+  resume(db);
+  const normal = query(db);
+  const sql = "SELECT * FROM commerce_documents WHERE document_id = 'cs_1'";
+  let updated = false;
+  const documents = queryRemoteCommerceDocuments(sql, (statement) => {
+    const rows = normal(statement);
+    if (statement === sql) {
+      assert.equal(rows[0].version, 1);
+      db.exec(`BEGIN;
+        INSERT INTO commerce_commit_guards (guard_id, expectations_json, created_at_ms, stripe_checkout_paths_json)
+          VALUES ('snapshot-update', '[{"path":"drops/drop/stripeCheckouts/cs_1","version":1}]', 2000,
+            '["drops/drop/stripeCheckouts/cs_1"]');
+        UPDATE commerce_documents SET document_json = json_set(document_json, '$.snapshotLabel', 'updated'),
+          version = 2, update_time = '2026-09-01T00:00:01.000Z' WHERE document_id = 'cs_1';
+        UPDATE commerce_stripe_checkout_state SET document_version = 2, status = 'fulfilled', updated_at_ms = 2000
+          WHERE document_path = 'drops/drop/stripeCheckouts/cs_1';
+        UPDATE commerce_authority_control SET documents_revision = documents_revision + 1;
+        DELETE FROM commerce_commit_guards WHERE guard_id = 'snapshot-update';
+        COMMIT;`);
+      updated = true;
+    }
+    return rows;
+  });
+  assert.equal(updated, true);
+  assert.equal(documents.length, 1);
+  assert.equal(documents[0].version, 2);
+  assert.equal(documents[0].data.snapshotLabel, 'updated');
+  assert.equal(documents[0].data.status, 'fulfilled');
+  assert.equal(documents[0].data.updatedAt, 2000);
+});
+
+test('checkout snapshot hydration preserves query filtering, ordering, and limits', async (context) => {
+  const db = database(context);
+  for (const id of ['cs_1', 'cs_2', 'cs_3']) insert(db, id);
+  pause(db);
+  await execute(db, 'prepare');
+  await execute(db, 'activate');
+  const selected = queryRemoteCommerceDocuments(`SELECT * FROM commerce_documents
+    WHERE document_id <> 'cs_2' ORDER BY document_id DESC LIMIT 1;`, query(db));
+  assert.deepEqual(selected.map((document) => document.documentId), ['cs_3']);
+});
+
+test('noncheckout maintenance reads keep their original snapshot without querying checkout storage', (context) => {
+  const db = database(context);
+  db.exec(`INSERT INTO commerce_documents (document_path, document_kind, drop_id, document_id,
+    document_json, version, create_time, update_time) VALUES (
+      'claimCodes/CODE', 'claim_code', NULL, 'CODE', '{"status":"unused"}', 1,
+      '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`);
+  const normal = query(db);
+  const sql = "SELECT * FROM commerce_documents WHERE document_kind = 'claim_code'";
+  const documents = queryRemoteCommerceDocuments(sql, (statement) => {
+    assert.equal(statement, sql);
+    return normal(statement);
+  });
+  assert.equal(documents[0].data.status, 'unused');
 });
 
 test('checkout state maintenance refuses missing pause, stale authority, and unfinished wipes', async (context) => {
