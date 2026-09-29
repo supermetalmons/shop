@@ -12,11 +12,12 @@ import { applyProfileCors, handleProfileCorsPreflight, loadProfileEmail } from '
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { readBoundedResponseJson, type ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { D1CommerceRepository, commerceKeys, type CommerceDocumentRecord } from '../src/commerceRepository.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import type { ShipmentHistoryPage } from '../../../../shared/shipmentHistory.ts';
 import { STRIPE_CHECKOUT_OPERATION_HEADER, STRIPE_CHECKOUT_RETRY_HEADER } from '../../../../shared/contracts.ts';
 import {
-  OWNER, OTHER, UID, NOW_MS, tokenRequest, stringValue, orderDocument,
-  profileDependencies, legacyFirestoreProfileDependencies, d1ProfileDependencies,
+  OWNER, OTHER, UID, NOW_MS, tokenRequest, stringValue, shipmentPage,
+  profileDependencies, fixtureProfileDependencies, d1ProfileDependencies,
 } from './readTestFixtures.ts';
 
 function readBoundedJson(response: Response, maxBytes: number, signal: AbortSignal): Promise<unknown> {
@@ -217,13 +218,13 @@ test('profile wallet binding distinguishes cancellation from an earlier D1 failu
   );
 });
 
-test('legacy Firestore fixtures preserve shipment and anonymous history query compatibility', async () => {
+test('shipment read fixtures use paged summaries for wallet and anonymous history', async () => {
   const queries: Record<string, unknown>[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith('/documents:runQuery')) {
+    if (url.pathname.endsWith('/shipment-history')) {
       queries.push(JSON.parse(String(init?.body)));
-      return Response.json([{ document: orderDocument() }]);
+      return Response.json(shipmentPage(7));
     }
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
@@ -232,11 +233,12 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     {},
-    legacyFirestoreProfileDependencies(providerFetch),
+    fixtureProfileDependencies(providerFetch),
   );
   assert.equal(shipments.response.status, 200);
   assert.deepEqual(await shipments.response.json(), {
     responseMode: 'shipments',
+    nextCursor: null,
     wallet: OWNER,
     orders: [{
       dropId: 'card_nft_2',
@@ -252,10 +254,11 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
     { COMMERCE_DB: createCommerceD1() },
     ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
     {},
-    legacyFirestoreProfileDependencies(providerFetch),
+    fixtureProfileDependencies(providerFetch),
   );
   assert.equal(anonymous.response.status, 200);
   assert.deepEqual(await anonymous.response.json(), {
+    nextCursor: null,
     orders: [{
       dropId: 'card_nft_2',
       deliveryId: 7,
@@ -266,8 +269,8 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
     }],
   });
   assert.deepEqual(queries, [
-    { operation: 'queryDeliveryHistory', owners: [OWNER] },
-    { operation: 'queryDeliveryHistory', owners: [`anonymous:${UID}`] },
+    { operation: 'queryShipmentHistoryPage', owner: OWNER, limit: 50 },
+    { operation: 'queryShipmentHistoryPage', owner: `anonymous:${UID}`, limit: 50 },
   ]);
 });
 
@@ -277,7 +280,7 @@ test('profile state derives identity server-side and returns independently bound
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async (input) => {
+    fixtureProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) {
         return Response.json({
@@ -287,11 +290,8 @@ test('profile state derives identity server-side and returns independently bound
           },
         });
       }
-      if (url.endsWith('/documents:runQuery')) {
-        return Response.json([
-          { document: orderDocument(OWNER, 8) },
-          { document: orderDocument(OWNER, 7) },
-        ]);
+      if (url.endsWith('/shipment-history')) {
+        return Response.json(shipmentPage(8, 7));
       }
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, { loadProfileEmail: async () => 'owner@example.com' }),
@@ -299,6 +299,7 @@ test('profile state derives identity server-side and returns independently bound
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
     responseMode: 'profile-state',
+    nextCursor: null,
     sessionWallet: OWNER,
     profile: {
       status: 'ready',
@@ -333,7 +334,7 @@ test('profile state uses D1 wallet sessions without requesting Commerce authSess
   const providerFetch: typeof fetch = async (input) => {
     const url = String(input);
     assert.equal(url.includes('/authSessions/'), false);
-    if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
+    if (url.endsWith('/shipment-history')) return Response.json(shipmentPage(7));
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileReadRequest(
@@ -344,7 +345,7 @@ test('profile state uses D1 wallet sessions without requesting Commerce authSess
     },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(providerFetch, {
+    fixtureProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     }),
   );
@@ -358,10 +359,10 @@ test('staff profile state uses the wallet principal without a Auth session row',
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async (input) => {
+    fixtureProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
-      if (url.endsWith('/documents:runQuery')) return Response.json([]);
+      if (url.endsWith('/shipment-history')) return Response.json(shipmentPage());
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1AuthWalletBinding: async () => assert.fail('staff identity reached Auth wallet-session resolution'),
@@ -371,6 +372,7 @@ test('staff profile state uses the wallet principal without a Auth session row',
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
     responseMode: 'profile-state',
+    nextCursor: null,
     sessionWallet: OWNER,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: { status: 'ready', value: [] },
@@ -383,12 +385,13 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => assert.fail('missing session reached Commerce'), {
+    fixtureProfileDependencies(async () => assert.fail('missing session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
     }),
   );
   assert.deepEqual(await missing.response.json(), {
     responseMode: 'profile-state',
+    nextCursor: null,
     sessionWallet: null,
     profile: null,
     shipments: null,
@@ -400,10 +403,10 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     PROFILE_STATE_PATH,
     {},
     {
-      ...legacyFirestoreProfileDependencies(async (input) => {
+      ...fixtureProfileDependencies(async (input) => {
         const url = String(input);
         if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
-        if (url.endsWith('/documents:runQuery')) return Response.json([]);
+        if (url.endsWith('/shipment-history')) return Response.json(shipmentPage());
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
       resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
@@ -412,6 +415,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
   );
   assert.deepEqual(await legacy.response.json(), {
     responseMode: 'profile-state',
+    nextCursor: null,
     sessionWallet: OWNER,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: { status: 'ready', value: [] },
@@ -424,10 +428,10 @@ test('profile state reports section failures without discarding successful data'
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async (input) => {
+    fixtureProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
-      if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
+      if (url.endsWith('/shipment-history')) return Response.json(shipmentPage(7));
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => {
@@ -456,9 +460,8 @@ test('profile state preserves an earlier unavailable section when its sibling ti
     profileDependencies(
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
-        queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
         queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
-        queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
+        queryShipmentHistoryPage: async () => new Promise<ShipmentHistoryPage>(() => undefined),
       }),
       {
         loadProfileEmail: async () => {
@@ -491,11 +494,10 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       profileDependencies(
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
-        queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
-        queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
-          queryDeliveryHistory: async () => mode === 'stalled'
-            ? new Promise<CommerceDocumentRecord[]>(() => undefined)
-            : new Promise<CommerceDocumentRecord[]>((resolve) => setTimeout(() => resolve([]), 20)),
+          queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
+          queryShipmentHistoryPage: async () => mode === 'stalled'
+            ? new Promise<ShipmentHistoryPage>(() => undefined)
+            : new Promise<ShipmentHistoryPage>((resolve) => setTimeout(() => resolve(shipmentPage()), 20)),
         }),
         { timeoutMs: 5 },
       ),
@@ -542,9 +544,8 @@ test('profile state preserves independently completed sections when D1 ignores t
     profileDependencies(
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
-        queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
         queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
-        queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
+        queryShipmentHistoryPage: async () => new Promise<ShipmentHistoryPage>(() => undefined),
       }),
       {
         loadProfileEmail: profileStalls
@@ -593,7 +594,7 @@ test('profile state rethrows client cancellation and retains server-timeout sect
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => Response.json([]), {
+    fixtureProfileDependencies(async () => Response.json(shipmentPage()), {
       loadProfileEmail: async ({ signal }) => {
         markStarted();
         return new Promise<string | undefined>((_resolve, reject) => {
@@ -613,7 +614,7 @@ test('profile state rethrows client cancellation and retains server-timeout sect
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => Response.json([]), {
+    fixtureProfileDependencies(async () => Response.json(shipmentPage()), {
       loadProfileEmail: async ({ signal }) => new Promise<string | undefined>((_resolve, reject) => {
         const onAbort = () => reject(signal.reason);
         signal.addEventListener('abort', onAbort, { once: true });
@@ -639,7 +640,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
+    fixtureProfileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => { throw new Error('invalid D1 session'); },
     }),
   );
@@ -650,7 +651,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider')),
+    fixtureProfileDependencies(async () => assert.fail('invalid request reached provider')),
   );
   assert.equal(invalidBody.response.status, 400);
 });
@@ -659,14 +660,14 @@ test('shipment route rejects mismatched sessions and malformed requests before s
   let queries = 0;
   const providerFetch: typeof fetch = async () => {
     queries += 1;
-    return Response.json([]);
+    return Response.json(shipmentPage());
   };
   const mismatch = await handleProfileReadRequest(
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     {},
-    legacyFirestoreProfileDependencies(providerFetch, {
+    fixtureProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
     }),
   );
@@ -683,7 +684,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
       {},
-      legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider'), {
+      fixtureProfileDependencies(async () => assert.fail('invalid request reached provider'), {
         verifyIdentity: async () => assert.fail('invalid request reached authentication'),
         nowMs: () => assert.fail('invalid request read the authentication clock'),
       }),
@@ -701,17 +702,17 @@ test('shipment route preserves legacy wallet-shaped Auth UIDs when no session do
     PROFILE_SHIPMENTS_PATH,
     {},
     {
-      ...legacyFirestoreProfileDependencies(async (_input, init) => {
-        const query = JSON.parse(String(init?.body)) as { operation: string; owners: string[] };
-        assert.equal(query.operation, 'queryDeliveryHistory');
-        owners.push(...query.owners);
-        return Response.json([]);
+      ...fixtureProfileDependencies(async (_input, init) => {
+        const query = JSON.parse(String(init?.body)) as { operation: string; owner: string };
+        assert.equal(query.operation, 'queryShipmentHistoryPage');
+        owners.push(query.owner);
+        return Response.json(shipmentPage());
       }),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: OWNER }),
     },
   );
   assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), { responseMode: 'shipments', wallet: OWNER, orders: [] });
+  assert.deepEqual(await result.response.json(), { responseMode: 'shipments', wallet: OWNER, orders: [], nextCursor: null });
   assert.deepEqual(owners, [OWNER]);
 });
 
@@ -835,9 +836,9 @@ test('commerce authority failures fail closed without a provider fallback', asyn
     },
     PROFILE_SHIPMENTS_PATH,
     {},
-    legacyFirestoreProfileDependencies(async () => {
+    fixtureProfileDependencies(async () => {
       providerCalls += 1;
-      return Response.json([{ document: orderDocument() }]);
+      return Response.json(shipmentPage(7));
     }, { createCommerceRepository: (database) => new D1CommerceRepository(database) }),
   );
   assert.equal(result.response.status, 503);

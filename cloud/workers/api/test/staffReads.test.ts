@@ -15,8 +15,8 @@ import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/s
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import {
   OWNER, ADMIN, OTHER, SYSTEM_OWNER, UID, NOW_MS, tokenRequest, stringValue, integerValue,
-  base64UrlJson, orderDocument, manualReviewDocument, staffDependencies,
-  legacyFirestoreStaffDependencies, d1StaffDependencies,
+  base64UrlJson, shipmentPage, manualReviewDocument, staffDependencies,
+  fixtureStaffDependencies, d1StaffDependencies,
 } from './readTestFixtures.ts';
 
 test('all staff reads reject anonymous identities before accessing data', async () => {
@@ -164,7 +164,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     {},
-    legacyFirestoreStaffDependencies(async () => Response.json([]), {
+    fixtureStaffDependencies(async () => Response.json(shipmentPage()), {
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
   );
@@ -175,7 +175,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     {},
-    legacyFirestoreStaffDependencies(async () => {
+    fixtureStaffDependencies(async () => {
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => 'owner@example.com',
@@ -190,10 +190,10 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (input) => {
+    fixtureStaffDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
-      if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
+      if (url.endsWith('/shipment-history')) return Response.json(shipmentPage(7));
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => 'owner@example.com',
@@ -202,6 +202,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
   );
   assert.equal(accepted.response.status, 200);
   assert.deepEqual(await accepted.response.json(), {
+    nextCursor: null,
     profile: {
       wallet: OWNER,
       email: 'owner@example.com',
@@ -221,26 +222,26 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (input) => {
+    fixtureStaffDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
-      if (url.endsWith('/documents:runQuery')) return Response.json([]);
+      if (url.endsWith('/shipment-history')) return Response.json(shipmentPage());
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(missingProfile.response.status, 200);
-  assert.deepEqual(await missingProfile.response.json(), { profile: { wallet: OWNER, orders: [] } });
+  assert.deepEqual(await missingProfile.response.json(), { profile: { wallet: OWNER, orders: [] }, nextCursor: null });
 
   const unavailableProfile = await handleStaffReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (input) => {
+    fixtureStaffDependencies(async (input) => {
       const url = String(input);
-      if (url.endsWith('/documents:runQuery')) return Response.json([]);
+      if (url.endsWith('/shipment-history')) return Response.json(shipmentPage());
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => {
@@ -266,7 +267,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (_input, init) => {
+    fixtureStaffDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as { operation: string };
       assert.equal(query.operation, 'queryDeliveryOrderOwners');
       return Response.json([
@@ -284,7 +285,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     env,
     FULFILLMENT_ORDERS_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (_input, init) => {
+    fixtureStaffDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as { operation: string; limit: number };
       assert.equal(query.operation, 'queryFulfillmentOrders');
       assert.equal(query.limit, 3);
@@ -324,7 +325,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
     {},
-    legacyFirestoreStaffDependencies(async (input, init) => {
+    fixtureStaffDependencies(async (input, init) => {
       const url = String(input);
       if (url.includes('api.stripe.com')) {
         assert.equal(new Headers(init?.headers).get('stripe-version'), '2026-07-29.dahlia');
@@ -423,7 +424,6 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
     () => ({
       notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
       queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
-      queryDeliveryHistory: async () => [],
       queryFulfillmentOrders: async () => [],
       queryManualReviewCheckouts: async () => [],
       queryDeliveryOrderOwners: async ({ limit }) => {
@@ -558,7 +558,7 @@ test('manual review rethrows client cancellation and retains server-timeout Stri
   const dependencies = (
     stripeStarted: () => void,
     timeoutMs: number,
-  ): Parameters<typeof handleStaffReadRequest>[4] => legacyFirestoreStaffDependencies(
+  ): Parameters<typeof handleStaffReadRequest>[4] => fixtureStaffDependencies(
     async (input) => {
       if (String(input).includes('api.stripe.com')) {
         stripeStarted();

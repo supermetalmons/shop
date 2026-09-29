@@ -1,15 +1,12 @@
 import {
   DEFAULT_SHIPMENT_PAGE_LIMIT, MAX_SHIPMENT_PAGE_LIMIT, isShipmentHistoryCursor,
-  type ShipmentPageRequest, type ShipmentHistoryCursor,
+  type ShipmentPageRequest, type ShipmentHistoryPage,
 } from '../../../../shared/shipmentHistory.js';
 import {
   STRIPE_CHECKOUT_OPERATION_HEADER, STRIPE_CHECKOUT_RETRY_HEADER,
-  type DeliveryOrderSummary,
 } from '../../../../shared/contracts.js';
-import { deliveryOrderSummarySortAt } from '../../../../shared/deliveryOrderSummary.js';
 import { STRIPE_RECEIPT_CLAIM_REQUEST_HEADER } from '../../../../shared/stripeReceiptClaimWorkflow.js';
-import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
-import type { D1CommerceRepository, CommerceDocumentRecord } from './commerceRepository.js';
+import type { D1CommerceRepository } from './commerceRepository.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
   isRequestCancellationError, isSignalCancellationError, readBoundedRequestJson,
@@ -124,8 +121,8 @@ export async function readProfileRequestBody(
   return parsed;
 }
 
-export function parseShipmentsPage(parsed: Record<string, unknown>): ShipmentPageRequest | undefined {
-  if (!Object.hasOwn(parsed, 'shipmentsPage')) return undefined;
+export function parseShipmentsPage(parsed: Record<string, unknown>): ShipmentPageRequest {
+  if (!Object.hasOwn(parsed, 'shipmentsPage')) return { limit: DEFAULT_SHIPMENT_PAGE_LIMIT };
   const page = parsed.shipmentsPage;
   if (!isRecord(page) || !exactKeys(page, ['limit', 'cursor']) ||
     (page.limit !== undefined && (!Number.isInteger(page.limit) || Number(page.limit) < 1 || Number(page.limit) > MAX_SHIPMENT_PAGE_LIMIT)) ||
@@ -135,30 +132,11 @@ export function parseShipmentsPage(parsed: Record<string, unknown>): ShipmentPag
   return { limit: Number(page.limit ?? DEFAULT_SHIPMENT_PAGE_LIMIT), cursor: page.cursor };
 }
 
-function deliveryHistoryFromDocuments(documents: readonly CommerceDocumentRecord[]): DeliveryOrderSummary[] {
-  const orders = documents
-    .map(deliveryOrderSummaryFromDocument)
-    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
-  orders.sort((left, right) => deliveryOrderSummarySortAt(right) - deliveryOrderSummarySortAt(left));
-  return orders;
-}
-
-async function loadDeliveryHistory(args: {
-  owners: readonly string[];
-  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory'>;
-}): Promise<DeliveryOrderSummary[]> {
-  const documents = await args.repository.queryDeliveryHistory({ owners: args.owners });
-  return deliveryHistoryFromDocuments(documents);
-}
-
-type ShipmentReadResult = { orders: DeliveryOrderSummary[]; nextCursor?: ShipmentHistoryCursor | null };
-
 export async function loadShipments(args: {
   owner: string;
-  shipmentsPage?: ShipmentPageRequest;
-  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory' | 'queryShipmentHistoryPage'>;
-}): Promise<ShipmentReadResult> {
-  if (!args.shipmentsPage) return { orders: await loadDeliveryHistory({ ...args, owners: [args.owner] }) };
+  shipmentsPage: ShipmentPageRequest;
+  repository: Pick<D1CommerceRepository, 'queryShipmentHistoryPage'>;
+}): Promise<ShipmentHistoryPage> {
   if (args.shipmentsPage.cursor && !isShipmentHistoryCursor(args.shipmentsPage.cursor, args.owner)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment cursor owner.');
   }

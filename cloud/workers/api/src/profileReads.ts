@@ -50,7 +50,7 @@ type ProfileReadResult = ReadRequestResult & {
 
 type ProfileReadDependencies = ReadRequestDependencies & {
   createCommerceRepository: (db: D1Database) => Pick<D1CommerceRepository,
-    'queryDeliveryHistory' | 'queryShipmentHistoryPage' | 'queryShipmentPresence'>;
+    'queryShipmentHistoryPage' | 'queryShipmentPresence'>;
   resolveD1AuthWalletBinding: (
     db: D1Database | undefined,
     uid: string,
@@ -75,9 +75,9 @@ const defaultDependencies: ProfileReadDependencies = {
 
 type ParsedProfileReadRequest =
   | { path: typeof SHIPMENT_PRESENCE_PATH; presence: ShipmentPresenceRequest }
-  | { path: typeof PROFILE_STATE_PATH; shipmentsPage?: ShipmentPageRequest }
-  | { path: typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH; shipmentsPage?: ShipmentPageRequest }
-  | { path: typeof PROFILE_SHIPMENTS_PATH; ownerWallet: string; shipmentsPage?: ShipmentPageRequest };
+  | { path: typeof PROFILE_STATE_PATH; shipmentsPage: ShipmentPageRequest }
+  | { path: typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH; shipmentsPage: ShipmentPageRequest }
+  | { path: typeof PROFILE_SHIPMENTS_PATH; ownerWallet: string; shipmentsPage: ShipmentPageRequest };
 
 function isShipmentDeliveryReference(value: unknown): value is ShipmentDeliveryReference {
   return isRecord(value) && exactKeys(value, ['dropId', 'deliveryId']) &&
@@ -115,12 +115,12 @@ async function parseExactRequestBody(
   const shipmentsPage = parseShipmentsPage(parsed);
   if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH || path === PROFILE_STATE_PATH) {
     if (!exactKeys(parsed, ['shipmentsPage'])) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    return { path, ...(shipmentsPage ? { shipmentsPage } : {}) };
+    return { path, shipmentsPage };
   }
   if (!exactKeys(parsed, ['ownerWallet', 'shipmentsPage']) || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address.');
   }
-  return { path, ownerWallet: parsed.ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) };
+  return { path, ownerWallet: parsed.ownerWallet, shipmentsPage };
 }
 
 async function loadOptionalSessionWallet(args: {
@@ -242,7 +242,7 @@ export async function handleProfileReadRequest(
           identity,
           (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
         ));
-        if (requestBody.shipmentsPage?.cursor && (!wallet || !isShipmentHistoryCursor(requestBody.shipmentsPage.cursor, wallet))) {
+        if (requestBody.shipmentsPage.cursor && (!wallet || !isShipmentHistoryCursor(requestBody.shipmentsPage.cursor, wallet))) {
           throw new ProfileReadError('invalid-argument', 400, 'Invalid shipment cursor owner.');
         }
         if (!wallet) {
@@ -251,7 +251,7 @@ export async function handleProfileReadRequest(
             sessionWallet: null,
             profile: null,
             shipments: null,
-            ...(requestBody.shipmentsPage ? { nextCursor: null } : {}),
+            nextCursor: null,
           };
           return {
             response: jsonResponse(response, 200),
@@ -276,7 +276,7 @@ export async function handleProfileReadRequest(
           sessionWallet: wallet,
           profile,
           shipments,
-          ...(shipmentPage.status === 'ready' && shipmentPage.value.nextCursor !== undefined
+          ...(shipmentPage.status === 'ready'
             ? { nextCursor: shipmentPage.value.nextCursor } : {}),
         };
         return {

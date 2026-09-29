@@ -80,8 +80,8 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
     /FROM commerce_authority_control WHERE singleton = 1/,
   );
   assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
-  if (dataSql.includes('INDEXED BY commerce_stripe_checkouts_manual_review_cursor')) {
-    assert.match(dataSql, /WHERE EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
+  if (/INDEXED BY commerce_(?:stripe_checkouts_manual_review|delivery_orders_shipment)_cursor/.test(dataSql)) {
+    assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
   } else {
     assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
     assert.match(dataSql, /authority\.singleton\s*=\s*1/);
@@ -297,20 +297,32 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
   assert.deepEqual(records.slice(-2).map((record) => record.processedAt), [null, null]);
 });
 
-test('delivery history selects every requested owner and shipment status across drops', async () => {
+test('shipment pages filter owner, kind, source, and status across drops', async (context) => {
   const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
   seedCommerceDocuments(harness, [
-    { key: commerceKeys.deliveryOrder('drop', 'a'), data: { owner: 'owner-a', status: 'processing' } },
-    { key: commerceKeys.deliveryOrder('drop', 'b'), data: { owner: 'owner-b', status: 'ready_to_ship' } },
-    { key: commerceKeys.deliveryOrder('other', 'c'), data: { owner: 'owner-a', status: 'ready_to_ship' } },
-    { key: commerceKeys.deliveryOrder('drop', 'wrong-owner'), data: { owner: 'owner-c', status: 'ready_to_ship' } },
-    { key: commerceKeys.deliveryOrder('drop', 'wrong-status'), data: { owner: 'owner-a', status: 'prepared' } },
-    { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: { owner: 'owner-a', status: 'processing' } },
+    { key: commerceKeys.deliveryOrder('drop', '1'), data: { owner: 'owner-a', status: 'processing', createdAt: 1 } },
+    { key: commerceKeys.deliveryOrder('drop', '2'), data: { owner: 'owner-b', status: 'ready_to_ship', createdAt: 2 } },
+    { key: commerceKeys.deliveryOrder('other', '3'), data: { owner: 'owner-a', status: 'ready_to_ship', createdAt: 3 } },
+    { key: commerceKeys.deliveryOrder('drop', '4'), data: { owner: 'owner-c', status: 'ready_to_ship', createdAt: 4 } },
+    { key: commerceKeys.deliveryOrder('drop', '5'), data: { owner: 'owner-a', status: 'prepared', createdAt: 5 } },
+    { key: commerceKeys.stripeCheckout('drop', '6'), data: { owner: 'owner-a', status: 'processing', createdAt: 6 } },
+    { key: commerceKeys.deliveryOrder('drop', '7'), data: { owner: 'owner-a', status: 'ready_to_ship', source: 'admin_irl_redeem', createdAt: 7 } },
   ]);
-  const records = await repository.queryDeliveryHistory({ owners: ['owner-b', 'owner-a', 'owner-a'] });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['a', 'b', 'c']);
-  assert.deepEqual(await repository.queryDeliveryHistory({ owners: ['missing'] }), []);
+  const page = await repository.queryShipmentHistoryPage({ owner: 'owner-a', limit: 1 });
+  assert.deepEqual(page.orders.map(({ dropId, deliveryId, status }) => ({ dropId, deliveryId, status })), [
+    { dropId: 'other', deliveryId: 3, status: 'ready_to_ship' },
+  ]);
+  assert.ok(page.nextCursor);
+  const tail = await repository.queryShipmentHistoryPage({ owner: 'owner-a', limit: 1, startAfter: page.nextCursor });
+  assert.deepEqual(tail.orders.map(({ dropId, deliveryId, status }) => ({ dropId, deliveryId, status })), [
+    { dropId: 'drop', deliveryId: 1, status: 'processing' },
+  ]);
+  assert.equal(tail.nextCursor, null);
+  assert.deepEqual((await repository.queryShipmentHistoryPage({ owner: 'owner-b', limit: 1 })).orders
+    .map((order) => order.deliveryId), [2]);
+  assert.deepEqual(await repository.queryShipmentHistoryPage({ owner: 'missing', limit: 1 }), { orders: [], nextCursor: null });
 });
 
 test('manual review reads select flagged checkouts in the requested drop', async () => {
@@ -401,7 +413,7 @@ test('named reads reject empty owners and invalid fulfillment limits before quer
   const repository = new D1CommerceRepository(harness.db);
   const isInvalidArgument = (error: unknown) =>
     error instanceof CommerceRepositoryError && error.code === 'invalid-argument';
-  await assert.rejects(repository.queryDeliveryHistory({ owners: [] }), isInvalidArgument);
+  await assert.rejects(repository.queryShipmentHistoryPage({ owner: '', limit: 1 }), isInvalidArgument);
   for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     await assert.rejects(repository.queryFulfillmentOrders({ dropId: 'drop', limit }), isInvalidArgument);
   }
@@ -1848,8 +1860,8 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.match(calls[1].statements[1].sql, /document_path = \?\s+LIMIT 1/);
 
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.queryDeliveryHistory({ owners: ['owner'] })),
-    [],
+    await readWithSingleBatch(calls, () => repository.queryShipmentHistoryPage({ owner: 'owner', limit: 1 })),
+    { orders: [], nextCursor: null },
   );
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryFulfillmentOrders({ dropId: 'drop', limit: 1 })),
@@ -1932,7 +1944,7 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     read: (value: D1CommerceRepository) => Promise<unknown>;
   }[] = [
     { name: 'get', read: (value) => value.get(commerceKeys.claimCode('MISSING')) },
-    { name: 'queryDeliveryHistory', read: (value) => value.queryDeliveryHistory({ owners: ['owner'] }) },
+    { name: 'queryShipmentHistoryPage', read: (value) => value.queryShipmentHistoryPage({ owner: 'owner', limit: 1 }) },
     { name: 'queryFulfillmentOrders', read: (value) => value.queryFulfillmentOrders({ dropId: 'drop', limit: 1 }) },
     { name: 'queryManualReviewCheckouts', read: (value) => value.queryManualReviewCheckouts({ dropId: 'drop', limit: 26 }) },
     { name: 'queryLegacyClaimAssignments', read: (value) => value.queryLegacyClaimAssignments({ code: 'MISSING' }) },
@@ -2087,22 +2099,24 @@ test('a revision committed after a query batch does not retry that snapshot', as
       batchCount += 1;
       if (batchCount !== 1) return;
       seedCommerceDocument(harness, {
-        key: commerceKeys.deliveryOrder('drop', 'NEW'),
-        data: { owner: 'owner', status: 'ready_to_ship' },
+        key: commerceKeys.deliveryOrder('drop', '2'),
+        data: { owner: 'owner', status: 'ready_to_ship', createdAt: 2 },
       });
     },
   });
   seedCommerceDocument(harness, {
-    key: commerceKeys.deliveryOrder('drop', 'EXISTING'),
-    data: { owner: 'owner', status: 'ready_to_ship' },
+    key: commerceKeys.deliveryOrder('drop', '1'),
+    data: { owner: 'owner', status: 'ready_to_ship', createdAt: 1 },
   });
   const repository = new D1CommerceRepository(harness.db);
 
-  const first = await repository.queryDeliveryHistory({ owners: ['owner'] });
-  assert.deepEqual(first.map((record) => record.key.documentId), ['EXISTING']);
+  const first = await repository.queryShipmentHistoryPage({ owner: 'owner', limit: 2 });
+  assert.deepEqual(first.orders.map((order) => order.deliveryId), [1]);
+  assert.equal(first.nextCursor, null);
   assert.equal(batchCount, 1);
 
-  const second = await repository.queryDeliveryHistory({ owners: ['owner'] });
-  assert.deepEqual(second.map((record) => record.key.documentId), ['EXISTING', 'NEW']);
+  const second = await repository.queryShipmentHistoryPage({ owner: 'owner', limit: 2 });
+  assert.deepEqual(second.orders.map((order) => order.deliveryId), [2, 1]);
+  assert.equal(second.nextCursor, null);
   assert.equal(batchCount, 2);
 });

@@ -4,6 +4,7 @@ import { D1CommerceRepository, commerceKeys, type CommerceDocumentData, type Com
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import type { handleProfileReadRequest } from '../src/profileReads.ts';
 import type { handleStaffReadRequest } from '../src/staffReads.ts';
+import type { ShipmentHistoryPage } from '../../../../shared/shipmentHistory.ts';
 
 export const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 export const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
@@ -36,22 +37,17 @@ export function base64UrlJson(value: unknown): string {
   return btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export function orderDocument(owner = OWNER, deliveryId = 7) {
+export function shipmentPage(...deliveryIds: number[]): ShipmentHistoryPage {
   return {
-    name: `projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/${deliveryId}`,
-    fields: {
-      dropId: stringValue('card_nft_2'),
-      deliveryId: integerValue(deliveryId),
-      status: stringValue('ready_to_ship'),
-      createdAt: { timestampValue: '2026-08-18T10:00:00.000Z' },
-      processedAt: { timestampValue: '2026-08-18T11:00:00.000Z' },
-      items: {
-        arrayValue: {
-          values: [{ mapValue: { fields: { kind: stringValue('box'), refId: integerValue(3) } } }],
-        },
-      },
-      owner: stringValue(owner),
-    },
+    orders: deliveryIds.map((deliveryId) => ({
+      dropId: 'card_nft_2',
+      deliveryId,
+      status: 'ready_to_ship',
+      createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+      processedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+      items: [{ kind: 'box', refId: 3 }],
+    })),
+    nextCursor: null,
   };
 }
 
@@ -77,7 +73,7 @@ export function manualReviewDocument() {
   };
 }
 
-function createLegacyFirestoreRepository(providerFetch: ProfileProviderFetch) {
+function createReadRepositoryFixture(providerFetch: ProfileProviderFetch) {
   const loadDocuments = async (request: object): Promise<CommerceDocumentRecord[]> => {
     const response = await providerFetch('https://commerce.test/documents:runQuery', {
       method: 'POST',
@@ -117,10 +113,14 @@ function createLegacyFirestoreRepository(providerFetch: ProfileProviderFetch) {
   };
   return {
     notificationOutbox: new D1CommerceRepository(createCommerceD1()).notificationOutbox,
-    queryShipmentHistoryPage: async () => assert.fail('Unexpected paged shipment query'),
+    queryShipmentHistoryPage: async (args: Parameters<D1CommerceRepository['queryShipmentHistoryPage']>[0]) => {
+      const response = await providerFetch('https://commerce.test/shipment-history', {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'queryShipmentHistoryPage', ...args }),
+      });
+      return await response.json() as ShipmentHistoryPage;
+    },
     queryShipmentPresence: async () => assert.fail('Unexpected shipment presence query'),
-    queryDeliveryHistory: (args: Parameters<D1CommerceRepository['queryDeliveryHistory']>[0]) =>
-      loadDocuments({ operation: 'queryDeliveryHistory', ...args }),
     queryFulfillmentOrders: (args: Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]) =>
       loadDocuments({ operation: 'queryFulfillmentOrders', ...args }),
     queryManualReviewCheckouts: (args: Parameters<D1CommerceRepository['queryManualReviewCheckouts']>[0]) =>
@@ -153,11 +153,11 @@ export function profileDependencies(
   };
 }
 
-export function legacyFirestoreProfileDependencies(
+export function fixtureProfileDependencies(
   providerFetch: ProfileProviderFetch,
   overrides: Parameters<typeof handleProfileReadRequest>[4] = {},
 ): Parameters<typeof handleProfileReadRequest>[4] {
-  return profileDependencies(providerFetch, () => createLegacyFirestoreRepository(providerFetch), overrides);
+  return profileDependencies(providerFetch, () => createReadRepositoryFixture(providerFetch), overrides);
 }
 
 export function d1ProfileDependencies(
@@ -183,11 +183,11 @@ export function staffDependencies(
   };
 }
 
-export function legacyFirestoreStaffDependencies(
+export function fixtureStaffDependencies(
   providerFetch: ProfileProviderFetch,
   overrides: Parameters<typeof handleStaffReadRequest>[4] = {},
 ): Parameters<typeof handleStaffReadRequest>[4] {
-  return staffDependencies(providerFetch, () => createLegacyFirestoreRepository(providerFetch), overrides);
+  return staffDependencies(providerFetch, () => createReadRepositoryFixture(providerFetch), overrides);
 }
 
 export function d1StaffDependencies(

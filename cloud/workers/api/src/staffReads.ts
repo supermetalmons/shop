@@ -96,7 +96,7 @@ type StaffReadDependencies = ReadRequestDependencies & {
   createCommerceRepository: (
     db: D1Database,
   ) => Pick<D1CommerceRepository,
-    'queryDeliveryHistory' | 'queryShipmentHistoryPage' | 'queryFulfillmentOrders' |
+    'queryShipmentHistoryPage' | 'queryFulfillmentOrders' |
     'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners' | 'notificationOutbox'>;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
 };
@@ -121,7 +121,7 @@ const defaultDependencies: StaffReadDependencies = {
 };
 
 type ParsedStaffReadRequest =
-  | { path: typeof ADMIN_PROFILE_PATH; ownerWallet: string; shipmentsPage?: ShipmentPageRequest }
+  | { path: typeof ADMIN_PROFILE_PATH; ownerWallet: string; shipmentsPage: ShipmentPageRequest }
   | { path: typeof ADMIN_DELIVERY_ORDER_OWNERS_PATH; cursor?: string; pageSize?: number }
   | { path: typeof FULFILLMENT_ORDERS_PATH; dropId: string; limit: number; cursor: FulfillmentOrdersCursor | null }
   | { path: typeof FULFILLMENT_MANUAL_REVIEW_PATH; dropId: string; limit: number; cursor?: FulfillmentManualReviewCursor | null };
@@ -205,7 +205,7 @@ async function parseStaffReadRequest(
   if (!exactKeys(parsed, ['ownerWallet', 'shipmentsPage']) || typeof parsed.ownerWallet !== 'string' || !isBase58Bytes(parsed.ownerWallet, 32)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address.');
   }
-  return { path, ownerWallet: parsed.ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) };
+  return { path, ownerWallet: parsed.ownerWallet, shipmentsPage };
 }
 
 async function loadAdminProfile(args: {
@@ -225,7 +225,7 @@ async function loadAdminProfile(args: {
       ...(email ? { email } : {}),
       orders: shipments.orders,
     },
-    ...(shipments.nextCursor !== undefined ? { nextCursor: shipments.nextCursor } : {}),
+    nextCursor: shipments.nextCursor,
   };
 }
 

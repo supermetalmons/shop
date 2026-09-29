@@ -164,13 +164,13 @@ export function parseProfileState(value: unknown): GetProfileStateResponse | nul
   const hasCursor = Object.hasOwn(value, 'nextCursor');
   if (hasCursor && value.nextCursor !== null && !isShipmentHistoryCursor(value.nextCursor, typeof value.sessionWallet === 'string' ? value.sessionWallet : undefined)) return null;
   if (value.sessionWallet === null) {
-    return value.profile === null && value.shipments === null && (!hasCursor || value.nextCursor === null)
+    return value.profile === null && value.shipments === null && hasCursor && value.nextCursor === null
       ? {
           responseMode: 'profile-state',
           sessionWallet: null,
           profile: null,
           shipments: null,
-          ...(hasCursor ? { nextCursor: null } : {}),
+          nextCursor: null,
         }
       : null;
   }
@@ -179,6 +179,7 @@ export function parseProfileState(value: unknown): GetProfileStateResponse | nul
   const shipments = profileStateShipmentsSection(value.shipments);
   if (!profile || !shipments) return null;
   if (shipments.status === 'error' && hasCursor) return null;
+  if (shipments.status === 'ready' && !hasCursor) return null;
   return {
     responseMode: 'profile-state',
     sessionWallet: value.sessionWallet,
@@ -320,8 +321,8 @@ export function createProfileApiClient(
     return state;
   }
 
-  async function getAdminProfileView(ownerWallet: string, shipmentsPage?: ShipmentPageRequest): Promise<GetAdminProfileViewResponse> {
-    const response = await callProfileApi<GetAdminProfileViewRequest>('/admin/profile', { ownerWallet, ...(shipmentsPage ? { shipmentsPage } : {}) });
+  async function getAdminProfileView(ownerWallet: string, shipmentsPage: ShipmentPageRequest = {}): Promise<GetAdminProfileViewResponse> {
+    const response = await callProfileApi<GetAdminProfileViewRequest>('/admin/profile', { ownerWallet, shipmentsPage });
     if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('Invalid admin profile response');
     const profile = (response as Record<string, unknown>).profile;
     if (!profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error('Invalid admin profile response');
@@ -334,21 +335,18 @@ export function createProfileApiClient(
     const normalizedEmail = typeof email === 'string' && email ? email : undefined;
     return {
       profile: { wallet, ...(normalizedEmail ? { email: normalizedEmail } : {}), orders },
-      ...(shipmentsPage ? { nextCursor: shipmentPage(response, orders, ownerWallet).nextCursor } : {}),
+      nextCursor: shipmentPage(response, orders, ownerWallet).nextCursor,
     };
   }
 
-  async function getAnonymousStripeDeliveryHistory(shipmentsPage?: ShipmentPageRequest): Promise<{
-    orders: DeliveryOrderSummary[];
-    nextCursor?: ShipmentHistoryCursor | null;
-  }> {
-    const response: unknown = await callProfileApi('/profile/anonymous-stripe-delivery-history', shipmentsPage ? { shipmentsPage } : {});
+  async function getAnonymousStripeDeliveryHistory(shipmentsPage: ShipmentPageRequest = {}): Promise<ShipmentHistoryPage> {
+    const response: unknown = await callProfileApi('/profile/anonymous-stripe-delivery-history', { shipmentsPage });
     if (!response || typeof response !== 'object' || Array.isArray(response)) {
       throw new Error('Invalid anonymous Stripe delivery history response');
     }
     const orders = profileOrders((response as Record<string, unknown>).orders);
     if (!orders) throw new Error('Invalid anonymous Stripe delivery history response');
-    return { orders, ...(shipmentsPage ? { nextCursor: shipmentPage(response, orders).nextCursor } : {}) };
+    return shipmentPage(response, orders);
   }
 
   async function getProfileShipments(ownerWallet: string, page: ShipmentPageRequest = {}): Promise<ShipmentHistoryPage> {

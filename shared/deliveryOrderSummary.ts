@@ -2,7 +2,7 @@ import type { DeliveryOrderSummary } from './contracts.ts';
 import { isFulfillmentStatus } from './fulfillmentStatus.ts';
 import { isPositiveSafeInteger } from './positiveInteger.ts';
 
-export const PROFILE_SHIPMENT_STATUSES = ['processing', 'ready_to_ship'] as const;
+const PROFILE_SHIPMENT_STATUSES = ['processing', 'ready_to_ship'] as const;
 
 function isProfileShipmentStatus(
   value: unknown,

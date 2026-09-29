@@ -622,10 +622,14 @@ requests per page, and OPS/DATA integrity checks batch their read-only statement
 into one Wrangler command per database.
 Migration `0016_shipment_history_pagination.sql` adds shipment-history and
 session-presence indexes. Apply it and deploy the API before the frontend.
-Profile-state, shipment, admin-profile, and anonymous-history requests opt in
-with `shipmentsPage: { limit, cursor }` (default 50, maximum 100), retaining their
-existing arrays and adding `nextCursor`. Legacy requests still receive complete
-histories. The frontend loads older shipments automatically while scrolling;
+Profile-state, shipment, admin-profile, and anonymous-history requests always
+paginate with `shipmentsPage: { limit, cursor }` (default 50, maximum 100).
+Omitting `shipmentsPage` returns the first page. Successful shipment pages retain
+their existing arrays and include `nextCursor`, which is `null` at the end;
+profile-state shipment errors omit the cursor, and no-wallet states return `null`.
+Older clients receive only the first page and may need a refresh to browse further.
+Publish this API behavior before the client cleanup; no new migration is needed.
+The frontend loads older shipments automatically while scrolling;
 checkout and prepared-delivery recovery use owner-scoped
 `/profile/shipment-presence` lookups instead of relying on loaded history pages.
 Wallet-scoped presence requests include `expectedWallet`; a changed binding

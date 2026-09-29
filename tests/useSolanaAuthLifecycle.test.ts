@@ -67,6 +67,7 @@ function readyState(
     sessionWallet: wallet,
     profile: { status: 'ready', value: { wallet, email } },
     shipments: { status: 'ready', value: shipments },
+    nextCursor: null,
   };
 }
 
@@ -76,6 +77,7 @@ function emptyState(): GetProfileStateResponse {
     sessionWallet: null,
     profile: null,
     shipments: null,
+    nextCursor: null,
   };
 }
 
@@ -555,6 +557,7 @@ test('partial reads do not turn successful reconciliation into a failed mutation
     sessionWallet: WALLET_A,
     profile: { status: 'error', error: { code: 'unavailable', message: 'profile unavailable' } },
     shipments: { status: 'ready', value: [shipment(6)] },
+    nextCursor: null,
   };
   const baseline = harness.reconcileCalls;
   await act(async () => {

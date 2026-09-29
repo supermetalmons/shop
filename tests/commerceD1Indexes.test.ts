@@ -5,7 +5,6 @@ import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
-  deliveryHistoryQuery,
   deliveryOrdersByOwnerQuery,
   deliveryRecoveryOrdersQuery,
   duePackStatusProjectionsQuery,
@@ -1349,10 +1348,9 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.match(ownerQueryPlan, /SEARCH document USING INDEX commerce_documents_delivery_owner_path \(owner=\?\)/);
     assert.match(ownerQueryPlan, /SEARCH path_revision .*\(document_path=\?\) LEFT-JOIN/);
     assert.doesNotMatch(ownerQueryPlan, /USE TEMP B-TREE/);
-    const historyPlan = planDetails(db, deliveryHistoryQuery({ owners: ['owner'] }));
-    assert.match(historyPlan, /SEARCH commerce_documents USING INDEX commerce_documents_delivery_owner/);
-    const multiOwnerHistoryPlan = planDetails(db, deliveryHistoryQuery({ owners: ['owner', 'other'] }));
-    assert.match(multiOwnerHistoryPlan, /SEARCH commerce_documents USING INDEX commerce_documents_delivery_owner/);
+    const historyPlan = planDetails(db, shipmentHistoryPageQuery({ owner: 'owner', limit: 51 }));
+    assert.match(historyPlan, /SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_cursor \(owner=\?\)/);
+    assert.doesNotMatch(historyPlan, /USE TEMP B-TREE/);
     for (const startAfter of [undefined, {
       processedAt: { seconds: 1, nanos: 1 },
       documentPath: 'drops/drop/deliveryOrders/100',
@@ -1500,7 +1498,7 @@ test('shipment-history queries seek owner cursors and targeted presence without 
           kind: 'delivery_order', dropId: 'drop', documentId: String(id),
           path: `drops/drop/deliveryOrders/${id}`,
           data: { owner: id < 250 ? 'owner' : 'other', status: 'ready_to_ship', processedAt: id,
-            stripeCheckoutSessionId: `cs_${id}` },
+            stripeCheckoutSessionId: `cs_${id}`, privateAddress: 'hidden' },
         });
       }
       for (const [id, data] of [
@@ -1517,6 +1515,10 @@ test('shipment-history queries seek owner cursors and targeted presence without 
     const first = shipmentHistoryPageQuery({ owner: 'owner', limit: 3 });
     const firstRows = db.prepare(first.sql).all(...first.bindings);
     assert.deepEqual(firstRows.map((row) => row.document_path), [249, 248, 247].map((id) => `drops/drop/deliveryOrders/${id}`));
+    const firstProjection = JSON.parse(String(firstRows[0].document_json));
+    assert.equal(firstProjection.privateAddress, undefined);
+    assert.equal(firstProjection.processedAt, 249);
+    assert.equal(firstProjection.stripeCheckoutSessionId, 'cs_249');
     const next = shipmentHistoryPageQuery({ owner: 'owner', limit: 3,
       startAfter: { version: 1, owner: 'owner', sortAtMs: 247, documentPath: 'drops/drop/deliveryOrders/247' } });
     assert.deepEqual(db.prepare(next.sql).all(...next.bindings).map((row) => row.document_path),

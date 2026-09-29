@@ -353,6 +353,8 @@ test('domain clients select authenticated routes through injected transport', as
     hint: 'hint',
     email: 'owner@example.com',
   });
+  assert.deepEqual(calls[4]?.data, { ownerWallet: OWNER, shipmentsPage: {} });
+  assert.deepEqual(calls[5]?.data, { shipmentsPage: {} });
   assert.deepEqual(calls[7]?.data, { dropId: 'card_nft_2', quantity: 1 });
   assert.equal(calls[7]?.headers?.[STRIPE_CHECKOUT_OPERATION_HEADER], STRIPE_CHECKOUT_OPERATION_ID);
   assert.equal(calls[7]?.replaySafe, true);
@@ -365,6 +367,7 @@ test('domain client factories apply successful response contracts', async () => 
     sessionWallet: null,
     profile: null,
     shipments: null,
+    nextCursor: null,
   };
   const profile = createProfileApiClient({
     callProfileApi: async (pathname, data) => {
@@ -451,7 +454,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
         authorizations.push(headers.get('authorization') || '');
         return calls === 1
           ? Response.json({ ok: false, error: { code: 'unauthenticated', message: 'Expired.' } }, { status: 401 })
-          : Response.json({ responseMode: 'shipments', wallet: OWNER, orders: [] });
+          : Response.json({ responseMode: 'shipments', wallet: OWNER, orders: [], nextCursor: null });
       },
       getCredential: async (forceRefresh) => {
         refreshes.push(forceRefresh);
@@ -466,7 +469,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
     credentialCapture,
     { onCredential: (authSubject) => observedCredentials.push(authSubject) },
   );
-  assert.deepEqual(payload, { responseMode: 'shipments', wallet: OWNER, orders: [] });
+  assert.deepEqual(payload, { responseMode: 'shipments', wallet: OWNER, orders: [], nextCursor: null });
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
   assert.equal(signals[0], signals[1]);
@@ -512,14 +515,14 @@ test('profile API client uses cookie credentials without exposing an anonymous b
       authorization = headers.get('authorization');
       assert.equal(headers.get('x-mons-csrf'), '1');
       assert.equal(init?.credentials, 'same-origin');
-      return Response.json({ responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
+      return Response.json({ responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null, nextCursor: null });
     },
     getCredential: async () => ({ authSubject: 'anon:123e4567-e89b-42d3-a456-426614174000' }),
     origin: () => '/api',
     timeoutMs: 1000,
   });
   assert.equal(authorization, null);
-  assert.deepEqual(payload, { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
+  assert.deepEqual(payload, { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null, nextCursor: null });
 });
 
 test('profile API client caps timeout overrides and returns a stable deadline error', async () => {
@@ -2130,6 +2133,7 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     sessionWallet: OWNER,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: { status: 'ready', value: [] },
+    nextCursor: null,
   };
   assert.deepEqual(parseProfileState(valid), valid);
   assert.deepEqual(parseProfileState({
@@ -2137,11 +2141,13 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     sessionWallet: null,
     profile: null,
     shipments: null,
+    nextCursor: null,
   }), {
     responseMode: 'profile-state',
     sessionWallet: null,
     profile: null,
     shipments: null,
+    nextCursor: null,
   });
   assert.equal(parseProfileState({
     ...valid,
@@ -2168,5 +2174,6 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     sessionWallet: null,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: null,
+    nextCursor: null,
   }), null);
 });

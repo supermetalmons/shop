@@ -8,12 +8,18 @@ import {
   PROFILE_STATE_PATH, SHIPMENT_PRESENCE_PATH, handleProfileReadRequest, type ProfileReadPath,
 } from '../src/profileReads.ts';
 import { ADMIN_PROFILE_PATH, handleStaffReadRequest } from '../src/staffReads.ts';
-import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.ts';
+import type { ShipmentHistoryCursor, ShipmentHistoryPage } from '../../../../shared/shipmentHistory.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const OTHER = 'So11111111111111111111111111111111111111112';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const ANONYMOUS = 'anonymous:shipment-test';
+const shipmentEndpoints = [
+  { path: PROFILE_STATE_PATH, body: {}, owner: OWNER, offset: 0 },
+  { path: PROFILE_SHIPMENTS_PATH, body: { ownerWallet: OWNER }, owner: OWNER, offset: 0 },
+  { path: ADMIN_PROFILE_PATH, body: { ownerWallet: OWNER }, owner: OWNER, offset: 0 },
+  { path: ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, body: {}, owner: ANONYMOUS, offset: 1000 },
+] as const;
 
 function seed(harness: CommerceD1Harness, rows: Array<{ id: number; data?: CommerceDocumentData }>): void {
   seedCommerceDocuments(harness, rows.map(({ id, data }) => ({
@@ -35,7 +41,37 @@ async function read(harness: CommerceD1Harness, path: ProfileReadPath, body: unk
   });
 }
 
-test('shipment projection preserves summaries and JSON types without private document fields', async (context) => {
+async function readShipmentEndpoint(
+  harness: CommerceD1Harness,
+  path: typeof shipmentEndpoints[number]['path'],
+  body: unknown,
+) {
+  return path === ADMIN_PROFILE_PATH
+    ? handleStaffReadRequest(new Request(`https://api.mons.shop${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }), { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database }, path, {}, {
+        nowMs: () => 1000,
+        loadProfileEmail: async () => undefined,
+        verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: ADMIN }),
+      })
+    : read(harness, path, body);
+}
+
+type ShipmentEndpointPayload = {
+  orders?: ShipmentHistoryPage['orders'];
+  shipments?: { value: ShipmentHistoryPage['orders'] };
+  profile?: { orders: ShipmentHistoryPage['orders'] };
+  nextCursor: ShipmentHistoryCursor | null;
+};
+
+function shipmentOrders(payload: ShipmentEndpointPayload): ShipmentHistoryPage['orders'] {
+  const orders = payload.orders ?? payload.shipments?.value ?? payload.profile?.orders;
+  assert.ok(orders);
+  assert.ok(Object.hasOwn(payload, 'nextCursor'));
+  return orders;
+}
+
+test('shipment page projection preserves summary coercion without private document fields', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   seed(harness, [
@@ -45,12 +81,11 @@ test('shipment projection preserves summaries and JSON types without private doc
   ]);
   const repository = new D1CommerceRepository(harness.db);
   const original = await repository.get(commerceKeys.deliveryOrder('card_nft_2', '1'));
-  const narrow = await repository.queryDeliveryHistory({ owners: [OWNER] });
-  assert.equal(narrow.length, 1);
-  assert.equal(narrow[0].data.privateAddress, undefined);
-  assert.equal(narrow[0].data.processedAt, true);
-  assert.equal(narrow[0].data.processingAt, '9');
-  assert.deepEqual(deliveryOrderSummaryFromDocument(narrow[0]), deliveryOrderSummaryFromDocument(original!));
+  const narrow = await repository.queryShipmentHistoryPage({ owner: OWNER, limit: 50 });
+  assert.equal(narrow.orders.length, 1);
+  assert.doesNotMatch(JSON.stringify(narrow), /privateAddress|private/);
+  assert.deepEqual(narrow.orders, [deliveryOrderSummaryFromDocument(original!)]);
+  assert.equal(narrow.nextCursor, null);
 });
 
 test('shipment pages preserve zero, resolve ties, and advance through invalid summary rows', async (context) => {
@@ -82,37 +117,90 @@ test('shipment pages preserve zero, resolve ties, and advance through invalid su
   }), /Invalid shipment pagination/);
 });
 
-test('all shipment endpoints opt into pagination while legacy responses remain complete', async (context) => {
+test('all shipment endpoints default to 50 and continue through bounded owner-scoped pages', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
-  seed(harness, Array.from({ length: 52 }, (_, i) => ({ id: i + 1 })));
-  seed(harness, [{ id: 100, data: { owner: ANONYMOUS } }, { id: 101, data: { owner: ANONYMOUS } }]);
-  for (const [path, body] of [
-    [PROFILE_STATE_PATH, {}], [PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }], [ADMIN_PROFILE_PATH, { ownerWallet: OWNER }],
-  ] as const) {
-    const load = (requestBody: unknown) => path === ADMIN_PROFILE_PATH
-      ? handleStaffReadRequest(new Request(`https://api.mons.shop${path}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody),
-        }), { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database }, path, {}, {
-          nowMs: () => 1000,
-          loadProfileEmail: async () => undefined,
-          verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: ADMIN }),
-        })
-      : read(harness, path, requestBody);
-    const legacy = await load(body);
-    assert.equal(legacy.response.status, 200);
-    const oldPayload = await legacy.response.json() as any;
-    assert.equal('nextCursor' in oldPayload, false);
-    assert.equal((oldPayload.orders ?? oldPayload.shipments?.value ?? oldPayload.profile?.orders).length, 52);
-    const paged = await load({ ...body, shipmentsPage: {} });
-    const payload = await paged.response.json() as any;
-    assert.equal((payload.orders ?? payload.shipments?.value ?? payload.profile?.orders).length, 50);
-    assert.equal(payload.nextCursor.owner, OWNER);
+  for (const [owner, offset] of [[OWNER, 0], [ANONYMOUS, 1000]] as const) {
+    seed(harness, Array.from({ length: 105 }, (_, index) => ({ id: offset + index + 1, data: { owner } })));
+    seed(harness, [
+      { id: offset + 200, data: { owner, source: 'admin_irl_redeem' } },
+      { id: offset + 201, data: { owner, status: 'failed' } },
+    ]);
   }
-  const anonymous = await read(harness, ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, { shipmentsPage: { limit: 1 } });
-  const payload = await anonymous.response.json() as any;
-  assert.equal(payload.orders[0].deliveryId, 101);
-  assert.equal(payload.nextCursor.owner, ANONYMOUS);
+  seed(harness, [{ id: 2000, data: { owner: OTHER } }]);
+  for (const { path, body, owner, offset } of shipmentEndpoints) {
+    const load = async (requestBody: unknown) => {
+      const result = await readShipmentEndpoint(harness, path, requestBody);
+      assert.equal(result.response.status, 200, path);
+      return await result.response.json() as ShipmentEndpointPayload;
+    };
+    const first = await load(body);
+    assert.deepEqual(first, await load({ ...body, shipmentsPage: {} }), path);
+    assert.equal(shipmentOrders(first).length, 50, path);
+    assert.equal(first.nextCursor?.owner, owner, path);
+    const second = await load({ ...body, shipmentsPage: { cursor: first.nextCursor } });
+    assert.equal(shipmentOrders(second).length, 50, path);
+    assert.equal(second.nextCursor?.owner, owner, path);
+    const last = await load({ ...body, shipmentsPage: { cursor: second.nextCursor } });
+    assert.equal(shipmentOrders(last).length, 5, path);
+    assert.equal(last.nextCursor, null, path);
+    assert.deepEqual(
+      [first, second, last].flatMap((payload) => shipmentOrders(payload).map((order) => order.deliveryId)),
+      Array.from({ length: 105 }, (_, index) => offset + 105 - index),
+      path,
+    );
+    for (const limit of [1, 100]) {
+      const limited = await load({ ...body, shipmentsPage: { limit } });
+      assert.equal(shipmentOrders(limited).length, limit, path);
+      assert.equal(limited.nextCursor?.owner, owner, path);
+    }
+  }
+});
+
+test('all shipment endpoints return an explicit terminal cursor for empty histories', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  for (const { path, body } of shipmentEndpoints) {
+    for (const page of [{}, { shipmentsPage: {} }]) {
+      const result = await readShipmentEndpoint(harness, path, { ...body, ...page });
+      assert.equal(result.response.status, 200, path);
+      const payload = await result.response.json() as ShipmentEndpointPayload;
+      assert.deepEqual(shipmentOrders(payload), [], path);
+      assert.equal(payload.nextCursor, null, path);
+    }
+  }
+});
+
+test('all shipment endpoints advance across invalid rows and preserve tie and zero ordering', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  for (const [owner, offset] of [[OWNER, 0], [ANONYMOUS, 1000]] as const) {
+    seed(harness, [
+      { id: offset + 1, data: { owner, processedAt: 0, processingAt: 999 } },
+      { id: offset + 2, data: { owner, processingAt: 10, createdAt: 99 } },
+      { id: offset + 3, data: { owner, processedAt: 10 } },
+      { id: offset + 4, data: { owner, processedAt: true, processingAt: 5 } },
+      { id: offset + 5, data: { owner, createdAt: 20, deliveryId: 999 } },
+    ]);
+  }
+  for (const { path, body, owner, offset } of shipmentEndpoints) {
+    let cursor: ShipmentHistoryCursor | null = null;
+    const ids: number[] = [];
+    for (let page = 0; page < 5; page += 1) {
+      const result = await readShipmentEndpoint(harness, path, { ...body, shipmentsPage: { limit: 1, cursor } });
+      assert.equal(result.response.status, 200, path);
+      const payload = await result.response.json() as ShipmentEndpointPayload;
+      if (page === 0) {
+        assert.deepEqual(shipmentOrders(payload), [], path);
+        assert.equal(payload.nextCursor?.documentPath, `drops/card_nft_2/deliveryOrders/${offset + 5}`, path);
+        assert.equal(payload.nextCursor?.owner, owner, path);
+      }
+      ids.push(...shipmentOrders(payload).map((order) => order.deliveryId));
+      cursor = payload.nextCursor;
+    }
+    assert.deepEqual(ids, [3, 2, 4, 1].map((id) => offset + id), path);
+    assert.equal(cursor, null, path);
+  }
 });
 
 test('shipment presence checks older sessions and delivery refs independently of page coverage and owner scope', async (context) => {
@@ -245,21 +333,27 @@ test('shipment presence rejects caller-supplied ownership fields before reposito
 test('shipment requests reject invalid limits, cross-owner cursors, and excessive presence selectors', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
-  for (const shipmentsPage of [{ limit: 0 }, { limit: 101 }, { limit: null }, { cursor: {} }, {
-    cursor: { version: 1, owner: OTHER, sortAtMs: 1, documentPath: 'drops/card_nft_2/deliveryOrders/1' },
-  }]) {
-    const result = await read(harness, PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER, shipmentsPage });
-    assert.equal(result.response.status, 400);
+  for (const { path, body } of shipmentEndpoints) {
+    for (const shipmentsPage of [null, { limit: 0 }, { limit: 101 }, { limit: null }, { limit: 1.5 }, { cursor: {} }, {
+      cursor: { version: 1, owner: OTHER, sortAtMs: 1, documentPath: 'drops/card_nft_2/deliveryOrders/1' },
+    }]) {
+      const result = await readShipmentEndpoint(harness, path, { ...body, shipmentsPage });
+      assert.equal(result.response.status, 400, path);
+    }
   }
   for (const body of [
     { scope: 'wallet', expectedWallet: OWNER }, { scope: 'wallet', expectedWallet: OWNER, stripeSessionIds: null },
     { scope: 'wallet', expectedWallet: OWNER, stripeSessionIds: Array.from({ length: 51 }, (_, i) => `cs_${i}`) },
     { scope: 'wallet', expectedWallet: OWNER, deliveries: [{ dropId: 'card_nft_2', deliveryId: 0 }] },
   ]) assert.equal((await read(harness, SHIPMENT_PRESENCE_PATH, body)).response.status, 400);
-  const missingWallet = await read(harness, PROFILE_STATE_PATH, { shipmentsPage: {} }, {
-    resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
-  });
-  assert.equal((await missingWallet.response.json() as any).nextCursor, null);
+  for (const body of [{}, { shipmentsPage: {} }]) {
+    const missingWallet = await read(harness, PROFILE_STATE_PATH, body, {
+      resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
+    });
+    assert.deepEqual(await missingWallet.response.json(), {
+      responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null, nextCursor: null,
+    });
+  }
   for (const binding of [OWNER, null]) {
     const state = await read(harness, PROFILE_STATE_PATH, {
       shipmentsPage: { cursor: { version: 1, owner: OTHER, sortAtMs: 1, documentPath: 'drops/card_nft_2/deliveryOrders/1' } },
@@ -268,11 +362,15 @@ test('shipment requests reject invalid limits, cross-owner cursors, and excessiv
     });
     assert.equal(state.response.status, 400);
   }
-  const failing = await read(harness, PROFILE_STATE_PATH, { shipmentsPage: {} }, {
-    createCommerceRepository: (db) => Object.assign(new D1CommerceRepository(db), {
-      queryShipmentHistoryPage: async () => { throw new CommerceRepositoryError('unavailable', 'Unavailable'); },
-    }),
-  });
-  assert.equal(failing.response.status, 200);
-  assert.equal('nextCursor' in (await failing.response.json() as object), false);
+  for (const body of [{}, { shipmentsPage: {} }]) {
+    const failing = await read(harness, PROFILE_STATE_PATH, body, {
+      createCommerceRepository: (db) => Object.assign(new D1CommerceRepository(db), {
+        queryShipmentHistoryPage: async () => { throw new CommerceRepositoryError('unavailable', 'Unavailable'); },
+      }),
+    });
+    assert.equal(failing.response.status, 200);
+    const payload = await failing.response.json() as { shipments: { status: string }; nextCursor?: unknown };
+    assert.equal(payload.shipments.status, 'error');
+    assert.equal('nextCursor' in payload, false);
+  }
 });

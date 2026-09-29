@@ -7,7 +7,6 @@ import {
 import {
   COMMERCE_DOCUMENT_COLUMNS as DOCUMENT_COLUMNS,
   adminIrlRedeemWorkflowStatusQuery,
-  deliveryHistoryQuery,
   deliveryOrderOwnersQuery,
   deliveryRecoveryOrdersQuery,
   duePackStatusProjectionsQuery,
@@ -169,14 +168,6 @@ export class D1CommerceRepository {
       document.key.documentId !== key.documentId
     )) throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
     return document ? publicRecord(document) : null;
-  }
-
-  async queryDeliveryHistory(args: Readonly<{ owners: readonly string[] }>): Promise<CommerceDocumentRecord[]> {
-    if (!Array.isArray(args.owners) || args.owners.length === 0 ||
-      args.owners.some((owner) => typeof owner !== 'string')) {
-      throw new CommerceRepositoryError('invalid-argument', 'Invalid delivery history owners.');
-    }
-    return this.readDocuments(deliveryHistoryQuery(args), 'delivery-history', 'delivery_order');
   }
 
   async queryShipmentHistoryPage(args: { owner: string; limit: number; startAfter?: ShipmentHistoryCursor }): Promise<ShipmentHistoryPage> {

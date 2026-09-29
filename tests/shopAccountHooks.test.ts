@@ -34,7 +34,7 @@ test('admin viewing uses its own cache and returning to the owner restores the a
   const runtime: NonNullable<Parameters<typeof useShopAccount>[1]> = {
     getAdminProfileView: async (owner) => {
       profileRequests.push(owner);
-      return { profile: { wallet: owner, email: 'viewed@example.com' } };
+      return { profile: { wallet: owner, email: 'viewed@example.com' }, nextCursor: null };
     },
     listDeliveryOrderOwners: async (request = {}) => {
       ownerRequests.push(request);
@@ -74,6 +74,7 @@ test('admin viewing uses its own cache and returning to the owner restores the a
   assert.deepEqual(profileRequests, ['viewed-wallet']);
   assert.deepEqual(client.getQueryData(['viewedProfile', admin, 'viewed-wallet', true]), {
     profile: { wallet: 'viewed-wallet', email: 'viewed@example.com' },
+    nextCursor: null,
   });
 
   act(() => result.current.setAdminViewedOwner(admin));

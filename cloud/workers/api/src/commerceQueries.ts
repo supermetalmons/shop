@@ -1,6 +1,5 @@
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { PROFILE_SHIPMENT_STATUSES } from '../../../../shared/deliveryOrderSummary.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.js';
@@ -96,20 +95,6 @@ export function stripeChargebackMatchedDocumentsQuery(sessionId: string): Commer
         OR (document_kind = 'delivery_order' AND source = ?
           AND json_extract(document_json, '$.stripeCheckoutSessionId') = ?)`,
     bindings: [sessionId, STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE, sessionId],
-  };
-}
-
-export function deliveryHistoryQuery(args: Readonly<{ owners: readonly string[] }>): CommerceSqlQuery {
-  return {
-    sql: `SELECT ${SHIPMENT_COLUMNS}
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
-        AND document_kind = 'delivery_order'
-        AND source IS NOT 'admin_irl_redeem'
-        AND owner IN (${args.owners.map(() => '?').join(', ')})
-        AND status IN (${PROFILE_SHIPMENT_STATUSES.map(() => '?').join(', ')})
-      ORDER BY document_path ASC`,
-    bindings: [...args.owners, ...PROFILE_SHIPMENT_STATUSES],
   };
 }
 

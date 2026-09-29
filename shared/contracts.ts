@@ -87,7 +87,7 @@ export type GetProfileShipmentsResponse = {
   responseMode: 'shipments';
   wallet: string;
   orders: DeliveryOrderSummary[];
-  nextCursor?: ShipmentHistoryCursor | null;
+  nextCursor: ShipmentHistoryCursor | null;
 };
 
 export type ProfileStateSection<T> =
@@ -153,7 +153,7 @@ export type GetAdminProfileViewRequest = {
 };
 
 export type GetAdminProfileViewResponse = {
-  nextCursor?: ShipmentHistoryCursor | null;
+  nextCursor: ShipmentHistoryCursor | null;
   profile: Profile;
 };
 

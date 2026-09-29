@@ -13,7 +13,7 @@ function client(callProfileApi: AuthenticatedApiCall) {
   return createProfileApiClient({ callProfileApi, createProfileAddressId: () => 'AbCdEfGhIjKlMnOpQrSt' });
 }
 
-test('shipment API clients opt into paging and validate continuation owners', async () => {
+test('shipment API clients always request pages and validate continuation owners', async () => {
   const calls: unknown[] = [];
   const api = client(async (path, body) => {
     calls.push({ path, body });
@@ -24,10 +24,16 @@ test('shipment API clients opt into paging and validate continuation owners', as
   assert.deepEqual(await api.getProfileShipments(OWNER, { limit: 50 }), { orders: [ORDER], nextCursor: CURSOR });
   assert.equal((await api.getAdminProfileView(OWNER, { cursor: CURSOR })).nextCursor, CURSOR);
   assert.deepEqual(await api.getAnonymousStripeDeliveryHistory({ limit: 50 }), { orders: [ORDER], nextCursor: null });
+  assert.deepEqual(await api.getProfileShipments(OWNER), { orders: [ORDER], nextCursor: CURSOR });
+  assert.deepEqual(await api.getAdminProfileView(OWNER), { profile: { wallet: OWNER, orders: [ORDER] }, nextCursor: CURSOR });
+  assert.deepEqual(await api.getAnonymousStripeDeliveryHistory(), { orders: [ORDER], nextCursor: null });
   assert.deepEqual(calls, [
     { path: '/profile/shipments', body: { ownerWallet: OWNER, shipmentsPage: { limit: 50 } } },
     { path: '/admin/profile', body: { ownerWallet: OWNER, shipmentsPage: { cursor: CURSOR } } },
     { path: '/profile/anonymous-stripe-delivery-history', body: { shipmentsPage: { limit: 50 } } },
+    { path: '/profile/shipments', body: { ownerWallet: OWNER, shipmentsPage: {} } },
+    { path: '/admin/profile', body: { ownerWallet: OWNER, shipmentsPage: {} } },
+    { path: '/profile/anonymous-stripe-delivery-history', body: { shipmentsPage: {} } },
   ]);
   const invalid = client(async () => ({ responseMode: 'shipments', wallet: OWNER, orders: [], nextCursor: { ...CURSOR, owner: 'another-wallet' } }));
   await assert.rejects(invalid.getProfileShipments(OWNER), /Invalid shipment history/);
@@ -35,17 +41,44 @@ test('shipment API clients opt into paging and validate continuation owners', as
   await assert.rejects(missing.getProfileShipments(OWNER), /Invalid shipment history/);
 });
 
-test('profile state accepts legacy and opted-in responses but never a cursor for failed shipments', () => {
+test('admin and anonymous shipment clients require valid cursors on every page', async () => {
+  for (const cursorFields of [{}, { nextCursor: undefined }, { nextCursor: {} }]) {
+    const api = client(async (path) => path === '/admin/profile'
+      ? { profile: { wallet: OWNER, orders: [ORDER] }, ...cursorFields }
+      : { orders: [ORDER], ...cursorFields });
+    await assert.rejects(api.getAdminProfileView(OWNER), /Invalid shipment history/);
+    await assert.rejects(api.getAnonymousStripeDeliveryHistory(), /Invalid shipment history/);
+  }
+  const invalidOwner = client(async () => ({
+    profile: { wallet: OWNER, orders: [ORDER] },
+    nextCursor: { ...CURSOR, owner: 'another-wallet' },
+  }));
+  await assert.rejects(invalidOwner.getAdminProfileView(OWNER), /Invalid shipment history/);
+  const complete = client(async () => ({ profile: { wallet: OWNER, orders: [ORDER] }, nextCursor: null }));
+  assert.deepEqual(await complete.getAdminProfileView(OWNER), { profile: { wallet: OWNER, orders: [ORDER] }, nextCursor: null });
+  const continuing = client(async () => ({ orders: [ORDER], nextCursor: CURSOR }));
+  assert.deepEqual(await continuing.getAnonymousStripeDeliveryHistory(), { orders: [ORDER], nextCursor: CURSOR });
+});
+
+test('profile state requires a cursor for ready shipments and omits it for failed shipments', () => {
   const state = {
     responseMode: 'profile-state', sessionWallet: OWNER,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: { status: 'ready', value: [ORDER] },
   };
-  assert.deepEqual(parseProfileState(state), state);
+  assert.equal(parseProfileState(state), null);
+  assert.deepEqual(parseProfileState({ ...state, nextCursor: null }), { ...state, nextCursor: null });
   assert.deepEqual(parseProfileState({ ...state, nextCursor: CURSOR }), { ...state, nextCursor: CURSOR });
   assert.equal(parseProfileState({ ...state, nextCursor: { ...CURSOR, owner: 'another-wallet' } }), null);
-  assert.equal(parseProfileState({ ...state, shipments: { status: 'error', error: { code: 'unavailable', message: 'Try later' } }, nextCursor: CURSOR }), null);
-  assert.equal(parseProfileState({ responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null, nextCursor: CURSOR }), null);
+  assert.equal(parseProfileState({ ...state, nextCursor: undefined }), null);
+  const failed = { ...state, shipments: { status: 'error', error: { code: 'unavailable', message: 'Try later' } } };
+  assert.deepEqual(parseProfileState(failed), failed);
+  assert.equal(parseProfileState({ ...failed, nextCursor: CURSOR }), null);
+  assert.equal(parseProfileState({ ...failed, nextCursor: null }), null);
+  const noWallet = { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null };
+  assert.equal(parseProfileState(noWallet), null);
+  assert.deepEqual(parseProfileState({ ...noWallet, nextCursor: null }), { ...noWallet, nextCursor: null });
+  assert.equal(parseProfileState({ ...noWallet, nextCursor: CURSOR }), null);
 });
 
 test('presence batches independent selectors and only accepts requested matches', async () => {

@@ -336,7 +336,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'null'), {
         owner: 'named-owner', status: 'ready_to_ship',
       }),
-      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'processing'), {
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', '4'), {
         owner: 'named-owner', status: 'processing',
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'prepared'), {
@@ -412,11 +412,12 @@ test('commerce repository reads and transaction guards run through the real D1 r
     }
     assert.deepEqual((await repository.get(claimKey))?.data, { status: 'unused' });
     assert.equal(await repository.get(commerceKeys.claimCode('MISSING')), null);
-    assert.deepEqual(
-      (await repository.queryDeliveryHistory({ owners: ['named-owner'] })).map((record) => record.key.documentId),
-      ['1', '2', '3', 'null', 'processing'],
-    );
-    assert.deepEqual(await repository.queryDeliveryHistory({ owners: ['missing'] }), []);
+    const namedShipmentPage = await repository.queryShipmentHistoryPage({ owner: 'named-owner', limit: 10 });
+    assert.deepEqual(namedShipmentPage.orders.map((order) => [order.deliveryId, order.status]), [
+      [4, 'processing'], [3, 'ready_to_ship'], [2, 'ready_to_ship'], [1, 'ready_to_ship'],
+    ]);
+    assert.equal(namedShipmentPage.nextCursor, null);
+    assert.deepEqual(await repository.queryShipmentHistoryPage({ owner: 'missing', limit: 10 }), { orders: [], nextCursor: null });
     assert.deepEqual(
       (await repository.queryFulfillmentOrders({ dropId: 'named-reads', limit: 2 }))
         .map((record) => record.key.documentId),
@@ -1125,7 +1126,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.equal(pausedReadyNotificationRowsRead <= 4, true, `Paused ready notifications read ${pausedReadyNotificationRowsRead} rows`);
 
     for (const read of [
-      () => observedRepository.queryDeliveryHistory({ owners: ['named-owner'] }),
+      () => observedRepository.queryShipmentHistoryPage({ owner: 'named-owner', limit: 2 }),
       () => observedRepository.queryFulfillmentOrders({ dropId: 'named-reads', limit: 2 }),
       () => observedRepository.queryManualReviewCheckouts({ dropId: 'named-reads', limit: 26 }),
       () => observedRepository.queryLegacyClaimAssignments({ code: 'RUNTIME-LEGACY' }),
