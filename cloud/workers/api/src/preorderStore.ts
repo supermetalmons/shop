@@ -76,6 +76,14 @@ export class PreorderStore {
     return decode(await this.db.prepare('SELECT * FROM commerce_preorder_orders WHERE order_id = ?').bind(orderId).first());
   }
 
+  private async writeAndRead(orderId: string, statements: D1PreparedStatement[]): Promise<StoredPreorder> {
+    const results = await this.db.batch<Record<string, unknown>>([
+      ...statements,
+      this.db.prepare('SELECT * FROM commerce_preorder_orders WHERE order_id = ?').bind(orderId),
+    ]);
+    return decode(results[statements.length].results[0] ?? null)!;
+  }
+
   async request(preorderId: string, buyer: string, requestId: string): Promise<StoredPreorder | null> {
     return decode(await this.db.prepare(`SELECT * FROM commerce_preorder_orders
       WHERE preorder_id = ? AND buyer = ? AND request_id = ?`).bind(preorderId, buyer, requestId).first());
@@ -181,27 +189,29 @@ export class PreorderStore {
   }
 
   async submit(order: StoredPreorder, signed: { transactionBase64: string; signature: string }, nowMs: number): Promise<StoredPreorder> {
-    await this.db.prepare(`UPDATE commerce_preorder_orders SET status = 'submitted', signed_transaction = ?, signature = ?,
-      updated_at_ms = ?, next_check_at_ms = ?, revision = revision + 1
-      WHERE order_id = ? AND revision = ? AND status = 'prepared' AND expires_at_ms > ?`)
-      .bind(signed.transactionBase64, signed.signature, nowMs, nowMs, order.orderId, order.revision, nowMs).run();
-    return (await this.get(order.orderId))!;
+    return this.writeAndRead(order.orderId, [
+      this.db.prepare(`UPDATE commerce_preorder_orders SET status = 'submitted', signed_transaction = ?, signature = ?,
+        updated_at_ms = ?, next_check_at_ms = ?, revision = revision + 1
+        WHERE order_id = ? AND revision = ? AND status = 'prepared' AND expires_at_ms > ?`)
+        .bind(signed.transactionBase64, signed.signature, nowMs, nowMs, order.orderId, order.revision, nowMs),
+    ]);
   }
 
   async confirm(order: StoredPreorder, slot: number, nowMs: number): Promise<StoredPreorder> {
     if (!Number.isSafeInteger(slot) || slot < 0) throw new Error('Invalid preorder confirmation slot.');
-    await this.db.prepare(`UPDATE commerce_preorder_orders SET confirmed_slot = COALESCE(confirmed_slot, ?),
-      updated_at_ms = ?, next_check_at_ms = ?, revision = revision + 1
-      WHERE order_id = ? AND revision = ? AND status = 'submitted'`)
-      .bind(slot, nowMs, nowMs + 15_000, order.orderId, order.revision).run();
-    return (await this.get(order.orderId))!;
+    return this.writeAndRead(order.orderId, [
+      this.db.prepare(`UPDATE commerce_preorder_orders SET confirmed_slot = COALESCE(confirmed_slot, ?),
+        updated_at_ms = ?, next_check_at_ms = ?, revision = revision + 1
+        WHERE order_id = ? AND revision = ? AND status = 'submitted'`)
+        .bind(slot, nowMs, nowMs + 15_000, order.orderId, order.revision),
+    ]);
   }
 
   async finish(order: StoredPreorder, status: 'succeeded' | 'failed' | 'expired' | 'cancelled', nowMs: number, finalizedSlot?: number): Promise<StoredPreorder> {
     if (finalizedSlot !== undefined && (status !== 'succeeded' || !Number.isSafeInteger(finalizedSlot) || finalizedSlot < 0)) {
       throw new Error('Invalid preorder finalization slot.');
     }
-    await this.db.batch([
+    return this.writeAndRead(order.orderId, [
       this.db.prepare(`UPDATE commerce_preorder_orders SET status = ?, updated_at_ms = ?, revision = revision + 1,
         confirmed_slot = CASE WHEN ? IS NOT NULL THEN MAX(COALESCE(confirmed_slot, ?), ?) ELSE confirmed_slot END
         WHERE order_id = ? AND revision = ? AND status = ?`)
@@ -210,7 +220,6 @@ export class PreorderStore {
         SELECT 1 FROM commerce_preorder_orders WHERE order_id = ? AND status IN ('failed', 'expired', 'cancelled'))`)
         .bind(order.orderId, order.orderId),
     ]);
-    return (await this.get(order.orderId))!;
   }
 
   async defer(order: StoredPreorder, nowMs: number): Promise<void> {

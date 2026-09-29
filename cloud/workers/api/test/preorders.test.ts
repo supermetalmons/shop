@@ -995,19 +995,31 @@ test('confirmed rollback releases only its own claims while another checkout rem
   }
 });
 
-test('confirmation CAS cannot revive terminal orders and a stale terminal write cannot erase confirmation', async () => {
-  const h = harness();
+test('preorder transitions return current state in one database call without stale writes erasing confirmation', async () => {
+  const calls: string[] = [];
+  const h = harness({ observeCall: ({ method }) => calls.push(method) });
+  async function transition<T>(operation: () => Promise<T>): Promise<T> {
+    calls.length = 0;
+    const result = await operation();
+    assert.deepEqual(calls, ['batch']);
+    return result;
+  }
   const prepared = await h.prepare([1]);
   const source = (await h.store.get(prepared.body.order.orderId))!;
-  const submitted = await h.store.submit(source, { signature: 'signature', transactionBase64: 'fully-signed' }, 1100);
-  const confirmed = await h.store.confirm(submitted, 550, 1200);
-  const staleFailure = await h.store.finish(submitted, 'failed', 1300);
+  const submitted = await transition(() => h.store.submit(source, { signature: 'signature', transactionBase64: 'fully-signed' }, 1100));
+  assert.equal(submitted.status, 'submitted');
+  assert.equal(submitted.revision, source.revision + 1);
+  const staleSubmission = await transition(() => h.store.submit(source, { signature: 'stale-signature', transactionBase64: 'stale-signed' }, 1150));
+  assert.deepEqual(staleSubmission, submitted);
+  const confirmed = await transition(() => h.store.confirm(submitted, 550, 1200));
+  const staleFailure = await transition(() => h.store.finish(submitted, 'failed', 1300));
   assert.equal(staleFailure.status, 'submitted');
   assert.equal(staleFailure.confirmedSlot, 550);
   await assert.rejects(h.db.prepare(`UPDATE commerce_preorder_orders SET confirmed_slot = NULL,
     revision = revision + 1 WHERE order_id = ?`).bind(confirmed.orderId).run(), /confirmation is permanent/);
-  const terminal = await h.store.finish(confirmed, 'failed', 1400);
-  const staleConfirmation = await h.store.confirm(submitted, 560, 1500);
+  const terminal = await transition(() => h.store.finish(confirmed, 'failed', 1400));
+  assert.equal(terminal.status, 'failed');
+  const staleConfirmation = await transition(() => h.store.confirm(submitted, 560, 1500));
   assert.deepEqual(staleConfirmation, terminal);
   assert.equal((await h.store.claims(config.cluster, config.collection)).length, 0);
 });
