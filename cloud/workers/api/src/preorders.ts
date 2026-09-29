@@ -304,8 +304,8 @@ export async function handlePreorderRequest(
       if (includeRecoveries) {
         const cursor = 'recoveryCursor' in body && typeof body.recoveryCursor === 'string' ? body.recoveryCursor : undefined;
         const page = await store.recoveries(config.preorderId, buyer, cursor);
-        return { response: jsonResponse({ order: page.foreground ? publicPreorder(page.foreground) : null,
-          recoveries: page.orders.map(publicPreorder), nextRecoveryCursor: page.nextCursor }, 200),
+        return { response: jsonResponse({ order: page.foreground,
+          recoveries: page.orders, nextRecoveryCursor: page.nextCursor }, 200),
           metrics, authOutcome: 'accepted' as const };
       }
       const orderId = 'orderId' in body && typeof body.orderId === 'string' ? body.orderId : undefined;

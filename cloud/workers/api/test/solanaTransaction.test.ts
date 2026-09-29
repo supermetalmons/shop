@@ -49,12 +49,17 @@ function sizeErrors() {
   const encodingError = new Error('Unable to encode transaction.');
   const packetError = new Error('Transaction exceeds packet limit.');
   const packetSizes: number[] = [];
+  const encodingStages: Array<'initial' | 'lookup'> = [];
   return {
     encodingError,
     packetError,
     packetSizes,
+    encodingStages,
     factories: {
-      encodingError: () => encodingError,
+      encodingError: (stage: 'initial' | 'lookup') => {
+        encodingStages.push(stage);
+        return encodingError;
+      },
       packetSizeError: (rawBytes: number) => {
         packetSizes.push(rawBytes);
         return packetError;
@@ -144,6 +149,7 @@ for (const trigger of ['encoding overflow', 'packet overflow'] as const) {
         ...errors.factories,
       }), (error) => error === (trigger === 'encoding overflow' ? errors.encodingError : errors.packetError));
       assert.deepEqual(errors.packetSizes, trigger === 'encoding overflow' ? [] : [SOLANA_MAX_RAW_TX_BYTES + 1]);
+      assert.deepEqual(errors.encodingStages, trigger === 'encoding overflow' ? ['initial'] : []);
       assert.equal(build.mock.callCount(), 1);
       assert.equal(loadLookupTables.mock.callCount(), 1);
     });
@@ -165,6 +171,7 @@ for (const trigger of ['encoding overflow', 'packet overflow'] as const) {
         ...errors.factories,
       }), (error) => error === (retryFailure === 'encoding overflow' ? errors.encodingError : errors.packetError));
       assert.deepEqual(errors.packetSizes, retryFailure === 'encoding overflow' ? [] : [SOLANA_MAX_RAW_TX_BYTES + 7]);
+      assert.deepEqual(errors.encodingStages, retryFailure === 'encoding overflow' ? ['lookup'] : []);
       assert.equal(build.mock.callCount(), 2);
       assert.equal(loadLookupTables.mock.callCount(), 1);
     });
@@ -205,6 +212,30 @@ for (const trigger of ['encoding overflow', 'packet overflow'] as const) {
       ...errors.factories,
     }), (error) => error === (trigger === 'encoding overflow' ? errors.encodingError : errors.packetError));
   });
+
+  for (const kind of ['provider', 'direct cancellation', 'wrapped cancellation'] as const) {
+    test(`${trigger} propagates the original ${kind} when lookup errors are required`, async (context) => {
+      const controller = new AbortController();
+      const reason = new DOMException('Request cancelled', 'AbortError');
+      const failure = kind === 'direct cancellation' ? reason
+        : kind === 'wrapped cancellation' ? new Error('Lookup interrupted', { cause: reason })
+          : new Error('Lookup provider unavailable');
+      const errors = sizeErrors();
+      const built = serializedTransaction(context, initialResult());
+      await assert.rejects(buildSizedTransaction({
+        build: () => built,
+        loadLookupTables: async () => {
+          controller.abort(reason);
+          throw failure;
+        },
+        lookupErrorPolicy: 'propagate',
+        signal: controller.signal,
+        ...errors.factories,
+      }), (error) => error === failure);
+      assert.deepEqual(errors.encodingStages, []);
+      assert.deepEqual(errors.packetSizes, []);
+    });
+  }
 }
 
 for (const stage of ['initial', 'lookup retry'] as const) {

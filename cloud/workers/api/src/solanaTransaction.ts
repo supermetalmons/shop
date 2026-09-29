@@ -13,8 +13,9 @@ export function isTransactionEncodingTooLarge(error: unknown): boolean {
 export async function buildSizedTransaction(args: {
   build: (lookupTables: AddressLookupTableAccount[]) => VersionedTransaction;
   loadLookupTables: () => Promise<AddressLookupTableAccount[]>;
+  lookupErrorPolicy?: 'fallback' | 'propagate';
   signal: AbortSignal;
-  encodingError: () => Error;
+  encodingError: (stage: 'initial' | 'lookup') => Error;
   packetSizeError: (rawBytes: number) => Error;
 }): Promise<{ transaction: VersionedTransaction; raw: Uint8Array }> {
   const serialize = (lookupTables: AddressLookupTableAccount[]) => {
@@ -33,6 +34,7 @@ export async function buildSizedTransaction(args: {
   try {
     lookupTables = await args.loadLookupTables();
   } catch (error) {
+    if (args.lookupErrorPolicy === 'propagate') throw error;
     if (isSignalCancellationError(args.signal, error)) throw args.signal.reason;
     lookupTables = [];
   }
@@ -41,10 +43,10 @@ export async function buildSizedTransaction(args: {
       built = serialize(lookupTables);
     } catch (error) {
       if (!isTransactionEncodingTooLarge(error)) throw error;
-      throw args.encodingError();
+      throw args.encodingError('lookup');
     }
   }
-  if (!built) throw args.encodingError();
+  if (!built) throw args.encodingError('initial');
   if (built.raw.length > SOLANA_MAX_RAW_TX_BYTES) throw args.packetSizeError(built.raw.length);
   return built;
 }

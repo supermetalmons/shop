@@ -22,6 +22,7 @@ import {
   receiptTransferTestHooks,
 } from '../src/receiptTransfer.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
+import { SOLANA_MAX_RAW_TX_BYTES } from '../src/solanaTransaction.ts';
 
 const OWNER = Keypair.generate().publicKey;
 const DESTINATION = Keypair.generate().publicKey;
@@ -629,3 +630,50 @@ test('receipt transfer lookup fallback preserves cancellation', async () => {
     (error: unknown) => error === reason,
   );
 });
+
+for (const overflow of ['encoding', 'packet'] as const) {
+  for (const lookupResult of ['missing', 'failed', 'ineffective'] as const) {
+    test(`receipt transfer preserves ${overflow} errors when lookup tables are ${lookupResult}`, async (context) => {
+      const rawBytes = SOLANA_MAX_RAW_TX_BYTES + 1;
+      const serialize = context.mock.method(VersionedTransaction.prototype, 'serialize', () => {
+        if (overflow === 'encoding') throw new RangeError('encoding overruns Uint8Array');
+        return new Uint8Array(rawBytes);
+      });
+      const lookup = new AddressLookupTableAccount({
+        key: Keypair.generate().publicKey,
+        state: {
+          deactivationSlot: 0xffffffffffffffffn,
+          lastExtendedSlot: 0,
+          lastExtendedSlotStartIndex: 0,
+          addresses: [],
+        },
+      });
+      const loadLookupTable = context.mock.fn(async () => {
+        if (lookupResult === 'failed') throw new Error('Lookup provider unavailable');
+        return lookupResult === 'ineffective' ? [lookup] : [];
+      });
+      await assert.rejects(receiptTransferTestHooks.buildPreparedTransaction({
+        context: {
+          apiKey: 'helius-key',
+          signal: new AbortController().signal,
+          providerFetch: async () => assert.fail('unexpected provider fetch'),
+        },
+        runtime: receiptTransferTestHooks.buildRuntime(DROP),
+        instruction: new TransactionInstruction({ programId: PROGRAM, keys: [], data: Buffer.from([1]) }),
+        owner: OWNER,
+        blockhash: BLOCKHASH,
+        loadLookupTable,
+      }), {
+        code: 'failed-precondition',
+        message: overflow === 'encoding'
+          ? 'Receipt transfer transaction is too large to encode.'
+          : `Receipt transfer transaction too large (${rawBytes} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
+        details: overflow === 'encoding'
+          ? { dropId: DROP_ID }
+          : { rawBytes, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, dropId: DROP_ID },
+      });
+      assert.equal(loadLookupTable.mock.callCount(), 1);
+      assert.equal(serialize.mock.callCount(), lookupResult === 'ineffective' ? 2 : 1);
+    });
+  }
+}

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Keypair } from '@solana/web3.js';
 import { getPreorderConfig, PREORDER_CARD_COUNT } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
-import { PreorderStore, listPreorderInventoryAssets } from '../src/preorderStore.ts';
+import { PreorderStore, listPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { loadMiNoteEligibility } from '../src/miNoteEligibility.ts';
@@ -1085,8 +1085,32 @@ test('preorder transitions return current state in one database call without sta
   assert.equal((await h.store.claims(config.cluster, config.collection)).length, 0);
 });
 
-test('recovery discovery is paginated, wallet scoped, stable through finalization, and does not probe every order', async () => {
+test('recovery discovery reads only public order fields and cursor metadata in one query', async t => {
+  const calls: Array<{ method: string; sql?: string }> = [];
+  const h = harness({ observeCall: observation => calls.push(observation) });
+  t.after(() => h.database.close());
+  const prepared = await h.prepare([1, 2]);
+  const source = (await h.store.get(prepared.body.order.orderId))!;
+  const submitted = await h.store.submit(source, { signature: 'signature', transactionBase64: 'private-signed-transaction' }, 1100);
+  const recovery = await h.store.confirm(submitted, 550, 1200);
+  const foreground = await h.prepare([3]);
+  calls.length = 0;
+
+  const page = await h.store.recoveries(config.preorderId, BUYER);
+
+  assert.deepEqual(page, { foreground: foreground.body.order, orders: [publicPreorder(recovery)], nextCursor: null });
+  assert.deepEqual(calls.map(call => call.method), ['all']);
+  const columns = h.database.prepare(calls[0].sql!).columns().map(column => column.name);
+  assert.deepEqual(columns.sort(), [
+    'order_id', 'preorder_id', 'buyer', 'ethereum_address', 'card_ids_json', 'assets_json', 'status',
+    'signature', 'confirmed_slot', 'expires_at_ms', 'created_at_ms', 'is_recovery',
+  ].sort());
+  assert.equal((await h.store.get(recovery.orderId))?.signedTransaction, 'private-signed-transaction');
+});
+
+test('recovery discovery is paginated, wallet scoped, stable through finalization, and does not probe every order', async t => {
   const h = harness();
+  t.after(() => h.database.close());
   const orders = [];
   for (let id = 1; id <= 22; id += 1) {
     const prepared = await h.prepare([id]);
@@ -1101,14 +1125,16 @@ test('recovery discovery is paginated, wallet scoped, stable through finalizatio
   const noProbe: Overrides = { probe: async () => { throw new Error('Discovery must only read recovery snapshots'); } };
   const first = await h.call('status', { preorderId: config.preorderId, includeRecoveries: true }, noProbe);
   assert.equal(first.status, 200);
-  assert.equal(first.body.order.orderId, foreground.body.order.orderId);
-  assert.deepEqual(first.body.recoveries.map((order: { orderId: string }) => order.orderId), orders.slice(0, 20).map((order) => order.orderId));
+  assert.deepEqual(first.body.order, foreground.body.order);
+  assert.deepEqual(first.body.recoveries, orders.slice(0, 20).map(publicPreorder));
   assert.equal(typeof first.body.nextRecoveryCursor, 'string');
+  assert.deepEqual(JSON.parse(Buffer.from(first.body.nextRecoveryCursor, 'base64url').toString('utf8')),
+    [orders[19].createdAtMs, orders[19].orderId]);
   await h.store.finish(orders[0], 'succeeded', 1100, 600);
   const second = await h.call('status', { preorderId: config.preorderId, includeRecoveries: true,
     recoveryCursor: first.body.nextRecoveryCursor }, noProbe);
-  assert.equal(second.body.order.orderId, foreground.body.order.orderId);
-  assert.deepEqual(second.body.recoveries.map((order: { orderId: string }) => order.orderId), orders.slice(20).map((order) => order.orderId));
+  assert.deepEqual(second.body.order, foreground.body.order);
+  assert.deepEqual(second.body.recoveries, orders.slice(20).map(publicPreorder));
   assert.equal(second.body.nextRecoveryCursor, null);
   const legacy = await h.call('status', { preorderId: config.preorderId });
   assert.equal(legacy.body.order.orderId, orders[1].orderId);

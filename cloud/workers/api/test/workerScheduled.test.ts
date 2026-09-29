@@ -68,6 +68,132 @@ function assertOpsFailures(error: unknown, failures: unknown[]): boolean {
   return true;
 }
 
+test('scheduled jobs report their own result counts and preserve immediate invocation order', async (context) => {
+  const logs: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', (entry: Record<string, unknown>) => { logs.push(entry); });
+  const calls: string[] = [];
+  const reconciliation = runScheduledReconciliations({} as Env, new AbortController().signal, {
+    stripe: async () => { calls.push('stripe'); return { enqueued: 2, failed: 1 }; },
+    stripeNotifications: async () => { calls.push('stripeNotifications'); return 3; },
+    shippedNotifications: async () => { calls.push('shippedNotifications'); return 4; },
+    packStatus: async () => { calls.push('packStatus'); return 5; },
+    notifications: async () => { calls.push('notifications'); return 6; },
+    receiptClaims: async () => { calls.push('receiptClaims'); return 7; },
+    preorders: async () => { calls.push('preorders'); return 0; },
+    ops: async () => { calls.push('ops'); },
+  });
+  assert.deepEqual(calls, [
+    'stripe', 'stripeNotifications', 'shippedNotifications', 'packStatus',
+    'notifications', 'receiptClaims', 'preorders', 'ops',
+  ]);
+  await reconciliation;
+  assert.equal(logs.length, 8);
+  for (const entry of logs) {
+    assert.equal(entry.event, 'scheduled_reconciliation_job');
+    assert.equal(entry.outcome, 'succeeded');
+    assert.equal(typeof entry.durationMs, 'number');
+    assert.ok(Number.isFinite(entry.durationMs));
+    assert.ok((entry.durationMs as number) >= 0);
+  }
+  assert.deepEqual(Object.fromEntries(logs.map(({ job, durationMs: _durationMs, ...entry }) => [job, entry])), {
+    stripe: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', enqueued: 2, failed: 1 },
+    stripeNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 3 },
+    shippedNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 4 },
+    packStatus: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 5 },
+    notifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 6 },
+    receiptClaims: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 7 },
+    preorders: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 0 },
+    ops: { event: 'scheduled_reconciliation_job', outcome: 'succeeded' },
+  });
+});
+
+test('failed scheduled jobs report only error names and preserve original failures', async (context) => {
+  const errors: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', () => {});
+  context.mock.method(console, 'error', (entry: Record<string, unknown>) => { errors.push(entry); });
+  const stripeFailure = new TypeError('private provider details');
+  const opsFailure = { secret: 'private cleanup details' };
+  await assert.rejects(runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(),
+    stripe: async () => { throw stripeFailure; },
+    ops: async () => { throw opsFailure; },
+  }), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 2);
+    assert.equal(error.errors[0], stripeFailure);
+    assert.equal(error.errors[1], opsFailure);
+    return true;
+  });
+  assert.deepEqual(errors.map(({ durationMs: _durationMs, ...entry }) => entry), [
+    { event: 'scheduled_reconciliation_job', job: 'stripe', outcome: 'failed', errorName: 'TypeError' },
+    { event: 'scheduled_reconciliation_job', job: 'ops', outcome: 'failed', errorName: 'UnknownError' },
+  ]);
+});
+
+test('scheduled job logging cannot change successful results or replace failures', async (context) => {
+  const loggerFailure = new Error('logger unavailable');
+  context.mock.method(console, 'log', () => { throw loggerFailure; });
+  context.mock.method(console, 'error', () => { throw loggerFailure; });
+  await runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(),
+    ops: async () => {},
+  });
+  const jobFailure = new Error('job failed');
+  await assert.rejects(runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(),
+    stripe: async () => { throw jobFailure; },
+    ops: async () => {},
+  }), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 1);
+    assert.equal(error.errors[0], jobFailure);
+    return true;
+  });
+});
+
+test('synchronous commerce failure still skips later commerce jobs and waits for OPS', async (context) => {
+  const errors: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', () => {});
+  context.mock.method(console, 'error', (entry: Record<string, unknown>) => { errors.push(entry); });
+  const failure = new Error('synchronous commerce failure');
+  const opsFinished = Promise.withResolvers<void>();
+  const calls: string[] = [];
+  let settled = false;
+  const reconciliation = runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(calls),
+    stripe: () => { calls.push('stripe'); throw failure; },
+    ops: () => { calls.push('ops'); return opsFinished.promise; },
+  }).finally(() => { settled = true; });
+  const rejection = assert.rejects(reconciliation, (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 1);
+    assert.equal(error.errors[0], failure);
+    return true;
+  });
+  assert.deepEqual(calls, ['stripe', 'ops']);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  opsFinished.resolve();
+  await rejection;
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].job, 'stripe');
+  assert.equal(errors[0].outcome, 'failed');
+});
+
+test('synchronous OPS failure remains the direct rejection', async (context) => {
+  const errors: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', () => {});
+  context.mock.method(console, 'error', (entry: Record<string, unknown>) => { errors.push(entry); });
+  const failure = new Error('synchronous OPS failure');
+  await assert.rejects(runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(),
+    ops: () => { throw failure; },
+  }), (error: unknown) => error === failure);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].job, 'ops');
+  assert.equal(errors[0].outcome, 'failed');
+});
+
 test('OPS cleanup continues sequentially after failures and aggregates all errors', async () => {
   const rateLimitFailure = new Error('rate-limit cleanup failed');
   const staffFailure = new Error('staff cleanup failed');
@@ -169,7 +295,10 @@ test('OPS cleanup runs while commerce authority is pending', async () => {
   assert.equal(commerceCalls.length, 7);
 });
 
-test('commerce authority failure waits for independent OPS cleanup and retains both failures', async () => {
+test('commerce authority failure waits for independent OPS cleanup and retains both failures', async (context) => {
+  const logs: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', (entry: Record<string, unknown>) => { logs.push(entry); });
+  context.mock.method(console, 'error', (entry: Record<string, unknown>) => { logs.push(entry); });
   const opsStarted = Promise.withResolvers<void>();
   const opsFinished = Promise.withResolvers<void>();
   const opsFailure = new Error('ops cleanup failed');
@@ -199,6 +328,9 @@ test('commerce authority failure waits for independent OPS cleanup and retains b
   assert.deepEqual(commerceCalls, []);
   opsFinished.resolve();
   await rejection;
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].job, 'ops');
+  assert.equal(logs[0].outcome, 'failed');
 });
 
 test('commerce reconciliation and OPS failures retain their existing aggregate shape', async () => {
@@ -226,9 +358,9 @@ test('commerce reconciliation and OPS failures retain their existing aggregate s
 });
 
 test('OPS cleanup preserves completion and backlog logs while commerce is paused', async (context) => {
-  const logs: unknown[] = [];
+  const logs: Array<Record<string, unknown>> = [];
   const errors: unknown[] = [];
-  context.mock.method(console, 'log', (entry: unknown) => { logs.push(entry); });
+  context.mock.method(console, 'log', (entry: Record<string, unknown>) => { logs.push(entry); });
   context.mock.method(console, 'error', (entry: unknown) => { errors.push(entry); });
   const rateLimitCount = OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit;
   const staffCount = OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions.limit;
@@ -256,7 +388,11 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   assert.equal(harness.maxActive(), 1);
   const staffCounts = { sessionsDeleted: staffCount, challengesDeleted: 2, limitReached: true, hasMore: true };
   const anonymousCounts = { deletedCount: anonymousCount, limitReached: true, hasMore: true };
-  assert.deepEqual(logs, [
+  const jobLogs = logs.filter((entry) => entry.event === 'scheduled_reconciliation_job');
+  assert.equal(jobLogs.length, 1);
+  assert.equal(jobLogs[0].job, 'ops');
+  assert.equal(jobLogs[0].outcome, 'succeeded');
+  assert.deepEqual(logs.filter((entry) => entry.event !== 'scheduled_reconciliation_job'), [
     { event: 'receipt_transfer_rate_limit_cleanup_completed', deletedCount: rateLimitCount, limitReached: true, hasMore: true },
     { event: 'staff_auth_cleanup_completed', ...staffCounts },
     { event: 'anonymous_auth_cleanup_completed', ...anonymousCounts },

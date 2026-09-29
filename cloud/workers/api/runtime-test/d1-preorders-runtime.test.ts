@@ -5,7 +5,7 @@ import test from 'node:test';
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import { createTestHarness } from 'wrangler';
-import { PreorderStore, type StoredPreorder } from '../src/preorderStore.ts';
+import { PreorderStore, publicPreorder, type StoredPreorder } from '../src/preorderStore.ts';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { recoverPreorder } from '../../../../scripts/ops/recoverPreorder.ts';
 
@@ -75,8 +75,8 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const nextOrder = nextOrders.find((result) => result.status === 'fulfilled');
     assert.ok(nextOrder?.status === 'fulfilled');
     const discovery = await store.recoveries(config.preorderId, repeatBuyer);
-    assert.equal(discovery.foreground?.orderId, nextOrder.value.orderId);
-    assert.deepEqual(discovery.orders.map(order => order.orderId), [early.orderId]);
+    assert.deepEqual(discovery.foreground, publicPreorder(nextOrder.value));
+    assert.deepEqual(discovery.orders, [publicPreorder(confirmedEarly)]);
     assert.equal(discovery.nextCursor, null);
     const discoveryBuyer = Keypair.generate().publicKey.toBase58();
     const discoveryPrepared = await store.reserve(candidate(discoveryBuyer, [24]));

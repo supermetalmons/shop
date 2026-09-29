@@ -22,6 +22,7 @@ import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { createTimedAbortScope } from '../src/boundedRequest.ts';
 import { commerceKeys } from '../src/commerceRepository.ts';
+import { SOLANA_MAX_RAW_TX_BYTES } from '../src/solanaTransaction.ts';
 import {
   handleIrlClaimPrepare,
   IRL_CLAIM_PREPARE_PATH,
@@ -585,6 +586,92 @@ test('IRL claim transaction builder maps an ineffective lookup table to a stable
     (error) => (error as { code?: unknown }).code === 'failed-precondition',
   );
 });
+
+for (const overflow of ['encoding', 'packet'] as const) {
+  for (const lookupResult of ['missing', 'ineffective'] as const) {
+    test(`IRL claim preserves ${overflow} error details when lookup tables are ${lookupResult}`, async (context) => {
+      const rawBytes = SOLANA_MAX_RAW_TX_BYTES + 1;
+      const serialize = context.mock.method(VersionedTransaction.prototype, 'serialize', () => {
+        if (overflow === 'encoding') throw new RangeError('encoding overruns Uint8Array');
+        return new Uint8Array(rawBytes);
+      });
+      const lookup = new AddressLookupTableAccount({
+        key: Keypair.generate().publicKey,
+        state: {
+          deactivationSlot: 0xffffffffffffffffn,
+          lastExtendedSlot: 0,
+          lastExtendedSlotStartIndex: 0,
+          addresses: [],
+        },
+      });
+      const runtime = irlClaimTestHooks.buildRuntime({ ...DROP, deliveryLookupTable: lookup.key.toBase58() });
+      const loadLookupTable = context.mock.fn(async () => lookupResult === 'ineffective' ? [lookup] : []);
+      const details = {
+        deliveryLookupTable: lookup.key.toBase58(),
+        receiptsMerkleTree: RECEIPTS_TREE.toBase58(),
+        dropId: DROP_ID,
+      };
+      await assert.rejects(irlClaimTestHooks.buildPreparedTransaction({
+        context: {
+          apiKey: 'helius-key',
+          signal: new AbortController().signal,
+          providerFetch: async () => assert.fail('unexpected provider fetch'),
+        },
+        runtime,
+        instructions: [new TransactionInstruction({
+          programId: PROGRAM,
+          keys: [{ pubkey: COSIGNER.publicKey, isSigner: true, isWritable: false }],
+          data: Buffer.from([1]),
+        })],
+        owner: OWNER,
+        cosigner: COSIGNER,
+        blockhash: BLOCKHASH,
+        loadLookupTable,
+      }), {
+        code: 'failed-precondition',
+        message: overflow === 'encoding'
+          ? 'Claim transaction is too large to encode.'
+          : `Claim transaction too large (${rawBytes} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
+        details: overflow === 'encoding'
+          ? lookupResult === 'ineffective' ? details : undefined
+          : { rawBytes, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, ...details },
+      });
+      assert.equal(loadLookupTable.mock.callCount(), 1);
+      assert.equal(serialize.mock.callCount(), lookupResult === 'ineffective' ? 2 : 1);
+    });
+  }
+}
+
+for (const kind of ['provider', 'direct cancellation', 'wrapped cancellation'] as const) {
+  test(`IRL claim propagates the original lookup ${kind}`, async (context) => {
+    context.mock.method(VersionedTransaction.prototype, 'serialize', () => new Uint8Array(SOLANA_MAX_RAW_TX_BYTES + 1));
+    const controller = new AbortController();
+    const reason = new DOMException('Request cancelled', 'AbortError');
+    const failure = kind === 'direct cancellation' ? reason
+      : kind === 'wrapped cancellation' ? new Error('Lookup interrupted', { cause: reason })
+        : new Error('Lookup provider unavailable');
+    await assert.rejects(irlClaimTestHooks.buildPreparedTransaction({
+      context: {
+        apiKey: 'helius-key',
+        signal: controller.signal,
+        providerFetch: async () => assert.fail('unexpected provider fetch'),
+      },
+      runtime: irlClaimTestHooks.buildRuntime(DROP),
+      instructions: [new TransactionInstruction({
+        programId: PROGRAM,
+        keys: [{ pubkey: COSIGNER.publicKey, isSigner: true, isWritable: false }],
+        data: Buffer.from([1]),
+      })],
+      owner: OWNER,
+      cosigner: COSIGNER,
+      blockhash: BLOCKHASH,
+      loadLookupTable: async () => {
+        controller.abort(reason);
+        throw failure;
+      },
+    }), (error) => error === failure);
+  });
+}
 
 test('IRL claim handler enforces exact bounded requests and method handling', async () => {
   const wrongMethod = await handleIrlClaimPrepare(

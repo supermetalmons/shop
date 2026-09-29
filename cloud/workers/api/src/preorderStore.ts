@@ -14,16 +14,25 @@ export type StoredPreorder = PreorderOrder & {
   revision: number;
 };
 
-function decode(row: Record<string, unknown> | null): StoredPreorder | null {
-  if (!row) return null;
+const PUBLIC_PREORDER_COLUMNS = 'order_id, preorder_id, buyer, ethereum_address, card_ids_json, assets_json, status, signature, confirmed_slot, expires_at_ms';
+
+function decodePreorderOrder(row: Record<string, unknown>): PreorderOrder {
   return {
     orderId: String(row.order_id), preorderId: String(row.preorder_id), buyer: String(row.buyer),
     ethereumAddress: row.ethereum_address == null ? null : String(row.ethereum_address),
-    cluster: String(row.cluster), collection: String(row.collection), requestId: String(row.request_id),
     cardIds: JSON.parse(String(row.card_ids_json)), assets: JSON.parse(String(row.assets_json)),
     status: row.status as PreorderOrder['status'], signature: row.signature === null ? null : String(row.signature),
     confirmedSlot: row.confirmed_slot == null ? null : Number(row.confirmed_slot),
-    expiresAtMs: Number(row.expires_at_ms), createdAtMs: Number(row.created_at_ms), revision: Number(row.revision),
+    expiresAtMs: Number(row.expires_at_ms),
+  };
+}
+
+function decode(row: Record<string, unknown> | null): StoredPreorder | null {
+  if (!row) return null;
+  return {
+    ...decodePreorderOrder(row),
+    cluster: String(row.cluster), collection: String(row.collection), requestId: String(row.request_id),
+    createdAtMs: Number(row.created_at_ms), revision: Number(row.revision),
     preparedTransaction: String(row.prepared_transaction),
     signedTransaction: row.signed_transaction === null ? null : String(row.signed_transaction),
     blockhash: String(row.blockhash), blockhashContextSlot: Number(row.blockhash_context_slot),
@@ -102,7 +111,7 @@ export class PreorderStore {
   }
 
   async recoveries(preorderId: string, buyer: string, cursor?: string): Promise<{
-    foreground: StoredPreorder | null; orders: StoredPreorder[]; nextCursor: string | null;
+    foreground: PreorderOrder | null; orders: PreorderOrder[]; nextCursor: string | null;
   }> {
     let after: [number, string] | null = null;
     if (cursor !== undefined) {
@@ -117,11 +126,11 @@ export class PreorderStore {
       }
     }
     const result = await this.db.prepare(`WITH foreground AS (
-      SELECT *, 0 AS is_recovery FROM commerce_preorder_orders
+      SELECT ${PUBLIC_PREORDER_COLUMNS}, created_at_ms, 0 AS is_recovery FROM commerce_preorder_orders
       WHERE preorder_id = ? AND buyer = ? AND (status = 'prepared' OR (status = 'submitted' AND confirmed_slot IS NULL))
       LIMIT 1
     ), recovery_page AS (
-      SELECT *, 1 AS is_recovery FROM commerce_preorder_orders
+      SELECT ${PUBLIC_PREORDER_COLUMNS}, created_at_ms, 1 AS is_recovery FROM commerce_preorder_orders
       WHERE preorder_id = ? AND buyer = ? AND status = 'submitted' AND confirmed_slot IS NOT NULL
       ${after ? 'AND (created_at_ms, order_id) > (?, ?)' : ''}
       ORDER BY created_at_ms, order_id LIMIT 21
@@ -130,11 +139,12 @@ export class PreorderStore {
     ORDER BY is_recovery, created_at_ms, order_id`)
       .bind(preorderId, buyer, preorderId, buyer, ...(after ?? [])).all<Record<string, unknown>>();
     const recoveries = result.results.filter(row => row.is_recovery === 1);
-    const orders = recoveries.slice(0, 20).map((row) => decode(row)!);
-    const last = orders.at(-1);
-    return { foreground: decode(result.results.find(row => row.is_recovery === 0) ?? null),
-      orders, nextCursor: recoveries.length > 20 && last
-      ? Buffer.from(JSON.stringify([last.createdAtMs, last.orderId])).toString('base64url') : null };
+    const page = recoveries.slice(0, 20);
+    const last = page.at(-1);
+    const foreground = result.results.find(row => row.is_recovery === 0);
+    return { foreground: foreground ? decodePreorderOrder(foreground) : null,
+      orders: page.map(decodePreorderOrder), nextCursor: recoveries.length > 20 && last
+      ? Buffer.from(JSON.stringify([Number(last.created_at_ms), String(last.order_id)])).toString('base64url') : null };
   }
 
   async due(nowMs: number, limit = 20): Promise<StoredPreorder[]> {

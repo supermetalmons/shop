@@ -83,6 +83,7 @@ import {
   SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 
 export const RECEIPT_TRANSFER_PREPARE_PATH = '/receipts/transfer/prepare';
 
@@ -90,7 +91,6 @@ const REQUEST_MAX_BYTES = 1024;
 const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
-const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
@@ -611,15 +611,6 @@ function buildTransferInstruction(
   });
 }
 
-function transactionEncodingTooLarge(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return error instanceof RangeError && (
-    /encoding overruns Uint8Array/i.test(message) ||
-    /offset.*out of range/i.test(message) ||
-    String((error as { code?: unknown }).code || '') === 'ERR_OUT_OF_RANGE'
-  );
-}
-
 async function buildPreparedTransaction(args: {
   context: ProviderContext;
   runtime: ReceiptTransferRuntime;
@@ -628,62 +619,25 @@ async function buildPreparedTransaction(args: {
   instruction: ReturnType<typeof buildTransferInstruction>;
   loadLookupTable: ReceiptTransferDependencies['loadLookupTable'];
 }): Promise<Uint8Array> {
-  const build = (lookups: AddressLookupTableAccount[]) => {
-    const message = new TransactionMessage({
+  const { raw } = await buildSizedTransaction({
+    build: (lookups) => new VersionedTransaction(new TransactionMessage({
       payerKey: args.owner,
       recentBlockhash: args.blockhash,
       instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), args.instruction],
-    }).compileToV0Message(lookups);
-    return new VersionedTransaction(message).serialize();
-  };
-  let lookupsPromise: Promise<AddressLookupTableAccount[]> | undefined;
-  const loadLookups = () => {
-    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch((error) => {
-      if (isSignalCancellationError(args.context.signal, error)) throw args.context.signal.reason;
-      return [];
-    });
-    return lookupsPromise;
-  };
-  let raw: Uint8Array;
-  try {
-    raw = build([]);
-  } catch (error) {
-    if (!transactionEncodingTooLarge(error)) throw error;
-    const lookups = await loadLookups();
-    if (!lookups.length) {
-      throw new ReceiptTransferError('failed-precondition', 'Receipt transfer transaction is too large to encode.', {
-        dropId: args.runtime.dropId,
-      });
-    }
-    try {
-      raw = build(lookups);
-    } catch (lookupError) {
-      if (!transactionEncodingTooLarge(lookupError)) throw lookupError;
-      throw new ReceiptTransferError('failed-precondition', 'Receipt transfer transaction is too large to encode.', {
-        dropId: args.runtime.dropId,
-      });
-    }
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    const lookups = await loadLookups();
-    if (lookups.length) {
-      try {
-        raw = build(lookups);
-      } catch (error) {
-        if (!transactionEncodingTooLarge(error)) throw error;
-        throw new ReceiptTransferError('failed-precondition', 'Receipt transfer transaction is too large to encode.', {
-          dropId: args.runtime.dropId,
-        });
-      }
-    }
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    throw new ReceiptTransferError(
+    }).compileToV0Message(lookups)),
+    loadLookupTables: () => args.loadLookupTable(args.context, args.runtime),
+    signal: args.context.signal,
+    encodingError: () => new ReceiptTransferError(
       'failed-precondition',
-      `Receipt transfer transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
-      { rawBytes: raw.length, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, dropId: args.runtime.dropId },
-    );
-  }
+      'Receipt transfer transaction is too large to encode.',
+      { dropId: args.runtime.dropId },
+    ),
+    packetSizeError: (rawBytes) => new ReceiptTransferError(
+      'failed-precondition',
+      `Receipt transfer transaction too large (${rawBytes} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
+      { rawBytes, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES, dropId: args.runtime.dropId },
+    ),
+  });
   return raw;
 }
 

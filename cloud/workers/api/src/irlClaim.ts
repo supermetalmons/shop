@@ -86,6 +86,7 @@ import {
   SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
@@ -96,7 +97,6 @@ const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const HELIUS_ASSETS_PAGE_LIMIT = HELIUS_SEARCH_ASSETS_PAGE_LIMITS[0];
-const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
@@ -775,15 +775,6 @@ function mintReceiptsInstruction(
   });
 }
 
-function transactionEncodingTooLarge(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return error instanceof RangeError && (
-    /encoding overruns Uint8Array/i.test(message) ||
-    /offset.*out of range/i.test(message) ||
-    String((error as { code?: unknown }).code || '') === 'ERR_OUT_OF_RANGE'
-  );
-}
-
 async function buildPreparedTransaction(args: {
   context: ProviderContext;
   runtime: IrlClaimRuntime;
@@ -793,50 +784,41 @@ async function buildPreparedTransaction(args: {
   blockhash: string;
   loadLookupTable: IrlClaimDependencies['loadLookupTable'];
 }): Promise<Uint8Array> {
-  const build = (lookups: AddressLookupTableAccount[]) => {
-    const message = new TransactionMessage({
-      payerKey: args.owner,
-      recentBlockhash: args.blockhash,
-      instructions: args.instructions,
-    }).compileToV0Message(lookups);
-    const transaction = new VersionedTransaction(message);
-    transaction.sign([args.cosigner]);
-    return transaction.serialize();
-  };
-  const buildWithLookup = (lookups: AddressLookupTableAccount[]) => {
-    try {
-      return build(lookups);
-    } catch (error) {
-      if (!transactionEncodingTooLarge(error)) throw error;
-      throw new IrlClaimError('failed-precondition', 'Claim transaction is too large to encode.', {
+  const { raw } = await buildSizedTransaction({
+    build: (lookups) => {
+      const message = new TransactionMessage({
+        payerKey: args.owner,
+        recentBlockhash: args.blockhash,
+        instructions: args.instructions,
+      }).compileToV0Message(lookups);
+      const transaction = new VersionedTransaction(message);
+      transaction.sign([args.cosigner]);
+      return transaction;
+    },
+    loadLookupTables: () => args.loadLookupTable(args.context, args.runtime),
+    lookupErrorPolicy: 'propagate',
+    signal: args.context.signal,
+    encodingError: (stage) => new IrlClaimError(
+      'failed-precondition',
+      'Claim transaction is too large to encode.',
+      stage === 'lookup' ? {
         deliveryLookupTable: args.runtime.deliveryLookupTable?.toBase58() || '',
         receiptsMerkleTree: args.runtime.receiptsMerkleTree.toBase58(),
         dropId: args.runtime.dropId,
-      });
-    }
-  };
-  let raw: Uint8Array;
-  try {
-    raw = build([]);
-  } catch (error) {
-    if (!transactionEncodingTooLarge(error)) throw error;
-    const lookups = await args.loadLookupTable(args.context, args.runtime);
-    if (!lookups.length) throw new IrlClaimError('failed-precondition', 'Claim transaction is too large to encode.');
-    raw = buildWithLookup(lookups);
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    const lookups = await args.loadLookupTable(args.context, args.runtime);
-    if (lookups.length) raw = buildWithLookup(lookups);
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    throw new IrlClaimError('failed-precondition', `Claim transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`, {
-      rawBytes: raw.length,
-      maxRawBytes: SOLANA_MAX_RAW_TX_BYTES,
-      deliveryLookupTable: args.runtime.deliveryLookupTable?.toBase58() || '',
-      receiptsMerkleTree: args.runtime.receiptsMerkleTree.toBase58(),
-      dropId: args.runtime.dropId,
-    });
-  }
+      } : undefined,
+    ),
+    packetSizeError: (rawBytes) => new IrlClaimError(
+      'failed-precondition',
+      `Claim transaction too large (${rawBytes} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
+      {
+        rawBytes,
+        maxRawBytes: SOLANA_MAX_RAW_TX_BYTES,
+        deliveryLookupTable: args.runtime.deliveryLookupTable?.toBase58() || '',
+        receiptsMerkleTree: args.runtime.receiptsMerkleTree.toBase58(),
+        dropId: args.runtime.dropId,
+      },
+    ),
+  });
   return raw;
 }
 

@@ -83,6 +83,7 @@ import {
   SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { isTransactionEncodingTooLarge, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -117,7 +118,6 @@ const ASSET_FETCH_MAX_WAIT_MS = 12_000;
 const ASSET_FETCH_RETRY_BASE_DELAY_MS = 300;
 const MAX_DELIVERY_ITEMS = 32;
 const MAX_DELIVERY_ID_ATTEMPTS = 16;
-const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
@@ -782,20 +782,11 @@ function buildTransaction(
   return transaction;
 }
 
-function transactionEncodingTooLarge(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return error instanceof RangeError && (
-    /encoding overruns Uint8Array/i.test(message) ||
-    /offset.*out of range/i.test(message) ||
-    String((error as { code?: unknown }).code || '') === 'ERR_OUT_OF_RANGE'
-  );
-}
-
 function serializedTransactionSize(build: () => VersionedTransaction): number {
   try {
     return build().serialize().length;
   } catch (error) {
-    if (!transactionEncodingTooLarge(error)) throw error;
+    if (!isTransactionEncodingTooLarge(error)) throw error;
     return SOLANA_MAX_RAW_TX_BYTES + 1;
   }
 }
