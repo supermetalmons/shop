@@ -5,6 +5,19 @@ import { commerceKeys } from '../src/commerceRepository.ts';
 import { reconcilePendingStripeTerminalNotifications } from '../src/stripeCheckout/notificationReconciliation.ts';
 import { createStripeTerminalNotificationIntent, notificationFixture, OUTBOX_NOW, OUTBOX_DROP } from './notificationOutboxTestSupport.ts';
 
+async function addManualNotifications(state: Awaited<ReturnType<typeof notificationFixture>>, sessionIds: string[]) {
+  await state.repository.run(OUTBOX_NOW, async (unit) => {
+    for (const sessionId of sessionIds) {
+      const key = commerceKeys.stripeCheckout(OUTBOX_DROP, sessionId);
+      await unit.create(key, { status: 'fulfillment_failed', manualRefundReviewRequired: true,
+        owner: 'anonymous:anon:recovery', ownerKind: 'anonymous', authSubject: 'anon:recovery' });
+      await unit.enqueueNotificationOutbox(createStripeTerminalNotificationIntent({
+        parentPath: key.path, dropId: OUTBOX_DROP, sessionId, outcome: 'manual_review', nowMs: OUTBOX_NOW,
+      }));
+    }
+  });
+}
+
 test('cron recovers terminal notification rows without backfilling historical checkouts', async (context) => {
   const state = await notificationFixture(context, 'stripe_terminal');
   const manual = commerceKeys.stripeCheckout(OUTBOX_DROP, 'cs_manual');
@@ -50,4 +63,44 @@ test('reconciliation continues after Queue failure and preserves the failed publ
     (error: unknown) => error instanceof AggregateError && error.errors[0] === failure);
   assert.equal((await state.read()).state, 'pending');
   assert.equal((await state.repository.notificationOutbox.get(other.path, 'stripe_terminal'))?.state, 'queued');
+});
+
+test('Stripe recovery drains at most twenty checkouts per pass', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { create: false });
+  const sessionIds = Array.from({ length: 21 }, (_, index) => `cs_${100 + index}`);
+  await addManualNotifications(state, sessionIds);
+  const env = { COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue };
+  assert.equal(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), 20);
+  assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), sessionIds.slice(0, 20));
+  const lastKey = commerceKeys.stripeCheckout(OUTBOX_DROP, sessionIds[20]);
+  assert.equal((await state.repository.notificationOutbox.get(lastKey.path, 'stripe_terminal'))?.attemptCount, 0);
+  assert.equal(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), 1);
+  assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), sessionIds);
+});
+
+test('Stripe recovery finalizes an accepted enqueue before cancellation stops later checkouts', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { create: false });
+  await addManualNotifications(state, ['cs_100', 'cs_101']);
+  const controller = new AbortController();
+  const cancellation = new Error('scheduled reconciliation cancelled');
+  const env = { COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: { sendBatch: async (
+    messages: Iterable<MessageSendRequest<NotificationEmailJobV1>>,
+  ) => {
+    const result = await state.queue.sendBatch(messages);
+    controller.abort(cancellation);
+    return result;
+  } } };
+  await assert.rejects(reconcilePendingStripeTerminalNotifications(env, controller.signal, { nowMs: () => OUTBOX_NOW }),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.message, 'Stripe terminal notification reconciliation failed');
+      assert.deepEqual(error.errors, [cancellation]);
+      return true;
+    });
+  assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), ['cs_100']);
+  const first = await state.repository.notificationOutbox.get(commerceKeys.stripeCheckout(OUTBOX_DROP, 'cs_100').path, 'stripe_terminal');
+  const second = await state.repository.notificationOutbox.get(commerceKeys.stripeCheckout(OUTBOX_DROP, 'cs_101').path, 'stripe_terminal');
+  assert.equal(first?.state, 'queued');
+  assert.equal(second?.state, 'pending');
+  assert.equal(second?.attemptCount, 0);
 });

@@ -39,6 +39,33 @@ function queue(send: (jobs: NotificationEmailJobV1[]) => Promise<void>) {
   } } as Pick<Queue<NotificationEmailJobV1>, 'sendBatch'>;
 }
 
+async function reconciliationFixture(context: { after: (run: () => void) => void }, ids: number[]) {
+  const state = fixture(context);
+  await state.repository.run(NOW_MS, async (unit) => {
+    for (const id of ids) {
+      const orderKey = commerceKeys.deliveryOrder(DROP_ID, String(id));
+      await unit.create(orderKey, {
+        deliveryId: id, status: 'ready_to_ship', fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: TRACKING_URL, addressSnapshot: { email: 'buyer@example.com' },
+      });
+      await unit.enqueueNotificationOutbox({
+        parentPath: orderKey.path, family: 'shipped', dropId: DROP_ID,
+        generation: crypto.randomUUID(), outcome: null, retryUntilMs: NOW_MS + 6 * 60 * 60_000,
+        entries: [{ kind: 'buyer_order_shipped', jobId: crypto.randomUUID(),
+          idempotencyKey: `${DROP_ID}:${id}:order_shipped`, state: 'pending' }],
+      });
+    }
+  });
+  return {
+    ...state,
+    run: (send: (jobs: NotificationEmailJobV1[]) => Promise<void>, signal = new AbortController().signal) =>
+      reconcilePendingShippedNotifications({
+        COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: queue(send) as Queue<NotificationEmailJobV1>,
+      }, signal, { nowMs: () => NOW_MS }),
+    load: (id: number) => state.repository.notificationOutbox.get(commerceKeys.deliveryOrder(DROP_ID, String(id)).path, 'shipped'),
+  };
+}
+
 test('shipment transition stores an atomic outbox intent and repeated saves preserve its identity', async (context) => {
   const { repository, update } = fixture(context);
   const first = await update();
@@ -120,6 +147,70 @@ test('scheduled shipment recovery reuses the exact saved email after an uncertai
   }, new AbortController().signal, { nowMs: () => NOW_MS + 10 * 60_000 });
   assert.equal(retried, 1);
   assert.deepEqual(jobs[1], jobs[0]);
+});
+
+test('shipment recovery processes four candidates including ineligible orders without refilling', async (context) => {
+  const state = await reconciliationFixture(context, [100, 101, 102, 103, 104, 105]);
+  await state.repository.run(NOW_MS, (unit) => unit.update(commerceKeys.deliveryOrder(DROP_ID, '100'), {
+    fulfillmentStatus: 'Preparing',
+  }));
+  const jobs: NotificationEmailJobV1[] = [];
+  const send = async (batch: NotificationEmailJobV1[]) => { jobs.push(...batch); };
+  assert.equal(await state.run(send), 3);
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103]);
+  assert.equal((await state.load(100))?.state, 'cancelled');
+  for (const id of [104, 105]) assert.equal((await state.load(id))?.attemptCount, 0);
+  assert.equal(await state.run(send), 2);
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103, 104, 105]);
+});
+
+test('shipment recovery continues after failure while retaining the four-candidate cap and error log', async (context) => {
+  const state = await reconciliationFixture(context, [100, 101, 102, 103, 104]);
+  const logs = context.mock.method(console, 'error', () => undefined);
+  const failure = new Error('queue unavailable');
+  const jobs: NotificationEmailJobV1[] = [];
+  await assert.rejects(state.run(async (batch) => {
+    jobs.push(...batch);
+    if (batch[0].context.deliveryId === 100) throw failure;
+  }), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.message, 'Shipped notification reconciliation failed');
+    assert.deepEqual(error.errors, [failure]);
+    return true;
+  });
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103]);
+  assert.deepEqual(logs.mock.calls.map((call) => call.arguments[0]), [{
+    event: 'buyer_order_shipped_notification_enqueue_failed',
+    parentPath: commerceKeys.deliveryOrder(DROP_ID, '100').path,
+    error: { name: 'Error' },
+  }]);
+  assert.equal((await state.load(100))?.state, 'pending');
+  assert.equal((await state.load(100))?.attemptCount, 1);
+  for (const id of [101, 102, 103]) assert.equal((await state.load(id))?.state, 'queued');
+  assert.equal((await state.load(104))?.attemptCount, 0);
+  assert.equal(await state.run(async (batch) => { jobs.push(...batch); }), 1);
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103, 104]);
+});
+
+test('shipment recovery finalizes an accepted enqueue before cancellation stops later candidates', async (context) => {
+  const state = await reconciliationFixture(context, [100, 101, 102]);
+  const controller = new AbortController();
+  const cancellation = new Error('scheduled reconciliation cancelled');
+  const jobs: NotificationEmailJobV1[] = [];
+  await assert.rejects(state.run(async (batch) => {
+    jobs.push(...batch);
+    controller.abort(cancellation);
+  }, controller.signal), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [cancellation]);
+    return true;
+  });
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100]);
+  assert.equal((await state.load(100))?.state, 'queued');
+  for (const id of [101, 102]) {
+    assert.equal((await state.load(id))?.attemptCount, 0);
+    assert.equal((await state.load(id))?.state, 'pending');
+  }
 });
 
 test('explicit shipment resend supersedes an old lease and creates a fresh idempotency key', async (context) => {

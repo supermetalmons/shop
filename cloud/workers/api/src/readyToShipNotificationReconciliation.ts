@@ -4,6 +4,7 @@ import {
 } from './deliveryOrderSummaries.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
+import { drainNotificationCandidates } from './notificationReconciliation.js';
 import {
   markPendingReadyToShipNotificationsFailed,
   notificationPersistenceContext,
@@ -29,23 +30,18 @@ export async function reconcilePendingReadyToShipNotifications(
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  signal.throwIfAborted();
-  const candidates = await repository.queryDueReadyNotifications({
-    dueAtMs: context.nowMs,
-    limit: READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
-  });
-  const failures: unknown[] = [];
   let publicationAttempts = 0;
-  let processed = 0;
-  for (const document of candidates) {
-    if (signal.aborted) {
-      failures.push(signal.reason);
-      break;
-    }
-    const resolution = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
-    const dropId = resolveDeliveryOrderDropId(document.data, document.key.path);
-    if (!('identity' in resolution) || !dropId || dropId !== resolution.identity.dropId) {
-      try {
+  return drainNotificationCandidates({
+    signal,
+    loadCandidates: () => repository.queryDueReadyNotifications({
+      dueAtMs: context.nowMs,
+      limit: READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
+    }),
+    failureMessage: 'Ready-notification reconciliation failed',
+    processCandidate: async (document) => {
+      const resolution = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
+      const dropId = resolveDeliveryOrderDropId(document.data, document.key.path);
+      if (!('identity' in resolution) || !dropId || dropId !== resolution.identity.dropId) {
         await markPendingReadyToShipNotificationsFailed(
           notificationPersistenceContext(context),
           document.key.path,
@@ -55,14 +51,10 @@ export async function reconcilePendingReadyToShipNotifications(
           event: 'ready_to_ship_notifications_invalid_order',
           documentPath: document.key.path,
         });
-      } catch (error) {
-        failures.push(error);
+        return 0;
       }
-      continue;
-    }
-    if (publicationAttempts >= READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT) break;
-    publicationAttempts += 1;
-    try {
+      if (publicationAttempts >= READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT) return 'stop';
+      publicationAttempts += 1;
       const published = await publishReadyToShipNotifications({
         context,
         deliveryId: resolution.identity.deliveryId,
@@ -71,11 +63,7 @@ export async function reconcilePendingReadyToShipNotifications(
         queue: env.NOTIFICATION_EMAIL_QUEUE,
         nowMs,
       });
-      if (published) processed += 1;
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length) throw new AggregateError(failures, 'Ready-notification reconciliation failed');
-  return processed;
+      return published ? 1 : 0;
+    },
+  });
 }

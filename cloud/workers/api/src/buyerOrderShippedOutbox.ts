@@ -13,6 +13,7 @@ import {
   updateClaimedNotificationOutbox,
 } from './notificationOutboxStore.js';
 import { publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
+import { drainNotificationCandidates } from './notificationReconciliation.js';
 
 type ShippedRepository = Pick<D1CommerceRepository, 'get' | 'notificationOutbox'>;
 
@@ -136,22 +137,22 @@ export async function reconcilePendingShippedNotifications(
 ): Promise<number> {
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  signal.throwIfAborted();
-  const candidates = await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: nowMs(), limit: 8 });
-  const failures: unknown[] = [];
-  let queued = 0;
-  for (const candidate of candidates.slice(0, 4)) {
-    if (signal.aborted) { failures.push(signal.reason); break; }
-    try {
-      if (await publishBuyerOrderShippedNotification({
+  return drainNotificationCandidates({
+    signal,
+    loadCandidates: async () => {
+      const candidates = await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: nowMs(), limit: 8 });
+      return candidates.slice(0, 4);
+    },
+    failureMessage: 'Shipped notification reconciliation failed',
+    processCandidate: async (candidate) => {
+      const published = await publishBuyerOrderShippedNotification({
         repository, parentPath: candidate.parentPath, queue: env.NOTIFICATION_EMAIL_QUEUE, signal, nowMs,
-      })) queued += 1;
-    } catch (error) {
+      });
+      return published ? 1 : 0;
+    },
+    onFailure: (candidate, error) => {
       console.error({ event: 'buyer_order_shipped_notification_enqueue_failed', parentPath: candidate.parentPath,
         error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' } });
-      failures.push(error);
-    }
-  }
-  if (failures.length) throw new AggregateError(failures, 'Shipped notification reconciliation failed');
-  return queued;
+    },
+  });
 }

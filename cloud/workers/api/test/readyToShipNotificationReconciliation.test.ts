@@ -12,6 +12,7 @@ const CLAIM_ID = 'readyToShipNotificationPublishClaimId';
 const RETRY_UNTIL = 'readyToShipNotificationRetryUntilMs';
 import { withoutNotificationFields } from './deliveryStoreTestSupport.ts';
 import { createCommerceD1Harness, seedCommerceDocuments, seedNotificationOutbox } from './commerceD1Harness.ts';
+import { notificationFixture, OUTBOX_NOW } from './notificationOutboxTestSupport.ts';
 
 const NOW_MS = 1_700_000_000_000;
 const READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS = 10 * 60_000;
@@ -121,6 +122,32 @@ test('the eight-candidate scan cap bounds malformed-order cleanup without refill
   assert.equal(await native.run(), 1);
   assert.equal(native.logs.length, 9);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [109]);
+});
+
+test('malformed candidates are cleaned after four publication attempts until the next valid candidate', async (context) => {
+  const native = fixture(context, [
+    ...[100, 101, 102, 103].map((id) => ({ id })),
+    { id: 104, fields: { deliveryId: -1 } },
+    { id: 105, fields: { deliveryId: -1 } },
+    { id: 106 },
+    { id: 107, fields: { deliveryId: -1 } },
+  ]);
+  assert.equal(await native.run(), 4);
+  assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103]);
+  assert.equal(native.logs.length, 2);
+  for (const id of [104, 105]) assert.equal((await native.load(id)).state, 'failed');
+  for (const id of [106, 107]) assert.equal((await native.load(id)).state, 'pending');
+  assert.equal(await native.run(), 1);
+  assert.equal((await native.load(107)).state, 'failed');
+});
+
+test('a ready order producing two emails contributes one processed order', async (context) => {
+  const state = await notificationFixture(context, 'ready');
+  assert.equal(await reconcilePendingReadyToShipNotifications({
+    COMMERCE_DB: state.harness.db,
+    NOTIFICATION_EMAIL_QUEUE: state.queue as Queue<NotificationEmailJobV1>,
+  }, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), 1);
+  assert.equal(state.sent.flat().length, 2);
 });
 
 test('individual publication failures consume four slots and defer their retries while later work progresses', async (context) => {
