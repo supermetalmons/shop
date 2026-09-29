@@ -17,15 +17,11 @@ import type {
   DeliveryReceiptClaimValues,
 } from './deliveryOrderUpdates.js';
 import {
-  commerceTimestamp,
   readCommerceRecord,
   runCommerceTransaction,
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
-import {
-  StripeReceiptClaimError,
-  summarizeStripeReceiptClaimError as summarizeError,
-} from './stripeReceiptClaimErrors.js';
+import { StripeReceiptClaimError } from './stripeReceiptClaimErrors.js';
 import {
   parseReceiptClaimWorkflowState,
   RECEIPT_CLAIM_WORKFLOW_FIELD,
@@ -48,8 +44,6 @@ import {
 } from '../../../../shared/stripeReceiptClaims.js';
 
 const CLEANUP_TIMEOUT_MS = 5_000;
-const PROCESSING_LEASE_MS = 90_000;
-const DIRECT_SUBMISSION_PROCESSING_LEASE_MS = 4 * 60_000;
 
 export type ReceiptKind = 'box' | 'figure';
 type StoredResult = {
@@ -74,7 +68,7 @@ export type StartedClaim = {
   receiptTxs: string[];
   receiptTxSubmissions: DirectCardReceiptClaimSubmission[];
 };
-type ClaimStart = (StartedClaim & { workflow?: ReceiptClaimWorkflowState }) | ({ status: 'already_claimed'; dropId: string; deliveryId: number; boxId: number; receiptTxs: string[] } & StoredResult);
+type ClaimStart = (StartedClaim & { workflow: ReceiptClaimWorkflowState }) | ({ status: 'already_claimed'; dropId: string; deliveryId: number; boxId: number; receiptTxs: string[] } & StoredResult);
 
 function positiveInteger(value: unknown, label: string): number {
   const normalized = Math.floor(Number(value));
@@ -194,17 +188,13 @@ function orderClaimValues(args: {
   return Object.fromEntries(entries) as DeliveryReceiptClaimUpdates;
 }
 
-function timestamp(value: number) {
-  return commerceTimestamp(value);
-}
-
 export async function startClaim(
   context: CommerceRepositoryContext,
   code: string,
   recipientWallet: string,
   attemptId: string,
   nowMs: number,
-  workflow?: { operationId: string; requestId: string; allowNew?: boolean },
+  workflow: { operationId: string; requestId: string; allowNew?: boolean },
 ): Promise<ClaimStart> {
   const claimKey = commerceKeys.claimCode(code);
   let attemptedStart: StartedClaim | undefined;
@@ -234,12 +224,11 @@ export async function startClaim(
       }
       const status = typeof claim.status === 'string' ? claim.status : 'unclaimed';
       const claimedRecipient = typeof claim.recipient === 'string' ? claim.recipient : '';
-      if (workflow && status === 'processing' && !isBase58Bytes(claimedRecipient, 32)) {
+      if (status === 'processing' && !isBase58Bytes(claimedRecipient, 32)) {
         throw new StripeReceiptClaimError('failed-precondition', 'Previous receipt claim receiver is invalid. Contact support.');
       }
       let existingWorkflow = parseReceiptClaimWorkflowState(claim[RECEIPT_CLAIM_WORKFLOW_FIELD]);
       if (existingWorkflow) {
-        if (!workflow) throw new StripeReceiptClaimError('aborted', 'This receipt claim is managed by a Workflow.');
         if (existingWorkflow.recipient !== recipientWallet) {
           throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim is locked to its original receiver.');
         }
@@ -264,18 +253,18 @@ export async function startClaim(
         hasRecipient: Boolean(claimedRecipient),
         receiptTxCount: receiptTxs.length,
       }));
-      const recipientLock = workflow && status === 'processing' ? true : directFigureReceipt ? directRecipientLock : status === 'processing';
+      const recipientLock = status === 'processing' || directRecipientLock;
       if (status === 'claimed') {
         if (claimedRecipient === recipientWallet) {
           return { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult };
         }
         throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim code has already been used.');
       }
-      if (workflow?.allowNew === false) {
+      if (workflow.allowNew === false) {
         throw new StripeReceiptClaimError('unavailable', 'New receipt claims are temporarily paused.');
       }
       const leaseExpiresAt = Number(claim.processingLeaseExpiresAt || 0);
-      if (workflow && status === 'processing' && Math.max(leaseExpiresAt, Number(claim.processingStartedAt || 0) + 180_000) > nowMs) {
+      if (status === 'processing' && Math.max(leaseExpiresAt, Number(claim.processingStartedAt || 0) + 180_000) > nowMs) {
         throw new StripeReceiptClaimError('aborted', 'The previous receipt claim request is still finishing. Retry shortly.');
       }
       if (status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
@@ -313,7 +302,7 @@ export async function startClaim(
           status: 'processing',
           values: {
             recipient: recipientWallet,
-            processingLeaseExpiresAt: workflow ? commerceFieldValue.delete() : timestamp(nowMs + PROCESSING_LEASE_MS),
+            processingLeaseExpiresAt: commerceFieldValue.delete(),
             processingStartedAt: commerceFieldValue.serverTimestamp(),
           },
           ...target,
@@ -334,24 +323,24 @@ export async function startClaim(
         ...(directFigureReceipt ? { directFigureReceipt } : {}),
         ...target,
       };
-      const reservedWorkflow: ReceiptClaimWorkflowState | undefined = workflow ? {
+      const reservedWorkflow: ReceiptClaimWorkflowState = {
         version: 1, operationId: workflow.operationId, requestId: workflow.requestId, requestIds: [workflow.requestId], generation: 1, recipient: recipientWallet,
         phase: 'pending', createdAtMs: nowMs, deadlineAtMs: nowMs + RECEIPT_CLAIM_WORKFLOW_WINDOW_MS,
         nextAttemptAtMs: nowMs, dispatchLeaseUntilMs: null, claim: attemptedStart, submissionHistory: [],
-      } : undefined;
-      if (reservedWorkflow) parseReceiptClaimWorkflowState(reservedWorkflow);
+      };
+      parseReceiptClaimWorkflowState(reservedWorkflow);
       await transaction.getMany([claimKey, orderKey]);
       await transaction.update(claimKey, {
         status: 'processing',
         recipient: recipientWallet,
         processingAttemptId: attemptId,
-        processingLeaseExpiresAt: workflow ? commerceFieldValue.delete() : timestamp(nowMs + PROCESSING_LEASE_MS),
+        processingLeaseExpiresAt: commerceFieldValue.delete(),
         processingStartedAt: commerceFieldValue.serverTimestamp(),
         updatedAt: commerceFieldValue.serverTimestamp(),
-        ...(reservedWorkflow ? { [RECEIPT_CLAIM_WORKFLOW_FIELD]: JSON.parse(JSON.stringify(reservedWorkflow)) } : {}),
+        [RECEIPT_CLAIM_WORKFLOW_FIELD]: JSON.parse(JSON.stringify(reservedWorkflow)),
       });
       await updateDeliveryOrder(transaction, orderKey, orderValues);
-      return reservedWorkflow ? { ...attemptedStart, workflow: reservedWorkflow } : attemptedStart;
+      return { ...attemptedStart, workflow: reservedWorkflow };
     });
   } catch (error) {
     const cancellation = isSignalCancellationError(context.signal, error);
@@ -384,12 +373,8 @@ export async function startClaim(
             stripeReceiptClaimCodeMaybe(stored) === code
           ))
         ) {
-          if (cancellation && !workflow) {
-            await clearProcessing(context, attemptedStart, code, context.signal.reason);
-          } else {
-            const reservedWorkflow = parseReceiptClaimWorkflowState(claim.data[RECEIPT_CLAIM_WORKFLOW_FIELD]);
-            return reservedWorkflow ? { ...attemptedStart, workflow: reservedWorkflow } : attemptedStart;
-          }
+          const reservedWorkflow = parseReceiptClaimWorkflowState(claim.data[RECEIPT_CLAIM_WORKFLOW_FIELD]);
+          if (reservedWorkflow) return { ...attemptedStart, workflow: reservedWorkflow };
         }
       }
     } catch {}
@@ -406,101 +391,6 @@ function cleanupContext(context: CommerceRepositoryContext): CommerceRepositoryC
   };
 }
 
-export async function clearProcessing(
-  context: CommerceRepositoryContext,
-  started: StartedClaim,
-  code: string,
-  error: unknown,
-): Promise<void> {
-  const safeContext = cleanupContext(context);
-  try {
-    await runCommerceTransaction(safeContext, async (transaction) => {
-      const claimKey = commerceKeys.claimCode(code);
-      const claim = await readCommerceRecord(safeContext, claimKey, transaction);
-      if (claim?.data[RECEIPT_CLAIM_WORKFLOW_FIELD]) return;
-      if (!claim || claim.data.status !== 'processing' || claim.data.processingAttemptId !== started.attemptId) {
-        return;
-      }
-      const lastError = summarizeError(error);
-      const orderValues = orderClaimValues({
-        code,
-        boxId: started.boxId,
-        status: 'unclaimed',
-        values: {
-          lastClaimError: lastError,
-          recipient: commerceFieldValue.delete(),
-          processingStartedAt: commerceFieldValue.delete(),
-          processingLeaseExpiresAt: commerceFieldValue.delete(),
-        },
-        updatePluralOrderClaim: started.updatePluralOrderClaim,
-        updateSingularOrderClaim: started.updateSingularOrderClaim,
-      });
-      const orderKey = deliveryOrderKey(started.orderPath);
-      await transaction.getMany([claimKey, orderKey]);
-      await transaction.update(claimKey, {
-        status: 'unclaimed',
-        lastClaimError: lastError,
-        processingAttemptId: commerceFieldValue.delete(),
-        processingStartedAt: commerceFieldValue.delete(),
-        processingLeaseExpiresAt: commerceFieldValue.delete(),
-        lastClaimErrorAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      });
-      await updateDeliveryOrder(transaction, orderKey, orderValues);
-    });
-  } catch (cleanupError) {
-    console.warn({
-      event: 'stripe_receipt_claim_cleanup_failed',
-      dropId: started.dropId,
-      deliveryId: started.deliveryId,
-      error: summarizeError(cleanupError),
-    });
-  }
-}
-
-export async function rememberSubmittedTransaction(
-  context: CommerceRepositoryContext,
-  code: string,
-  attemptId: string,
-  receiptTx: string,
-  submission?: Omit<DirectCardReceiptClaimSubmission, 'signature'> | null,
-): Promise<void> {
-  const safeContext = context.signal.aborted ? cleanupContext(context) : context;
-  await runCommerceTransaction(safeContext, async (transaction) => {
-    const key = commerceKeys.claimCode(code);
-    const claim = await readCommerceRecord(safeContext, key, transaction);
-    if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
-    if (claim.data[RECEIPT_CLAIM_WORKFLOW_FIELD]) throw new StripeReceiptClaimError('aborted', 'This receipt claim is managed by a Workflow.');
-    if (claim.data.status !== 'processing' || claim.data.processingAttemptId !== attemptId) {
-      throw new StripeReceiptClaimError('aborted', 'Receipt claim processing lease changed.');
-    }
-    const isDirect = Boolean(directReceiptAssetId(claim.data));
-    const normalizedSubmission = isDirect && submission
-      ? normalizeSubmissions([{ signature: receiptTx, ...submission }])[0]
-      : undefined;
-    const submissions = isDirect ? normalizeSubmissions(claim.data.receiptTxSubmissions) : [];
-    if (normalizedSubmission) {
-      const existing = submissions.findIndex((entry) => entry.signature === normalizedSubmission.signature);
-      if (existing >= 0) submissions[existing] = normalizedSubmission;
-      else submissions.push(normalizedSubmission);
-    }
-    const merged = Array.from(new Set([...normalizeReceiptTxs(claim.data.receiptTxs), receiptTx]));
-    const receiptTxs = isDirect && submissions.length
-      ? activeDirectCardReceiptClaimSignatures({ receiptTxs: merged, submissions })
-      : merged;
-    const values = {
-      receiptTxs,
-      ...(normalizedSubmission ? { receiptTxSubmissions: submissions } : {}),
-      ...(normalizedSubmission
-        ? { processingLeaseExpiresAt: timestamp(Date.now() + DIRECT_SUBMISSION_PROCESSING_LEASE_MS) }
-        : {}),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    };
-    await transaction.getMany([key]);
-    await transaction.update(key, values);
-  });
-}
-
 export async function finalizeClaim(
   context: CommerceRepositoryContext,
   started: StartedClaim,
@@ -509,8 +399,8 @@ export async function finalizeClaim(
   receiptTx: string | null,
   receiptKind: ReceiptKind,
   receiptsTransferred: number,
-  figureIds?: number[],
-  workflow?: { operationId: string; generation: number; result: import('../../../../shared/contracts.js').StripeReceiptClaimResult },
+  figureIds: number[] | undefined,
+  workflow: { operationId: string; generation: number; result: import('../../../../shared/contracts.js').StripeReceiptClaimResult },
 ): Promise<string[]> {
   const safeContext = context.signal.aborted ? cleanupContext(context) : context;
   return runCommerceTransaction(safeContext, async (transaction) => {
@@ -518,10 +408,10 @@ export async function finalizeClaim(
     const claim = await readCommerceRecord(safeContext, claimKey, transaction);
     if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
     const operation = parseReceiptClaimWorkflowState(claim.data[RECEIPT_CLAIM_WORKFLOW_FIELD]);
-    if (operation && (!workflow || operation.operationId !== workflow.operationId || operation.generation !== workflow.generation || operation.recipient !== recipientWallet)) {
+    if (!operation || operation.operationId !== workflow.operationId || operation.generation !== workflow.generation || operation.recipient !== recipientWallet) {
       throw new StripeReceiptClaimError('aborted', 'Receipt claim Workflow execution changed.');
     }
-    if (operation && operation.phase !== 'pending' && operation.phase !== 'complete') throw new StripeReceiptClaimError('aborted', 'Receipt claim Workflow is no longer pending.');
+    if (operation.phase !== 'pending' && operation.phase !== 'complete') throw new StripeReceiptClaimError('aborted', 'Receipt claim Workflow is no longer pending.');
     const storedReceiptTxs = normalizeReceiptTxs(claim.data.receiptTxs);
     const isDirect = Boolean(directReceiptAssetId(claim.data));
     const submissions = isDirect ? normalizeSubmissions(claim.data.receiptTxSubmissions) : [];
@@ -572,10 +462,10 @@ export async function finalizeClaim(
       processingLeaseExpiresAt: commerceFieldValue.delete(),
       claimedAt: commerceFieldValue.serverTimestamp(),
       updatedAt: commerceFieldValue.serverTimestamp(),
-      ...(operation && workflow ? { [RECEIPT_CLAIM_WORKFLOW_FIELD]: JSON.parse(JSON.stringify({
+      [RECEIPT_CLAIM_WORKFLOW_FIELD]: JSON.parse(JSON.stringify({
         ...operation, phase: 'complete', result: workflow.result, error: undefined,
         nextAttemptAtMs: null, dispatchLeaseUntilMs: null,
-      })) } : {}),
+      })),
     });
     await updateDeliveryOrder(transaction, orderKey, orderValues);
     return receiptTxs;

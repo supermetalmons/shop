@@ -40,8 +40,3 @@ export function normalizeStripeReceiptClaimError(error: unknown, fallback: strin
   }
   return new StripeReceiptClaimError('internal', fallback, undefined, error);
 }
-
-export function summarizeStripeReceiptClaimError(error: unknown) {
-  const normalized = normalizeStripeReceiptClaimError(error, 'Receipt claim failed.');
-  return { kind: normalized.name, code: normalized.code, message: normalized.message };
-}

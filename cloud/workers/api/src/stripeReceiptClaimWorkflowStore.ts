@@ -5,7 +5,7 @@ import { readCommerceRecord, runCommerceTransaction, type CommerceRepositoryCont
 import { StripeReceiptClaimError } from './stripeReceiptClaimErrors.js';
 import { activeDirectCardReceiptClaimSignatures, type DirectCardReceiptClaimSubmission } from './adminIrlCardReceipt.js';
 import type { ProviderContext } from './adminIrlRedeemOnchain.js';
-import { responseForAlreadyClaimed } from './stripeReceiptClaim.js';
+import { responseForAlreadyClaimed } from './stripeReceiptClaimResult.js';
 import { finalizeClaim, normalizeReceiptTxs, normalizeSubmissions, startClaim } from './stripeReceiptClaimStore.js';
 import {
   RECEIPT_CLAIM_WORKFLOW_DISPATCH_LEASE_MS,

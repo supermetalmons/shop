@@ -11,9 +11,10 @@ import {
   buildTransaction, buildWithOptionalLookupTable, burnInstruction, claimFlowFor,
   createConnection, fetchAsset, fetchAssetProof, findFigureReceiptById, findPackReceipt,
   findPackReceiptById, inspectPersistedTransfers, ownsAllFigureReceipts,
-  proofForAsset, proofMatches, requireOpenableAssignment, responseForClaim, runtimeForDrop,
+  proofForAsset, proofMatches, requireOpenableAssignment, runtimeForDrop,
   signedTransactionSignature, transferInstruction,
-} from './stripeReceiptClaim.js';
+} from './stripeReceiptClaimOnchain.js';
+import { responseForClaim } from './stripeReceiptClaimResult.js';
 import { bubblegumReceiptAssetIds, matchingReceiptTransferCount, transactionAccountKeys } from './receiptTransferVerification.js';
 import type { ReceiptClaimWorkflowSnapshot, ReceiptClaimWorkflowSubmission } from './stripeReceiptClaimWorkflowState.js';
 import {

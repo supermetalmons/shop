@@ -14,7 +14,7 @@ import { createRequestDeadline, createTimedAbortScope, isRequestCancellationErro
 import { isRecord } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import { RequestIdentityError, verifyRequestIdentity, type RequestAuthContext } from './requestIdentity.js';
-import { canonicalRecipient, normalizedCode, readRequestBody } from './stripeReceiptClaim.js';
+import { canonicalRecipient, normalizedCode, readRequestBody } from './stripeReceiptClaimRequest.js';
 import { StripeReceiptClaimError } from './stripeReceiptClaimErrors.js';
 import { ensureReceiptClaimWorkflowRunning, ReceiptClaimWorkflowRecoveryPending } from './stripeReceiptClaimWorkflowDispatch.js';
 import { loadReceiptClaimWorkflow, reserveReceiptClaimWorkflow } from './stripeReceiptClaimWorkflowStore.js';

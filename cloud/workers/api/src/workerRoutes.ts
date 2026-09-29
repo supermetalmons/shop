@@ -57,7 +57,7 @@ import {
 } from './receiptTransfer.js';
 import {
   STRIPE_RECEIPT_CLAIM_PATH,
-} from './stripeReceiptClaim.js';
+} from './stripeReceiptClaimRequest.js';
 import {
   handleStripeReceiptClaimWorkflowLegacy,
   handleStripeReceiptClaimWorkflowStart,

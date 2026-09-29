@@ -404,7 +404,7 @@ Admin IRL finalization runs in the API Worker's
 `ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW`. The existing Admin request document,
 30-minute lease, and on-chain submission records provide recovery. Commerce
 migration `0008_admin_irl_redeem_workflow_operation.sql` indexes Workflow operation
-IDs for status and recovery lookups. Stripe receipt claims remain synchronous.
+IDs for status and recovery lookups.
 Terminal failures with retained progress are not restarted by status polling.
 After correcting the cause, authenticate as the original requesting Admin and
 replay `POST /admin/irl-redeem/finalize` with its stored `dropId`, `requestId`,
@@ -433,6 +433,12 @@ before the API cutover. After the final frontend release, roll the frontend back
 to its compatibility version before rolling the API back. Drain active v1 Admin
 instances before changing the signer, drop configuration, or on-chain
 configuration.
+
+### Stripe receipt claim Workflow
+
+Stripe receipt claims run in `STRIPE_RECEIPT_CLAIM_WORKFLOW`. The `/receipts/stripe/claim/start`
+and `/receipts/stripe/claim/status` endpoints start and poll claims. The existing
+`/receipts/stripe/claim` endpoint waits for the same Workflow for compatibility.
 
 ### Pack-status D1
 

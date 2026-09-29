@@ -16,7 +16,7 @@ import {
 } from '../src/stripeReceiptClaimWorkflowStore.js';
 import { parseReceiptClaimWorkflowState, type ReceiptClaimWorkflowSubmission } from '../src/stripeReceiptClaimWorkflowState.js';
 import { receiptClaimWorkflowFailure } from '../src/stripeReceiptClaimWorkflowSupport.js';
-import { runtimeForDrop } from '../src/stripeReceiptClaim.js';
+import { runtimeForDrop } from '../src/stripeReceiptClaimOnchain.js';
 
 const CODE = 'ABCDEF-1234567890';
 const DROP = 'card_nft_2';
@@ -200,6 +200,70 @@ test('receipt claim reservations arbitrate recipients and retain one operation f
   assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW), [first.snapshot.operation.operationId]);
 });
 
+test('receipt claim reservations reject missing and inconsistent records without writing', async (t) => {
+  const cases = [
+    { name: 'missing claim', remove: commerceKeys.claimCode(CODE), error: /Invalid receipt claim code/ },
+    { name: 'missing order', remove: commerceKeys.deliveryOrder(DROP, '7'), error: /order not found/ },
+    { name: 'inconsistent claim code', claim: { code: 'ZZZZZZ-1234567890' }, error: /inconsistent/ },
+    { name: 'wrong claim namespace', claim: { namespace: 'other' }, error: /Invalid receipt claim code/ },
+    { name: 'wrong order source', order: { source: 'other' }, error: /not for a receipt claim order/ },
+    { name: 'mismatched order claim', order: { stripeReceiptClaimsByBoxId: {
+      box_16: { namespace: 'stripe_receipt_v1', code: 'ZZZZZZ-1234567890', boxId: 16, status: 'unclaimed' },
+    } }, error: /mismatch/ },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      const fixture = setup({}, scenario.claim, scenario.order);
+      t.after(() => fixture.database.close());
+      if (scenario.remove) await fixture.context.repository.run(NOW, (unit) => unit.delete(scenario.remove));
+      const before = await fixture.context.repository.get(commerceKeys.claimCode(CODE));
+      await assert.rejects(reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW), scenario.error);
+      assert.deepEqual(await fixture.context.repository.get(commerceKeys.claimCode(CODE)), before);
+    });
+  }
+});
+
+test('receipt claim reservations and completion retry conflicts and update singular and plural mirrors', async (t) => {
+  let conflicts = 1;
+  let commitAttempts = 0;
+  const fixture = setup({ observeCall: (call) => {
+    if (call.method === 'batch' && call.statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) {
+      commitAttempts += 1;
+      if (conflicts > 0) {
+        conflicts -= 1;
+        throw new Error('commerce transaction conflict');
+      }
+    }
+  } }, {}, { stripeReceiptClaimsByBoxId: {
+    box_16: { namespace: 'stripe_receipt_v1', code: CODE, boxId: 16, status: 'unclaimed' },
+  } });
+  t.after(() => fixture.database.close());
+  const reserved = await reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW);
+  if (reserved.status !== 'pending') return assert.fail('Expected pending claim');
+  assert.equal(commitAttempts, 2);
+  const orderKey = commerceKeys.deliveryOrder(DROP, '7');
+  const processingOrder = await fixture.context.repository.get(orderKey);
+  assert.ok(processingOrder);
+  const processingPlural = processingOrder.data.stripeReceiptClaimsByBoxId as Record<string, Record<string, unknown>>;
+  const processingSingular = processingOrder.data.stripeReceiptClaim as Record<string, unknown>;
+  assert.equal(processingSingular.status, 'processing');
+  assert.equal(processingSingular.recipient, RECIPIENT);
+  assert.equal(processingSingular.processingLeaseExpiresAt, undefined);
+  assert.deepEqual(processingPlural.box_16, processingSingular);
+  conflicts = 1;
+  await completeReceiptClaimWorkflow(fixture.context, reserved.snapshot, {
+    processed: true, dropId: DROP, deliveryId: 7, receiptKind: 'box', receiptsTransferred: 1, receiptTxs: ['signature'],
+  });
+  assert.equal(commitAttempts, 4);
+  const completedOrder = await fixture.context.repository.get(orderKey);
+  assert.ok(completedOrder);
+  const completedPlural = completedOrder.data.stripeReceiptClaimsByBoxId as Record<string, Record<string, unknown>>;
+  const completedSingular = completedOrder.data.stripeReceiptClaim as Record<string, unknown>;
+  assert.equal(completedSingular.status, 'claimed');
+  assert.deepEqual(completedSingular.receiptTxs, ['signature']);
+  assert.deepEqual(completedPlural.box_16, completedSingular);
+});
+
 test('concurrent different recipients cannot reserve separate receipt operations', async (t) => {
   const fixture = setup();
   t.after(() => fixture.database.close());
@@ -319,6 +383,39 @@ test('receipt claim completion atomically stores its durable result and order mi
   assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW + 1_000_000), []);
 });
 
+test('receipt claim completion keeps claim and order timestamps aligned', async (t) => {
+  const fixture = setup();
+  t.after(() => fixture.database.close());
+  const reserved = await reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW);
+  if (reserved.status !== 'pending') return assert.fail('Expected pending claim');
+  const orderKey = commerceKeys.deliveryOrder(DROP, '7');
+  await fixture.context.repository.run(NOW + 10_000, (unit) => unit.update(orderKey, { updatedAt: NOW + 10_000 }));
+  const previousOrder = await fixture.context.repository.get(orderKey);
+  await completeReceiptClaimWorkflow(fixture.context, reserved.snapshot, {
+    processed: true, dropId: DROP, deliveryId: 7, receiptKind: 'box', receiptsTransferred: 1, receiptTxs: ['signature'],
+  });
+  const claim = await fixture.context.repository.get(commerceKeys.claimCode(CODE));
+  const order = await fixture.context.repository.get(orderKey);
+  assert.ok(claim && order && previousOrder);
+  assert.equal(claim.updateTime, order.updateTime);
+  assert.ok(order.updateTime > previousOrder.updateTime);
+  assert.equal(claim.data.claimedAt, (order.data.stripeReceiptClaim as Record<string, unknown>).claimedAt);
+});
+
+test('receipt claim completion rejects missing orders without changing the claim or Workflow', async (t) => {
+  const fixture = setup();
+  t.after(() => fixture.database.close());
+  const reserved = await reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW);
+  if (reserved.status !== 'pending') return assert.fail('Expected pending claim');
+  await fixture.context.repository.run(NOW, (unit) => unit.delete(commerceKeys.deliveryOrder(DROP, '7')));
+  const before = await fixture.context.repository.get(commerceKeys.claimCode(CODE));
+  await assert.rejects(completeReceiptClaimWorkflow(fixture.context, reserved.snapshot, {
+    processed: true, dropId: DROP, deliveryId: 7, receiptKind: 'box', receiptsTransferred: 1, receiptTxs: ['signature'],
+  }), { name: 'CommerceWriteConflict', code: 'failed-precondition' });
+  assert.deepEqual(await fixture.context.repository.get(commerceKeys.claimCode(CODE)), before);
+  assert.deepEqual(await loadReceiptClaimWorkflow(fixture.context, reserved.snapshot.operation.operationId), reserved.snapshot);
+});
+
 test('completed receipt claim results remain readable while commerce is paused', async (t) => {
   const fixture = setup();
   t.after(() => fixture.database.close());
@@ -397,6 +494,11 @@ test('legacy claim adoption waits for old handlers and retains recipient restric
   await assert.rejects(reserveReceiptClaimWorkflow(fixture.context, CODE, 'another-recipient', NOW + 180_000), /locked/);
   const adopted = await reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW + 180_000);
   assert.equal(adopted.status, 'pending');
+  if (adopted.status !== 'pending') return assert.fail('Expected adopted claim');
+  assert.equal(adopted.snapshot.started.resumingPreviousProcessingClaim, true);
+  const claim = await fixture.context.repository.get(commerceKeys.claimCode(CODE));
+  assert.equal(claim?.data.processingLeaseExpiresAt, undefined);
+  assert.equal(claim?.data.processingAttemptId, adopted.snapshot.started.attemptId);
 });
 
 test('direct legacy processing without a journal keeps its original recipient and rejects missing identity', async (t) => {

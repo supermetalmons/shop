@@ -11,9 +11,14 @@ import { PROFILE_RECONCILE_PATH, handleProfileLifecycleRequest } from '../src/pr
 import { RequestIdentityError, type verifyRequestIdentity } from '../src/requestIdentity.ts';
 import { ShipStationProfileError } from '../src/shipstation/common.ts';
 import { handleStripeCheckoutSession } from '../src/stripeCheckout.ts';
-import { handleStripeReceiptClaim } from '../src/stripeReceiptClaim.ts';
+import {
+  handleStripeReceiptClaimWorkflowLegacy,
+  handleStripeReceiptClaimWorkflowStart,
+  handleStripeReceiptClaimWorkflowStatus,
+} from '../src/stripeReceiptClaimWorkflowRoutes.ts';
+import { STRIPE_RECEIPT_CLAIM_REQUEST_HEADER } from '../../../../shared/stripeReceiptClaimWorkflow.ts';
+import { RECEIPT_OPERATION_ID, RECEIPT_REQUEST_ID, RECEIPT_RECIPIENT } from './stripeReceiptClaimWorkflowFixtures.ts';
 import { StripeReceiptClaimError } from '../src/stripeReceiptClaimErrors.ts';
-import { failOnDeferredWork } from './deferredWork.ts';
 
 const database = {} as D1Database;
 const identity = { kind: 'anonymous' as const, authSubject: 'error-contract-subject' };
@@ -156,35 +161,51 @@ test('checkout pre-auth domain, unknown, and expired-deadline outcomes remain di
   assert.equal(result.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), 'same-operation');
 });
 
-test('receipt claim errors preserve details, pre-auth outcomes, and normalized internal logging', async (context) => {
-  const logs: unknown[] = [];
-  context.mock.method(console, 'error', (entry: unknown) => logs.push(entry));
-  for (const authenticated of [false, true]) {
-    for (const code of ['invalid-argument', 'unauthenticated', 'not-found', 'aborted', 'internal'] as const) {
-      const error = new StripeReceiptClaimError(code, 'Claim failed.', { reason: 'original-details' });
-      const result = await handleStripeReceiptClaim(request('/stripe/receipt/claim', {
-        code: 'ABCDEF-1234567890', recipient: 'So11111111111111111111111111111111111111112',
-      }), { COMMERCE_DB: database, HELIUS_API_KEY: 'helius', COSIGNER_SECRET: 'cosigner' }, failOnDeferredWork, {}, {
-        verifyIdentity: async () => { if (!authenticated) throw error; return identity; },
-        claim: async () => { throw error; },
-      });
-      assert.deepEqual(await result.response.json(), { ok: false, error: { code, message: error.message, details: error.details } });
-      assert.equal(result.authOutcome, code === 'unauthenticated' || (authenticated && ['invalid-argument', 'not-found'].includes(code)) ? 'rejected' : 'provider-failure');
-      assert.equal(result.outcome, code);
-      assert.equal(result.response.headers.get('Timing-Allow-Origin'), '*');
-    }
-  }
-  assert.equal(logs.length, 2);
-});
+for (const [mode, handle] of [
+  ['start', handleStripeReceiptClaimWorkflowStart],
+  ['status', handleStripeReceiptClaimWorkflowStatus],
+  ['legacy', handleStripeReceiptClaimWorkflowLegacy],
+] as const) {
+  const receiptRequest = () => {
+    const value = request(mode === 'legacy' ? '/receipts/stripe/claim' : `/receipts/stripe/claim/${mode}`, {
+      code: 'ABCDEF-1234567890', recipient: RECEIPT_RECIPIENT,
+      ...(mode === 'status' ? { operationId: RECEIPT_OPERATION_ID } : {}),
+    });
+    value.headers.set(STRIPE_RECEIPT_CLAIM_REQUEST_HEADER, RECEIPT_REQUEST_ID);
+    return value;
+  };
 
-test('receipt claim deadline wins identity errors and preserves the pre-auth provider outcome', async () => {
-  const result = await handleStripeReceiptClaim(request('/stripe/receipt/claim', {
-    code: 'ABCDEF-1234567890', recipient: 'So11111111111111111111111111111111111111112',
-  }), { COMMERCE_DB: database, HELIUS_API_KEY: 'helius', COSIGNER_SECRET: 'cosigner' }, failOnDeferredWork, {}, {
-    timeoutMs: 1,
-    verifyIdentity: async (_request, _db, signal) => throwAfterDeadline(signal, new RequestIdentityError('invalid-token')),
+  test(`receipt ${mode} preserves domain error details and current authentication outcomes`, async () => {
+    for (const authenticated of [false, true]) {
+      for (const [code, status] of [
+        ['invalid-argument', 400], ['unauthenticated', 401], ['not-found', 404], ['aborted', 409], ['internal', 500],
+      ] as const) {
+        const error = new StripeReceiptClaimError(code, 'Claim failed.', { reason: 'original-details' });
+        const result = await handle(receiptRequest(), { COMMERCE_DB: database } as Env, {}, {
+          verifyIdentity: async () => { if (!authenticated) throw error; return identity; },
+          reserve: async () => { throw error; },
+          load: async () => { throw error; },
+        });
+        assert.equal(result.response.status, status);
+        assert.deepEqual(await result.response.json(), { ok: false, error: { code, message: error.message, details: error.details } });
+        assert.equal(result.authOutcome, !authenticated && code === 'unauthenticated' ? 'rejected' : 'provider-failure');
+        assert.equal(result.outcome, code);
+        assert.equal(result.response.headers.get('Timing-Allow-Origin'), '*');
+        assert.equal(result.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
+      }
+    }
   });
-  assert.equal(result.response.status, 504);
-  assert.equal(result.authOutcome, 'provider-failure');
-  assert.deepEqual(await result.response.json(), { ok: false, error: { code: 'deadline-exceeded', message: 'Receipt claim request timed out.' } });
-});
+
+  test(`receipt ${mode} deadline wins identity errors and requests the same operation retry`, async () => {
+    const result = await handle(receiptRequest(), { COMMERCE_DB: database } as Env, {}, {
+      httpTimeoutMs: 5, legacyTimeoutMs: 5,
+      verifyIdentity: async (_request, _db, signal) => throwAfterDeadline(signal, new RequestIdentityError('invalid-token')),
+    });
+    assert.equal(result.response.status, 504);
+    assert.equal(result.authOutcome, 'provider-failure');
+    assert.equal(result.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), 'same-operation');
+    assert.deepEqual(await result.response.json(), { ok: false, error: {
+      code: 'deadline-exceeded', message: 'Receipt claim request timed out. Retry with the same receiver address.',
+    } });
+  });
+}

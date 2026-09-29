@@ -4,7 +4,7 @@ import { STRIPE_CHECKOUT_RETRY_HEADER } from '../../../../shared/contracts.ts';
 import { STRIPE_RECEIPT_CLAIM_REQUEST_HEADER } from '../../../../shared/stripeReceiptClaimWorkflow.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
-import { runtimeForDrop } from '../src/stripeReceiptClaim.ts';
+import { runtimeForDrop } from '../src/stripeReceiptClaimOnchain.ts';
 import {
   handleStripeReceiptClaimWorkflowLegacy,
   handleStripeReceiptClaimWorkflowStart,
@@ -63,6 +63,10 @@ test('start requires an invocation id while status requires the complete code an
   assert.equal(invalid.response.status, 400);
   const forbidden = await handleStripeReceiptClaimWorkflowStatus(request({ ...body, code: 'ZZZZZZ-1234567890', operationId: RECEIPT_OPERATION_ID }), env, {}, fixture.dependencies);
   assert.equal(forbidden.response.status, 404);
+  const wrongRecipient = await handleStripeReceiptClaimWorkflowStatus(request({
+    ...body, recipient: 'So11111111111111111111111111111111111111112', operationId: RECEIPT_OPERATION_ID,
+  }), env, {}, fixture.dependencies);
+  assert.equal(wrongRecipient.response.status, 404);
   const missing = await handleStripeReceiptClaimWorkflowStatus(request({ operationId: RECEIPT_OPERATION_ID }), env, {}, fixture.dependencies);
   assert.equal(missing.response.status, 400);
   assert.equal(fixture.ensured(), 0);
@@ -223,4 +227,92 @@ test('retired instance recovery asks the client to retry the same invocation', a
   });
   assert.equal(response.response.status, 503);
   assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), 'same-operation');
+});
+
+for (const [mode, handle] of [
+  ['start', handleStripeReceiptClaimWorkflowStart],
+  ['status', handleStripeReceiptClaimWorkflowStatus],
+  ['legacy', handleStripeReceiptClaimWorkflowLegacy],
+] as const) {
+  const validBody = { ...body, ...(mode === 'status' ? { operationId: RECEIPT_OPERATION_ID } : {}) };
+
+  test(`receipt ${mode} rejects methods before authentication or database work`, async () => {
+    const response = await handle(new Request('https://api.mons.shop/receipts/stripe/claim'), env, {}, {
+      nowMs: () => assert.fail('Rejected methods must not read the authentication clock'),
+      verifyIdentity: async () => assert.fail('Rejected methods must not authenticate'),
+      reserve: async () => assert.fail('Rejected methods must not reserve claims'),
+      load: async () => assert.fail('Rejected methods must not read claims'),
+    });
+    assert.equal(response.response.status, 405);
+    assert.equal(response.response.headers.get('Allow'), 'POST, OPTIONS');
+    assert.equal(response.authOutcome, 'rejected');
+    assert.deepEqual(response.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+  });
+
+  test(`receipt ${mode} rejects malformed and nonexact input before authentication`, async () => {
+    for (const [raw, contentType] of [
+      ['{', 'application/json'],
+      [JSON.stringify({ ...validBody, extra: true }), 'application/json'],
+      [JSON.stringify({ code: body.code }), 'application/json'],
+      [' '.repeat(1025), 'application/json'],
+      [JSON.stringify(validBody), 'text/plain'],
+    ]) {
+      let authentications = 0;
+      const response = await handle(new Request('https://api.mons.shop/receipts/stripe/claim', {
+        method: 'POST', headers: { 'Content-Type': contentType }, body: raw,
+      }), env, {}, {
+        verifyIdentity: async () => { authentications += 1; throw new RequestIdentityError('invalid-token'); },
+        reserve: async () => assert.fail('Invalid requests must not reserve claims'),
+        load: async () => assert.fail('Invalid requests must not read claims'),
+      });
+      assert.equal(response.response.status, 400);
+      assert.equal(response.outcome, 'invalid-argument');
+      assert.equal(response.response.headers.get('Timing-Allow-Origin'), '*');
+      assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
+      assert.equal(authentications, 0);
+    }
+  });
+
+  test(`receipt ${mode} validates claim identity before database work`, async () => {
+    for (const invalid of [{ ...validBody, code: 'not-a-code' }, { ...validBody, recipient: '0'.repeat(44) }]) {
+      const response = await handle(request(invalid, { requestId: RECEIPT_REQUEST_ID }), env, {}, {
+        verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'anon' }),
+        reserve: async () => assert.fail('Invalid claim identity must not reserve claims'),
+        load: async () => assert.fail('Invalid claim identity must not read claims'),
+      });
+      assert.equal(response.response.status, 400);
+      assert.equal(response.outcome, 'invalid-argument');
+      assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
+    }
+  });
+
+  test(`receipt ${mode} distinguishes invalid credentials from retryable authentication outages`, async () => {
+    for (const kind of ['invalid-token', 'provider-timeout', 'provider-unavailable'] as const) {
+      const response = await handle(request(validBody, { requestId: RECEIPT_REQUEST_ID }), env, {}, {
+        verifyIdentity: async () => { throw new RequestIdentityError(kind); },
+        reserve: async () => assert.fail('Unauthenticated requests must not reserve claims'),
+        load: async () => assert.fail('Unauthenticated requests must not read claims'),
+      });
+      const rejected = kind === 'invalid-token';
+      assert.equal(response.response.status, rejected ? 401 : 503);
+      assert.equal(response.authOutcome, rejected ? 'rejected' : 'provider-failure');
+      assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), rejected ? null : 'same-operation');
+      assert.deepEqual(await response.response.json(), { ok: false, error: {
+        code: rejected ? 'unauthenticated' : 'unavailable',
+        message: rejected ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
+      } });
+    }
+  });
+}
+
+test('legacy polling deadline leaves its durable operation pending and allows the same operation retry', async () => {
+  const fixture = harness();
+  const response = await handleStripeReceiptClaimWorkflowLegacy(request(body), env, {}, {
+    ...fixture.dependencies, legacyTimeoutMs: 5,
+  });
+  assert.equal(response.response.status, 504);
+  assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), 'same-operation');
+  assert.equal(response.operationId, RECEIPT_OPERATION_ID);
+  assert.equal(fixture.ensured(), 1);
+  assert.equal(fixture.snapshot.operation.phase, 'pending');
 });

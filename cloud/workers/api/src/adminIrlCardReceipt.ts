@@ -1,6 +1,5 @@
 export type AdminIrlCardReceiptLookupErrorDisposition = 'indexing' | 'transient' | 'fatal';
 
-export type DirectCardReceiptClaimRecoveryAction = 'finalize' | 'transfer' | 'wait';
 export type DirectCardReceiptClaimSubmissionStatus = 'submitted' | 'not_landed';
 export type DirectCardReceiptClaimSubmission = {
   signature: string;
@@ -39,13 +38,6 @@ export function directCardReceiptClaimHasRecipientLock(args: {
   receiptTxCount: number;
 }): boolean {
   return args.hasRecipient && args.receiptTxCount > 0;
-}
-
-export function shouldKeepDirectCardReceiptClaimProcessing(args: {
-  resumingPreviousProcessingClaim: boolean;
-  recipientOwnershipConfirmed: boolean;
-}): boolean {
-  return args.resumingPreviousProcessingClaim || args.recipientOwnershipConfirmed;
 }
 
 function normalizedErrorCode(err: unknown): string {
@@ -89,16 +81,6 @@ export function classifyDirectCardReceiptClaimSubmission(args: {
     : 'expired_unverified';
 }
 
-export function directCardReceiptClaimSubmissionProvesNoDelivery(args: {
-  signatureStatus: 'missing' | 'failed' | 'succeeded';
-  currentBlockHeight: number;
-  lastValidBlockHeight: number;
-  submittedAtMs: number;
-  nowMs: number;
-}): boolean {
-  return classifyDirectCardReceiptClaimSubmission(args) === 'not_landed';
-}
-
 function errorStatus(err: unknown): number | null {
   const status = Number((err as any)?.details?.status ?? (err as any)?.status);
   return Number.isFinite(status) ? status : null;
@@ -140,17 +122,4 @@ export function adminIrlCardReceiptProofHasIdentity(proof: unknown): boolean {
   const treeId = String(record.tree_id ?? record.treeId ?? '').trim();
   const root = String(record.root ?? '').trim();
   return Boolean(treeId && root);
-}
-
-export function resolveDirectCardReceiptClaimRecoveryAction(args: {
-  transferEvidence: DirectCardReceiptClaimTransferEvidence;
-  recipientOwnsReceipt: boolean;
-  adminOwnsReceipt: boolean;
-}): DirectCardReceiptClaimRecoveryAction {
-  if (args.transferEvidence === 'verified' || args.recipientOwnsReceipt) return 'finalize';
-  // A live unresolved signature may still deliver. An expired-but-unverified
-  // signature cannot newly land, so exact current admin ownership is enough to retry safely.
-  if (args.transferEvidence === 'unresolved') return 'wait';
-  if (args.adminOwnsReceipt) return 'transfer';
-  return 'wait';
 }

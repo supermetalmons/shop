@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import bs58 from 'bs58';
-import { Connection, Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED, BOX_MINTER_CONFIG_DISCRIMINATOR } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { runtimeForDrop } from '../src/stripeReceiptClaim.ts';
+import { runtimeForDrop } from '../src/stripeReceiptClaimOnchain.ts';
 import {
   broadcastReceiptClaimWorkflowTransaction, prepareReceiptClaimWorkflowTransaction,
   reconcileReceiptClaimWorkflowOnchain,
@@ -451,6 +451,74 @@ for (const recovery of ['replacement', 'verified_legacy'] as const) {
     assert.deepEqual((order?.data.stripeReceiptClaim as Record<string, unknown>).receiptTxs, [successful.signature]);
     assert.deepEqual((await state.reload()).snapshot.operation.result?.receiptTxs, [successful.signature]);
     assert.equal((claim?.data.receiptTxSubmissions as Array<{ signature: string; status: string }>).find((entry) => entry.signature === rejected)?.status, 'not_landed');
+  });
+}
+
+for (const outcome of ['instruction-mismatch', 'missing', 'rpc-error'] as const) {
+  test(`direct legacy recovery preserves recipient ownership with ${outcome} transaction evidence`, async (t) => {
+    const signature = bs58.encode(Buffer.alloc(64, 25));
+    const state = await fixture(t, 'direct_figure', true, [signature]);
+    t.after(() => state.harness.database.close());
+    await state.context.repository.run(Date.now(), async (unit) => {
+      const key = commerceKeys.claimCode(CODE);
+      await unit.get(key);
+      await unit.update(key, { receiptTxSubmissions: [{
+        signature, submittedAtMs: Date.now(), lastValidBlockHeight: 200, status: 'submitted',
+      }] });
+    });
+    const noop = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
+    const invalidTransaction = new VersionedTransaction(new TransactionMessage({
+      payerKey: state.signer.publicKey,
+      recentBlockhash: BLOCKHASH,
+      instructions: [new TransactionInstruction({ programId: noop, keys: [], data: Buffer.alloc(0) })],
+    }).compileToV0Message());
+    t.mock.method(Connection.prototype, 'getTransaction', async (observedSignature: string, options: unknown) => {
+      assert.equal(observedSignature, signature);
+      assert.deepEqual(options, { maxSupportedTransactionVersion: 0 });
+      if (outcome === 'rpc-error') throw new Error('RPC temporarily unavailable');
+      if (outcome === 'missing') return null;
+      return {
+        slot: 1, blockTime: null,
+        transaction: { message: invalidTransaction.message, signatures: [signature] },
+        meta: { err: null, fee: 0, preBalances: [], postBalances: [],
+          loadedAddresses: { writable: [], readonly: [] },
+          innerInstructions: [{ index: 0, instructions: [{
+            programIdIndex: invalidTransaction.message.staticAccountKeys.findIndex((key) => key.equals(noop)),
+            accounts: [], data: '0',
+          }] }],
+        },
+      };
+    });
+    let signatureChecks = 0;
+    t.mock.method(Connection.prototype, 'getSignatureStatuses', async () => {
+      signatureChecks += 1;
+      return { context: { slot: 1 }, value: [null] };
+    });
+    t.mock.method(Connection.prototype, 'sendRawTransaction', async () => assert.fail('Recovery inspection must not broadcast'));
+    const args = await state.reload();
+    args.providerFetch = async (input, init) => {
+      const rpc = JSON.parse(String(init?.body)) as { id: string; method: string };
+      return rpc.method === 'getAsset'
+        ? Response.json({ jsonrpc: '2.0', id: rpc.id, result: { id: ASSET, burnt: true } })
+        : state.args.providerFetch(input, init);
+    };
+    assert.deepEqual(await reconcileReceiptClaimWorkflowOnchain(args), {
+      status: outcome === 'instruction-mismatch' ? 'prepare' : 'pending',
+    });
+    const current = await state.reload();
+    assert.equal(current.snapshot.operation.phase, 'pending');
+    assert.equal(current.snapshot.operation.recipient, RECIPIENT);
+    assert.equal(current.snapshot.operation.submission, undefined);
+    assert.equal(current.snapshot.started.receiptTxSubmissions[0].status,
+      outcome === 'instruction-mismatch' ? 'not_landed' : 'submitted');
+    assert.deepEqual(current.snapshot.started.receiptTxs, outcome === 'instruction-mismatch' ? [] : [signature]);
+    assert.equal(signatureChecks, outcome === 'instruction-mismatch' ? 0 : 1);
+    await assert.rejects(reserveReceiptClaimWorkflow(state.context, CODE, Keypair.generate().publicKey.toBase58(), Date.now()),
+      /original receiver/);
+    if (outcome === 'instruction-mismatch') {
+      await assert.rejects(prepareReceiptClaimWorkflowTransaction({ ...current, providerFetch: args.providerFetch }), { code: 'unavailable' });
+      assert.equal((await state.reload()).snapshot.operation.submission, undefined);
+    }
   });
 }
 

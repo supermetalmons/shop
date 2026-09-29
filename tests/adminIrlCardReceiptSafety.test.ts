@@ -8,9 +8,6 @@ import {
   classifyDirectCardReceiptClaimSubmission,
   classifyDirectCardReceiptClaimTransferVerificationError,
   directCardReceiptClaimHasRecipientLock,
-  directCardReceiptClaimSubmissionProvesNoDelivery,
-  resolveDirectCardReceiptClaimRecoveryAction,
-  shouldKeepDirectCardReceiptClaimProcessing,
 } from '../cloud/workers/api/src/adminIrlCardReceipt.ts';
 
 test('Admin IRL card receipt lookup errors distinguish indexing, transient, and fatal failures', () => {
@@ -80,7 +77,6 @@ test('direct card claim distinguishes proven non-landing from old expired histor
     nowMs,
   };
   assert.equal(classifyDirectCardReceiptClaimSubmission({ ...base, signatureStatus: 'missing' }), 'not_landed');
-  assert.equal(directCardReceiptClaimSubmissionProvesNoDelivery({ ...base, signatureStatus: 'missing' }), true);
   assert.equal(
     classifyDirectCardReceiptClaimSubmission({
       ...base,
@@ -107,110 +103,9 @@ test('direct card claim distinguishes proven non-landing from old expired histor
   );
   assert.equal(classifyDirectCardReceiptClaimSubmission({ ...base, signatureStatus: 'failed' }), 'not_landed');
   assert.equal(classifyDirectCardReceiptClaimSubmission({ ...base, signatureStatus: 'succeeded' }), 'unresolved');
-  assert.equal(directCardReceiptClaimSubmissionProvesNoDelivery({ ...base, signatureStatus: 'failed' }), true);
-  assert.equal(directCardReceiptClaimSubmissionProvesNoDelivery({ ...base, signatureStatus: 'succeeded' }), false);
 });
 
-test('direct card claim recovery prioritizes historical proof, exact ownership, or a safe wait', () => {
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'none',
-      recipientOwnsReceipt: true,
-      adminOwnsReceipt: false,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'none',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: true,
-    }),
-    'transfer',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'none',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: false,
-    }),
-    'wait',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'none',
-      recipientOwnsReceipt: true,
-      adminOwnsReceipt: true,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'verified',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: false,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'verified',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: true,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'unresolved',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: true,
-    }),
-    'wait',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'unresolved',
-      recipientOwnsReceipt: true,
-      adminOwnsReceipt: false,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'rejected',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: true,
-    }),
-    'transfer',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'expired_unverified',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: true,
-    }),
-    'transfer',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'expired_unverified',
-      recipientOwnsReceipt: true,
-      adminOwnsReceipt: false,
-    }),
-    'finalize',
-  );
-  assert.equal(
-    resolveDirectCardReceiptClaimRecoveryAction({
-      transferEvidence: 'expired_unverified',
-      recipientOwnsReceipt: false,
-      adminOwnsReceipt: false,
-    }),
-    'wait',
-  );
-});
-
-test('direct card claim recovery preserves and repairs the first-recipient lock', () => {
+test('direct card claim recipient lock requires a receiver and retained signature', () => {
   assert.equal(
     directCardReceiptClaimHasRecipientLock({ hasRecipient: true, receiptTxCount: 0 }),
     false,
@@ -221,27 +116,6 @@ test('direct card claim recovery preserves and repairs the first-recipient lock'
   );
   assert.equal(
     directCardReceiptClaimHasRecipientLock({ hasRecipient: false, receiptTxCount: 1 }),
-    false,
-  );
-  assert.equal(
-    shouldKeepDirectCardReceiptClaimProcessing({
-      resumingPreviousProcessingClaim: true,
-      recipientOwnershipConfirmed: false,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldKeepDirectCardReceiptClaimProcessing({
-      resumingPreviousProcessingClaim: false,
-      recipientOwnershipConfirmed: true,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldKeepDirectCardReceiptClaimProcessing({
-      resumingPreviousProcessingClaim: false,
-      recipientOwnershipConfirmed: false,
-    }),
     false,
   );
 });
