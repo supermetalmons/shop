@@ -50,6 +50,7 @@ const migrationNames = [
   '0022_preorder_confirmation.sql',
   '0023_preorder_card_range.sql',
   '0024_preorder_card_range_1400.sql',
+  '0025_preorder_scoped_expiry.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -156,7 +157,18 @@ test('preorder card range 1400 migration is required for deployment and its tabl
   previous.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 = 24): DatabaseSync {
+test('preorder scoped expiry migration is required for deployment and its index definition is verified', () => {
+  const previous = currentDatabase(false, 24);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /scoped expiry migration/);
+  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0025_preorder_scoped_expiry.sql');
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder expiry index is invalid/);
+  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0025_preorder_scoped_expiry.sql', import.meta.url), 'utf8'));
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  previous.close();
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 = 25): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

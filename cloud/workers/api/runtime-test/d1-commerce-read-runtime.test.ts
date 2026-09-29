@@ -210,6 +210,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0022_preorder_confirmation.sql',
       '0023_preorder_card_range.sql',
       '0024_preorder_card_range_1400.sql',
+      '0025_preorder_scoped_expiry.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

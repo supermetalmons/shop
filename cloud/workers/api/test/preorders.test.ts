@@ -101,6 +101,24 @@ test('preorder preparation is idempotent, never renews a reservation, and reject
   assert.equal((await h.prepare([2], requestId)).status, 409);
 });
 
+test('preparation reads only claims for selected cards', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  assert.equal((await h.prepare([1, 2, 3])).status, 200);
+  h.wallet(OTHER);
+  const readClaims = PreorderStore.prototype.claims;
+  const reads: number[][] = [];
+  t.mock.method(PreorderStore.prototype, 'claims', async function (this: PreorderStore, ...args: Parameters<PreorderStore['claims']>) {
+    const result = await readClaims.call(this, ...args);
+    reads.push(result.map((claim) => claim.id));
+    return result;
+  });
+  assert.equal((await h.prepare([2, 4])).status, 409);
+  assert.deepEqual(reads, [[2]]);
+  assert.equal((await h.prepare([4])).status, 200);
+  assert.deepEqual(reads, [[2], []]);
+});
+
 test('availability and preparation require an Ethereum proof and only reveal its eligible cards', async () => {
   const h = harness();
   const rejected: Overrides = { verifyEthereumSession: async () => { throw new MiNoteAuthError('unauthenticated', 401, 'Verify your Ethereum wallet.'); } };
@@ -164,9 +182,9 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     });
     const expirePrepared = PreorderStore.prototype.expirePrepared;
     const readClaims = PreorderStore.prototype.claims;
-    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async function (this: PreorderStore, nowMs: number) {
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async function (this: PreorderStore, ...args: Parameters<PreorderStore['expirePrepared']>) {
       await expiry.enter();
-      return expirePrepared.call(this, nowMs);
+      return expirePrepared.call(this, ...args);
     });
     const claimRead = t.mock.method(PreorderStore.prototype, 'claims', async function (this: PreorderStore, cluster: string, collection: string) {
       await claims.enter();
@@ -846,6 +864,49 @@ test('status polling and scheduled recovery broadcast persisted submissions afte
   }
 });
 
+test('scheduled recovery drains expired disabled reservations before processing other collections', async (t) => {
+  const h = harness();
+  t.after(() => { Object.assign(config, { enabled: true }); h.database.close(); });
+  const prepared = await h.prepare([1]);
+  const template = (await h.store.get(prepared.body.order.orderId))!;
+  for (let id = 2; id <= 20; id += 1) {
+    await h.store.reserve({ ...template, orderId: crypto.randomUUID(), requestId: crypto.randomUUID(),
+      buyer: `buyer-${id}`, cardIds: [id], assets: [{ id, address: `asset-${id}` }] });
+  }
+  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const active = await h.store.reserve({ ...template, orderId: crypto.randomUUID(), requestId: crypto.randomUUID(),
+    preorderId: mainnet.preorderId, cluster: mainnet.cluster, collection: mainnet.collection });
+  const submitted = await h.store.submit(active, { transactionBase64: 'fully-signed', signature: 'signature' }, 2000);
+  await h.store.defer(submitted, 120_000);
+  h.time(200_000);
+  h.outcome('finalized');
+  Object.assign(config, { enabled: false });
+
+  assert.equal(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), 20);
+  assert.deepEqual(await h.store.claims(config.cluster, config.collection), []);
+  assert.equal(h.database.prepare("SELECT COUNT(*) AS count FROM commerce_preorder_orders WHERE status = 'expired'").get()!.count, 20);
+  assert.equal((await h.store.get(active.orderId))!.status, 'submitted');
+  assert.equal(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), 1);
+  assert.equal((await h.store.get(active.orderId))!.status, 'succeeded');
+});
+
+test('scheduled recovery keeps disabled submitted reservations after their original expiry', async (t) => {
+  const h = harness();
+  t.after(() => { Object.assign(config, { enabled: true }); h.database.close(); });
+  const prepared = await h.prepare();
+  const submitted = await h.store.submit((await h.store.get(prepared.body.order.orderId))!,
+    { transactionBase64: 'fully-signed', signature: 'signature' }, 2000);
+  h.time(200_000);
+  Object.assign(config, { enabled: false });
+  const unexpected = t.mock.fn(async () => { assert.fail('Disabled collections must not perform on-chain work.'); });
+  await assert.rejects(reconcilePendingPreorders(h.env, new AbortController().signal, {
+    ...h.deps, probe: unexpected, send: unexpected, blockhashValid: unexpected,
+  }), AggregateError);
+  assert.equal(unexpected.mock.callCount(), 0);
+  assert.equal((await h.store.get(submitted.orderId))!.status, 'submitted');
+  assert.equal((await h.store.claims(config.cluster, config.collection))[0]?.orderId, submitted.orderId);
+});
+
 test('an uncertain first broadcast retains its transaction for status retry', async () => {
   const h = harness();
   const prepared = await h.prepare();
@@ -934,7 +995,7 @@ test('mainnet availability is verified, collection-scoped, and expires unsigned 
   assert.equal(result.body.items[1].status, 'preordered');
   assert.equal(result.body.items[2].status, 'available');
   assert.equal(result.body.ethereumAddress, ETHEREUM);
-  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'expired');
+  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'prepared');
   assert.equal((await h.call('availability', { preorderId: 'unknown' })).status, 409);
   const devnet = await h.call('availability', { preorderId: config.preorderId });
   assert.equal(devnet.body.items[0].status, 'preordered');

@@ -96,11 +96,14 @@ async function reconcileOrder(
   order: StoredPreorder, store: PreorderStore, env: Env, dependencies: PreorderDependencies, signal: AbortSignal,
   options: { checkPreparedBlockhash?: boolean; rebroadcast?: boolean } = {},
 ): Promise<StoredPreorder> {
+  if (order.status === 'prepared' && order.expiresAtMs <= dependencies.nowMs()) {
+    return store.finish(order, 'expired', dependencies.nowMs());
+  }
   const config = enabledConfig(order.preorderId);
   if (order.status === 'prepared') {
-    if (order.expiresAtMs <= dependencies.nowMs() || (options.checkPreparedBlockhash && !(await dependencies.blockhashValid({
+    if (options.checkPreparedBlockhash && !(await dependencies.blockhashValid({
       ...rpcArgs(env, config, dependencies, signal), blockhash: order.blockhash, minContextSlot: order.blockhashContextSlot,
-    })))) return store.finish(order, 'expired', dependencies.nowMs());
+    }))) return store.finish(order, 'expired', dependencies.nowMs());
     return order;
   }
   if (order.status !== 'submitted') return order;
@@ -198,7 +201,7 @@ export async function handlePreorderRequest(
         if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
           throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
         }
-        if (config.enabled && !includeRecoveries) await store.expirePrepared(deps.nowMs());
+        if (config.enabled && !includeRecoveries) await store.expirePrepared(config.cluster, config.collection, deps.nowMs());
       };
       const eligibility = (address: string, buyer: string | null, fresh: boolean) => deps.eligibility({
         request, env, config, address, buyer, fresh, deadline, metrics,
@@ -281,8 +284,8 @@ export async function handlePreorderRequest(
             throw new ProfileReadError('failed-precondition', 409, 'Finish or cancel your current preorder first.', { order: publicPreorder(current) });
           }
         }
-        const claims = await store.claims(config.cluster, config.collection);
-        for (const orderId of new Set(claims.filter((claim) => ids.includes(claim.id) && claim.status === 'reserved').map((claim) => claim.orderId))) {
+        const claims = await store.claims(config.cluster, config.collection, ids);
+        for (const orderId of new Set(claims.filter((claim) => claim.status === 'reserved').map((claim) => claim.orderId))) {
           const reserved = await store.get(orderId);
           if (reserved) await reconcileOrder(reserved, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
         }

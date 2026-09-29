@@ -227,6 +227,7 @@ export function createCommerceD1Harness(
         database.exec(readFileSync('cloud/workers/api/commerce-migrations/0023_preorder_card_range.sql', 'utf8'));
         if (options.preorderCardRange1400Migration !== false) {
           database.exec(readFileSync('cloud/workers/api/commerce-migrations/0024_preorder_card_range_1400.sql', 'utf8'));
+          database.exec(readFileSync('cloud/workers/api/commerce-migrations/0025_preorder_scoped_expiry.sql', 'utf8'));
         }
       }
     }

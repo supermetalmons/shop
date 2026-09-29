@@ -144,20 +144,31 @@ export class PreorderStore {
     return result.results.map((row) => decode(row)!);
   }
 
-  async expirePrepared(nowMs: number): Promise<void> {
+  async expirePrepared(cluster: string, collection: string, nowMs: number): Promise<void> {
+    const due = await this.db.prepare(`SELECT order_id FROM commerce_preorder_orders
+      WHERE cluster = ? AND collection = ? AND status = 'prepared' AND expires_at_ms <= ?`)
+      .bind(cluster, collection, nowMs).all<{ order_id: string }>();
+    if (!due.results.length) return;
+    const orderIds = JSON.stringify(due.results.map((order) => order.order_id));
     await this.db.batch([
       this.db.prepare(`UPDATE commerce_preorder_orders SET status = 'expired', updated_at_ms = ?, revision = revision + 1
-        WHERE status = 'prepared' AND expires_at_ms <= ?`).bind(nowMs, nowMs),
-      this.db.prepare(`DELETE FROM commerce_preorder_claims WHERE EXISTS (
-        SELECT 1 FROM commerce_preorder_orders
-        WHERE order_id = commerce_preorder_claims.order_id AND status = 'expired' AND signature IS NULL)`),
+        WHERE order_id IN (SELECT value FROM json_each(?)) AND status = 'prepared' AND expires_at_ms <= ?`)
+        .bind(nowMs, orderIds, nowMs),
+      this.db.prepare(`DELETE FROM commerce_preorder_claims
+        WHERE order_id IN (SELECT value FROM json_each(?)) AND EXISTS (
+          SELECT 1 FROM commerce_preorder_orders
+          WHERE order_id = commerce_preorder_claims.order_id AND status = 'expired' AND signature IS NULL)`)
+        .bind(orderIds),
     ]);
   }
 
-  async claims(cluster: string, collection: string): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string }>> {
+  async claims(cluster: string, collection: string, cardIds?: readonly number[]): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string }>> {
+    if (cardIds?.length === 0) return [];
     const result = await this.db.prepare(`SELECT claims.card_id, claims.order_id, orders.status, orders.buyer, orders.confirmed_slot
       FROM commerce_preorder_claims AS claims JOIN commerce_preorder_orders AS orders ON orders.order_id = claims.order_id
-      WHERE claims.cluster = ? AND claims.collection = ?`).bind(cluster, collection).all<Record<string, unknown>>();
+      WHERE claims.cluster = ? AND claims.collection = ?
+        ${cardIds ? `AND claims.card_id IN (${cardIds.map(() => '?').join(', ')})` : ''}`)
+      .bind(cluster, collection, ...(cardIds ?? [])).all<Record<string, unknown>>();
     return result.results.map((row) => ({ id: Number(row.card_id), orderId: String(row.order_id), buyer: String(row.buyer),
       status: row.status === 'succeeded' || row.status === 'submitted' && row.confirmed_slot != null ? 'preordered' : 'reserved' }));
   }

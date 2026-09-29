@@ -9,7 +9,7 @@ import { PreorderStore, type StoredPreorder } from '../src/preorderStore.ts';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { recoverPreorder } from '../../../../scripts/ops/recoverPreorder.ts';
 
-test('real D1 atomically claims preorders, fences submission and safely recovers verified outcomes', async () => {
+test('real D1 atomically claims preorders, fences submission and safely recovers verified outcomes', async (t) => {
   const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtime = { ...production, main: resolve('cloud/workers/api/src/index.ts'), routes: undefined,
     d1_databases: production.d1_databases.map((database: Record<string, unknown>) => ({ ...database,
@@ -50,7 +50,7 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').first<{ count: number }>())!.count, 1);
     await Promise.all([
       store.submit(winner, { transactionBase64: 'authorized', signature: 'signature' }, 2000),
-      store.finish(winner, 'expired', 121_000),
+      store.expirePrepared(config.cluster, config.collection, 121_000),
     ]);
     const raced = (await store.get(winner.orderId))!;
     assert.ok(raced.status === 'submitted' || raced.status === 'expired');
@@ -137,6 +137,57 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE card_id = 1400').run(), /permanent/);
     await store.finish(newCards, 'cancelled', 3000);
     assert.equal((await store.claims(config.cluster, config.collection)).some((claim) => claim.id >= 1398), false);
+
+    await t.test('expiry releases only scoped expired preparations and selected claims stay accurate', async () => {
+      const collection = `${config.collection}-expiry`;
+      const source = (buyer: string, id: number) => ({ ...candidate(buyer, [id]), collection });
+      const expired = await store.reserve(source('expired', 30));
+      const fresh = await store.reserve({ ...source('fresh', 31), expiresAtMs: 121_001 });
+      const otherCollection = await store.reserve({ ...source('other-collection', 30), collection: `${collection}-other` });
+      const otherCluster = await store.reserve({ ...source('other-cluster', 30), cluster: 'mainnet-beta' });
+      const submitted = await store.submit(await store.reserve(source('submitted', 32)),
+        { transactionBase64: 'signed-submitted', signature: 'signature-submitted' }, 2000);
+      const confirmed = await store.confirm(await store.submit(await store.reserve(source('confirmed', 33)),
+        { transactionBase64: 'signed-confirmed', signature: 'signature-confirmed' }, 2000), 600, 3000);
+      const succeeded = await store.finish(await store.submit(await store.reserve(source('succeeded', 34)),
+        { transactionBase64: 'signed-succeeded', signature: 'signature-succeeded' }, 2000), 'succeeded', 3000);
+      const untouched = await Promise.all([fresh, otherCollection, otherCluster, submitted, confirmed, succeeded]
+        .map(order => store.get(order.orderId)));
+
+      await store.expirePrepared(config.cluster, collection, 121_000);
+
+      assert.equal((await store.get(expired.orderId))?.status, 'expired');
+      for (const order of untouched) {
+        assert.deepEqual(await store.get(order!.orderId), order);
+        assert.equal((await store.claims(order!.cluster, order!.collection, order!.cardIds))[0]?.orderId, order!.orderId);
+      }
+      assert.deepEqual(await store.claims(config.cluster, collection, []), []);
+      assert.deepEqual(await store.claims(config.cluster, collection, [30, 99]), []);
+      assert.deepEqual((await store.claims(config.cluster, collection, [31, 33, 34]))
+        .map(({ id, status }) => ({ id, status })).sort((a, b) => a.id - b.id), [
+        { id: 31, status: 'reserved' }, { id: 33, status: 'preordered' }, { id: 34, status: 'preordered' },
+      ]);
+      const replacement = await store.reserve({ ...source(expired.buyer, 30), expiresAtMs: 121_001 });
+      assert.equal((await store.claims(config.cluster, collection, [30]))[0]?.orderId, replacement.orderId);
+    });
+
+    await t.test('claim deletion failure rolls back every expired preparation', async () => {
+      const collection = `${config.collection}-rollback`;
+      const orders = await Promise.all([40, 41].map(id => store.reserve({ ...candidate(`rollback-${id}`, [id]), collection })));
+      const before = await Promise.all(orders.map(order => store.get(order.orderId)));
+      const claimsBefore = await store.claims(config.cluster, collection);
+      await db.prepare(`CREATE TRIGGER preorder_cleanup_failure BEFORE DELETE ON commerce_preorder_claims
+        WHEN OLD.card_id = 41 BEGIN SELECT RAISE(ABORT, 'forced claim deletion failure'); END`).run();
+      try {
+        await assert.rejects(store.expirePrepared(config.cluster, collection, 121_000), /forced claim deletion failure/);
+        assert.deepEqual(await Promise.all(orders.map(order => store.get(order.orderId))), before);
+        assert.deepEqual(await store.claims(config.cluster, collection), claimsBefore);
+      } finally {
+        await db.prepare('DROP TRIGGER preorder_cleanup_failure').run();
+      }
+      await store.expirePrepared(config.cluster, collection, 121_000);
+      assert.deepEqual(await store.claims(config.cluster, collection), []);
+    });
   } finally {
     await server.close();
   }

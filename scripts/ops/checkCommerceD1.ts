@@ -52,6 +52,7 @@ const PREORDER_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, st
 });
 const PREORDER_BUYER_INDEX_FINGERPRINT = '03d0921e2fe4834a986d2d2aae6dc1b2ba40d323a5f5c146f061af7db60c90f9';
 const PREORDER_EXPIRY_INDEX_FINGERPRINT = '6e75d815ecd1bd2ed85f545e17b0b5c212259dfbb7c59e2c29040b16a4d5ac01';
+const PREORDER_SCOPED_EXPIRY_INDEX_FINGERPRINT = '4298ccc639a6b3aa6a48fb004ba2c2c7ec4839b3a13f61c5134f87b39d2d1367';
 const PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
   ...PREORDER_SCHEMA_FINGERPRINTS,
   commerce_preorder_orders: ['table', 'ac7078da7591fba9f0d174a5cb3316e1abe9b1f824d076261aa0430a67af269c'],
@@ -298,7 +299,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 24) ||
+    (migrations.length < 13 || migrations.length > 25) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -322,7 +323,8 @@ export function checkCommerceD1(
     (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql') ||
     (migrations.length >= 22 && migrations[21].name !== '0022_preorder_confirmation.sql') ||
     (migrations.length >= 23 && migrations[22].name !== '0023_preorder_card_range.sql') ||
-    (migrations.length >= 24 && migrations[23].name !== '0024_preorder_card_range_1400.sql')
+    (migrations.length >= 24 && migrations[23].name !== '0024_preorder_card_range_1400.sql') ||
+    (migrations.length >= 25 && migrations[24].name !== '0025_preorder_scoped_expiry.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -364,10 +366,12 @@ export function checkCommerceD1(
     }
   }
   const preorderExpiryIndexReady = migrations.some((migration) => migration.name === '0020_preorder_expiry_index.sql');
+  const preorderScopedExpiryReady = migrations.some((migration) => migration.name === '0025_preorder_scoped_expiry.sql');
   if (options.forDeployment && !preorderExpiryIndexReady) fail('Commerce D1 preorder expiry index migration is required for deployment.');
   if (preorderExpiryIndexReady) {
     const schema = queryRemoteCommerceD1("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'commerce_preorder_prepared_expiry'");
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== PREORDER_EXPIRY_INDEX_FINGERPRINT) {
+    const fingerprint = preorderScopedExpiryReady ? PREORDER_SCOPED_EXPIRY_INDEX_FINGERPRINT : PREORDER_EXPIRY_INDEX_FINGERPRINT;
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) {
       fail('Commerce D1 preorder expiry index is invalid.');
     }
   }
@@ -375,6 +379,7 @@ export function checkCommerceD1(
   if (options.forDeployment && !preorderConfirmationReady) fail('Commerce D1 preorder confirmation migration is required for deployment.');
   if (options.forDeployment && !preorderCardRangeReady) fail('Commerce D1 preorder card range migration is required for deployment.');
   if (options.forDeployment && !preorderCardRange1400Ready) fail('Commerce D1 preorder card range 1400 migration is required for deployment.');
+  if (options.forDeployment && !preorderScopedExpiryReady) fail('Commerce D1 preorder scoped expiry migration is required for deployment.');
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list

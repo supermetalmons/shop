@@ -130,7 +130,7 @@ test('recent preorder inventory uses the buyer index without scanning or sorting
   assert.doesNotMatch(plan, /SCAN commerce_preorder_orders|TEMP B-TREE/);
 });
 
-test('expiry touches prepared orders and current claims without scanning permanent history', async (context) => {
+test('expiry uses collection and order indexes without scanning permanent claims or history', async (context) => {
   const statements: string[] = [];
   const { database, db } = createCommerceD1Harness({ observeStatement(call) { statements.push(call.sql); } });
   context.after(() => database.close());
@@ -150,17 +150,64 @@ test('expiry touches prepared orders and current claims without scanning permane
   const sold = await store.submit(await reserve(5), { transactionBase64: 'signed', signature: 'signature-5' }, 1500);
   await store.finish(sold, 'succeeded', 1600);
   statements.length = 0;
-  await store.expirePrepared(5000);
-  assert.equal(statements.length, 2);
+  await store.expirePrepared(config.cluster, config.collection, 5000);
+  assert.equal(statements.length, 3);
+  const orderIds = JSON.stringify([due.orderId]);
+  const bindings = [[config.cluster, config.collection, 5000], [5000, orderIds, 5000], [orderIds]];
   const plans = statements.map((sql, index) => database.prepare(`EXPLAIN QUERY PLAN ${sql}`)
-    .all(...(index === 0 ? [5000, 5000] : [])).map((row) => String(row.detail)).join('\n'));
-  assert.match(plans[0], /SEARCH commerce_preorder_orders USING (?:COVERING )?INDEX commerce_preorder_prepared_expiry/);
+    .all(...bindings[index]).map((row) => String(row.detail)).join('\n'));
+  assert.match(plans[0], /SEARCH commerce_preorder_orders USING (?:COVERING )?INDEX commerce_preorder_prepared_expiry \(cluster=\? AND collection=\? AND expires_at_ms<\?\)/);
   assert.match(plans[1], /SEARCH commerce_preorder_orders USING INDEX.*order_id=\?/);
-  assert.ok(plans.every((plan) => !plan.includes('SCAN commerce_preorder_orders')));
+  assert.match(plans[2], /SEARCH commerce_preorder_claims USING (?:COVERING )?INDEX commerce_preorder_claim_order \(order_id=\?\)/);
+  assert.ok(plans.every((plan) => !/SCAN commerce_preorder_(orders|claims)/.test(plan)));
   assert.equal((await store.get(due.orderId))!.status, 'expired');
   assert.equal((await store.get(submitted.orderId))!.status, 'submitted');
   assert.deepEqual((await store.claims(config.cluster, config.collection)).map((claim) => claim.id).sort(), [3, 4, 5]);
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').get()!.count, 5);
+  statements.length = 0;
+  await store.expirePrepared(config.cluster, config.collection, 5000);
+  assert.equal(statements.length, 1);
+  assert.match(statements[0], /^SELECT/);
+});
+
+test('selected preorder claims use the full card index and empty selections skip the database', async (context) => {
+  const statements: string[] = [];
+  const { database, db } = createCommerceD1Harness({ observeStatement(call) { statements.push(call.sql); } });
+  context.after(() => database.close());
+  const store = new PreorderStore(db);
+  const config = getPreorderConfig('mi_note_cards_devnet')!;
+  assert.deepEqual(await store.claims(config.cluster, config.collection, []), []);
+  assert.equal(statements.length, 0);
+  assert.deepEqual(await store.claims(config.cluster, config.collection, [1, 7, 1400]), []);
+  const plan = database.prepare(`EXPLAIN QUERY PLAN ${statements[0]}`)
+    .all(config.cluster, config.collection, 1, 7, 1400).map((row) => String(row.detail)).join('\n');
+  assert.match(plan, /SEARCH claims USING INDEX .* \(cluster=\? AND collection=\? AND card_id=\?\)/);
+  assert.doesNotMatch(plan, /SCAN (claims|orders)/);
+});
+
+test('expiry preserves a submission that wins after candidates are read', async (context) => {
+  let submitAfterRead = false;
+  const { database, db } = createCommerceD1Harness({ observeStatement(call) {
+    if (!submitAfterRead || call.method !== 'all' || !call.sql.includes('SELECT order_id FROM commerce_preorder_orders')) return;
+    submitAfterRead = false;
+    database.prepare(`UPDATE commerce_preorder_orders SET status = 'submitted', signed_transaction = 'signed',
+      signature = 'signature', revision = revision + 1 WHERE order_id = 'racing-order'`).run();
+  } });
+  context.after(() => database.close());
+  const store = new PreorderStore(db);
+  const config = getPreorderConfig('mi_note_cards_devnet')!;
+  await store.reserve({
+    orderId: 'racing-order', preorderId: config.preorderId, cluster: config.cluster, collection: config.collection,
+    buyer: 'buyer', ethereumAddress: '0x0000000000000000000000000000000000000001', requestId: 'request',
+    cardIds: [1], assets: [{ id: 1, address: 'asset' }], status: 'prepared', expiresAtMs: 2000,
+    signature: null, preparedTransaction: 'partial', signedTransaction: null, blockhash: 'hash',
+    blockhashContextSlot: 1, lastValidBlockHeight: 100, createdAtMs: 1000, revision: 1,
+  });
+  submitAfterRead = true;
+  await store.expirePrepared(config.cluster, config.collection, 2000);
+  assert.equal(submitAfterRead, false);
+  assert.equal((await store.get('racing-order'))?.status, 'submitted');
+  assert.deepEqual((await store.claims(config.cluster, config.collection)).map((claim) => claim.id), [1]);
 });
 
 test('Ethereum ownership migration preserves submitted legacy orders and fences unsigned legacy submission', async (context) => {

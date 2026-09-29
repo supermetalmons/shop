@@ -185,7 +185,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0024_preorder_card_range_1400.sql`, followed by the API
+migrations through `0025_preorder_scoped_expiry.sql`, followed by the API
 release and then the frontend. The normal API deployment command applies the
 migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
