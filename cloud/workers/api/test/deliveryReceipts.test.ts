@@ -385,6 +385,39 @@ function recoveryPageHarness() {
   };
 }
 
+test('prepared recovery uses the captured clock after page reads and persists its retry schedule', async (context) => {
+  let nowMs = READY_NOTIFICATION_NOW_MS + 1000;
+  context.mock.method(Date, 'now', () => nowMs);
+  for (const createdAt of [undefined, 0, -1, 'legacy']) {
+    const native = await nativeDeliveryContext({
+      deliveryId: 7, owner: OWNER, status: 'prepared', receiptRecovery: { preparedProbeCount: 0 },
+      ...(createdAt === undefined ? {} : { createdAt }),
+    });
+    context.after(() => native.harness.database.close());
+    const repository = native.context.repository;
+    const readPage = repository.queryDeliveryRecoveryPage.bind(repository);
+    context.mock.method(repository, 'queryDeliveryRecoveryPage', async (args: Parameters<typeof readPage>[0]) => {
+      nowMs += 10;
+      return readPage(args);
+    });
+    let probes = 0;
+    const recover = () => deliveryReceiptTestHooks.recoverReceiptsRequest(
+      { cursor: null }, { kind: 'staff-wallet', wallet: OWNER }, env({ COMMERCE_DB: native.harness.db }), native.context,
+      { apiKey: 'helius', fetch: async () => assert.fail('unexpected provider fetch'), signal: native.context.signal },
+      failOnDeferredWork, { hasConfirmedDeliveryRecord: async () => { probes += 1; return false; } },
+    );
+    const result = await recover();
+    const stored = (await repository.get(commerceKeys.deliveryOrder('card_nft_2', '7')))!.data;
+    assert.equal(probes, 1);
+    assert.equal((stored.receiptRecovery as { preparedProbeCount: number }).preparedProbeCount, 1);
+    assert.ok(result.walletRecovery.nextCheckAt! > nowMs);
+    assert.equal(result.nextCursor, null);
+    const deferred = await recover();
+    assert.equal(probes, 1);
+    assert.equal(deferred.walletRecovery.nextCheckAt, result.walletRecovery.nextCheckAt);
+  }
+});
+
 test('recovery pages bound attempts and continue by immutable path despite changing retry timestamps', async () => {
   const h = recoveryPageHarness();
   seedCommerceDocuments(h.harness, Array.from({ length: 11 }, (_, index) => ({

@@ -193,7 +193,7 @@ export function deliveryRecoveryEligibility(
   }
   if (status === 'prepared') {
     if (force) return { eligible: true };
-    const nextCheckAt = recovery.preparedNextCheckAt();
+    const nextCheckAt = recovery.preparedNextCheckAt(nowMs);
     if (nextCheckAt === null) {
       return { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
     }
