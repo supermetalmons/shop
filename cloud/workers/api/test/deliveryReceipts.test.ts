@@ -50,6 +50,7 @@ import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { registerDeferredWork } from '../src/deferredWork.ts';
 import { publishReadyToShipNotifications } from '../src/readyToShipNotificationOutbox.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { decodeDeliveryRecoveryCursor, encodeDeliveryRecoveryCursor } from '../../../../shared/deliveryRecoveryPagination.ts';
 import {
   OWNER, SIGNATURE, READY_NOTIFICATION_NOW_MS,
   nativeDeliveryContext, notificationQueue, readyNotificationOrderFields, deliveryCleanupContext,
@@ -348,6 +349,134 @@ test('unfiltered recovery uses indexed owner candidates, identity filtering, ord
     { deliveryId: 4, outcome: 'attempt_capped' },
   ]);
   assert.equal(recoveryQueries, 2);
+  assert.equal(Object.hasOwn(result, 'nextCursor'), false);
+});
+
+function recoveryPageHarness() {
+  const harness = createCommerceD1Harness();
+  const queries: Parameters<D1CommerceRepository['queryDeliveryRecoveryPage']>[0][] = [];
+  const repository = new class extends D1CommerceRepository {
+    override async queryDeliveryRecoveryPage(args: Parameters<D1CommerceRepository['queryDeliveryRecoveryPage']>[0]) {
+      queries.push(args);
+      return super.queryDeliveryRecoveryPage(args);
+    }
+  }(harness.db);
+  const signal = new AbortController().signal;
+  const context = { repository, signal, nowMs: Date.now(), providerFetch: async () => assert.fail('unexpected provider fetch'), dataDb: undefined };
+  const environment = env({ COMMERCE_DB: harness.db });
+  const retried: number[] = [];
+  return {
+    harness, queries, retried,
+    recover: (
+      body: Parameters<typeof deliveryReceiptTestHooks.recoverReceiptsRequest>[0],
+      overrides: Parameters<typeof deliveryReceiptTestHooks.recoverReceiptsRequest>[6] = {},
+    ) => deliveryReceiptTestHooks.recoverReceiptsRequest(
+      body, { kind: 'staff-wallet', wallet: OWNER }, environment, context,
+      { apiKey: 'helius', fetch: async () => assert.fail('unexpected provider fetch'), signal }, failOnDeferredWork,
+      {
+        hasConfirmedDeliveryRecord: async () => true,
+        retryIssueReceipts: async ({ request: retry }) => {
+          retried.push(retry.deliveryId);
+          return { processed: true, deliveryId: retry.deliveryId, receiptsMinted: 1, receiptTxs: [], closeDeliveryTx: null };
+        },
+        ...overrides,
+      },
+    ),
+  };
+}
+
+test('recovery pages bound attempts and continue by immutable path despite changing retry timestamps', async () => {
+  const h = recoveryPageHarness();
+  seedCommerceDocuments(h.harness, Array.from({ length: 11 }, (_, index) => ({
+    key: commerceKeys.deliveryOrder('card_nft_2', String(index + 1)),
+    data: { deliveryId: index + 1, owner: OWNER, status: 'processing', createdAt: 100 - index },
+  })));
+  let cursor: string | null = null;
+  let pages = 0;
+  do {
+    const result = await h.recover({ force: true, cursor });
+    assert.ok(result.attempted <= 2);
+    assert.equal(result.remainingProcessing, 11);
+    assert.equal(result.walletRecovery.remainingProcessing, 11);
+    assert.notEqual(result.nextCursor, undefined);
+    cursor = result.nextCursor ?? null;
+    pages += 1;
+    assert.ok(pages <= 6);
+  } while (cursor);
+  assert.equal(pages, 6);
+  assert.deepEqual(h.retried, [1, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.ok(h.queries.every((query) => query.limit <= 9));
+});
+
+test('recovery pages advance past eight malformed identities while preserving the lookahead', async () => {
+  const h = recoveryPageHarness();
+  seedCommerceDocuments(h.harness, [
+    ...Array.from({ length: 8 }, (_, index) => ({
+      key: commerceKeys.deliveryOrder('card_nft_2', `!invalid-${index}`),
+      data: { owner: OWNER, status: 'processing' },
+    })),
+    { key: commerceKeys.deliveryOrder('card_nft_2', '1'), data: { deliveryId: 1, owner: OWNER, status: 'processing' } },
+  ]);
+  const first = await h.recover({ cursor: null });
+  assert.deepEqual(first.results, []);
+  assert.equal(first.attempted, 0);
+  assert.equal(h.queries.length, 1);
+  assert.equal(h.queries[0].limit, 9);
+  assert.equal(decodeDeliveryRecoveryCursor(first.nextCursor)?.path, 'drops/card_nft_2/deliveryOrders/!invalid-7');
+  const second = await h.recover({ cursor: first.nextCursor });
+  assert.deepEqual(h.retried, [1]);
+  assert.equal(second.nextCursor, null);
+});
+
+test('recovery page budget includes prepared probes and ready notification resumes across phases', async () => {
+  const h = recoveryPageHarness();
+  seedCommerceDocuments(h.harness, [
+    { key: commerceKeys.deliveryOrder('card_nft_2', '1'), data: { deliveryId: 1, owner: OWNER, status: 'processing' } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '2'), data: { deliveryId: 2, owner: OWNER, status: 'prepared', createdAt: 1 } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '3'), data: withoutNotificationFields(readyNotificationOrderFields(3, true)) },
+  ]);
+  seedReadyNotificationOutbox(h.harness, 3, readyNotificationOrderFields(3, true));
+  let probes = 0;
+  const first = await h.recover({ cursor: null }, {
+    hasConfirmedDeliveryRecord: async () => { probes += 1; return false; },
+    recordPreparedDeliveryRecoveryMiss: async () => Date.now() + 30_000,
+  });
+  assert.equal(first.attempted, 1);
+  assert.equal(probes, 1);
+  assert.deepEqual(h.retried, [1]);
+  assert.equal(decodeDeliveryRecoveryCursor(first.nextCursor)?.phase, 'prepared');
+  assert.deepEqual(h.queries.map(({ phase, limit }) => ({ phase, limit })), [
+    { phase: 'processing', limit: 9 }, { phase: 'prepared', limit: 8 }, { phase: 'ready', limit: 7 },
+  ]);
+  const second = await h.recover({ cursor: first.nextCursor });
+  assert.deepEqual(h.retried, [1, 3]);
+  assert.equal(second.nextCursor, null);
+});
+
+test('recovery pages skip backoff and leases before probes and reject cursor scope changes', async () => {
+  const h = recoveryPageHarness();
+  seedCommerceDocuments(h.harness, [
+    { key: commerceKeys.deliveryOrder('card_nft_2', '1'), data: {
+      deliveryId: 1, owner: OWNER, status: 'prepared', createdAt: Date.now() + 60_000,
+    } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '2'), data: {
+      deliveryId: 2, owner: OWNER, status: 'processing', receiptRecovery: { leaseExpiresAt: Date.now() + 60_000 },
+    } },
+  ]);
+  const result = await h.recover({ cursor: null }, { hasConfirmedDeliveryRecord: async () => assert.fail('ineligible order was probed') });
+  assert.equal(result.attempted, 0);
+  assert.equal(result.nextCursor, null);
+  assert.deepEqual(result.results.map((entry) => entry.outcome), ['lease_active', 'not_eligible']);
+  const valid = { version: 1 as const, owner: OWNER, dropId: null, force: false, phase: 'processing' as const, path: 'drops/card_nft_2/deliveryOrders/2' };
+  for (const body of [
+    { cursor: 'invalid' },
+    { cursor: encodeDeliveryRecoveryCursor({ ...valid, owner: Keypair.generate().publicKey.toBase58() }) },
+    { cursor: encodeDeliveryRecoveryCursor(valid), force: true },
+    { cursor: encodeDeliveryRecoveryCursor(valid), dropId: 'card_nft_2' },
+    { cursor: null, dropId: 'card_nft_2', deliveryId: 1 },
+  ]) {
+    await assert.rejects(h.recover(body), (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'invalid-argument');
+  }
 });
 
 test('receipt API reports notification claim read failures as unavailable without enqueueing', async (context) => {

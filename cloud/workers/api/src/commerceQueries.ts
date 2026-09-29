@@ -248,6 +248,30 @@ export function deliveryRecoveryOrdersQuery(owner: string): CommerceSqlQuery {
   };
 }
 
+export type DeliveryRecoveryPageQuery = Readonly<{
+  owner: string;
+  dropId?: string;
+  phase: 'processing' | 'prepared' | 'ready';
+  startAfterPath?: string;
+  limit: number;
+}>;
+
+export function deliveryRecoveryPageQuery(args: DeliveryRecoveryPageQuery): CommerceSqlQuery {
+  if (args.phase === 'ready') return pendingReadyNotificationsQuery(args);
+  return {
+    sql: `SELECT ${qualifiedDocumentColumns('document')}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document.document_kind = 'delivery_order' AND document.owner = ? AND document.status = ?
+        ${args.dropId === undefined ? '' : 'AND document.drop_id = ?'}
+        ${args.startAfterPath === undefined ? '' : 'AND document.document_path > ?'}
+      ORDER BY document.document_path ASC LIMIT ?`,
+    bindings: [args.owner, args.phase, ...(args.dropId === undefined ? [] : [args.dropId]),
+      ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]), args.limit],
+  };
+}
+
 export function deliveryOrdersByOwnerQuery(args: Readonly<{
   owner: string;
   limit: number;
@@ -268,6 +292,7 @@ export function deliveryOrdersByOwnerQuery(args: Readonly<{
 export function pendingReadyNotificationsQuery(args: Readonly<{
   limit: number;
   owner?: string;
+  dropId?: string;
   startAfterPath?: string;
 }>): CommerceSqlQuery {
   const ownerPredicate = args.owner === undefined ? '' : ' AND pending.owner = ? AND document.owner = pending.owner';
@@ -276,6 +301,7 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
   const bindings = [
     ...(args.owner === undefined ? [] : [args.owner]),
     ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
+    ...(args.dropId === undefined ? [] : [args.dropId]),
   ];
   return {
     sql: `SELECT ${qualifiedDocumentColumns('document')}
@@ -287,7 +313,7 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
     CROSS JOIN commerce_documents AS document`}
     WHERE outbox.parent_path = document.document_path
       AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
-      AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}
+      AND outbox.family = 'ready' AND outbox.state = 'pending'${args.owner === undefined ? '' : " AND pending.parent_path = outbox.parent_path AND pending.family = 'ready'"}${ownerPredicate}${cursorPredicate}${args.dropId === undefined ? '' : ' AND document.drop_id = ?'}
     ORDER BY ${orderedPath} ASC
     LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
     bindings: [...bindings, args.limit],

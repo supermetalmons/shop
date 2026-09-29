@@ -1,5 +1,5 @@
 import { parseDeliveryOrderReceiptView, type DeliveryOrderReceiptView } from './deliveryOrderReceiptView.js';
-import { parseDeliveryOrderOwnership, parseDeliveryOrderStatus } from './deliveryOrderReadModel.js';
+import { parseDeliveryOrderOwnership, parseDeliveryOrderStatus, parseDeliveryRecoveryState } from './deliveryOrderReadModel.js';
 import bs58 from 'bs58';
 import {
   ComputeBudgetProgram,
@@ -88,6 +88,11 @@ import {
 } from './transactionSubmissionRecovery.js';
 import { resolveDeliveryOrderDropId } from './deliveryOrderSummaries.js';
 import { buildRecoverDeliveryOrdersResult } from '../../../../shared/deliveryRecovery.js';
+import {
+  DELIVERY_RECOVERY_CURSOR_MAX_LENGTH,
+  DELIVERY_RECOVERY_PAGE_SIZE,
+  decodeDeliveryRecoveryCursor,
+} from '../../../../shared/deliveryRecoveryPagination.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import {
@@ -113,12 +118,14 @@ import {
   acquireDeliveryRecoveryLease,
   cancelDeliveryRecoveryAttempt,
   compareDeliveryRecoveryCandidates,
+  deliveryRecoveryEligibility,
   fetchDeliveryRecoveryState,
   finalizeDeliveryRecoveryAttempt,
   handlePreparedRecoveryFailure,
   orderResultBase,
   recordPreparedDeliveryRecoveryMiss,
   runDeliveryRecoveryOrderQuery,
+  runDeliveryRecoveryPageQuery,
   runPendingReadyNotificationQuery,
   type DeliveryRecoveryLease,
 } from './deliveryRecoveryStore.js';
@@ -150,6 +157,7 @@ const recoverSchema = z.object({
   dropId: dropIdSchema.optional(),
   deliveryId: deliveryIdSchema.optional(),
   force: z.boolean().optional(),
+  cursor: z.string().min(1).max(DELIVERY_RECOVERY_CURSOR_MAX_LENGTH).nullable().optional(),
 }).strict();
 
 type IssueRequest = z.infer<typeof issueSchema>;
@@ -1240,12 +1248,25 @@ async function recoverReceiptsRequest(
   }
   const filterDropId = body.dropId ? runtimeForDrop(body.dropId).dropId : undefined;
   const force = body.force === true;
+  const paginated = body.cursor !== undefined;
+  const cursor = typeof body.cursor === 'string' ? decodeDeliveryRecoveryCursor(body.cursor) : null;
+  if (paginated && (body.deliveryId !== undefined || (body.cursor !== null && (!cursor ||
+    cursor.owner !== wallet || cursor.dropId !== (filterDropId ?? null) || cursor.force !== force)))) {
+    throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery recovery cursor.');
+  }
   const nowMs = Date.now();
   const results: RecoverDeliveryOrdersItemResult[] = [];
   let attempted = 0;
   let recovered = 0;
+  let externalWorkCandidates = 0;
+  let visitedCandidates = 0;
+  let lastVisitedCursor = body.cursor ?? null;
+  let page: Awaited<ReturnType<typeof runDeliveryRecoveryPageQuery>> | undefined;
   let candidates: DeliveryOrderDocument[] = [];
-  if (filterDropId && body.deliveryId !== undefined) {
+  if (paginated) {
+    page = await runDeliveryRecoveryPageQuery(commerce, wallet, filterDropId, force, cursor);
+    candidates = page.map((candidate) => candidate.document);
+  } else if (filterDropId && body.deliveryId !== undefined) {
     const document = await readDeliveryOrder(commerce, deliveryOrderKey(dropDeliveryOrderPath(filterDropId, body.deliveryId)));
     if (document) candidates = [document];
     else {
@@ -1267,12 +1288,35 @@ async function recoverReceiptsRequest(
       new Map([...recovery, ...pendingReady].map((document) => [document.key.path, document])).values(),
     ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.data, document.key.path) === filterDropId);
   }
-  candidates.sort(compareDeliveryRecoveryCandidates);
-  for (const document of candidates) {
+  if (!paginated) candidates.sort(compareDeliveryRecoveryCandidates);
+  for (const [index, document] of candidates.entries()) {
     if (commerce.signal.aborted) throw commerce.signal.reason;
+    if (paginated && index >= DELIVERY_RECOVERY_PAGE_SIZE) break;
     const base = orderResultBase(document);
-    if (!base) continue;
     const ownership = parseDeliveryOrderOwnership(document.data);
+    let preflightResult: RecoverDeliveryOrdersItemResult | undefined;
+    if (paginated && base && base.statusBefore !== 'ready_to_ship') {
+      const eligibility = deliveryRecoveryEligibility(document.data, nowMs, force);
+      const recovery = parseDeliveryRecoveryState(document.data);
+      if (!eligibility.eligible) {
+        preflightResult = {
+          ...base, verification: 'delivery_pda', outcome: eligibility.outcome, message: eligibility.message,
+        };
+      } else if ((recovery.leaseExpiresAtMs ?? 0) > nowMs) {
+        preflightResult = {
+          ...base, verification: 'delivery_pda', outcome: 'lease_active',
+          message: 'another client is already retrying this order',
+        };
+      }
+    }
+    const needsExternalWork = base && (!ownership.hasOwner || ownership.owner === wallet) && !preflightResult;
+    if (paginated && needsExternalWork && externalWorkCandidates >= MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL) break;
+    if (page) {
+      visitedCandidates += 1;
+      lastVisitedCursor = page[index].cursor;
+      if (needsExternalWork) externalWorkCandidates += 1;
+    }
+    if (!base) continue;
     if (ownership.hasOwner && ownership.owner !== wallet) {
       results.push({
         ...base,
@@ -1281,6 +1325,10 @@ async function recoverReceiptsRequest(
         errorCode: 'permission-denied',
         message: 'order belongs to a different wallet',
       });
+      continue;
+    }
+    if (preflightResult) {
+      results.push(preflightResult);
       continue;
     }
     if (base.statusBefore === 'ready_to_ship') {
@@ -1438,7 +1486,10 @@ async function recoverReceiptsRequest(
   }
   if (commerce.signal.aborted) throw commerce.signal.reason;
   const walletRecovery = await fetchDeliveryRecoveryState(commerce, wallet, Date.now());
-  return buildRecoverDeliveryOrdersResult({ attempted, recovered, walletRecovery, results });
+  return {
+    ...buildRecoverDeliveryOrdersResult({ attempted, recovered, walletRecovery, results }),
+    ...(page ? { nextCursor: visitedCandidates < page.length ? lastVisitedCursor : null } : {}),
+  };
 }
 
 const defaultDependencies: DeliveryReceiptDependencies = {

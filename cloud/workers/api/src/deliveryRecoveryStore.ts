@@ -41,6 +41,12 @@ import {
 } from './deliveryOrderSummaries.js';
 import { mapProviderError } from './deliveryReceiptErrors.js';
 import { isSignalCancellationError } from './boundedRequest.js';
+import {
+  DELIVERY_RECOVERY_PAGE_SIZE,
+  DELIVERY_RECOVERY_PHASES,
+  encodeDeliveryRecoveryCursor,
+  type DeliveryRecoveryCursor,
+} from '../../../../shared/deliveryRecoveryPagination.js';
 
 const PENDING_READY_NOTIFICATION_QUERY_PAGE_SIZE = 8;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
@@ -121,6 +127,39 @@ export async function runDeliveryRecoveryOrderQuery(
 ): Promise<DeliveryOrderDocument[]> {
   const value = await context.repository.queryDeliveryRecoveryOrders(ownerWallet);
   return decodeDeliveryOrderQuery(value, requireIdentity);
+}
+
+export async function runDeliveryRecoveryPageQuery(
+  context: CommerceRepositoryContext,
+  owner: string,
+  dropId: string | undefined,
+  force: boolean,
+  cursor: DeliveryRecoveryCursor | null,
+): Promise<Array<{ document: DeliveryOrderDocument; cursor: string }>> {
+  const candidates: Array<{ document: DeliveryOrderDocument; cursor: string }> = [];
+  const firstPhase = cursor ? DELIVERY_RECOVERY_PHASES.indexOf(cursor.phase) : 0;
+  for (let index = firstPhase; index < DELIVERY_RECOVERY_PHASES.length; index += 1) {
+    if (context.signal.aborted) throw context.signal.reason;
+    const phase = DELIVERY_RECOVERY_PHASES[index];
+    const limit = DELIVERY_RECOVERY_PAGE_SIZE + 1 - candidates.length;
+    const documents = await context.repository.queryDeliveryRecoveryPage({
+      owner,
+      dropId,
+      phase,
+      ...(index === firstPhase && cursor ? { startAfterPath: cursor.path } : {}),
+      limit,
+    });
+    for (const document of documents) {
+      candidates.push({
+        document: deliveryOrderDocument(document),
+        cursor: encodeDeliveryRecoveryCursor({
+          version: 1, owner, dropId: dropId ?? null, force, phase, path: document.key.path,
+        }),
+      });
+    }
+    if (documents.length === limit) break;
+  }
+  return candidates;
 }
 
 export function compareDeliveryRecoveryCandidates(

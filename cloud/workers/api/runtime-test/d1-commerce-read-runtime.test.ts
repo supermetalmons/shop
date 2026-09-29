@@ -856,6 +856,14 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.equal(matchingRecoveryRowsRead >= 2, true);
     assert.equal(matchingRecoveryRowsRead <= 8, true);
 
+    const recoveryPage = { owner: 'paused-owner', dropId: 'runtime', phase: 'processing', limit: 9 } as const;
+    assert.deepEqual((await repository.queryDeliveryRecoveryPage(recoveryPage)).map((row) => row.key.documentId),
+      ['recovery-processing']);
+    assert.deepEqual(await repository.queryDeliveryRecoveryPage({ ...recoveryPage, dropId: 'other' }), []);
+    assert.deepEqual(await repository.queryDeliveryRecoveryPage({
+      ...recoveryPage, startAfterPath: commerceKeys.deliveryOrder('runtime', 'recovery-processing').path,
+    }), []);
+
     assert.deepEqual(await observedRepository.queryPendingReadyNotifications({
       limit: 5,
       owner: 'missing-owner',

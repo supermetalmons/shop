@@ -9,6 +9,8 @@ import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
   deliveryRecoveryOrdersQuery,
+  deliveryRecoveryPageQuery,
+  type DeliveryRecoveryPageQuery,
   duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
@@ -275,9 +277,28 @@ export class D1CommerceRepository {
     return documents.map((document) => publicRecord(document));
   }
 
+  async queryDeliveryRecoveryPage(args: DeliveryRecoveryPageQuery): Promise<CommerceDocumentRecord[]> {
+    const owner = deliveryOwner(args.owner);
+    const limit = positiveQueryLimit(args.limit);
+    if (limit > 9 || !['processing', 'prepared', 'ready'].includes(args.phase) ||
+      (args.dropId !== undefined && !/^[a-z0-9_-]{1,64}$/.test(args.dropId)) ||
+      (args.startAfterPath !== undefined && (!args.startAfterPath || args.startAfterPath.length > 512))) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid recovery page.');
+    }
+    const query = deliveryRecoveryPageQuery({ ...args, owner, limit });
+    const statement = () => this.db.prepare(query.sql).bind(...query.bindings);
+    const result = await (args.phase === 'ready'
+      ? this.readNotificationBatch(statement)
+      : this.readBatchWithAuthority(statement));
+    if (result.results.length > limit) throw unavailableCommerceData();
+    reportInefficientQuery('delivery-recovery-page', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map(publicRecord);
+  }
+
   async queryPendingReadyNotifications(args: {
     limit: number;
     owner?: string;
+    dropId?: string;
     startAfterPath?: string;
   }): Promise<CommerceDocumentRecord[]> {
     const limit = positiveQueryLimit(args.limit);

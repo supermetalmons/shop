@@ -47,6 +47,7 @@ import {
   type AdminIrlRedeemFinalizeStatusRequest,
 } from '../../shared/contracts.ts';
 import { canonicalWalletAddress } from '../../shared/walletLifecycle.ts';
+import { decodeDeliveryRecoveryCursor } from '../../shared/deliveryRecoveryPagination.ts';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
@@ -329,12 +330,13 @@ export function parseRecoverDeliveryOrdersResult(value: unknown): RecoverDeliver
     !hasExactRequiredAndOptionalKeys(
       value,
       ['attempted', 'recovered', 'remainingProcessing', 'walletRecovery', 'results'],
-      ['nextCheckAt'],
+      ['nextCheckAt', 'nextCursor'],
     ) ||
     !Number.isSafeInteger(value.attempted) || Number(value.attempted) < 0 ||
     !Number.isSafeInteger(value.recovered) || Number(value.recovered) < 0 ||
     !Number.isSafeInteger(value.remainingProcessing) || Number(value.remainingProcessing) < 0 ||
     (value.nextCheckAt !== undefined && (!Number.isFinite(value.nextCheckAt) || Number(value.nextCheckAt) < 0)) ||
+    (value.nextCursor !== undefined && value.nextCursor !== null && !decodeDeliveryRecoveryCursor(value.nextCursor)) ||
     !isRecord(value.walletRecovery) ||
     !hasExactKeys(value.walletRecovery, ['remainingProcessing', 'nextCheckAt']) ||
     !Number.isSafeInteger(value.walletRecovery.remainingProcessing) ||
@@ -806,9 +808,20 @@ export function createCommerceApiClient(
     if (args?.force === true) {
       payload.force = true;
     }
+    if (args?.cursor !== undefined) {
+      payload.cursor = args.cursor;
+    }
     const response = await callProfileApi('/delivery/receipts/recover', payload);
     const parsed = parseRecoverDeliveryOrdersResult(response);
-    if (!parsed) throw new Error('Invalid delivery recovery response');
+    if (!parsed || (payload.cursor !== undefined && parsed.nextCursor === undefined)) {
+      throw new Error('Invalid delivery recovery response');
+    }
+    if (typeof parsed.nextCursor === 'string') {
+      const nextCursor = decodeDeliveryRecoveryCursor(parsed.nextCursor);
+      if (!nextCursor || nextCursor.dropId !== (payload.dropId ?? null) || nextCursor.force !== (payload.force === true)) {
+        throw new Error('Invalid delivery recovery response');
+      }
+    }
     return parsed;
   }
 

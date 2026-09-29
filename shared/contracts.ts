@@ -179,6 +179,7 @@ export type RecoverDeliveryOrdersArgs = {
   dropId?: string;
   deliveryId?: number;
   force?: boolean;
+  cursor?: string | null;
 };
 
 export type RecoverDeliveryOrdersItemResult = {
@@ -198,6 +199,7 @@ export type RecoverDeliveryOrdersResult = {
   nextCheckAt?: number;
   walletRecovery: WalletDeliveryRecoveryState;
   results: RecoverDeliveryOrdersItemResult[];
+  nextCursor?: string | null;
 };
 
 export type FulfillmentOrderAddress = {
