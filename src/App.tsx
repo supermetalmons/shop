@@ -1,18 +1,10 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { useQueryClient } from '@tanstack/react-query';
 import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { usePreorderCheckout } from './hooks/usePreorderCheckout';
-import { usePreorderRecoveryRecords } from './hooks/usePreorderRecoveryRecords';
-import { acknowledgePreorderFailure, listPreorderRecoveries } from './lib/preorderRecovery';
-import { revokePreorderInventoryAssets } from './lib/inventoryQuery';
-import { useMiNoteEthereumWallet } from './hooks/useMiNoteEthereumWallet';
-import { useMiNoteVerification } from './hooks/useMiNoteVerification';
-import { getPreorderConfig } from '../shared/preorders';
 import { useStripeCheckoutInventoryRecovery } from './hooks/useStripeCheckoutInventoryRecovery';
 import { useStripeCheckoutRecovery } from './hooks/useStripeCheckoutRecovery';
 import {
@@ -45,6 +37,7 @@ import { useShopInventorySelection, useShopInventorySelectionState } from './sho
 import { useShopInventoryMaintenance, useShopInventorySource } from './shop/inventory/useShopInventorySource';
 import { useShopInventoryView } from './shop/inventory/useShopInventoryView';
 import { useShopPurchaseActions } from './shop/purchase/useShopPurchaseActions';
+import { useShopPreorders } from './shop/purchase/useShopPreorders';
 import { useEffectiveMintStats, useShopPurchaseState } from './shop/purchase/useShopPurchaseState';
 import { ShopRevealLayer } from './shop/reveal/ShopRevealLayer';
 import { useShopReveal } from './shop/reveal/useShopReveal';
@@ -64,8 +57,6 @@ import { useShopDrop } from './shop/useShopDrop';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
-const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
-const MI_NOTE_MAINNET_PREORDER = getPreorderConfig('mi_note_cards')!;
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -162,67 +153,20 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const walletActionBusy = Boolean(pendingAction);
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
-  const preorderConfig = drop.normalizedCurrentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
-  const preorderActive = ['/mi_note_cards', '/mi_note_cards_devnet'].includes(drop.normalizedCurrentPath) && !commerceUiSuspended;
-  const ethereumWallet = useMiNoteEthereumWallet(preorderActive);
-  const ethereumVerification = useMiNoteVerification(preorderActive, preorderConfig.preorderId, ethereumWallet);
-  const preorderOptions = {
-    buyer: connectedWallet,
-    signedIn: isSignedInWallet,
-    authenticatedBuyer: account.authenticatedWallet,
-    ethereumSession: ethereumVerification.session,
-    onEthereumSessionInvalid: ethereumVerification.invalidate,
+  const { miNoteCardsPage, ethereumWallet, ethereumVerification, preorderCheckout } = useShopPreorders({
+    currentPath: drop.normalizedCurrentPath,
+    connectedWallet,
+    authenticatedWallet: account.authenticatedWallet,
+    isSignedInWallet,
+    isViewerMode,
+    commerceUiSuspended,
+    statusUiSuspended,
     signTransaction: wallet.signTransaction,
     ensureSignedIn: continuation.ensureActionSignedIn,
-    onSucceeded: () => {
-      showSuccessHud('Preordered');
-      void queries.refreshInventoryAfterMint();
-    },
-    onSettled: () => { void queries.refreshInventoryAfterMint(); },
-  };
-  const mainnetPreorder = usePreorderCheckout({
-    ...preorderOptions,
-    config: MI_NOTE_MAINNET_PREORDER,
-    active: preorderActive && preorderConfig === MI_NOTE_MAINNET_PREORDER,
-    ethereumSession: ethereumVerification.session?.preorderId === MI_NOTE_MAINNET_PREORDER.preorderId ? ethereumVerification.session : null,
+    refreshInventoryAfterMint: queries.refreshInventoryAfterMint,
+    showToast,
+    showSuccessHud,
   });
-  const devnetPreorder = usePreorderCheckout({
-    ...preorderOptions,
-    config: MI_NOTE_DEVNET_PREORDER,
-    active: preorderActive && preorderConfig === MI_NOTE_DEVNET_PREORDER,
-    ethereumSession: ethereumVerification.session?.preorderId === MI_NOTE_DEVNET_PREORDER.preorderId ? ethereumVerification.session : null,
-  });
-  const preorderCheckout = preorderConfig === MI_NOTE_MAINNET_PREORDER ? mainnetPreorder : devnetPreorder;
-  const preorderRecoveries = usePreorderRecoveryRecords(connectedWallet ?? account.authenticatedWallet);
-  const inventoryQueryClient = useQueryClient();
-  const revokedPreorders = useRef(new Set<string>());
-  const notifiedPreorderFailures = useRef(new Set<string>());
-  useEffect(() => {
-    for (const { order } of preorderRecoveries) {
-      if (order.status !== 'failed' && order.status !== 'expired') continue;
-      const key = `${order.buyer}:${order.preorderId}:${order.orderId}`;
-      if (revokedPreorders.current.has(key)) continue;
-      revokedPreorders.current.add(key);
-      void revokePreorderInventoryAssets(inventoryQueryClient, order.buyer, order.assets.map(asset => asset.address));
-    }
-  }, [inventoryQueryClient, preorderRecoveries]);
-  useEffect(() => {
-    const notify = () => {
-      if (!connectedWallet || !isSignedInWallet || statusUiSuspended || isViewerMode || document.visibilityState === 'hidden') return;
-      const failures = listPreorderRecoveries(connectedWallet).filter(record => !record.failureNotified && (record.order.status === 'failed' || record.order.status === 'expired'));
-      if (!failures.length) return;
-      const unseen = failures.filter(({ order }) => !notifiedPreorderFailures.current.has(`${order.buyer}:${order.preorderId}:${order.orderId}`));
-      if (unseen.length) {
-        showToast('A preorder transaction did not finalize. Select cards to try again.');
-        for (const { order } of unseen) notifiedPreorderFailures.current.add(`${order.buyer}:${order.preorderId}:${order.orderId}`);
-      }
-      for (const { order } of failures) void acknowledgePreorderFailure(order.buyer, order.preorderId, order.orderId).catch(() => {});
-    };
-    notify();
-    window.addEventListener('focus', notify);
-    document.addEventListener('visibilitychange', notify);
-    return () => { window.removeEventListener('focus', notify); document.removeEventListener('visibilitychange', notify); };
-  }, [connectedWallet, isSignedInWallet, statusUiSuspended, isViewerMode, preorderRecoveries, showToast]);
   const transactions = useWalletTransactions(wallet, showToast);
   const runDeliveryRecovery = useDeliveryRecovery({
     auth,
@@ -427,7 +371,6 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = !walletActionBusy && signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
-  const miNoteCardsPage = drop.normalizedCurrentPath === '/mi_note_cards' || drop.normalizedCurrentPath === '/mi_note_cards_devnet';
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
