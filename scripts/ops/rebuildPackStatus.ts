@@ -18,10 +18,14 @@ import {
   type PackStatusDropRuntime,
 } from '../shared/packStatus.ts';
 import {
+  hasPackStatusOutboxSchema,
+  queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
   sqlString,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
+import { parsePackStatusOutboxRow, type PackStatusOutboxRecord } from '../../shared/packStatusOutbox.ts';
+import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusOutboxMaintenance.ts';
 import {
   readD1Integrity,
   writeD1RebuiltSummaries,
@@ -128,7 +132,14 @@ function packStatusContainerPlural(dropId: string): string {
 
 export function requireSettledPackStatusProjectionOutboxes(
   deliveryOrders: readonly PackStatusDeliveryOrderRecord[],
+  outboxes?: readonly PackStatusOutboxRecord[],
 ): void {
+  if (outboxes !== undefined) {
+    if (outboxes.some((outbox) => outbox.state !== 'completed' && outbox.state !== 'cancelled')) {
+      fail('Pack-status rebuild requires every durable delivery projection outbox to be settled.');
+    }
+    return;
+  }
   for (const order of deliveryOrders) {
     const state = (order as Record<string, unknown>)?.packStatusProjectionState;
     if (state !== undefined && state !== 'completed') {
@@ -140,20 +151,54 @@ export function requireSettledPackStatusProjectionOutboxes(
 export type PackStatusCommerceSnapshot = {
   assignments: CommerceD1Document[];
   deliveryOrders: CommerceD1Document[];
+  packStatusOutboxes?: PackStatusOutboxRecord[];
 };
 
-function loadCommerceDocuments(dropId: string, kind: 'box_assignment' | 'delivery_order'): CommerceD1Document[] {
+function requirePackStatusOutboxParents(snapshot: PackStatusCommerceSnapshot): void {
+  if (snapshot.packStatusOutboxes === undefined) return;
+  const parents = new Map(snapshot.deliveryOrders.map((document) => [document.path, document]));
+  const outboxes = new Map(snapshot.packStatusOutboxes.map((outbox) => [outbox.parentPath, outbox]));
+  for (const outbox of snapshot.packStatusOutboxes) {
+    if (parents.get(outbox.parentPath)?.dropId !== outbox.dropId) fail('Pack-status outbox parent is invalid.');
+  }
+  for (const parent of snapshot.deliveryOrders) {
+    if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(parent.data, field)) && !outboxes.has(parent.path)) {
+      fail(`Pack-status outbox is missing: ${parent.path}.`);
+    }
+  }
+}
+
+function loadCommerceDocuments(
+  dropId: string,
+  kind: 'box_assignment' | 'delivery_order',
+  query: typeof queryRemoteCommerceD1,
+): CommerceD1Document[] {
   return queryRemoteCommerceDocuments(`SELECT document_path, document_kind, drop_id, document_id,
     document_json, version, create_time, update_time FROM commerce_documents
     WHERE document_kind = ${sqlString(kind)} AND drop_id = ${sqlString(dropId)}
-    ORDER BY document_path`);
+    ORDER BY document_path`, query);
 }
 
-export function readPackStatusCommerceSnapshot(dropId: string): PackStatusCommerceSnapshot {
-  return {
-    assignments: loadCommerceDocuments(dropId, 'box_assignment'),
-    deliveryOrders: loadCommerceDocuments(dropId, 'delivery_order'),
+export function readPackStatusCommerceSnapshot(
+  dropId: string,
+  query: typeof queryRemoteCommerceD1 = queryRemoteCommerceD1,
+): PackStatusCommerceSnapshot {
+  const snapshot: PackStatusCommerceSnapshot = {
+    assignments: loadCommerceDocuments(dropId, 'box_assignment', query),
+    deliveryOrders: loadCommerceDocuments(dropId, 'delivery_order', query),
   };
+  if (hasPackStatusOutboxSchema(query)) {
+    const controls = query('SELECT storage_mode FROM commerce_pack_status_outbox_control WHERE singleton = 1');
+    if (controls.length !== 1 || (controls[0].storage_mode !== 'legacy' && controls[0].storage_mode !== 'table')) {
+      fail('Pack-status outbox control is invalid.');
+    }
+    if (controls[0].storage_mode === 'table') {
+      snapshot.packStatusOutboxes = query(`SELECT * FROM commerce_pack_status_outbox
+        WHERE drop_id = ${sqlString(dropId)} ORDER BY parent_path`).map(parsePackStatusOutboxRow);
+      requirePackStatusOutboxParents(snapshot);
+    }
+  }
+  return snapshot;
 }
 
 export function rebuildPackStatusCounters(
@@ -170,13 +215,14 @@ export function rebuildPackStatusCounters(
 } {
   const assignments = snapshot.assignments.map((document) => document.data);
   const deliveryOrders = snapshot.deliveryOrders.map((document) => document.data) as PackStatusDeliveryOrderRecord[];
+  requirePackStatusOutboxParents(snapshot);
   const assignmentCount = assignments.length;
   const irlClaimAssignmentCount = assignments.filter((assignment) =>
     assignment.irlClaim && typeof assignment.irlClaim === 'object' &&
     !Array.isArray(assignment.irlClaim) &&
     (assignment.irlClaim as Record<string, unknown>).namespace === IRL_CLAIM_CODE_NAMESPACE
   ).length;
-  requireSettledPackStatusProjectionOutboxes(deliveryOrders);
+  requireSettledPackStatusProjectionOutboxes(deliveryOrders, snapshot.packStatusOutboxes);
 
   const inFlightNormalBoxAssetIds = new Set<string>();
   const adminIrlReceiptAssetIds = new Set<string>();

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
 import { parseNotificationOutboxRecord, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.ts';
+import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../../../../shared/stripeCheckoutState.ts';
 import type {
   CommerceDocumentData,
@@ -117,7 +118,7 @@ export type CommerceD1Harness = {
   db: D1Database;
 };
 
-function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table', checkoutStateMode: 'legacy' | 'table'): void {
+function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table', checkoutStateMode: 'legacy' | 'table', packStatusOutboxMode: 'legacy' | 'table'): void {
   database.exec('BEGIN IMMEDIATE');
   try {
     database.exec(`INSERT INTO commerce_authority_control_lease (
@@ -141,6 +142,10 @@ function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'le
     UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready',
       prepared_at_ms = 0 WHERE singleton = 1;
     UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
+    ${packStatusOutboxMode === 'table' ? `UPDATE commerce_pack_status_outbox_control
+      SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1;
+    UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0 WHERE singleton = 1;
+    UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
     UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
       updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -198,6 +203,7 @@ export function createCommerceD1Harness(
     observeStatement?: CommerceD1StatementObserver;
     notificationOutboxMode?: 'legacy' | 'table';
     stripeCheckoutStateMode?: 'legacy' | 'table';
+    packStatusOutboxMode?: 'legacy' | 'table';
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
@@ -250,7 +256,8 @@ export function createCommerceD1Harness(
       database.exec(readFileSync('cloud/workers/api/commerce-migrations/0028_preorder_card_range_1413.sql', 'utf8'));
     }
   }
-  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table');
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0029_pack_status_outbox.sql', 'utf8'));
+  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table');
   return {
     database,
     db: d1Database(
@@ -462,7 +469,8 @@ export function applyCommerceDocumentFixtureEpoch(
   harness.database.exec('BEGIN');
   try {
     const fences = harness.database.prepare(`SELECT name, sql FROM sqlite_schema
-      WHERE type = 'trigger' AND name IN ('commerce_notification_legacy_insert_fence', 'commerce_notification_legacy_update_fence')`).all();
+      WHERE type = 'trigger' AND name IN ('commerce_notification_legacy_insert_fence', 'commerce_notification_legacy_update_fence',
+        'commerce_pack_status_legacy_insert_fence', 'commerce_pack_status_legacy_update_fence')`).all();
     for (const fence of fences) harness.database.exec(`DROP TRIGGER ${String(fence.name)}`);
     for (const mutation of mutations) {
       if (mutation.type === 'upsert') writeCommerceDocument(harness, mutation.seed);
@@ -522,4 +530,13 @@ export function seedNotificationOutbox(harness: CommerceD1Harness, value: Notifi
     row.revision, row.attemptCount, row.nextAttemptAtMs, row.claimId, row.claimExpiresAtMs, row.retryUntilMs,
     row.createdAtMs, row.updatedAtMs, row.lastErrorCode,
   );
+}
+
+export function seedPackStatusOutbox(harness: CommerceD1Harness, value: PackStatusOutboxRecord): void {
+  const row = packStatusOutboxRow(value);
+  const columns = Object.keys(row);
+  harness.database.prepare(`INSERT INTO commerce_pack_status_outbox (${columns.join(', ')})
+    VALUES (${columns.map(() => '?').join(', ')}) ON CONFLICT(parent_path) DO UPDATE SET
+    ${columns.filter((column) => column !== 'parent_path').map((column) => `${column} = excluded.${column}`).join(', ')}`)
+    .run(...columns.map((column) => row[column]));
 }

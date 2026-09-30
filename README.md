@@ -494,10 +494,19 @@ and increments cache generation once. Run a write only while reveal,
 fulfillment, delivery, and admin mutations are quiesced. The tool refuses
 pending, failed, or unknown durable delivery projection outboxes.
 
+Migration `0029_pack_status_outbox.sql` moves delivery projection retry state
+to `COMMERCE_DB.commerce_pack_status_outbox` through the
+[pack-status outbox cutover](scripts/docs/pack_status_outbox_cutover.md).
+It requires the existing coordinated maintenance pause, verified preparation,
+compatible API publication, and one-way activation. Historical JSON markers
+remain frozen after activation; rebuild and wipe tools use the table as the
+authority. Inspect mode, preparation, pending age, and failures with
+`npm run pack-status-outbox-control -- status`.
+
 Do not mark every legacy delivery order as projection-pending. Historical
 summary rebuilds can include orders without per-order event documents, so
 replaying those orders individually can double-count them. New ready orders
-receive their durable pending marker atomically and are retried by the Worker
+receive their durable pending outbox row atomically and are retried by the Worker
 schedule.
 
 ### Operations D1
@@ -652,7 +661,7 @@ checkout and prepared-delivery recovery use owner-scoped
 `/profile/shipment-presence` lookups instead of relying on loaded history pages.
 Wallet-scoped presence requests include `expectedWallet`; a changed binding
 returns an authentication error before reading shipments.
-Append `0017_<description>.sql` for the next change.
+Append `0030_<description>.sql` for the next Commerce schema change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

@@ -258,6 +258,14 @@ export function hasStripeCheckoutStateSchema(query: typeof queryRemoteCommerceD1
   return true;
 }
 
+export function hasPackStatusOutboxSchema(query: typeof queryRemoteCommerceD1): boolean {
+  const tables = query(`SELECT name FROM sqlite_schema WHERE type = 'table'
+    AND name IN ('commerce_pack_status_outbox', 'commerce_pack_status_outbox_control')`);
+  if (tables.length === 0) return false;
+  if (tables.length !== 2) return fail('Pack-status outbox schema is incomplete.');
+  return true;
+}
+
 export function readRemoteCommerceAuthority(): CommerceD1Authority {
   const rows = queryRemoteCommerceD1(`SELECT authority_state, revision, documents_revision, paused_at_ms,
       CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS database_now_ms

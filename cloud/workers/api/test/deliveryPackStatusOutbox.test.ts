@@ -3,20 +3,28 @@ import test from 'node:test';
 import {
   createCommerceD1Harness,
   seedCommerceDocument,
+  seedPackStatusOutbox,
   type CommerceD1CallObservation,
 } from './commerceD1Harness.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 import {
-  createDeliveryPackStatusProjectionOutbox,
+  shouldEnqueueDeliveryPackStatusProjection,
   projectPendingDeliveryPackStatus,
   reconcilePendingDeliveryPackStatusProjections,
   scheduleDeliveryPackStatusProjection,
 } from '../src/deliveryPackStatusOutbox.ts';
 import { runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { readCommerceRecord } from '../src/commerceTransactions.ts';
+import type { PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 
 const READY_NOTIFICATION_NOW_MS = 1_700_000_000_000;
+
+function pendingOutbox(dropId = 'card_nft_2', deliveryId = 7, fields: Partial<PackStatusOutboxRecord> = {}): PackStatusOutboxRecord {
+  return { parentPath: commerceKeys.deliveryOrder(dropId, String(deliveryId)).path, dropId,
+    generation: crypto.randomUUID(), state: 'pending', revision: 1, failureCount: 0, nextAttemptAtMs: 0,
+    completedAtMs: null, failedAtMs: null, lastErrorCode: null, createdAtMs: 0, updatedAtMs: 0, ...fields };
+}
+
 
 async function nativeDeliveryContext(
   fields: Record<string, unknown>,
@@ -27,6 +35,12 @@ async function nativeDeliveryContext(
     key: commerceKeys.deliveryOrder('card_nft_2', '7'),
     data: fields as CommerceDocumentData,
   });
+  if (fields.packStatusProjectionState === 'pending') {
+    seedPackStatusOutbox(harness, pendingOutbox('card_nft_2', 7, {
+      nextAttemptAtMs: Number(fields.packStatusProjectionNextAttemptAtMs ?? 0),
+      failureCount: Number(fields.packStatusProjectionFailureCount ?? 0),
+    }));
+  }
   return {
     harness,
     context: {
@@ -41,11 +55,13 @@ async function nativeDeliveryContext(
 function projectionDataDb(args: {
   delay?: () => Promise<void>;
   failures?: number;
+  lostResponses?: number;
   hasEvent?: boolean;
 } = {}) {
   let attempts = 0;
   let applied = 0;
   let failures = args.failures || 0;
+  let lostResponses = args.lostResponses || 0;
   const events = new Set<string>();
   return {
     db: {
@@ -67,6 +83,10 @@ function projectionDataDb(args: {
             if (changes) {
               events.add(key);
               applied += 1;
+            }
+            if (lostResponses > 0) {
+              lostResponses -= 1;
+              throw new Error('d1 response lost after commit');
             }
             return { success: true, results: [], meta: { changes } };
           },
@@ -95,12 +115,87 @@ test('native pack-status projection applies once and marks the delivery complete
     dropId: 'card_nft_2',
     nowMs: () => READY_NOTIFICATION_NOW_MS,
   }), 'completed');
-  const completed = await readCommerceRecord(
-    native.context,
-    commerceKeys.deliveryOrder('card_nft_2', '7'),
-  );
+  const completed = await native.context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '7').path);
   assert.equal(projection.applied, 1);
-  assert.equal(completed?.data.packStatusProjectionState, 'completed');
+  assert.equal(completed?.state, 'completed');
+});
+
+test('an unmarked historical ready order is never replayed', async () => {
+  const native = await nativeDeliveryContext({ deliveryId: 7, status: 'ready_to_ship', items: [{ kind: 'box', refId: 1 }] });
+  const projection = projectionDataDb();
+  native.context.dataDb = projection.db;
+  assert.equal(await projectPendingDeliveryPackStatus({ context: native.context, deliveryId: 7,
+    dropId: 'card_nft_2', nowMs: () => READY_NOTIFICATION_NOW_MS }), 'not-needed');
+  assert.equal(projection.attempts, 0);
+  assert.equal(await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath), null);
+});
+
+test('a successful DATA event survives failed Commerce acknowledgment without double counting', async () => {
+  const native = await nativeDeliveryContext(pendingOrder(7));
+  const projection = projectionDataDb();
+  native.context.dataDb = projection.db;
+  const repository = native.context.repository.packStatusOutbox;
+  const compareAndSet = repository.compareAndSet.bind(repository);
+  repository.compareAndSet = async () => { throw new Error('Commerce unavailable'); };
+  const args = { context: native.context, deliveryId: 7, dropId: 'card_nft_2',
+    nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} };
+  await assert.rejects(projectPendingDeliveryPackStatus(args), /Commerce unavailable/);
+  assert.equal((await repository.get(pendingOutbox().parentPath))?.state, 'pending');
+  repository.compareAndSet = compareAndSet;
+  assert.equal(await projectPendingDeliveryPackStatus(args), 'completed');
+  assert.equal(projection.attempts, 2);
+  assert.equal(projection.applied, 1);
+});
+
+test('a DATA response lost after commit schedules a retry that completes without double counting', async () => {
+  const native = await nativeDeliveryContext(pendingOrder(7));
+  const projection = projectionDataDb({ lostResponses: 1 });
+  native.context.dataDb = projection.db;
+  const args = { context: native.context, deliveryId: 7, dropId: 'card_nft_2', log: () => {} };
+  assert.equal(await projectPendingDeliveryPackStatus({ ...args, nowMs: () => READY_NOTIFICATION_NOW_MS }), 'pending');
+  const pending = await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath);
+  assert.equal(pending?.state, 'pending');
+  assert.equal(pending?.failureCount, 1);
+  assert.equal(pending?.lastErrorCode, 'd1-write-failed');
+  assert.equal(pending?.nextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
+  assert.equal(projection.applied, 1);
+  assert.equal(projection.attempts, 1);
+
+  assert.equal(await projectPendingDeliveryPackStatus({ ...args,
+    nowMs: () => READY_NOTIFICATION_NOW_MS + 5 * 60_000 }), 'completed');
+  assert.equal((await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))?.state, 'completed');
+  assert.equal(projection.applied, 1);
+  assert.equal(projection.attempts, 2);
+});
+
+test('a lost completion acknowledgment preserves the already completed outbox', async () => {
+  const native = await nativeDeliveryContext(pendingOrder(7));
+  const projection = projectionDataDb();
+  native.context.dataDb = projection.db;
+  const repository = native.context.repository.packStatusOutbox;
+  const compareAndSet = repository.compareAndSet.bind(repository);
+  repository.compareAndSet = async (args) => {
+    const result = await compareAndSet(args);
+    if (args.changes.state === 'completed') throw new Error('acknowledgment lost');
+    return result;
+  };
+  assert.equal(await projectPendingDeliveryPackStatus({ context: native.context, deliveryId: 7,
+    dropId: 'card_nft_2', nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} }), 'completed');
+  assert.equal((await repository.get(pendingOutbox().parentPath))?.failureCount, 0);
+  assert.equal(projection.applied, 1);
+});
+
+test('an ineligible pending projection becomes cancelled without changing its order', async () => {
+  const native = await nativeDeliveryContext({ ...pendingOrder(7), source: 'admin_irl_redeem',
+    adminIrlRedeem: { targetKind: 'card_receipt' } });
+  const before = await native.context.repository.get(commerceKeys.deliveryOrder('card_nft_2', '7'));
+  const projection = projectionDataDb();
+  native.context.dataDb = projection.db;
+  assert.equal(await projectPendingDeliveryPackStatus({ context: native.context, deliveryId: 7,
+    dropId: 'card_nft_2', nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} }), 'not-needed');
+  assert.equal((await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))?.state, 'cancelled');
+  assert.deepEqual(await native.context.repository.get(commerceKeys.deliveryOrder('card_nft_2', '7')), before);
+  assert.equal(projection.attempts, 0);
 });
 
 test('pack-status projection persists retry state when a non-cooperative D1 write is cancelled', async () => {
@@ -126,17 +221,14 @@ test('pack-status projection persists retry state when a non-cooperative D1 writ
     dropId: 'card_nft_2',
     nowMs: () => READY_NOTIFICATION_NOW_MS,
   });
-  const pending = await readCommerceRecord(
-    { ...native.context, signal: new AbortController().signal },
-    commerceKeys.deliveryOrder('card_nft_2', '7'),
-  );
+  const pending = await native.context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '7').path);
 
   assert.equal(outcome, 'pending');
   assert.equal(projection.attempts, 1);
-  assert.equal(pending?.data.packStatusProjectionState, 'pending');
-  assert.equal(pending?.data.packStatusProjectionFailureCount, 1);
-  assert.equal(pending?.data.packStatusProjectionLastErrorCode, 'aborted');
-  assert.equal(pending?.data.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
+  assert.equal(pending?.state, 'pending');
+  assert.equal(pending?.failureCount, 1);
+  assert.equal(pending?.lastErrorCode, 'aborted');
+  assert.equal(pending?.nextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
 });
 
 test('scheduled pack-status projection survives request cancellation', async () => {
@@ -163,12 +255,9 @@ test('scheduled pack-status projection survives request cancellation', async () 
   });
   await deferred.drain();
 
-  const completed = await readCommerceRecord(
-    { ...native.context, signal: new AbortController().signal },
-    commerceKeys.deliveryOrder('card_nft_2', '7'),
-  );
+  const completed = await native.context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '7').path);
   assert.equal(projection.applied, 1);
-  assert.equal(completed?.data.packStatusProjectionState, 'completed');
+  assert.equal(completed?.state, 'completed');
 });
 
 function pendingOrder(deliveryId: number, dropId = 'card_nft_2'): CommerceDocumentData {
@@ -191,14 +280,11 @@ function documentReadCount(calls: readonly CommerceD1CallObservation[]): number 
 test('delivery outbox creation only schedules eligible countable orders', () => {
   const runtime = runtimeForDrop('card_nft_2');
   const order = pendingOrder(7);
-  const outbox = createDeliveryPackStatusProjectionOutbox(runtime, order, READY_NOTIFICATION_NOW_MS);
-  assert.equal(outbox.packStatusProjectionState, 'pending');
-  assert.equal(outbox.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS);
-  assert.equal(outbox.packStatusProjectionFailureCount, 0);
-  assert.deepEqual(createDeliveryPackStatusProjectionOutbox(runtime, { ...order, items: [] }), {});
+  assert.equal(shouldEnqueueDeliveryPackStatusProjection(runtime, order), true);
+  assert.equal(shouldEnqueueDeliveryPackStatusProjection(runtime, { ...order, items: [] }), false);
 });
 
-test('projection completion and retry scheduling each reuse one transactional document read', async () => {
+test('projection completion and retry scheduling read the order once and never write it', async () => {
   for (const available of [true, false]) {
     const calls: CommerceD1CallObservation[] = [];
     const native = await nativeDeliveryContext(pendingOrder(7), {
@@ -212,40 +298,50 @@ test('projection completion and retry scheduling each reuse one transactional do
       nowMs: () => READY_NOTIFICATION_NOW_MS,
       log: () => {},
     }), available ? 'completed' : 'pending');
-    assert.equal(documentReadCount(calls), 2);
+    assert.equal(documentReadCount(calls), 1);
+    assert.equal(calls.flatMap((call) => call.method === 'batch' ? call.statements : [call])
+      .some(({ sql }) => /(?:UPDATE|INSERT INTO) commerce_documents/.test(sql)), false);
   }
 });
 
-test('projection transitions reread conflicts and preserve a concurrent terminal state', async () => {
-  for (const available of [true, false]) {
-    let reads = 0;
-    const order = pendingOrder(7);
-    const native = await nativeDeliveryContext(order, {
-      observeBatchAfterCommit: ({ statements }) => {
-        if (!statements.some(({ sql }) => sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql))) return;
-        reads += 1;
-        if (reads !== 2) return;
-        seedCommerceDocument(native.harness, {
-          key: commerceKeys.deliveryOrder('card_nft_2', '7'),
-          data: { ...order, packStatusProjectionState: 'failed', packStatusProjectionLastErrorCode: 'manual-review' },
-          version: 2,
-        });
-      },
-    });
-    if (available) native.context.dataDb = projectionDataDb().db;
-    await projectPendingDeliveryPackStatus({
-      context: native.context,
-      deliveryId: 7,
-      dropId: 'card_nft_2',
-      nowMs: () => READY_NOTIFICATION_NOW_MS,
-      log: () => {},
-    });
-    assert.equal(reads, 3);
-    const stored = await readCommerceRecord(native.context, commerceKeys.deliveryOrder('card_nft_2', '7'));
-    assert.equal(stored?.data.packStatusProjectionState, 'failed');
-    assert.equal(stored?.data.packStatusProjectionLastErrorCode, 'manual-review');
-    assert.equal(stored?.data.packStatusProjectionFailureCount, 0);
-  }
+test('projection CAS preserves a concurrent terminal state', async () => {
+  const native = await nativeDeliveryContext(pendingOrder(7));
+  const expected = (await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))!;
+  const projection = projectionDataDb({ delay: async () => {
+    await native.context.repository.packStatusOutbox.compareAndSet({ expected, nowMs: READY_NOTIFICATION_NOW_MS,
+      changes: { state: 'failed', failureCount: 0, nextAttemptAtMs: null, completedAtMs: null,
+        failedAtMs: READY_NOTIFICATION_NOW_MS, lastErrorCode: 'manual-review' } });
+  } });
+  native.context.dataDb = projection.db;
+  assert.equal(await projectPendingDeliveryPackStatus({ context: native.context, deliveryId: 7,
+    dropId: 'card_nft_2', nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} }), 'failed');
+  const stored = await native.context.repository.packStatusOutbox.get(expected.parentPath);
+  assert.equal(stored?.state, 'failed');
+  assert.equal(stored?.lastErrorCode, 'manual-review');
+  assert.equal(stored?.failureCount, 0);
+});
+
+test('a non-cooperative CAS reread remains bounded by request cancellation', { timeout: 1_000 }, async () => {
+  const native = await nativeDeliveryContext(pendingOrder(7));
+  const expected = (await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))!;
+  const controller = new AbortController();
+  native.context.signal = controller.signal;
+  const repository = native.context.repository.packStatusOutbox;
+  const get = repository.get.bind(repository);
+  let reads = 0;
+  repository.get = (path) => {
+    reads += 1;
+    if (reads === 2) return new Promise(() => setTimeout(() => controller.abort(new DOMException('cancelled', 'AbortError')), 0));
+    return get(path);
+  };
+  native.context.dataDb = projectionDataDb({ delay: async () => {
+    await repository.compareAndSet({ expected, nowMs: READY_NOTIFICATION_NOW_MS,
+      changes: { state: 'failed', failureCount: 0, nextAttemptAtMs: null, completedAtMs: null,
+        failedAtMs: READY_NOTIFICATION_NOW_MS, lastErrorCode: 'manual-review' } });
+  } }).db;
+  assert.equal(await projectPendingDeliveryPackStatus({ context: native.context, deliveryId: 7,
+    dropId: 'card_nft_2', nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} }), 'failed');
+  assert.equal(reads, 3);
 });
 
 test('projection sweep shares its four-order cap fairly across drops with concurrency two', async () => {
@@ -257,6 +353,7 @@ test('projection sweep shares its four-order cap fairly across drops with concur
         key: commerceKeys.deliveryOrder(dropId, String(deliveryId)),
         data: pendingOrder(deliveryId, dropId),
       });
+      seedPackStatusOutbox(harness, pendingOutbox(dropId, deliveryId));
     }
   }
   const events: Record<string, unknown>[] = [];
@@ -291,17 +388,18 @@ test('projection sweep marks malformed identities failed and counts them against
       key: commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
       data: { ...pendingOrder(deliveryId), ...(deliveryId === 1 ? { deliveryId: 99 } : {}) },
     });
+    seedPackStatusOutbox(harness, pendingOutbox('card_nft_2', deliveryId));
   }
   const projection = projectionDataDb();
   assert.equal(await reconcilePendingDeliveryPackStatusProjections(
     { COMMERCE_DB: harness.db, DATA_DB: projection.db },
     new AbortController().signal,
     { dropIds: ['card_nft_2'], nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} },
-  ), 3);
+  ), 4);
   const context = { repository: new D1CommerceRepository(harness.db), nowMs: READY_NOTIFICATION_NOW_MS, signal: new AbortController().signal };
-  const invalid = await readCommerceRecord(context, commerceKeys.deliveryOrder('card_nft_2', '1'));
-  assert.equal(invalid?.data.packStatusProjectionState, 'failed');
-  assert.equal(invalid?.data.packStatusProjectionLastErrorCode, 'invalid-order-identity');
-  assert.equal((await readCommerceRecord(context, commerceKeys.deliveryOrder('card_nft_2', '5')))?.data.packStatusProjectionState, 'pending');
+  const invalid = await context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '1').path);
+  assert.equal(invalid?.state, 'failed');
+  assert.equal(invalid?.lastErrorCode, 'invalid-order-identity');
+  assert.equal((await context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '5').path))?.state, 'pending');
   assert.equal(projection.applied, 3);
 });

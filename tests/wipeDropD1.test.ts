@@ -14,7 +14,7 @@ import {
   verifyCommerceD1Wipe,
   withCommerceWipeAuthorityLease,
 } from '../scripts/ops/wipeDrop.ts';
-import { acquireCommerceAuthorityLease } from '../scripts/shared/commerceD1Maintenance.ts';
+import { acquireCommerceAuthorityLease, hasPackStatusOutboxSchema } from '../scripts/shared/commerceD1Maintenance.ts';
 import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
 import type {
   CommerceD1Authority,
@@ -691,4 +691,71 @@ test('Commerce D1 wipe guards checkout state counts and verifies parent cascades
   assert.throws(() => verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:checkout:', (sql) => query(sql).map((row) => ({
     ...row, stripe_checkout_state_count: 1,
   }))), /verification failed/);
+});
+
+test('Commerce D1 wipe keeps old schemas compatible and rejects partial pack-status schemas', (context) => {
+  const db = database();
+  context.after(() => db.close());
+  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  assert.equal(hasPackStatusOutboxSchema(query), false);
+  const legacyPlan = plan();
+  assert.equal(legacyPlan.packStatusOutboxCount, null);
+  assert.doesNotMatch(buildCommerceD1WipeSql(legacyPlan, 'legacy-schema', 67_000), /commerce_pack_status_outbox/);
+  assert.equal(sameCommerceD1Plan(legacyPlan, { ...legacyPlan, packStatusOutboxCount: 0 }), false);
+  db.exec('CREATE TABLE commerce_pack_status_outbox (parent_path TEXT PRIMARY KEY)');
+  assert.throws(() => hasPackStatusOutboxSchema(query), /Pack-status outbox schema is incomplete/);
+});
+
+test('Commerce D1 wipe snapshots pack-status rows and verifies exact parent cascades', (context) => {
+  const db = database();
+  context.after(() => db.close());
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0029_pack_status_outbox.sql', 'utf8'));
+  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  assert.equal(hasPackStatusOutboxSchema(query), true);
+  const target = document('delivery_order', 'target', '7', { packStatusProjectionState: 'pending' });
+  const other = document('delivery_order', 'other', '8', { packStatusProjectionState: 'pending' });
+  insertDocumentEpoch(db, [target, other]);
+  pauseCommerce(db);
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_pack_status_outbox_control
+    SET preparation_state = 'preparing', source_documents_revision = 1`);
+  const insert = db.prepare(`INSERT INTO commerce_pack_status_outbox (
+    parent_path, drop_id, generation, state, revision, failure_count, next_attempt_at_ms,
+    completed_at_ms, failed_at_ms, last_error_code, created_at_ms, updated_at_ms
+  ) VALUES (?, ?, '00000000-0000-4000-8000-000000000601', 'pending', 1, 0, 0, NULL, NULL, NULL, 0, 0)`);
+  for (const parent of [target, other]) insert.run(parent.path, parent.dropId);
+  db.exec(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 67000`);
+  db.exec(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table'`);
+
+  const input = {
+    authority: { ...authority, documentsRevision: 1 }, dropId: 'target', inventory: emptyInventory,
+    targetDocuments: [target], assignmentDocuments: [], claimDocuments: [], packStatusOutboxCount: 1,
+  };
+  for (const packStatusOutboxCount of [-1, 0.5, Number.NaN]) {
+    assert.throws(() => buildCommerceD1PlanFromDocuments({ ...input, packStatusOutboxCount }), /Pack-status outbox count/);
+  }
+  const wipePlan = buildCommerceD1PlanFromDocuments(input);
+  assert.equal(wipePlan.packStatusOutboxCount, 1);
+  assert.equal(sameCommerceD1Plan(wipePlan, { ...wipePlan, packStatusOutboxCount: 2 }), false);
+  assert.throws(() => executeTransaction(db, buildCommerceD1WipeSql({
+    ...wipePlan, packStatusOutboxCount: 0,
+  }, 'stale-pack-status', 67_000)), /commerce wipe conflict/);
+  assert.equal(query('SELECT COUNT(*) AS count FROM commerce_documents')[0].count, 2);
+  assert.equal(query('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 2);
+
+  const guardId = 'wipe:target:pack-status';
+  const sql = buildCommerceD1WipeSql(wipePlan, guardId, 67_000);
+  assert.doesNotMatch(sql, /DELETE FROM commerce_pack_status_outbox/);
+  executeTransaction(db, sql);
+  assert.deepEqual(query('SELECT parent_path, drop_id FROM commerce_pack_status_outbox'), [{
+    parent_path: other.path,
+    drop_id: 'other',
+  }]);
+  for (const count of [1, 'invalid']) {
+    assert.throws(() => verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, (statement) =>
+      query(statement).map((row) => ({ ...row, pack_status_outbox_count: count }))), /verification failed/);
+    assert.equal(query('SELECT COUNT(*) AS count FROM commerce_wipe_guards')[0].count, 1);
+  }
+  verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, query);
+  assert.equal(query('SELECT COUNT(*) AS count FROM commerce_wipe_guards')[0].count, 0);
 });

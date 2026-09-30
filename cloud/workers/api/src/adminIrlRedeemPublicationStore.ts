@@ -40,7 +40,6 @@ import { type AdminIrlRedeemRuntime } from './adminIrlRedeemRuntime.js';
 import {
   commerceFieldValue,
   commerceKeys,
-  isCommerceDeleteField,
   type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentWriteData,
@@ -52,7 +51,7 @@ import {
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import { isRecord } from './dataAccess.js';
-import { createDeliveryPackStatusProjectionOutbox } from './deliveryPackStatusOutbox.js';
+import { shouldEnqueueDeliveryPackStatusProjection } from './deliveryPackStatusOutbox.js';
 import { secureRandomInt } from './deliveryRandom.js';
 import { createDeliveryOrder } from './deliveryOrderStore.js';
 import type { AdminCardDeliveryOrderCreate, AdminPackDeliveryOrderCreate } from './deliveryOrderCreate.js';
@@ -346,11 +345,6 @@ export async function publishPack(
         receiptTxs,
         boxes: boxesWithCodes,
       });
-      const orderValues = {
-        ...order,
-        ...Object.fromEntries(Object.entries(createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs))
-          .filter(([, value]) => !isCommerceDeleteField(value))),
-      };
       const claimValues = boxesWithCodes.map((box) => ({
         ...buildAdminIrlRedeemClaimCodeDocument({
           dropId: runtime.dropId,
@@ -409,10 +403,13 @@ export async function publishPack(
         document.key,
       ]);
       await createDeliveryOrder(transaction, orderKey, {
-        ...orderValues,
+        ...order,
         createdAt: commerceFieldValue.serverTimestamp(),
         processedAt: commerceFieldValue.serverTimestamp(),
       } satisfies AdminPackDeliveryOrderCreate);
+      if (shouldEnqueueDeliveryPackStatusProjection(runtime, order)) {
+        transaction.enqueuePackStatusProjection({ parentPath: orderKey.path, dropId: runtime.dropId });
+      }
       for (const [index, values] of claimValues.entries()) {
         await transaction.create(claimKeys[index], values);
       }

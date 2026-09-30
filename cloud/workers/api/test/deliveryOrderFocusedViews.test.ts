@@ -67,15 +67,15 @@ test('notification and shipment views preserve their different item-count polici
   assert.equal(notification.resolveDeliveryId(1), null);
 });
 
-test('projection views preserve strict safe integer state and item filtering', () => {
+test('projection views keep item filtering independent of legacy retry fields', () => {
   const view = parseDeliveryOrderProjectionView({
     status: 'ready_to_ship', packStatusProjectionState: 'pending',
     packStatusProjectionNextAttemptAtMs: '500', packStatusProjectionFailureCount: -1,
     items: [{ kind: 'box', refId: 1 }, { kind: 'dude', refId: 2 }],
     adminIrlRedeem: { targetKind: 'card_receipt' },
   });
-  assert.equal(view.nextAttemptAtMs, 0);
-  assert.equal(view.failureCount, 0);
+  assert.equal(Object.hasOwn(view, 'nextAttemptAtMs'), false);
+  assert.equal(Object.hasOwn(view, 'failureCount'), false);
   assert.equal(view.packQuantity, 1);
   assert.equal(view.cardQuantity, 1);
   assert.equal(view.adminTargetKind, 'card_receipt');

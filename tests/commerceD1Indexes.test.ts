@@ -3,11 +3,11 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
+import { legacyPackStatusProjectionsQuery } from '../scripts/shared/packStatusOutboxMaintenance.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrdersByOwnerQuery,
   deliveryRecoveryOrdersQuery,
-  duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
   fulfillmentOrdersQuery,
@@ -1397,7 +1397,7 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       }
     }
     assert.match(
-      planDetails(db, duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
+      planDetails(db, legacyPackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
       /commerce_documents_pack_projection/,
     );
     assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkout_state_reconciliation_due/);

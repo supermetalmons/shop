@@ -12,11 +12,13 @@ import {
 } from '../../../../scripts/shared/d1PackStatusMaintenance.ts';
 import {
   parseArgs as parseRebuildArgs,
+  readPackStatusCommerceSnapshot,
   rebuildPackStatusCounters,
   requireSettledPackStatusProjectionOutboxes,
 } from '../../../../scripts/ops/rebuildPackStatus.ts';
 import type { CommerceD1Document } from '../../../../scripts/shared/commerceD1Maintenance.ts';
 import type { PackStatusCounters } from '../../../../shared/packStatus.ts';
+import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 
 const dropRows = [
   ['card_nft_2', 100, 300, 3],
@@ -121,6 +123,57 @@ function commerceDocument(
     updateTime: '2026-08-25T10:00:00.000000001Z',
   };
 }
+
+function projectionOutbox(state: PackStatusOutboxRecord['state']): PackStatusOutboxRecord {
+  return {
+    parentPath: 'drops/card_nft_2/deliveryOrders/1', dropId: 'card_nft_2',
+    generation: '00000000-0000-4000-8000-000000000001', state, revision: 1, failureCount: 0,
+    nextAttemptAtMs: state === 'pending' ? 0 : null,
+    completedAtMs: null, failedAtMs: null, lastErrorCode: null, createdAtMs: 1, updatedAtMs: 1,
+  };
+}
+
+test('pack-status rebuild uses active table state instead of frozen legacy markers', () => {
+  const order = { packStatusProjectionState: 'pending' };
+  for (const state of ['completed', 'cancelled'] as const) {
+    assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([order], [projectionOutbox(state)]));
+  }
+  assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([{}], []));
+  for (const state of ['pending', 'failed'] as const) {
+    assert.throws(() => requireSettledPackStatusProjectionOutboxes([{ packStatusProjectionState: 'completed' }],
+      [projectionOutbox(state)]), /outbox to be settled/);
+  }
+});
+
+test('pack-status snapshot reads table authority and refuses partial schemas or invalid control', () => {
+  const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
+  const rows = (sql: string): Record<string, unknown>[] => {
+    if (sql.includes('FROM sqlite_schema')) return [{ name: 'commerce_pack_status_outbox' }, { name: 'commerce_pack_status_outbox_control' }];
+    if (sql.startsWith('SELECT storage_mode')) return [{ storage_mode: 'table' }];
+    if (sql.startsWith('SELECT * FROM commerce_pack_status_outbox')) return [packStatusOutboxRow(projectionOutbox('completed'))];
+    if (sql.includes("document_kind = 'box_assignment'")) return [];
+    return [{ document_path: parent.path, document_kind: parent.kind, drop_id: parent.dropId,
+      document_id: parent.documentId, document_json: JSON.stringify(parent.data), version: parent.version,
+      create_time: parent.createTime, update_time: parent.updateTime }];
+  };
+  const snapshot = readPackStatusCommerceSnapshot('card_nft_2', rows);
+  assert.equal(snapshot.packStatusOutboxes?.[0].state, 'completed');
+  assert.equal(snapshot.deliveryOrders[0].data.packStatusProjectionState, 'pending');
+  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes('FROM sqlite_schema')
+    ? [{ name: 'commerce_pack_status_outbox_control' }] : rows(sql)), /schema is incomplete/);
+  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
+    ? [{ storage_mode: 'unknown' }] : rows(sql)), /control is invalid/);
+  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes("document_kind = 'delivery_order'")
+    ? [] : rows(sql)), /parent is invalid/);
+  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT * FROM commerce_pack_status_outbox')
+    ? [] : rows(sql)), /outbox is missing/);
+  assert.throws(() => rebuildPackStatusCounters({ dropId: 'card_nft_2', cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 100 },
+    { assignments: [], deliveryOrders: [parent], packStatusOutboxes: [] }), /outbox is missing/);
+  assert.equal(readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
+    ? [{ storage_mode: 'legacy' }] : rows(sql)).packStatusOutboxes, undefined);
+  assert.equal(readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes('FROM sqlite_schema')
+    ? [] : rows(sql)).packStatusOutboxes, undefined);
+});
 
 test('D1 integrity reads all checks in one command without changing the report', () => {
   const database = createPackStatusDatabase();

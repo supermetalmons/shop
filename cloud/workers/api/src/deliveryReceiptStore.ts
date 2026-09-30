@@ -9,7 +9,6 @@ import {
 import {
   commerceFieldValue,
   commerceKeys,
-  isCommerceDeleteField,
 } from './commerceRepository.js';
 import {
   commerceTimestamp,
@@ -24,7 +23,7 @@ import {
   type DeliveryOrderDocument,
   type DeliveryOrderKey,
 } from './deliveryOrderStore.js';
-import { createDeliveryPackStatusProjectionOutbox } from './deliveryPackStatusOutbox.js';
+import { shouldEnqueueDeliveryPackStatusProjection } from './deliveryPackStatusOutbox.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
 import { createReadyToShipNotificationIntent } from './readyToShipNotifications.js';
@@ -322,10 +321,6 @@ export async function markDeliveryReady(
     ...(result.irlClaims.length ? { irlClaims: result.irlClaims } : {}),
   };
   const readyOrder = { ...document.data, ...fields };
-  const packStatusOutbox = createDeliveryPackStatusProjectionOutbox(runtime, readyOrder, context.nowMs);
-  Object.assign(readyOrder, Object.fromEntries(
-    Object.entries(packStatusOutbox).filter(([, value]) => !isCommerceDeleteField(value)),
-  ));
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
     const current = await transaction.get(document.key);
     const notificationOutbox = createReadyToShipNotificationIntent({
@@ -336,7 +331,6 @@ export async function markDeliveryReady(
     if (notificationOutbox) await transaction.enqueueNotificationOutbox(notificationOutbox);
     await updateDeliveryOrder(transaction, document.key, {
       ...fields,
-      ...packStatusOutbox,
       'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
       'receiptRecovery.lastErrorCode': commerceFieldValue.delete(),
       'receiptRecovery.lastErrorMessage': commerceFieldValue.delete(),
@@ -349,6 +343,9 @@ export async function markDeliveryReady(
         ? { irlClaimsUpdatedAt: commerceFieldValue.serverTimestamp() }
         : {}),
     } satisfies DeliveryReadyUpdate);
+    if (shouldEnqueueDeliveryPackStatusProjection(runtime, { ...current?.data, ...fields })) {
+      transaction.enqueuePackStatusProjection({ parentPath: document.key.path, dropId: runtime.dropId });
+    }
   }, { shouldRetry: () => false });
   return { ...document, data: readyOrder };
 }

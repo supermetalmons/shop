@@ -79,6 +79,10 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
     authoritySql,
     /FROM commerce_authority_control WHERE singleton = 1/,
   );
+  if (/FROM commerce_pack_status_outbox /.test(dataSql)) {
+    assert.match(authoritySql, /SELECT storage_mode FROM commerce_pack_status_outbox_control/);
+    return;
+  }
   assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
   if (/INDEXED BY commerce_(?:stripe_checkouts_manual_review|delivery_orders_shipment)_cursor/.test(dataSql)) {
     assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
@@ -426,20 +430,14 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   await repository.run(10, async (unit) => {
     await unit.create(commerceKeys.deliveryOrder('drop', '1'), {
       owner: 'owner-a',
-      packStatusProjectionNextAttemptAtMs: 30,
-      packStatusProjectionState: 'pending',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.deliveryOrder('drop', '2'), {
       owner: 'owner-a',
-      packStatusProjectionNextAttemptAtMs: 10,
-      packStatusProjectionState: 'pending',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.deliveryOrder('drop', '3'), {
       owner: 'owner-b',
-      packStatusProjectionNextAttemptAtMs: 20,
-      packStatusProjectionState: 'pending',
       status: 'ready_to_ship',
     });
     await unit.create(commerceKeys.stripeCheckout('drop', 'recent'), {
@@ -461,6 +459,13 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
       });
     }
   });
+  for (const [id, nowMs] of [['1', 30], ['2', 10], ['3', 20]] as const) {
+    await repository.run(nowMs, async (unit) => {
+      const key = commerceKeys.deliveryOrder('drop', id);
+      await unit.update(key, { status: 'ready_to_ship' });
+      unit.enqueuePackStatusProjection({ parentPath: key.path, dropId: 'drop' });
+    });
+  }
   for (const id of ['1', '2', '3']) {
     seedQueryNotification(harness, commerceKeys.deliveryOrder('drop', id), {
       state: id === '3' ? 'queued' : 'pending',
@@ -477,8 +482,8 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
     startAfterPath: 'drops/drop/deliveryOrders/1',
   });
   assert.deepEqual(after.map((record) => record.key.documentId), ['2']);
-  const due = await repository.queryDuePackStatusProjections({ dropId: 'drop', dueAtMs: 25, limit: 4 });
-  assert.deepEqual(due.map((record) => record.key.documentId), ['2', '3']);
+  const due = await repository.packStatusOutbox.queryDue({ dropId: 'drop', dueAtMs: 25, limit: 4 });
+  assert.deepEqual(due.map((record) => record.parentPath), ['drops/drop/deliveryOrders/2', 'drops/drop/deliveryOrders/3']);
   const stale = await repository.queryStaleStripeFulfillments(20);
   assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
 });
@@ -1914,7 +1919,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     /INDEXED BY commerce_notification_outbox_pending_owner_path\s/,
   );
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.queryDuePackStatusProjections({
+    await readWithSingleBatch(calls, () => repository.packStatusOutbox.queryDue({
       dropId: 'drop',
       dueAtMs: 1,
       limit: 1,
@@ -1970,7 +1975,7 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     },
     {
       name: 'queryDuePackStatusProjections',
-      read: (value) => value.queryDuePackStatusProjections({ dropId: 'drop', dueAtMs: 1, limit: 1 }),
+      read: (value) => value.packStatusOutbox.queryDue({ dropId: 'drop', dueAtMs: 1, limit: 1 }),
     },
     {
       name: 'queryStaleStripeFulfillments',

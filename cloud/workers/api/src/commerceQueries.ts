@@ -7,6 +7,7 @@ import type { FulfillmentManualReviewCursor } from '../../../../shared/contracts
 import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.js';
 import { stripeCheckoutStateSelectColumns } from './stripeCheckoutStateStore.js';
 import { DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH } from '../../../../shared/deliveryRecoveryPagination.js';
+import { PACK_STATUS_OUTBOX_FIELD_COLUMNS } from '../../../../shared/packStatusOutbox.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -361,23 +362,11 @@ export function dueReadyNotificationsQuery(args: Readonly<{
   };
 }
 
-export function duePackStatusProjectionsQuery(args: Readonly<{
-  dropId: string;
-  dueAtMs: number;
-  limit: number;
-}>): CommerceSqlQuery {
+export function packStatusOutboxDueQuery(args: { dropId: string; dueAtMs: number; limit: number }): CommerceSqlQuery {
   return {
-    sql: `SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document_kind = 'delivery_order' AND
-        drop_id = ? AND
-        pack_projection_state = 'pending' AND
-        pack_projection_next_attempt_ms <= ?
-      ORDER BY pack_projection_next_attempt_ms ASC, document_path ASC
-      LIMIT ?`,
+    sql: `SELECT ${Object.values(PACK_STATUS_OUTBOX_FIELD_COLUMNS).join(', ')} FROM commerce_pack_status_outbox INDEXED BY commerce_pack_status_outbox_due
+      WHERE drop_id = ? AND state = 'pending' AND next_attempt_at_ms <= ?
+      ORDER BY next_attempt_at_ms, parent_path LIMIT ?`,
     bindings: [args.dropId, args.dueAtMs, args.limit],
   };
 }

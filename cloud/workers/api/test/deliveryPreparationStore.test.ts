@@ -12,7 +12,7 @@ import {
   type PreparedDeliveryInput,
 } from '../src/deliveryPreparationStore.ts';
 import type { NotificationOutboxMutation } from '../../../../shared/notificationOutbox.ts';
-import type { DeliveryPackStatusProjectionUpdates } from '../src/deliveryPackStatusOutbox.ts';
+import type { PackStatusOutboxMutation } from '../../../../shared/packStatusOutbox.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const key = commerceKeys.deliveryOrder('card_nft_2', '7');
@@ -86,7 +86,7 @@ function checkWriteContracts(context: PreparedDeliveryCommerceContext): void {
   // @ts-expect-error Notification states are a closed domain union.
   const invalidNotification: NotificationOutboxMutation = { state: 'done' };
   // @ts-expect-error Projection payloads cannot mutate unrelated commerce fields.
-  const invalidProjection: DeliveryPackStatusProjectionUpdates = { owner: 'another-wallet' };
+  const invalidProjection: PackStatusOutboxMutation = { owner: 'another-wallet' };
   void invalidNotification;
   void invalidProjection;
 }

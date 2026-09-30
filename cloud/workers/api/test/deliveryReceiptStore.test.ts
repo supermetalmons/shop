@@ -179,8 +179,10 @@ test('native ready-to-ship persistence includes notification and pack-status out
     const notification = await native.context.repository.notificationOutbox.get('drops/card_nft_2/deliveryOrders/7', 'ready');
     assert.deepEqual(notification?.entries.map((entry) => entry.state), ['pending', 'pending']);
     assert.equal(ready?.data.buyerOrderReceivedEmailState, undefined);
-    assert.equal(ready?.data.packStatusProjectionState, 'pending');
-    assert.equal(ready?.data.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS);
+    const projection = await native.context.repository.packStatusOutbox.get('drops/card_nft_2/deliveryOrders/7');
+    assert.equal(projection?.state, 'pending');
+    assert.equal(projection?.nextAttemptAtMs, READY_NOTIFICATION_NOW_MS);
+    assert.equal(ready?.data.packStatusProjectionState, undefined);
   }
 });
 

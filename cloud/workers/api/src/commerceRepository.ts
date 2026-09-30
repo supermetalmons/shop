@@ -12,7 +12,6 @@ import {
   deliveryRecoveryStateQuery,
   deliveryRecoveryPageQuery,
   type DeliveryRecoveryPageQuery,
-  duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
   fulfillmentOrdersQuery,
@@ -55,6 +54,7 @@ import {
   unavailableCommerceData,
 } from './commerceRepositorySupport.js';
 import { CommerceUnitOfWork } from './commerceUnitOfWork.js';
+import { PackStatusOutboxRepository } from './packStatusOutboxRepository.js';
 import {
   NotificationOutboxRepository, notificationOutboxAuthorityStatement, requireNotificationOutboxAuthority,
 } from './notificationOutboxRepository.js';
@@ -73,9 +73,11 @@ export { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 
 export class D1CommerceRepository {
   readonly notificationOutbox: NotificationOutboxRepository;
+  readonly packStatusOutbox: PackStatusOutboxRepository;
 
   constructor(private readonly db: D1Database) {
     this.notificationOutbox = new NotificationOutboxRepository(db);
+    this.packStatusOutbox = new PackStatusOutboxRepository(db);
   }
 
   async getDudeInventory(args: Readonly<{
@@ -354,23 +356,6 @@ export class D1CommerceRepository {
       () => this.db.prepare(query.sql).bind(...query.bindings),
     );
     reportInefficientQuery('due-ready-notifications', 'delivery_order', result, result.results.length);
-    return result.results.map(parseRow).map((document) => publicRecord(document));
-  }
-
-  async queryDuePackStatusProjections(args: {
-    dropId: string;
-    dueAtMs: number;
-    limit: number;
-  }): Promise<CommerceDocumentRecord[]> {
-    const limit = positiveQueryLimit(args.limit);
-    if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
-      throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce projection cutoff.');
-    }
-    const query = duePackStatusProjectionsQuery({ ...args, limit });
-    const result = await this.readBatchWithAuthority(
-      () => this.db.prepare(query.sql).bind(...query.bindings),
-    );
-    reportInefficientQuery('due-pack-status-projections', 'delivery_order', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 

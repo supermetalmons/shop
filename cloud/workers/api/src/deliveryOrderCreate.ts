@@ -4,7 +4,6 @@ import type {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceDocumentData, commerceFieldValue } from './commerceRepositoryTypes.js';
-import type { DeliveryPackStatusProjectionUpdates } from './deliveryPackStatusProjectionTypes.js';
 
 type ServerTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
 type ReadyOrderTimestamps = { createdAt: ServerTimestamp; processedAt: ServerTimestamp };
@@ -89,7 +88,7 @@ export type AdminCardDeliveryOrderFields = AdminDeliveryOrderFields & {
   };
 };
 
-export type AdminPackDeliveryOrderCreate = AdminPackDeliveryOrderFields & ReadyOrderTimestamps & DeliveryPackStatusProjectionUpdates;
+export type AdminPackDeliveryOrderCreate = AdminPackDeliveryOrderFields & ReadyOrderTimestamps;
 export type AdminCardDeliveryOrderCreate = AdminCardDeliveryOrderFields & ReadyOrderTimestamps;
 
 export type DeliveryOrderCreate = PreparedDeliveryOrderCreate | StripeDeliveryOrderCreate |

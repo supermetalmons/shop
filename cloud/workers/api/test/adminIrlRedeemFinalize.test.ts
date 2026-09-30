@@ -1155,6 +1155,11 @@ test('Admin IRL marker reuse is drafted before its D1-only publication step', as
       packStatusProjectionFailureCount: 0,
     } as CommerceDocumentData,
   });
+  await new D1CommerceRepository(harness.db).run(0, async (unit) => {
+    const key = commerceKeys.deliveryOrder(DROP_ID, String(deliveryId));
+    await unit.update(key, { status: 'ready_to_ship' });
+    unit.enqueuePackStatusProjection({ parentPath: key.path, dropId: DROP_ID });
+  });
   const markerKey = commerceKeys.adminIrlRedeemPackMarker(DROP_ID, OWNER);
   assert.ok(markerKey);
   const markerDocument = buildAdminIrlRedeemMarkerDocument({
@@ -1231,9 +1236,9 @@ test('Admin IRL marker reuse is drafted before its D1-only publication step', as
   assert.equal(request?.data.deliveryId, deliveryId);
   assert.equal(request?.data.workflowPublicationDraftV1, undefined);
   assert.equal(projection.applied, 1);
-  assert.equal((await new D1CommerceRepository(harness.db).get(
-    commerceKeys.deliveryOrder(DROP_ID, String(deliveryId)),
-  ))?.data.packStatusProjectionState, 'completed');
+  assert.equal((await new D1CommerceRepository(harness.db).packStatusOutbox.get(
+    commerceKeys.deliveryOrder(DROP_ID, String(deliveryId)).path,
+  ))?.state, 'completed');
   assert.deepEqual(await resumeAndReconcileAdminIrlRedeemFinalizeWorkflow(args), { status: 'complete' });
   assert.deepEqual(await validateAdminIrlRedeemFinalizeWorkflow(args), { status: 'complete' });
   assert.deepEqual(await prepareAdminIrlRedeemFinalizeWorkflowDraft(args), { status: 'complete' });
@@ -1513,7 +1518,7 @@ test('Admin IRL D1-only publication is idempotent for card and prepared-pack dra
     assert.equal(projection.applied, testCase.targetKind === 'pack' ? 1 : 0);
     assert.equal(projection.attempts, testCase.targetKind === 'pack' ? 1 : 0);
     assert.equal(
-      orders[0]?.packStatusProjectionState,
+      (await repository.packStatusOutbox.get(commerceKeys.deliveryOrder(DROP_ID, String(orders[0]?.deliveryId)).path))?.state,
       testCase.targetKind === 'pack' ? 'completed' : undefined,
     );
   }

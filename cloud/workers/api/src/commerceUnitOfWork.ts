@@ -57,6 +57,8 @@ import {
   stripeCheckoutStateMetadata,
 } from '../../../../shared/stripeCheckoutState.js';
 import { stripeCheckoutStateWriteStatement } from './stripeCheckoutStateStore.js';
+import { parsePackStatusOutboxRecord, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.js';
+import { packStatusOutboxInsertStatement } from './packStatusOutboxRepository.js';
 
 type PendingDocument = StoredDocument | null;
 
@@ -115,6 +117,7 @@ export class CommerceUnitOfWork {
   private readonly pending = new Map<string, PendingDocument>();
   private readonly originalOutboxes = new Map<string, NotificationOutboxRecord | null>();
   private readonly pendingOutboxes = new Map<string, NotificationOutboxRecord>();
+  private readonly pendingPackStatusOutboxes = new Map<string, PackStatusOutboxRecord>();
   private readonly createPaths = new Set<string>();
   private readonly existingPaths = new Set<string>();
   private commitTimestamp: CommerceTimestamp;
@@ -122,7 +125,7 @@ export class CommerceUnitOfWork {
 
   constructor(
     private readonly db: D1Database,
-    nowMs: number,
+    private readonly nowMs: number,
   ) {
     this.commitTimestamp = timestampFromMilliseconds(nowMs);
   }
@@ -144,6 +147,21 @@ export class CommerceUnitOfWork {
     }
     const value = this.pendingOutboxes.get(key) ?? this.originalOutboxes.get(key);
     return value ? parseNotificationOutboxRecord(value) : null;
+  }
+
+  enqueuePackStatusProjection(input: { parentPath: string; dropId: string }): void {
+    this.assertOpen();
+    const parent = this.pending.get(input.parentPath);
+    if (!parent || parent.key.kind !== 'delivery_order' || parent.key.dropId !== input.dropId || parent.data.status !== 'ready_to_ship') {
+      throw new CommerceRepositoryError('invalid-argument', 'Pack-status projection requires a staged ready delivery.');
+    }
+    if (this.pendingPackStatusOutboxes.has(input.parentPath)) return;
+    const nowMs = this.nowMs;
+    this.pendingPackStatusOutboxes.set(input.parentPath, parsePackStatusOutboxRecord({
+      ...input, generation: crypto.randomUUID(), state: 'pending', revision: 1, failureCount: 0,
+      nextAttemptAtMs: nowMs, completedAtMs: null, failedAtMs: null, lastErrorCode: null,
+      createdAtMs: nowMs, updatedAtMs: nowMs,
+    }));
   }
 
   async enqueueNotificationOutbox(input: NotificationOutboxCreate): Promise<NotificationOutboxRecord> {
@@ -379,6 +397,13 @@ export class CommerceUnitOfWork {
     for (const outbox of this.pendingOutboxes.values()) {
       statements.push(notificationOutboxWriteStatement(this.db, outbox));
     }
+    for (const outbox of this.pendingPackStatusOutboxes.values()) {
+      const parent = this.pending.get(outbox.parentPath);
+      if (!parent || parent.key.kind !== 'delivery_order' || parent.key.dropId !== outbox.dropId || parent.data.status !== 'ready_to_ship') {
+        throw new CommerceRepositoryError('invalid-argument', 'Pack-status projection requires a staged ready delivery.');
+      }
+      statements.push(packStatusOutboxInsertStatement(this.db, outbox));
+    }
     if (this.pending.size) statements.push(this.db.prepare(`UPDATE commerce_authority_control
       SET documents_revision = documents_revision + 1, updated_at_ms = ? WHERE singleton = 1`)
       .bind(timestampMilliseconds(this.commitTimestamp)));
@@ -387,7 +412,7 @@ export class CommerceUnitOfWork {
       await this.db.batch(statements);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (/authority is not d1|notification outbox is unavailable|stripe checkout state is unavailable/i.test(message)) {
+      if (/authority is not d1|notification outbox is unavailable|stripe checkout state is unavailable|pack-status outbox is unavailable/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
       if (/transaction conflict|UNIQUE constraint|cannot start a transaction within a transaction/i.test(message)) {
@@ -407,6 +432,7 @@ export class CommerceUnitOfWork {
     this.closed = true;
     this.pending.clear();
     this.pendingOutboxes.clear();
+    this.pendingPackStatusOutboxes.clear();
   }
 
   private assertOpen(): void {

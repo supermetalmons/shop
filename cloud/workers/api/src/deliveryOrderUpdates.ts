@@ -3,7 +3,6 @@ import type { commerceFieldValue, CommerceJsonValue } from './commerceRepository
 import type { FulfillmentDeliveryOrderUpdates } from './fulfillmentDeliveryOrderUpdates.js';
 import type { ApiErrorCode } from './dataAccess.js';
 import type { DeliveryCloseUpdate, DeliveryProcessingUpdate, DeliveryReadyUpdate } from './deliveryReceiptTypes.js';
-import type { DeliveryPackStatusProjectionUpdates } from './deliveryPackStatusProjectionTypes.js';
 
 type DeleteField = ReturnType<typeof commerceFieldValue.delete>;
 type ServerTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
@@ -64,4 +63,4 @@ export type DeliveryReceiptClaimUpdates = {
 
 export type DeliveryOrderUpdates = (DeliveryOrderFulfillmentUpdates & DeliveryRecoveryPatch &
   FulfillmentDeliveryOrderUpdates) | DeliveryOwnerMergeUpdate | DeliveryProcessingUpdate |
-  DeliveryReadyUpdate | DeliveryCloseUpdate | DeliveryReceiptClaimUpdates | DeliveryPackStatusProjectionUpdates;
+  DeliveryReadyUpdate | DeliveryCloseUpdate | DeliveryReceiptClaimUpdates;

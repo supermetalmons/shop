@@ -1,7 +1,9 @@
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
+import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
 import { planNotificationOutboxBackfill } from '../shared/notificationOutboxMaintenance.ts';
+import { LEGACY_PACK_STATUS_PROJECTION_FIELDS, legacyPackStatusProjectionsQuery, planPackStatusOutboxBackfill } from '../shared/packStatusOutboxMaintenance.ts';
 import { planStripeCheckoutStateBackfill } from '../shared/stripeCheckoutStateMaintenance.ts';
 import { parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
 import { stripeCheckoutStateSelectColumns } from '../../cloud/workers/api/src/stripeCheckoutStateStore.ts';
@@ -20,7 +22,7 @@ import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
   deliveryRecoveryOrdersQuery,
-  duePackStatusProjectionsQuery,
+  packStatusOutboxDueQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
   fulfillmentOrdersQuery,
@@ -139,6 +141,21 @@ const STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [str
   commerce_stripe_checkout_state_reconciliation_due: ['index', '33a00a977c2835918699d8ebcf6795d0688f522c6cc5e4cafb883c3ba120c39c'],
   commerce_stripe_checkout_state_update_guard: ['trigger', 'a3c24f0ba0d2064b758f3c7d719e9a1cb5bdc4d0bf3234092433b259a156ee80'],
   commerce_stripe_checkouts_manual_review_cursor: ['index', '21ffc6599703703842adb5e233fedf7b5203912c5d718637d43b45ff1cdfbb59'],
+});
+const PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
+  commerce_pack_status_control_delete_guard: ['trigger', 'b5e923301376ec5a34792dbb4c5fac28afa54e6efd9c3d717503efabb14effeb'],
+  commerce_pack_status_control_insert_guard: ['trigger', '033a672c8adc8e74facafad13209e5c8a0de846c7cb1225445429cdab4c9ddc5'],
+  commerce_pack_status_control_update_guard: ['trigger', '443a40315dc44495283fba30cf238a0b736bd85a6f1a1b0fca0eaf300a47dc0f'],
+  commerce_pack_status_legacy_insert_fence: ['trigger', 'a9a6627a98250d0e7d73651990a4c2cab6a72547a985b51eb8d1d96230ac714c'],
+  commerce_pack_status_legacy_update_fence: ['trigger', '52b2071795034705d6c1ce094a1a6f1a5a4d3e0290bca3da3ff509b04f2724ee'],
+  commerce_pack_status_outbox: ['table', 'a38a305a3a6b5f35451e86149fdfa59712db947e8766142e40ccaa1eedfaa8a7'],
+  commerce_pack_status_outbox_control: ['table', '8cd8a2b2b5becc7028a094a0d8740104d7da10ae79269f130e11c14eab155258'],
+  commerce_pack_status_outbox_delete_guard: ['trigger', '99a7425360c6c744cdc63a55c61b06fde9ecab0c879ffa66e2221a907244e43e'],
+  commerce_pack_status_outbox_drop: ['index', 'a7bba976dad7a6ef10ed210198c77ddb0ffd8162ef8d3deb2282534599900dc7'],
+  commerce_pack_status_outbox_due: ['index', 'fb49fbed1e637578b3579071f515c90114052498a7099ab3bb6c311e3a564947'],
+  commerce_pack_status_outbox_insert_guard: ['trigger', '839d3c04745cd1b162c37ca58aa7d18864a1ed32d738d5efa5d034d6e687ba23'],
+  commerce_pack_status_outbox_update_guard: ['trigger', 'ca1df49d62065f1a414f4cf8ac8455a25550d35f43d30cbf8d431485d29bf744'],
+  commerce_pack_status_resume_guard: ['trigger', '6a9b573ca8131810f0b563ad1a27b42a4b22cd48f7ab3c9377660309893c37e4'],
 });
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '376e5c3579dd47c8742fb68171df543c2c35fc144a8c2277d66d68fd73c82b07';
@@ -325,6 +342,39 @@ function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: str
 
 export type CheckCommerceD1Query = typeof defaultQueryRemoteCommerceD1;
 
+type CommerceSchemaGroup =
+  | 'commerce_trigger'
+  | 'delivery_owner_revision_trigger'
+  | 'document_path_revision_trigger'
+  | 'pending_ready_notification_index';
+
+function createCommerceSchemaCatalog(query: CheckCommerceD1Query) {
+  type Rows = ReturnType<CheckCommerceD1Query>;
+  let catalog: { rows: Rows; objects: Map<string, Rows> } | undefined;
+  const load = () => {
+    if (catalog) return catalog;
+    const rows = query(`SELECT type, name, sql,
+      type = 'trigger' AND name LIKE 'commerce_%' AS commerce_trigger,
+      type = 'trigger' AND name GLOB 'commerce_delivery_owner_revision_*' AS delivery_owner_revision_trigger,
+      type = 'trigger' AND name GLOB 'commerce_document_path_revision_*' AS document_path_revision_trigger,
+      type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*' AS pending_ready_notification_index
+      FROM sqlite_schema ORDER BY name`);
+    const objects = new Map<string, Rows>();
+    for (const row of rows) {
+      const key = `${String(row.type)}:${String(row.name)}`;
+      const existing = objects.get(key);
+      if (existing) existing.push(row);
+      else objects.set(key, [row]);
+    }
+    catalog = { rows, objects };
+    return catalog;
+  };
+  return {
+    get: (type: string, name: string): Rows => load().objects.get(`${type}:${name}`) || [],
+    group: (group: CommerceSchemaGroup): Rows => load().rows.filter((row) => row[group] === 1),
+  };
+}
+
 function legacyCheckoutQuery(query: CommerceSqlQuery): CommerceSqlQuery {
   let sql = query.sql;
   for (const alias of ['commerce_documents', 'document']) {
@@ -350,13 +400,14 @@ export function checkCommerceD1(
   queryRemoteCommerceD1: CheckCommerceD1Query = defaultQueryRemoteCommerceD1,
   options: { forDeployment?: boolean } = {},
 ): Record<string, unknown> {
+  const schemaCatalog = createCommerceSchemaCatalog(queryRemoteCommerceD1);
   const quick = queryRemoteCommerceD1('PRAGMA quick_check');
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
   if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 28) ||
+    (migrations.length < 13 || migrations.length > 29) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -384,13 +435,15 @@ export function checkCommerceD1(
     (migrations.length >= 25 && migrations[24].name !== '0025_preorder_scoped_expiry.sql') ||
     (migrations.length >= 26 && migrations[25].name !== '0026_stripe_checkout_state.sql') ||
     (migrations.length >= 27 && migrations[26].name !== '0027_preorder_expiry_claim_release.sql') ||
-    (migrations.length >= 28 && migrations[27].name !== '0028_preorder_card_range_1413.sql')
+    (migrations.length >= 28 && migrations[27].name !== '0028_preorder_card_range_1413.sql') ||
+    (migrations.length >= 29 && migrations[28].name !== '0029_pack_status_outbox.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
   const legacyNotificationIndexesRemoved = migrations.some((migration) =>
     migration.name === '0014_drop_legacy_notification_indexes.sql');
   const stripeCheckoutStateReady = migrations.some((migration) => migration.name === '0026_stripe_checkout_state.sql');
+  const packStatusOutboxReady = migrations.some((migration) => migration.name === '0029_pack_status_outbox.sql');
   const manualReviewPaginationReady = migrations.some((migration) =>
     migration.name === '0015_manual_review_pagination.sql');
   if (options.forDeployment && !manualReviewPaginationReady) {
@@ -419,13 +472,13 @@ export function checkCommerceD1(
     : preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS;
   if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
   if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(preorderSchema)) {
-    const schema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
+    const schema = schemaCatalog.get(type, name);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Commerce D1 preorder schema ${name} is invalid.`);
   }
   const preorderBuyerIndexReady = migrations.some((migration) => migration.name === '0019_preorder_buyer_index.sql');
   if (options.forDeployment && !preorderBuyerIndexReady) fail('Commerce D1 preorder buyer index migration is required for deployment.');
   if (preorderBuyerIndexReady) {
-    const schema = queryRemoteCommerceD1("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'commerce_preorder_succeeded_buyer'");
+    const schema = schemaCatalog.get('index', 'commerce_preorder_succeeded_buyer');
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== PREORDER_BUYER_INDEX_FINGERPRINT) {
       fail('Commerce D1 preorder buyer index is invalid.');
     }
@@ -434,7 +487,7 @@ export function checkCommerceD1(
   const preorderScopedExpiryReady = migrations.some((migration) => migration.name === '0025_preorder_scoped_expiry.sql');
   if (options.forDeployment && !preorderExpiryIndexReady) fail('Commerce D1 preorder expiry index migration is required for deployment.');
   if (preorderExpiryIndexReady) {
-    const schema = queryRemoteCommerceD1("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'commerce_preorder_prepared_expiry'");
+    const schema = schemaCatalog.get('index', 'commerce_preorder_prepared_expiry');
     const fingerprint = preorderScopedExpiryReady ? PREORDER_SCOPED_EXPIRY_INDEX_FINGERPRINT : PREORDER_EXPIRY_INDEX_FINGERPRINT;
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) {
       fail('Commerce D1 preorder expiry index is invalid.');
@@ -448,10 +501,15 @@ export function checkCommerceD1(
   if (options.forDeployment && !stripeCheckoutStateReady) fail('Commerce D1 Stripe checkout state migration is required for deployment.');
   if (options.forDeployment && !preorderExpiryClaimReleaseReady) fail('Commerce D1 preorder expiry claim release migration is required for deployment.');
   if (options.forDeployment && !preorderCardRange1413Ready) fail('Commerce D1 preorder card range 1413 migration is required for deployment.');
+  if (options.forDeployment && !packStatusOutboxReady) fail('Commerce D1 pack-status outbox migration is required for deployment.');
   if (stripeCheckoutStateReady) for (const [name, [type, fingerprint]] of Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS)) {
     if (name === 'commerce_stripe_checkouts_manual_review_cursor') continue;
-    const schema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
+    const schema = schemaCatalog.get(type, name);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Stripe checkout state schema is invalid: ${name}.`);
+  }
+  if (packStatusOutboxReady) for (const [name, [type, fingerprint]] of Object.entries(PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS)) {
+    const schema = schemaCatalog.get(type, name);
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Pack-status outbox schema is invalid: ${name}.`);
   }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
@@ -472,6 +530,7 @@ export function checkCommerceD1(
     'commerce_notification_outbox_control',
     'commerce_notification_outbox_pending_owners',
     'commerce_notification_outbox_stripe_due',
+    ...(packStatusOutboxReady ? ['commerce_pack_status_outbox', 'commerce_pack_status_outbox_control'] : []),
     ...(preordersReady ? ['commerce_preorder_claims', 'commerce_preorder_orders'] : []),
     ...(stripeCheckoutStateReady ? ['commerce_stripe_checkout_state', 'commerce_stripe_checkout_state_control'] : []),
     'commerce_wipe_guards',
@@ -483,10 +542,8 @@ export function checkCommerceD1(
   ) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
-  const chargebackSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'table' AND name = 'stripe_order_disputes'`);
-  const chargebackIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'stripe_order_disputes_drop_session'`);
+  const chargebackSchema = schemaCatalog.get('table', 'stripe_order_disputes');
+  const chargebackIndex = schemaCatalog.get('index', 'stripe_order_disputes_drop_session');
   if (chargebackSchema.length !== 1 ||
     sqlSchemaFingerprint(String(chargebackSchema[0].sql)) !== '722711e091525e0b50cced4e2c85593574bc0dbcc471f9232f156db94de5754f' ||
     chargebackIndex.length !== 1 ||
@@ -564,43 +621,35 @@ export function checkCommerceD1(
   const wipeGuardColumns = queryRemoteCommerceD1(
     "SELECT name FROM pragma_table_info('commerce_wipe_guards') ORDER BY cid",
   ).map((row) => String(row.name));
-  const leaseSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'table' AND name = 'commerce_authority_control_lease'`);
+  const leaseSchema = schemaCatalog.get('table', 'commerce_authority_control_lease');
   const leaseFingerprint = leaseSchema.length === 1
     ? sqlSchemaFingerprint(String(leaseSchema[0].sql || ''))
     : '';
-  const wipeGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name = 'commerce_wipe_guard_validate'`);
+  const wipeGuardSchema = schemaCatalog.get('trigger', 'commerce_wipe_guard_validate');
   const wipeGuardFingerprint = wipeGuardSchema.length === 1
     ? sqlSchemaFingerprint(String(wipeGuardSchema[0].sql || ''))
     : '';
-  const authorityUpdateGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name = 'commerce_authority_update_guard'`);
+  const authorityUpdateGuardSchema = schemaCatalog.get('trigger', 'commerce_authority_update_guard');
   const authorityUpdateGuardFingerprint = authorityUpdateGuardSchema.length === 1
     ? sqlSchemaFingerprint(String(authorityUpdateGuardSchema[0].sql || ''))
     : '';
-  const commitGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name = 'commerce_commit_guard_validate'`);
+  const commitGuardSchema = schemaCatalog.get('trigger', 'commerce_commit_guard_validate');
   const commitGuardFingerprint = commitGuardSchema.length === 1
     ? sqlSchemaFingerprint(String(commitGuardSchema[0].sql || ''))
     : '';
-  const commitGuardTableSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'table' AND name = 'commerce_commit_guards'`);
+  const commitGuardTableSchema = schemaCatalog.get('table', 'commerce_commit_guards');
   const commitGuardTableFingerprint = commitGuardTableSchema.length === 1
     ? sqlSchemaFingerprint(String(commitGuardTableSchema[0].sql || ''))
     : '';
-  const deliveryOwnerRevisionSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'table' AND name = 'commerce_delivery_owner_revisions'`);
+  const deliveryOwnerRevisionSchema = schemaCatalog.get('table', 'commerce_delivery_owner_revisions');
   const deliveryOwnerRevisionFingerprint = deliveryOwnerRevisionSchema.length === 1
     ? sqlSchemaFingerprint(String(deliveryOwnerRevisionSchema[0].sql || ''))
     : '';
-  const documentPathRevisionSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'table' AND name = 'commerce_document_path_revisions'`);
+  const documentPathRevisionSchema = schemaCatalog.get('table', 'commerce_document_path_revisions');
   const documentPathRevisionFingerprint = documentPathRevisionSchema.length === 1
     ? sqlSchemaFingerprint(String(documentPathRevisionSchema[0].sql || ''))
     : '';
-  const documentVersionUpdateGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name = 'commerce_documents_version_update_guard'`);
+  const documentVersionUpdateGuardSchema = schemaCatalog.get('trigger', 'commerce_documents_version_update_guard');
   const documentVersionUpdateGuardFingerprint = documentVersionUpdateGuardSchema.length === 1
     ? sqlSchemaFingerprint(String(documentVersionUpdateGuardSchema[0].sql || ''))
     : '';
@@ -662,6 +711,7 @@ export function checkCommerceD1(
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
+    ...(packStatusOutboxReady ? Object.entries(PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     ...(stripeCheckoutStateReady ? Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     ...(preordersReady ? Object.entries(preorderSchema).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     'commerce_authority_transition_guard',
@@ -694,8 +744,7 @@ export function checkCommerceD1(
     ...Object.keys(INVENTORY_TRIGGER_FINGERPRINTS),
     ...Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name),
   ]);
-  const triggers = queryRemoteCommerceD1(`SELECT name FROM sqlite_master
-    WHERE type = 'trigger' AND name LIKE 'commerce_%' ORDER BY name`);
+  const triggers = schemaCatalog.group('commerce_trigger');
   if (
     triggers.length !== requiredTriggers.size ||
     triggers.some((row) => !requiredTriggers.has(String(row.name)))
@@ -705,8 +754,7 @@ export function checkCommerceD1(
     ['table', INVENTORY_TABLE_SCHEMA_FINGERPRINTS],
     ['trigger', INVENTORY_TRIGGER_FINGERPRINTS],
   ] as const) {
-    const inventorySchema = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
-      WHERE type = '${type}' AND name IN (${Object.keys(fingerprints).map((name) => `'${name}'`).join(', ')})`);
+    const inventorySchema = Object.keys(fingerprints).flatMap((name) => schemaCatalog.get(type, name));
     if (
       inventorySchema.length !== Object.keys(fingerprints).length ||
       inventorySchema.some((row) => sqlSchemaFingerprint(String(row.sql || '')) !== fingerprints[String(row.name)])
@@ -746,26 +794,21 @@ export function checkCommerceD1(
       !readyInventoryDrops.has(String(document.drop_id)))
   )) fail('Commerce D1 inventory initialization is incomplete.');
 
-  const deliveryOwnerRevisionTriggers = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name GLOB 'commerce_delivery_owner_revision_*'
-    ORDER BY name`);
+  const deliveryOwnerRevisionTriggers = schemaCatalog.group('delivery_owner_revision_trigger');
   if (
     deliveryOwnerRevisionTriggers.length !== Object.keys(DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS).length ||
     deliveryOwnerRevisionTriggers.some((row) =>
       sqlSchemaFingerprint(String(row.sql || '')) !== DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
   ) fail('Commerce D1 delivery-owner revision triggers are invalid.');
 
-  const documentPathRevisionTriggers = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
-    WHERE type = 'trigger' AND name GLOB 'commerce_document_path_revision_*'
-    ORDER BY name`);
+  const documentPathRevisionTriggers = schemaCatalog.group('document_path_revision_trigger');
   if (
     documentPathRevisionTriggers.length !== Object.keys(DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS).length ||
     documentPathRevisionTriggers.some((row) =>
       sqlSchemaFingerprint(String(row.sql || '')) !== DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
   ) fail('Commerce D1 document-path revision triggers are invalid.');
 
-  const deliveryOwnerIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`);
+  const deliveryOwnerIndex = schemaCatalog.get('index', 'commerce_documents_delivery_owner_path');
   const deliveryOwnerIndexSql = String(deliveryOwnerIndex[0]?.sql || '').replace(/\s+/g, ' ').trim();
   if (
     deliveryOwnerIndex.length !== 1 ||
@@ -774,45 +817,40 @@ export function checkCommerceD1(
       WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim()
   ) fail('Commerce D1 delivery-owner partial index is invalid.');
 
-  const deliveryRecoveryIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_status'`);
+  const deliveryRecoveryIndex = schemaCatalog.get('index', 'commerce_documents_delivery_owner_status');
   if (
     deliveryRecoveryIndex.length !== 1 ||
     normalizedSql(deliveryRecoveryIndex[0].sql) !== normalizedSql(DELIVERY_RECOVERY_INDEX_SQL)
   ) fail('Commerce D1 delivery-recovery index is invalid.');
 
-  const stripeReconciliationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_stripe_checkouts_reconciliation_due'`);
+  const stripeReconciliationIndex = schemaCatalog.get('index', 'commerce_stripe_checkouts_reconciliation_due');
   if (
     stripeReconciliationIndex.length !== 1 ||
     normalizedSql(stripeReconciliationIndex[0].sql) !== normalizedSql(STRIPE_RECONCILIATION_INDEX_SQL)
   ) fail('Commerce D1 Stripe-reconciliation index is invalid.');
 
-  const stripeTerminalNotificationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_stripe_terminal_notifications_due'`);
+  const stripeTerminalNotificationIndex = schemaCatalog.get('index', 'commerce_stripe_terminal_notifications_due');
   if (legacyNotificationIndexesRemoved ? stripeTerminalNotificationIndex.length !== 0 : (
     stripeTerminalNotificationIndex.length !== 1 ||
     normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
   )) fail('Commerce D1 Stripe terminal-notification index is invalid.');
 
   for (const [name, expectedSql] of Object.entries(STRIPE_IDENTITY_INDEX_SQL)) {
-    const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-      WHERE type = 'index' AND name = '${name}'`);
+    const index = schemaCatalog.get('index', name);
     if (
       index.length !== 1 ||
       sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)
     ) fail(`Commerce D1 Stripe identity index ${name} is invalid.`);
   }
 
-  const adminIrlWorkflowOperationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_admin_irl_redeem_workflow_operation'`);
+  const adminIrlWorkflowOperationIndex = schemaCatalog.get('index', 'commerce_admin_irl_redeem_workflow_operation');
   if (
     adminIrlWorkflowOperationIndex.length !== 1 ||
     normalizedSql(adminIrlWorkflowOperationIndex[0].sql) !== normalizedSql(ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL)
   ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
   if (receiptClaimWorkflowReady) {
     for (const [name, expectedSql] of Object.entries(RECEIPT_CLAIM_WORKFLOW_INDEX_SQL)) {
-      const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = '${name}'`);
+      const index = schemaCatalog.get('index', name);
       if (index.length !== 1 || sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)) {
         fail(`Commerce D1 receipt claim Workflow index ${name} is invalid.`);
       }
@@ -827,16 +865,13 @@ export function checkCommerceD1(
     'commerce_receipt_claim_workflow_due');
   }
 
-  const readyNotificationDueIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-    WHERE type = 'index' AND name = 'commerce_ready_notifications_due'`);
+  const readyNotificationDueIndex = schemaCatalog.get('index', 'commerce_ready_notifications_due');
   if (legacyNotificationIndexesRemoved ? readyNotificationDueIndex.length !== 0 : (
     readyNotificationDueIndex.length !== 1 ||
     normalizedSql(readyNotificationDueIndex[0].sql) !== normalizedSql(READY_NOTIFICATION_DUE_INDEX_SQL)
   )) fail('Commerce D1 due ready-notification index is invalid.');
 
-  const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
-    WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
-    ORDER BY name`);
+  const pendingReadyNotificationIndexes = schemaCatalog.group('pending_ready_notification_index');
   if (legacyNotificationIndexesRemoved ? pendingReadyNotificationIndexes.length !== 0 : (
     pendingReadyNotificationIndexes.length !== Object.keys(PENDING_READY_NOTIFICATION_INDEX_SQL).length ||
     pendingReadyNotificationIndexes.some((row) =>
@@ -845,7 +880,7 @@ export function checkCommerceD1(
 
   for (const [name, [type, fingerprint]] of Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS)) {
     if (stripeCheckoutStateReady && name in STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS) continue;
-    const rows = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);
+    const rows = schemaCatalog.get(type, name);
     if (rows.length !== 1 || sqlSchemaFingerprint(String(rows[0].sql)) !== fingerprint) {
       fail(`Notification outbox schema is invalid: ${name}.`);
     }
@@ -876,7 +911,7 @@ export function checkCommerceD1(
       fail('Commerce D1 shipment-history sort projection is invalid.');
     }
     for (const [name, expectedSql] of Object.entries(SHIPMENT_INDEX_SQL)) {
-      const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = '${name}'`);
+      const index = schemaCatalog.get('index', name);
       if (index.length !== 1 || normalizedSql(index[0].sql) !== normalizedSql(expectedSql)) {
         fail(`Commerce D1 shipment-history index ${name} is invalid.`);
       }
@@ -913,8 +948,7 @@ export function checkCommerceD1(
     'commerce_documents_fulfillment_status',
   );
   if (manualReviewPaginationReady) {
-    const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
-      WHERE type = 'index' AND name = 'commerce_stripe_checkouts_manual_review_cursor'`);
+    const index = schemaCatalog.get('index', 'commerce_stripe_checkouts_manual_review_cursor');
     if (index.length !== 1 || (stripeCheckoutStateReady
       ? sqlSchemaFingerprint(String(index[0].sql)) !== STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS.commerce_stripe_checkouts_manual_review_cursor[1]
       : normalizedSql(index[0].sql) !== normalizedSql(MANUAL_REVIEW_CURSOR_INDEX_SQL))) {
@@ -963,10 +997,19 @@ export function checkCommerceD1(
     startAfterPath: 'drops/a/deliveryOrders/1',
   }));
   requireSearchIndex(ownerlessNotificationPlan, 'commerce_notification_outbox_pending_path');
-  requireIndex(
-    queryPlan(duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
-    'commerce_documents_pack_projection',
-  );
+  if (packStatusOutboxReady) {
+    const plan = queryPlan(packStatusOutboxDueQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 }));
+    requireSearchIndex(plan, 'commerce_pack_status_outbox_due');
+    if (!plan.some((row) => normalizedSql(row.detail).includes('(drop_id=? AND next_attempt_at_ms<?)'))) {
+      fail('Commerce D1 pack-status outbox query plan does not seek the full drop-due prefix.');
+    }
+    requireNoTemporaryBTree(plan, 'pack-status outbox');
+  } else {
+    requireIndex(
+      queryPlan(legacyPackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
+      'commerce_documents_pack_projection',
+    );
+  }
   requireIndex(
     queryPlan(staleStripeFulfillmentsQuery(1)),
     stripeCheckoutStateReady ? 'commerce_stripe_checkout_state_reconciliation_due' : 'commerce_stripe_checkouts_reconciliation_due',
@@ -1013,6 +1056,53 @@ export function checkCommerceD1(
   const notificationRows = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox ORDER BY parent_path, family')
     .map(parseNotificationOutboxRow);
   const parents = new Map(authoritativeDocuments.map((document) => [document.document_path, document]));
+  const packStatusControls = packStatusOutboxReady
+    ? queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox_control') : [];
+  const packStatusControl = packStatusControls[0];
+  if (packStatusOutboxReady) {
+    if (packStatusControls.length !== 1 || packStatusControl.singleton !== 1 ||
+      !['legacy', 'table'].includes(String(packStatusControl.storage_mode)) ||
+      !['idle', 'preparing', 'ready'].includes(String(packStatusControl.preparation_state)) ||
+      (packStatusControl.storage_mode === 'table' && packStatusControl.preparation_state !== 'ready') ||
+      (packStatusControl.preparation_state === 'ready' &&
+        (packStatusControl.source_documents_revision === null || packStatusControl.prepared_at_ms === null))) {
+      fail('Pack-status outbox control is invalid.');
+    }
+    if (packStatusControl.source_documents_revision !== null) {
+      safeInteger(packStatusControl.source_documents_revision, 'Pack-status outbox source revision');
+    }
+    if (packStatusControl.prepared_at_ms !== null) {
+      safeInteger(packStatusControl.prepared_at_ms, 'Pack-status outbox preparation timestamp');
+    }
+  }
+  const packStatusRows = packStatusOutboxReady
+    ? queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path').map(parsePackStatusOutboxRow)
+    : [];
+  for (const row of packStatusRows) {
+    const parent = parents.get(row.parentPath);
+    if (!parent || parent.document_kind !== 'delivery_order' || parent.drop_id !== row.dropId) {
+      fail('Pack-status outbox parent identity is invalid.');
+    }
+  }
+  if (packStatusControl?.storage_mode === 'table') {
+    const outboxPaths = new Set(packStatusRows.map((row) => row.parentPath));
+    for (const document of authoritativeDocuments) {
+      const data = JSON.parse(String(document.document_json)) as Record<string, unknown>;
+      if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(data, field)) &&
+        !outboxPaths.has(String(document.document_path))) {
+        fail(`Pack-status outbox is missing for source document: ${String(document.document_path)}.`);
+      }
+    }
+  }
+  if (packStatusControl?.storage_mode === 'legacy' && packStatusControl.preparation_state === 'ready') {
+    const expected = authoritativeDocuments.map(parseCommerceD1DocumentRow)
+      .flatMap((document) => planPackStatusOutboxBackfill(document) || [])
+      .sort((left, right) => left.parentPath.localeCompare(right.parentPath));
+    if (packStatusControl.source_documents_revision !== authority.documents_revision ||
+      !isDeepStrictEqual(packStatusRows.slice().sort((left, right) => left.parentPath.localeCompare(right.parentPath)), expected)) {
+      fail('Pack-status outbox preparation differs from source documents.');
+    }
+  }
   const stripeCheckoutJoinedRows = stripeCheckoutStateReady ? queryRemoteCommerceD1(`SELECT checkout.*,
       document.document_kind AS parent_kind, document.version AS parent_version
     FROM commerce_stripe_checkout_state AS checkout
@@ -1104,6 +1194,10 @@ export function checkCommerceD1(
     authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
     stripeCheckoutControl?.preparation_state === 'ready' && stripeCheckoutControl.source_documents_revision === authority.documents_revision
   )) fail('API deployment requires activated Stripe checkout state or fully paused, verified preparation. Follow scripts/docs/stripe_checkout_state_cutover.md.');
+  if (options.forDeployment && packStatusControl?.storage_mode !== 'table' && !(
+    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
+    packStatusControl?.preparation_state === 'ready' && packStatusControl.source_documents_revision === authority.documents_revision
+  )) fail('API deployment requires activated pack-status outbox storage or fully paused, verified preparation. Follow scripts/docs/pack_status_outbox_cutover.md.');
   for (const family of ['ready', 'stripe_terminal', 'shipped'] as const) {
     const plan = queryPlan(notificationOutboxDueQuery({ family, dueAtMs: 1, limit: 8 }));
     requireSearchIndex(plan, 'commerce_notification_outbox_family_due');
@@ -1129,6 +1223,11 @@ export function checkCommerceD1(
       stripeCheckoutStateMode: stripeCheckoutControl.storage_mode,
       stripeCheckoutStatePreparation: stripeCheckoutControl.preparation_state,
       stripeCheckoutStateRows: stripeCheckoutRows.length,
+    } : {}),
+    ...(packStatusOutboxReady ? {
+      packStatusOutboxMode: packStatusControl.storage_mode,
+      packStatusOutboxPreparation: packStatusControl.preparation_state,
+      packStatusOutboxRows: packStatusRows.length,
     } : {}),
     inventoryDrops: inventory.length,
     availableDudes,

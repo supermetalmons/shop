@@ -1,5 +1,6 @@
 import { LEGACY_NOTIFICATION_FIELDS, type NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
 import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepository.ts';
+import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -231,6 +232,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0026_stripe_checkout_state.sql',
       '0027_preorder_expiry_claim_release.sql',
       '0028_preorder_card_range_1413.sql',
+      '0029_pack_status_outbox.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -267,6 +269,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
       env.COMMERCE_DB.prepare(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready',
         source_documents_revision = 0, prepared_at_ms = 0 WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table' WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing',
+        source_documents_revision = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready',
+        prepared_at_ms = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table' WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -295,8 +302,6 @@ test('commerce repository reads and transaction guards run through the real D1 r
       insertDocument(env.COMMERCE_DB, deliveryKey, {
         buyerOrderReceivedEmailState: 'pending',
         owner: 'runtime-owner',
-        packStatusProjectionNextAttemptAtMs: 10,
-        packStatusProjectionState: 'pending',
         shipperReadyToShipEmailState: 'queued',
         status: 'ready_to_ship',
       }),
@@ -387,6 +392,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
         WHERE singleton = 1`),
     ]);
     await batchDocuments(env.COMMERCE_DB, [
+      packStatusOutboxInsertStatement(env.COMMERCE_DB, {
+        parentPath: deliveryKey.path, dropId: deliveryKey.dropId!, generation: crypto.randomUUID(),
+        state: 'pending', revision: 1, failureCount: 0, nextAttemptAtMs: 10,
+        completedAtMs: null, failedAtMs: null, lastErrorCode: null, createdAtMs: 0, updatedAtMs: 0,
+      }),
       insertOutbox(env.COMMERCE_DB, deliveryKey, 0),
       ...[10, 11].map((expiry) => insertOutbox(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', `notification-${expiry}`), expiry)),
       insertOutbox(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), 10, 'stripe_terminal'),
@@ -503,12 +513,12 @@ test('commerce repository reads and transaction guards run through the real D1 r
       ['1'],
     );
     assert.deepEqual(
-      (await repository.queryDuePackStatusProjections({
+      (await repository.packStatusOutbox.queryDue({
         dropId: 'runtime',
         dueAtMs: 10,
         limit: 5,
-      })).map((record) => record.key.documentId),
-      ['1'],
+      })).map((record) => record.parentPath),
+      [deliveryKey.path],
     );
     assert.deepEqual(
       (await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 8 }))
