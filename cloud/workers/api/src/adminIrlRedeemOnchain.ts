@@ -1,6 +1,5 @@
 import {
-  AddressLookupTableAccount,
-  AddressLookupTableProgram,
+  type AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
 import {
@@ -28,6 +27,7 @@ import {
   parseSolanaRpcAccount,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { readLatestBlockhash, readSolanaLookupTable } from './solanaRpcReads.js';
 
 export { buildRuntime } from './adminIrlRedeemRuntime.js';
 
@@ -259,41 +259,25 @@ export async function loadPendingOpenAccounts(
 }
 
 export async function loadLatestBlockhash(context: ProviderContext, runtime: AdminIrlRedeemRuntime): Promise<string> {
-  const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
-  const value = isRecord(result) ? result.value : undefined;
-  const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  try {
-    if (!blockhash || new PublicKey(blockhash).toBytes().length !== 32) throw new Error('invalid');
-  } catch {
-    throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid blockhash.');
-  }
-  return blockhash;
+  return readLatestBlockhash({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    invalidResponse: () => new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid blockhash.'),
+  });
 }
 
 export async function loadLookupTable(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
 ): Promise<AddressLookupTableAccount[]> {
-  if (!runtime.deliveryLookupTable) return [];
-  const result = await rpcCall(context, runtime, 'getAccountInfo', [
-    runtime.deliveryLookupTable.toBase58(),
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  const value = isRecord(result) ? result.value : undefined;
-  if (!value) return [];
-  const account = parseRpcAccount(value, 'DELIVERY_LOOKUP_TABLE');
-  if (!account.owner.equals(AddressLookupTableProgram.programId)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE has an unexpected owner.');
-  }
-  try {
-    const lookup = new AddressLookupTableAccount({
-      key: runtime.deliveryLookupTable,
-      state: AddressLookupTableAccount.deserialize(account.data),
-    });
-    return lookup.isActive() ? [lookup] : [];
-  } catch {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE is invalid.');
-  }
+  return readSolanaLookupTable({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    address: runtime.deliveryLookupTable,
+    parseAccount: (value) => parseRpcAccount(value, 'DELIVERY_LOOKUP_TABLE'),
+    label: 'DELIVERY_LOOKUP_TABLE',
+    missing: 'empty',
+    inactive: 'empty',
+    configurationError: (message) => new AdminIrlRedeemPrepareError('failed-precondition', message),
+  });
 }
 
 export function receiptDropIdentity(runtime: AdminIrlRedeemRuntime) {

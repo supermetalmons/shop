@@ -1,8 +1,7 @@
 import bs58 from 'bs58';
 import { z } from 'zod';
 import {
-  AddressLookupTableAccount,
-  AddressLookupTableProgram,
+  type AddressLookupTableAccount,
   ComputeBudgetProgram,
   Keypair,
   PublicKey,
@@ -52,7 +51,6 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
-  isNonZeroBase58Bytes,
   isTransientShopRpcError,
 } from '../../../../shared/solanaRpcProxy.js';
 import {
@@ -83,6 +81,7 @@ import {
   SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { readLatestBlockhashWithContext, readSolanaLookupTable } from './solanaRpcReads.js';
 import { isTransactionEncodingTooLarge, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import {
   CommerceWriteConflict,
@@ -519,57 +518,25 @@ async function loadLatestBlockhash(
   context: ProviderContext,
   runtime: DeliveryRuntime,
 ): Promise<{ blockhash: string; blockhashContextSlot: number }> {
-  const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
-  const contextValue = isRecord(result) ? result.context : undefined;
-  const value = isRecord(result) ? result.value : undefined;
-  const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  const lastValidBlockHeight = isRecord(value) ? value.lastValidBlockHeight : undefined;
-  if (
-    !isRecord(contextValue) ||
-    !Number.isSafeInteger(contextValue.slot) ||
-    Number(contextValue.slot) < 0 ||
-    !Number.isSafeInteger(lastValidBlockHeight) ||
-    Number(lastValidBlockHeight) < 0 ||
-    !isNonZeroBase58Bytes(blockhash, 32)
-  ) {
-    throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid blockhash.');
-  }
-  return {
-    blockhash,
-    blockhashContextSlot: Number(contextValue.slot),
-  };
+  return readLatestBlockhashWithContext({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    invalidResponse: () => new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid blockhash.'),
+  });
 }
 
 async function loadLookupTable(
   context: ProviderContext,
   runtime: DeliveryRuntime,
 ): Promise<AddressLookupTableAccount[]> {
-  if (!runtime.deliveryLookupTable) return [];
-  const result = await rpcCall(context, runtime, 'getAccountInfo', [
-    runtime.deliveryLookupTable.toBase58(),
-    { commitment: 'confirmed', encoding: 'base64' },
-  ]);
-  const value = isRecord(result) ? result.value : undefined;
-  if (!value) {
-    throw new DeliveryPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE not found on-chain.');
-  }
-  const account = parseRpcAccount(value, 'DELIVERY_LOOKUP_TABLE');
-  if (!account.owner.equals(AddressLookupTableProgram.programId)) {
-    throw new DeliveryPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE has an unexpected owner.');
-  }
-  try {
-    const lookupTable = new AddressLookupTableAccount({
-      key: runtime.deliveryLookupTable,
-      state: AddressLookupTableAccount.deserialize(account.data),
-    });
-    if (!lookupTable.isActive()) {
-      throw new DeliveryPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE is inactive.');
-    }
-    return [lookupTable];
-  } catch (error) {
-    if (error instanceof DeliveryPrepareError) throw error;
-    throw new DeliveryPrepareError('failed-precondition', 'DELIVERY_LOOKUP_TABLE is invalid.');
-  }
+  return readSolanaLookupTable({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    address: runtime.deliveryLookupTable,
+    parseAccount: (value) => parseRpcAccount(value, 'DELIVERY_LOOKUP_TABLE'),
+    label: 'DELIVERY_LOOKUP_TABLE',
+    missing: 'error',
+    inactive: 'error',
+    configurationError: (message) => new DeliveryPrepareError('failed-precondition', message),
+  });
 }
 
 async function deliveryPdaExists(

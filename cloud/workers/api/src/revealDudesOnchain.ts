@@ -14,7 +14,7 @@ import {
 } from '../../../../shared/boxMinterConfigCodec.js';
 import { BOX_MINTER_PENDING_OPEN_SEED } from '../../../../shared/boxMinterProtocol.js';
 import { decodePendingOpenData } from '../../../../shared/pendingOpenCodec.js';
-import { isNonZeroBase58Bytes, isTransientShopRpcError } from '../../../../shared/solanaRpcProxy.js';
+import { isTransientShopRpcError } from '../../../../shared/solanaRpcProxy.js';
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import { isSignalCancellationError } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
@@ -24,6 +24,7 @@ import {
   SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import { readLatestBlockhashWithContext } from './solanaRpcReads.js';
 import {
   MPL_CORE_PROGRAM_ID,
   RevealDudesError,
@@ -267,20 +268,8 @@ export async function loadLatestBlockhash(
   context: ProviderContext,
   runtime: RevealRuntime,
 ): Promise<{ blockhash: string; blockhashContextSlot: number }> {
-  const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
-  const contextValue = isRecord(result) ? result.context : undefined;
-  const value = isRecord(result) ? result.value : undefined;
-  const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  const lastValidBlockHeight = isRecord(value) ? value.lastValidBlockHeight : undefined;
-  if (
-    !isRecord(contextValue) ||
-    !Number.isSafeInteger(contextValue.slot) ||
-    Number(contextValue.slot) < 0 ||
-    !isNonZeroBase58Bytes(blockhash, 32) ||
-    !Number.isSafeInteger(lastValidBlockHeight) ||
-    Number(lastValidBlockHeight) < 0
-  ) {
-    throw new RevealDudesError('unavailable', 'Reveal provider returned an invalid blockhash.');
-  }
-  return { blockhash, blockhashContextSlot: Number(contextValue.slot) };
+  return readLatestBlockhashWithContext({
+    rpc: (method, params) => rpcCall(context, runtime, method, params),
+    invalidResponse: () => new RevealDudesError('unavailable', 'Reveal provider returned an invalid blockhash.'),
+  });
 }
