@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Keypair } from '@solana/web3.js';
+import miNoteCatalog from '../../../../mi_note_cards.json';
 import { getPreorderConfig, PREORDER_CARD_COUNT } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
 import { PreorderStore, listPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
@@ -12,6 +13,8 @@ import { handleAnonymousAuthRequest } from '../src/anonymousAuth.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const config = getPreorderConfig('mi_note_cards_devnet')!;
+const preorderCardIds = miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map(({ clean_card_id }) => clean_card_id))
+  .sort((left, right) => left - right);
 const BUYER = Keypair.generate().publicKey.toBase58();
 const OTHER = Keypair.generate().publicKey.toBase58();
 const ETHEREUM = '0x0000000000000000000000000000000000000001';
@@ -31,7 +34,7 @@ function harness(options?: Parameters<typeof createCommerceD1Harness>[0]) {
   let wallet = BUYER;
   let ethereumAddress = ETHEREUM;
   let signedIn = true;
-  let ownedIds = Array.from({ length: PREORDER_CARD_COUNT }, (_, index) => index + 1);
+  let ownedIds = [...preorderCardIds];
   let outcome: 'pending' | 'confirmed' | 'finalized' | 'failed' | 'expired' = 'pending';
   let valid = true;
   let prepares = 0;
@@ -678,10 +681,9 @@ test('database guards require normalized Ethereum identity on new orders and for
   assert.equal((await h.store.get(order.orderId))!.ethereumAddress, ETHEREUM);
 });
 
-test('mainnet prepares and submits verified owned cards through the same checkout flow', async () => {
+for (const cardIds of [[1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413]]) test(`mainnet prepares and submits verified owned cards ${cardIds.join(', ')}`, async () => {
   const h = harness();
   const mainnet = getPreorderConfig('mi_note_cards')!;
-  const cardIds = [1399, 1400];
   h.holdings(cardIds);
   const result = await h.call('prepare', { preorderId: mainnet.preorderId, buyer: BUYER, requestId: crypto.randomUUID(), cardIds });
   assert.equal(result.status, 200);
@@ -748,7 +750,9 @@ test('anonymous checkout requires the existing signed wallet binding and uses it
 
 test('invalid selections and unknown collections fail before preparing or signing', async () => {
   const h = harness();
-  for (const ids of [[1, 1], [0], [1401], [1, 2, 3, 4]]) assert.equal((await h.prepare(ids)).status, 400);
+  for (const ids of [[1, 1], [0], [1401], [1402], [1403], [1404], [1405], [1406], [1407], [1408], [1414], [1409.5], [1, 2, 3, 4]]) {
+    assert.equal((await h.prepare(ids)).status, 400);
+  }
   for (const path of ['status', 'prepare', 'submit', 'cancel']) {
     const response = await h.call(path, { preorderId: 'unknown',
       ...(path === 'prepare' ? { buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() } : {}),
@@ -921,9 +925,8 @@ test('an uncertain first broadcast retains its transaction for status retry', as
   assert.deepEqual(h.counts(), { prepares: 1, authorizations: 1, sends: 1 });
 });
 
-test('finalized success permanently consumes new IDs and exposes recent assets for verified inventory recovery', async () => {
+for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413]]) test(`finalized success consumes cards ${cardIds.join(', ')} and exposes recent assets for verified inventory recovery`, async () => {
   const h = harness();
-  const cardIds = [1398, 1399, 1400];
   const prepared = await h.prepare(cardIds);
   assert.equal(prepared.status, 200);
   assert.deepEqual(prepared.body.order.cardIds, cardIds);
@@ -931,12 +934,12 @@ test('finalized success permanently consumes new IDs and exposes recent assets f
   h.outcome('finalized');
   const result = await h.call('status', { preorderId: config.preorderId, orderId: prepared.body.order.orderId });
   assert.equal(result.body.order.status, 'succeeded');
-  assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items.slice(-3),
+  assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items.filter((item: { id: number }) => cardIds.includes(item.id)),
     cardIds.map((id) => ({ id, status: 'preordered' })));
   h.wallet(OTHER);
   const availability = await h.call('availability', { preorderId: config.preorderId });
   assert.equal(availability.body.items.some((item: { id: number }) => cardIds.includes(item.id)), false);
-  assert.equal((await h.prepare([1400])).status, 409);
+  assert.equal((await h.prepare([cardIds[0]])).status, 409);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_claims'), /permanent/);
   assert.throws(() => h.database.exec('DELETE FROM commerce_preorder_orders'), /permanent/);
   assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map((asset) => asset.id), cardIds);
@@ -991,6 +994,7 @@ test('mainnet availability is verified, collection-scoped, and expires unsigned 
   assert.equal(result.status, 200);
   assert.equal(result.body.preorderId, mainnet.preorderId);
   assert.equal(result.body.items.length, PREORDER_CARD_COUNT);
+  assert.deepEqual(result.body.items.map((item: { id: number }) => item.id), preorderCardIds);
   assert.equal(result.body.items[0].status, 'available');
   assert.equal(result.body.items[1].status, 'preordered');
   assert.equal(result.body.items[2].status, 'available');

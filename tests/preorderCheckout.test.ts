@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { Keypair, SystemProgram, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { getPreorderConfig, PREORDER_CARD_COUNT, type PreorderOrder } from '../shared/preorders.ts';
+import miNoteCatalog from '../mi_note_cards.json';
+import { getPreorderConfig, type PreorderOrder } from '../shared/preorders.ts';
 import type { MiNoteEthereumSession } from '../shared/miNoteAuth.ts';
 import type { createPreorderApi } from '../src/lib/preorderApi.ts';
 import { ProfileApiError } from '../src/api/transport.ts';
@@ -11,6 +12,8 @@ const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
 const config = getPreorderConfig('mi_note_cards_devnet')!;
+const preorderCardIds = miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map(({ clean_card_id }) => clean_card_id))
+  .sort((left, right) => left - right);
 const ethereumSession: MiNoteEthereumSession = {
   address: '0x0000000000000000000000000000000000000001', token: 'ethereum-session',
   preorderId: config.preorderId, expiresAtMs: Date.now() + 3_600_000,
@@ -42,7 +45,7 @@ function order(status: PreorderOrder['status'] = 'prepared'): PreorderOrder {
 function runtime() {
   const calls = { prepare: [] as Parameters<PreorderApi['prepare']>[0][], submit: [] as Parameters<PreorderApi['submit']>[0][], cancel: [] as string[], succeeded: [] as PreorderOrder[], signed: 0 };
   const api: PreorderApi = {
-    availability: async () => ({ ...ownership, preorderId: config.preorderId, items: Array.from({ length: PREORDER_CARD_COUNT }, (_, i) => ({ id: i + 1, status: 'available' as const })) }),
+    availability: async () => ({ ...ownership, preorderId: config.preorderId, items: preorderCardIds.map((id) => ({ id, status: 'available' as const })) }),
     prepare: async (input) => { calls.prepare.push(input); return { order: order(), transactionBase64 }; },
     submit: async (input) => { calls.submit.push(input); return { order: order('submitted') }; },
     cancel: async (input) => { calls.cancel.push(input.orderId); return { order: order('cancelled') }; },
@@ -78,10 +81,9 @@ test('selection alone does not reserve; purchase signs once and submits exclusiv
   assert.equal(window.localStorage.length, 0);
 });
 
-for (const persisted of [false, true]) {
-  test(`${persisted ? 'persisted' : 'fresh'} checkout accepts both new cards alongside an existing card`, async () => {
+for (const persisted of [false, true]) for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413]]) {
+  test(`${persisted ? 'persisted' : 'fresh'} checkout accepts cards ${cardIds.join(', ')}`, async () => {
     const { api, options, calls } = runtime();
-    const cardIds = [1398, 1399, 1400];
     const prepared = { ...order(), cardIds, assets: cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })) };
     const saved = { requestId: 'new-cards-request', cardIds, ethereumAddress: ethereumSession.address };
     if (persisted) window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify(saved));
@@ -90,7 +92,7 @@ for (const persisted of [false, true]) {
     const { result } = renderHook(() => usePreorderCheckout(options, api));
     await waitFor(() => assert.equal(result.current.recoveryReady, true));
     if (persisted) assert.deepEqual(result.current.pending, saved);
-    await act(async () => { await result.current.purchase(persisted ? [1] : [1400, 1398, 1399]); });
+    await act(async () => { await result.current.purchase(persisted ? [1] : [...cardIds].reverse()); });
     assert.deepEqual(calls.prepare[0].cardIds, cardIds);
     if (persisted) assert.equal(calls.prepare[0].requestId, saved.requestId);
     assert.equal(calls.signed, 1);
@@ -100,15 +102,15 @@ for (const persisted of [false, true]) {
   });
 }
 
-test('checkout rejects card 1401 in current selections and persisted recovery', async () => {
+for (const id of [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1414]) test(`checkout rejects card ${id} in current selections and persisted recovery`, async () => {
   const { api, options, calls } = runtime();
   window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify({
-    requestId: 'out-of-range-request', cardIds: [1401], ethereumAddress: ethereumSession.address,
+    requestId: 'out-of-range-request', cardIds: [id], ethereumAddress: ethereumSession.address,
   }));
   const { result } = renderHook(() => usePreorderCheckout(options, api));
   await waitFor(() => assert.equal(result.current.recoveryReady, true));
   assert.equal(result.current.pending, null);
-  await act(async () => { await result.current.purchase([1401]); });
+  await act(async () => { await result.current.purchase([id]); });
   assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
 });
 

@@ -68,6 +68,7 @@ test('eligibility maps contract token ownership to clean card IDs in gallery ord
 for (const { tokenIds, cardIds, unownedId } of [
   { tokenIds: ['125', '126', '127'], cardIds: [1396, 1397, 1398], unownedId: 1395 },
   { tokenIds: ['128', '129'], cardIds: [1399, 1400], unownedId: 1398 },
+  { tokenIds: ['130', '131', '132', '133', '134'], cardIds: [1409, 1410, 1411, 1412, 1413], unownedId: 1408 },
 ]) {
   test(`Mi Note 3 tokens ${tokenIds.join(', ')} authorize only their corresponding card IDs`, async (context) => {
     const h = fixture();

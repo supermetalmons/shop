@@ -68,9 +68,12 @@ test('confirmation migration has the same guards and indexes when split for remo
 
 for (const migration of [
   { name: '0023_preorder_card_range.sql', options: { preorderCardRangeMigration: false },
-    previousMaximum: 1395, maximum: 1398, newIds: [1396, 1397, 1398] },
+    previousMaximum: 1395, maximum: 1398, newIds: [1396, 1397, 1398], reservedIds: [], statements: 8 },
   { name: '0024_preorder_card_range_1400.sql', options: { preorderCardRange1400Migration: false },
-    previousMaximum: 1398, maximum: 1400, newIds: [1399, 1400] },
+    previousMaximum: 1398, maximum: 1400, newIds: [1399, 1400], reservedIds: [], statements: 8 },
+  { name: '0028_preorder_card_range_1413.sql', options: { preorderCardRange1413Migration: false },
+    previousMaximum: 1400, maximum: 1413, newIds: [1409, 1410, 1411, 1412, 1413],
+    reservedIds: [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408], statements: 10 },
 ] as const) {
   for (const mode of ['whole', 'remote split'] as const) {
     test(`${migration.name} preserves orders, claims and guards when applied ${mode}`, async (context) => {
@@ -104,7 +107,7 @@ for (const migration of [
       if (mode === 'whole') database.exec(sql);
       else {
         const statements = unstable_splitSqlQuery(sql);
-        assert.equal(statements.length, 8);
+        assert.equal(statements.length, migration.statements);
         for (const statement of statements) database.prepare(statement).run();
       }
       assert.deepEqual({ claims: claims(), orders: orders(), guards: guards() }, before);
@@ -112,7 +115,7 @@ for (const migration of [
       assert.equal(database.prepare("SELECT strict FROM pragma_table_list WHERE name = 'commerce_preorder_claims'").get()!.strict, 1);
       for (const id of migration.newIds) await reserve(id);
       assert.deepEqual(claims().map((claim) => claim.card_id), [1, 2, migration.previousMaximum, ...migration.newIds]);
-      for (const id of [0, migration.maximum + 1]) {
+      for (const id of [0, ...migration.reservedIds, migration.maximum + 1]) {
         await assert.rejects(reserve(id), /CHECK constraint/);
         assert.equal(await store.get(`range-${id}`), null);
       }

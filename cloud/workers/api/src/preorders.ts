@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  getPreorderConfig, PREORDER_CARD_COUNT, PREORDER_RESERVATION_TTL_MS,
+  getPreorderConfig, isPreorderCardId, PREORDER_RESERVATION_TTL_MS,
   type PreorderConfig, type PreorderPrepareResponse,
 } from '../../../../shared/preorders.js';
 import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
@@ -26,7 +26,7 @@ const idSchema = z.string().min(1).max(80);
 const orderSchema = z.object({ preorderId: idSchema, orderId: z.string().uuid() }).strict();
 const prepareSchema = z.object({
   preorderId: idSchema, buyer: z.string().min(32).max(44),
-  requestId: z.string().uuid(), cardIds: z.array(z.number().int().min(1).max(PREORDER_CARD_COUNT)).min(1).max(3),
+  requestId: z.string().uuid(), cardIds: z.array(z.number().refine(isPreorderCardId)).min(1).max(3),
 }).strict();
 const submitSchema = orderSchema.extend({ transactionBase64: z.string().min(1).max(2000) });
 const statusSchema = z.object({

@@ -160,6 +160,40 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
         `https://cdn.lil.org/nft/mi_note_cards/preorder/v1/${card.id}.webp`);
     }
   });
+
+  test(`${preorderId} displays and purchases cards after the reserved special IDs`, async () => {
+    const cards = [
+      { id: 1409, tokenId: 130 }, { id: 1410, tokenId: 131 }, { id: 1411, tokenId: 132 },
+      { id: 1412, tokenId: 133 }, { id: 1413, tokenId: 134 },
+    ];
+    const preorder = checkout();
+    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.availability = { ...preorder.availability!, preorderId,
+      items: cards.map(({ id }) => ({ id, status: 'available' })) };
+    const purchased: number[][] = [];
+    preorder.purchase = async (ids) => { purchased.push(ids); };
+    const view = render(createElement(MiNoteCardsGallery, { preorder }));
+    assert.deepEqual(gridCardIds(), cards.map(({ id }) => id));
+    for (const card of cards) {
+      const button = view.getByRole('button', { name: new RegExp(`Select preorder #${card.id}:`) });
+      assert.equal(button.querySelector('img')!.getAttribute('src'),
+        `https://cdn.lil.org/player/mi_note_3/mid/${card.tokenId}.webp`);
+    }
+    for (const selection of [cards.slice(0, 3), cards.slice(3)]) {
+      for (const { id } of selection) fireEvent.click(view.getByRole('button', { name: new RegExp(`Select preorder #${id}:`) }));
+      await act(async () => { fireEvent.click(view.getByRole('button', { name: `Preorder for ${selection.length * 0.25} SOL` })); });
+      fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+    }
+    assert.deepEqual(purchased, [[1409, 1410, 1411], [1412, 1413]]);
+    view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder,
+      availability: { ...preorder.availability, items: cards.map(({ id }) => ({ id, status: 'preordered' as const })) },
+    } }));
+    for (const { id } of cards) {
+      const button = view.getByRole('button', { name: new RegExp(`Preordered preorder #${id}:`) });
+      assert.equal(button.querySelector('img')!.getAttribute('src'),
+        `https://cdn.lil.org/nft/mi_note_cards/preorder/v1/${id}.webp`);
+    }
+  });
 }
 
 test('reservation clears selection and keeps original artwork until the preorder succeeds', () => {

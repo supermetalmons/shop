@@ -163,10 +163,11 @@ other devnet collections keep
 their existing visibility rules. Preorder configuration lives in
 `shared/preorders.ts`, separately from ordinary pack drops. Metadata uses
 `https://cdn.lil.org/nft/mi_note_cards/preorder/json/<id>.json`; its numeric ID is
-the source catalog's `clean_card_id`. Local metadata copies have been removed
-after verifying the hosted set. Metadata and images for cards 1399–1400 are
-published and verified on the CDN; see [the release notes](releases/mi-note-cards-1399-1400/README.md)
-for asset links and deployment order.
+the source catalog's `clean_card_id`. Local metadata copies of previously published
+cards have been removed after verifying the hosted set. Metadata and images for
+cards 1409–1413 are published and verified on the CDN; see
+[the release notes](releases/mi-note-cards-1409-1413/README.md) for asset links
+and deployment order.
 
 Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
 gallery. Available and reserved gallery artwork keeps its original corners.
@@ -188,7 +189,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0027_preorder_expiry_claim_release.sql`, followed by the API
+migrations through `0028_preorder_card_range_1413.sql`, followed by the API
 release and then the frontend. The normal API deployment command applies the
 migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
@@ -240,10 +241,10 @@ selections, and pending asynchronous results. Solana sign-in changes refresh
 eligibility so the devnet test inventory appears only for the admin buyer.
 
 Its `specialCards` list reserves IDs 1401–1408 for a later public sale;
-these cards currently have no sale or preorder eligibility. The preorder range in
-`shared/preorders.ts` remains 1–1400, and the next unallocated card ID is 1409.
-Future preorder expansion must exclude the reserved special IDs; increasing the
-numeric bound alone would incorrectly admit them.
+these cards currently have no sale or preorder eligibility. The preorder IDs in
+`shared/preorders.ts` are 1–1400 and 1409–1413, totaling 1405 cards; the next
+unallocated card ID is 1414. Shared validation and the database exclude the
+reserved special IDs from preorder eligibility.
 
 Holdings and preorder availability endpoints require Ethereum verification,
 derive the address from its session, and scope results to that wallet. The

@@ -26,7 +26,8 @@ test('preorders use exact trusted collection and canonical numeric metadata IDs'
   assert.equal(transformShopInventoryItem({ ...asset, burnt: true }, 'devnet'), null);
   assert.equal(transformShopInventoryItem({ ...asset, interface: 'V1_NFT' }, 'devnet'), null);
   assert.equal(transformShopInventoryItem({ ...asset, grouping: [{ group_key: 'collection', group_value: asset.id }] }, 'devnet'), null);
-  for (const suffix of ['0.json', '1401.json', '01.json', '1.0.json', 'f1.json', '1.json?v=1', '1.json#x', '../1.json']) {
+  for (const suffix of ['0.json', '1401.json', '1402.json', '1403.json', '1404.json', '1405.json', '1406.json', '1407.json', '1408.json', '1414.json',
+    '01.json', '1.0.json', 'f1.json', '1.json?v=1', '1.json#x', '../1.json']) {
     const uri = `${config.metadataBase}${suffix}`;
     assert.equal(preorderIdFromMetadataUri(config, uri), null, uri);
     assert.equal(transformShopInventoryItem({ ...asset, content: { json_uri: uri } }, 'devnet'), null, uri);
@@ -37,7 +38,7 @@ test('preorders use exact trusted collection and canonical numeric metadata IDs'
 test('new preorder cards retain their metadata IDs and images in both collection inventories', () => {
   for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     const preorderConfig = getPreorderConfig(preorderId)!;
-    for (const id of [1396, 1397, 1398, 1399, 1400]) {
+    for (const id of [1396, 1397, 1398, 1399, 1400, 1409, 1410, 1411, 1412, 1413]) {
       const uri = preorderMetadataUri(preorderConfig, id);
       const item = transformShopInventoryItem({ ...asset,
         grouping: [{ group_key: 'collection', group_value: preorderConfig.collection }],
@@ -71,7 +72,8 @@ test('preorder inventory cannot be mistaken for redeemable cards', () => {
   assert.equal(canDeliverItemKind(undefined, 'preorder'), false);
   assert.equal(canDeliverItemKind('card_nft_2', 'preorder'), false);
   for (const invalid of [
-    { ...item, preorderId: undefined }, { ...item, preorderId: 1401 },
+    { ...item, preorderId: undefined },
+    ...[1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1414].map((preorderId) => ({ ...item, preorderId })),
     { ...item, dudeId: 1 }, { ...item, boxId: '1' },
     { ...item, dropId: 'card_nft_2' }, { ...item, kind: 'dude' },
   ]) assert.equal(isExactShopInventoryResponse({ ok: true, items: [invalid] }), false);

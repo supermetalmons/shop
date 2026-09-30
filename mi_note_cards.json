@@ -9818,6 +9818,41 @@
           "name": "Azure Holy Knight",
           "original": "https://cdn.lil.org/player/mi_note_3/129.jpg",
           "mid": "https://cdn.lil.org/player/mi_note_3/mid/129.webp"
+        },
+        {
+          "id": "130",
+          "clean_card_id": 1409,
+          "name": "The Reaper in a Mimikyu Cloak",
+          "original": "https://cdn.lil.org/player/mi_note_3/130.jpg",
+          "mid": "https://cdn.lil.org/player/mi_note_3/mid/130.webp"
+        },
+        {
+          "id": "131",
+          "clean_card_id": 1410,
+          "name": "The Reaper in a Gengar Cloak",
+          "original": "https://cdn.lil.org/player/mi_note_3/131.jpg",
+          "mid": "https://cdn.lil.org/player/mi_note_3/mid/131.webp"
+        },
+        {
+          "id": "132",
+          "clean_card_id": 1411,
+          "name": "Blue Angel Rei",
+          "original": "https://cdn.lil.org/player/mi_note_3/132.jpg",
+          "mid": "https://cdn.lil.org/player/mi_note_3/mid/132.webp"
+        },
+        {
+          "id": "133",
+          "clean_card_id": 1412,
+          "name": "Blue Aura Dratini",
+          "original": "https://cdn.lil.org/player/mi_note_3/133.jpg",
+          "mid": "https://cdn.lil.org/player/mi_note_3/mid/133.webp"
+        },
+        {
+          "id": "134",
+          "clean_card_id": 1413,
+          "name": "Drifella of Death 888",
+          "original": "https://cdn.lil.org/player/mi_note_3/134.jpg",
+          "mid": "https://cdn.lil.org/player/mi_note_3/mid/134.webp"
         }
       ]
     }

@@ -1,0 +1,34 @@
+{
+  "id": 1413,
+  "name": "Preorder #1413",
+  "description": "mi note cards · physical on mons dot shop",
+  "image": "https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1413.webp",
+  "external_url": "https://mons.shop",
+  "attributes": [
+    {
+      "trait_type": "type",
+      "value": "preorder"
+    },
+    {
+      "trait_type": "redeemed",
+      "value": false
+    },
+    {
+      "trait_type": "name",
+      "value": "Drifella of Death 888"
+    },
+    {
+      "trait_type": "mi note",
+      "value": "mi note 3"
+    }
+  ],
+  "properties": {
+    "files": [
+      {
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1413.webp",
+        "type": "image/webp"
+      }
+    ],
+    "category": "image"
+  }
+}

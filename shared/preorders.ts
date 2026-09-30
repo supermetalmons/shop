@@ -1,6 +1,11 @@
 import type { SolanaCluster } from './deploymentCore.js';
 
-export const PREORDER_CARD_COUNT = 1400;
+const PREORDER_CARD_IDS: readonly number[] = Object.freeze([
+  ...Array.from({ length: 1400 }, (_, index) => index + 1),
+  1409, 1410, 1411, 1412, 1413,
+]);
+export const PREORDER_CARD_COUNT = PREORDER_CARD_IDS.length;
+const preorderCardIds: ReadonlySet<number> = new Set(PREORDER_CARD_IDS);
 export const PREORDER_RESERVATION_TTL_MS = 120_000;
 export const PREORDER_PAYMENT_RECIPIENTS = [
   'BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf',
@@ -49,7 +54,7 @@ export function getPreorderConfig(id: string): PreorderConfig | undefined {
 }
 
 export function isPreorderCardId(value: unknown): value is number {
-  return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= PREORDER_CARD_COUNT;
+  return Number.isSafeInteger(value) && preorderCardIds.has(Number(value));
 }
 
 export function preorderMetadataUri(config: PreorderConfig, id: number): string {

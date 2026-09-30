@@ -11,9 +11,18 @@ test('the Ethereum catalog contains exactly the cards supported for preorder', (
     miNoteCatalog.ethereumCollections.map(({ contractAddress }) => contractAddress).sort(),
     [...MI_NOTE_CONTRACT_ADDRESSES].sort(),
   );
-  assert.deepEqual([...ethereumCardIds].sort((left, right) => left - right),
-    Array.from({ length: PREORDER_CARD_COUNT }, (_, index) => index + 1));
+  assert.equal(PREORDER_CARD_COUNT, 1405);
+  assert.deepEqual([...ethereumCardIds].sort((left, right) => left - right), [
+    ...Array.from({ length: 1400 }, (_, index) => index + 1), 1409, 1410, 1411, 1412, 1413,
+  ]);
   assert.ok(ethereumCardIds.every(isPreorderCardId));
+});
+
+test('preorder IDs include new Ethereum cards while excluding specials and invalid IDs', () => {
+  for (const id of [1, 1400, 1409, 1410, 1411, 1412, 1413]) assert.equal(isPreorderCardId(id), true);
+  for (const id of [0, 1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1414, 1409.5, '1409', NaN, Infinity]) {
+    assert.equal(isPreorderCardId(id), false, String(id));
+  }
 });
 
 test('standalone special cards retain their reserved IDs and names without preorder eligibility', () => {

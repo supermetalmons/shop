@@ -1,0 +1,34 @@
+{
+  "id": 1411,
+  "name": "Preorder #1411",
+  "description": "mi note cards · physical on mons dot shop",
+  "image": "https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1411.webp",
+  "external_url": "https://mons.shop",
+  "attributes": [
+    {
+      "trait_type": "type",
+      "value": "preorder"
+    },
+    {
+      "trait_type": "redeemed",
+      "value": false
+    },
+    {
+      "trait_type": "name",
+      "value": "Blue Angel Rei"
+    },
+    {
+      "trait_type": "mi note",
+      "value": "mi note 3"
+    }
+  ],
+  "properties": {
+    "files": [
+      {
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1411.webp",
+        "type": "image/webp"
+      }
+    ],
+    "category": "image"
+  }
+}

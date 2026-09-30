@@ -52,7 +52,7 @@ function client(payload: unknown, status = 200) {
 
 test('availability sends Ethereum verification and accepts only distinct wallet-scoped card IDs', async () => {
   const payload = { preorderId: config.preorderId, ethereumAddress: session.address, ownershipStatus: 'success', requiresAdminSignIn: false,
-    items: [1, 12, 1395, 1396, 1397, 1398, 1399, 1400].map((id) => ({ id, status: 'available' })) };
+    items: [1, 12, 1395, 1396, 1397, 1398, 1399, 1400, 1409, 1410, 1411, 1412, 1413].map((id) => ({ id, status: 'available' })) };
   const runtime = client(payload);
   assert.deepEqual(await runtime.api.availability(config.preorderId, session), payload);
   assert.equal(runtime.credentialCalls, 0);
@@ -62,7 +62,9 @@ test('availability sends Ethereum verification and accepts only distinct wallet-
   for (const items of [[], payload.items.slice(1)]) {
     assert.deepEqual(await client({ ...payload, items }).api.availability(config.preorderId, session), { ...payload, items });
   }
-  for (const items of [[...payload.items, payload.items[1]], [{ id: 1401, status: 'available' }], payload.items.map((item) => ({ ...item, status: 'sold' }))]) {
+  for (const items of [[...payload.items, payload.items[1]],
+    ...[1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1414].map((id) => [{ id, status: 'available' }]),
+    payload.items.map((item) => ({ ...item, status: 'sold' }))]) {
     await assert.rejects(client({ ...payload, items }).api.availability(config.preorderId, session), /invalid response/);
   }
   await assert.rejects(client({ ...payload, ethereumAddress: '0x0000000000000000000000000000000000000002' }).api.availability(config.preorderId, session), /invalid response/);
