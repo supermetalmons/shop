@@ -239,9 +239,9 @@ ownership could not be checked. Account changes clear obsolete cards,
 selections, and pending asynchronous results. Solana sign-in changes refresh
 eligibility so the devnet test inventory appears only for the admin buyer.
 
-Its `specialCards` list reserves IDs 1401–1407 for a later public sale;
+Its `specialCards` list reserves IDs 1401–1408 for a later public sale;
 these cards currently have no sale or preorder eligibility. The preorder range in
-`shared/preorders.ts` remains 1–1400, and the next unallocated card ID is 1408.
+`shared/preorders.ts` remains 1–1400, and the next unallocated card ID is 1409.
 Future preorder expansion must exclude the reserved special IDs; increasing the
 numeric bound alone would incorrectly admit them.
 

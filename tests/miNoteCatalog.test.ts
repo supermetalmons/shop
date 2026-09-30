@@ -25,6 +25,7 @@ test('standalone special cards retain their reserved IDs and names without preor
     { clean_card_id: 1405, name: 'Blue Drifella Hat on Monday' },
     { clean_card_id: 1406, name: 'Drifella’s Little Bandage' },
     { clean_card_id: 1407, name: 'Slumber Black Drifella' },
+    { clean_card_id: 1408, name: 'Drifella the Reaper' },
   ]);
   for (const { clean_card_id } of miNoteCatalog.specialCards) assert.equal(isPreorderCardId(clean_card_id), false);
 });
