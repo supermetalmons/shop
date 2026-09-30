@@ -70,6 +70,7 @@
     "notification-outbox-control": "node --import tsx scripts/ops/notificationOutboxControl.ts",
     "pack-status-outbox-control": "node --import tsx scripts/ops/packStatusOutboxControl.ts",
     "stripe-checkout-state-control": "node --import tsx scripts/ops/stripeCheckoutStateControl.ts",
+    "delivery-recovery-state-control": "node --import tsx scripts/ops/deliveryRecoveryStateControl.ts",
     "dude-inventory-control": "node --import tsx scripts/ops/dudeInventoryControl.ts",
     "reveal-submissions-control": "node --import tsx scripts/ops/revealSubmissionsControl.ts",
     "recover-preorder": "node --import tsx scripts/ops/recoverPreorder.ts",

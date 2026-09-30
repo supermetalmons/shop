@@ -810,6 +810,8 @@ export function createCommerceApiClient(
     }
     if (args?.cursor !== undefined) {
       payload.cursor = args.cursor;
+    } else if (payload.deliveryId === undefined) {
+      payload.cursor = null;
     }
     const response = await callProfileApi('/delivery/receipts/recover', payload);
     const parsed = parseRecoverDeliveryOrdersResult(response);

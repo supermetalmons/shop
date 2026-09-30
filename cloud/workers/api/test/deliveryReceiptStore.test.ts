@@ -12,11 +12,13 @@ import {
   settlePendingReceiptSubmission,
   type DeliveryReceiptCompletion,
 } from '../src/deliveryReceiptStore.ts';
-import { deliveryOrderDocument, deliveryOrderKey, readDeliveryOrder } from '../src/deliveryOrderStore.ts';
+import { deliveryOrderDocument, deliveryOrderKey, readDeliveryOrder, readDeliveryRecovery } from '../src/deliveryOrderStore.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { DeliveryReceiptError, runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
 import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { publishReadyToShipNotifications } from '../src/readyToShipNotificationOutbox.ts';
+import { claimRecoveryLease, readRecoveryDocument } from './deliveryRecoveryTestSupport.ts';
+import { acquireDeliveryRecoveryLease } from '../src/deliveryRecoveryStore.ts';
 
 import { IRL_CLAIM_CODE_NAMESPACE } from '../src/claimCodes.ts';
 import { seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';
@@ -54,7 +56,9 @@ test('delivery document adapters preserve sparse data, unknown fields, and repos
     assert.deepEqual(document, record);
     assert.equal(document.data, record.data);
     assert.deepEqual(await readDeliveryOrder(native.context, key), record);
-    assert.deepEqual(document.data, fields);
+    const { receiptRecovery: _recovery, ...businessFields } = fields;
+    assert.deepEqual(document.data, businessFields);
+    assert.deepEqual((await readDeliveryRecovery(native.context, key))?.order.data, fields);
     assert.throws(() => deliveryOrderDocument({
       ...record,
       key: commerceKeys.stripeCheckout('card_nft_2', 'session'),
@@ -112,31 +116,34 @@ test('receipt status writes retain unrelated fields and apply nested deletion an
   });
   context.after(() => native.harness.database.close());
   const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
-  const initial = await readDeliveryOrder(native.context, key);
+  const lease = await claimRecoveryLease(native.context);
+  const initial = await readDeliveryRecovery(native.context, key);
   assert.ok(initial);
   const runtime = runtimeForDrop('card_nft_2');
-  await markDeliveryProcessing(native.context, initial, runtime, SIGNATURE);
-  const processing = await readDeliveryOrder(native.context, key);
+  await markDeliveryProcessing(native.context, initial, runtime, SIGNATURE, lease);
+  const processing = await readRecoveryDocument(native.context, key);
   assert.ok(processing);
   assert.equal(processing.data.processingAt, Date.parse(processing.updateTime));
   assert.deepEqual(processing.data.receiptRecovery, {
-    custom: { keep: true }, leaseExpiresAt: 50, lastErrorCode: 'unavailable', lastErrorMessage: 'retry',
+    custom: { keep: true }, leaseExpiresAt: lease.leaseExpiresAtMs, lastErrorCode: 'unavailable', lastErrorMessage: 'retry',
+    attemptCount: 1, lastAttemptAt: native.context.nowMs,
   });
   const ready = await markDeliveryReady(native.context, processing, runtime, {
     signature: null, receiptsMinted: 0, receiptTxs: [], irlClaims: [],
-  });
+  }, lease);
   assert.equal(ready.createTime, processing.createTime);
   assert.equal(ready.updateTime, processing.updateTime);
   assert.equal(ready.version, processing.version);
   assert.deepEqual(ready.processedAt, processing.processedAt);
-  const readyStored = await readDeliveryOrder(native.context, key);
+  const readyStored = await readRecoveryDocument(native.context, key);
   assert.ok(readyStored);
   assert.equal(readyStored.data.processedAt, Date.parse(readyStored.updateTime));
   await recordDeliveryClose(native.context, key, runtime.dropId, SECOND_SIGNATURE);
-  const stored = await readDeliveryOrder(native.context, key);
+  const stored = await readRecoveryDocument(native.context, key);
   assert.ok(stored);
   assert.deepEqual(stored.data.custom, { nested: ['keep'] });
-  assert.deepEqual(stored.data.receiptRecovery, { custom: { keep: true } });
+  assert.deepEqual(stored.data.receiptRecovery, { custom: { keep: true }, attemptCount: 1, lastAttemptAt: native.context.nowMs });
+  assert.equal((await readDeliveryRecovery(native.context, key))?.state.leaseId, null);
   assert.equal(stored.data.processingAt, processing.data.processingAt);
   assert.equal(stored.data.processedAt, readyStored.data.processedAt);
   assert.equal(stored.data.deliveryClosedAt, Date.parse(stored.updateTime));
@@ -159,6 +166,7 @@ test('native ready-to-ship persistence includes notification and pack-status out
       requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
     );
     assert.ok(document);
+    const lease = await claimRecoveryLease(native.context);
     native.context.signal = signal;
     await markDeliveryReady(
       native.context,
@@ -170,6 +178,7 @@ test('native ready-to-ship persistence includes notification and pack-status out
         receiptTxs: [SIGNATURE],
         irlClaims: [],
       },
+      lease,
     );
     const ready = await readCommerceRecord(
       native.context,
@@ -260,6 +269,7 @@ test('receipt submissions are persisted before broadcast and promoted idempotent
     receiptTxs: [SIGNATURE],
   });
   const path = 'drops/card_nft_2/deliveryOrders/7';
+  const lease = await claimRecoveryLease(native.context, path);
   const pending = {
     signature: SECOND_SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
@@ -267,18 +277,18 @@ test('receipt submissions are persisted before broadcast and promoted idempotent
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
 
-  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
-  let stored = await readCommerceRecord(native.context, requireCommerceKey(path));
+  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context));
+  let stored = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.deepEqual(
     (stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission,
     pending,
   );
   assert.deepEqual(stored?.data.receiptTxs, [SIGNATURE]);
 
-  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
-  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
+  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context));
+  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context));
 
-  stored = await readCommerceRecord(native.context, requireCommerceKey(path));
+  stored = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.deepEqual(stored?.data.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
   assert.deepEqual(
     confirmedReceiptTransactions(stored?.data || {}),
@@ -301,6 +311,7 @@ test('receipt submission intent recovers a lost D1 commit acknowledgement', asyn
     },
   });
   const path = 'drops/card_nft_2/deliveryOrders/7';
+  const lease = await claimRecoveryLease(native.context, path);
   const pending = {
     signature: SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
@@ -309,9 +320,9 @@ test('receipt submission intent recovers a lost D1 commit acknowledgement', asyn
   };
 
   armed = true;
-  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
+  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context));
 
-  const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
+  const stored = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.deepEqual(
     (stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission,
     pending,
@@ -335,23 +346,24 @@ test('confirmed receipt settlement survives a lost D1 acknowledgement and replay
     },
   });
   const path = 'drops/card_nft_2/deliveryOrders/7';
+  const lease = await claimRecoveryLease(native.context, path);
   const pending = {
     signature: SECOND_SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
     lastValidBlockHeight: 123,
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
+  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context));
 
   armed = true;
-  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
+  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context));
   assert.equal(lostAcknowledgement, true);
-  const settled = await readCommerceRecord(native.context, requireCommerceKey(path));
+  const settled = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.deepEqual(settled?.data.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
   assert.equal((settled?.data.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
 
-  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
-  const replayed = await readCommerceRecord(native.context, requireCommerceKey(path));
+  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context));
+  const replayed = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.deepEqual(replayed, settled);
 });
 
@@ -362,15 +374,16 @@ test('expired receipt submissions clear without being promoted', async () => {
     status: 'processing',
   });
   const path = 'drops/card_nft_2/deliveryOrders/7';
+  const lease = await claimRecoveryLease(native.context, path);
   const pending = {
     signature: SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
     lastValidBlockHeight: 123,
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
-  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
-  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'expired', () => deliveryCleanupContext(native.context));
-  const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
+  await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context));
+  await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'expired', lease, () => deliveryCleanupContext(native.context));
+  const stored = await readRecoveryDocument(native.context, requireCommerceKey(path));
   assert.equal((stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
   assert.deepEqual(stored?.data.receiptTxs, undefined);
 });
@@ -394,12 +407,13 @@ test('receipt persistence and settlement each read their document once', async (
         leaseExpiresAt: 200,
       },
     }, { observeCall: (call) => calls.push(call) });
-    calls.length = 0;
     const path = 'drops/card_nft_2/deliveryOrders/7';
+    const lease = await claimRecoveryLease(native.context, path);
+    calls.length = 0;
     if (operation === 'persist') {
-      await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
+      await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context));
     } else {
-      await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
+      await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context));
     }
     const reads = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call])
       .filter(({ sql }) => sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql));
@@ -448,16 +462,17 @@ test('receipt retries preserve a competing submission and recovery lease', async
         });
       },
     });
-    armed = true;
     const path = 'drops/card_nft_2/deliveryOrders/7';
+    const lease = await claimRecoveryLease(native.context, path);
+    armed = true;
     await assert.rejects(
       operation === 'persist'
-        ? persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context))
-        : settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context)),
+        ? persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, lease, () => deliveryCleanupContext(native.context))
+        : settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', lease, () => deliveryCleanupContext(native.context)),
       (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted',
     );
     assert.equal(changed, true, operation);
-    const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
+    const stored = await readRecoveryDocument(native.context, requireCommerceKey(path));
     assert.deepEqual(stored?.data.receiptRecovery, {
       pendingSubmission: competing,
       attemptCount: 3,
@@ -490,4 +505,61 @@ test('existing assignment claim metadata is idempotently compatible without a bo
     expected,
     OWNER,
   ), true);
+});
+
+test('ready completion rolls back order, recovery state, and outboxes together', async (context) => {
+  const native = await nativeDeliveryContext({
+    deliveryId: 7, owner: OWNER, status: 'processing',
+    addressSnapshot: { email: 'buyer@example.com' }, items: [{ kind: 'box', refId: 3 }],
+  });
+  context.after(() => native.harness.database.close());
+  const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
+  const lease = await claimRecoveryLease(native.context);
+  const before = await readDeliveryRecovery(native.context, key);
+  assert.ok(before);
+  native.harness.database.exec(`CREATE TRIGGER reject_ready_notification BEFORE INSERT ON commerce_notification_outbox
+    BEGIN SELECT RAISE(ABORT, 'test notification failure'); END`);
+  const completion = { signature: SIGNATURE, receiptsMinted: 1, receiptTxs: [SIGNATURE], irlClaims: [] };
+  await assert.rejects(markDeliveryReady(native.context, before.order, runtimeForDrop('card_nft_2'), completion, lease));
+  assert.deepEqual(await readDeliveryRecovery(native.context, key), before);
+  assert.equal(await native.context.repository.notificationOutbox.get(key.path, 'ready'), null);
+  assert.equal(await native.context.repository.packStatusOutbox.get(key.path), null);
+  native.harness.database.exec('DROP TRIGGER reject_ready_notification');
+  await markDeliveryReady(native.context, before.order, runtimeForDrop('card_nft_2'), completion, lease);
+  const after = await readDeliveryRecovery(native.context, key);
+  assert.equal(after?.order.data.status, 'ready_to_ship');
+  assert.equal(after?.state.leaseId, null);
+  assert.equal(after?.state.leaseExpiresAtMs, null);
+  assert.equal((await native.context.repository.notificationOutbox.get(key.path, 'ready'))?.state, 'pending');
+  assert.equal((await native.context.repository.packStatusOutbox.get(key.path))?.state, 'pending');
+});
+
+test('stale attempts cannot extend the journal, settle a replacement claim, or complete the order', async (context) => {
+  const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'processing' });
+  context.after(() => native.harness.database.close());
+  const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
+  const first = await claimRecoveryLease(native.context);
+  const pending = {
+    signature: SIGNATURE, blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 123,
+    assetIds: [Keypair.generate().publicKey.toBase58()],
+  };
+  await persistPendingReceiptSubmission(native.context, key, pending, first, () => deliveryCleanupContext(native.context));
+  const pendingSnapshot = await readDeliveryRecovery(native.context, key);
+  assert.ok(pendingSnapshot);
+  const reclaimed = await acquireDeliveryRecoveryLease(native.context, key, OWNER, pendingSnapshot.state.leaseExpiresAtMs! + 1, true);
+  assert.ok(reclaimed.acquired);
+  const before = await readDeliveryRecovery(native.context, key);
+  assert.ok(before);
+  const aborted = (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted';
+  await assert.rejects(persistPendingReceiptSubmission(native.context, key, pending, first, () => deliveryCleanupContext(native.context)), aborted);
+  await assert.rejects(settlePendingReceiptSubmission(native.context, key, pending, 'confirmed', first, () => deliveryCleanupContext(native.context)), aborted);
+  await assert.rejects(markDeliveryProcessing(native.context, before, runtimeForDrop('card_nft_2'), SIGNATURE, first), aborted);
+  await assert.rejects(markDeliveryReady(native.context, before.order, runtimeForDrop('card_nft_2'), {
+    signature: SIGNATURE, receiptsMinted: 1, receiptTxs: [SIGNATURE], irlClaims: [],
+  }, first), aborted);
+  assert.deepEqual(await readDeliveryRecovery(native.context, key), before);
+  await settlePendingReceiptSubmission(native.context, key, pending, 'confirmed', reclaimed.lease, () => deliveryCleanupContext(native.context));
+  const after = await readDeliveryRecovery(native.context, key);
+  assert.equal(pendingReceiptSubmission(after!.order.data), undefined);
+  assert.deepEqual(after?.order.data.receiptTxs, [SIGNATURE]);
 });

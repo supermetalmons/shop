@@ -19,6 +19,7 @@ import {
 import type { CommerceD1Document } from '../../../../scripts/shared/commerceD1Maintenance.ts';
 import type { PackStatusCounters } from '../../../../shared/packStatus.ts';
 import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
+import { createDeliveryRecoveryRecord, deliveryRecoveryRow } from '../../../../shared/deliveryRecoveryState.ts';
 
 const dropRows = [
   ['card_nft_2', 100, 300, 3],
@@ -147,14 +148,24 @@ test('pack-status rebuild uses active table state instead of frozen legacy marke
 
 test('pack-status snapshot reads table authority and refuses partial schemas or invalid control', () => {
   const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
+  const recovery = createDeliveryRecoveryRecord({ parentPath: parent.path, receiptRecoveryJson: null,
+    nowMs: 1, generation: '00000000-0000-4000-8000-000000000030' });
+  const { receipt_recovery_json: recoveryPayload, ...recoveryMetadata } = deliveryRecoveryRow(recovery);
   const rows = (sql: string): Record<string, unknown>[] => {
-    if (sql.includes('FROM sqlite_schema')) return [{ name: 'commerce_pack_status_outbox' }, { name: 'commerce_pack_status_outbox_control' }];
+    if (sql.includes('FROM sqlite_schema')) {
+      if (sql.includes('commerce_delivery_recovery')) return [{ name: 'commerce_delivery_recovery' }, { name: 'commerce_delivery_recovery_control' }];
+      if (sql.includes('commerce_stripe_checkout_state')) return [];
+      return [{ name: 'commerce_pack_status_outbox' }, { name: 'commerce_pack_status_outbox_control' }];
+    }
     if (sql.startsWith('SELECT storage_mode')) return [{ storage_mode: 'table' }];
     if (sql.startsWith('SELECT * FROM commerce_pack_status_outbox')) return [packStatusOutboxRow(projectionOutbox('completed'))];
     if (sql.includes("document_kind = 'box_assignment'")) return [];
     return [{ document_path: parent.path, document_kind: parent.kind, drop_id: parent.dropId,
       document_id: parent.documentId, document_json: JSON.stringify(parent.data), version: parent.version,
-      create_time: parent.createTime, update_time: parent.updateTime }];
+      create_time: parent.createTime, update_time: parent.updateTime,
+      ...(sql.startsWith('SELECT snapshot.document_path,') ? {
+        recovery_state_mode: 'table', recovery_state_json: JSON.stringify(recoveryMetadata), recovery_payload_json: recoveryPayload,
+      } : {}) }];
   };
   const snapshot = readPackStatusCommerceSnapshot('card_nft_2', rows);
   assert.equal(snapshot.packStatusOutboxes?.[0].state, 'completed');

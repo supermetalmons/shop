@@ -1,3 +1,4 @@
+import { createDeliveryRecoveryRecord, parseDeliveryRecoveryRow, updateDeliveryRecoveryRecord, deliveryRecoveryRow } from '../../../../shared/deliveryRecoveryState.ts';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
@@ -118,7 +119,7 @@ export type CommerceD1Harness = {
   db: D1Database;
 };
 
-function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table', checkoutStateMode: 'legacy' | 'table', packStatusOutboxMode: 'legacy' | 'table'): void {
+function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'legacy' | 'table', checkoutStateMode: 'legacy' | 'table', packStatusOutboxMode: 'legacy' | 'table', recoveryMode: 'legacy' | 'table'): void {
   database.exec('BEGIN IMMEDIATE');
   try {
     database.exec(`INSERT INTO commerce_authority_control_lease (
@@ -146,6 +147,10 @@ function resumeFreshCommerce(database: DatabaseSync, notificationOutboxMode: 'le
       SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1;
     UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0 WHERE singleton = 1;
     UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
+    ${recoveryMode === 'table' ? `UPDATE commerce_delivery_recovery_control
+      SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1;
+    UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 0 WHERE singleton = 1;
+    UPDATE commerce_delivery_recovery_control SET storage_mode = 'table' WHERE singleton = 1;` : ''}
     UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
       updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -204,6 +209,7 @@ export function createCommerceD1Harness(
     notificationOutboxMode?: 'legacy' | 'table';
     stripeCheckoutStateMode?: 'legacy' | 'table';
     packStatusOutboxMode?: 'legacy' | 'table';
+    deliveryRecoveryMode?: 'legacy' | 'table';
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
@@ -257,7 +263,8 @@ export function createCommerceD1Harness(
     }
   }
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0029_pack_status_outbox.sql', 'utf8'));
-  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table');
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0030_delivery_recovery.sql', 'utf8'));
+  resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table', options.deliveryRecoveryMode ?? 'table');
   return {
     database,
     db: d1Database(
@@ -418,6 +425,22 @@ function writeCommerceDocument(
   ).get()?.storage_mode === 'table';
   const guardId = crypto.randomUUID();
   let data = seed.data;
+  const typedRecovery = seed.key.kind === 'delivery_order' && harness.database.prepare(
+    'SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1').get()?.storage_mode === 'table';
+  const oldRecoveryRow = typedRecovery ? harness.database.prepare('SELECT * FROM commerce_delivery_recovery WHERE parent_path = ?').get(seed.key.path) : null;
+  const previousRecovery = oldRecoveryRow ? parseDeliveryRecoveryRow(oldRecoveryRow) : null;
+  if (typedRecovery) {
+    data = { ...seed.data };
+    delete data.receiptRecovery;
+    const parent = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(seed.key.path);
+    const oldData = parent ? JSON.parse(String(parent.document_json)) : {};
+    if (Object.hasOwn(oldData, 'receiptRecovery')) data.receiptRecovery = oldData.receiptRecovery;
+    harness.database.prepare(`INSERT INTO commerce_commit_guards
+      (guard_id, expectations_json, expected_documents_revision, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
+      VALUES (?, '[]', NULL, 0, ?, ?)`).run(guardId, JSON.stringify([seed.key.path]), JSON.stringify([
+        { parentPath: seed.key.path, generation: previousRecovery?.generation ?? null, revision: previousRecovery?.revision ?? -1 },
+      ]));
+  }
   if (typedCheckout) {
     const existing = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(seed.key.path);
     data = stripeCheckoutStateMetadata(seed.data, existing ? JSON.parse(String(existing.document_json)) : {});
@@ -450,6 +473,23 @@ function writeCommerceDocument(
     seed.processedAt?.seconds ?? null,
     seed.processedAt?.nanos ?? null,
   );
+  if (typedRecovery) {
+    const receiptRecoveryJson = Object.hasOwn(seed.data, 'receiptRecovery') ? JSON.stringify(seed.data.receiptRecovery) : null;
+    const record = previousRecovery
+      ? updateDeliveryRecoveryRecord(previousRecovery, { receiptRecoveryJson }, previousRecovery.updatedAtMs)
+      : createDeliveryRecoveryRecord({ parentPath: seed.key.path, receiptRecoveryJson, generation: crypto.randomUUID(), nowMs: 0 });
+    const row = deliveryRecoveryRow(record);
+    const columns = Object.keys(row);
+    if (previousRecovery) {
+      const updates = columns.filter((column) => column !== 'parent_path');
+      harness.database.prepare(`UPDATE commerce_delivery_recovery SET ${updates.map((column) => `${column} = ?`).join(', ')} WHERE parent_path = ?`)
+        .run(...updates.map((column) => row[column]), seed.key.path);
+    } else {
+      harness.database.prepare(`INSERT INTO commerce_delivery_recovery (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+        .run(...columns.map((column) => row[column]));
+    }
+    harness.database.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').run(guardId);
+  }
   if (typedCheckout) {
     const row = stripeCheckoutStateRow(stripeCheckoutStateFromDocument(seed.key.path, seed.data, version));
     const columns = Object.keys(row);
@@ -474,7 +514,17 @@ export function applyCommerceDocumentFixtureEpoch(
     for (const fence of fences) harness.database.exec(`DROP TRIGGER ${String(fence.name)}`);
     for (const mutation of mutations) {
       if (mutation.type === 'upsert') writeCommerceDocument(harness, mutation.seed);
-      else harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(mutation.key.path);
+      else {
+        const recovery = harness.database.prepare('SELECT * FROM commerce_delivery_recovery WHERE parent_path = ?').get(mutation.key.path);
+        const guardId = crypto.randomUUID();
+        if (recovery) harness.database.prepare(`INSERT INTO commerce_commit_guards
+          (guard_id, expectations_json, expected_documents_revision, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
+          VALUES (?, '[]', NULL, 0, ?, ?)`).run(guardId, JSON.stringify([mutation.key.path]), JSON.stringify([
+            { parentPath: mutation.key.path, generation: recovery.generation, revision: recovery.revision },
+          ]));
+        harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(mutation.key.path);
+        if (recovery) harness.database.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').run(guardId);
+      }
     }
     harness.database.exec(`UPDATE commerce_authority_control
       SET documents_revision = documents_revision + 1,

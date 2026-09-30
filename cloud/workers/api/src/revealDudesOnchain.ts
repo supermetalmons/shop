@@ -1,12 +1,11 @@
-import bs58 from 'bs58';
+import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import { PublicKey } from '@solana/web3.js';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import type { DasAsset } from '../../../../shared/dasAsset.js';
 import {
-  boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
 } from '../../../../shared/deploymentCore.js';
-import { DEPLOYMENT_DROPS, type DeploymentRegistryDrop } from '../../../../shared/deploymentRegistry.js';
+import { DEPLOYMENT_DROPS, projectDeploymentPaymentRouting, type DeploymentRegistryDrop } from '../../../../shared/deploymentRegistry.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
@@ -108,23 +107,6 @@ function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; dat
   }
 }
 
-function configuredRoutingMatches(runtime: RevealRuntime, decoded: DecodedBoxMinterConfigData): boolean {
-  const routing = decoded.paymentRouting;
-  if (!routing) return false;
-  if ('treasury' in runtime.config) {
-    return routing.schema === 'legacy' && bs58.encode(decoded.treasury) === runtime.config.treasury;
-  }
-  const configured = runtime.config.paymentRouting;
-  if (!configured || routing.schema !== 'split-payments-v1') return false;
-  if (
-    bs58.encode(routing.deliveryPaymentReceiver) !== configured.deliveryPaymentReceiver ||
-    routing.mintProceeds.length !== configured.mintProceeds.length
-  ) return false;
-  return configured.mintProceeds.every((expected, index) => {
-    const actual = routing.mintProceeds[index];
-    return Boolean(actual) && bs58.encode(actual.address) === expected.address && actual.percentage === expected.percentage;
-  });
-}
 
 export async function validateOnchainConfig(
   context: ProviderContext,
@@ -164,16 +146,12 @@ export async function validateOnchainConfig(
   }
   const coreCollection = new PublicKey(decoded.coreCollection);
   if (
-    !coreCollection.equals(runtime.collectionMint) ||
-    decoded.itemsPerBox !== runtime.itemsPerBox ||
-    decoded.maxSupply !== runtime.config.maxSupply ||
-    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet ||
-    !boxMinterMetadataBaseMatchesDrop(
-      decoded.uriBase,
-      runtime.config.metadataBase,
-      runtime.config.metadataBaseAliases,
-    ) ||
-    !configuredRoutingMatches(runtime, decoded)
+    !matchesCommittedDropConfig(decoded, {
+      ...runtime.config,
+      ...projectDeploymentPaymentRouting(runtime.config),
+      collectionMint: runtime.collectionMint.toBase58(),
+      itemsPerBox: runtime.itemsPerBox,
+    })
   ) {
     throw new RevealDudesError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,

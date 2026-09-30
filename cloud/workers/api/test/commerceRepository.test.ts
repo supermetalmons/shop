@@ -86,6 +86,8 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
   assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
   if (/INDEXED BY commerce_(?:stripe_checkouts_manual_review|delivery_orders_shipment)_cursor/.test(dataSql)) {
     assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
+  } else if (dataSql.includes('recovery_state_json')) {
+    assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control AS authority/);
   } else {
     assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
     assert.match(dataSql, /authority\.singleton\s*=\s*1/);
@@ -718,7 +720,7 @@ test('delivery-order owner pagination uses a distinct indexed keyset query', asy
   );
 });
 
-test('delivery recovery queries use the composite owner-status index without imposing order', async () => {
+test('delivery recovery pages use the composite owner-status index and bounded path order', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   seedCommerceDocuments(harness, [
@@ -745,10 +747,10 @@ test('delivery recovery queries use the composite owner-status index without imp
   ]);
   const repository = new D1CommerceRepository(harness.db);
 
-  const records = await repository.queryDeliveryRecoveryOrders('owner-a');
-  const documentIds = records.map((record) => record.key.documentId);
+  const records = await repository.queryDeliveryRecoveryPage({ owner: 'owner-a', phase: 'processing', limit: 8 });
+  const documentIds = records.map((record) => record.order.key.documentId);
   assert.equal(new Set(documentIds).size, documentIds.length);
-  assert.deepEqual(documentIds.toSorted(), ['prepared', 'processing']);
+  assert.deepEqual(documentIds, ['processing']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, 'batch');
   if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
@@ -757,11 +759,11 @@ test('delivery recovery queries use the composite owner-status index without imp
   assert.match(sql, /INDEXED BY commerce_documents_delivery_owner_status/);
   assert.match(sql, /document\.document_kind = 'delivery_order'/);
   assert.match(sql, /document\.owner = \?/);
-  assert.match(sql, /document\.status IN \('processing', 'prepared'\)/);
-  assert.doesNotMatch(sql, /ORDER BY/);
+  assert.match(sql, /document\.status = \?/);
+  assert.match(sql, /ORDER BY document\.document_path ASC LIMIT \?/);
 
   await assert.rejects(
-    repository.queryDeliveryRecoveryOrders(''),
+    repository.queryDeliveryRecoveryPage({ owner: '', phase: 'processing', limit: 8 }),
     (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
   );
   assert.equal(calls.length, 1);
@@ -1596,23 +1598,12 @@ test('delivery-owner guards reject every scoped membership and path change', asy
           { owner: 'scope-owner', status: 'processing' },
         ));
       },
-      mutate: async (_repository, harness) => {
-        harness.database.exec('BEGIN');
-        try {
-          harness.database.prepare(`UPDATE commerce_documents
-            SET document_path = ?, document_id = ?, version = version + 1
-            WHERE document_path = ?`).run(
-              commerceKeys.deliveryOrder('drop', 'after').path,
-              'after',
-              commerceKeys.deliveryOrder('drop', 'before').path,
-            );
-          harness.database.exec(`UPDATE commerce_authority_control
-            SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
-          harness.database.exec('COMMIT');
-        } catch (error) {
-          harness.database.exec('ROLLBACK');
-          throw error;
-        }
+      mutate: async (repository) => {
+        await repository.run(12, async (unit) => {
+          await unit.getMany([commerceKeys.deliveryOrder('drop', 'before'), commerceKeys.deliveryOrder('drop', 'after')]);
+          await unit.delete(commerceKeys.deliveryOrder('drop', 'before'), { mustExist: true });
+          await unit.create(commerceKeys.deliveryOrder('drop', 'after'), { owner: 'scope-owner', status: 'processing' });
+        });
       },
     },
   ];
@@ -1885,7 +1876,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     [],
   );
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.queryDeliveryRecoveryOrders('owner')),
+    await readWithSingleBatch(calls, () => repository.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'processing', limit: 8 })),
     [],
   );
   assert.deepEqual(
@@ -1962,8 +1953,8 @@ test('all standalone reads fail closed when commerce is paused', async () => {
       read: (value) => value.queryDeliveryOrderOwners({ limit: 1 }),
     },
     {
-      name: 'queryDeliveryRecoveryOrders',
-      read: (value) => value.queryDeliveryRecoveryOrders('owner'),
+      name: 'queryDeliveryRecoveryPage',
+      read: (value) => value.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'processing', limit: 8 }),
     },
     {
       name: 'queryDeliveryRecoveryState',

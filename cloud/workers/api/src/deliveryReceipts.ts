@@ -43,7 +43,6 @@ import {
   dropDeliveryOrderPath,
 } from './dropPaths.js';
 import type {
-  DeliveryRecoveryOutcome,
   IssueReceiptsResult,
   RecoverDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult,
@@ -86,7 +85,6 @@ import {
   probeTransactionSubmission,
   type TransactionSubmissionOutcome,
 } from './transactionSubmissionRecovery.js';
-import { resolveDeliveryOrderDropId } from './deliveryOrderSummaries.js';
 import { buildRecoverDeliveryOrdersResult } from '../../../../shared/deliveryRecovery.js';
 import {
   DELIVERY_RECOVERY_CURSOR_MAX_LENGTH,
@@ -97,13 +95,13 @@ import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import {
   deliveryOrderKey,
-  readDeliveryOrder,
+  readDeliveryRecovery,
   type DeliveryOrderDocument,
+  type RecoverySnapshot,
 } from './deliveryOrderStore.js';
 import {
   confirmedReceiptTransactions,
   ensureIrlClaimCodeForBox,
-  hasPendingReceiptSubmission,
   markDeliveryProcessing,
   markDeliveryReady,
   pendingReceiptSubmission,
@@ -116,26 +114,26 @@ import {
 import {
   MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL,
   acquireDeliveryRecoveryLease,
-  cancelDeliveryRecoveryAttempt,
-  compareDeliveryRecoveryCandidates,
+  acquireVerifiedReceiptIssuanceLease,
+  requireDeliveryRecoveryLease,
   deliveryRecoveryEligibility,
   fetchDeliveryRecoveryState,
-  finalizeDeliveryRecoveryAttempt,
-  handlePreparedRecoveryFailure,
   orderResultBase,
   recordPreparedDeliveryRecoveryMiss,
-  runDeliveryRecoveryOrderQuery,
   runDeliveryRecoveryPageQuery,
-  runPendingReadyNotificationQuery,
   type DeliveryRecoveryLease,
 } from './deliveryRecoveryStore.js';
+import {
+  deliveryRecoveryCleanupContext as cleanupContext,
+  deliveryRecoveryFailure,
+  runLeasedReceiptRecoveryAttempt,
+} from './deliveryRecoveryAttempt.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
 
 const REQUEST_MAX_BYTES = 4096;
 const HANDLER_TIMEOUT_MS = 55_000;
-const CLEANUP_TIMEOUT_MS = 5_000;
 const TX_MAX_SEND_ATTEMPTS = 3;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const CANONICAL_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -225,6 +223,7 @@ export type DeliveryReceiptRequestResult = {
   verification?: 'signature' | 'delivery_pda';
   attempted?: number;
   recovered?: number;
+  recoveryMode?: 'targeted' | 'page' | 'legacy-rejected';
 };
 
 type DeliveryReceiptDependencies = {
@@ -798,20 +797,30 @@ async function closeDeliveryPda(args: {
   return sendAndConfirmSignedTransaction(args.connection, transaction, args.signal, 'Close delivery');
 }
 
-async function retryIssueReceipts(args: {
+type ReceiptIssuanceAccess =
+  | { kind: 'leased'; lease: DeliveryRecoveryLease }
+  | { kind: 'verify-and-lease' }
+  | { kind: 'ready' };
+
+type ReceiptIssuanceArguments = {
   request: RetryIssueReceiptsArgs;
   env: DeliveryReceiptsEnv;
   commerce: CommerceContext;
   provider: ProviderContext;
   waitUntil: DeferredWork;
   randomInt: (maxExclusive: number) => number;
-}): Promise<ReceiptIssueResult> {
+  access: ReceiptIssuanceAccess;
+};
+
+async function prepareReceiptIssuance(args: ReceiptIssuanceArguments) {
   const owner = canonicalPublicKey(args.request.ownerWallet, 'wallet address');
   const deliveryId = Math.floor(args.request.deliveryId);
   const runtime = runtimeForDrop(args.request.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
-  let document = await readDeliveryOrder(args.commerce, deliveryOrderKey(path));
-  if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+  const snapshot = await readDeliveryRecovery(args.commerce, deliveryOrderKey(path));
+  if (!snapshot) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+  if (args.access.kind === 'leased') requireDeliveryRecoveryLease(snapshot, args.access.lease);
+  const document = snapshot.order;
   const receipt = parseDeliveryOrderReceiptView(document.data);
   if (receipt.ownership.hasOwner && receipt.ownership.owner !== owner.toBase58()) {
     throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
@@ -822,52 +831,10 @@ async function retryIssueReceipts(args: {
   if (!signer.publicKey.equals(onchain.admin)) {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
-  if (receipt.status === 'ready_to_ship') {
-    scheduleDeliveryPackStatusProjection({
-      context: args.commerce,
-      deliveryId,
-      dropId: runtime.dropId,
-      waitUntil: args.waitUntil,
-    });
-    let closeDeliveryTx = receipt.closeDeliveryTx;
-    if (!closeDeliveryTx) {
-      const [deliveryPda, deliveryBump] = deriveDeliveryPda(runtime, deliveryId);
-      try {
-        closeDeliveryTx = await closeDeliveryPda({
-          connection,
-          runtime,
-          signer,
-          deliveryPda,
-          deliveryId,
-          deliveryBump,
-          signal: args.provider.signal,
-        });
-        if (closeDeliveryTx) {
-          await recordDeliveryClose(args.commerce, document.key, runtime.dropId, closeDeliveryTx);
-        }
-      } catch (error) {
-        console.warn({
-          event: 'delivery_receipt_late_close_failed',
-          dropId: runtime.dropId,
-          deliveryId,
-          error: summarizeError(error),
-        });
-      }
-    }
-    await publishReadyToShipNotifications({
-      context: args.commerce,
-      deliveryId,
-      document,
-      dropId: runtime.dropId,
-      queue: args.env.NOTIFICATION_EMAIL_QUEUE,
-    });
-    return {
-      processed: true,
-      deliveryId,
-      receiptsMinted: receipt.receiptsMinted,
-      receiptTxs: receipt.receiptTxs,
-      closeDeliveryTx,
-    };
+  const prepared = { owner, deliveryId, runtime, snapshot, document, receipt, connection, onchain, signer };
+  if (receipt.status === 'ready_to_ship') return { ...prepared, kind: 'ready' as const };
+  if (args.access.kind === 'ready') {
+    throw new DeliveryReceiptError('aborted', 'Delivery order changed. Retry later.');
   }
   const verified = args.request.verification === 'signature'
     ? await verifyReceiptIssuanceBySignature({
@@ -885,7 +852,73 @@ async function retryIssueReceipts(args: {
         ownerWallet: owner.toBase58(),
         runtime,
       });
-  await markDeliveryProcessing(args.commerce, document, runtime, verified.signature);
+  return { ...prepared, kind: 'verified' as const, verified };
+}
+
+type PreparedReceiptIssuance = Awaited<ReturnType<typeof prepareReceiptIssuance>>;
+type VerifiedReceiptIssuance = Extract<PreparedReceiptIssuance, { kind: 'verified' }>;
+
+async function resumeReadyOrder(
+  args: ReceiptIssuanceArguments,
+  prepared: PreparedReceiptIssuance,
+): Promise<ReceiptIssueResult> {
+  const { runtime, deliveryId, document, receipt, connection, signer } = prepared;
+  scheduleDeliveryPackStatusProjection({
+    context: args.commerce,
+    deliveryId,
+    dropId: runtime.dropId,
+    waitUntil: args.waitUntil,
+  });
+  let closeDeliveryTx = receipt.closeDeliveryTx;
+  if (!closeDeliveryTx) {
+    const [deliveryPda, deliveryBump] = deriveDeliveryPda(runtime, deliveryId);
+    try {
+      closeDeliveryTx = await closeDeliveryPda({
+        connection,
+        runtime,
+        signer,
+        deliveryPda,
+        deliveryId,
+        deliveryBump,
+        signal: args.provider.signal,
+      });
+      if (closeDeliveryTx) {
+        await recordDeliveryClose(args.commerce, document.key, runtime.dropId, closeDeliveryTx);
+      }
+    } catch (error) {
+      console.warn({
+        event: 'delivery_receipt_late_close_failed',
+        dropId: runtime.dropId,
+        deliveryId,
+        error: summarizeError(error),
+      });
+    }
+  }
+  await publishReadyToShipNotifications({
+    context: args.commerce,
+    deliveryId,
+    document,
+    dropId: runtime.dropId,
+    queue: args.env.NOTIFICATION_EMAIL_QUEUE,
+  });
+  return {
+    processed: true,
+    deliveryId,
+    receiptsMinted: receipt.receiptsMinted,
+    receiptTxs: receipt.receiptTxs,
+    closeDeliveryTx,
+  };
+}
+
+async function issueVerifiedReceipts(
+  args: ReceiptIssuanceArguments,
+  prepared: VerifiedReceiptIssuance,
+  lease: DeliveryRecoveryLease,
+): Promise<ReceiptIssueResult> {
+  const { owner, deliveryId, runtime, snapshot, connection, onchain, signer, verified } = prepared;
+  let document = snapshot.order;
+  const path = document.key.path;
+  await markDeliveryProcessing(args.commerce, snapshot, runtime, verified.signature, lease);
   const storedPendingSubmission = pendingReceiptSubmission(document.data);
   if (storedPendingSubmission) {
     const outcome = await reconcilePendingReceiptSubmission({
@@ -894,19 +927,21 @@ async function retryIssueReceipts(args: {
       runtime,
       path: document.key.path,
       pending: storedPendingSubmission,
+      lease,
     });
     if (outcome === 'unresolved') {
       throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
     }
-    const reconciled = await readDeliveryOrder(args.commerce, deliveryOrderKey(path));
+    const reconciled = await readDeliveryRecovery(args.commerce, deliveryOrderKey(path));
     if (!reconciled) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-    document = reconciled;
+    document = reconciled.order;
   }
   const lifecycle: ReceiptSubmissionLifecycle = {
     prepare: (pendingSubmission) => persistPendingReceiptSubmission(
       args.commerce,
       document.key,
       pendingSubmission,
+      lease,
       () => cleanupContext(args.commerce),
     ),
     reconcile: (pendingSubmission) => reconcilePendingReceiptSubmission({
@@ -915,12 +950,14 @@ async function retryIssueReceipts(args: {
       runtime,
       path: document.key.path,
       pending: pendingSubmission,
+      lease,
     }),
     settle: (pendingSubmission, outcome) => settlePendingReceiptSubmission(
       cleanupContext(args.commerce),
       document.key,
       pendingSubmission,
       outcome,
+      lease,
       () => cleanupContext(args.commerce),
     ),
   };
@@ -999,7 +1036,7 @@ async function retryIssueReceipts(args: {
     receiptsMinted,
     receiptTxs,
     irlClaims,
-  });
+  }, lease);
   scheduleDeliveryPackStatusProjection({
     context: args.commerce,
     deliveryId,
@@ -1038,12 +1075,20 @@ async function retryIssueReceipts(args: {
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
 }
 
-function cleanupContext(context: CommerceContext): CommerceContext {
-  return {
-    ...context,
-    nowMs: Date.now(),
-    signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
-  };
+async function retryIssueReceipts(args: ReceiptIssuanceArguments): Promise<ReceiptIssueResult> {
+  const prepared = await prepareReceiptIssuance(args);
+  if (prepared.kind === 'ready') return resumeReadyOrder(args, prepared);
+  if (args.access.kind === 'leased') return issueVerifiedReceipts(args, prepared, args.access.lease);
+  if (args.access.kind !== 'verify-and-lease' || args.request.verification !== 'signature') {
+    throw new DeliveryReceiptError('aborted', 'Receipt issuance requires an owned recovery attempt.');
+  }
+  const claimed = await acquireVerifiedReceiptIssuanceLease(
+    args.commerce, prepared.snapshot, prepared.owner.toBase58(), Date.now(),
+  );
+  return runLeasedReceiptRecoveryAttempt({
+    context: args.commerce, key: prepared.document.key, lease: claimed.lease, origin: { kind: 'issue' },
+    operation: () => issueVerifiedReceipts(args, { ...prepared, snapshot: claimed.snapshot }, claimed.lease),
+  });
 }
 
 function isDeliveryRecoveryCancellation(error: unknown, signal: AbortSignal): boolean {
@@ -1074,6 +1119,7 @@ async function reconcilePendingReceiptSubmission(args: {
   runtime: DeliveryRuntime;
   path: string;
   pending: PendingReceiptSubmission;
+  lease: DeliveryRecoveryLease;
 }): Promise<TransactionSubmissionOutcome> {
   const probeContext = cleanupContext(args.commerce);
   let outcome: TransactionSubmissionOutcome = 'unresolved';
@@ -1089,6 +1135,7 @@ async function reconcilePendingReceiptSubmission(args: {
       persistence,
       deliveryOrderKey(args.path),
       args.pending,
+      args.lease,
       () => cleanupContext(persistence),
     );
   } else {
@@ -1097,37 +1144,11 @@ async function reconcilePendingReceiptSubmission(args: {
       deliveryOrderKey(args.path),
       args.pending,
       outcome,
+      args.lease,
       () => cleanupContext(persistence),
     );
   }
   return outcome;
-}
-
-function normalizeRecoveryErrorCode(error: unknown): string | undefined {
-  if (error instanceof DeliveryReceiptError) return error.code;
-  if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
-  if (error instanceof DOMException && error.name === 'AbortError') return 'aborted';
-  return error instanceof Error ? 'internal' : undefined;
-}
-
-function normalizeRecoveryMessage(error: unknown): string | undefined {
-  const value = String(error instanceof Error ? error.message : error || '').trim();
-  return value ? value.slice(0, 300) : undefined;
-}
-
-function deliveryRecoveryFailure(error: unknown): {
-  errorCode: string | undefined;
-  message: string | undefined;
-  outcome: DeliveryRecoveryOutcome;
-} {
-  rethrowDeferredWorkRegistrationError(error);
-  const errorCode = normalizeRecoveryErrorCode(error);
-  const message = normalizeRecoveryMessage(error);
-  const outcome: DeliveryRecoveryOutcome = errorCode === 'failed-precondition' &&
-    /delivery record pda not found/i.test(message || '')
-    ? 'missing_delivery'
-    : 'failed';
-  return { errorCode, message, outcome };
 }
 
 async function issueReceiptsRequest(
@@ -1147,9 +1168,10 @@ async function issueReceiptsRequest(
   }
   const runtime = runtimeForDrop(body.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, body.deliveryId);
-  const order = await readDeliveryOrder(commerce, deliveryOrderKey(path));
-  if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-  let acquiredLease: DeliveryRecoveryLease | undefined;
+  const snapshot = await readDeliveryRecovery(commerce, deliveryOrderKey(path));
+  if (!snapshot) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+  const order = snapshot.order;
+  let access: ReceiptIssuanceAccess = { kind: 'ready' };
   if (parseDeliveryOrderStatus(order.data).status !== 'ready_to_ship') {
     const lease = await acquireDeliveryRecoveryLease(commerce, order.key, ownerWallet, Date.now(), true);
     if (!lease.acquired) {
@@ -1165,50 +1187,22 @@ async function issueReceiptsRequest(
       if (lease.result.outcome !== 'skipped_status') {
         throw new DeliveryReceiptError('failed-precondition', lease.result.message || 'Unable to start receipt issuance.');
       }
+      access = { kind: 'verify-and-lease' };
     } else {
-      acquiredLease = lease.lease;
+      access = { kind: 'leased', lease: lease.lease };
     }
   }
-  try {
-    if (commerce.signal.aborted) throw commerce.signal.reason;
-    const result = await (overrides.retryIssueReceipts || retryIssueReceipts)({
-      request: {
-        ownerWallet,
-        deliveryId: body.deliveryId,
-        dropId: runtime.dropId,
-        verification: 'signature',
-        signature: body.signature,
-      },
-      env,
-      commerce,
-      provider,
-      waitUntil,
-      randomInt: secureRandomInt,
-    });
-    if (acquiredLease) {
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), order.key, {}).catch(() => undefined);
-    }
-    return result;
-  } catch (error) {
-    if (acquiredLease && isDeliveryRecoveryCancellation(error, commerce.signal)) {
-      const reason = commerce.signal.reason;
-      const cleanup = cleanupContext(commerce);
-      if (!await hasPendingReceiptSubmission(cleanup, order.key)) {
-        await cancelDeliveryRecoveryAttempt(cleanup, order.key, acquiredLease).catch(() => undefined);
-      }
-      throw reason;
-    }
-    if (acquiredLease) {
-      const cleanup = cleanupContext(commerce);
-      if (!await hasPendingReceiptSubmission(cleanup, order.key)) {
-        await finalizeDeliveryRecoveryAttempt(cleanup, order.key, {
-          errorCode: normalizeRecoveryErrorCode(error),
-          message: normalizeRecoveryMessage(error),
-        }).catch(() => undefined);
-      }
-    }
-    throw error;
-  }
+  const operation = () => (overrides.retryIssueReceipts || retryIssueReceipts)({
+    request: {
+      ownerWallet, deliveryId: body.deliveryId, dropId: runtime.dropId,
+      verification: 'signature', signature: body.signature,
+    },
+    env, commerce, provider, waitUntil, randomInt: secureRandomInt, access,
+  });
+  if (access.kind !== 'leased') return operation();
+  return runLeasedReceiptRecoveryAttempt({
+    context: commerce, key: order.key, lease: access.lease, origin: { kind: 'issue' }, operation,
+  });
 }
 
 async function hasConfirmedDeliveryRecord(
@@ -1221,6 +1215,18 @@ async function hasConfirmedDeliveryRecord(
   const [expectedDeliveryPda] = deriveDeliveryPda(runtime, deliveryId);
   assertStoredDeliveryPda(parseDeliveryOrderReceiptView(order), expectedDeliveryPda);
   return Boolean(await fetchDeliveryRecord(connection, runtime, deliveryId, false));
+}
+
+function validateRecoveryRequestMode(body: RecoverRequest): void {
+  if (body.deliveryId !== undefined) {
+    if (body.dropId === undefined || body.cursor !== undefined) {
+      throw new DeliveryReceiptError('invalid-argument', 'Targeted delivery recovery requires dropId and does not accept a cursor.');
+    }
+    return;
+  }
+  if (body.cursor === undefined) {
+    throw new DeliveryReceiptError('failed-precondition', 'Refresh the page to continue delivery recovery.');
+  }
 }
 
 async function recoverReceiptsRequest(
@@ -1243,9 +1249,7 @@ async function recoverReceiptsRequest(
     ...overrides,
   };
   const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
-  if (body.deliveryId !== undefined && body.dropId === undefined) {
-    throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
-  }
+  validateRecoveryRequestMode(body);
   const filterDropId = body.dropId ? runtimeForDrop(body.dropId).dropId : undefined;
   const force = body.force === true;
   const paginated = body.cursor !== undefined;
@@ -1263,12 +1267,13 @@ async function recoverReceiptsRequest(
   let lastVisitedCursor = body.cursor ?? null;
   let page: Awaited<ReturnType<typeof runDeliveryRecoveryPageQuery>> | undefined;
   let candidates: DeliveryOrderDocument[] = [];
+  let targetedSnapshot: RecoverySnapshot | null = null;
   if (paginated) {
     page = await runDeliveryRecoveryPageQuery(commerce, wallet, filterDropId, force, cursor);
     candidates = page.map((candidate) => candidate.document);
   } else if (filterDropId && body.deliveryId !== undefined) {
-    const document = await readDeliveryOrder(commerce, deliveryOrderKey(dropDeliveryOrderPath(filterDropId, body.deliveryId)));
-    if (document) candidates = [document];
+    targetedSnapshot = await readDeliveryRecovery(commerce, deliveryOrderKey(dropDeliveryOrderPath(filterDropId, body.deliveryId)));
+    if (targetedSnapshot) candidates = [targetedSnapshot.order];
     else {
       results.push({
         dropId: filterDropId,
@@ -1279,19 +1284,12 @@ async function recoverReceiptsRequest(
         message: 'delivery order not found',
       });
     }
-  } else {
-    const [recovery, pendingReady] = await Promise.all([
-      runDeliveryRecoveryOrderQuery(commerce, wallet, true),
-      runPendingReadyNotificationQuery(commerce, wallet),
-    ]);
-    candidates = Array.from(
-      new Map([...recovery, ...pendingReady].map((document) => [document.key.path, document])).values(),
-    ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.data, document.key.path) === filterDropId);
   }
-  if (!paginated) candidates.sort(compareDeliveryRecoveryCandidates);
   for (const [index, document] of candidates.entries()) {
     if (commerce.signal.aborted) throw commerce.signal.reason;
     if (paginated && index >= DELIVERY_RECOVERY_PAGE_SIZE) break;
+    const snapshot = page?.[index].snapshot ?? targetedSnapshot;
+    if (!snapshot) throw new DeliveryReceiptError('internal', 'Delivery recovery snapshot is missing.');
     const base = orderResultBase(document);
     const ownership = parseDeliveryOrderOwnership(document.data);
     let preflightResult: RecoverDeliveryOrdersItemResult | undefined;
@@ -1344,6 +1342,7 @@ async function recoverReceiptsRequest(
         provider,
         waitUntil,
         randomInt: secureRandomInt,
+        access: { kind: 'ready' },
       });
       results.push({
         ...base,
@@ -1377,7 +1376,7 @@ async function recoverReceiptsRequest(
       if (exists === false) {
         const nextCheckAt = await recoveryDependencies.recordPreparedDeliveryRecoveryMiss(
           commerce,
-          document,
+          snapshot,
           nowMs,
         ).catch((error) => {
           if (isDeliveryRecoveryCancellation(error, commerce.signal)) throw commerce.signal.reason;
@@ -1416,58 +1415,26 @@ async function recoverReceiptsRequest(
     }
     attempted += 1;
     try {
-      if (commerce.signal.aborted) throw commerce.signal.reason;
-      const result = await recoveryDependencies.retryIssueReceipts({
-        request: {
-          ownerWallet: wallet,
-          deliveryId: base.deliveryId,
-          dropId: base.dropId,
-          verification: 'delivery_pda',
-        },
-        env,
-        commerce,
-        provider,
-        waitUntil,
-        randomInt: secureRandomInt,
+      const result = await runLeasedReceiptRecoveryAttempt({
+        context: commerce, key: document.key, lease: lease.lease,
+        origin: { kind: 'recovery', statusBefore: base.statusBefore },
+        operation: () => recoveryDependencies.retryIssueReceipts({
+          request: {
+            ownerWallet: wallet, deliveryId: base.deliveryId, dropId: base.dropId, verification: 'delivery_pda',
+          },
+          env, commerce, provider, waitUntil, randomInt: secureRandomInt,
+          access: { kind: 'leased', lease: lease.lease },
+        }),
       });
       recovered += 1;
       results.push({
-        ...base,
-        outcome: 'recovered',
-        verification: 'delivery_pda',
+        ...base, outcome: 'recovered', verification: 'delivery_pda',
         message: result.processed ? 'receipts issued' : 'order already processed',
       });
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.key, {}).catch(() => undefined);
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
-      if (isDeliveryRecoveryCancellation(error, commerce.signal)) {
-        const reason = commerce.signal.reason;
-        const cleanup = cleanupContext(commerce);
-        if (!await hasPendingReceiptSubmission(cleanup, document.key)) {
-          await cancelDeliveryRecoveryAttempt(
-            cleanup,
-            document.key,
-            lease.lease,
-          ).catch(() => undefined);
-        }
-        throw reason;
-      }
+      if (isDeliveryRecoveryCancellation(error, commerce.signal)) throw commerce.signal.reason;
       const { errorCode, message, outcome } = deliveryRecoveryFailure(error);
-      const cleanup = cleanupContext(commerce);
-      if (base.statusBefore === 'prepared') {
-        await handlePreparedRecoveryFailure(
-          cleanup,
-          document.key,
-          outcome,
-          errorCode,
-        ).catch(() => undefined);
-      }
-      if (!await hasPendingReceiptSubmission(cleanup, document.key)) {
-        await finalizeDeliveryRecoveryAttempt(cleanup, document.key, {
-          errorCode,
-          message,
-        }).catch(() => undefined);
-      }
       if (error instanceof ReadyToShipNotificationEnqueueError) throw error;
       results.push({
         ...base,
@@ -1529,6 +1496,7 @@ export async function handleDeliveryReceiptRequest(
     let identity: RequestIdentity | undefined;
     let dropId: string | undefined;
     let deliveryId: number | undefined;
+    let recoveryMode: DeliveryReceiptRequestResult['recoveryMode'];
     try {
       const verifiedIdentity = await authenticate();
       identity = verifiedIdentity;
@@ -1537,6 +1505,11 @@ export async function handleDeliveryReceiptRequest(
         deadline.signal,
         path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
       );
+      if (path === DELIVERY_RECEIPTS_RECOVER_PATH) {
+        const recoveryBody = rawBody as RecoverRequest;
+        recoveryMode = recoveryBody.deliveryId !== undefined ? 'targeted' : recoveryBody.cursor !== undefined ? 'page' : 'legacy-rejected';
+        validateRecoveryRequestMode(recoveryBody);
+      }
       const apiKey = String(env.HELIUS_API_KEY || '').trim();
       const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
       if (!apiKey || !cosignerSecret) {
@@ -1601,6 +1574,7 @@ export async function handleDeliveryReceiptRequest(
         verification: 'delivery_pda',
         attempted: result.attempted,
         recovered: result.recovered,
+        recoveryMode,
       };
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
@@ -1642,6 +1616,7 @@ export async function handleDeliveryReceiptRequest(
         ...(dropId ? { dropId } : {}),
         ...(deliveryId === undefined ? {} : { deliveryId }),
         verification: path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'signature' : 'delivery_pda',
+        ...(recoveryMode ? { recoveryMode } : {}),
       };
     }
   });

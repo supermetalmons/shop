@@ -1,3 +1,4 @@
+import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import {
   type AddressLookupTableAccount,
@@ -33,7 +34,6 @@ import {
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
 } from '../../../../shared/boxMinterProtocol.js';
 import {
-  boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
   normalizeDropId,
   type SolanaCluster,
@@ -446,35 +446,15 @@ function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; dat
   }
 }
 
-function configuredRoutingMatches(runtime: IrlClaimRuntime, decoded: DecodedBoxMinterConfigData): boolean {
-  const routing = decoded.paymentRouting;
-  if (!routing || bs58.encode(decoded.treasury) !== runtime.config.treasury) return false;
-  const configured = runtime.config.paymentRouting;
-  if (!configured) return routing.schema === 'legacy';
-  if (routing.schema !== 'split-payments-v1') return false;
-  if (
-    bs58.encode(routing.deliveryPaymentReceiver) !== configured.deliveryPaymentReceiver ||
-    routing.mintProceeds.length !== configured.mintProceeds.length
-  ) return false;
-  return configured.mintProceeds.every((expected, index) => {
-    const actual = routing.mintProceeds[index];
-    return Boolean(actual) && bs58.encode(actual.address) === expected.address && actual.percentage === expected.percentage;
-  });
-}
 
 function validateOnchainConfig(runtime: IrlClaimRuntime, decoded: DecodedBoxMinterConfigData): PublicKey {
   const coreCollection = new PublicKey(decoded.coreCollection);
   if (
-    !coreCollection.equals(runtime.collectionMint) ||
-    decoded.itemsPerBox !== runtime.itemsPerBox ||
-    decoded.maxSupply !== runtime.config.maxSupply ||
-    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet ||
-    !boxMinterMetadataBaseMatchesDrop(
-      decoded.uriBase,
-      runtime.config.metadataBase,
-      runtime.config.metadataBaseAliases,
-    ) ||
-    !configuredRoutingMatches(runtime, decoded)
+    !matchesCommittedDropConfig(decoded, {
+      ...runtime.config,
+      collectionMint: runtime.collectionMint.toBase58(),
+      itemsPerBox: runtime.itemsPerBox,
+    })
   ) {
     throw new IrlClaimError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,

@@ -1,55 +1,51 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Keypair } from '@solana/web3.js';
 import {
   acquireDeliveryRecoveryLease,
+  acquireVerifiedReceiptIssuanceLease,
   cancelDeliveryRecoveryAttempt,
   deliveryRecoveryEligibility,
   finalizeDeliveryRecoveryAttempt,
   handlePreparedRecoveryFailure,
+  patchDeliveryRecoveryRecord,
   recordPreparedDeliveryRecoveryMiss,
-  runPendingReadyNotificationQuery,
 } from '../src/deliveryRecoveryStore.ts';
-import {
-  deliveryOrderKey,
-  readDeliveryOrder,
-} from '../src/deliveryOrderStore.ts';
-import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
-import { CommerceWriteConflict, D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';
-import {
-  OWNER, SIGNATURE, SECOND_SIGNATURE, READY_NOTIFICATION_NOW_MS,
-  nativeDeliveryContext, readyNotificationOrderFields, withoutNotificationFields, seedReadyNotificationOutbox,
-} from './deliveryStoreTestSupport.ts';
+import { deliveryOrderKey, readDeliveryRecovery } from '../src/deliveryOrderStore.ts';
+import { CommerceWriteConflict, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { DeliveryReceiptError } from '../src/deliveryReceiptErrors.ts';
+import { type CommerceD1CallObservation } from './commerceD1Harness.ts';
+import { OWNER, nativeDeliveryContext } from './deliveryStoreTestSupport.ts';
+import { claimRecoveryLease } from './deliveryRecoveryTestSupport.ts';
+import { createDeliveryRecoveryRecord, updateDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 
-test('recovery mutation contracts require delivery keys and typed lease fields', () => {
+const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
+
+test('recovery mutation contracts require delivery keys and an owned lease token', () => {
   type RecoveryKey = Parameters<typeof acquireDeliveryRecoveryLease>[1];
   type Lease = Parameters<typeof cancelDeliveryRecoveryAttempt>[2];
-  type Finalization = Parameters<typeof finalizeDeliveryRecoveryAttempt>[2];
+  type Finalization = Parameters<typeof finalizeDeliveryRecoveryAttempt>[3];
   const boundaries: [
     ReturnType<typeof commerceKeys.stripeCheckout> extends RecoveryKey ? false : true,
     string extends RecoveryKey ? false : true,
     string extends Lease['leaseExpiresAtMs'] ? false : true,
     'lastErrorCode' extends keyof Finalization ? false : true,
     number extends Finalization['errorCode'] ? false : true,
-  ] = [true, true, true, true, true];
-  assert.deepEqual(boundaries, [true, true, true, true, true]);
+    undefined extends Parameters<typeof finalizeDeliveryRecoveryAttempt>[2] ? false : true,
+  ] = [true, true, true, true, true, true];
+  assert.deepEqual(boundaries, [true, true, true, true, true, true]);
 });
 
 test('recovery leases preserve sparse and legacy raw fields when cancellation restores the order', async (context) => {
   const fixtures: CommerceDocumentData[] = [
-    {},
-    { attemptCount: '2.9', lastAttemptAt: null },
-    { attemptCount: { legacy: true }, lastAttemptAt: '90000' },
-    { attemptCount: 0, lastAttemptAt: 0 },
+    {}, { attemptCount: '2.9', lastAttemptAt: null },
+    { attemptCount: { legacy: true }, lastAttemptAt: '90000' }, { attemptCount: 0, lastAttemptAt: 0 },
   ];
   for (const original of fixtures) {
     const recovery = { ...original, custom: { keep: true } };
-    const native = await nativeDeliveryContext({
-      deliveryId: 7, status: 'processing', receiptRecovery: recovery, custom: ['keep'],
-    });
+    const native = await nativeDeliveryContext({ deliveryId: 7, status: 'processing', receiptRecovery: recovery, custom: ['keep'] });
     context.after(() => native.harness.database.close());
-    const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
+    const before = await readDeliveryRecovery(native.context, key);
+    assert.ok(before);
     const result = await acquireDeliveryRecoveryLease(native.context, key, OWNER, 100_000, false);
     assert.equal(result.acquired, true);
     if (!result.acquired) assert.fail('legacy recovery fields must remain recoverable');
@@ -57,9 +53,12 @@ test('recovery leases preserve sparse and legacy raw fields when cancellation re
     assert.deepEqual(result.lease.previousAttemptCount, original.attemptCount);
     assert.deepEqual(result.lease.previousLastAttemptAt, original.lastAttemptAt);
     await cancelDeliveryRecoveryAttempt(native.context, key, result.lease);
-    const stored = await readDeliveryOrder(native.context, key);
-    assert.deepEqual(stored?.data.receiptRecovery, recovery);
-    assert.deepEqual(stored?.data.custom, ['keep']);
+    const stored = await readDeliveryRecovery(native.context, key);
+    assert.deepEqual(stored?.order.data.receiptRecovery, recovery);
+    assert.deepEqual(stored?.order.data.custom, ['keep']);
+    assert.equal(stored?.order.version, before.order.version);
+    assert.equal(stored?.order.updateTime, before.order.updateTime);
+    assert.equal(stored?.state.leaseId, null);
   }
 });
 
@@ -70,209 +69,189 @@ test('recovery eligibility tolerates malformed and unknown legacy states without
   for (const status of [undefined, 4, 'future-status']) {
     const order: CommerceDocumentData = status === undefined ? {} : { status };
     assert.deepEqual(deliveryRecoveryEligibility(order, 100_000, true), {
-      eligible: false,
-      outcome: 'skipped_status',
+      eligible: false, outcome: 'skipped_status',
       message: `order status \`${typeof status === 'string' ? status : 'unknown'}\` is not recoverable`,
     });
   }
 });
 
-test('prepared recovery writes preserve newer document revisions without retrying', async (context) => {
+test('prepared recovery probes reject state-only changes without changing the parent', async (context) => {
   const native = await nativeDeliveryContext({ deliveryId: 7, status: 'prepared', receiptRecovery: { preparedProbeCount: 0 } });
   context.after(() => native.harness.database.close());
-  const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
-  const before = await readDeliveryOrder(native.context, key);
+  const before = await readDeliveryRecovery(native.context, key);
   assert.ok(before);
-  seedCommerceDocument(native.harness, {
-    key,
-    data: { ...before.data, receiptRecovery: { preparedProbeCount: 2, futureField: true } },
-    version: before.version + 1,
+  await native.context.repository.run(native.context.nowMs, async (unit) => {
+    const current = await unit.getRecoverySnapshot(key);
+    assert.ok(current);
+    unit.stageRecovery(patchDeliveryRecoveryRecord(current.state, { preparedProbeCount: 2 }, native.context.nowMs));
   });
-  await assert.rejects(
-    recordPreparedDeliveryRecoveryMiss(native.context, before, 100_000),
-    (error: unknown) => error instanceof CommerceWriteConflict,
-  );
-  const stored = await readDeliveryOrder(native.context, key);
-  assert.deepEqual(stored?.data.receiptRecovery, { preparedProbeCount: 2, futureField: true });
-  assert.equal(stored?.version, before.version + 1);
+  await assert.rejects(recordPreparedDeliveryRecoveryMiss(native.context, before, 100_000), CommerceWriteConflict);
+  const stored = await readDeliveryRecovery(native.context, key);
+  assert.deepEqual(stored?.order.data.receiptRecovery, { preparedProbeCount: 2 });
+  assert.equal(stored?.order.version, before.order.version);
+  assert.equal(stored?.order.updateTime, before.order.updateTime);
 });
 
-test('pending ready recovery queries all outbox marker states', async () => {
-  const native = await nativeDeliveryContext(readyNotificationOrderFields(7, true));
-  const result = await runPendingReadyNotificationQuery(native.context, OWNER);
-  assert.equal(result.length, 1);
-  assert.deepEqual((await native.context.repository.notificationOutbox.get(result[0].key.path, 'ready'))?.entries.map((entry) => entry.state), ['pending', 'pending']);
-});
-
-test('pending ready recovery pages past malformed identities', async () => {
-  const harness = createCommerceD1Harness();
-  const repository = new D1CommerceRepository(harness.db);
-  await repository.run(READY_NOTIFICATION_NOW_MS, async (unit) => {
-    for (let deliveryId = 1; deliveryId <= 8; deliveryId += 1) {
-      await unit.create(
-        commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
-        {
-          ...withoutNotificationFields(readyNotificationOrderFields(deliveryId)),
-          deliveryId: 999,
-        },
-      );
-    }
-    await unit.create(
-      commerceKeys.deliveryOrder('card_nft_2', '9'),
-      withoutNotificationFields(readyNotificationOrderFields(9)),
-    );
-  });
-  for (let id = 1; id <= 9; id += 1) seedReadyNotificationOutbox(harness, id, readyNotificationOrderFields(id));
-  const context = {
-    repository: new D1CommerceRepository(harness.db),
-    nowMs: READY_NOTIFICATION_NOW_MS,
-    providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
-    signal: new AbortController().signal,
-    dataDb: undefined as D1Database | undefined,
-  };
-  const result = await runPendingReadyNotificationQuery(context, OWNER);
-  assert.deepEqual(result.map((document) => document.key.documentId), ['9']);
-});
-
-test('recovery cancellation reads its document once', async () => {
+test('recovery cancellation reads one snapshot and preserves a pending submission atomically', async (context) => {
   const calls: CommerceD1CallObservation[] = [];
-  const pending = {
-    signature: SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    status: 'processing',
-    receiptRecovery: {
-      pendingSubmission: pending,
-      attemptCount: 2,
-      lastAttemptAt: 100,
-      leaseExpiresAt: 200,
-    },
-  }, { observeCall: (call) => calls.push(call) });
+  const native = await nativeDeliveryContext({ deliveryId: 7, status: 'processing' }, { observeCall: (call) => calls.push(call) });
+  context.after(() => native.harness.database.close());
+  const lease = await claimRecoveryLease(native.context);
+  await native.context.repository.run(native.context.nowMs, async (unit) => {
+    const snapshot = await unit.getRecoverySnapshot(key);
+    assert.ok(snapshot);
+    unit.stageRecovery(patchDeliveryRecoveryRecord(snapshot.state, { pendingSubmission: { malformed: true } }, native.context.nowMs));
+  });
+  const before = await readDeliveryRecovery(native.context, key);
   calls.length = 0;
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  await cancelDeliveryRecoveryAttempt(
-    native.context,
-    deliveryOrderKey(path),
-    {
-      attemptCount: 2,
-      lastAttemptAtMs: 100,
-      leaseExpiresAtMs: 200,
-      previousAttemptCount: 1,
-      previousLastAttemptAt: 50,
-    },
-  );
+  await cancelDeliveryRecoveryAttempt(native.context, key, lease);
   const reads = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call])
     .filter(({ sql }) => sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql));
   assert.equal(reads.length, 1);
+  await finalizeDeliveryRecoveryAttempt(native.context, key, lease, { errorCode: 'unavailable' });
+  assert.deepEqual(await readDeliveryRecovery(native.context, key), before);
 });
 
-test('recovery cancellation retries preserve a competing submission and recovery lease', async () => {
-  const pending = {
-    signature: SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-  const competing = { ...pending, signature: SECOND_SIGNATURE };
-  const fields = {
-    deliveryId: 7,
-    status: 'processing',
-    receiptRecovery: {
-      pendingSubmission: pending,
-      attemptCount: 2,
-      lastAttemptAt: 100,
-      leaseExpiresAt: 200,
-    },
-  };
-  let armed = false;
-  let changed = false;
-  const native = await nativeDeliveryContext(fields, {
-    observeBatchAfterCommit: ({ statements }) => {
-      if (!armed || changed || !statements.some(({ sql }) =>
-        sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql))) return;
-      changed = true;
-      seedCommerceDocument(native.harness, {
-        key: commerceKeys.deliveryOrder('card_nft_2', '7'),
-        data: {
-          ...fields,
-          receiptRecovery: {
-            pendingSubmission: competing,
-            attemptCount: 3,
-            lastAttemptAt: 300,
-            leaseExpiresAt: 400,
-          },
-        },
-        version: 2,
-      });
-    },
-  });
-  armed = true;
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  await cancelDeliveryRecoveryAttempt(
-    native.context,
-    deliveryOrderKey(path),
-    {
-      attemptCount: 2,
-      lastAttemptAtMs: 100,
-      leaseExpiresAtMs: 200,
-      previousAttemptCount: 1,
-      previousLastAttemptAt: 50,
-    },
-  );
-  assert.equal(changed, true);
-  const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(stored?.data.receiptRecovery, {
-    pendingSubmission: competing,
-    attemptCount: 3,
-    lastAttemptAt: 300,
-    leaseExpiresAt: 400,
-  });
-  assert.equal(stored?.data.receiptTxs, undefined);
+test('owned finalization cannot clear a replacement lease and state-only completion preserves parent version', async (context) => {
+  const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'processing' });
+  context.after(() => native.harness.database.close());
+  const first = await claimRecoveryLease(native.context);
+  const next = await acquireDeliveryRecoveryLease(native.context, key, OWNER, first.leaseExpiresAtMs + 1, true);
+  assert.ok(next.acquired);
+  const before = await readDeliveryRecovery(native.context, key);
+  assert.ok(before);
+  await cancelDeliveryRecoveryAttempt(native.context, key, first);
+  await finalizeDeliveryRecoveryAttempt(native.context, key, first, { errorCode: 'internal', message: 'stale' });
+  assert.deepEqual(await readDeliveryRecovery(native.context, key), before);
+  await finalizeDeliveryRecoveryAttempt(native.context, key, next.lease, {});
+  const completed = await readDeliveryRecovery(native.context, key);
+  assert.equal(completed?.state.leaseId, null);
+  assert.equal(completed?.order.version, before.order.version);
+  assert.equal(completed?.order.updateTime, before.order.updateTime);
+});
+
+test('concurrent recovery acquisition has one winner', async (context) => {
+  const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'processing' });
+  context.after(() => native.harness.database.close());
+  const results = await Promise.all(Array.from({ length: 2 }, () =>
+    acquireDeliveryRecoveryLease(native.context, key, OWNER, native.context.nowMs, true)));
+  assert.equal(results.filter((result) => result.acquired).length, 1);
+  assert.deepEqual(results.filter((result) => !result.acquired).map((result) => result.result.outcome), ['lease_active']);
 });
 
 test('delivery recovery eligibility preserves backoff, prepared probes, and force behavior', () => {
-  assert.deepEqual(
-    deliveryRecoveryEligibility({
-      status: 'processing',
-      receiptRecovery: { lastAttemptAt: 99_000 },
-    }, 100_000, false),
-    { eligible: false, outcome: 'not_eligible', message: 'processing order retry backoff is active' },
-  );
-  assert.deepEqual(
-    deliveryRecoveryEligibility(
-      {
-        status: 'prepared',
-        createdAt: 100,
-        receiptRecovery: { preparedProbeCount: 3 },
-      },
-      100_000,
-      false,
-    ),
-    { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' },
-  );
-  assert.deepEqual(
-    deliveryRecoveryEligibility({ status: 'prepared_abandoned' }, 100_000, true),
-    { eligible: true },
-  );
+  assert.deepEqual(deliveryRecoveryEligibility({ status: 'processing', receiptRecovery: { lastAttemptAt: 99_000 } }, 100_000, false), {
+    eligible: false, outcome: 'not_eligible', message: 'processing order retry backoff is active',
+  });
+  assert.deepEqual(deliveryRecoveryEligibility({ status: 'prepared', createdAt: 100, receiptRecovery: { preparedProbeCount: 3 } }, 100_000, false), {
+    eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted',
+  });
+  assert.deepEqual(deliveryRecoveryEligibility({ status: 'prepared_abandoned' }, 100_000, true), { eligible: true });
 });
 
-test('prepared recovery failures reread the leased order and preserve retryable scheduling', async () => {
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'prepared',
-    receiptRecovery: { preparedProbeCount: 0, leaseExpiresAt: 90_000 },
-  });
-  await handlePreparedRecoveryFailure(native.context, deliveryOrderKey(path), 'missing_delivery', 'failed-precondition', 1_000);
-  await handlePreparedRecoveryFailure(native.context, deliveryOrderKey(path), 'failed', 'unavailable', 2_000);
-  const recovered = await readCommerceRecord(native.context, requireCommerceKey(path));
-  const recovery = recovered?.data.receiptRecovery as Record<string, unknown>;
+test('prepared recovery failures preserve ownership and schedule before lease release', async (context) => {
+  const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'prepared', receiptRecovery: { preparedProbeCount: 0 } });
+  context.after(() => native.harness.database.close());
+  const lease = await claimRecoveryLease(native.context);
+  await handlePreparedRecoveryFailure(native.context, key, lease, 'missing_delivery', 'failed-precondition', native.context.nowMs + 1000);
+  await handlePreparedRecoveryFailure(native.context, key, lease, 'failed', 'unavailable', native.context.nowMs + 2000);
+  const recovered = await readDeliveryRecovery(native.context, key);
+  const recovery = recovered?.order.data.receiptRecovery as Record<string, unknown>;
   assert.equal(recovery.preparedProbeCount, 1);
-  assert.equal(recovery.lastPreparedProbeAt, 1_000);
-  assert.equal(recovery.nextPreparedProbeAt, 90_000);
+  assert.equal(recovery.lastPreparedProbeAt, native.context.nowMs + 1000);
+  assert.equal(recovery.nextPreparedProbeAt, lease.leaseExpiresAtMs);
+  await handlePreparedRecoveryFailure(native.context, key, lease, 'failed', 'failed-precondition', native.context.nowMs + 3000);
+  const abandoned = await readDeliveryRecovery(native.context, key);
+  assert.equal(abandoned?.order.data.status, 'prepared_abandoned');
+  assert.equal((abandoned?.order.data.receiptRecovery as Record<string, unknown>).nextPreparedProbeAt, undefined);
+});
+
+test('verified legacy issuance acquires a mandatory lease without broadening recovery eligibility', async (context) => {
+  for (const status of [undefined, 3, 'legacy-complete']) {
+    const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, ...(status === undefined ? {} : { status }) });
+    context.after(() => native.harness.database.close());
+    const skipped = await acquireDeliveryRecoveryLease(native.context, key, OWNER, native.context.nowMs, true);
+    assert.ok(!skipped.acquired);
+    assert.equal(skipped.result.outcome, 'skipped_status');
+    const verified = await readDeliveryRecovery(native.context, key);
+    assert.ok(verified);
+    const claimed = await acquireVerifiedReceiptIssuanceLease(native.context, verified, OWNER, native.context.nowMs);
+    assert.equal(claimed.snapshot.state.leaseId, claimed.lease.leaseId);
+    assert.equal(claimed.snapshot.state.revision, verified.state.revision + 1);
+    await assert.rejects(acquireVerifiedReceiptIssuanceLease(native.context, verified, OWNER, native.context.nowMs),
+      (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted');
+    const active = await readDeliveryRecovery(native.context, key);
+    assert.ok(active);
+    await assert.rejects(acquireVerifiedReceiptIssuanceLease(native.context, active, OWNER, native.context.nowMs),
+      (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted');
+  }
+});
+
+test('verified issuance rejects changed parents and delete-recreate generations', async (context) => {
+  for (const recreate of [false, true]) {
+    const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'legacy' });
+    context.after(() => native.harness.database.close());
+    const verified = await readDeliveryRecovery(native.context, key);
+    assert.ok(verified);
+    if (recreate) {
+      await native.context.repository.run(native.context.nowMs, async (unit) => { await unit.get(key); await unit.delete(key); });
+      await native.context.repository.run(native.context.nowMs, (unit) => unit.create(key, { deliveryId: 7, owner: OWNER, status: 'legacy' }));
+    } else {
+      await native.context.repository.run(native.context.nowMs, async (unit) => { await unit.get(key); await unit.update(key, { itemIds: ['changed'] }); });
+    }
+    await assert.rejects(acquireVerifiedReceiptIssuanceLease(native.context, verified, OWNER, native.context.nowMs),
+      (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted');
+    assert.equal((await readDeliveryRecovery(native.context, key))?.state.leaseId, null);
+  }
+});
+
+test('lease mutations preserve untouched recovery JSON and cancellation restores exact prior number fragments', async (context) => {
+  const custom = '{"integer":9007199254740993,"overflow":1e999,"nested":[-9007199254740993,{"text":"braces } ], comma, quote \\\" slash \\\\"}]}';
+  const escapedProperty = '"escaped\\u004bey" : [9007199254740993,1e999,{"duplicate":1,"duplicate":2}]';
+  for (const finalization of ['finalize', 'cancel'] as const) {
+    for (const previous of [
+      { attemptCount: '9007199254740993', lastAttemptAt: '1e999' },
+      { attemptCount: '{"legacy":[9007199254740993,1e999]}', lastAttemptAt: '[-9007199254740993,{"overflow":1e999}]' },
+      { attemptCount: '1e999', lastAttemptAt: '9007199254740993' },
+    ]) {
+      const native = await nativeDeliveryContext({ deliveryId: 7, owner: OWNER, status: 'processing' });
+      context.after(() => native.harness.database.close());
+      const raw = `{ "custom":${custom}, ${escapedProperty}, "attempt\\u0043ount":${previous.attemptCount}, "lastAttemptAt":${previous.lastAttemptAt} }`;
+      await native.context.repository.run(native.context.nowMs, async (unit) => {
+        const snapshot = await unit.getRecoverySnapshot(key);
+        assert.ok(snapshot);
+        unit.stageRecovery(updateDeliveryRecoveryRecord(snapshot.state, { receiptRecoveryJson: raw }, native.context.nowMs));
+      });
+      const lease = await claimRecoveryLease(native.context);
+      assert.equal(lease.previousAttemptCountJson, previous.attemptCount);
+      assert.equal(lease.previousLastAttemptAtJson, previous.lastAttemptAt);
+      const acquired = await readDeliveryRecovery(native.context, key);
+      assert.ok(acquired?.state.receiptRecoveryJson?.includes(`"custom":${custom}`));
+      assert.ok(acquired?.state.receiptRecoveryJson?.includes(escapedProperty));
+      if (finalization === 'cancel') await cancelDeliveryRecoveryAttempt(native.context, key, lease);
+      else await finalizeDeliveryRecoveryAttempt(native.context, key, lease, { errorCode: 'unavailable', message: 'retry' });
+      const final = await readDeliveryRecovery(native.context, key);
+      assert.ok(final?.state.receiptRecoveryJson?.includes(`"custom":${custom}`));
+      assert.ok(final?.state.receiptRecoveryJson?.includes(escapedProperty));
+      if (finalization === 'cancel') {
+        assert.ok(final?.state.receiptRecoveryJson?.includes(`"attemptCount":${previous.attemptCount}`));
+        assert.ok(final?.state.receiptRecoveryJson?.includes(`"lastAttemptAt":${previous.lastAttemptAt}`));
+      }
+      assert.equal(final?.state.leaseId, null);
+    }
+  }
+});
+
+test('recovery JSON patches retain duplicate unknown properties and mutate scalar roots as objects', () => {
+  const nowMs = 1000;
+  const original = createDeliveryRecoveryRecord({
+    parentPath: key.path, generation: crypto.randomUUID(), nowMs,
+    receiptRecoveryJson: '{"custom":9007199254740993,"custom":1e999,"attemptCount":2,"attempt\\u0043ount":3}',
+  });
+  const updated = patchDeliveryRecoveryRecord(original, { attemptCount: 4 }, nowMs);
+  assert.equal(updated.receiptRecoveryJson, '{"custom":9007199254740993,"custom":1e999,"attemptCount":4}');
+  for (const receiptRecoveryJson of [null, 'null', '1e999', '9007199254740993', '"legacy"', '[1e999]']) {
+    const record = createDeliveryRecoveryRecord({ parentPath: key.path, generation: crypto.randomUUID(), nowMs, receiptRecoveryJson });
+    assert.equal(patchDeliveryRecoveryRecord(record, { attemptCount: 1 }, nowMs).receiptRecoveryJson, '{"attemptCount":1}');
+  }
 });

@@ -1,3 +1,5 @@
+import { createDeliveryRecoveryRecord, updateDeliveryRecoveryRecord, parseDeliveryRecoveryRecord, type DeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.js';
+import { deliveryRecoveryWriteStatement, parseRecoveryState, recoverySnapshot, recoverySnapshotColumns, type RecoverySnapshot } from './deliveryRecoveryPersistence.js';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -110,6 +112,8 @@ function parseConflictResult(result: D1Result<Record<string, unknown>>): boolean
 export class CommerceUnitOfWork {
   private authorityChecked = false;
   private checkoutStateChecked = false;
+  private readonly originalRecovery = new Map<string, DeliveryRecoveryRecord | null>();
+  private readonly pendingRecovery = new Map<string, DeliveryRecoveryRecord>();
   private closed = false;
   private readonly deliveryOwnerExpectations = new Map<string, number>();
   private readonly expectations = new Map<string, DocumentExpectation>();
@@ -137,6 +141,60 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const document = await this.load(key);
     return document ? publicRecord(document) : null;
+  }
+
+  async getRecoverySnapshot(key: CommerceDocumentKey<'delivery_order'>): Promise<RecoverySnapshot | null> {
+    this.assertOpen();
+    if (this.writesStarted && !this.pendingRecovery.has(key.path) && !this.originalRecovery.has(key.path)) {
+      throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
+    }
+    return this.loadRecoverySnapshot(key);
+  }
+
+  stageRecovery(input: DeliveryRecoveryRecord): void {
+    this.assertOpen();
+    const record = parseDeliveryRecoveryRecord(input);
+    if (!this.originalRecovery.has(record.parentPath)) {
+      throw new CommerceRepositoryError('invalid-argument', 'Recovery state must be read before mutation.');
+    }
+    const original = this.originalRecovery.get(record.parentPath);
+    const current = this.pendingRecovery.get(record.parentPath) ?? original;
+    if (!current || record.generation !== current.generation || record.createdAtMs !== current.createdAtMs ||
+      record.revision !== current.revision + 1 || record.updatedAtMs < current.updatedAtMs) {
+      throw new CommerceWriteConflict();
+    }
+    this.writesStarted = true;
+    this.pendingRecovery.set(record.parentPath, { ...record, revision: (original?.revision ?? 0) + 1 });
+  }
+
+  private async loadRecoverySnapshot(key: CommerceDocumentKey<'delivery_order'>): Promise<RecoverySnapshot | null> {
+    if (!this.originalRecovery.has(key.path)) {
+      await this.readBatch([
+        this.db.prepare('SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1'),
+        this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}, ${recoverySnapshotColumns('commerce_documents')}
+          FROM commerce_documents WHERE document_path = ?`).bind(key.path),
+        this.db.prepare('SELECT revision FROM commerce_document_path_revisions WHERE document_path = ?').bind(key.path),
+      ], ([control, documents, revisions]) => {
+        if (control.results.length !== 1 || control.results[0].storage_mode !== 'table' || documents.results.length > 1 || revisions.results.length > 1) throw unavailableCommerce();
+        const pathRevision = revisions.results[0]?.revision ?? 0;
+        if (typeof pathRevision !== 'number' || !Number.isSafeInteger(pathRevision) || pathRevision < 0) throw unavailableCommerceData();
+        const row = documents.results[0];
+        const document = row ? parseRow(row) : null;
+        if (document) assertDocumentIdentity(document.key, key);
+        this.recordRead(key.path, document?.version ?? -1, document, pathRevision);
+        let state: DeliveryRecoveryRecord | null = null;
+        if (document) {
+          state = parseRecoveryState(row);
+          if (state.parentPath !== key.path) throw unavailableCommerceData();
+        }
+        this.originalRecovery.set(key.path, state);
+      });
+    }
+    const document = this.pending.has(key.path) ? this.pending.get(key.path) : this.original.get(key.path);
+    if (!document) return null;
+    const state = this.pendingRecovery.get(key.path) ?? this.originalRecovery.get(key.path);
+    if (!state) throw unavailableCommerceData();
+    return recoverySnapshot(document, state, this.expectations.get(key.path)?.pathRevision ?? 0);
   }
 
   async getNotificationOutbox(parentPath: string, family: NotificationOutboxFamily): Promise<NotificationOutboxRecord | null> {
@@ -287,6 +345,16 @@ export class CommerceUnitOfWork {
     if (current) throw new CommerceWriteConflict('already-exists');
     this.createPaths.add(key.path);
     const document = this.newDocument(key, data);
+    if (key.kind === 'delivery_order') {
+      const receiptRecoveryJson = Object.hasOwn(document.data, 'receiptRecovery') ? JSON.stringify(document.data.receiptRecovery) : null;
+      const previous = this.originalRecovery.get(key.path);
+      if (!this.originalRecovery.has(key.path)) this.originalRecovery.set(key.path, null);
+      this.pendingRecovery.set(key.path, previous
+        ? updateDeliveryRecoveryRecord(previous, { receiptRecoveryJson, leaseId: null }, this.nowMs)
+        : createDeliveryRecoveryRecord({ parentPath: key.path, receiptRecoveryJson, nowMs: this.nowMs, generation: crypto.randomUUID() }));
+      delete document.data.receiptRecovery;
+      document.rawData = this.deliveryMetadata(document.data, this.original.get(key.path) ?? null);
+    }
     this.pending.set(key.path, document);
     return publicRecord(document);
   }
@@ -298,6 +366,11 @@ export class CommerceUnitOfWork {
   ): Promise<void> {
     this.assertOpen();
     const current = await this.loadForMutation(key);
+    if (key.kind === 'delivery_order' && !current) {
+      await this.create({ ...key, kind: 'delivery_order' }, data);
+      return;
+    }
+    this.rejectRecoveryUpdates(key, data);
     if (!options.merge) {
       this.pending.set(key.path, this.replaceDocument(key, current, data));
       return;
@@ -308,6 +381,7 @@ export class CommerceUnitOfWork {
 
   async update(key: CommerceDocumentKey, updates: Readonly<Record<string, CommerceUpdateValue>>): Promise<void> {
     this.assertOpen();
+    this.rejectRecoveryUpdates(key, updates);
     const current = await this.loadForMutation(key);
     if (!current) throw new CommerceWriteConflict('failed-precondition');
     if (!this.createPaths.has(key.path)) this.existingPaths.add(key.path);
@@ -316,10 +390,12 @@ export class CommerceUnitOfWork {
 
   async delete(key: CommerceDocumentKey, options: Readonly<{ mustExist?: boolean }> = {}): Promise<void> {
     this.assertOpen();
+    if (key.kind === 'delivery_order') await this.loadRecoverySnapshot({ ...key, kind: 'delivery_order' });
     const current = await this.loadForMutation(key);
     if (options.mustExist && !current) throw new CommerceWriteConflict('failed-precondition');
     if (options.mustExist && !this.createPaths.has(key.path)) this.existingPaths.add(key.path);
     this.pending.set(key.path, null);
+    this.pendingRecovery.delete(key.path);
   }
 
   async commit(): Promise<void> {
@@ -327,8 +403,8 @@ export class CommerceUnitOfWork {
     this.closed = true;
     const documentExpectationsJson = JSON.stringify(this.serializedDocumentExpectations());
     const deliveryOwnerExpectationsJson = JSON.stringify(this.serializedDeliveryOwnerExpectations());
-    if (!this.pending.size && !this.pendingOutboxes.size) {
-      if (!this.deliveryOwnerExpectations.size && !this.expectations.size && !this.originalOutboxes.size) {
+    if (!this.pending.size && !this.pendingOutboxes.size && !this.pendingRecovery.size) {
+      if (!this.deliveryOwnerExpectations.size && !this.expectations.size && !this.originalOutboxes.size && !this.originalRecovery.size) {
         await authority(this.db);
         return;
       }
@@ -336,11 +412,15 @@ export class CommerceUnitOfWork {
       return;
     }
     const guardId = crypto.randomUUID();
+    const deliveryPaths = Array.from(this.pending, ([path, document]) =>
+      (document ?? this.original.get(path))?.key.kind === 'delivery_order' ? path : null).filter((path): path is string => path !== null);
+    const usesRecovery = this.originalRecovery.size > 0 || deliveryPaths.length > 0;
     const statements: D1PreparedStatement[] = [
       this.db.prepare(`INSERT INTO commerce_commit_guards (
         guard_id, expectations_json, delivery_owner_expectations_json,
         expected_documents_revision, created_at_ms, notification_outbox_expectations_json, stripe_checkout_paths_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(
+        ${usesRecovery ? ', delivery_recovery_expectations_json, delivery_recovery_paths_json' : ''}
+      ) VALUES (?, ?, ?, ?, ?, ?, ?${usesRecovery ? ', ?, ?' : ''})`).bind(
         guardId,
         documentExpectationsJson,
         deliveryOwnerExpectationsJson,
@@ -349,6 +429,7 @@ export class CommerceUnitOfWork {
         this.serializedOutboxExpectations(),
         JSON.stringify(Array.from(this.pending, ([path, document]) =>
           (document ?? this.original.get(path))?.key.kind === 'stripe_checkout' ? path : null).filter(Boolean)),
+        ...(usesRecovery ? [this.serializedRecoveryExpectations(), JSON.stringify(deliveryPaths)] : []),
       ),
     ];
     for (const [path, document] of this.pending) {
@@ -371,7 +452,11 @@ export class CommerceUnitOfWork {
         document_kind = excluded.document_kind,
         drop_id = excluded.drop_id,
         document_id = excluded.document_id,
-        document_json = excluded.document_json,
+        document_json = ${document.key.kind === 'delivery_order'
+          ? `CASE WHEN json_type(commerce_documents.document_json, '$.receiptRecovery') IS NULL
+              THEN json_remove(excluded.document_json, '$.receiptRecovery')
+              ELSE json_set(excluded.document_json, '$.receiptRecovery', json(commerce_documents.document_json -> '$.receiptRecovery')) END`
+          : 'excluded.document_json'},
         version = excluded.version,
         create_time = excluded.create_time,
         update_time = excluded.update_time,
@@ -394,6 +479,9 @@ export class CommerceUnitOfWork {
           stripeCheckoutStateFromDocument(path, document.data, document.version)));
       }
     }
+    for (const state of this.pendingRecovery.values()) {
+      statements.push(deliveryRecoveryWriteStatement(this.db, state, this.originalRecovery.get(state.parentPath) === null));
+    }
     for (const outbox of this.pendingOutboxes.values()) {
       statements.push(notificationOutboxWriteStatement(this.db, outbox));
     }
@@ -412,7 +500,7 @@ export class CommerceUnitOfWork {
       await this.db.batch(statements);
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (/authority is not d1|notification outbox is unavailable|stripe checkout state is unavailable|pack-status outbox is unavailable/i.test(message)) {
+      if (/authority is not d1|notification outbox is unavailable|stripe checkout state is unavailable|pack-status outbox is unavailable|delivery recovery is unavailable/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
       if (/transaction conflict|UNIQUE constraint|cannot start a transaction within a transaction/i.test(message)) {
@@ -433,6 +521,7 @@ export class CommerceUnitOfWork {
     this.pending.clear();
     this.pendingOutboxes.clear();
     this.pendingPackStatusOutboxes.clear();
+    this.pendingRecovery.clear();
   }
 
   private assertOpen(): void {
@@ -447,6 +536,25 @@ export class CommerceUnitOfWork {
   private serializedDocumentExpectations(): DocumentExpectation[] {
     return Array.from(this.expectations.values())
       .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  }
+
+  private serializedRecoveryExpectations(): string {
+    return JSON.stringify(Array.from(this.originalRecovery, ([parentPath, state]) => ({
+      parentPath, generation: state?.generation ?? null, revision: state?.revision ?? -1,
+    })));
+  }
+
+  private rejectRecoveryUpdates(key: CommerceDocumentKey, updates: Readonly<Record<string, unknown>>): void {
+    if (key.kind === 'delivery_order' && Object.keys(updates).some((field) => field === 'receiptRecovery' || field.startsWith('receiptRecovery.'))) {
+      throw new CommerceRepositoryError('invalid-argument', 'Use the delivery recovery state store.');
+    }
+  }
+
+  private deliveryMetadata(data: CommerceDocumentData, current: StoredDocument | null): CommerceDocumentData {
+    const metadata = { ...data };
+    delete metadata.receiptRecovery;
+    if (current && Object.hasOwn(current.rawData, 'receiptRecovery')) metadata.receiptRecovery = current.rawData.receiptRecovery;
+    return metadata;
   }
 
   private serializedOutboxExpectations(): string {
@@ -488,6 +596,13 @@ export class CommerceUnitOfWork {
                 CAST(json_extract(expectation.value, '$.pathRevision') AS INTEGER)
             )
         ) AS conflict`).bind(documentExpectationsJson),
+        ...(this.originalRecovery.size ? [this.db.prepare(`SELECT
+          NOT EXISTS (SELECT 1 FROM commerce_delivery_recovery_control WHERE singleton = 1 AND storage_mode = 'table') OR EXISTS (
+            SELECT 1 FROM json_each(?) AS expected LEFT JOIN commerce_delivery_recovery AS state
+              ON state.parent_path = json_extract(expected.value, '$.parentPath')
+            WHERE COALESCE(state.revision, -1) <> json_extract(expected.value, '$.revision')
+              OR state.generation IS NOT json_extract(expected.value, '$.generation')
+          ) AS conflict`).bind(this.serializedRecoveryExpectations())] : []),
         ...(this.originalOutboxes.size ? [this.db.prepare(`SELECT CASE WHEN ? = 0 THEN 0 ELSE
           NOT EXISTS (SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'table') OR EXISTS (
             SELECT 1 FROM json_each(?) AS expectation
@@ -501,8 +616,8 @@ export class CommerceUnitOfWork {
     } catch (error) {
       throw unavailableCommerce(error);
     }
-    if (results.length !== 3 + Number(this.originalOutboxes.size > 0)) throw unavailableCommerce();
-    const [authorityResult, ownerResult, documentResult, outboxResult] = results;
+    if (results.length !== 3 + Number(this.originalOutboxes.size > 0) + Number(this.originalRecovery.size > 0)) throw unavailableCommerce();
+    const [authorityResult, ...conflicts] = results;
     if (
       authorityResult.success !== true ||
       authorityResult.results.length !== 1 ||
@@ -511,8 +626,7 @@ export class CommerceUnitOfWork {
     const control = parseAuthorityControl(authorityResult.results[0]);
     if (control.state !== 'd1') throw unavailableCommerce();
     if (
-      parseConflictResult(ownerResult) ||
-      parseConflictResult(documentResult) || (outboxResult && parseConflictResult(outboxResult))
+      conflicts.some(parseConflictResult)
     ) {
       throw new CommerceWriteConflict();
     }
@@ -576,7 +690,8 @@ export class CommerceUnitOfWork {
       this.db.prepare(`SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
         WHERE document_path IN (${placeholders})`).bind(...paths),
       ...(checkCheckoutState ? [this.db.prepare('SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1')] : []),
-    ], ([revisionResult, documentResult, checkoutStateResult]) => {
+    ], (results) => {
+      const [revisionResult, documentResult, checkoutStateResult] = results;
       if (checkCheckoutState) {
         if (checkoutStateResult.results.length !== 1 || checkoutStateResult.results[0].storage_mode !== 'table') {
           throw unavailableCommerce();
@@ -676,7 +791,7 @@ export class CommerceUnitOfWork {
       data: materialized.data,
       rawData: key.kind === 'stripe_checkout'
         ? stripeCheckoutStateMetadata(materialized.data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {})
-        : materialized.data,
+        : key.kind === 'delivery_order' ? this.deliveryMetadata(materialized.data, current) : materialized.data,
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
@@ -712,7 +827,7 @@ export class CommerceUnitOfWork {
     if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, data, version);
     const rawData = key.kind === 'stripe_checkout'
       ? stateOnly && current ? current.rawData : this.checkoutMetadata(key, data, current)
-      : data;
+      : key.kind === 'delivery_order' ? this.deliveryMetadata(data, current) : data;
     return {
       createTime: current?.createTime || commitTime,
       data,

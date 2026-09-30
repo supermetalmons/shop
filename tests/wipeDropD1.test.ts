@@ -14,8 +14,10 @@ import {
   verifyCommerceD1Wipe,
   withCommerceWipeAuthorityLease,
 } from '../scripts/ops/wipeDrop.ts';
-import { acquireCommerceAuthorityLease, hasPackStatusOutboxSchema } from '../scripts/shared/commerceD1Maintenance.ts';
+import { acquireCommerceAuthorityLease, hasDeliveryRecoveryStateSchema, hasPackStatusOutboxSchema } from '../scripts/shared/commerceD1Maintenance.ts';
 import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
+import { runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
+import { parseDeliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
 import type {
   CommerceD1Authority,
   CommerceD1Document,
@@ -758,4 +760,63 @@ test('Commerce D1 wipe snapshots pack-status rows and verifies exact parent casc
   }
   verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, query);
   assert.equal(query('SELECT COUNT(*) AS count FROM commerce_wipe_guards')[0].count, 0);
+});
+
+test('Commerce D1 wipe validates recovery generations and revisions and verifies parent cascades', async (context) => {
+  const db = database();
+  context.after(() => db.close());
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0030_delivery_recovery.sql', 'utf8'));
+  const target = document('delivery_order', 'target', '7', { receiptRecovery: { leaseExpiresAt: 90000 } });
+  const other = document('delivery_order', 'other', '8', {});
+  insertDocumentEpoch(db, [target, other]);
+  pauseCommerce(db);
+  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
+  await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
+  await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+  insertAuthorityLease(db);
+  const recoveryRecords = query("SELECT * FROM commerce_delivery_recovery WHERE parent_path = 'drops/target/deliveryOrders/7'")
+    .map(parseDeliveryRecoveryRow);
+  const input = {
+    authority: { ...authority, documentsRevision: 1 }, dropId: 'target', inventory: emptyInventory,
+    targetDocuments: [target], assignmentDocuments: [], claimDocuments: [], deliveryRecoveryRecords: recoveryRecords,
+  };
+  const wipePlan = buildCommerceD1PlanFromDocuments(input);
+  assert.equal(wipePlan.deliveryRecoveryStateCount, 1);
+  assert.equal(sameCommerceD1Plan(wipePlan, { ...wipePlan, deliveryRecoveryStateCount: 0 }), false);
+  assert.throws(() => buildCommerceD1PlanFromDocuments({ ...input, deliveryRecoveryRecords: [...recoveryRecords, ...recoveryRecords] }), /does not match/);
+  assert.throws(() => buildCommerceD1PlanFromDocuments({ ...input, deliveryRecoveryRecords: recoveryRecords.map((row) => ({
+    ...row, parentPath: other.path,
+  })) }), /does not match/);
+  assert.throws(() => executeTransaction(db, buildCommerceD1WipeSql({
+    ...wipePlan, deliveryRecoveryStateCount: 0,
+  }, 'stale-recovery-count', 67000)), /commerce wipe conflict/);
+  for (const changed of [{ revision: 2 }, { generation: '00000000-0000-4000-8000-000000000888' }]) {
+    const stalePlan = { ...wipePlan, deliveryRecoveryExpectations: wipePlan.deliveryRecoveryExpectations.map((row) => ({ ...row, ...changed })) };
+    assert.equal(sameCommerceD1Plan(wipePlan, stalePlan), false);
+    assert.throws(() => executeTransaction(db, buildCommerceD1WipeSql(stalePlan, 'stale-recovery-token', 67000)), /delivery recovery changed/);
+    assert.equal(query('SELECT COUNT(*) AS count FROM commerce_documents')[0].count, 2);
+  }
+  const guardId = 'wipe:target:recovery';
+  const sql = buildCommerceD1WipeSql(wipePlan, guardId, 67000);
+  assert.doesNotMatch(sql, /DELETE FROM commerce_delivery_recovery/);
+  executeTransaction(db, sql);
+  assert.deepEqual(query('SELECT parent_path FROM commerce_delivery_recovery'), [{ parent_path: other.path }]);
+  for (const count of [1, 'invalid']) {
+    assert.throws(() => verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, (statement) => query(statement)
+      .map((row) => ({ ...row, delivery_recovery_state_count: count }))), /verification failed/);
+  }
+  verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, query);
+});
+
+test('Commerce D1 wipe preserves pre-recovery schemas and rejects partial recovery schemas', (context) => {
+  const db = database();
+  context.after(() => db.close());
+  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  assert.equal(hasDeliveryRecoveryStateSchema(query), false);
+  const legacyPlan = plan();
+  assert.equal(legacyPlan.deliveryRecoveryStateCount, null);
+  assert.doesNotMatch(buildCommerceD1WipeSql(legacyPlan, 'legacy-recovery', 67000), /delivery_recovery/);
+  db.exec('CREATE TABLE commerce_delivery_recovery (parent_path TEXT PRIMARY KEY)');
+  assert.throws(() => hasDeliveryRecoveryStateSchema(query), /schema is incomplete/);
 });

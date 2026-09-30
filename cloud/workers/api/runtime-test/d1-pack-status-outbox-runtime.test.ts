@@ -13,6 +13,8 @@ import {
 import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
 import { packStatusOutboxDueQuery } from '../src/commerceQueries.ts';
 import type { PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
+import { createDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
+import { deliveryRecoveryWriteStatement } from '../src/deliveryRecoveryPersistence.ts';
 
 function lease(db: D1Database): D1PreparedStatement {
   return db.prepare(`INSERT INTO commerce_authority_control_lease (singleton, lease_token, acquired_at_ms, expires_at_ms)
@@ -98,6 +100,19 @@ test('real D1 expands pack-status outboxes and preserves atomic enqueue, CAS, in
     ]);
     await assert.rejects(repository.packStatusOutbox.get(key.path), { code: 'unavailable' });
 
+    copyFileSync(join(source, '0030_delivery_recovery.sql'), join(directory, '0030_delivery_recovery.sql'));
+    await worker.applyD1Migrations('COMMERCE_DB');
+    await db.batch([...pause(db),
+      db.prepare(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'preparing',
+        source_documents_revision = (SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1)`),
+      deliveryRecoveryWriteStatement(db, createDeliveryRecoveryRecord({
+        parentPath: key.path, receiptRecoveryJson: null, nowMs: 0, generation: crypto.randomUUID(),
+      }), true),
+      db.prepare("UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 0"),
+      db.prepare("UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'"),
+      ...resume(db),
+    ]);
+
     const rollbackKey = commerceKeys.deliveryOrder('runtime', 'rollback');
     const beforeRollback = await db.prepare('SELECT documents_revision FROM commerce_authority_control').first();
     await assert.rejects(repository.run(100, async (unit) => {
@@ -122,8 +137,8 @@ test('real D1 expands pack-status outboxes and preserves atomic enqueue, CAS, in
     await db.prepare("UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table'").run();
     await db.batch(resume(db));
     assert.deepEqual(await repository.packStatusOutbox.get(key.path), imported);
-    await assert.rejects(db.prepare("UPDATE commerce_documents SET document_json = json_set(document_json, '$.packStatusProjectionFailureCount', 1), version = version + 1 WHERE document_path = ?")
-      .bind(key.path).run(), /legacy pack-status projection writes are disabled/);
+    await assert.rejects(repository.run(50, (unit) => unit.update(key, { packStatusProjectionFailureCount: 1 })),
+      /legacy pack-status projection writes are disabled/);
 
     const parentBeforeRetry = await db.prepare('SELECT document_json, version, update_time FROM commerce_documents WHERE document_path = ?').bind(key.path).first();
     const revisionBeforeRetry = await db.prepare('SELECT documents_revision FROM commerce_authority_control').first();
@@ -180,10 +195,11 @@ test('real D1 expands pack-status outboxes and preserves atomic enqueue, CAS, in
       const entry = commerceKeys.deliveryOrder('due', `completed-${index}`);
       fixtures.push({ key: entry, row: outbox(entry, { state: 'completed', nextAttemptAtMs: null, completedAtMs: 0 }) });
     }
-    await db.batch([
-      ...fixtures.flatMap((entry) => [insertParent(db, entry.key, { status: 'ready_to_ship' }), packStatusOutboxInsertStatement(db, entry.row)]),
-      db.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
-    ]);
+    await repository.run(1_000, async (unit) => {
+      await unit.getMany(fixtures.map((entry) => entry.key));
+      for (const entry of fixtures) await unit.create(entry.key, { status: 'ready_to_ship' });
+    });
+    await db.batch(fixtures.map((entry) => packStatusOutboxInsertStatement(db, entry.row)));
     const query = packStatusOutboxDueQuery({ dropId: 'due', dueAtMs: 2, limit: 2 });
     for (const analyzed of [false, true]) {
       if (analyzed) await db.prepare('ANALYZE commerce_pack_status_outbox').run();
@@ -198,14 +214,15 @@ test('real D1 expands pack-status outboxes and preserves atomic enqueue, CAS, in
       assert.doesNotMatch(plan, /SCAN|USE TEMP B-TREE/);
     }
     await assert.rejects(db.prepare('DELETE FROM commerce_documents WHERE document_path = ?').bind(key.path).run(),
-      /pack-status outbox deletion requires maintenance/);
+      /guarded deletion/);
     assert.deepEqual(await repository.packStatusOutbox.get(key.path), completed);
     await db.batch(pause(db));
     await assert.rejects(repository.packStatusOutbox.get(key.path), { code: 'unavailable' });
     await assert.rejects(repository.packStatusOutbox.compareAndSet({ expected: completed, changes: complete, nowMs: 900 }),
       { code: 'unavailable' });
-    await db.prepare('DELETE FROM commerce_documents WHERE document_path = ?').bind(key.path).run();
-    assert.equal(await db.prepare('SELECT parent_path FROM commerce_pack_status_outbox WHERE parent_path = ?').bind(key.path).first(), null);
+    await assert.rejects(db.prepare('DELETE FROM commerce_documents WHERE document_path = ?').bind(key.path).run(), /guarded deletion/);
+    assert.equal((await db.prepare('SELECT parent_path FROM commerce_pack_status_outbox WHERE parent_path = ?').bind(key.path)
+      .first<{ parent_path: string }>())?.parent_path, key.path);
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox WHERE drop_id = ?').bind('other')
       .first<{ count: number }>())!.count, 1);
     const foreignKeys = await db.prepare('PRAGMA foreign_key_list(commerce_pack_status_outbox)').all<{ table: string; from: string; to: string; on_delete: string }>();

@@ -1,3 +1,5 @@
+import { createDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
+import { deliveryRecoveryWriteStatement } from '../src/deliveryRecoveryPersistence.ts';
 import { LEGACY_NOTIFICATION_FIELDS, type NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
 import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepository.ts';
 import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
@@ -39,7 +41,8 @@ function insertDocument(
   data: CommerceDocumentData,
   processedAt: CommerceTimestamp | null = null,
 ): D1PreparedStatement[] {
-  const metadata = key.kind === 'stripe_checkout' ? stripeCheckoutStateMetadata(data, {}) : data;
+  const metadata = key.kind === 'stripe_checkout' ? stripeCheckoutStateMetadata(data, {}) : { ...data };
+  if (key.kind === 'delivery_order') delete metadata.receiptRecovery;
   const statement = db.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time, processed_at_seconds, processed_at_nanos
@@ -54,6 +57,18 @@ function insertDocument(
     processedAt?.seconds ?? null,
     processedAt?.nanos ?? null,
   );
+  if (key.kind === 'delivery_order') {
+    const guardId = crypto.randomUUID();
+    const state = createDeliveryRecoveryRecord({ parentPath: key.path, nowMs: 0, generation: crypto.randomUUID(),
+      receiptRecoveryJson: Object.hasOwn(data, 'receiptRecovery') ? JSON.stringify(data.receiptRecovery) : null });
+    return [
+      db.prepare(`INSERT INTO commerce_commit_guards
+        (guard_id, expectations_json, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
+        VALUES (?, '[]', 0, ?, ?)`).bind(guardId, JSON.stringify([key.path]), JSON.stringify([{ parentPath: key.path, generation: null, revision: -1 }])),
+      statement, deliveryRecoveryWriteStatement(db, state, true),
+      db.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId),
+    ];
+  }
   if (key.kind !== 'stripe_checkout') return [statement];
   const guardId = crypto.randomUUID();
   return [
@@ -233,6 +248,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0027_preorder_expiry_claim_release.sql',
       '0028_preorder_card_range_1413.sql',
       '0029_pack_status_outbox.sql',
+      '0030_delivery_recovery.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -274,6 +290,9 @@ test('commerce repository reads and transaction guards run through the real D1 r
       env.COMMERCE_DB.prepare(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready',
         prepared_at_ms = 0 WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table' WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'preparing', source_documents_revision = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 0 WHERE singleton = 1`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_delivery_recovery_control SET storage_mode = 'table' WHERE singleton = 1`),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
           updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -864,7 +883,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.match(readyDuePlanDetails, /SEARCH .* USING (?:COVERING )?INDEX commerce_notification_outbox_family_due\b/);
     assert.doesNotMatch(readyDuePlanDetails, /SCAN commerce_documents|USE TEMP B-TREE/i);
 
-    assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
+    assert.deepEqual(await observedRepository.queryDeliveryRecoveryPage({ owner: 'paused-owner', phase: 'processing', limit: 8 }), []);
     const emptyRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(emptyRecoveryRowsRead), true);
     assert.equal(emptyRecoveryRowsRead >= 0, true);
@@ -886,10 +905,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
     ]);
     observedBatchResults = undefined;
     assert.deepEqual(
-      (await observedRepository.queryDeliveryRecoveryOrders('paused-owner'))
-        .map((record) => record.key.documentId)
+      (await observedRepository.queryDeliveryRecoveryPage({ owner: 'paused-owner', phase: 'processing', limit: 8 }))
+        .map((record) => record.order.key.documentId)
         .sort(),
-      ['recovery-prepared', 'recovery-processing'],
+      ['recovery-processing'],
     );
     const matchingRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(matchingRecoveryRowsRead), true);
@@ -897,7 +916,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.equal(matchingRecoveryRowsRead <= 8, true);
 
     const recoveryPage = { owner: 'paused-owner', dropId: 'runtime', phase: 'processing', limit: 9 } as const;
-    assert.deepEqual((await repository.queryDeliveryRecoveryPage(recoveryPage)).map((row) => row.key.documentId),
+    assert.deepEqual((await repository.queryDeliveryRecoveryPage(recoveryPage)).map((row) => row.order.key.documentId),
       ['recovery-processing']);
     assert.deepEqual(await repository.queryDeliveryRecoveryPage({ ...recoveryPage, dropId: 'other' }), []);
     assert.deepEqual(await repository.queryDeliveryRecoveryPage({
@@ -1147,7 +1166,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
 
     observedBatchResults = undefined;
     await assert.rejects(
-      observedRepository.queryDeliveryRecoveryOrders('paused-owner'),
+      observedRepository.queryDeliveryRecoveryPage({ owner: 'paused-owner', phase: 'processing', limit: 8 }),
       (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable',
     );
     const pausedRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);

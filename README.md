@@ -29,6 +29,9 @@ control, rate-limit state, and shipment and fulfillment data.
 - Stripe checkout lifecycle, processing leases, and retry timestamps use
   `commerce_stripe_checkout_state`. Checkout metadata remains in commerce
   documents; legacy lifecycle fields are frozen after activation.
+- Delivery receipt recovery leases, pending transaction journals, and retry
+  timestamps use `commerce_delivery_recovery`. Recovery updates have their own
+  generation and revision; ordinary order edits do not invalidate a recovery claim.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -403,6 +406,16 @@ initial deployment; `deploy:api` verifies this readiness. Inspect state with
 does not broadcast transactions or send emails, and retains checkout versions,
 processing claims, and retry history. Publish the frontend after API activation
 and resumption so the delivery recovery cursor API is available first.
+
+Delivery recovery migration `0030_delivery_recovery.sql` requires the same
+pause, backfill, compatible API publication, activation, and resume sequence.
+Follow the [delivery recovery cutover](scripts/docs/delivery_recovery_state_cutover.md).
+`npm run delivery-recovery-state-control -- status` verifies source or active
+state without contacting providers. Backfill preserves pending transaction
+journals and legacy lease expiry. Activation freezes the parent recovery JSON;
+old Workers cannot overwrite it. Broad recovery requests must explicitly send
+`cursor: null` for the first page. Cached clients that omit it receive a refresh
+error; targeted recovery requests retain their existing contract.
 
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,

@@ -16,11 +16,11 @@ test('recovery pages filter by wallet, drop and phase before applying stable pat
   })));
   const args = { owner: 'wallet', dropId: 'drop', phase: 'processing', limit: 9 } as const;
   const first = await repository.queryDeliveryRecoveryPage(args);
-  assert.deepEqual(first.map((row) => row.key.documentId), ['03', '06', '07', '08', '09', '10', '11', '12', '13']);
-  const tail = await repository.queryDeliveryRecoveryPage({ ...args, startAfterPath: first.at(-1)!.key.path });
-  assert.deepEqual(tail.map((row) => row.key.documentId), ['14', '15', '16', '17']);
+  assert.deepEqual(first.map((row) => row.order.key.documentId), ['03', '06', '07', '08', '09', '10', '11', '12', '13']);
+  const tail = await repository.queryDeliveryRecoveryPage({ ...args, startAfterPath: first.at(-1)!.order.key.path });
+  assert.deepEqual(tail.map((row) => row.order.key.documentId), ['14', '15', '16', '17']);
   const prepared = await repository.queryDeliveryRecoveryPage({ ...args, phase: 'prepared' });
-  assert.deepEqual(prepared.map((row) => row.key.documentId), ['05']);
+  assert.deepEqual(prepared.map((row) => row.order.key.documentId), ['05']);
   const query = deliveryRecoveryPageQuery(args);
   const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings);
   assert.ok(plan.some((row) => String(row.detail).includes('commerce_documents_delivery_owner_status')));
@@ -46,7 +46,7 @@ test('ready recovery pages include only pending notifications for the requested 
   }
   const args = { owner: 'wallet', dropId: 'drop', phase: 'ready', limit: 9 } as const;
   const page = await repository.queryDeliveryRecoveryPage(args);
-  assert.deepEqual(page.map((row) => row.key.path), [keys[1].path]);
+  assert.deepEqual(page.map((row) => row.order.key.path), [keys[1].path]);
   assert.deepEqual(await repository.queryDeliveryRecoveryPage({ ...args, owner: 'other' }), []);
   assert.deepEqual(await repository.queryDeliveryRecoveryPage({ ...args, startAfterPath: keys[1].path }), []);
 });
@@ -81,10 +81,8 @@ for (const phase of ['processing', 'prepared', 'ready'] as const) {
       const tail = await runDeliveryRecoveryPageQuery(commerce, owner, 'drop', false, cursor);
       assert.deepEqual(tail.map(({ document }) => document.key.documentId), ['19', '20']);
       assert.ok([...first, ...tail].every(({ cursor }) => decodeDeliveryRecoveryCursor(cursor)));
-      const legacy = phase === 'ready'
-        ? await repository.queryPendingReadyNotifications({ owner, limit: 20 })
-        : await repository.queryDeliveryRecoveryOrders(owner);
-      assert.ok(legacy.some((document) => document.key.path === malformedKey.path));
+      assert.equal((await repository.get(malformedKey))?.key.path, malformedKey.path);
+
     });
   }
 }

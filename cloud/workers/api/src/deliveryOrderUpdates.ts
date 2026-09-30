@@ -17,16 +17,21 @@ export type DeliveryOrderFulfillmentUpdates = {
 };
 
 export type DeliveryRecoveryPatch = {
-  status?: 'prepared_abandoned';
-  preparedRecoveryAbandonedAt?: Timestamp;
-  'receiptRecovery.leaseExpiresAt'?: Timestamp | DeleteField;
-  'receiptRecovery.lastAttemptAt'?: CommerceJsonValue | Timestamp | DeleteField;
-  'receiptRecovery.attemptCount'?: CommerceJsonValue | DeleteField;
-  'receiptRecovery.lastErrorCode'?: string | DeleteField;
-  'receiptRecovery.lastErrorMessage'?: string | DeleteField;
-  'receiptRecovery.preparedProbeCount'?: number;
-  'receiptRecovery.lastPreparedProbeAt'?: Timestamp;
-  'receiptRecovery.nextPreparedProbeAt'?: Timestamp | DeleteField;
+  'leaseExpiresAt'?: Timestamp | DeleteField;
+  'lastAttemptAt'?: CommerceJsonValue | Timestamp | DeleteField;
+  'attemptCount'?: CommerceJsonValue | DeleteField;
+  'lastErrorCode'?: string | DeleteField;
+  'lastErrorMessage'?: string | DeleteField;
+  'preparedProbeCount'?: number | DeleteField;
+  'lastPreparedProbeAt'?: Timestamp | DeleteField;
+  'nextPreparedProbeAt'?: Timestamp | DeleteField;
+  'pendingSubmission'?: CommerceJsonValue | DeleteField;
+  'status'?: DeleteField;
+};
+
+export type PreparedDeliveryRecoveryUpdate = {
+  status: 'prepared_abandoned';
+  preparedRecoveryAbandonedAt: Timestamp;
 };
 
 export type DeliveryOwnerMergeUpdate = {
@@ -61,6 +66,6 @@ export type DeliveryReceiptClaimUpdates = {
   [Field in keyof DeliveryReceiptClaimFields as `stripeReceiptClaimsByBoxId.box_${number}.${Field}`]-?: Exclude<DeliveryReceiptClaimFields[Field], undefined>;
 } & { dropId?: string };
 
-export type DeliveryOrderUpdates = (DeliveryOrderFulfillmentUpdates & DeliveryRecoveryPatch &
+export type DeliveryOrderUpdates = (DeliveryOrderFulfillmentUpdates &
   FulfillmentDeliveryOrderUpdates) | DeliveryOwnerMergeUpdate | DeliveryProcessingUpdate |
-  DeliveryReadyUpdate | DeliveryCloseUpdate | DeliveryReceiptClaimUpdates;
+  DeliveryReadyUpdate | DeliveryCloseUpdate | DeliveryReceiptClaimUpdates | PreparedDeliveryRecoveryUpdate;

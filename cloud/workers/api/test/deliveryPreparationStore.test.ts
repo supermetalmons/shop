@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { updateDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 import test from 'node:test';
 import {
   CommerceWriteConflict,
@@ -36,7 +37,7 @@ test('typed prepared creation preserves address metadata and native timestamps',
   t.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
   await createPreparedDeliveryOrder({ repository, nowMs: 1_000, signal: new AbortController().signal }, input);
-  assert.deepEqual((await repository.get(key))?.data, {
+  assert.deepEqual((await repository.getRecoverySnapshot(key))?.order.data, {
     dropId: 'card_nft_2', status: 'prepared', owner: 'owner', addressId: 'address',
     addressSnapshot: { encrypted: 'cipher', futureAddressField: 'preserved', id: 'address', countryCode: 'US' },
     itemIds: ['asset'], items: [{ assetId: 'asset', kind: 'box', refId: 7 }],
@@ -59,8 +60,8 @@ test('prepared delivery cleanup cannot delete a newer revision', async (t) => {
   assert.deepEqual(await repository.get(key), newer);
 
   assert.ok(newer);
-  await deletePreparedDeliveryOrder(context, key.path, newer.updateTime);
-  assert.equal(await repository.get(key), null);
+  await assert.rejects(deletePreparedDeliveryOrder(context, key.path, { ...preparedRevision, updateTime: newer.updateTime, version: newer.version }), CommerceWriteConflict);
+  assert.deepEqual(await repository.get(key), newer);
 });
 
 test('prepared delivery reconciliation accepts its own operation and rejects a competing attempt', async (t) => {
@@ -70,12 +71,33 @@ test('prepared delivery reconciliation accepts its own operation and rejects a c
   const context = { repository, nowMs: 1_000, signal: new AbortController().signal };
   const revision = await createPreparedDeliveryOrder(context, input);
 
-  assert.equal(await createPreparedDeliveryOrder(context, input), revision);
+  assert.deepEqual(await createPreparedDeliveryOrder(context, input), revision);
   await assert.rejects(createPreparedDeliveryOrder(context, {
     ...input,
     prepareAttemptId: 'competing-attempt',
   }), CommerceWriteConflict);
   assert.equal((await repository.get(key))?.data.prepareAttemptId, input.prepareAttemptId);
+});
+
+test('prepared cleanup and lost-ack reconciliation preserve recovery-only progress', async (t) => {
+  const harness = createCommerceD1Harness();
+  t.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const context = { repository, nowMs: 1_000, signal: new AbortController().signal };
+  const created = await createPreparedDeliveryOrder(context, input);
+  await repository.run(2_000, async (unit) => {
+    const snapshot = await unit.getRecoverySnapshot(key);
+    assert.ok(snapshot);
+    unit.stageRecovery(updateDeliveryRecoveryRecord(snapshot.state, {
+      receiptRecoveryJson: JSON.stringify({ preparedProbeCount: 1, nextPreparedProbeAt: 122_000 }),
+    }, 2_000));
+  });
+  const progressed = await repository.getRecoverySnapshot(key);
+  assert.equal(progressed?.order.version, created.version);
+  assert.equal(progressed?.order.updateTime, created.updateTime);
+  await assert.rejects(deletePreparedDeliveryOrder(context, key.path, created), CommerceWriteConflict);
+  await assert.rejects(createPreparedDeliveryOrder(context, input), CommerceWriteConflict);
+  assert.deepEqual(await repository.getRecoverySnapshot(key), progressed);
 });
 
 function checkWriteContracts(context: PreparedDeliveryCommerceContext): void {

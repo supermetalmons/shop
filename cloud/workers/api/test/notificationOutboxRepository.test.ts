@@ -178,14 +178,28 @@ test('activated legacy fences preserve frozen fields but reject changed or new l
 
 test('paused authority blocks publishers; a leased maintenance parent delete cascades outbox rows', async (context) => {
   const { harness, repository } = fixture(context);
+  let databaseSeconds = Math.floor(Date.now() / 1_000);
+  harness.database.function('strftime', (_format, _value) => String(databaseSeconds));
   const original = await repository.run(100, (unit) => unit.enqueueNotificationOutbox(input()));
   assert.throws(() => harness.database.prepare('DELETE FROM commerce_notification_outbox WHERE parent_path = ?').run(key.path), /maintenance/);
   pause(harness);
   await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), /unavailable/);
   await assert.rejects(repository.notificationOutbox.getMany([key.path], 'shipped'), isUnavailable);
   await assert.rejects(repository.notificationOutbox.compareAndSet({ expected: original, nowMs: 300, changes: { nextAttemptAtMs: 500 } }), /unavailable/);
+  assert.throws(() => harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(key.path), /guarded deletion/);
+  harness.database.exec("UPDATE commerce_authority_control_lease SET expires_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 120000");
+  databaseSeconds += 67;
+  harness.database.prepare(`INSERT INTO commerce_wipe_guards (guard_id, expectations_json,
+    expected_documents_revision, expected_authority_revision, created_at_ms, delivery_recovery_expectations_json)
+    SELECT 'notification-test-wipe', json_array(json_object('path', document.document_path, 'version', document.version)),
+      authority.documents_revision, authority.revision, CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+      json_array(json_object('parentPath', recovery.parent_path, 'generation', recovery.generation, 'revision', recovery.revision))
+    FROM commerce_authority_control AS authority JOIN commerce_documents AS document ON document.document_path = ?
+    JOIN commerce_delivery_recovery AS recovery ON recovery.parent_path = document.document_path
+    WHERE authority.singleton = 1`).run(key.path);
   harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(key.path);
   assert.equal(harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_notification_outbox').get()?.count, 0);
+  assert.equal(harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_delivery_recovery').get()?.count, 0);
 });
 
 test('preparation blocks resume until activation and activation is irreversible', (context) => {

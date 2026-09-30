@@ -7,7 +7,7 @@ import { legacyPackStatusProjectionsQuery } from '../scripts/shared/packStatusOu
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrdersByOwnerQuery,
-  deliveryRecoveryOrdersQuery,
+  deliveryRecoveryPageQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
   fulfillmentOrdersQuery,
@@ -1376,12 +1376,18 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.doesNotMatch(manualReviewPlan + manualReviewCursorPlan, /USE TEMP B-TREE/);
     const legacyClaimPlan = planDetails(db, legacyClaimAssignmentsQuery({ code: 'claim' }));
     assert.match(legacyClaimPlan, /SEARCH commerce_documents USING INDEX commerce_documents_assignment_claim/);
-    const deliveryRecoveryPlan = planDetails(db, deliveryRecoveryOrdersQuery('owner'));
-    assert.match(
-      deliveryRecoveryPlan,
-      /SEARCH document USING INDEX commerce_documents_delivery_owner_status \(document_kind=\? AND owner=\? AND status=\?\)/,
-    );
-    assert.doesNotMatch(deliveryRecoveryPlan, /USE TEMP B-TREE/);
+    for (const phase of ['processing', 'prepared'] as const) {
+      for (const startAfterPath of [undefined, 'drops/drop/deliveryOrders/100']) {
+        const query = deliveryRecoveryPageQuery({ owner: 'owner', phase, startAfterPath, limit: 9 });
+        const deliveryRecoveryPlan = planDetails(db, query);
+        assert.match(deliveryRecoveryPlan,
+          /SEARCH document USING INDEX commerce_documents_delivery_owner_status \(document_kind=\? AND owner=\? AND status=\?/);
+        if (startAfterPath) assert.match(deliveryRecoveryPlan, /document_path>\?/);
+        assert.doesNotMatch(deliveryRecoveryPlan, /USE TEMP B-TREE/);
+        assert.match(query.sql, /ORDER BY document\.document_path ASC LIMIT \?/);
+        assert.equal(query.bindings.at(-1), 9);
+      }
+    }
     for (const owner of [undefined, 'other']) {
       for (const startAfterPath of [undefined, 'drops/drop/deliveryOrders/100']) {
         const query = pendingReadyNotificationsQuery({ limit: 8, owner, startAfterPath });

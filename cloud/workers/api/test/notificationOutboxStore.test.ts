@@ -232,16 +232,29 @@ for (const transition of ['cancelled', 'replaced', 'reclaimed', 'released', 'que
       assert.ok(persisted);
       await markClaimedNotificationQueued({ ...fixture, claim: persisted });
     } else {
+      let databaseSeconds = Math.floor(Date.now() / 1_000);
+      fixture.harness.database.function('strftime', (_format, _value) => String(databaseSeconds));
       fixture.harness.database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
         1, '123e4567-e89b-42d3-a456-426614174000',
         CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 120000
       );
       UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
         paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1;
       UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1;
-      DELETE FROM commerce_documents;
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1;`);
+      databaseSeconds += 67;
+      fixture.harness.database.prepare(`INSERT INTO commerce_wipe_guards (guard_id, expectations_json,
+        expected_documents_revision, expected_authority_revision, created_at_ms, delivery_recovery_expectations_json)
+        SELECT 'notification-test-wipe', json_array(json_object('path', document.document_path, 'version', document.version)),
+          authority.documents_revision, authority.revision, CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+          json_array(json_object('parentPath', recovery.parent_path, 'generation', recovery.generation, 'revision', recovery.revision))
+        FROM commerce_authority_control AS authority JOIN commerce_documents AS document ON document.document_path = ?
+        JOIN commerce_delivery_recovery AS recovery ON recovery.parent_path = document.document_path
+        WHERE authority.singleton = 1`).run(fixture.parentKey.path);
+      fixture.harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(fixture.parentKey.path);
+      fixture.harness.database.exec(`UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1;
+      DELETE FROM commerce_wipe_guards WHERE guard_id = 'notification-test-wipe';
       UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
         paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1;
       DELETE FROM commerce_authority_control_lease;`);

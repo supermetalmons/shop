@@ -7,13 +7,15 @@ import {
   type CheckCommerceD1Query,
 } from '../scripts/ops/checkCommerceD1.ts';
 import { inventoryDropConfigs } from '../scripts/shared/dudeInventoryMaintenance.ts';
+import { createDeliveryRecoveryRecord, deliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
+import { runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
 import { packStatusOutboxRow } from '../shared/packStatusOutbox.ts';
 import { legacyPackStatusProjectionsQuery, planPackStatusOutboxBackfill } from '../scripts/shared/packStatusOutboxMaintenance.ts';
 import { parseCommerceD1DocumentRow } from '../scripts/shared/commerceD1Maintenance.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
-  deliveryRecoveryOrdersQuery,
+  deliveryRecoveryStateQuery,
   packStatusOutboxDueQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
@@ -59,6 +61,7 @@ const migrationNames = [
   '0027_preorder_expiry_claim_release.sql',
   '0028_preorder_card_range_1413.sql',
   '0029_pack_status_outbox.sql',
+  '0030_delivery_recovery.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -269,7 +272,7 @@ test('preorder expiry claim release schema rejects a missing or broadened trigge
   assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema commerce_preorder_expiry_claim_release/);
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 = 29): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 = 30): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -414,7 +417,23 @@ function seedInventory(database: DatabaseSync, ready = true) {
   return configs[0];
 }
 
-function preparedPackStatusDatabase(): DatabaseSync {
+function prepareRecoveryState(database: DatabaseSync, activate = true): void {
+  database.exec(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'preparing',
+    source_documents_revision = (SELECT documents_revision FROM commerce_authority_control)`);
+  for (const source of localQuery(database)(`SELECT document_path, update_time, document_json -> '$.receiptRecovery' AS recovery
+    FROM commerce_documents WHERE document_kind = 'delivery_order'`)) {
+    const record = deliveryRecoveryRow(createDeliveryRecoveryRecord({
+      parentPath: String(source.document_path), receiptRecoveryJson: source.recovery as string | null,
+      generation: crypto.randomUUID(), nowMs: Date.parse(String(source.update_time)),
+    }));
+    database.prepare(`INSERT INTO commerce_delivery_recovery (${Object.keys(record).join(',')})
+      VALUES (${Object.keys(record).map(() => '?').join(',')})`).run(...Object.values(record));
+  }
+  database.exec("UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 1");
+  if (activate) database.exec("UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'");
+}
+
+function preparedPackStatusDatabase(recoveryActive = true): DatabaseSync {
   const database = currentDatabase(false);
   seedInventory(database);
   database.exec(`UPDATE commerce_authority_control SET authority_state = 'd1',
@@ -447,6 +466,7 @@ function preparedPackStatusDatabase(): DatabaseSync {
   database.prepare(`INSERT INTO commerce_pack_status_outbox (${Object.keys(row).join(', ')})
     VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
   database.exec("UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1");
+  if (recoveryActive) prepareRecoveryState(database);
   return database;
 }
 
@@ -472,6 +492,9 @@ test('Commerce D1 checker accepts the current schema using complete production q
       packStatusOutboxMode: 'legacy',
       packStatusOutboxPreparation: 'idle',
       packStatusOutboxRows: 0,
+      deliveryRecoveryStateMode: 'legacy',
+      deliveryRecoveryStatePreparation: 'idle',
+      deliveryRecoveryStateRows: 0,
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 513,
@@ -486,7 +509,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
     const productionPlans = [
       deliveryOrderOwnersQuery({ limit: 501 }),
       deliveryOrderOwnersQuery({ limit: 501, startAfterOwner: '11111111111111111111111111111111' }),
-      deliveryRecoveryOrdersQuery('11111111111111111111111111111111'),
+      deliveryRecoveryStateQuery('11111111111111111111111111111111', 1, 1),
       shipmentHistoryPageQuery({ owner: '11111111111111111111111111111111', limit: 51 }),
       shipmentHistoryPageQuery({ owner: '11111111111111111111111111111111', limit: 51,
         startAfter: { version: 1, owner: '11111111111111111111111111111111', sortAtMs: 1,
@@ -536,7 +559,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
 });
 
 test('Commerce D1 checker reads one schema catalog for each supported migration baseline', () => {
-  for (const migrationCount of [13, 25, 28, 29] as const) {
+  for (const migrationCount of [13, 25, 28, 29, 30] as const) {
     const database = currentDatabase(false, migrationCount);
     try {
       let catalogReads = 0;
@@ -849,6 +872,9 @@ test('Commerce D1 checker accepts the exact empty post-migration state', () => {
       packStatusOutboxMode: 'legacy',
       packStatusOutboxPreparation: 'idle',
       packStatusOutboxRows: 0,
+      deliveryRecoveryStateMode: 'legacy',
+      deliveryRecoveryStatePreparation: 'idle',
+      deliveryRecoveryStateRows: 0,
       inventoryDrops: 0,
       availableDudes: 0,
       authoritativeDocuments: 0,
@@ -1040,6 +1066,8 @@ test('API deployment requires activation even after inventory preparation and ac
     database.exec(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
       UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
       UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table'`);
+    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated delivery recovery state/);
+    prepareRecoveryState(database);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).inventoryMode, 'rows');
     assert.equal(checkCommerceD1(query, { forDeployment: true }).availableDudes, 0);
     database.exec(`UPDATE commerce_authority_control
@@ -1381,6 +1409,7 @@ test('API deployment accepts a fully paused verified notification preparation be
       UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 1;
       UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
       UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1`);
+    prepareRecoveryState(database, false);
     const result = checkCommerceD1(localQuery(database), { forDeployment: true });
     assert.equal(result.notificationOutboxMode, 'legacy');
     assert.equal(result.notificationOutboxPreparation, 'ready');
@@ -1468,3 +1497,128 @@ test('Commerce D1 checker rejects missing or stale Stripe due lookup entries', (
     } finally { database.close(); }
   }
 });
+
+test('delivery recovery migration is required for deployment while previous schemas remain inspectable', () => {
+  const database = currentDatabase(false, 29);
+  try {
+    assert.equal(checkCommerceD1(localQuery(database)).deliveryRecoveryStateMode, undefined);
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), /delivery recovery migration/);
+  } finally { database.close(); }
+});
+
+test('delivery recovery checker validates all fences and the altered commit and wipe guard schemas', () => {
+  for (const name of [
+    'commerce_delivery_recovery_control_update_guard', 'commerce_delivery_recovery_insert_guard',
+    'commerce_delivery_recovery_update_guard', 'commerce_delivery_recovery_parent_update_guard',
+    'commerce_delivery_recovery_parent_delete_guard', 'commerce_wipe_guard_delivery_recovery_validate',
+    'commerce_commit_guard_delivery_recovery_validate', 'commerce_commit_guard_delivery_recovery_finish',
+  ]) {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`DROP TRIGGER ${name}`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), new RegExp(`Delivery recovery state schema is invalid: ${name}`));
+    } finally { database.close(); }
+  }
+  const database = currentDatabase(false);
+  try {
+    const query = localQuery(database);
+    for (const name of ['commerce_commit_guards', 'commerce_wipe_guards', 'commerce_delivery_recovery']) {
+      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => row.name === name && row.type === 'table'
+        ? { ...row, sql: String(row.sql).replace('STRICT', '') } : row)), /Delivery recovery state schema is invalid/);
+    }
+  } finally { database.close(); }
+});
+
+test('delivery recovery deployment accepts verified paused preparation and rejects stale, missing, or corrupt rows', async () => {
+  const database = preparedPackStatusDatabase(false);
+  try {
+    const query = localQuery(database);
+    const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
+    database.exec('DELETE FROM commerce_authority_control_lease');
+    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated delivery recovery state/);
+    await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
+    const prepared = checkCommerceD1(query, { forDeployment: true });
+    assert.equal(prepared.deliveryRecoveryStateMode, 'legacy');
+    assert.equal(prepared.deliveryRecoveryStatePreparation, 'ready');
+    assert.equal(prepared.deliveryRecoveryStateRows, 1);
+    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql === 'SELECT * FROM commerce_delivery_recovery_control'
+      ? { ...row, source_documents_revision: 0 } : row)), /preparation is stale/);
+    assert.throws(() => checkCommerceD1((sql) => sql.startsWith('SELECT recovery.*,')
+      ? [] : query(sql)), /differs from source/);
+    await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+    assert.equal(checkCommerceD1(query, { forDeployment: true }).deliveryRecoveryStateMode, 'table');
+    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
+      ? { ...row, parent_path: null } : row)), /state is missing/);
+    for (const corruption of [{ revision: 0 }, { generation: 'broken' }, { prepared_delay_ms: 120000 }]) {
+      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
+        ? { ...row, ...corruption } : row)), /Invalid delivery recovery/);
+    }
+    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
+      ? { ...row, parent_path: 'drops/card_nft_2/deliveryOrders/999' } : row)), /parent is invalid/);
+    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
+      ? { ...row, document_path: null, document_kind: null } : row)), /parent is invalid/);
+    const updateGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_delivery_recovery_update_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_delivery_recovery_update_guard;
+      UPDATE commerce_delivery_recovery SET prepared_delay_ms = 120000; ${updateGuard}`);
+    assert.throws(() => checkCommerceD1(query), /Invalid delivery recovery projections/);
+    database.exec(`DROP TRIGGER commerce_delivery_recovery_update_guard;
+      UPDATE commerce_delivery_recovery SET prepared_delay_ms = 30000; ${updateGuard}`);
+    const deleteGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_delivery_recovery_delete_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_delivery_recovery_delete_guard;
+      DELETE FROM commerce_delivery_recovery; ${deleteGuard}`);
+    assert.throws(() => checkCommerceD1(query), /state is missing/);
+  } finally { database.close(); }
+});
+
+for (const change of ['creation', 'cleanup'] as const) {
+  test(`delivery recovery checker accepts concurrent prepared delivery ${change}`, () => {
+    const database = preparedPackStatusDatabase();
+    try {
+      database.exec(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table';
+        UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
+          paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+        DELETE FROM commerce_authority_control_lease`);
+      const parentPath = 'drops/card_nft_2/deliveryOrders/2';
+      const recovery = createDeliveryRecoveryRecord({
+        parentPath, receiptRecoveryJson: null, generation: '00000000-0000-4000-8000-000000000002', nowMs: 1_000,
+      });
+      const writeOrder = (remove: boolean) => {
+        database.exec('BEGIN IMMEDIATE');
+        database.prepare(`INSERT INTO commerce_commit_guards (
+          guard_id, expectations_json, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json
+        ) VALUES ('concurrent-prepared', ?, 1000, ?, ?)`).run(
+          JSON.stringify([{ path: parentPath, version: remove ? 1 : -1 }]),
+          JSON.stringify([parentPath]),
+          JSON.stringify([{ parentPath, generation: remove ? recovery.generation : null, revision: remove ? 1 : -1 }]),
+        );
+        if (remove) database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(parentPath);
+        else {
+          database.prepare(`INSERT INTO commerce_documents (
+            document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
+          ) VALUES (?, 'delivery_order', 'card_nft_2', '2', '{"status":"prepared","createdAt":1000}', 1,
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`).run(parentPath);
+          const row = deliveryRecoveryRow(recovery);
+          database.prepare(`INSERT INTO commerce_delivery_recovery (${Object.keys(row).join(', ')})
+            VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
+        }
+        database.exec(`UPDATE commerce_authority_control SET documents_revision = documents_revision + 1;
+          DELETE FROM commerce_commit_guards WHERE guard_id = 'concurrent-prepared'; COMMIT`);
+      };
+      if (change === 'cleanup') writeOrder(false);
+      const query = localQuery(database);
+      assert.doesNotThrow(() => checkCommerceD1(query, { forDeployment: true }));
+      let changed = false;
+      const checked = checkCommerceD1((sql) => {
+        const rows = query(sql);
+        if (sql.startsWith('SELECT\n    document_path, document_kind, drop_id, document_id, document_json') && !changed) {
+          changed = true;
+          writeOrder(change === 'cleanup');
+        }
+        return rows;
+      }, { forDeployment: true });
+      assert.equal(changed, true);
+      assert.equal(checked.deliveryRecoveryStateRows, change === 'creation' ? 2 : 1);
+      assert.doesNotThrow(() => checkCommerceD1(query, { forDeployment: true }));
+    } finally { database.close(); }
+  });
+}

@@ -1,3 +1,4 @@
+import type { PreparedDeliveryCleanupToken } from '../src/deliveryPreparationStore.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
@@ -158,6 +159,8 @@ function env(overrides: Record<string, string> = {}) {
   };
 }
 
+const CLEANUP_TOKEN: PreparedDeliveryCleanupToken = { updateTime: '2026-08-20T00:00:01.000Z', version: 1, recoveryGeneration: '00000000-0000-4000-8000-000000000001', recoveryRevision: 1 };
+
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
@@ -176,7 +179,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     deliveryPdaExists: async () => false,
     attemptId: () => '123e4567-e89b-42d3-a456-426614174000',
     candidateId: () => 7,
-    createDeliveryOrder: async () => '2026-08-20T00:00:01.000Z',
+    createDeliveryOrder: async () => CLEANUP_TOKEN,
     deleteDeliveryOrder: async () => undefined,
     loadLatestBlockhash: async () => ({
       blockhash: BLOCKHASH,
@@ -242,7 +245,7 @@ test('delivery preparation returns the server-signed owner transaction and exact
   }), env(), {}, dependencies({
     createDeliveryOrder: async (_context: unknown, input: Record<string, unknown>) => {
       created = input;
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
   }));
   assert.equal(result.response.status, 200);
@@ -284,7 +287,7 @@ test('delivery preparation schedules recovery from the document reservation time
     nowMs: () => times.shift() ?? NOW_MS,
     createDeliveryOrder: async (_context: unknown, input: { nextPreparedProbeAtMs: number }) => {
       nextPreparedProbeAtMs = input.nextPreparedProbeAtMs;
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
   }));
   assert.equal(result.response.status, 200);
@@ -313,7 +316,7 @@ test('delivery preparation preserves raw address fields in the native create', a
     nextPreparedProbeAtMs: NOW_MS + 30_000,
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
-  assert.equal(Date.parse(updateTime), NOW_MS);
+  assert.equal(Date.parse(updateTime.updateTime), NOW_MS);
   const row = harness.database.prepare(`SELECT document_json FROM commerce_documents
     WHERE document_path = ?`).get(`drops/${DROP_ID}/deliveryOrders/7`) as { document_json: string };
   const fields = JSON.parse(row.document_json) as Record<string, unknown>;
@@ -351,7 +354,7 @@ test('delivery preparation reconciles an applied D1 commit when its result is lo
     nextPreparedProbeAtMs: NOW_MS + 30_000,
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
-  assert.equal(Date.parse(updateTime), NOW_MS);
+  assert.equal(Date.parse(updateTime.updateTime), NOW_MS);
   assert.equal(commitBatches, 1);
 });
 
@@ -363,7 +366,7 @@ test('delivery preparation retries Commerce collisions with a fresh delivery id'
     createDeliveryOrder: async (_context: unknown, input: { deliveryId: number }) => {
       created.push(input.deliveryId);
       if (input.deliveryId === 7) throw new CommerceWriteConflict();
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
   }));
   assert.equal(result.response.status, 200);
@@ -384,7 +387,7 @@ test('delivery preparation conditionally cleans up a reserved order after a bloc
   assert.equal(result.response.status, 500);
   assert.equal(deleted.length, 1);
   assert.equal(deleted[0][1], `drops/${DROP_ID}/deliveryOrders/7`);
-  assert.equal(deleted[0][2], '2026-08-20T00:00:01.000Z');
+  assert.deepEqual(deleted[0][2], CLEANUP_TOKEN);
 });
 
 test('delivery preparation uses a fresh signal to clean up after the overall deadline', async () => {
@@ -404,13 +407,13 @@ test('delivery preparation uses a fresh signal to clean up after the overall dea
 
 test('delivery preparation returns its deadline and retains an in-flight order write', async () => {
   const deferred = createDeferredWorkCollector();
-  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
-  let finishWrite!: (updateTime: string) => void;
-  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  let cleanup: { path: string; signalAborted: boolean; updateTime: PreparedDeliveryCleanupToken } | undefined;
+  let finishWrite!: (updateTime: PreparedDeliveryCleanupToken) => void;
+  const write = new Promise<PreparedDeliveryCleanupToken>((resolve) => { finishWrite = resolve; });
   const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     createDeliveryOrder: () => write,
     defer: deferred.defer,
-    deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+    deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: PreparedDeliveryCleanupToken) => {
       cleanup = { path, signalAborted: context.signal.aborted, updateTime };
     },
     timeoutMs: 5,
@@ -418,12 +421,12 @@ test('delivery preparation returns its deadline and retains an in-flight order w
 
   assert.equal(result.response.status, 504);
   assert.equal(deferred.promises.length, 1);
-  finishWrite('2026-08-20T00:00:01.000Z');
+  finishWrite(CLEANUP_TOKEN);
   await deferred.drain();
   assert.deepEqual(cleanup, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
     signalAborted: false,
-    updateTime: '2026-08-20T00:00:01.000Z',
+    updateTime: CLEANUP_TOKEN,
   });
 });
 
@@ -431,11 +434,11 @@ test('delivery preparation deletes an order that resolves after client cancellat
   const controller = new AbortController();
   const reason = new Error('client disconnected during order create');
   const deferred = createDeferredWorkCollector();
-  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
-  let finishWrite!: (updateTime: string) => void;
+  let cleanup: { path: string; signalAborted: boolean; updateTime: PreparedDeliveryCleanupToken } | undefined;
+  let finishWrite!: (updateTime: PreparedDeliveryCleanupToken) => void;
   let markStarted!: () => void;
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
-  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  const write = new Promise<PreparedDeliveryCleanupToken>((resolve) => { finishWrite = resolve; });
   const pending = handleDeliveryPrepare(
     new Request(request(requestBody()), { signal: controller.signal }),
     env(),
@@ -446,7 +449,7 @@ test('delivery preparation deletes an order that resolves after client cancellat
         return write;
       },
       defer: deferred.defer,
-      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: PreparedDeliveryCleanupToken) => {
         cleanup = { path, signalAborted: context.signal.aborted, updateTime };
       },
       timeoutMs: 100,
@@ -455,13 +458,13 @@ test('delivery preparation deletes an order that resolves after client cancellat
 
   await started;
   controller.abort(reason);
-  finishWrite('2026-08-20T00:00:01.000Z');
+  finishWrite(CLEANUP_TOKEN);
   await assert.rejects(pending, (error: unknown) => error === reason);
   assert.equal(deferred.promises.length, 0);
   assert.deepEqual(cleanup, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
     signalAborted: false,
-    updateTime: '2026-08-20T00:00:01.000Z',
+    updateTime: CLEANUP_TOKEN,
   });
 });
 
@@ -469,7 +472,7 @@ test('delivery preparation deletes its order when blockhash loading settles afte
   const controller = new AbortController();
   const reason = new Error('client disconnected during blockhash loading');
   const deferred = createDeferredWorkCollector();
-  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  let cleanup: { path: string; signalAborted: boolean; updateTime: PreparedDeliveryCleanupToken } | undefined;
   const pending = handleDeliveryPrepare(
     new Request(request(requestBody()), { signal: controller.signal }),
     env(),
@@ -480,7 +483,7 @@ test('delivery preparation deletes its order when blockhash loading settles afte
         controller.abort(reason);
         return { blockhash: BLOCKHASH, blockhashContextSlot: 123 };
       },
-      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: PreparedDeliveryCleanupToken) => {
         cleanup = { path, signalAborted: context.signal.aborted, updateTime };
       },
     }),
@@ -491,7 +494,7 @@ test('delivery preparation deletes its order when blockhash loading settles afte
   assert.deepEqual(cleanup, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
     signalAborted: false,
-    updateTime: '2026-08-20T00:00:01.000Z',
+    updateTime: CLEANUP_TOKEN,
   });
 });
 
@@ -517,7 +520,7 @@ test('delivery preparation does not reserve an order after the deadline', async 
   const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     createDeliveryOrder: async () => {
       createCalled = true;
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
     deliveryPdaExists: async () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -552,7 +555,7 @@ test('delivery preparation reports an oversized transaction before reserving an 
     fetchAsset: async (_context: unknown, _runtime: unknown, assetId: string) => asset({ id: assetId }),
     createDeliveryOrder: async () => {
       createCalled = true;
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
   }));
   assert.equal(result.response.status, 409);
@@ -879,7 +882,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
     fetchAsset: async () => asset({ id: Keypair.generate().publicKey.toBase58() }),
     createDeliveryOrder: async () => {
       mismatchedAssetCreated = true;
-      return '2026-08-20T00:00:01.000Z';
+      return CLEANUP_TOKEN;
     },
   }));
   assert.equal(mismatchedAsset.response.status, 409);

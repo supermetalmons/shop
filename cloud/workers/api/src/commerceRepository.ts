@@ -1,3 +1,8 @@
+import { buildWalletDeliveryRecoveryState } from '../../../../shared/deliveryRecovery.js';
+import {
+  deliveryRecoveryAuthorityStatement, requireDeliveryRecoveryAuthority,
+  recoverySnapshotColumns, parseRecoverySnapshot, type RecoverySnapshot,
+} from './deliveryRecoveryPersistence.js';
 import {
   CommerceRepositoryError,
   type CommerceDocumentKey,
@@ -8,7 +13,6 @@ import {
   COMMERCE_DOCUMENT_COLUMNS as DOCUMENT_COLUMNS,
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
-  deliveryRecoveryOrdersQuery,
   deliveryRecoveryStateQuery,
   deliveryRecoveryPageQuery,
   type DeliveryRecoveryPageQuery,
@@ -27,11 +31,6 @@ import {
 } from './commerceQueries.js';
 import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
-import {
-  buildWalletDeliveryRecoveryState,
-  preparedDeliveryRecoveryNextCheckMs,
-  processingDeliveryRecoveryNextCheckMs,
-} from '../../../../shared/deliveryRecovery.js';
 import type { WalletDeliveryRecoveryState } from '../../../../shared/contracts.js';
 import {
   MAX_SHIPMENT_PAGE_LIMIT,
@@ -275,15 +274,14 @@ export class D1CommerceRepository {
     return owners;
   }
 
-  async queryDeliveryRecoveryOrders(owner: string): Promise<CommerceDocumentRecord[]> {
-    const scopedOwner = deliveryOwner(owner);
-    const query = deliveryRecoveryOrdersQuery(scopedOwner);
-    const result = await this.readBatchWithAuthority(
-      () => this.db.prepare(query.sql).bind(...query.bindings),
-    );
-    const documents = result.results.map(parseRow);
-    reportInefficientQuery('delivery-recovery-orders', 'delivery_order', result, documents.length);
-    return documents.map((document) => publicRecord(document));
+  async getRecoverySnapshot(key: CommerceDocumentKey<'delivery_order'>): Promise<RecoverySnapshot | null> {
+    const result = await this.readRecoveryBatch(this.db.prepare(`SELECT ${DOCUMENT_COLUMNS},
+      ${recoverySnapshotColumns('commerce_documents')} FROM commerce_documents WHERE document_path = ?`).bind(key.path));
+    if (result.results.length > 1) throw unavailableCommerceData();
+    const snapshot = result.results[0] ? parseRecoverySnapshot(result.results[0]) : null;
+    if (snapshot && (snapshot.order.key.kind !== key.kind || snapshot.order.key.dropId !== key.dropId ||
+      snapshot.order.key.documentId !== key.documentId)) throw unavailableCommerceData();
+    return snapshot;
   }
 
   async queryDeliveryRecoveryState(args: Readonly<{
@@ -291,26 +289,21 @@ export class D1CommerceRepository {
     nowMs: number;
     preparedNowMs?: number;
   }>): Promise<WalletDeliveryRecoveryState> {
-    const query = deliveryRecoveryStateQuery(deliveryOwner(args.owner));
-    const result = await this.readBatchWithAuthority(
-      () => this.db.prepare(query.sql).bind(...query.bindings),
-    );
-    const documents = result.results.map(parseRow);
-    reportInefficientQuery('delivery-recovery-state', 'delivery_order', result, documents.length);
-    let remainingProcessing = 0;
-    const nextCheckCandidates: Array<number | null> = [];
-    for (const { data } of documents) {
-      if (data.status === 'processing') {
-        remainingProcessing += 1;
-        nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(data, args.nowMs));
-      } else if (data.status === 'prepared') {
-        nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(data, args.preparedNowMs));
-      }
+    if (!Number.isFinite(args.nowMs) || (args.preparedNowMs !== undefined && !Number.isFinite(args.preparedNowMs))) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid recovery summary clock.');
     }
-    return buildWalletDeliveryRecoveryState({ remainingProcessing, nextCheckCandidates });
+    const query = deliveryRecoveryStateQuery(deliveryOwner(args.owner), args.nowMs, args.preparedNowMs ?? Date.now());
+    const result = await this.readRecoveryBatch(this.db.prepare(query.sql).bind(...query.bindings));
+    const row = result.results[0];
+    if (result.results.length !== 1 || !row || row.invalid_count !== 0 ||
+      typeof row.remaining_processing !== 'number' || !Number.isSafeInteger(row.remaining_processing) || row.remaining_processing < 0 ||
+      (row.next_check_at !== null && (typeof row.next_check_at !== 'number' || !Number.isFinite(row.next_check_at)))) {
+      throw unavailableCommerceData();
+    }
+    return buildWalletDeliveryRecoveryState({ remainingProcessing: row.remaining_processing, nextCheckCandidates: [row.next_check_at as number | null] });
   }
 
-  async queryDeliveryRecoveryPage(args: DeliveryRecoveryPageQuery): Promise<CommerceDocumentRecord[]> {
+  async queryDeliveryRecoveryPage(args: DeliveryRecoveryPageQuery): Promise<RecoverySnapshot[]> {
     const owner = deliveryOwner(args.owner);
     const limit = positiveQueryLimit(args.limit);
     if (limit > 9 || !['processing', 'prepared', 'ready'].includes(args.phase) ||
@@ -319,13 +312,11 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid recovery page.');
     }
     const query = deliveryRecoveryPageQuery({ ...args, owner, limit });
-    const statement = () => this.db.prepare(query.sql).bind(...query.bindings);
-    const result = await (args.phase === 'ready'
-      ? this.readNotificationBatch(statement)
-      : this.readBatchWithAuthority(statement));
+    const statement = this.db.prepare(`SELECT page.*, ${recoverySnapshotColumns('page')} FROM (${query.sql}) AS page`).bind(...query.bindings);
+    const result = await this.readRecoveryBatch(statement, args.phase === 'ready');
     if (result.results.length > limit) throw unavailableCommerceData();
     reportInefficientQuery('delivery-recovery-page', 'delivery_order', result, result.results.length);
-    return result.results.map(parseRow).map(publicRecord);
+    return result.results.map(parseRecoverySnapshot);
   }
 
   async queryPendingReadyNotifications(args: {
@@ -419,6 +410,20 @@ export class D1CommerceRepository {
     const documents = result.results.map(parseRow);
     reportInefficientQuery(operation, kind, result, documents.length);
     return documents.map((document) => publicRecord(document));
+  }
+
+  private async readRecoveryBatch(statement: D1PreparedStatement, requireNotifications = false): Promise<D1Result<Record<string, unknown>>> {
+    let results: D1Result<Record<string, unknown>>[];
+    try {
+      results = await this.db.batch<Record<string, unknown>>([
+        deliveryRecoveryAuthorityStatement(this.db), statement,
+        ...(requireNotifications ? [notificationOutboxAuthorityStatement(this.db)] : []),
+      ]);
+    } catch (error) { throw unavailableCommerce(error); }
+    if (results.length !== 2 + Number(requireNotifications) || !results[1].success || !Array.isArray(results[1].results)) throw unavailableCommerceData();
+    requireDeliveryRecoveryAuthority(results[0]);
+    if (requireNotifications) requireNotificationOutboxAuthority(results[2]);
+    return results[1];
   }
 
   private async readBatchWithAuthority(

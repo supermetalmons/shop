@@ -1,3 +1,4 @@
+import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import {
   Connection,
@@ -20,7 +21,6 @@ import {
   isConfiguredBoxMinterItemsPerBox,
 } from '../../../../shared/boxMinterProtocol.js';
 import {
-  boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
@@ -220,38 +220,17 @@ function decodeOnchainConfig(data: Buffer): DecodedOnchainConfig {
   }
 }
 
-function paymentRoutingMatches(config: ApiDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
-  const routing = decoded.paymentRouting;
-  if (!routing) return false;
-  if (!config.paymentRouting) return routing.schema === 'legacy';
-  if (routing.schema !== 'split-payments-v1') return false;
-  if (
-    new PublicKey(routing.deliveryPaymentReceiver).toBase58() !== config.paymentRouting.deliveryPaymentReceiver ||
-    routing.mintProceeds.length !== config.paymentRouting.mintProceeds.length
-  ) return false;
-  return config.paymentRouting.mintProceeds.every((expected, index) => {
-    const actual = routing.mintProceeds[index];
-    return Boolean(actual) &&
-      new PublicKey(actual.address).toBase58() === expected.address &&
-      actual.percentage === expected.percentage;
-  });
-}
 
 function assertOnchainConfigMatchesRuntime(runtime: DeliveryRuntime, config: DecodedOnchainConfig): void {
   const decoded = config.decoded;
   if (
-    !config.coreCollection.equals(runtime.collectionMint) ||
-    decoded.itemsPerBox !== runtime.itemsPerBox ||
-    decoded.maxSupply !== runtime.maxSupply ||
-    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet ||
     !isBoxMinterDiscountMintsPerWallet(decoded.discountMintsPerWallet) ||
-    !boxMinterMetadataBaseMatchesDrop(
-      decoded.uriBase,
-      runtime.config.metadataBase,
-      runtime.config.metadataBaseAliases,
-    ) ||
-    new PublicKey(decoded.treasury).toBase58() !== runtime.config.treasury ||
-    !paymentRoutingMatches(runtime.config, decoded)
+    !matchesCommittedDropConfig(decoded, {
+      ...runtime.config,
+      collectionMint: runtime.collectionMint.toBase58(),
+      itemsPerBox: runtime.itemsPerBox,
+      maxSupply: runtime.maxSupply,
+    })
   ) {
     throw new DeliveryReceiptError('failed-precondition', 'Committed drop configuration does not match the on-chain config.');
   }

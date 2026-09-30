@@ -1,9 +1,10 @@
+import { parseDeliveryRecoveryState } from '../src/deliveryOrderReadModel.ts';
+import { updateDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from '../src/commerceRepository.ts';
 import {
   deliveryOrderFulfillmentDocument,
-  deliveryOrderRecoveryDocument,
   loadDeliveryOrderDocument,
   readDeliveryOrder,
   updateDeliveryOrder,
@@ -70,22 +71,33 @@ test('delivery operational views preserve the envelope and raw legacy fields wit
   const repository = new D1CommerceRepository(harness.db);
   const document = await loadDeliveryOrderDocument({ repository }, DROP_ID, DELIVERY_ID);
   const fulfillment = deliveryOrderFulfillmentDocument(document);
-  const recovery = deliveryOrderRecoveryDocument(document);
+  const snapshot = await repository.getRecoverySnapshot(key);
+  assert.ok(snapshot);
+  const recovery = { ...snapshot.order, recovery: parseDeliveryRecoveryState(snapshot.order.data) };
   assert.equal(fulfillment.data, document.data);
-  assert.equal(recovery.data, document.data);
+  assert.equal(recovery.data, snapshot.order.data);
   assert.equal(fulfillment.version, document.version);
   assert.equal(recovery.updateTime, document.updateTime);
   assert.equal(fulfillment.fulfillment.fulfillmentTrackingCode, 'TRACKING');
   assert.equal(recovery.recovery.rawAttemptCount, '2');
   assert.equal(recovery.recovery.lastAttemptAtMs, NOW_MS);
-  assert.deepEqual(document.data, data);
-  await repository.run(NOW_MS, (unit) => updateDeliveryOrder(unit, key, {
+  const { receiptRecovery: _recovery, ...metadata } = data;
+  assert.deepEqual(document.data, metadata);
+  await assert.rejects(repository.run(NOW_MS, (unit) => unit.update(key, {
     'receiptRecovery.leaseExpiresAt': commerceFieldValue.timestamp(Math.floor(NOW_MS / 1000), 0),
-  }));
-  const updated = await repository.get(key);
-  assert.deepEqual(updated?.data.legacy, data.legacy);
-  assert.deepEqual(updated?.data.shipstation, data.shipstation);
-  assert.deepEqual(updated?.data.receiptRecovery, { ...data.receiptRecovery, leaseExpiresAt: NOW_MS });
+  })), /Use the delivery recovery state store/);
+  await repository.run(NOW_MS, async (unit) => {
+    const current = await unit.getRecoverySnapshot(key);
+    assert.ok(current);
+    unit.stageRecovery(updateDeliveryRecoveryRecord(current.state, {
+      receiptRecoveryJson: JSON.stringify({ ...data.receiptRecovery, leaseExpiresAt: NOW_MS }),
+    }, NOW_MS));
+  });
+  const updated = await repository.getRecoverySnapshot(key);
+  assert.deepEqual(updated?.order.data.legacy, data.legacy);
+  assert.deepEqual(updated?.order.data.shipstation, data.shipstation);
+  assert.deepEqual(updated?.order.data.receiptRecovery, { ...data.receiptRecovery, leaseExpiresAt: NOW_MS });
+
 });
 
 test('required delivery reads and no-op fulfillment mutations preserve the full canonical record', async (context) => {

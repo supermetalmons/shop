@@ -54,11 +54,6 @@ const SHIPMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_
   : name).join(', ');
 const SHIPMENT_PREDICATE = `document_kind = 'delivery_order'
   AND status IN ('processing', 'ready_to_ship') AND source IS NOT 'admin_irl_redeem'`;
-const DELIVERY_RECOVERY_FIELDS = ['preparedProbeCount', 'nextPreparedProbeAt', 'lastAttemptAt', 'leaseExpiresAt'] as const;
-const DELIVERY_RECOVERY_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_json'
-  ? `json_object('status', document.document_json -> '$.status', 'createdAt', document.document_json -> '$.createdAt',
-      'receiptRecovery', json_object(${DELIVERY_RECOVERY_FIELDS.map((field) => `'${field}', document.document_json -> '$.receiptRecovery.${field}'`).join(', ')})) AS document_json`
-  : `document.${name}`).join(', ');
 export const NOTIFICATION_OUTBOX_COLUMNS = 'parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code';
 const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
   SELECT 1 FROM commerce_authority_control AS authority
@@ -246,26 +241,44 @@ export function deliveryOrderOwnersQuery(args: Readonly<{
   };
 }
 
-export function deliveryRecoveryOrdersQuery(owner: string): CommerceSqlQuery {
-  return deliveryRecoveryQuery(owner, qualifiedDocumentColumns('document'));
+function invalidRecoveryUuidSql(column: string): string {
+  return `(length(${column}) <> 36 OR substr(${column}, 9, 1) <> '-' OR substr(${column}, 14, 1) <> '-'
+    OR substr(${column}, 19, 1) <> '-' OR substr(${column}, 24, 1) <> '-'
+    OR substr(${column}, 15, 1) <> '4' OR lower(substr(${column}, 20, 1)) NOT IN ('8', '9', 'a', 'b')
+    OR length(replace(${column}, '-', '')) <> 32 OR lower(replace(${column}, '-', '')) GLOB '*[^0-9a-f]*')`;
 }
 
-export function deliveryRecoveryStateQuery(owner: string): CommerceSqlQuery {
-  return deliveryRecoveryQuery(owner, DELIVERY_RECOVERY_COLUMNS);
-}
-
-function deliveryRecoveryQuery(owner: string, columns: string): CommerceSqlQuery {
+export function deliveryRecoveryStateQuery(owner: string, nowMs: number, preparedNowMs: number): CommerceSqlQuery {
+  const createdAt = "json_extract(document.document_json, '$.createdAt')";
   return {
-    sql: `SELECT ${columns}
+    sql: `SELECT COALESCE(SUM(document.status = 'processing'), 0) AS remaining_processing,
+      MIN(CASE WHEN document.status = 'processing' THEN
+        max(?, COALESCE(recovery.processing_retry_at_ms, ?), COALESCE(recovery.lease_expires_at_ms, 0))
+      WHEN recovery.prepared_delay_ms IS NULL THEN NULL
+      WHEN recovery.prepared_explicit_at_ms IS NOT NULL THEN recovery.prepared_explicit_at_ms
+      WHEN json_type(document.document_json, '$.createdAt') IN ('integer', 'real')
+        AND ${createdAt} > 0 AND ${createdAt} <= 1.7976931348623157e308
+        THEN ${createdAt} + recovery.prepared_delay_ms
+      ELSE ? END) AS next_check_at,
+      COALESCE(SUM(CASE WHEN recovery.parent_path IS NULL
+        OR ${invalidRecoveryUuidSql('recovery.generation')}
+        OR (recovery.lease_id IS NOT NULL AND ${invalidRecoveryUuidSql('recovery.lease_id')})
+        OR document.document_path IS NOT ('drops/' || document.drop_id || '/deliveryOrders/' || document.document_id)
+        OR document.drop_id IS NULL OR length(document.drop_id) = 0 OR document.drop_id GLOB '*[^!-~]*' OR instr(document.drop_id, '/') > 0
+        OR length(document.document_id) = 0 OR document.document_id GLOB '*[^!-~]*' OR instr(document.document_id, '/') > 0
+        OR typeof(document.version) <> 'integer' OR document.version NOT BETWEEN 1 AND 9007199254740991
+        OR typeof(document.create_time) <> 'text' OR typeof(document.update_time) <> 'text'
+        OR NOT ((document.processed_at_seconds IS NULL AND document.processed_at_nanos IS NULL) OR
+          (typeof(document.processed_at_seconds) = 'integer' AND document.processed_at_seconds BETWEEN 0 AND 9007199254740991
+            AND typeof(document.processed_at_nanos) = 'integer' AND document.processed_at_nanos BETWEEN 0 AND 999999999))
+        THEN 1 ELSE 0 END), 0) AS invalid_count
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.owner = ? AND
-        document.status IN ('processing', 'prepared')`,
-    bindings: [owner],
+      LEFT JOIN commerce_delivery_recovery AS recovery ON recovery.parent_path = document.document_path
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document.document_kind = 'delivery_order' AND document.owner = ?
+        AND document.status IN ('processing', 'prepared')`,
+    bindings: [nowMs, nowMs, preparedNowMs, owner],
   };
 }
 
@@ -281,9 +294,9 @@ export function deliveryRecoveryPageQuery(args: DeliveryRecoveryPageQuery): Comm
   if (args.phase === 'ready') return pendingReadyNotificationsQuery(args, true);
   return {
     sql: `SELECT ${qualifiedDocumentColumns('document')}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
-      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+      FROM commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
+      WHERE EXISTS (SELECT 1 FROM commerce_authority_control AS authority
+          WHERE authority.singleton = 1 AND authority.authority_state = 'd1')
         AND document.document_kind = 'delivery_order' AND document.owner = ? AND document.status = ?
         AND length(CAST(document.document_path AS BLOB)) <= ${DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH}
         ${args.dropId === undefined ? '' : 'AND document.drop_id = ? AND document.document_path >= ? AND document.document_path < ?'}

@@ -14,21 +14,19 @@ import {
 import { ProfileReadError } from './dataAccess.js';
 import {
   parseDeliveryFulfillmentState,
-  parseDeliveryRecoveryState,
   type DeliveryFulfillmentState,
-  type DeliveryRecoveryState,
 } from './deliveryOrderReadModel.js';
 import type { DeliveryOrderUpdates } from './deliveryOrderUpdates.js';
 import type { DeliveryOrderCreate } from './deliveryOrderCreate.js';
+import type { RecoverySnapshot } from './deliveryRecoveryPersistence.js';
+export type { RecoverySnapshot } from './deliveryRecoveryPersistence.js';
 
 export type DeliveryOrderKey = CommerceDocumentKey<'delivery_order'>;
 export type DeliveryOrderDocument = CommerceDocumentRecord<CommerceDocumentData, 'delivery_order'>;
 export type DeliveryOrderFulfillmentDocument = DeliveryOrderDocument & {
   fulfillment: DeliveryFulfillmentState;
 };
-export type DeliveryOrderRecoveryDocument = DeliveryOrderDocument & {
-  recovery: DeliveryRecoveryState;
-};
+
 
 export function deliveryOrderKey(path: string): DeliveryOrderKey {
   const key = requireCommerceKey(path);
@@ -45,9 +43,7 @@ export function deliveryOrderFulfillmentDocument(record: DeliveryOrderDocument):
   return { ...record, fulfillment: parseDeliveryFulfillmentState(record.data) };
 }
 
-export function deliveryOrderRecoveryDocument(record: DeliveryOrderDocument): DeliveryOrderRecoveryDocument {
-  return { ...record, recovery: parseDeliveryRecoveryState(record.data) };
-}
+
 
 export function updateDeliveryOrder(
   transaction: Pick<CommerceUnitOfWork, 'update'>,
@@ -72,6 +68,14 @@ export async function readDeliveryOrder(
 ): Promise<DeliveryOrderDocument | null> {
   const document = await readCommerceRecord(context, key, transaction);
   return document ? deliveryOrderDocument(document) : null;
+}
+
+export function readDeliveryRecovery(
+  context: { repository: Pick<D1CommerceRepository, 'getRecoverySnapshot'> },
+  key: DeliveryOrderKey,
+  transaction?: CommerceUnitOfWork,
+): Promise<RecoverySnapshot | null> {
+  return (transaction ?? context.repository).getRecoverySnapshot(key);
 }
 
 export async function loadDeliveryOrderDocument(

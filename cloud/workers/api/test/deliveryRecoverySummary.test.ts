@@ -15,7 +15,7 @@ import {
   type CommerceD1CallObservation,
 } from './commerceD1Harness.ts';
 
-test('recovery summaries select only timing fields while preserving owner scope and malformed delivery identities', async (context) => {
+test('recovery summaries aggregate timing fields while preserving owner scope and malformed delivery identities', async (context) => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   context.after(() => harness.database.close());
@@ -45,24 +45,18 @@ test('recovery summaries select only timing fields while preserving owner scope 
   assert.equal(calls[0].method, 'batch');
   if (calls[0].method !== 'batch') assert.fail('Expected one authoritative batch.');
   assert.equal(calls[0].statements.length, 2);
-  const query = deliveryRecoveryStateQuery('owner');
+  const query = deliveryRecoveryStateQuery('owner', 100_000, 100_000);
   assert.equal(calls[0].statements[1].sql, query.sql);
-  assert.match(query.sql, /authority\.authority_state = 'd1'/);
+  assert.match(calls[0].statements[0].sql, /commerce_delivery_recovery_control/);
   assert.doesNotMatch(query.sql, /ORDER BY/);
   const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings)
     .map((row) => row.detail).join('\n');
   assert.match(plan, /SEARCH document USING INDEX commerce_documents_delivery_owner_status/);
   assert.doesNotMatch(plan, /SCAN document|USE TEMP B-TREE/);
   const projected = harness.database.prepare(query.sql).all(...query.bindings);
-  assert.equal(projected.length, 3);
-  for (const row of projected) {
-    assert.ok(String(row.document_json).length < 300);
-    const data = JSON.parse(String(row.document_json));
-    assert.deepEqual(Object.keys(data).sort(), ['createdAt', 'receiptRecovery', 'status']);
-    assert.deepEqual(Object.keys(data.receiptRecovery).sort(), [
-      'lastAttemptAt', 'leaseExpiresAt', 'nextPreparedProbeAt', 'preparedProbeCount',
-    ]);
-  }
+  assert.equal(projected.length, 1);
+  assert.deepEqual({ ...projected[0] }, { remaining_processing: 2, next_check_at: 80_000, invalid_count: 0 });
+  assert.ok(JSON.stringify(projected).length < 150);
   await assert.rejects(repository.queryDeliveryRecoveryState({ owner: '', nowMs: 100_000 }),
     (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument');
   assert.equal(calls.length, 1);
@@ -124,16 +118,8 @@ test('recovery summaries fail closed on corrupt document metadata and projected 
   context.after(() => harness.database.close());
   seedCommerceDocuments(harness, [{ key: commerceKeys.deliveryOrder('drop', '1'), data: { owner: 'owner', status: 'processing' } }]);
   const corruptions = [
-    { document_path: 'archives/drop/deliveryOrders/1' },
-    { document_kind: 'claim_code' },
-    { document_id: '2' },
-    { drop_id: 'other' },
-    { version: 0 },
-    { create_time: null },
-    { update_time: null },
-    { processed_at_seconds: 1, processed_at_nanos: null },
-    { document_json: '[]' },
-    { document_json: '{' },
+    { invalid_count: 1 }, { invalid_count: null }, { remaining_processing: -1 },
+    { remaining_processing: '1' }, { next_check_at: '90000' }, { next_check_at: Number.NaN },
   ];
   for (const corruption of corruptions) {
     const database = new Proxy(harness.db, {
@@ -148,4 +134,33 @@ test('recovery summaries fail closed on corrupt document metadata and projected 
     await assert.rejects(new D1CommerceRepository(database).queryDeliveryRecoveryState({ owner: 'owner', nowMs: 100_000 }),
       (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable', JSON.stringify(corruption));
   }
+});
+
+
+test('recovery summary rejects missing state instead of hiding outstanding orders', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocuments(harness, [{ key: commerceKeys.deliveryOrder('drop', '7'), data: { owner: 'owner', status: 'processing' } }]);
+  harness.database.exec('DROP TRIGGER commerce_delivery_recovery_delete_guard');
+  harness.database.exec('DELETE FROM commerce_delivery_recovery');
+  await assert.rejects(new D1CommerceRepository(harness.db).queryDeliveryRecoveryState({ owner: 'owner', nowMs: 1 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
+});
+
+
+test('recovery summary rejects invalid stored lease identities', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const key = commerceKeys.deliveryOrder('drop', '7');
+  seedCommerceDocuments(harness, [{ key, data: { owner: 'owner', status: 'processing' } }]);
+  const state = harness.database.prepare('SELECT generation, revision FROM commerce_delivery_recovery WHERE parent_path = ?').get(key.path)!;
+  const guardId = crypto.randomUUID();
+  harness.database.prepare(`INSERT INTO commerce_commit_guards
+    (guard_id, expectations_json, created_at_ms, delivery_recovery_expectations_json)
+    VALUES (?, '[]', 0, ?)`).run(guardId, JSON.stringify([{ parentPath: key.path, ...state }]));
+  harness.database.prepare('UPDATE commerce_delivery_recovery SET lease_id = ?, revision = revision + 1 WHERE parent_path = ?')
+    .run('x'.repeat(36), key.path);
+  harness.database.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').run(guardId);
+  await assert.rejects(new D1CommerceRepository(harness.db).queryDeliveryRecoveryState({ owner: 'owner', nowMs: 1 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
 });

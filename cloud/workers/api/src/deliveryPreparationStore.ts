@@ -6,7 +6,7 @@ import {
   type CommerceDocumentData,
 } from './commerceRepository.js';
 import { DeliveryPrepareError } from './deliveryPrepareErrors.js';
-import { createDeliveryOrder } from './deliveryOrderStore.js';
+import { createDeliveryOrder, type RecoverySnapshot } from './deliveryOrderStore.js';
 import type { PreparedDeliveryOrderCreate } from './deliveryOrderCreate.js';
 
 const RECONCILE_TIMEOUT_MS = 5_000;
@@ -50,10 +50,26 @@ export type PreparedDeliveryInput = {
   prepareAttemptId: string;
 };
 
+export type PreparedDeliveryCleanupToken = {
+  updateTime: string;
+  version: number;
+  recoveryGeneration: string;
+  recoveryRevision: number;
+};
+
+function preparedCleanupToken(snapshot: RecoverySnapshot): PreparedDeliveryCleanupToken {
+  return {
+    updateTime: snapshot.order.updateTime,
+    version: snapshot.order.version,
+    recoveryGeneration: snapshot.state.generation,
+    recoveryRevision: snapshot.state.revision,
+  };
+}
+
 export async function createPreparedDeliveryOrder(
   context: PreparedDeliveryCommerceContext,
   input: PreparedDeliveryInput,
-): Promise<string> {
+): Promise<PreparedDeliveryCleanupToken> {
   const reconcile = () => reconcilePreparedDeliveryOrder({
     ...context,
     signal: AbortSignal.timeout(RECONCILE_TIMEOUT_MS),
@@ -86,9 +102,14 @@ export async function createPreparedDeliveryOrder(
     if (key.path !== input.path) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
     const created = await commerceRepository(context).run(
       context.nowMs,
-      async (unit) => createDeliveryOrder(unit, key, fields),
+      async (unit) => {
+        await createDeliveryOrder(unit, key, fields);
+        const snapshot = await unit.getRecoverySnapshot(key);
+        if (!snapshot) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
+        return preparedCleanupToken(snapshot);
+      },
     );
-    return created.updateTime;
+    return created;
   } catch (error) {
     const reconciled = await reconcile();
     if (reconciled) return reconciled;
@@ -99,12 +120,13 @@ export async function createPreparedDeliveryOrder(
 async function reconcilePreparedDeliveryOrder(
   context: PreparedDeliveryCommerceContext,
   input: PreparedDeliveryInput,
-): Promise<string | null> {
+): Promise<PreparedDeliveryCleanupToken | null> {
   const key = commerceKeys.deliveryOrder(input.dropId, String(input.deliveryId));
   if (key.path !== input.path) return null;
-  const document = await commerceRepository(context).get(key);
-  if (!document) return null;
-  const decoded = document.data;
+  const snapshot = await commerceRepository(context).getRecoverySnapshot(key);
+  if (!snapshot || snapshot.state.revision !== 1 || snapshot.state.leaseId !== null ||
+    snapshot.state.receiptRecoveryJson !== JSON.stringify({ preparedProbeCount: 0, nextPreparedProbeAt: input.nextPreparedProbeAtMs })) return null;
+  const decoded = snapshot.order.data;
   if (
     !decoded ||
     decoded.prepareAttemptId !== input.prepareAttemptId ||
@@ -117,20 +139,22 @@ async function reconcilePreparedDeliveryOrder(
     decoded.deliveryLamports !== input.deliveryLamports ||
     JSON.stringify(decoded.itemIds) !== JSON.stringify(input.items.map((item) => item.assetId))
   ) return null;
-  return document.updateTime;
+  return preparedCleanupToken(snapshot);
 }
 
 export async function deletePreparedDeliveryOrder(
   context: PreparedDeliveryCommerceContext,
   path: string,
-  updateTime: string,
+  token: PreparedDeliveryCleanupToken,
 ): Promise<void> {
   const identity = path.match(/^drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
   if (!identity) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
   const key = commerceKeys.deliveryOrder(identity[1], identity[2]);
   await commerceRepository(context).run(context.nowMs, async (unit) => {
-    const current = await unit.get(key);
-    if (!current || current.updateTime !== updateTime) throw new CommerceWriteConflict();
+    const current = await unit.getRecoverySnapshot(key);
+    if (!current || current.order.data.status !== 'prepared' || current.order.updateTime !== token.updateTime ||
+      current.order.version !== token.version || current.state.generation !== token.recoveryGeneration ||
+      current.state.revision !== token.recoveryRevision) throw new CommerceWriteConflict();
     await unit.delete(key, { mustExist: true });
   });
 }

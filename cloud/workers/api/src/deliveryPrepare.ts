@@ -1,3 +1,4 @@
+import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import { z } from 'zod';
 import {
@@ -33,7 +34,6 @@ import type {
 import { DELIVERY_PREPARE_ATTEMPT_HEADER } from '../../../../shared/contracts.js';
 import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
 import {
-  boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
@@ -102,6 +102,7 @@ import {
   type PreparedDeliveryAddress as AddressDocument,
   type PreparedDeliveryItem as DeliveryOrderItem,
   type PreparedDeliveryInput as DeliveryOrderCreateInput,
+  type PreparedDeliveryCleanupToken,
 } from './deliveryPreparationStore.js';
 
 export const DELIVERY_PREPARE_PATH = '/delivery/prepare';
@@ -173,11 +174,11 @@ type DeliveryPrepareDependencies = {
   createDeliveryOrder: (
     context: CommerceContext,
     input: DeliveryOrderCreateInput,
-  ) => Promise<string>;
+  ) => Promise<PreparedDeliveryCleanupToken>;
   deleteDeliveryOrder: (
     context: CommerceContext,
     path: string,
-    updateTime: string,
+    token: PreparedDeliveryCleanupToken,
   ) => Promise<void>;
   deliveryPdaExists: (
     context: ProviderContext,
@@ -426,22 +427,6 @@ function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; dat
   }
 }
 
-function paymentRoutingMatches(config: ApiDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
-  const paymentRouting = decoded.paymentRouting;
-  if (!paymentRouting) return false;
-  if (!config.paymentRouting) return paymentRouting.schema === 'legacy';
-  if (paymentRouting.schema !== 'split-payments-v1') return false;
-  if (
-    new PublicKey(paymentRouting.deliveryPaymentReceiver).toBase58() !== config.paymentRouting.deliveryPaymentReceiver ||
-    paymentRouting.mintProceeds.length !== config.paymentRouting.mintProceeds.length
-  ) return false;
-  return config.paymentRouting.mintProceeds.every((expected, index) => {
-    const actual = paymentRouting.mintProceeds[index];
-    return Boolean(actual) &&
-      new PublicKey(actual.address).toBase58() === expected.address &&
-      actual.percentage === expected.percentage;
-  });
-}
 
 async function loadOnchainState(
   context: ProviderContext,
@@ -494,18 +479,13 @@ async function loadOnchainState(
   const treasury = new PublicKey(decoded.treasury);
   const coreCollection = new PublicKey(decoded.coreCollection);
   if (
-    !coreCollection.equals(runtime.collectionMint) ||
-    decoded.itemsPerBox !== runtime.itemsPerBox ||
-    decoded.maxSupply !== runtime.maxSupply ||
-    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet ||
     !isBoxMinterDiscountMintsPerWallet(decoded.discountMintsPerWallet) ||
-    !boxMinterMetadataBaseMatchesDrop(
-      decoded.uriBase,
-      runtime.config.metadataBase,
-      runtime.config.metadataBaseAliases,
-    ) ||
-    treasury.toBase58() !== runtime.config.treasury ||
-    !paymentRoutingMatches(runtime.config, decoded)
+    !matchesCommittedDropConfig(decoded, {
+      ...runtime.config,
+      collectionMint: runtime.collectionMint.toBase58(),
+      itemsPerBox: runtime.itemsPerBox,
+      maxSupply: runtime.maxSupply,
+    })
   ) {
     throw new DeliveryPrepareError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,
@@ -937,13 +917,13 @@ async function prepareDelivery(args: {
       deliveryLamports,
     });
     const path = dropDeliveryOrderPath(dropId, deliveryId);
-    const cleanupCreatedOrder = async (updateTime: string): Promise<void> => {
+    const cleanupCreatedOrder = async (token: PreparedDeliveryCleanupToken): Promise<void> => {
       try {
         await args.dependencies.deleteDeliveryOrder({
           ...args.context,
           nowMs: args.dependencies.nowMs(),
           signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
-        }, path, updateTime);
+        }, path, token);
       } catch (cleanupError) {
         rethrowDeferredWorkRegistrationError(cleanupError);
         console.error({
@@ -954,10 +934,10 @@ async function prepareDelivery(args: {
         });
       }
     };
-    let updateTime: string;
+    let cleanupToken: PreparedDeliveryCleanupToken;
     try {
       args.context.signal.throwIfAborted();
-      updateTime = await args.runCritical(async () => {
+      cleanupToken = await args.runCritical(async () => {
         const createdAt = await args.dependencies.createDeliveryOrder(args.context, {
           path,
           dropId,
@@ -1001,9 +981,9 @@ async function prepareDelivery(args: {
       };
     } catch (error) {
       if (args.context.signal.aborted) {
-        registerDeferredWork(args.defer, cleanupCreatedOrder(updateTime));
+        registerDeferredWork(args.defer, cleanupCreatedOrder(cleanupToken));
       } else {
-        await args.runCritical(() => cleanupCreatedOrder(updateTime));
+        await args.runCritical(() => cleanupCreatedOrder(cleanupToken));
       }
       throw error;
     }

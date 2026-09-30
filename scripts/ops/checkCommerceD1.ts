@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
+import { LEGACY_DELIVERY_RECOVERY_JSON_SQL, planDeliveryRecoveryStateBackfill } from '../shared/deliveryRecoveryStateMaintenance.ts';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
 import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
 import { planNotificationOutboxBackfill } from '../shared/notificationOutboxMaintenance.ts';
@@ -21,7 +23,7 @@ import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/str
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
-  deliveryRecoveryOrdersQuery,
+  deliveryRecoveryStateQuery,
   packStatusOutboxDueQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
@@ -141,6 +143,25 @@ const STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [str
   commerce_stripe_checkout_state_reconciliation_due: ['index', '33a00a977c2835918699d8ebcf6795d0688f522c6cc5e4cafb883c3ba120c39c'],
   commerce_stripe_checkout_state_update_guard: ['trigger', 'a3c24f0ba0d2064b758f3c7d719e9a1cb5bdc4d0bf3234092433b259a156ee80'],
   commerce_stripe_checkouts_manual_review_cursor: ['index', '21ffc6599703703842adb5e233fedf7b5203912c5d718637d43b45ff1cdfbb59'],
+});
+const DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
+  commerce_commit_guard_delivery_recovery_finish: ['trigger', 'c6d633f733c29fca8fff1852eec84124b55e15c4c6c404997f5876e7131e3b60'],
+  commerce_commit_guard_delivery_recovery_validate: ['trigger', 'cb304d88a2c58e9fc2e5c5973bd30d1eed22376fb59f2088ce60ed5845905967'],
+  commerce_commit_guards: ['table', '6407f79973f7f4b763ed232fc660ec9dddf62d3c14673debe25475c5d8a8363b'],
+  commerce_delivery_recovery: ['table', '82c7c0a54193aaec1593209df13bbe294a4432a68a94c39ba4031c03c23cd41f'],
+  commerce_delivery_recovery_control: ['table', 'cd145465b3c37fa466f1407d67cf2472795c197e7e954afa3979f69ccf7db334'],
+  commerce_delivery_recovery_control_delete_guard: ['trigger', 'f9760f6e7e588f3e96360ef9c63e7493b73a35b2c4fc7dd73c6c9ae3986d9c2a'],
+  commerce_delivery_recovery_control_insert_guard: ['trigger', '379249abc43be92a893c751bb66e67794c9b9e4445000942c9e1ef3b6d27ee9f'],
+  commerce_delivery_recovery_control_update_guard: ['trigger', 'edef08d64133dd93548dc587dcbdf20f2a5318061f8d885a9e7bb68365a95bc8'],
+  commerce_delivery_recovery_delete_guard: ['trigger', '13ef4a30613d7269f782126ff78facce06178b741890ceac40d8ecc48fa09c4a'],
+  commerce_delivery_recovery_insert_guard: ['trigger', 'a132d64871ab352a2a237e75cf30529bebc8da9ab70cddb01a259f78da4b3b0c'],
+  commerce_delivery_recovery_parent_delete_guard: ['trigger', 'f102e4efaf4d9caebbc0c7f21dbf068ef653e704d4883a504a641ae02a6a05d4'],
+  commerce_delivery_recovery_parent_insert_guard: ['trigger', 'a8c166315d157095d295667a2875de4a2acade1b8abb56272614aca4c48f068a'],
+  commerce_delivery_recovery_parent_update_guard: ['trigger', '2559c5cf1dadd666653bce9e4b5ffe73286c771e66d0c70f2bcc7b130456d881'],
+  commerce_delivery_recovery_resume_guard: ['trigger', '3ec1529f526c52c2fc452fe8a9e548ed201b0495f99e8cc45aca8041c3159977'],
+  commerce_delivery_recovery_update_guard: ['trigger', 'ba3fe21c43b192cf3da7e50c3629f0e5b33b0833cea8351173ca1f9977a55683'],
+  commerce_wipe_guard_delivery_recovery_validate: ['trigger', 'b4bc1de2fd765df6ea534ad8ef7981adcb67e2bde74055cc630ef27df6bacc51'],
+  commerce_wipe_guards: ['table', '5425bb71f76f90d411b123428095e540652749e412edab0b5d814a1877efb19e'],
 });
 const PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_pack_status_control_delete_guard: ['trigger', 'b5e923301376ec5a34792dbb4c5fac28afa54e6efd9c3d717503efabb14effeb'],
@@ -407,7 +428,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 29) ||
+    (migrations.length < 13 || migrations.length > 30) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -436,13 +457,15 @@ export function checkCommerceD1(
     (migrations.length >= 26 && migrations[25].name !== '0026_stripe_checkout_state.sql') ||
     (migrations.length >= 27 && migrations[26].name !== '0027_preorder_expiry_claim_release.sql') ||
     (migrations.length >= 28 && migrations[27].name !== '0028_preorder_card_range_1413.sql') ||
-    (migrations.length >= 29 && migrations[28].name !== '0029_pack_status_outbox.sql')
+    (migrations.length >= 29 && migrations[28].name !== '0029_pack_status_outbox.sql') ||
+    (migrations.length >= 30 && migrations[29].name !== '0030_delivery_recovery.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
   const legacyNotificationIndexesRemoved = migrations.some((migration) =>
     migration.name === '0014_drop_legacy_notification_indexes.sql');
   const stripeCheckoutStateReady = migrations.some((migration) => migration.name === '0026_stripe_checkout_state.sql');
+  const deliveryRecoveryStateReady = migrations.some((migration) => migration.name === '0030_delivery_recovery.sql');
   const packStatusOutboxReady = migrations.some((migration) => migration.name === '0029_pack_status_outbox.sql');
   const manualReviewPaginationReady = migrations.some((migration) =>
     migration.name === '0015_manual_review_pagination.sql');
@@ -502,8 +525,13 @@ export function checkCommerceD1(
   if (options.forDeployment && !preorderExpiryClaimReleaseReady) fail('Commerce D1 preorder expiry claim release migration is required for deployment.');
   if (options.forDeployment && !preorderCardRange1413Ready) fail('Commerce D1 preorder card range 1413 migration is required for deployment.');
   if (options.forDeployment && !packStatusOutboxReady) fail('Commerce D1 pack-status outbox migration is required for deployment.');
+  if (options.forDeployment && !deliveryRecoveryStateReady) fail('Commerce D1 delivery recovery migration is required for deployment.');
+  if (deliveryRecoveryStateReady) for (const [name, [type, fingerprint]] of Object.entries(DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS)) {
+    const schema = schemaCatalog.get(type, name);
+    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Delivery recovery state schema is invalid: ${name}.`);
+  }
   if (stripeCheckoutStateReady) for (const [name, [type, fingerprint]] of Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS)) {
-    if (name === 'commerce_stripe_checkouts_manual_review_cursor') continue;
+    if (name === 'commerce_stripe_checkouts_manual_review_cursor' || (deliveryRecoveryStateReady && name === 'commerce_commit_guards')) continue;
     const schema = schemaCatalog.get(type, name);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Stripe checkout state schema is invalid: ${name}.`);
   }
@@ -523,6 +551,7 @@ export function checkCommerceD1(
     'commerce_available_dudes',
     'commerce_commit_guards',
     'commerce_delivery_owner_revisions',
+    ...(deliveryRecoveryStateReady ? ['commerce_delivery_recovery', 'commerce_delivery_recovery_control'] : []),
     'commerce_document_path_revisions',
     'commerce_documents',
     'commerce_inventory_drops',
@@ -685,13 +714,13 @@ export function checkCommerceD1(
   if (
     authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms,dude_inventory_mode' ||
     commitGuardColumns.join(',') !==
-      `guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json,notification_outbox_expectations_json${stripeCheckoutStateReady ? ',stripe_checkout_paths_json' : ''}` ||
+      `guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json,notification_outbox_expectations_json${stripeCheckoutStateReady ? ',stripe_checkout_paths_json' : ''}${deliveryRecoveryStateReady ? ',delivery_recovery_expectations_json,delivery_recovery_paths_json' : ''}` ||
     documentPathRevisionColumns.join(',') !== 'document_path,revision' ||
     leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
-    wipeGuardColumns.join(',') !== 'guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision' ||
+    wipeGuardColumns.join(',') !== `guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision${deliveryRecoveryStateReady ? ',delivery_recovery_expectations_json' : ''}` ||
     authorityUpdateGuardFingerprint !== AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
     commitGuardFingerprint !== COMMIT_GUARD_SCHEMA_FINGERPRINT ||
-    commitGuardTableFingerprint !== (stripeCheckoutStateReady ? STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS.commerce_commit_guards[1] : COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT) ||
+    commitGuardTableFingerprint !== (deliveryRecoveryStateReady ? DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS.commerce_commit_guards[1] : stripeCheckoutStateReady ? STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS.commerce_commit_guards[1] : COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT) ||
     deliveryOwnerRevisionFingerprint !== DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT ||
     documentPathRevisionFingerprint !== DOCUMENT_PATH_REVISION_SCHEMA_FINGERPRINT ||
     documentVersionUpdateGuardFingerprint !== DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
@@ -711,6 +740,7 @@ export function checkCommerceD1(
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
+    ...(deliveryRecoveryStateReady ? Object.entries(DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     ...(packStatusOutboxReady ? Object.entries(PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     ...(stripeCheckoutStateReady ? Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
     ...(preordersReady ? Object.entries(preorderSchema).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
@@ -898,12 +928,14 @@ export function checkCommerceD1(
   }));
   requireSearchIndex(keysetDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
   requireNoTemporaryBTree(keysetDeliveryOwnerPlan, 'keyset delivery-owner');
-  const deliveryRecoveryPlan = queryPlan(deliveryRecoveryOrdersQuery('11111111111111111111111111111111'));
-  requireSearchIndex(deliveryRecoveryPlan, 'commerce_documents_delivery_owner_status');
-  if (!deliveryRecoveryPlan.some((row) => normalizedSql(row.detail).includes(
-    'commerce_documents_delivery_owner_status (document_kind=? AND owner=? AND status=?)',
-  ))) fail('Commerce D1 delivery-recovery query plan does not use the full owner-status prefix.');
-  requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery');
+  if (deliveryRecoveryStateReady) {
+    const deliveryRecoveryPlan = queryPlan(deliveryRecoveryStateQuery('11111111111111111111111111111111', 1, 1));
+    requireSearchIndex(deliveryRecoveryPlan, 'commerce_documents_delivery_owner_status');
+    if (!deliveryRecoveryPlan.some((row) => normalizedSql(row.detail).includes(
+      'commerce_documents_delivery_owner_status (document_kind=? AND owner=? AND status=?)',
+    ))) fail('Commerce D1 delivery-recovery summary does not use the full owner-status prefix.');
+    requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery summary');
+  }
   if (shipmentPaginationReady) {
     const sortColumns = queryRemoteCommerceD1(`SELECT type, hidden FROM pragma_table_xinfo('commerce_documents')
       WHERE name = 'shipment_sort_at_ms'`);
@@ -1056,6 +1088,59 @@ export function checkCommerceD1(
   const notificationRows = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox ORDER BY parent_path, family')
     .map(parseNotificationOutboxRow);
   const parents = new Map(authoritativeDocuments.map((document) => [document.document_path, document]));
+  const recoveryControls = deliveryRecoveryStateReady
+    ? queryRemoteCommerceD1('SELECT * FROM commerce_delivery_recovery_control') : [];
+  const recoveryControl = recoveryControls[0];
+  if (deliveryRecoveryStateReady) {
+    if (recoveryControls.length !== 1 || recoveryControl.singleton !== 1 ||
+      !['legacy', 'table'].includes(String(recoveryControl.storage_mode)) ||
+      !['idle', 'preparing', 'ready'].includes(String(recoveryControl.preparation_state)) ||
+      (recoveryControl.storage_mode === 'table' && recoveryControl.preparation_state !== 'ready') ||
+      (recoveryControl.preparation_state === 'ready' &&
+        (recoveryControl.source_documents_revision === null || recoveryControl.prepared_at_ms === null))) {
+      fail('Delivery recovery state control is invalid.');
+    }
+    if (recoveryControl.source_documents_revision !== null) safeInteger(recoveryControl.source_documents_revision, 'Delivery recovery source revision');
+    if (recoveryControl.prepared_at_ms !== null) safeInteger(recoveryControl.prepared_at_ms, 'Delivery recovery preparation timestamp');
+  }
+  const recoveryParentColumns = `document.document_path, document.document_kind, document.drop_id, document.document_id,
+    json_remove(document.document_json, '$.receiptRecovery') AS document_json,
+    document.version, document.create_time, document.update_time`;
+  const recoveryJoinedRows = deliveryRecoveryStateReady
+    ? queryRemoteCommerceD1(`SELECT recovery.*, ${recoveryParentColumns}
+      FROM commerce_documents AS document
+      LEFT JOIN commerce_delivery_recovery AS recovery ON recovery.parent_path = document.document_path
+      WHERE document.document_kind = 'delivery_order'
+      UNION ALL
+      SELECT recovery.*, ${recoveryParentColumns}
+      FROM commerce_delivery_recovery AS recovery
+      LEFT JOIN commerce_documents AS document ON document.document_path = recovery.parent_path
+      WHERE document.document_kind IS NOT 'delivery_order'
+      ORDER BY parent_path`) : [];
+  for (const row of recoveryJoinedRows) {
+    if (row.parent_path === null) {
+      if (recoveryControl?.storage_mode === 'table') fail(`Delivery recovery state is missing: ${String(row.document_path)}.`);
+    } else {
+      if (row.document_kind !== 'delivery_order' || row.document_path !== row.parent_path) fail('Delivery recovery state parent is invalid.');
+      parseCommerceD1DocumentRow(row);
+    }
+  }
+  const recoveryRows = recoveryJoinedRows.filter((row) => row.parent_path !== null).map(parseDeliveryRecoveryRow);
+  const recoveryStates = new Map(recoveryRows.map((record) => [record.parentPath, record]));
+  if (recoveryControl?.storage_mode === 'legacy' && recoveryControl.preparation_state === 'ready') {
+    if (recoveryControl.source_documents_revision !== authority.documents_revision) fail('Delivery recovery state preparation is stale.');
+    const sources = queryRemoteCommerceD1(`SELECT document_path, ${LEGACY_DELIVERY_RECOVERY_JSON_SQL} AS receipt_recovery_json
+      FROM commerce_documents WHERE document_kind = 'delivery_order' ORDER BY document_path`);
+    if (sources.length !== recoveryRows.length) fail('Delivery recovery state preparation differs from source documents.');
+    const recoveryParents = new Map(recoveryJoinedRows.map((row) => [row.document_path, row]));
+    for (const source of sources) {
+      const actual = recoveryStates.get(String(source.document_path));
+      const parent = recoveryParents.get(source.document_path);
+      if (!actual || !parent || (source.receipt_recovery_json !== null && typeof source.receipt_recovery_json !== 'string') ||
+        !isDeepStrictEqual(actual, planDeliveryRecoveryStateBackfill(parseCommerceD1DocumentRow(parent),
+          source.receipt_recovery_json as string | null, actual.generation))) fail('Delivery recovery state preparation differs from source documents.');
+    }
+  }
   const packStatusControls = packStatusOutboxReady
     ? queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox_control') : [];
   const packStatusControl = packStatusControls[0];
@@ -1198,6 +1283,10 @@ export function checkCommerceD1(
     authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
     packStatusControl?.preparation_state === 'ready' && packStatusControl.source_documents_revision === authority.documents_revision
   )) fail('API deployment requires activated pack-status outbox storage or fully paused, verified preparation. Follow scripts/docs/pack_status_outbox_cutover.md.');
+  if (options.forDeployment && recoveryControl?.storage_mode !== 'table' && !(
+    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
+    recoveryControl?.preparation_state === 'ready' && recoveryControl.source_documents_revision === authority.documents_revision
+  )) fail('API deployment requires activated delivery recovery state or fully paused, verified preparation. Follow scripts/docs/delivery_recovery_state_cutover.md.');
   for (const family of ['ready', 'stripe_terminal', 'shipped'] as const) {
     const plan = queryPlan(notificationOutboxDueQuery({ family, dueAtMs: 1, limit: 8 }));
     requireSearchIndex(plan, 'commerce_notification_outbox_family_due');
@@ -1228,6 +1317,11 @@ export function checkCommerceD1(
       packStatusOutboxMode: packStatusControl.storage_mode,
       packStatusOutboxPreparation: packStatusControl.preparation_state,
       packStatusOutboxRows: packStatusRows.length,
+    } : {}),
+    ...(deliveryRecoveryStateReady ? {
+      deliveryRecoveryStateMode: recoveryControl.storage_mode,
+      deliveryRecoveryStatePreparation: recoveryControl.preparation_state,
+      deliveryRecoveryStateRows: recoveryRows.length,
     } : {}),
     inventoryDrops: inventory.length,
     availableDudes,

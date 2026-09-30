@@ -1,3 +1,4 @@
+import { parseDeliveryRecoveryRecord, parseDeliveryRecoveryRow, type DeliveryRecoveryRecord } from '../../shared/deliveryRecoveryState.ts';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
@@ -35,6 +36,7 @@ import {
   acquireCommerceAuthorityLease,
   executeRemoteCommerceD1File,
   hasPackStatusOutboxSchema,
+  hasDeliveryRecoveryStateSchema,
   hasStripeCheckoutStateSchema,
   queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
@@ -150,6 +152,8 @@ export type CommerceD1Plan = {
   notificationOutboxCount: number;
   packStatusOutboxCount: number | null;
   stripeCheckoutStateCount: number | null;
+  deliveryRecoveryStateCount: number | null;
+  deliveryRecoveryExpectations: Array<Pick<DeliveryRecoveryRecord, 'parentPath' | 'generation' | 'revision'>>;
 };
 
 export function sameCommerceD1Plan(
@@ -912,6 +916,7 @@ export function buildCommerceD1PlanFromDocuments(args: {
   notificationOutboxCount?: number;
   packStatusOutboxCount?: number;
   stripeCheckoutStateCount?: number;
+  deliveryRecoveryRecords?: DeliveryRecoveryRecord[];
 }): CommerceD1Plan {
   const dropId = validateDropId(args.dropId, 'drop id');
   const targetAssignments = args.targetDocuments.filter((document) => document.kind === 'box_assignment');
@@ -978,6 +983,11 @@ export function buildCommerceD1PlanFromDocuments(args: {
       conflicts.map((entry) => `- ${entry}`).join('\n'),
     );
   }
+  const recoveryRecords = args.deliveryRecoveryRecords?.map(parseDeliveryRecoveryRecord);
+  if (recoveryRecords && (new Set(recoveryRecords.map((record) => record.parentPath)).size !== recoveryRecords.length ||
+    recoveryRecords.some((record) => !targetDeliveryOrders.some((document) => document.path === record.parentPath)))) {
+    fail('Delivery recovery state does not match the wipe target.');
+  }
   const claimDocumentsToDelete = [...claimDocByCode.values()];
   const documentsToDelete = [...new Map(
     [...args.targetDocuments, ...claimDocumentsToDelete].map((document) => [document.path, document]),
@@ -1000,6 +1010,9 @@ export function buildCommerceD1PlanFromDocuments(args: {
       ? null : safeInteger(args.packStatusOutboxCount, 'Pack-status outbox count'),
     stripeCheckoutStateCount: args.stripeCheckoutStateCount === undefined
       ? null : safeInteger(args.stripeCheckoutStateCount, 'Stripe checkout state count'),
+    deliveryRecoveryStateCount: recoveryRecords?.length ?? null,
+    deliveryRecoveryExpectations: (recoveryRecords ?? []).map(({ parentPath, generation, revision }) => ({ parentPath, generation, revision }))
+      .sort((left, right) => left.parentPath.localeCompare(right.parentPath)),
   };
 }
 
@@ -1028,6 +1041,10 @@ export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
     stripeCheckoutStateCount: hasStripeCheckoutStateSchema(queryRemoteCommerceD1)
       ? safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
         FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}`)[0]?.count, 'Stripe checkout state count')
+      : undefined,
+    deliveryRecoveryRecords: hasDeliveryRecoveryStateSchema(queryRemoteCommerceD1)
+      ? queryRemoteCommerceD1(`SELECT * FROM commerce_delivery_recovery WHERE ${deliveryRecoveryDropPredicate(dropId)}
+          ORDER BY parent_path`).map(parseDeliveryRecoveryRow)
       : undefined,
     targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
     claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
@@ -1668,6 +1685,7 @@ function printPlan(args: {
   console.log(`- notification outbox rows to delete: ${commercePlan.notificationOutboxCount}`);
   if (commercePlan.packStatusOutboxCount !== null) console.log(`- pack-status outbox rows to delete: ${commercePlan.packStatusOutboxCount}`);
   if (commercePlan.stripeCheckoutStateCount !== null) console.log(`- Stripe checkout state rows to delete: ${commercePlan.stripeCheckoutStateCount}`);
+  if (commercePlan.deliveryRecoveryStateCount !== null) console.log(`- Delivery recovery state rows to delete: ${commercePlan.deliveryRecoveryStateCount}`);
   console.log(`- figure inventory mode: ${commercePlan.inventory.mode}`);
   console.log(`- available figure rows to delete: ${commercePlan.inventory.availableCount}`);
   if (commercePlan.inventory.metadata) {
@@ -4769,6 +4787,11 @@ function stripeCheckoutDropPredicate(dropId: string): string {
   return `substr(document_path, 1, ${prefix.length}) = ${sqlString(prefix)}`;
 }
 
+function deliveryRecoveryDropPredicate(dropId: string): string {
+  const prefix = `drops/${dropId}/deliveryOrders/`;
+  return `substr(parent_path, 1, ${prefix.length}) = ${sqlString(prefix)}`;
+}
+
 export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, nowMs: number): string {
   requireExecutableCommerceD1Wipe(plan.authority);
   if (!guardId || !Number.isSafeInteger(nowMs) || nowMs < 0) fail('Commerce D1 wipe metadata is invalid.');
@@ -4786,6 +4809,7 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
       AND (SELECT COUNT(*) FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}) = ${plan.notificationOutboxCount}
       ${plan.packStatusOutboxCount === null ? '' : `AND (SELECT COUNT(*) FROM commerce_pack_status_outbox WHERE drop_id = ${sqlString(dropId)}) = ${plan.packStatusOutboxCount}`}
       ${plan.stripeCheckoutStateCount === null ? '' : `AND (SELECT COUNT(*) FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}) = ${plan.stripeCheckoutStateCount}`}
+      ${plan.deliveryRecoveryStateCount === null ? '' : `AND (SELECT COUNT(*) FROM commerce_delivery_recovery WHERE ${deliveryRecoveryDropPredicate(dropId)}) = ${plan.deliveryRecoveryStateCount}`}
       AND (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)}) = ${inventory.availableCount}
       AND (SELECT dude_inventory_mode FROM commerce_authority_control WHERE singleton = 1) = ${sqlString(inventory.mode)}
       AND EXISTS (SELECT 1 FROM commerce_authority_control_lease
@@ -4803,16 +4827,16 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
   const guardIds = chunks.map((_, index) => `${guardId}:${index}`);
   const guards = chunks.map((chunk, index) => `INSERT INTO commerce_wipe_guards (
     guard_id, expectations_json, expected_documents_revision,
-    expected_authority_revision, created_at_ms
+    expected_authority_revision, created_at_ms${plan.deliveryRecoveryStateCount === null ? '' : ', delivery_recovery_expectations_json'}
   ) VALUES (
     ${sqlString(guardIds[index])}, ${sqlString(JSON.stringify(chunk))},
     CASE WHEN ${inventoryExpectation} THEN ${plan.authority.documentsRevision} ELSE -1 END,
-    ${plan.authority.revision}, ${nowMs}
+    ${plan.authority.revision}, ${nowMs}${plan.deliveryRecoveryStateCount === null ? '' : `, ${sqlString(JSON.stringify(plan.deliveryRecoveryExpectations.filter((record) => chunk.some((document) => document.path === record.parentPath))))}`}
   );`).join('\n');
   const deletes = chunks.filter((chunk) => chunk.length).map((chunk) => `DELETE FROM commerce_documents
   WHERE document_path IN (${chunk.map((document) => sqlString(document.path)).join(', ')});`).join('\n');
   const scrubGuards = guardIds.map((id) =>
-    `UPDATE commerce_wipe_guards SET expectations_json = '[]' WHERE guard_id = ${sqlString(id)};`
+    `UPDATE commerce_wipe_guards SET expectations_json = '[]'${plan.deliveryRecoveryStateCount === null ? '' : ", delivery_recovery_expectations_json = '[]'"} WHERE guard_id = ${sqlString(id)};`
   ).join('\n');
   const advanceRevision = expectations.length || metadata || inventory.availableCount
     ? `UPDATE commerce_authority_control
@@ -4857,6 +4881,7 @@ function readCommerceD1WipeOutcome(
         WHERE drop_id = ${sqlString(dropId)}) AS notification_outbox_count,
       ${plan.packStatusOutboxCount === null ? '0' : `(SELECT COUNT(*) FROM commerce_pack_status_outbox WHERE drop_id = ${sqlString(dropId)})`} AS pack_status_outbox_count,
       ${plan.stripeCheckoutStateCount === null ? '0' : `(SELECT COUNT(*) FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)})`} AS stripe_checkout_state_count,
+      ${plan.deliveryRecoveryStateCount === null ? '0' : `(SELECT COUNT(*) FROM commerce_delivery_recovery WHERE ${deliveryRecoveryDropPredicate(dropId)})`} AS delivery_recovery_state_count,
       (SELECT COUNT(*) FROM commerce_inventory_drops
         WHERE drop_id = ${sqlString(dropId)}) AS inventory_count,
       (SELECT COUNT(*) FROM commerce_available_dudes
@@ -4878,6 +4903,7 @@ function readCommerceD1WipeOutcome(
   const notificationOutboxCount = Number(row.notification_outbox_count);
   const packStatusOutboxCount = plan.packStatusOutboxCount === null ? 0 : Number(row.pack_status_outbox_count);
   const stripeCheckoutStateCount = plan.stripeCheckoutStateCount === null ? 0 : Number(row.stripe_checkout_state_count);
+  const deliveryRecoveryStateCount = plan.deliveryRecoveryStateCount === null ? 0 : Number(row.delivery_recovery_state_count);
   const inventoryCount = Number(row.inventory_count);
   const availableCount = Number(row.available_count);
   const guardCount = Number(row.guard_count);
@@ -4895,6 +4921,7 @@ function readCommerceD1WipeOutcome(
     !Number.isSafeInteger(notificationOutboxCount) ||
     !Number.isSafeInteger(packStatusOutboxCount) ||
     !Number.isSafeInteger(stripeCheckoutStateCount) ||
+    !Number.isSafeInteger(deliveryRecoveryStateCount) ||
     !Number.isSafeInteger(inventoryCount) ||
     !Number.isSafeInteger(availableCount) ||
     !Number.isSafeInteger(guardCount)
@@ -4908,6 +4935,7 @@ function readCommerceD1WipeOutcome(
     notificationOutboxCount === 0 &&
     packStatusOutboxCount === 0 &&
     stripeCheckoutStateCount === 0 &&
+    deliveryRecoveryStateCount === 0 &&
     inventoryCount === 0 &&
     availableCount === 0 &&
     guardCount === expectedGuardCount

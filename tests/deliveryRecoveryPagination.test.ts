@@ -70,7 +70,7 @@ test('recovery response decoding preserves legacy shape and validates optional c
   assert.equal(parseRecoverDeliveryOrdersResult({ ...result, extra: true }), null);
 });
 
-test('recovery client opts in explicitly and rejects missing or mismatched page responses', async () => {
+test('recovery client always paginates broad requests and rejects missing or mismatched page responses', async () => {
   const requests: unknown[] = [];
   let response: unknown = { ...result, nextCursor: encodeDeliveryRecoveryCursor(cursor) };
   const api = createCommerceApiClient(async (_path, body) => { requests.push(body); return response; });
@@ -82,5 +82,12 @@ test('recovery client opts in explicitly and rejects missing or mismatched page 
   await assert.rejects(api.recoverMyDeliveryOrders({ cursor: null }), /Invalid delivery recovery response/);
   response = result;
   await assert.rejects(api.recoverMyDeliveryOrders({ cursor: null }), /Invalid delivery recovery response/);
-  assert.deepEqual(await api.recoverMyDeliveryOrders(), result);
+  await assert.rejects(api.recoverMyDeliveryOrders(), /Invalid delivery recovery response/);
+  assert.deepEqual(requests.at(-1), { cursor: null });
+  response = { ...result, nextCursor: null };
+  assert.deepEqual(await api.recoverMyDeliveryOrders(), response);
+  assert.deepEqual(requests.at(-1), { cursor: null });
+  response = result;
+  assert.deepEqual(await api.recoverMyDeliveryOrders({ dropId: 'card_nft_2', deliveryId: 7 }), result);
+  assert.deepEqual(requests.at(-1), { dropId: 'card_nft_2', deliveryId: 7 });
 });

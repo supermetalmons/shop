@@ -385,6 +385,7 @@ async function dispatchDeliveryReceipt(
       ...(result.verification ? { deliveryReceiptVerification: result.verification } : {}),
       ...(result.attempted === undefined ? {} : { deliveryRecoveryAttempted: result.attempted }),
       ...(result.recovered === undefined ? {} : { deliveryRecoveryRecovered: result.recovered }),
+      ...(result.recoveryMode ? { deliveryRecoveryMode: result.recoveryMode } : {}),
     },
   };
 }
