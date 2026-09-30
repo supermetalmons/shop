@@ -53,6 +53,11 @@ const SHIPMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_
   : name).join(', ');
 const SHIPMENT_PREDICATE = `document_kind = 'delivery_order'
   AND status IN ('processing', 'ready_to_ship') AND source IS NOT 'admin_irl_redeem'`;
+const DELIVERY_RECOVERY_FIELDS = ['preparedProbeCount', 'nextPreparedProbeAt', 'lastAttemptAt', 'leaseExpiresAt'] as const;
+const DELIVERY_RECOVERY_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_json'
+  ? `json_object('status', document.document_json -> '$.status', 'createdAt', document.document_json -> '$.createdAt',
+      'receiptRecovery', json_object(${DELIVERY_RECOVERY_FIELDS.map((field) => `'${field}', document.document_json -> '$.receiptRecovery.${field}'`).join(', ')})) AS document_json`
+  : `document.${name}`).join(', ');
 export const NOTIFICATION_OUTBOX_COLUMNS = 'parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code';
 const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
   SELECT 1 FROM commerce_authority_control AS authority
@@ -241,8 +246,16 @@ export function deliveryOrderOwnersQuery(args: Readonly<{
 }
 
 export function deliveryRecoveryOrdersQuery(owner: string): CommerceSqlQuery {
+  return deliveryRecoveryQuery(owner, qualifiedDocumentColumns('document'));
+}
+
+export function deliveryRecoveryStateQuery(owner: string): CommerceSqlQuery {
+  return deliveryRecoveryQuery(owner, DELIVERY_RECOVERY_COLUMNS);
+}
+
+function deliveryRecoveryQuery(owner: string, columns: string): CommerceSqlQuery {
   return {
-    sql: `SELECT ${qualifiedDocumentColumns('document')}
+    sql: `SELECT ${columns}
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
       WHERE

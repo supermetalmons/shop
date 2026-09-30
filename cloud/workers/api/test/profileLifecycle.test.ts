@@ -31,6 +31,11 @@ import {
 } from '../src/commerceRepository.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import {
+  buildWalletDeliveryRecoveryState,
+  preparedDeliveryRecoveryNextCheckMs,
+  processingDeliveryRecoveryNextCheckMs,
+} from '../../../../shared/deliveryRecovery.ts';
 
 const UID = 'auth-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
@@ -205,9 +210,15 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
     };
   };
   return {
-    queryDeliveryRecoveryOrders: async (owner: string) => harness.orders.map(record).filter((entry) =>
-      entry.data.owner === owner &&
-      (entry.data.status === 'processing' || entry.data.status === 'prepared')),
+    queryDeliveryRecoveryState: async (args: Parameters<D1CommerceRepository['queryDeliveryRecoveryState']>[0]) => {
+      const orders = harness.orders.map(record).filter((entry) => entry.data.owner === args.owner);
+      return buildWalletDeliveryRecoveryState({
+        remainingProcessing: orders.filter(({ data }) => data.status === 'processing').length,
+        nextCheckCandidates: orders.map(({ data }) => data.status === 'processing'
+          ? processingDeliveryRecoveryNextCheckMs(data, args.nowMs)
+          : data.status === 'prepared' ? preparedDeliveryRecoveryNextCheckMs(data, args.preparedNowMs) : null),
+      });
+    },
     run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
       const staged = new Map<string, Record<string, CommerceUpdateValue>>();
       const unit = {
@@ -872,6 +883,29 @@ test('profile reconciliation rejects invalid collection-group paths before write
   assert.deepEqual(await recoveryResult.response.json(), {
     mergedStripeDeliveryOrders: 0,
     deliveryRecovery: { nextCheckAt: NOW_MS + 20_000 },
+  });
+});
+
+test('profile reconciliation retains the captured prepared recovery clock', async (context) => {
+  context.mock.method(Date, 'now', () => NOW_MS + 60_000);
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('drop', '1'), data: { owner: OWNER, status: 'prepared' },
+  });
+  const result = await handleProfileLifecycleRequest(
+    request(PROFILE_RECONCILE_PATH, {}),
+    { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database },
+    PROFILE_RECONCILE_PATH,
+    {},
+    dependencies(new LegacyFirestoreCommerceHarness(), 500, {
+      createCommerceRepository: (db) => new D1CommerceRepository(db),
+      verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: OWNER }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    mergedStripeDeliveryOrders: 0, deliveryRecovery: { nextCheckAt: NOW_MS },
   });
 });
 

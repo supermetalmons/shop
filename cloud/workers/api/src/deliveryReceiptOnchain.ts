@@ -33,13 +33,11 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import {
-  isSignalCancellationError,
-  sleepWithSignal,
-} from './boundedRequest.js';
+import { isSignalCancellationError } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import { createSolanaConnection } from './solanaConnection.js';
+import { pollSignatureConfirmation } from './signaturePolling.js';
 import { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 
 export { DeliveryReceiptError } from './deliveryReceiptErrors.js';
@@ -47,7 +45,6 @@ export { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery
 
 export const TX_SEND_TIMEOUT_MS = 12_000;
 export const TX_CONFIRM_TIMEOUT_MS = 25_000;
-const TX_CONFIRM_POLL_MS = 800;
 export const MAX_U32 = 0xffff_ffff;
 const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
 const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
@@ -458,53 +455,59 @@ export function looksLikeRateLimitOrRpcError(message: string): boolean {
     (value.includes('rpc') && value.includes('error'));
 }
 
+type SignatureConfirmationResult = { ok: true } | { ok: false; definitive: boolean; error: unknown; logs: string[] };
+
 export async function waitForSignature(
   connection: Connection,
   signature: string,
   signal: AbortSignal,
   timeoutMs: number,
-): Promise<{ ok: true } | { ok: false; definitive: boolean; error: unknown; logs: string[] }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (signal.aborted) throw signal.reason;
-    try {
-      const statuses = await connection.getSignatureStatuses([signature], {
-        searchTransactionHistory: Date.now() - startedAt > 6_000,
-      });
-      const status = statuses.value[0];
-      if (status?.err) {
-        let logs: string[] = [];
-        try {
-          const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-          logs = Array.isArray(transaction?.meta?.logMessages)
+): Promise<SignatureConfirmationResult> {
+  return pollSignatureConfirmation<SignatureConfirmationResult>({
+    signal,
+    timeoutMs,
+    poll: async ({ searchTransactionHistory }) => {
+      if (signal.aborted) throw signal.reason;
+      try {
+        const statuses = await connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: searchTransactionHistory(),
+        });
+        const status = statuses.value[0];
+        if (status?.err) {
+          let logs: string[] = [];
+          try {
+            const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+            logs = Array.isArray(transaction?.meta?.logMessages)
+              ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
+              : [];
+          } catch {}
+          return { ok: false, definitive: true, error: status.err, logs };
+        }
+        if (hasConfirmedSignatureCommitment(status)) {
+          return { ok: true };
+        }
+      } catch (error) {
+        if (isSignalCancellationError(signal, error)) throw error;
+      }
+    },
+    finalLookup: async () => {
+      try {
+        const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+        if (transaction?.meta && !transaction.meta.err) return { ok: true };
+        return {
+          ok: false,
+          definitive: Boolean(transaction?.meta?.err),
+          error: transaction?.meta?.err || 'timeout',
+          logs: Array.isArray(transaction?.meta?.logMessages)
             ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
-            : [];
-        } catch {}
-        return { ok: false, definitive: true, error: status.err, logs };
+            : [],
+        };
+      } catch (error) {
+        if (isSignalCancellationError(signal, error)) throw error;
+        return { ok: false, definitive: false, error: 'timeout', logs: [] };
       }
-      if (hasConfirmedSignatureCommitment(status)) {
-        return { ok: true };
-      }
-    } catch (error) {
-      if (isSignalCancellationError(signal, error)) throw error;
-    }
-    await sleepWithSignal(TX_CONFIRM_POLL_MS, signal);
-  }
-  try {
-    const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
-    if (transaction?.meta && !transaction.meta.err) return { ok: true };
-    return {
-      ok: false,
-      definitive: Boolean(transaction?.meta?.err),
-      error: transaction?.meta?.err || 'timeout',
-      logs: Array.isArray(transaction?.meta?.logMessages)
-        ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
-        : [],
-    };
-  } catch (error) {
-    if (isSignalCancellationError(signal, error)) throw error;
-    return { ok: false, definitive: false, error: 'timeout', logs: [] };
-  }
+    },
+  });
 }
 
 export async function sendAndConfirmSignedTransaction(

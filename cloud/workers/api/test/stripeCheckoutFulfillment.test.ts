@@ -542,3 +542,50 @@ test('Stripe transaction preflight errors retain their logs and terminal classif
   );
   assert.deepEqual(methods, ['sendTransaction']);
 });
+
+test('Stripe polling waits for explicit commitment when a legacy status has confirmations', async (context) => {
+  const controller = new AbortController();
+  const reason = new Error('stop after legacy status');
+  const polled = Promise.withResolvers<void>();
+  const methods: string[] = [];
+  const fixture = rpcFixture(context, async (_input, init) => {
+    const request: RpcRequest = JSON.parse(String(init?.body));
+    methods.push(request.method);
+    if (request.method === 'sendTransaction') return rpcResult(request, fixture.signature);
+    assert.equal(request.method, 'getSignatureStatuses');
+    polled.resolve();
+    return rpcResult(request, {
+      context: { slot: 1 }, value: [{ slot: 1, confirmations: null, err: null }],
+    });
+  }, controller.signal);
+  const sending = fixture.dependencies.sendAndConfirmSignedTx(fixture.runtime, fixture.transaction, 'deliver');
+  await polled.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort(reason);
+  await assert.rejects(sending, (error) => assertSubmittedCancellation(error, reason, fixture.signature));
+  assert.deepEqual(methods, ['sendTransaction', 'getSignatureStatuses']);
+});
+
+test('Stripe final lookup keeps absent and unavailable evidence retryable', async (context) => {
+  for (const unavailable of [false, true]) {
+    const methods: string[] = [];
+    const fixture = rpcFixture(context, async (_input, init) => {
+      const request: RpcRequest = JSON.parse(String(init?.body));
+      methods.push(request.method);
+      if (request.method === 'sendTransaction') return rpcResult(request, fixture.signature);
+      assert.equal(request.method, 'getTransaction');
+      if (unavailable) throw new Error('provider unavailable');
+      return rpcResult(request, null);
+    });
+    await assert.rejects(fixture.dependencies.sendAndConfirmSignedTx(fixture.runtime, fixture.transaction, 'deliver', {
+      confirmTimeoutMs: 0,
+    }), (error) => {
+      assert.ok(error instanceof StripeCheckoutFulfillmentError);
+      assert.equal(error.code, 'deadline-exceeded');
+      assert.deepEqual(error.details, { signature: fixture.signature, lastError: 'timeout', lastLogs: [] });
+      assert.equal(isRetryableStripeCheckoutFulfillmentError(error), true);
+      return true;
+    });
+    assert.deepEqual(methods, ['sendTransaction', 'getTransaction']);
+  }
+});

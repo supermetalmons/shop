@@ -202,6 +202,7 @@ export function createCommerceD1Harness(
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
     preorderCardRange1400Migration?: boolean;
+    preorderExpiryClaimReleaseMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -240,6 +241,11 @@ export function createCommerceD1Harness(
     }
   }
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0026_stripe_checkout_state.sql', 'utf8'));
+  if (options.preorderEthereumMigration !== false && options.preorderConfirmationMigration !== false &&
+    options.preorderCardRangeMigration !== false && options.preorderCardRange1400Migration !== false &&
+    options.preorderExpiryClaimReleaseMigration !== false) {
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0027_preorder_expiry_claim_release.sql', 'utf8'));
+  }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table');
   return {
     database,

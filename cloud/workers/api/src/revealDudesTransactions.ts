@@ -1,6 +1,7 @@
 import bs58 from 'bs58';
 import type { VersionedTransaction } from '@solana/web3.js';
-import { isSignalCancellationError, sleepWithSignal } from './boundedRequest.js';
+import { isSignalCancellationError } from './boundedRequest.js';
+import { pollSignatureConfirmation } from './signaturePolling.js';
 import { isRecord } from './dataAccess.js';
 import {
   RevealDudesError,
@@ -15,8 +16,6 @@ import { rpcCall } from './revealDudesOnchain.js';
 const TX_SEND_TIMEOUT_MS = 12_000;
 
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
-
-const TX_CONFIRM_POLL_MS = 800;
 
 function transactionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -252,44 +251,49 @@ function preflightFailure(error: unknown): { logs: string[] } | null {
   };
 }
 
+type SignatureConfirmationResult = { ok: true } | { ok: false; error: unknown; logs: string[] };
+
 export async function waitForSignature(
   context: ProviderContext,
   runtime: RevealRuntime,
   signature: string,
   timeoutMs: number,
-): Promise<{ ok: true } | { ok: false; error: unknown; logs: string[] }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const searchTransactionHistory = Date.now() - startedAt > 6_000;
-      const result = await rpcCall(context, runtime, 'getSignatureStatuses', [
-        [signature],
-        { searchTransactionHistory },
-      ], { attempts: 1 });
-      const parsed = parseSignatureStatusResult(result);
-      const outcome = parsed === undefined ? 'pending' : signatureStatusOutcome(parsed.status);
-      if (outcome === 'failed') {
-        const transaction = await loadTransactionBestEffort(context, runtime, signature);
-        const corroborated = confirmedTransactionOutcome(transaction, signature);
-        if (corroborated.outcome === 'confirmed') return { ok: true };
-        if (corroborated.outcome === 'failed') {
-          return { ok: false, error: corroborated.error, logs: corroborated.logs };
+): Promise<SignatureConfirmationResult> {
+  return pollSignatureConfirmation<SignatureConfirmationResult>({
+    signal: context.signal,
+    timeoutMs,
+    poll: async ({ searchTransactionHistory }) => {
+      try {
+        const result = await rpcCall(context, runtime, 'getSignatureStatuses', [
+          [signature],
+          { searchTransactionHistory: searchTransactionHistory() },
+        ], { attempts: 1 });
+        const parsed = parseSignatureStatusResult(result);
+        const outcome = parsed === undefined ? 'pending' : signatureStatusOutcome(parsed.status);
+        if (outcome === 'failed') {
+          const transaction = await loadTransactionBestEffort(context, runtime, signature);
+          const corroborated = confirmedTransactionOutcome(transaction, signature);
+          if (corroborated.outcome === 'confirmed') return { ok: true };
+          if (corroborated.outcome === 'failed') {
+            return { ok: false, error: corroborated.error, logs: corroborated.logs };
+          }
         }
+        if (outcome === 'confirmed') return { ok: true };
+      } catch (error) {
+        if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       }
-      if (outcome === 'confirmed') return { ok: true };
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-    }
-    await sleepWithSignal(TX_CONFIRM_POLL_MS, context.signal);
-  }
-  const transaction = await loadTransactionBestEffort(context, runtime, signature);
-  const corroborated = confirmedTransactionOutcome(transaction, signature);
-  if (corroborated.outcome === 'confirmed') return { ok: true };
-  return {
-    ok: false,
-    error: corroborated.outcome === 'failed' ? corroborated.error : 'timeout',
-    logs: corroborated.logs,
-  };
+    },
+    finalLookup: async () => {
+      const transaction = await loadTransactionBestEffort(context, runtime, signature);
+      const corroborated = confirmedTransactionOutcome(transaction, signature);
+      if (corroborated.outcome === 'confirmed') return { ok: true };
+      return {
+        ok: false,
+        error: corroborated.outcome === 'failed' ? corroborated.error : 'timeout',
+        logs: corroborated.logs,
+      };
+    },
+  });
 }
 
 async function loadTransaction(

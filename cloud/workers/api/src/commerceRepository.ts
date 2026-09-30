@@ -9,6 +9,7 @@ import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
   deliveryRecoveryOrdersQuery,
+  deliveryRecoveryStateQuery,
   deliveryRecoveryPageQuery,
   type DeliveryRecoveryPageQuery,
   duePackStatusProjectionsQuery,
@@ -27,6 +28,12 @@ import {
 } from './commerceQueries.js';
 import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
+import {
+  buildWalletDeliveryRecoveryState,
+  preparedDeliveryRecoveryNextCheckMs,
+  processingDeliveryRecoveryNextCheckMs,
+} from '../../../../shared/deliveryRecovery.js';
+import type { WalletDeliveryRecoveryState } from '../../../../shared/contracts.js';
 import {
   MAX_SHIPMENT_PAGE_LIMIT,
   MAX_SHIPMENT_PRESENCE_SELECTORS,
@@ -275,6 +282,30 @@ export class D1CommerceRepository {
     const documents = result.results.map(parseRow);
     reportInefficientQuery('delivery-recovery-orders', 'delivery_order', result, documents.length);
     return documents.map((document) => publicRecord(document));
+  }
+
+  async queryDeliveryRecoveryState(args: Readonly<{
+    owner: string;
+    nowMs: number;
+    preparedNowMs?: number;
+  }>): Promise<WalletDeliveryRecoveryState> {
+    const query = deliveryRecoveryStateQuery(deliveryOwner(args.owner));
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
+    const documents = result.results.map(parseRow);
+    reportInefficientQuery('delivery-recovery-state', 'delivery_order', result, documents.length);
+    let remainingProcessing = 0;
+    const nextCheckCandidates: Array<number | null> = [];
+    for (const { data } of documents) {
+      if (data.status === 'processing') {
+        remainingProcessing += 1;
+        nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(data, args.nowMs));
+      } else if (data.status === 'prepared') {
+        nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(data, args.preparedNowMs));
+      }
+    }
+    return buildWalletDeliveryRecoveryState({ remainingProcessing, nextCheckCandidates });
   }
 
   async queryDeliveryRecoveryPage(args: DeliveryRecoveryPageQuery): Promise<CommerceDocumentRecord[]> {

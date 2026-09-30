@@ -155,21 +155,10 @@ export class PreorderStore {
   }
 
   async expirePrepared(cluster: string, collection: string, nowMs: number): Promise<void> {
-    const due = await this.db.prepare(`SELECT order_id FROM commerce_preorder_orders
+    await this.db.prepare(`UPDATE commerce_preorder_orders
+      SET status = 'expired', updated_at_ms = ?, revision = revision + 1
       WHERE cluster = ? AND collection = ? AND status = 'prepared' AND expires_at_ms <= ?`)
-      .bind(cluster, collection, nowMs).all<{ order_id: string }>();
-    if (!due.results.length) return;
-    const orderIds = JSON.stringify(due.results.map((order) => order.order_id));
-    await this.db.batch([
-      this.db.prepare(`UPDATE commerce_preorder_orders SET status = 'expired', updated_at_ms = ?, revision = revision + 1
-        WHERE order_id IN (SELECT value FROM json_each(?)) AND status = 'prepared' AND expires_at_ms <= ?`)
-        .bind(nowMs, orderIds, nowMs),
-      this.db.prepare(`DELETE FROM commerce_preorder_claims
-        WHERE order_id IN (SELECT value FROM json_each(?)) AND EXISTS (
-          SELECT 1 FROM commerce_preorder_orders
-          WHERE order_id = commerce_preorder_claims.order_id AND status = 'expired' AND signature IS NULL)`)
-        .bind(orderIds),
-    ]);
+      .bind(nowMs, cluster, collection, nowMs).run();
   }
 
   async claims(cluster: string, collection: string, cardIds?: readonly number[]): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string }>> {

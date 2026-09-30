@@ -1,11 +1,7 @@
-import { parseDeliveryRecoveryState } from './deliveryOrderReadModel.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { z } from 'zod';
 import { WALLET_SESSION_SUPERSEDED_ERROR_REASON } from '../../../../shared/apiErrorCode.js';
-import {
-  buildWalletDeliveryRecoveryState,
-} from '../../../../shared/deliveryRecovery.js';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import type {
   ReconcileProfileStateRequest,
@@ -76,7 +72,7 @@ const reconcileSchema = z.object({
   includeDeliveryRecovery: z.boolean().optional(),
 }).strict();
 
-type ProfileLifecycleRepository = Pick<D1CommerceRepository, 'queryDeliveryRecoveryOrders' | 'run'>;
+type ProfileLifecycleRepository = Pick<D1CommerceRepository, 'queryDeliveryRecoveryState' | 'run'>;
 
 type CommerceCommon = {
   nowMs: number;
@@ -189,22 +185,6 @@ async function mergeStripeOrders(params: {
   return merged;
 }
 
-async function loadDeliveryRecoveryState(common: CommerceCommon, wallet: string, nowMs: number) {
-  const documents = await common.repository.queryDeliveryRecoveryOrders(wallet);
-  let remainingProcessing = 0;
-  const nextCheckCandidates: Array<number | null> = [];
-  for (const document of documents) {
-    const recovery = parseDeliveryRecoveryState(document.data);
-    if (recovery.status === 'processing') {
-      remainingProcessing += 1;
-      nextCheckCandidates.push(recovery.processingNextCheckAt(nowMs));
-    } else if (recovery.status === 'prepared') {
-      nextCheckCandidates.push(recovery.preparedNextCheckAt(nowMs));
-    }
-  }
-  return buildWalletDeliveryRecoveryState({ remainingProcessing, nextCheckCandidates });
-}
-
 async function reconcileProfileState(params: {
   body: ReconcileProfileStateRequest;
   common: CommerceCommon;
@@ -283,7 +263,9 @@ async function reconcileProfileState(params: {
   if (params.common.signal.aborted) throw params.common.signal.reason;
   const recovery = params.body.includeDeliveryRecovery === false
     ? null
-    : await loadDeliveryRecoveryState(params.common, wallet, params.nowMs);
+    : await params.common.repository.queryDeliveryRecoveryState({
+      owner: wallet, nowMs: params.nowMs, preparedNowMs: params.nowMs,
+    });
   if (params.common.signal.aborted) throw params.common.signal.reason;
   return {
     mergedStripeDeliveryOrders,

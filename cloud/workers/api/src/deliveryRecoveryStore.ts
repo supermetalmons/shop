@@ -2,7 +2,6 @@ import type { DeliveryRecoveryPatch } from './deliveryOrderUpdates.js';
 import {
   DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS,
   DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
-  buildWalletDeliveryRecoveryState,
   nextPreparedDeliveryRecoveryDelayMs,
 } from '../../../../shared/deliveryRecovery.js';
 import type {
@@ -451,16 +450,7 @@ export async function fetchDeliveryRecoveryState(
   ownerWallet: string,
   nowMs: number,
 ): Promise<WalletDeliveryRecoveryState> {
-  const documents = (await runDeliveryRecoveryOrderQuery(context, ownerWallet)).map(deliveryOrderRecoveryDocument);
-  const processing = documents.filter((document) => document.recovery.status === 'processing');
-  const prepared = documents.filter((document) => document.recovery.status === 'prepared');
-  return buildWalletDeliveryRecoveryState({
-    remainingProcessing: processing.length,
-    nextCheckCandidates: [
-      ...processing.map((document) => document.recovery.processingNextCheckAt(nowMs)),
-      ...prepared.map((document) => document.recovery.preparedNextCheckAt()),
-    ],
-  });
+  return context.repository.queryDeliveryRecoveryState({ owner: ownerWallet, nowMs });
 }
 
 function isRetryableRecoveryErrorCode(errorCode: string | undefined): boolean {

@@ -292,10 +292,15 @@ test('unfiltered recovery uses indexed owner candidates, identity filtering, ord
     },
   } as D1Database;
   let recoveryQueries = 0;
+  let recoveryStateQueries = 0;
   const repository = new class extends D1CommerceRepository {
     override async queryDeliveryRecoveryOrders(owner: string) {
       recoveryQueries += 1;
       return super.queryDeliveryRecoveryOrders(owner);
+    }
+    override async queryDeliveryRecoveryState(args: Parameters<D1CommerceRepository['queryDeliveryRecoveryState']>[0]) {
+      recoveryStateQueries += 1;
+      return super.queryDeliveryRecoveryState(args);
     }
   }(database);
   const otherOwner = Keypair.generate().publicKey.toBase58();
@@ -348,7 +353,8 @@ test('unfiltered recovery uses indexed owner candidates, identity filtering, ord
     { deliveryId: 3, outcome: 'recovered' },
     { deliveryId: 4, outcome: 'attempt_capped' },
   ]);
-  assert.equal(recoveryQueries, 2);
+  assert.equal(recoveryQueries, 1);
+  assert.equal(recoveryStateQueries, 1);
   assert.equal(Object.hasOwn(result, 'nextCursor'), false);
 });
 

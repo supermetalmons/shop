@@ -64,18 +64,17 @@ import type { StripeCheckoutCommerceContext } from './stripeCheckout/commerce.js
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { createSolanaConnection } from './solanaConnection.js';
+import { pollSignatureConfirmation } from './signaturePolling.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
   createTimedAbortScope,
   isSignalCancellationError,
   raceWithSignal,
-  sleepWithSignal,
 } from './boundedRequest.js';
 
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
-const TX_CONFIRM_POLL_MS = 800;
 
 const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
 const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
@@ -242,57 +241,63 @@ function blockhashOrAccountInUseError(message: string, logs: readonly string[]):
   );
 }
 
+type SignatureConfirmationResult = { ok: true } | { ok: false; error: unknown; logs: string[] };
+
 async function waitForSignature(
   runtime: FulfillmentRuntime,
   signature: string,
   timeoutMs: number,
   runRpc: FulfillmentRpc,
   signal: AbortSignal,
-): Promise<{ ok: true } | { ok: false; error: unknown; logs: string[] }> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const result = await runRpc(
-        runtime,
-        (rpc) => rpc.getSignatureStatuses([signature], { searchTransactionHistory: Date.now() - startedAt > 6_000 }),
-        RPC_TIMEOUT_MS,
-        'getSignatureStatuses',
-      );
-      const status = result.value[0];
-      if (status?.err) {
-        const transaction = await runRpc(
+): Promise<SignatureConfirmationResult> {
+  return pollSignatureConfirmation<SignatureConfirmationResult>({
+    signal,
+    timeoutMs,
+    poll: async ({ searchTransactionHistory }) => {
+      try {
+        const result = await runRpc(
           runtime,
-          (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+          (rpc) => rpc.getSignatureStatuses([signature], { searchTransactionHistory: searchTransactionHistory() }),
           RPC_TIMEOUT_MS,
-          'getTransaction:failed',
-        ).catch(() => null);
-        return {
-          ok: false,
-          error: status.err,
-          logs: Array.isArray(transaction?.meta?.logMessages) ? transaction.meta.logMessages : [],
-        };
+          'getSignatureStatuses',
+        );
+        const status = result.value[0];
+        if (status?.err) {
+          const transaction = await runRpc(
+            runtime,
+            (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+            RPC_TIMEOUT_MS,
+            'getTransaction:failed',
+          ).catch(() => null);
+          return {
+            ok: false,
+            error: status.err,
+            logs: Array.isArray(transaction?.meta?.logMessages) ? transaction.meta.logMessages : [],
+          };
+        }
+        if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return { ok: true };
+      } catch (error) {
+        if (isSignalCancellationError(signal, error)) throw signal.reason;
       }
-      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return { ok: true };
-    } catch (error) {
-      if (isSignalCancellationError(signal, error)) throw signal.reason;
-    }
-    await sleepWithSignal(TX_CONFIRM_POLL_MS, signal);
-  }
-  const transaction = await runRpc(
-    runtime,
-    (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
-    RPC_TIMEOUT_MS,
-    'getTransaction:timeout',
-  ).catch((error) => {
-    if (isSignalCancellationError(signal, error)) throw signal.reason;
-    return null;
+    },
+    finalLookup: async () => {
+      const transaction = await runRpc(
+        runtime,
+        (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+        RPC_TIMEOUT_MS,
+        'getTransaction:timeout',
+      ).catch((error) => {
+        if (isSignalCancellationError(signal, error)) throw signal.reason;
+        return null;
+      });
+      if (transaction?.meta && !transaction.meta.err) return { ok: true };
+      return {
+        ok: false,
+        error: transaction?.meta?.err || 'timeout',
+        logs: Array.isArray(transaction?.meta?.logMessages) ? transaction.meta.logMessages : [],
+      };
+    },
   });
-  if (transaction?.meta && !transaction.meta.err) return { ok: true };
-  return {
-    ok: false,
-    error: transaction?.meta?.err || 'timeout',
-    logs: Array.isArray(transaction?.meta?.logMessages) ? transaction.meta.logMessages : [],
-  };
 }
 
 async function sendAndConfirmSignedTx(

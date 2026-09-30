@@ -1884,6 +1884,10 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     [],
   );
   assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryDeliveryRecoveryState({ owner: 'owner', nowMs: 1 })),
+    { remainingProcessing: 0, nextCheckAt: null },
+  );
+  assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({ limit: 1 })),
     [],
   );
@@ -1929,7 +1933,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     await readWithSingleBatch(calls, () => repository.queryDueStripeTerminalNotifications(1)),
     [],
   );
-  assert.equal(calls.length, 13);
+  assert.equal(calls.length, 14);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {
@@ -1955,6 +1959,10 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     {
       name: 'queryDeliveryRecoveryOrders',
       read: (value) => value.queryDeliveryRecoveryOrders('owner'),
+    },
+    {
+      name: 'queryDeliveryRecoveryState',
+      read: (value) => value.queryDeliveryRecoveryState({ owner: 'owner', nowMs: 1 }),
     },
     {
       name: 'queryPendingReadyNotifications',

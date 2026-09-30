@@ -37,7 +37,7 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const candidate = (buyer: string, ids: number[]): StoredPreorder => ({
       orderId: crypto.randomUUID(), preorderId: config.preorderId, cluster: config.cluster, collection: config.collection,
       buyer, ethereumAddress: '0x0000000000000000000000000000000000000001', requestId: crypto.randomUUID(), cardIds: ids, assets: ids.map((id) => ({ id, address: `asset-${buyer}-${id}` })),
-      status: 'prepared', preparedTransaction: 'partial', signedTransaction: null, signature: null,
+      status: 'prepared', preparedTransaction: 'partial', signedTransaction: null, signature: null, confirmedSlot: null,
       blockhash: 'blockhash', blockhashContextSlot: 1, lastValidBlockHeight: 100,
       expiresAtMs: 121_000, createdAtMs: 1000, revision: 1,
     });
@@ -154,9 +154,14 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       const untouched = await Promise.all([fresh, otherCollection, otherCluster, submitted, confirmed, succeeded]
         .map(order => store.get(order.orderId)));
 
+      await store.expirePrepared(config.cluster, collection, 120_999);
+      assert.deepEqual(await store.get(expired.orderId), expired);
       await store.expirePrepared(config.cluster, collection, 121_000);
 
       assert.equal((await store.get(expired.orderId))?.status, 'expired');
+      const expiredState = await store.get(expired.orderId);
+      await store.expirePrepared(config.cluster, collection, 121_000);
+      assert.deepEqual(await store.get(expired.orderId), expiredState);
       for (const order of untouched) {
         assert.deepEqual(await store.get(order!.orderId), order);
         assert.equal((await store.claims(order!.cluster, order!.collection, order!.cardIds))[0]?.orderId, order!.orderId);
@@ -187,6 +192,43 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       }
       await store.expirePrepared(config.cluster, collection, 121_000);
       assert.deepEqual(await store.claims(config.cluster, collection), []);
+    });
+
+    await t.test('new expiry trigger remains compatible with previous API cleanup', async () => {
+      const collection = `${config.collection}-legacy-cleanup`;
+      const expired = await store.reserve({ ...candidate('legacy-expired', [50]), collection });
+      const fresh = await store.reserve({ ...candidate('legacy-fresh', [51]), collection, expiresAtMs: 121_001 });
+      const submitted = await store.submit(await store.reserve({ ...candidate('legacy-submitted', [52]), collection }),
+        { transactionBase64: 'legacy-signed', signature: 'legacy-signature' }, 2000);
+      const ids = JSON.stringify([expired.orderId, fresh.orderId, submitted.orderId]);
+      const results = await db.batch([
+        db.prepare(`UPDATE commerce_preorder_orders SET status = 'expired', updated_at_ms = ?, revision = revision + 1
+          WHERE order_id IN (SELECT value FROM json_each(?)) AND status = 'prepared' AND expires_at_ms <= ?`)
+          .bind(121_000, ids, 121_000),
+        db.prepare(`DELETE FROM commerce_preorder_claims WHERE order_id IN (SELECT value FROM json_each(?)) AND EXISTS (
+          SELECT 1 FROM commerce_preorder_orders WHERE order_id = commerce_preorder_claims.order_id
+            AND status = 'expired' AND signature IS NULL)`).bind(ids),
+      ]);
+      assert.equal(results[1].meta.changes, 0);
+      assert.equal((await store.get(expired.orderId))?.status, 'expired');
+      assert.deepEqual(await store.get(fresh.orderId), fresh);
+      assert.deepEqual(await store.get(submitted.orderId), submitted);
+      assert.deepEqual((await store.claims(config.cluster, collection)).map(({ id }) => id), [51, 52]);
+    });
+
+    await t.test('commerce pause prevents expiry and claim release', async () => {
+      const collection = `${config.collection}-paused-expiry`;
+      const order = await store.reserve({ ...candidate('paused-expiry', [60]), collection });
+      await db.batch([
+        db.prepare(`INSERT INTO commerce_authority_control_lease (singleton, lease_token, acquired_at_ms, expires_at_ms)
+          VALUES (1, '00000000-0000-4000-8000-000000000027', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+            CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000)`),
+        db.prepare(`UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+          paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1`),
+      ]);
+      await assert.rejects(store.expirePrepared(config.cluster, collection, 121_000), /authority is not d1/);
+      assert.deepEqual(await store.get(order.orderId), order);
+      assert.equal((await store.claims(config.cluster, collection))[0]?.orderId, order.orderId);
     });
   } finally {
     await server.close();

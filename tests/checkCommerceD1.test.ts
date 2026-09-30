@@ -53,6 +53,7 @@ const migrationNames = [
   '0024_preorder_card_range_1400.sql',
   '0025_preorder_scoped_expiry.sql',
   '0026_stripe_checkout_state.sql',
+  '0027_preorder_expiry_claim_release.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -227,7 +228,29 @@ test('preorder scoped expiry migration is required for deployment and its index 
   previous.close();
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 = 26): DatabaseSync {
+test('preorder expiry claim release migration is required for deployment while the previous baseline remains inspectable', (context) => {
+  const previous = currentDatabase(false, 26);
+  context.after(() => previous.close());
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /expiry claim release migration/);
+  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0027_preorder_expiry_claim_release.sql');
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder schema commerce_preorder_expiry_claim_release/);
+  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0027_preorder_expiry_claim_release.sql', import.meta.url), 'utf8'));
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+});
+
+test('preorder expiry claim release schema rejects a missing or broadened trigger', (context) => {
+  const database = currentDatabase(false);
+  context.after(() => database.close());
+  database.exec('DROP TRIGGER commerce_preorder_expiry_claim_release');
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema commerce_preorder_expiry_claim_release/);
+  database.exec(`CREATE TRIGGER commerce_preorder_expiry_claim_release
+    AFTER UPDATE OF status ON commerce_preorder_orders WHEN NEW.status = 'expired'
+    BEGIN DELETE FROM commerce_preorder_claims WHERE order_id = NEW.order_id; END`);
+  assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema commerce_preorder_expiry_claim_release/);
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 = 27): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {

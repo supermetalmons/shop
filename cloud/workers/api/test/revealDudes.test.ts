@@ -2156,6 +2156,79 @@ test('final confirmation lookup rethrows cancellation', async () => {
   );
 });
 
+test('reveal polling requires confirmed matching evidence and can corroborate success', async () => {
+  const transactionError = { InstructionError: [0, { Custom: 6_001 }] };
+  for (const evidence of ['confirmed', 'failed', 'mismatched'] as const) {
+    const controller = new AbortController();
+    const reason = new Error('stop after uncertain evidence');
+    const lookedUp = Promise.withResolvers<void>();
+    const methods: string[] = [];
+    const polling = revealDudesTestHooks.waitForSignature(providerContext(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { method: string };
+      methods.push(body.method);
+      if (body.method === 'getSignatureStatuses') {
+        return rpcResponse(body, signatureStatusResult({ err: transactionError, confirmationStatus: 'confirmed' }));
+      }
+      assert.equal(body.method, 'getTransaction');
+      lookedUp.resolve();
+      return rpcResponse(body, {
+        slot: 42,
+        transaction: { signatures: [evidence === 'mismatched' ? 'wrong-signature' : SIGNATURE] },
+        meta: { err: evidence === 'confirmed' ? null : transactionError, logMessages: ['program result'] },
+      });
+    }, controller.signal), revealDudesTestHooks.runtimeForDrop(DROP_ID), SIGNATURE, 25_000);
+    if (evidence === 'mismatched') {
+      await lookedUp.promise;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      controller.abort(reason);
+      await assert.rejects(polling, (error) => error === reason);
+    } else {
+      assert.deepEqual(await polling, evidence === 'confirmed'
+        ? { ok: true }
+        : { ok: false, error: transactionError, logs: ['program result'] });
+    }
+    assert.deepEqual(methods, ['getSignatureStatuses', 'getTransaction']);
+  }
+});
+
+test('reveal polling keeps processed failures pending without fetching transaction evidence', async () => {
+  const controller = new AbortController();
+  const reason = new Error('stop after processed failure');
+  const polled = Promise.withResolvers<void>();
+  const methods: string[] = [];
+  const polling = revealDudesTestHooks.waitForSignature(providerContext(async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { method: string };
+    methods.push(body.method);
+    assert.equal(body.method, 'getSignatureStatuses');
+    polled.resolve();
+    return rpcResponse(body, signatureStatusResult({
+      err: { InstructionError: [0, { Custom: 6_001 }] }, confirmationStatus: 'processed',
+    }));
+  }, controller.signal), revealDudesTestHooks.runtimeForDrop(DROP_ID), SIGNATURE, 25_000);
+  await polled.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  controller.abort(reason);
+  await assert.rejects(polling, (error) => error === reason);
+  assert.deepEqual(methods, ['getSignatureStatuses']);
+});
+
+test('reveal polling cancellation during failure corroboration preserves uncertainty', async () => {
+  const controller = new AbortController();
+  const reason = new Error('stop corroboration');
+  await assert.rejects(revealDudesTestHooks.waitForSignature(providerContext(async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { method: string };
+    if (body.method === 'getSignatureStatuses') {
+      return rpcResponse(body, signatureStatusResult({
+        err: { InstructionError: [0, { Custom: 6_001 }] }, confirmationStatus: 'confirmed',
+      }));
+    }
+    assert.equal(body.method, 'getTransaction');
+    controller.abort(reason);
+    throw new Error('provider cancelled', { cause: reason });
+  }, controller.signal), revealDudesTestHooks.runtimeForDrop(DROP_ID), SIGNATURE, 25_000),
+  (error) => error === reason);
+});
+
 test('transaction submission confirms the exact signed transaction signature', async () => {
   const transaction = signedTransaction();
   const expectedSignature = bs58.encode(transaction.signatures[0]);
