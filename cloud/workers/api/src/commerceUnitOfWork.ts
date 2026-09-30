@@ -1,4 +1,5 @@
 import { createDeliveryRecoveryRecord, updateDeliveryRecoveryRecord, parseDeliveryRecoveryRecord, type DeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.js';
+import { executeCommerceD1Batch } from './commerceD1Batch.js';
 import { deliveryRecoveryWriteStatement, parseRecoveryState, recoverySnapshot, recoverySnapshotColumns, type RecoverySnapshot } from './deliveryRecoveryPersistence.js';
 import {
   CommerceRepositoryError,
@@ -61,6 +62,7 @@ import {
 import { stripeCheckoutStateWriteStatement } from './stripeCheckoutStateStore.js';
 import { parsePackStatusOutboxRecord, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.js';
 import { packStatusOutboxInsertStatement } from './packStatusOutboxRepository.js';
+import { commerceDocumentWriteStatement } from './commerceDocumentPersistence.js';
 
 type PendingDocument = StoredDocument | null;
 
@@ -433,48 +435,8 @@ export class CommerceUnitOfWork {
       ),
     ];
     for (const [path, document] of this.pending) {
-      if (!document) {
-        statements.push(this.db.prepare('DELETE FROM commerce_documents WHERE document_path = ?').bind(path));
-        continue;
-      }
-      const original = this.original.get(path);
-      if (document.key.kind === 'stripe_checkout' && original && document.rawData === original.rawData) {
-        statements.push(this.db.prepare(`UPDATE commerce_documents SET version = ?, update_time = ?,
-          processed_at_seconds = ?, processed_at_nanos = ? WHERE document_path = ?`).bind(
-          document.version, document.updateTime, document.processedAt?.seconds ?? null,
-          document.processedAt?.nanos ?? null, path));
-      } else {
-        statements.push(this.db.prepare(`INSERT INTO commerce_documents (
-        document_path, document_kind, drop_id, document_id, document_json,
-        version, create_time, update_time, processed_at_seconds, processed_at_nanos
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(document_path) DO UPDATE SET
-        document_kind = excluded.document_kind,
-        drop_id = excluded.drop_id,
-        document_id = excluded.document_id,
-        document_json = ${document.key.kind === 'delivery_order'
-          ? `CASE WHEN json_type(commerce_documents.document_json, '$.receiptRecovery') IS NULL
-              THEN json_remove(excluded.document_json, '$.receiptRecovery')
-              ELSE json_set(excluded.document_json, '$.receiptRecovery', json(commerce_documents.document_json -> '$.receiptRecovery')) END`
-          : 'excluded.document_json'},
-        version = excluded.version,
-        create_time = excluded.create_time,
-        update_time = excluded.update_time,
-        processed_at_seconds = excluded.processed_at_seconds,
-        processed_at_nanos = excluded.processed_at_nanos`).bind(
-        document.key.path,
-        document.key.kind,
-        document.key.dropId,
-        document.key.documentId,
-        JSON.stringify(document.rawData),
-        document.version,
-        document.createTime,
-        document.updateTime,
-        document.processedAt?.seconds ?? null,
-        document.processedAt?.nanos ?? null,
-      ));
-      }
-      if (document.key.kind === 'stripe_checkout') {
+      statements.push(commerceDocumentWriteStatement(this.db, path, document, this.original.get(path)));
+      if (document?.key.kind === 'stripe_checkout') {
         statements.push(stripeCheckoutStateWriteStatement(this.db,
           stripeCheckoutStateFromDocument(path, document.data, document.version)));
       }
@@ -568,55 +530,49 @@ export class CommerceUnitOfWork {
     documentExpectationsJson: string,
     deliveryOwnerExpectationsJson: string,
   ): Promise<void> {
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([
-        authorityStatement(this.db),
-        this.db.prepare(`SELECT EXISTS (
-          SELECT 1
-          FROM json_each(?) AS expectation
-          LEFT JOIN commerce_delivery_owner_revisions AS owner_revision
-            ON owner_revision.owner = json_extract(expectation.value, '$.owner')
-          WHERE COALESCE(owner_revision.revision, 0) <>
-            CAST(json_extract(expectation.value, '$.revision') AS INTEGER)
-        ) AS conflict`).bind(deliveryOwnerExpectationsJson),
-        this.db.prepare(`SELECT EXISTS (
-          SELECT 1
-          FROM json_each(?) AS expectation
-          LEFT JOIN commerce_documents AS document
-            ON document.document_path = json_extract(expectation.value, '$.path')
-          LEFT JOIN commerce_document_path_revisions AS path_revision
-            ON path_revision.document_path = json_extract(expectation.value, '$.path')
-          WHERE
-            COALESCE(document.version, -1) <>
-              CAST(json_extract(expectation.value, '$.version') AS INTEGER) OR
-            (
-              json_type(expectation.value, '$.pathRevision') IS NOT NULL AND
-              COALESCE(path_revision.revision, 0) <>
-                CAST(json_extract(expectation.value, '$.pathRevision') AS INTEGER)
-            )
-        ) AS conflict`).bind(documentExpectationsJson),
-        ...(this.originalRecovery.size ? [this.db.prepare(`SELECT
-          NOT EXISTS (SELECT 1 FROM commerce_delivery_recovery_control WHERE singleton = 1 AND storage_mode = 'table') OR EXISTS (
-            SELECT 1 FROM json_each(?) AS expected LEFT JOIN commerce_delivery_recovery AS state
-              ON state.parent_path = json_extract(expected.value, '$.parentPath')
-            WHERE COALESCE(state.revision, -1) <> json_extract(expected.value, '$.revision')
-              OR state.generation IS NOT json_extract(expected.value, '$.generation')
-          ) AS conflict`).bind(this.serializedRecoveryExpectations())] : []),
-        ...(this.originalOutboxes.size ? [this.db.prepare(`SELECT CASE WHEN ? = 0 THEN 0 ELSE
-          NOT EXISTS (SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'table') OR EXISTS (
-            SELECT 1 FROM json_each(?) AS expectation
-            LEFT JOIN commerce_notification_outbox AS outbox
-              ON outbox.parent_path = json_extract(expectation.value, '$.parentPath')
-              AND outbox.family = json_extract(expectation.value, '$.family')
-            WHERE COALESCE(outbox.revision, -1) <> json_extract(expectation.value, '$.revision')
-              OR outbox.generation IS NOT json_extract(expectation.value, '$.generation')
-          ) END AS conflict`).bind(this.originalOutboxes.size, this.serializedOutboxExpectations())] : []),
-      ]);
-    } catch (error) {
-      throw unavailableCommerce(error);
-    }
-    if (results.length !== 3 + Number(this.originalOutboxes.size > 0) + Number(this.originalRecovery.size > 0)) throw unavailableCommerce();
+    const results = await executeCommerceD1Batch(this.db, () => [
+      authorityStatement(this.db),
+      this.db.prepare(`SELECT EXISTS (
+        SELECT 1
+        FROM json_each(?) AS expectation
+        LEFT JOIN commerce_delivery_owner_revisions AS owner_revision
+          ON owner_revision.owner = json_extract(expectation.value, '$.owner')
+        WHERE COALESCE(owner_revision.revision, 0) <>
+          CAST(json_extract(expectation.value, '$.revision') AS INTEGER)
+      ) AS conflict`).bind(deliveryOwnerExpectationsJson),
+      this.db.prepare(`SELECT EXISTS (
+        SELECT 1
+        FROM json_each(?) AS expectation
+        LEFT JOIN commerce_documents AS document
+          ON document.document_path = json_extract(expectation.value, '$.path')
+        LEFT JOIN commerce_document_path_revisions AS path_revision
+          ON path_revision.document_path = json_extract(expectation.value, '$.path')
+        WHERE
+          COALESCE(document.version, -1) <>
+            CAST(json_extract(expectation.value, '$.version') AS INTEGER) OR
+          (
+            json_type(expectation.value, '$.pathRevision') IS NOT NULL AND
+            COALESCE(path_revision.revision, 0) <>
+              CAST(json_extract(expectation.value, '$.pathRevision') AS INTEGER)
+          )
+      ) AS conflict`).bind(documentExpectationsJson),
+      ...(this.originalRecovery.size ? [this.db.prepare(`SELECT
+        NOT EXISTS (SELECT 1 FROM commerce_delivery_recovery_control WHERE singleton = 1 AND storage_mode = 'table') OR EXISTS (
+          SELECT 1 FROM json_each(?) AS expected LEFT JOIN commerce_delivery_recovery AS state
+            ON state.parent_path = json_extract(expected.value, '$.parentPath')
+          WHERE COALESCE(state.revision, -1) <> json_extract(expected.value, '$.revision')
+            OR state.generation IS NOT json_extract(expected.value, '$.generation')
+        ) AS conflict`).bind(this.serializedRecoveryExpectations())] : []),
+      ...(this.originalOutboxes.size ? [this.db.prepare(`SELECT CASE WHEN ? = 0 THEN 0 ELSE
+        NOT EXISTS (SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'table') OR EXISTS (
+          SELECT 1 FROM json_each(?) AS expectation
+          LEFT JOIN commerce_notification_outbox AS outbox
+            ON outbox.parent_path = json_extract(expectation.value, '$.parentPath')
+            AND outbox.family = json_extract(expectation.value, '$.family')
+          WHERE COALESCE(outbox.revision, -1) <> json_extract(expectation.value, '$.revision')
+            OR outbox.generation IS NOT json_extract(expectation.value, '$.generation')
+        ) END AS conflict`).bind(this.originalOutboxes.size, this.serializedOutboxExpectations())] : []),
+    ], { invalidResult: unavailableCommerce, requireMeta: true, mapBatchError: unavailableCommerce });
     const [authorityResult, ...conflicts] = results;
     if (
       authorityResult.success !== true ||
@@ -651,24 +607,13 @@ export class CommerceUnitOfWork {
     read: (results: D1Result<Record<string, unknown>>[]) => T,
   ): Promise<T> {
     const needsAuthority = !this.authorityChecked;
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>(
-        needsAuthority ? [authorityStatement(this.db), ...statements] : statements,
-      );
-    } catch (error) {
-      if (needsAuthority) throw unavailableCommerce(error);
-      throw error;
-    }
-    if (!Array.isArray(results) || results.length !== statements.length + Number(needsAuthority)) {
-      throw unavailableCommerceData();
-    }
-    for (const result of results) {
-      if (
-        !isObject(result) || result.success !== true ||
-        !Array.isArray(result.results) || !isObject(result.meta)
-      ) throw unavailableCommerceData();
-    }
+    const results = await executeCommerceD1Batch(this.db,
+      () => needsAuthority ? [authorityStatement(this.db), ...statements] : statements,
+      {
+        invalidResult: unavailableCommerceData,
+        requireMeta: true,
+        mapBatchError: (error) => needsAuthority ? unavailableCommerce(error) : error,
+      });
     if (needsAuthority) {
       const authorityResult = results[0];
       if (authorityResult.results.length !== 1) throw unavailableCommerceData();

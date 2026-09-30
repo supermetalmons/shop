@@ -117,6 +117,7 @@ test('incomplete or unsuccessful responses fail validation without entering the 
     ['unsuccessful statement', [{ success: false, results: [] }]],
     ['truthy success marker', [{ success: 1, results: [] }]],
     ['missing rows', [{ success: true }]],
+    ['null rows', [{ success: true, results: null }]],
     ['non-array rows', [{ success: true, results: {} }]],
   ];
   for (const [name, response] of cases) {
@@ -124,6 +125,38 @@ test('incomplete or unsuccessful responses fail validation without entering the 
       const invalid = new Error('Invalid response.');
       await assert.rejects(executeCommerceD1Batch(batchDatabase(() => response), [statement], {
         invalidResult: () => invalid,
+        mapBatchError: () => assert.fail('Response validation is outside the execution error boundary'),
+      }), (error) => error === invalid);
+    });
+  }
+});
+
+test('nullable mutation results are accepted only at explicitly selected indices and returned unchanged', async (t) => {
+  const response = [
+    { success: true, results: null },
+    { success: true, results: null },
+    { success: true, results: [{ order_id: 'order' }] },
+  ];
+  const statements = [statement, statement, statement];
+  const actual = await executeCommerceD1Batch(batchDatabase(() => response), statements, {
+    invalidResult, allowNullResultsAt: [0, 1],
+  });
+  assert.strictEqual(actual, response);
+  assert.equal(actual[0].results, null);
+  assert.equal(actual[1].results, null);
+  assert.strictEqual(actual[2].results, response[2].results);
+  const cases: Array<[string, unknown, readonly number[]]> = [
+    ['unselected mutation', response, [0]],
+    ['null read', [response[0], response[1], { success: true, results: null }], [0, 1]],
+    ['missing mutation rows', [{ success: true }, response[1], response[2]], [0, 1]],
+    ['invalid mutation rows', [{ success: true, results: {} }, response[1], response[2]], [0, 1]],
+    ['failed mutation', [{ success: false, results: null }, response[1], response[2]], [0, 1]],
+  ];
+  for (const [name, result, allowNullResultsAt] of cases) {
+    await t.test(name, async () => {
+      const invalid = new Error('Invalid response.');
+      await assert.rejects(executeCommerceD1Batch(batchDatabase(() => result), statements, {
+        invalidResult: () => invalid, allowNullResultsAt,
         mapBatchError: () => assert.fail('Response validation is outside the execution error boundary'),
       }), (error) => error === invalid);
     });

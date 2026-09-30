@@ -1701,6 +1701,73 @@ test('read-only owner queries revalidate authority, scope epochs, and returned v
   assertReadOnlyRevalidationBatch(pointCalls[0]);
 });
 
+test('read-only revalidation rejects malformed authority, recovery and outbox batch responses', async (context) => {
+  const mutations: Record<string, (results: D1Result<Record<string, unknown>>[]) => unknown> = {
+    'missing batch': () => undefined,
+    'missing result': (results) => results.slice(0, -1),
+    'null authority result': (results) => [null, ...results.slice(1)],
+    'null recovery rows': (results) => results.map((result, index) => index === 3 ? { ...result, results: null } : result),
+    'failed outbox result': (results) => results.map((result, index) => index === 4 ? { ...result, success: false } : result),
+    'invalid outbox metadata': (results) => results.map((result, index) => index === 4 ? { ...result, meta: null } : result),
+    'invalid conflict value': (results) => results.map((result, index) => index === 2 ? { ...result, results: [{ conflict: 2 }] } : result),
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    await context.test(name, async (context) => {
+      const harness = createCommerceD1Harness();
+      context.after(() => harness.database.close());
+      const key = commerceKeys.deliveryOrder('drop', 'READ-ONLY');
+      seedCommerceDocument(harness, { key, data: { owner: 'owner', status: 'ready_to_ship' } });
+      seedQueryNotification(harness, key);
+      let revalidating = false;
+      let revalidationCalls = 0;
+      const db = new Proxy(harness.db, {
+        get(target, property, receiver) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch<Record<string, unknown>>(statements);
+            if (!revalidating) return results;
+            revalidationCalls += 1;
+            assert.equal(results.length, 5);
+            return mutate(results);
+          };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const unit = await new D1CommerceRepository(db).begin(10);
+      assert.ok(await unit.getRecoverySnapshot(key));
+      assert.ok(await unit.getNotificationOutbox(key.path, 'ready'));
+      revalidating = true;
+      await assert.rejects(unit.commit(), isUnavailableCommerceError);
+      assert.equal(revalidationCalls, 1);
+    });
+  }
+});
+
+test('read-only revalidation preserves preparation and execution failure causes', async (context) => {
+  for (const phase of ['prepare', 'batch'] as const) {
+    await context.test(phase, async (context) => {
+      const harness = createCommerceD1Harness();
+      context.after(() => harness.database.close());
+      const cause = new Error('D1 read-only failure');
+      let fail = false;
+      const db = new Proxy(harness.db, {
+        get(target, property, receiver) {
+          if (property === phase && fail) return () => { throw cause; };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const unit = await new D1CommerceRepository(db).begin(10);
+      assert.equal(await unit.get(commerceKeys.claimCode('ABSENT')), null);
+      fail = true;
+      await assert.rejects(unit.commit(), (error: unknown) => {
+        assert.ok(error instanceof CommerceRepositoryError);
+        assert.equal(error.code, 'unavailable');
+        assert.equal(error.cause, cause);
+        return true;
+      });
+    });
+  }
+});
+
 test('read-only point transactions reject same-path changes and ABA', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);

@@ -32,9 +32,7 @@ function cleanupDatabase(options: {
           return {
             success: true,
             meta: { changes: deleted },
-            results: deletedTable === 'rate_limit_buckets'
-              ? Array.from({ length: deleted }, () => ({ subject_hash: 'expired' }))
-              : deletedTable ? [] : [{ has_more: options.hasMore ? 1 : 0 }],
+            results: deletedTable ? [] : [{ has_more: options.hasMore ? 1 : 0 }],
           };
         });
       } finally {
@@ -365,12 +363,15 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   const rateLimitCount = OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit;
   const staffCount = OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions.limit;
   const anonymousCount = OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.limit;
+  const miNoteCount = OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthChallenges.limit;
   const harness = cleanupDatabase({
     deleted: {
       rate_limit_buckets: rateLimitCount,
       staff_auth_sessions: staffCount,
       staff_auth_challenges: 2,
       anonymous_auth_sessions: anonymousCount,
+      mi_note_auth_sessions: 1,
+      mi_note_auth_challenges: miNoteCount,
     },
     hasMore: true,
   });
@@ -388,6 +389,7 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   assert.equal(harness.maxActive(), 1);
   const staffCounts = { sessionsDeleted: staffCount, challengesDeleted: 2, limitReached: true, hasMore: true };
   const anonymousCounts = { deletedCount: anonymousCount, limitReached: true, hasMore: true };
+  const miNoteCounts = { sessionsDeleted: 1, challengesDeleted: miNoteCount, limitReached: true, hasMore: true };
   const jobLogs = logs.filter((entry) => entry.event === 'scheduled_reconciliation_job');
   assert.equal(jobLogs.length, 1);
   assert.equal(jobLogs[0].job, 'ops');
@@ -396,10 +398,12 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
     { event: 'receipt_transfer_rate_limit_cleanup_completed', deletedCount: rateLimitCount, limitReached: true, hasMore: true },
     { event: 'staff_auth_cleanup_completed', ...staffCounts },
     { event: 'anonymous_auth_cleanup_completed', ...anonymousCounts },
+    { event: 'mi_note_auth_cleanup_completed', ...miNoteCounts },
   ]);
   assert.deepEqual(errors, [
     { event: 'receipt_transfer_rate_limit_cleanup_backlog', deletedCount: rateLimitCount },
     { event: 'staff_auth_cleanup_backlog', ...staffCounts },
     { event: 'anonymous_auth_cleanup_backlog', ...anonymousCounts },
+    { event: 'mi_note_auth_cleanup_backlog', ...miNoteCounts },
   ]);
 });

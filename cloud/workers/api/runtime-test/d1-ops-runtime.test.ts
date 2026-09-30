@@ -869,6 +869,11 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
         NULL, 0, 600000, 1, 0
       FROM sequence`,
     ).run();
+    assert.deepEqual(await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, 719_999), {
+      deletedCount: 0,
+      limitReached: false,
+      hasMore: false,
+    });
     assert.deepEqual(await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, 720_000), {
       deletedCount: 1_000,
       limitReached: true,

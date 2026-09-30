@@ -12,8 +12,6 @@ import {
   receiptTransferAssetRateLimitSubjectHash,
   receiptTransferCallerRateLimitBucket,
   receiptTransferCallerRateLimitSubjectHash,
-  type ReceiptTransferRateLimitD1Database,
-  type ReceiptTransferRateLimitD1Statement,
 } from '../cloud/workers/api/src/receiptTransferRateLimit.ts';
 
 const UID = 'anonymous-auth-uid';
@@ -34,25 +32,30 @@ function assetSubject(overrides: Partial<{
   };
 }
 
-function scriptedDatabase(batches: Array<Array<Array<Record<string, unknown>>>>) {
-  const metadata = new WeakMap<ReceiptTransferRateLimitD1Statement, { query: string; values: unknown[] }>();
+function scriptedDatabase(batches: Array<Array<Array<Record<string, unknown>>>>, changes: number[][] = []) {
+  const metadata = new WeakMap<D1PreparedStatement, { query: string; values: unknown[] }>();
   const calls: Array<Array<{ query: string; values: unknown[] }>> = [];
-  const database: ReceiptTransferRateLimitD1Database = {
+  const database: Pick<D1Database, 'prepare' | 'batch'> = {
     prepare(query) {
-      const statement: ReceiptTransferRateLimitD1Statement = {
-        bind(...values) {
+      const statement = {
+        bind(...values: unknown[]) {
           metadata.set(statement, { query, values });
           return statement;
         },
-      };
+      } as D1PreparedStatement;
       metadata.set(statement, { query, values: [] });
       return statement;
     },
-    async batch<T>(statements: ReceiptTransferRateLimitD1Statement[]) {
+    async batch<T>(statements: D1PreparedStatement[]) {
       calls.push(statements.map((statement) => metadata.get(statement)!));
       const results = batches.shift();
       if (!results) throw new Error('Unexpected D1 batch');
-      return results.map((rows) => ({ results: rows as T[] }));
+      const counts = changes.shift();
+      return results.map((rows, index) => ({
+        success: true,
+        results: rows as T[],
+        meta: { changes: counts?.[index] ?? 0 },
+      } as D1Result<T>));
     },
   };
   return { calls, database };
@@ -191,11 +194,7 @@ test('receipt transfer D1 consumption uses one atomic UPSERT and read batch', as
 
 test('receipt transfer D1 cleanup is bounded and reports remaining backlog', async () => {
   const nowMs = 1_700_000_000_000;
-  const deletedRows = Array.from(
-    { length: RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT },
-    (_, index) => ({ subject_hash: String(index).padStart(64, '0') }),
-  );
-  const scripted = scriptedDatabase([[[...deletedRows], [{ has_more: 1 }]]]);
+  const scripted = scriptedDatabase([[[], [{ has_more: 1 }]]], [[RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT, 0]]);
   assert.deepEqual(
     await cleanupExpiredReceiptTransferRateLimitBuckets(scripted.database, nowMs),
     {
@@ -209,7 +208,20 @@ test('receipt transfer D1 cleanup is bounded and reports remaining backlog', asy
     RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
   ]);
   assert.equal(scripted.calls[0][1].values[0], nowMs - 2 * 60 * 1_000);
-  assert.match(scripted.calls[0][0].query, /LIMIT \?[\s\S]*RETURNING subject_hash/);
+  assert.match(scripted.calls[0][0].query, /LIMIT \?/);
+  assert.doesNotMatch(scripted.calls[0][0].query, /RETURNING/);
+});
+
+test('receipt transfer D1 cleanup keeps grace cutoffs non-negative and uses whole milliseconds', async () => {
+  for (const [nowMs, cutoffMs] of [[0, 0], [60_000, 0], [120_123.9, 123]]) {
+    const scripted = scriptedDatabase([[[], [{ has_more: 0 }]]]);
+    assert.deepEqual(await cleanupExpiredReceiptTransferRateLimitBuckets(scripted.database, nowMs), {
+      deletedCount: 0, limitReached: false, hasMore: false,
+    });
+    assert.deepEqual(scripted.calls[0].map(({ values }) => values), [
+      [cutoffMs, RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT], [cutoffMs],
+    ]);
+  }
 });
 
 test('receipt transfer evaluator rejects invalid limits and times', () => {

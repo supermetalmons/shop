@@ -1,5 +1,6 @@
 import type { PreorderOrder } from '../../../../shared/preorders.js';
-import { ProfileReadError } from './dataAccess.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import { executeCommerceD1Batch } from './commerceD1Batch.js';
 
 export type StoredPreorder = PreorderOrder & {
   cluster: string;
@@ -86,11 +87,18 @@ export class PreorderStore {
   }
 
   private async writeAndRead(orderId: string, statements: D1PreparedStatement[]): Promise<StoredPreorder> {
-    const results = await this.db.batch<Record<string, unknown>>([
+    const invalidResult = () => new Error('Invalid preorder database response.');
+    const results = await executeCommerceD1Batch(this.db, [
       ...statements,
       this.db.prepare('SELECT * FROM commerce_preorder_orders WHERE order_id = ?').bind(orderId),
-    ]);
-    return decode(results[statements.length].results[0] ?? null)!;
+    ], { invalidResult, allowNullResultsAt: statements.map((_, index) => index) });
+    const rows = results[statements.length].results;
+    if (!Array.isArray(rows) || rows.length !== 1 || !isRecord(rows[0]) || rows[0].order_id !== orderId) {
+      throw invalidResult();
+    }
+    const order = decode(rows[0]);
+    if (!order) throw invalidResult();
+    return order;
   }
 
   async request(preorderId: string, buyer: string, requestId: string): Promise<StoredPreorder | null> {

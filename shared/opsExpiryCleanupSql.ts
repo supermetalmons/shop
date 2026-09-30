@@ -1,4 +1,5 @@
 type OpsExpiryCleanupStatement = {
+  tableName: string;
   indexName: string;
   limit: number;
   sql: string;
@@ -6,6 +7,7 @@ type OpsExpiryCleanupStatement = {
 
 export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
   miNoteAuthSessions: {
+    tableName: 'mi_note_auth_sessions',
     indexName: 'mi_note_auth_sessions_expires_at_ms',
     limit: 500,
     sql: `DELETE FROM mi_note_auth_sessions
@@ -15,6 +17,7 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
       )`,
   },
   miNoteAuthChallenges: {
+    tableName: 'mi_note_auth_challenges',
     indexName: 'mi_note_auth_challenges_expires_at_ms',
     limit: 500,
     sql: `DELETE FROM mi_note_auth_challenges
@@ -24,6 +27,7 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
       )`,
   },
   anonymousAuthSessions: {
+    tableName: 'anonymous_auth_sessions',
     indexName: 'anonymous_auth_sessions_expires_at_ms',
     limit: 500,
     sql: `DELETE FROM anonymous_auth_sessions
@@ -36,6 +40,7 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
       )`,
   },
   staffAuthSessions: {
+    tableName: 'staff_auth_sessions',
     indexName: 'staff_auth_sessions_expires_at_ms',
     limit: 500,
     sql: `DELETE FROM staff_auth_sessions
@@ -48,6 +53,7 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
       )`,
   },
   staffAuthChallenges: {
+    tableName: 'staff_auth_challenges',
     indexName: 'staff_auth_challenges_expires_at_ms',
     limit: 500,
     sql: `DELETE FROM staff_auth_challenges
@@ -60,6 +66,7 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
       )`,
   },
   rateLimitBuckets: {
+    tableName: 'rate_limit_buckets',
     indexName: 'rate_limit_buckets_expires_at_ms',
     limit: 1_000,
     sql: `DELETE FROM rate_limit_buckets
@@ -69,7 +76,8 @@ export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
         WHERE expires_at_ms <= ?
         ORDER BY expires_at_ms, scope, subject_hash
         LIMIT ?
-      )
-      RETURNING subject_hash`,
+      )`,
   },
 } as const satisfies Record<string, OpsExpiryCleanupStatement>;
+
+export type OpsExpiryCleanupKey = keyof typeof OPS_EXPIRY_CLEANUP_STATEMENTS;

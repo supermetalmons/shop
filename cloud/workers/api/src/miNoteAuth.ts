@@ -7,7 +7,7 @@ import {
   MI_NOTE_SESSION_HEADER, type MiNoteEthereumChallenge, type MiNoteEthereumSession,
 } from '../../../../shared/miNoteAuth.js';
 import { normalizeMiNoteAddress } from '../../../../shared/miNoteCards.js';
-import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
+import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 import { getPreorderConfig } from '../../../../shared/preorders.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
 import { apiErrorBody, jsonResponse } from './httpResponse.js';
@@ -240,16 +240,7 @@ export async function handleMiNoteAuthRequest(request: Request, env: MiNoteAuthE
 export async function cleanupExpiredMiNoteAuthState(db: D1Database, nowMs: number): Promise<{
   sessionsDeleted: number; challengesDeleted: number; limitReached: boolean; hasMore: boolean;
 }> {
-  const sessions = OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthSessions;
-  const challenges = OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthChallenges;
-  const results = await db.batch([
-    db.prepare(sessions.sql).bind(nowMs, sessions.limit),
-    db.prepare(challenges.sql).bind(nowMs, challenges.limit),
-    db.prepare(`SELECT (EXISTS(SELECT 1 FROM mi_note_auth_sessions WHERE expires_at_ms <= ?) OR
-      EXISTS(SELECT 1 FROM mi_note_auth_challenges WHERE expires_at_ms <= ?)) AS has_more`).bind(nowMs, nowMs),
-  ]);
-  const sessionsDeleted = Number(results[0]?.meta.changes || 0);
-  const challengesDeleted = Number(results[1]?.meta.changes || 0);
-  const hasMore = (results[2]?.results[0] as { has_more?: number } | undefined)?.has_more === 1;
-  return { sessionsDeleted, challengesDeleted, limitReached: sessionsDeleted === sessions.limit || challengesDeleted === challenges.limit, hasMore };
+  const { deletedCounts: [sessionsDeleted, challengesDeleted], limitReached, hasMore } =
+    await cleanupExpiredOpsRecords(db, ['miNoteAuthSessions', 'miNoteAuthChallenges'], nowMs);
+  return { sessionsDeleted, challengesDeleted, limitReached, hasMore };
 }

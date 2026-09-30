@@ -829,6 +829,21 @@ test('database submission failure cannot broadcast an authority signature', asyn
   assert.equal((await h.store.get(prepared.body.order.orderId))!.status, 'prepared');
 });
 
+test('an invalid submission batch response prevents broadcasting an unverified result', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare();
+  const batch = h.db.batch.bind(h.db);
+  t.mock.method(h.db, 'batch', async (statements: D1PreparedStatement[]) => {
+    const results = await batch(statements);
+    return results.slice(0, -1);
+  });
+  const result = await h.call('submit', { preorderId: config.preorderId, orderId: prepared.body.order.orderId, transactionBase64: 'buyer-signed' });
+  assert.equal(result.status, 500);
+  assert.equal(h.counts().sends, 0);
+  assert.equal((await h.store.get(prepared.body.order.orderId))?.status, 'submitted');
+});
+
 test('the first broadcast precedes recovery probes and survives a failed probe', async () => {
   const h = harness();
   const prepared = await h.prepare();
@@ -1087,6 +1102,89 @@ test('preorder transitions return current state in one database call without sta
   const staleConfirmation = await transition(() => h.store.confirm(submitted, 560, 1500));
   assert.deepEqual(staleConfirmation, terminal);
   assert.equal((await h.store.claims(config.cluster, config.collection)).length, 0);
+});
+
+test('preorder transitions accept null mutation results and retain the final persisted order', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare();
+  const source = (await h.store.get(prepared.body.order.orderId))!;
+  let batchCalls = 0;
+  const db = new Proxy(h.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+        batchCalls += 1;
+        const results = await target.batch<Record<string, unknown>>(statements);
+        return results.map((result, index) => index < statements.length - 1 ? { ...result, results: null } : result);
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const store = new PreorderStore(db);
+  const submitted = await store.submit(source, { signature: 'signature', transactionBase64: 'fully-signed' }, 1100);
+  assert.equal(submitted.status, 'submitted');
+  assert.equal(batchCalls, 1);
+  assert.deepEqual(await store.submit(source, { signature: 'stale', transactionBase64: 'stale' }, 1200), submitted);
+  assert.equal(batchCalls, 2);
+  const failed = await store.finish(submitted, 'failed', 1300);
+  assert.equal(failed.status, 'failed');
+  assert.equal(batchCalls, 3);
+  assert.equal((await h.store.claims(config.cluster, config.collection)).length, 0);
+});
+
+test('preorder transitions reject malformed batch responses and unexpected final rows in one call', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare();
+  const source = (await h.store.get(prepared.body.order.orderId))!;
+  const mutations: Record<string, (results: D1Result<Record<string, unknown>>[]) => unknown> = {
+    'missing response': () => undefined,
+    'missing result': (results) => results.slice(0, -1),
+    'failed mutation': (results) => [{ ...results[0], success: false }, results[1]],
+    'null final rows': (results) => [results[0], { ...results[1], results: null }],
+    'missing order': (results) => [results[0], { ...results[1], results: [] }],
+    'extra order': (results) => [results[0], { ...results[1], results: [...results[1].results, ...results[1].results] }],
+    'invalid order': (results) => [results[0], { ...results[1], results: [null] }],
+    'different order': (results) => [results[0], { ...results[1], results: [{ ...results[1].results[0], order_id: 'other' }] }],
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    await t.test(name, async () => {
+      let batchCalls = 0;
+      const db = new Proxy(h.db, {
+        get(target, property, receiver) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+            batchCalls += 1;
+            return mutate(await target.batch<Record<string, unknown>>(statements));
+          };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      await assert.rejects(new PreorderStore(db).submit(source,
+        { signature: 'signature', transactionBase64: 'fully-signed' }, 1100), {
+        name: 'Error', message: 'Invalid preorder database response.',
+      });
+      assert.equal(batchCalls, 1);
+    });
+  }
+});
+
+test('preorder transitions preserve D1 execution errors unchanged', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare();
+  const source = (await h.store.get(prepared.body.order.orderId))!;
+  const cause = new Error('D1 transport failure');
+  let batchCalls = 0;
+  const db = new Proxy(h.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async () => { batchCalls += 1; throw cause; };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  await assert.rejects(new PreorderStore(db).submit(source,
+    { signature: 'signature', transactionBase64: 'fully-signed' }, 1100), (error) => error === cause);
+  assert.equal(batchCalls, 1);
+  assert.equal((await h.store.get(source.orderId))?.status, 'prepared');
 });
 
 test('recovery discovery reads only public order fields and cursor metadata in one query', async t => {

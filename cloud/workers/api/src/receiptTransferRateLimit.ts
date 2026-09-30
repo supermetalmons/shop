@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
+import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 
 export const RECEIPT_TRANSFER_CALLER_RATE_LIMIT = 60;
 export const RECEIPT_TRANSFER_ASSET_RATE_LIMIT = 20;
@@ -151,15 +152,6 @@ const SELECT_BUCKET_SQL = `
     request_count
   FROM rate_limit_buckets
   WHERE scope = ? AND subject_hash = ?
-`;
-
-const SELECT_CLEANUP_BACKLOG_SQL = `
-  SELECT EXISTS(
-    SELECT 1
-    FROM rate_limit_buckets
-    WHERE expires_at_ms <= ?
-    LIMIT 1
-  ) AS has_more
 `;
 
 function finiteInteger(value: unknown): number | null {
@@ -404,32 +396,12 @@ export async function consumeReceiptTransferRateLimit(
 }
 
 export async function cleanupExpiredReceiptTransferRateLimitBuckets(
-  database: ReceiptTransferRateLimitD1Database,
+  database: Pick<D1Database, 'prepare' | 'batch'>,
   nowMs: number,
 ): Promise<ReceiptTransferRateLimitCleanupResult> {
   const normalizedNowMs = normalizedNow(nowMs);
   const cutoffMs = Math.max(0, normalizedNowMs - RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_GRACE_MS);
-  const [deleteResult, backlogResult] = await database.batch<{ subject_hash?: unknown; has_more?: unknown }>([
-    database.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.sql)
-      .bind(cutoffMs, RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT),
-    database.prepare(SELECT_CLEANUP_BACKLOG_SQL).bind(cutoffMs),
-  ]);
-  if (
-    !deleteResult ||
-    !backlogResult ||
-    deleteResult.results.length > RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT ||
-    backlogResult.results.length !== 1
-  ) {
-    throw new Error('Receipt transfer rate-limit cleanup returned an invalid result');
-  }
-  const hasMoreValue = backlogResult.results[0]?.has_more;
-  if (hasMoreValue !== 0 && hasMoreValue !== 1 && hasMoreValue !== false && hasMoreValue !== true) {
-    throw new Error('Receipt transfer rate-limit cleanup returned an invalid backlog result');
-  }
-  const deletedCount = deleteResult.results.length;
-  return {
-    deletedCount,
-    limitReached: deletedCount === RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
-    hasMore: hasMoreValue === 1 || hasMoreValue === true,
-  };
+  const { deletedCounts: [deletedCount], limitReached, hasMore } =
+    await cleanupExpiredOpsRecords(database, ['rateLimitBuckets'], cutoffMs);
+  return { deletedCount, limitReached, hasMore };
 }

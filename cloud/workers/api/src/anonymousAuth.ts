@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
+import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
 import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
@@ -14,7 +14,6 @@ export const ANONYMOUS_AUTH_PATHS = new Set([
 const ANONYMOUS_AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ANONYMOUS_AUTH_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ANONYMOUS_AUTH_MAX_REQUEST_BYTES = 256;
-const ANONYMOUS_AUTH_CLEANUP_LIMIT = OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.limit;
 const ANONYMOUS_AUTH_RATE_LIMIT_RETRY_MS = 60_000;
 const PRODUCTION_COOKIE_NAME = '__Host-mons_anon_v1';
 const DEVELOPMENT_COOKIE_NAME = 'mons_anon_dev_v1';
@@ -395,20 +394,9 @@ export async function cleanupExpiredAnonymousAuthSessions(
   db: D1Database,
   nowMs: number,
 ): Promise<{ deletedCount: number; limitReached: boolean; hasMore: boolean }> {
-  const results = await db.batch([
-    db.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.sql)
-      .bind(nowMs, ANONYMOUS_AUTH_CLEANUP_LIMIT),
-    db.prepare(`SELECT EXISTS(
-      SELECT 1 FROM anonymous_auth_sessions WHERE expires_at_ms <= ?
-    ) AS has_more`).bind(nowMs),
-  ]);
-  const deletedCount = Number(results[0]?.meta.changes || 0);
-  const hasMoreValue = (results[1]?.results[0] as { has_more?: unknown } | undefined)?.has_more;
-  return {
-    deletedCount,
-    limitReached: deletedCount === ANONYMOUS_AUTH_CLEANUP_LIMIT,
-    hasMore: hasMoreValue === 1 || hasMoreValue === true,
-  };
+  const { deletedCounts: [deletedCount], limitReached, hasMore } =
+    await cleanupExpiredOpsRecords(db, ['anonymousAuthSessions'], nowMs);
+  return { deletedCount, limitReached, hasMore };
 }
 
 export const anonymousAuthTestHooks = {
