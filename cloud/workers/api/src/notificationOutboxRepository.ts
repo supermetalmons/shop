@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/notificationOutbox.js';
 import { CommerceRepositoryError } from './commerceRepositoryTypes.js';
 import { NOTIFICATION_OUTBOX_COLUMNS, notificationOutboxDueQuery } from './commerceQueries.js';
+import { executeCommerceD1Batch } from './commerceD1Batch.js';
 
 export function notificationOutboxAuthorityStatement(db: D1Database, includeCheckoutState = false): D1PreparedStatement {
   return db.prepare(`SELECT authority_state,
@@ -105,19 +106,14 @@ export class NotificationOutboxRepository {
 
   private async readBatch(statements: D1PreparedStatement[]): Promise<NotificationOutboxRecord[]> {
     if (statements.length === 0) return [];
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([notificationOutboxAuthorityStatement(this.db), ...statements]);
-    } catch (error) {
-      if (error instanceof Error && /notification outbox is unavailable|authority is not d1/i.test(error.message)) {
-        throw new CommerceRepositoryError('unavailable', 'Notification outbox is unavailable.');
-      }
-      throw error;
-    }
-    if (!Array.isArray(results) || results.length !== statements.length + 1 ||
-      results.some((result) => !result?.success || !Array.isArray(result.results))) {
-      throw new CommerceRepositoryError('unavailable', 'Notification outbox is unavailable.');
-    }
+    const results = await executeCommerceD1Batch(this.db, () => [
+      notificationOutboxAuthorityStatement(this.db), ...statements,
+    ], {
+      invalidResult: () => new CommerceRepositoryError('unavailable', 'Notification outbox is unavailable.'),
+      mapBatchError: (error) => error instanceof Error && /notification outbox is unavailable|authority is not d1/i.test(error.message)
+        ? new CommerceRepositoryError('unavailable', 'Notification outbox is unavailable.')
+        : error,
+    });
     requireNotificationOutboxAuthority(results[0]);
     return results.slice(1).flatMap((result) => result.results.map(parseNotificationOutboxRow));
   }

@@ -2,14 +2,12 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parseNotificationOutboxRow, type NotificationOutboxRecord } from '../../shared/notificationOutbox.ts';
 import {
-  acquireCommerceAuthorityLease,
   COMMERCE_D1_NOW_MS_SQL,
   parseCommerceD1DocumentRow,
   queryRemoteCommerceD1,
-  releaseCommerceAuthorityLease,
-  renewCommerceAuthorityLease,
   safeInteger,
   sqlString,
+  withCommerceMaintenanceLease,
   type CommerceAuthorityQuery,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
@@ -140,19 +138,29 @@ async function verifyBackfill(query: CommerceAuthorityQuery, renew: () => Promis
   return expectedCount;
 }
 
-async function summary(query: CommerceAuthorityQuery) {
+async function summary(query: CommerceAuthorityQuery, renew?: () => Promise<void>) {
+  await renew?.();
   const current = await state(query);
   let plannedGroups = 0;
   let validationError: string | null = null;
   if (current.mode === 'legacy') {
-    try { await eachDocument(query, async (document) => { plannedGroups += planNotificationOutboxBackfill(document).length; }); }
-    catch (error) { validationError = error instanceof Error ? error.message : 'Invalid legacy notification data.'; }
+    try {
+      await eachDocument(query, async (document) => {
+        plannedGroups += planNotificationOutboxBackfill(document).length;
+        await renew?.();
+      });
+    } catch (error) {
+      if (renew) throw error;
+      validationError = error instanceof Error ? error.message : 'Invalid legacy notification data.';
+    }
   }
+  await renew?.();
   const groups = await query(`SELECT family, state, COUNT(*) AS count,
       MIN(CASE WHEN state = 'pending' THEN created_at_ms END) AS oldest_pending_at_ms,
       MAX(CASE WHEN state = 'pending' THEN MAX(0, ${COMMERCE_D1_NOW_MS_SQL} - created_at_ms) END) AS oldest_pending_age_ms,
       SUM(CASE WHEN state = 'pending' AND claim_id IS NOT NULL AND claim_expires_at_ms <= ${COMMERCE_D1_NOW_MS_SQL} THEN 1 ELSE 0 END) AS expired_claims
     FROM commerce_notification_outbox GROUP BY family, state ORDER BY family, state`);
+  await renew?.();
   const failures = await query(`SELECT family, last_error_code, COUNT(*) AS count FROM commerce_notification_outbox
     WHERE state = 'failed' OR last_error_code IS NOT NULL GROUP BY family, last_error_code ORDER BY family, last_error_code`);
   return { ...current, ...(current.mode === 'legacy' ? { plannedGroups, validationError } : {}), groups, failures };
@@ -166,15 +174,11 @@ export async function runNotificationOutboxControl(argv: string[], overrides: Pa
     if (!current.paused || current.revision !== options.expectedRevision) throw new Error('Notification changes require the expected authority revision and completed Commerce pause/drain.');
   };
   requirePause(await state(dependencies.query));
-  let lease = await acquireCommerceAuthorityLease(dependencies.query, dependencies.uuid());
-  let renewedAt = Date.now();
-  const renew = async () => {
-    if (Date.now() - renewedAt < 60_000) return;
-    lease = await renewCommerceAuthorityLease(dependencies.query, lease);
-    renewedAt = Date.now();
-  };
-  let operationError: unknown;
-  try {
+  return withCommerceMaintenanceLease({
+    query: dependencies.query,
+    token: dependencies.uuid(),
+    releaseFailureMessage: 'Notification operation failed and its lease release could not be confirmed; keep Commerce paused.',
+  }, async ({ token, renew }) => {
     const current = await state(dependencies.query);
     requirePause(current);
     if ((await dependencies.query('SELECT guard_id FROM commerce_wipe_guards LIMIT 1')).length) throw new Error('A drop wipe is unfinished; complete it before notification changes.');
@@ -190,10 +194,10 @@ export async function runNotificationOutboxControl(argv: string[], overrides: Pa
         family = String(rows.at(-1)!.family);
         await renew();
       }
-      return summary(dependencies.query);
+      return summary(dependencies.query, renew);
     }
     await eachDocument(dependencies.query, async (document) => { planNotificationOutboxBackfill(document); await renew(); });
-    const mutationGuard = guard(current, lease.token);
+    const mutationGuard = guard(current, token);
     if (options.command === 'prepare') {
       await mutate(dependencies.query, `UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing',
           source_documents_revision = ${current.documentsRevision}, prepared_at_ms = NULL
@@ -226,15 +230,8 @@ export async function runNotificationOutboxControl(argv: string[], overrides: Pa
           observed.documentsRevision !== current.documentsRevision) throw error;
       }
     }
-    return summary(dependencies.query);
-  } catch (error) { operationError = error; throw error; }
-  finally {
-    try { await releaseCommerceAuthorityLease(dependencies.query, lease); }
-    catch (error) {
-      if (operationError !== undefined) throw new AggregateError([operationError, error], 'Notification operation failed and its lease release could not be confirmed; keep Commerce paused.');
-      throw error;
-    }
-  }
+    return summary(dependencies.query, renew);
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

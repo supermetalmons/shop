@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { CommerceRepositoryError, D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import { parsePackStatusOutboxRecord, type PackStatusOutboxMutation } from '../../../../shared/packStatusOutbox.ts';
 
@@ -116,4 +116,18 @@ test('record parser rejects malformed supplied counters, times, and state values
     { state: { toString: () => 'completed' }, nextAttemptAtMs: null }, { failedAtMs: 1 }, { lastErrorCode: '' }]) {
     assert.throws(() => parsePackStatusOutboxRecord({ ...record, ...changes }), /Invalid pack-status/);
   }
+});
+
+test('pack-status batch failures preserve the repository error and original cause', async (t) => {
+  const { harness, repository } = setup();
+  t.after(() => harness.database.close());
+  const cause = new Error('D1 transport failed');
+  t.mock.method(harness.db, 'batch', async () => { throw cause; });
+  await assert.rejects(repository.packStatusOutbox.get(key.path), (error: unknown) => {
+    assert.ok(error instanceof CommerceRepositoryError);
+    assert.equal(error.code, 'unavailable');
+    assert.equal(error.message, 'Pack-status outbox is unavailable.');
+    assert.equal(error.cause, cause);
+    return true;
+  });
 });

@@ -8,6 +8,7 @@ import {
 } from '../../../../shared/packStatusOutbox.js';
 import { CommerceRepositoryError } from './commerceRepositoryTypes.js';
 import { packStatusOutboxDueQuery } from './commerceQueries.js';
+import { executeCommerceD1Batch } from './commerceD1Batch.js';
 
 const COLUMNS = Object.values(PACK_STATUS_OUTBOX_FIELD_COLUMNS);
 
@@ -55,20 +56,19 @@ export class PackStatusOutboxRepository {
   }
 
   private async read(statement: D1PreparedStatement): Promise<PackStatusOutboxRecord[]> {
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([
-        this.db.prepare(`SELECT authority_state,
-          (SELECT storage_mode FROM commerce_pack_status_outbox_control WHERE singleton = 1) AS storage_mode
-          FROM commerce_authority_control WHERE singleton = 1`), statement,
-      ]);
-    } catch (cause) {
-      const error = new CommerceRepositoryError('unavailable', 'Pack-status outbox is unavailable.');
-      error.cause = cause;
-      throw error;
-    }
-    if (!Array.isArray(results) || results.length !== 2 || results.some((result) => !result?.success || !Array.isArray(result.results)) ||
-      results[0].results.length !== 1 || results[0].results[0]?.authority_state !== 'd1' ||
+    const results = await executeCommerceD1Batch(this.db, () => [
+      this.db.prepare(`SELECT authority_state,
+        (SELECT storage_mode FROM commerce_pack_status_outbox_control WHERE singleton = 1) AS storage_mode
+        FROM commerce_authority_control WHERE singleton = 1`), statement,
+    ], {
+      invalidResult: () => new CommerceRepositoryError('unavailable', 'Pack-status outbox is unavailable.'),
+      mapBatchError: (cause) => {
+        const error = new CommerceRepositoryError('unavailable', 'Pack-status outbox is unavailable.');
+        error.cause = cause;
+        return error;
+      },
+    });
+    if (results[0].results.length !== 1 || results[0].results[0]?.authority_state !== 'd1' ||
       results[0].results[0]?.storage_mode !== 'table') {
       throw new CommerceRepositoryError('unavailable', 'Pack-status outbox is unavailable.');
     }

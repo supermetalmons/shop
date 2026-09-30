@@ -52,6 +52,23 @@ function pause(harness: ReturnType<typeof createCommerceD1Harness>) {
     updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1;`);
 }
 
+test('notification batch failures map maintenance errors and preserve unrelated failures', async (context) => {
+  const { harness, repository } = fixture(context);
+  let cause = new Error('D1 transport failed');
+  context.mock.method(harness.db, 'batch', async () => { throw cause; });
+  await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), (error) => error === cause);
+  for (const message of ['Notification outbox is unavailable', 'Commerce authority is not d1']) {
+    cause = new Error(message);
+    await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), (error: unknown) => {
+      assert.ok(error instanceof CommerceRepositoryError);
+      assert.equal(error.code, 'unavailable');
+      assert.equal(error.message, 'Notification outbox is unavailable.');
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+  }
+});
+
 test('outbox creation commits with its parent and preserves raw parent reads', async (context) => {
   const { harness, repository } = fixture(context);
   const draft = input();

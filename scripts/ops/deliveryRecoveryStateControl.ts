@@ -2,14 +2,12 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parseDeliveryRecoveryRow, deliveryRecoveryRow, type DeliveryRecoveryRecord } from '../../shared/deliveryRecoveryState.ts';
 import {
-  acquireCommerceAuthorityLease,
   COMMERCE_D1_NOW_MS_SQL,
   parseCommerceD1DocumentRow,
   queryRemoteCommerceD1,
-  releaseCommerceAuthorityLease,
-  renewCommerceAuthorityLease,
   safeInteger,
   sqlString,
+  withCommerceMaintenanceLease,
   type CommerceAuthorityQuery,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
@@ -196,15 +194,11 @@ export async function runDeliveryRecoveryStateControl(argv: string[], overrides:
     if (!current.paused || current.revision !== options.expectedRevision) throw new Error('Delivery recovery state changes require the expected authority revision and completed Commerce pause/drain.');
   };
   requirePause(await state(dependencies.query));
-  let lease = await acquireCommerceAuthorityLease(dependencies.query, dependencies.uuid());
-  let renewedAt = Date.now();
-  const renew = async () => {
-    if (Date.now() - renewedAt < 60_000) return;
-    lease = await renewCommerceAuthorityLease(dependencies.query, lease);
-    renewedAt = Date.now();
-  };
-  let operationError: unknown;
-  try {
+  return withCommerceMaintenanceLease({
+    query: dependencies.query,
+    token: dependencies.uuid(),
+    releaseFailureMessage: 'Delivery recovery state operation failed and its lease release could not be confirmed; keep Commerce paused.',
+  }, async ({ token, renew }) => {
     const current = await state(dependencies.query);
     requirePause(current);
     if ((await dependencies.query('SELECT guard_id FROM commerce_wipe_guards LIMIT 1')).length) throw new Error('A drop wipe is unfinished; complete it before delivery recovery state changes.');
@@ -212,7 +206,7 @@ export async function runDeliveryRecoveryStateControl(argv: string[], overrides:
       const deliveryCount = await verifyState(dependencies.query, false, renew);
       return await summary(dependencies.query, renew, deliveryCount);
     }
-    const mutationGuard = guard(current, lease.token);
+    const mutationGuard = guard(current, token);
     let deliveryCount: number;
     if (options.command === 'prepare') {
       await eachPage(dependencies.query, async (sources) => {
@@ -250,14 +244,7 @@ export async function runDeliveryRecoveryStateControl(argv: string[], overrides:
       }
     }
     return await summary(dependencies.query, renew, deliveryCount);
-  } catch (error) { operationError = error; throw error; }
-  finally {
-    try { await releaseCommerceAuthorityLease(dependencies.query, lease); }
-    catch (error) {
-      if (operationError !== undefined) throw new AggregateError([operationError, error], 'Delivery recovery state operation failed and its lease release could not be confirmed; keep Commerce paused.');
-      throw error;
-    }
-  }
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

@@ -2,14 +2,12 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parseStripeCheckoutStateRow, stripeCheckoutStateRow, type StripeCheckoutState } from '../../shared/stripeCheckoutState.ts';
 import {
-  acquireCommerceAuthorityLease,
   COMMERCE_D1_NOW_MS_SQL,
   parseCommerceD1DocumentRow,
   queryRemoteCommerceD1,
-  releaseCommerceAuthorityLease,
-  renewCommerceAuthorityLease,
   safeInteger,
   sqlString,
+  withCommerceMaintenanceLease,
   type CommerceAuthorityQuery,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
@@ -148,15 +146,24 @@ async function verifyState(query: CommerceAuthorityQuery, legacy: boolean, renew
   return count;
 }
 
-async function summary(query: CommerceAuthorityQuery) {
+async function summary(query: CommerceAuthorityQuery, renew?: () => Promise<void>) {
+  await renew?.();
   const current = await state(query);
   let checkoutCount = 0;
   let validationError: string | null = null;
   try {
     if (current.mode === 'legacy') {
-      await eachDocument(query, async (document) => { planStripeCheckoutStateBackfill(document); checkoutCount += 1; });
-    } else checkoutCount = await verifyState(query, false, async () => undefined);
-  } catch (error) { validationError = error instanceof Error ? error.message : 'Invalid Stripe checkout state.'; }
+      await eachDocument(query, async (document) => {
+        planStripeCheckoutStateBackfill(document);
+        checkoutCount += 1;
+        await renew?.();
+      });
+    } else checkoutCount = await verifyState(query, false, async () => { await renew?.(); });
+  } catch (error) {
+    if (renew) throw error;
+    validationError = error instanceof Error ? error.message : 'Invalid Stripe checkout state.';
+  }
+  await renew?.();
   const groups = await query(`SELECT status, COUNT(*) AS count,
       MIN(CASE WHEN status IN ('fulfillment_pending', 'processing') THEN updated_at_ms END) AS oldest_pending_at_ms,
       SUM(CASE WHEN status = 'processing' AND processing_lease_expires_at_ms <= ${COMMERCE_D1_NOW_MS_SQL} THEN 1 ELSE 0 END) AS expired_claims
@@ -172,24 +179,20 @@ export async function runStripeCheckoutStateControl(argv: string[], overrides: P
     if (!current.paused || current.revision !== options.expectedRevision) throw new Error('Stripe checkout state changes require the expected authority revision and completed Commerce pause/drain.');
   };
   requirePause(await state(dependencies.query));
-  let lease = await acquireCommerceAuthorityLease(dependencies.query, dependencies.uuid());
-  let renewedAt = Date.now();
-  const renew = async () => {
-    if (Date.now() - renewedAt < 60_000) return;
-    lease = await renewCommerceAuthorityLease(dependencies.query, lease);
-    renewedAt = Date.now();
-  };
-  let operationError: unknown;
-  try {
+  return withCommerceMaintenanceLease({
+    query: dependencies.query,
+    token: dependencies.uuid(),
+    releaseFailureMessage: 'Stripe checkout state operation failed and its lease release could not be confirmed; keep Commerce paused.',
+  }, async ({ token, renew }) => {
     const current = await state(dependencies.query);
     requirePause(current);
     if ((await dependencies.query('SELECT guard_id FROM commerce_wipe_guards LIMIT 1')).length) throw new Error('A drop wipe is unfinished; complete it before Stripe checkout state changes.');
     if (current.mode === 'table') {
       await verifyState(dependencies.query, false, renew);
-      return summary(dependencies.query);
+      return summary(dependencies.query, renew);
     }
     await eachDocument(dependencies.query, async (document) => { planStripeCheckoutStateBackfill(document); await renew(); });
-    const mutationGuard = guard(current, lease.token);
+    const mutationGuard = guard(current, token);
     if (options.command === 'prepare') {
       await mutate(dependencies.query, `UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing',
           source_documents_revision = ${current.documentsRevision}, prepared_at_ms = NULL
@@ -218,15 +221,8 @@ export async function runStripeCheckoutStateControl(argv: string[], overrides: P
           observed.documentsRevision !== current.documentsRevision) throw error;
       }
     }
-    return summary(dependencies.query);
-  } catch (error) { operationError = error; throw error; }
-  finally {
-    try { await releaseCommerceAuthorityLease(dependencies.query, lease); }
-    catch (error) {
-      if (operationError !== undefined) throw new AggregateError([operationError, error], 'Stripe checkout state operation failed and its lease release could not be confirmed; keep Commerce paused.');
-      throw error;
-    }
-  }
+    return summary(dependencies.query, renew);
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

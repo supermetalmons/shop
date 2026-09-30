@@ -147,6 +147,41 @@ export async function releaseCommerceAuthorityLease(
   ) return fail('Commerce authority coordination lease ownership was lost before release.');
 }
 
+export async function withCommerceMaintenanceLease<T>(
+  options: {
+    query: CommerceAuthorityQuery;
+    token: string;
+    releaseFailureMessage: string;
+    now?: () => number;
+  },
+  operation: (context: { token: string; renew: () => Promise<void> }) => Promise<T>,
+): Promise<T> {
+  let lease = await acquireCommerceAuthorityLease(options.query, options.token);
+  const now = options.now ?? Date.now;
+  let renewedAt = now();
+  const renew = async () => {
+    if (now() - renewedAt < 60_000) return;
+    lease = await renewCommerceAuthorityLease(options.query, lease);
+    renewedAt = now();
+  };
+  let operationError: unknown;
+  let operationFailed = false;
+  try {
+    return await operation({ token: lease.token, renew });
+  } catch (error) {
+    operationError = error;
+    operationFailed = true;
+    throw error;
+  } finally {
+    try {
+      await releaseCommerceAuthorityLease(options.query, lease);
+    } catch (error) {
+      if (operationFailed) throw new AggregateError([operationError, error], options.releaseFailureMessage);
+      throw error;
+    }
+  }
+}
+
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value) return fail(`${label} is invalid.`);
   return value;

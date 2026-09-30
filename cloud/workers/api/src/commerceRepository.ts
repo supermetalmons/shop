@@ -1,4 +1,5 @@
 import { buildWalletDeliveryRecoveryState } from '../../../../shared/deliveryRecovery.js';
+import { executeCommerceD1Batch } from './commerceD1Batch.js';
 import {
   deliveryRecoveryAuthorityStatement, requireDeliveryRecoveryAuthority,
   recoverySnapshotColumns, parseRecoverySnapshot, type RecoverySnapshot,
@@ -85,30 +86,27 @@ export class D1CommerceRepository {
     itemsPerBox: number;
     maxDudeId: number;
   }>): Promise<{ generation: string; pool: number[] }> {
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([
-        this.db.prepare(`SELECT authority_state, dude_inventory_mode
-          FROM commerce_authority_control WHERE singleton = 1`),
-        this.db.prepare(`SELECT generation, ready, drop_family, items_per_box, max_dude_id
-          FROM commerce_inventory_drops WHERE drop_id = ?`).bind(args.dropId),
-        this.db.prepare(`SELECT available.dude_id, available.pool_position
-          FROM commerce_authority_control AS authority
-          CROSS JOIN commerce_inventory_drops AS inventory
-          JOIN commerce_available_dudes AS available ON available.drop_id = inventory.drop_id
-          WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
-            AND authority.dude_inventory_mode = 'rows'
-            AND inventory.drop_id = ? AND inventory.ready = 1
-          ORDER BY available.pool_position`).bind(args.dropId),
-      ]);
-    } catch (error) {
-      reportCommerceReadFailure(error);
-      throw unavailableCommerce(error);
-    }
-    if (results.length !== 3 || results.some((result) =>
-      result.success !== true || !Array.isArray(result.results) || !isObject(result.meta))) {
-      throw unavailableCommerceData();
-    }
+    const results = await executeCommerceD1Batch(this.db, () => [
+      this.db.prepare(`SELECT authority_state, dude_inventory_mode
+        FROM commerce_authority_control WHERE singleton = 1`),
+      this.db.prepare(`SELECT generation, ready, drop_family, items_per_box, max_dude_id
+        FROM commerce_inventory_drops WHERE drop_id = ?`).bind(args.dropId),
+      this.db.prepare(`SELECT available.dude_id, available.pool_position
+        FROM commerce_authority_control AS authority
+        CROSS JOIN commerce_inventory_drops AS inventory
+        JOIN commerce_available_dudes AS available ON available.drop_id = inventory.drop_id
+        WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+          AND authority.dude_inventory_mode = 'rows'
+          AND inventory.drop_id = ? AND inventory.ready = 1
+        ORDER BY available.pool_position`).bind(args.dropId),
+    ], {
+      invalidResult: unavailableCommerceData,
+      mapBatchError: (error) => {
+        reportCommerceReadFailure(error);
+        return unavailableCommerce(error);
+      },
+      requireMeta: true,
+    });
     const [authorityResult, inventoryResult, availableResult] = results;
     const control = authorityResult.results[0];
     if (authorityResult.results.length !== 1 || !isObject(control) ||
@@ -413,14 +411,10 @@ export class D1CommerceRepository {
   }
 
   private async readRecoveryBatch(statement: D1PreparedStatement, requireNotifications = false): Promise<D1Result<Record<string, unknown>>> {
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([
-        deliveryRecoveryAuthorityStatement(this.db), statement,
-        ...(requireNotifications ? [notificationOutboxAuthorityStatement(this.db)] : []),
-      ]);
-    } catch (error) { throw unavailableCommerce(error); }
-    if (results.length !== 2 + Number(requireNotifications) || !results[1].success || !Array.isArray(results[1].results)) throw unavailableCommerceData();
+    const results = await executeCommerceD1Batch(this.db, () => [
+      deliveryRecoveryAuthorityStatement(this.db), statement,
+      ...(requireNotifications ? [notificationOutboxAuthorityStatement(this.db)] : []),
+    ], { invalidResult: unavailableCommerceData, mapBatchError: unavailableCommerce });
     requireDeliveryRecoveryAuthority(results[0]);
     if (requireNotifications) requireNotificationOutboxAuthority(results[2]);
     return results[1];
@@ -431,26 +425,19 @@ export class D1CommerceRepository {
     allowPaused = false,
     requireCheckoutState = false,
   ): Promise<D1Result<Record<string, unknown>>> {
-    let results: D1Result<Record<string, unknown>>[];
-    try {
-      results = await this.db.batch<Record<string, unknown>>([
-        authorityStatement(this.db, requireCheckoutState),
-        statement(),
-      ]);
-    } catch (error) {
-      reportCommerceReadFailure(error);
-      throw unavailableCommerce(error);
-    }
-    if (results.length !== 2) throw unavailableCommerce();
+    const results = await executeCommerceD1Batch(this.db, () => [
+      authorityStatement(this.db, requireCheckoutState),
+      statement(),
+    ], {
+      invalidResult: unavailableCommerce,
+      mapBatchError: (error) => {
+        reportCommerceReadFailure(error);
+        return unavailableCommerce(error);
+      },
+      requireMeta: true,
+    });
     const [authorityResult, dataResult] = results;
-    if (
-      authorityResult.success !== true ||
-      dataResult.success !== true ||
-      authorityResult.results.length !== 1 ||
-      !Array.isArray(dataResult.results) ||
-      !isObject(authorityResult.meta) ||
-      !isObject(dataResult.meta)
-    ) throw unavailableCommerce();
+    if (authorityResult.results.length !== 1) throw unavailableCommerce();
     const control = parseAuthorityControl(authorityResult.results[0]);
     if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
     if (requireCheckoutState && authorityResult.results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
@@ -458,10 +445,9 @@ export class D1CommerceRepository {
   }
 
   private async readNotificationBatch(statement: () => D1PreparedStatement, requireCheckoutState = false): Promise<D1Result<Record<string, unknown>>> {
-    const results = await this.db.batch<Record<string, unknown>>([
+    const results = await executeCommerceD1Batch(this.db, () => [
       notificationOutboxAuthorityStatement(this.db, requireCheckoutState), statement(),
-    ]);
-    if (results.length !== 2 || !results[1].success || !Array.isArray(results[1].results)) throw unavailableCommerceData();
+    ], { invalidResult: unavailableCommerceData });
     requireNotificationOutboxAuthority(results[0]);
     if (requireCheckoutState && results[0].results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
     return results[1];

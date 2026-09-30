@@ -3,7 +3,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { parsePackStatusOutboxControlArgs, runPackStatusOutboxControl } from '../scripts/ops/packStatusOutboxControl.ts';
-import { parseCommerceD1DocumentRow } from '../scripts/shared/commerceD1Maintenance.ts';
+import {
+  acquireCommerceAuthorityLease,
+  COMMERCE_D1_NOW_MS_SQL,
+  parseCommerceD1DocumentRow,
+} from '../scripts/shared/commerceD1Maintenance.ts';
 import { planPackStatusOutboxBackfill } from '../scripts/shared/packStatusOutboxMaintenance.ts';
 import { parsePackStatusOutboxRow } from '../shared/packStatusOutbox.ts';
 
@@ -108,6 +112,72 @@ test('legacy defaults match the existing retry reader and preparation is determi
   assert.equal(before[1].completed_at_ms, null);
   await execute(db, 'prepare');
   assert.deepEqual(query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'), before);
+});
+
+for (const mode of ['legacy', 'table'] as const) {
+  test(`${mode} final maintenance summary renews its lease throughout a long scan`, async (context) => {
+    const db = database(context);
+    for (let id = 1; id <= 151; id += 1) insert(db, id, { packStatusProjectionState: 'pending' });
+    pause(db);
+    if (mode === 'table') {
+      await execute(db, 'prepare');
+      await execute(db, 'activate');
+    }
+    let now = Date.now();
+    context.mock.method(Date, 'now', () => now);
+    const startedAt = now;
+    const read = (sql: string) => query(db)(sql.replaceAll(COMMERCE_D1_NOW_MS_SQL, String(now)));
+    let stateReads = 0;
+    let competingAttempts = 0;
+    const result = await execute(db, 'prepare', { query: async (sql) => {
+      const rows = read(sql);
+      if (sql.startsWith('SELECT authority.authority_state')) stateReads += 1;
+      if (stateReads === 3 && (sql.startsWith('SELECT document_path') || sql.startsWith('SELECT outbox.*'))) {
+        now += 5 * 60_000;
+        competingAttempts += 1;
+        await assert.rejects(acquireCommerceAuthorityLease(read, '00000000-0000-4000-8000-000000002098'), /already running/);
+      }
+      return rows;
+    } });
+    assert.ok(now - startedAt > 30 * 60_000);
+    assert.ok(competingAttempts > 6);
+    assert.equal(result.mode, mode);
+    assert.equal(result.projectionCount, 151);
+    assert.equal(result.validationError, null);
+    assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
+  });
+}
+
+test('a final summary renewal failure rejects maintenance and still releases the lease', async (context) => {
+  const db = database(context);
+  insert(db, 1, { packStatusProjectionState: 'pending' });
+  pause(db);
+  let now = Date.now();
+  context.mock.method(Date, 'now', () => now);
+  let stateReads = 0;
+  let renewalFailed = false;
+  await assert.rejects(execute(db, 'prepare', { query: (sql) => {
+    if (sql.startsWith('UPDATE commerce_authority_control_lease')) {
+      renewalFailed = true;
+      throw new Error('renewal unavailable');
+    }
+    const rows = query(db)(sql);
+    if (sql.startsWith('SELECT authority.authority_state') && ++stateReads === 3) now += 60_000;
+    return rows;
+  } }), /lease could not be renewed/);
+  assert.equal(renewalFailed, true);
+  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
+});
+
+test('status performs no lease writes while reporting invalid state', async (context) => {
+  const db = database(context);
+  insert(db, 1, { packStatusProjectionState: 'unknown' });
+  const status = await execute(db, 'status', { query: (sql) => {
+    assert.match(sql, /^SELECT /);
+    return query(db)(sql);
+  } });
+  assert.match(status.validationError || '', /validation failed/);
+  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
 });
 
 test('all legacy sources are validated before importing any rows', async (context) => {

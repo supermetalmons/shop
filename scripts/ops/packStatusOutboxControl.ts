@@ -2,14 +2,12 @@ import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { parsePackStatusOutboxRow, packStatusOutboxRow, type PackStatusOutboxRecord } from '../../shared/packStatusOutbox.ts';
 import {
-  acquireCommerceAuthorityLease,
   COMMERCE_D1_NOW_MS_SQL,
   parseCommerceD1DocumentRow,
   queryRemoteCommerceD1,
-  releaseCommerceAuthorityLease,
-  renewCommerceAuthorityLease,
   safeInteger,
   sqlString,
+  withCommerceMaintenanceLease,
   type CommerceAuthorityQuery,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
@@ -158,23 +156,32 @@ async function verifyState(query: CommerceAuthorityQuery, legacy: boolean, renew
   return count;
 }
 
-async function summary(query: CommerceAuthorityQuery) {
+async function summary(query: CommerceAuthorityQuery, renew?: () => Promise<void>) {
+  await renew?.();
   const current = await state(query);
   let projectionCount = 0;
   let validationError: string | null = null;
   try {
     if (current.mode === 'legacy') {
-      await eachDocument(query, async (document) => { if (planPackStatusOutboxBackfill(document)) projectionCount += 1; });
+      await eachDocument(query, async (document) => {
+        if (planPackStatusOutboxBackfill(document)) projectionCount += 1;
+        await renew?.();
+      });
       if (current.preparation === 'ready') {
         if (current.sourceDocumentsRevision !== current.documentsRevision) throw new Error('Pack-status outbox preparation is stale.');
-        await verifyState(query, true, async () => undefined);
+        await verifyState(query, true, async () => { await renew?.(); });
       }
-    } else projectionCount = await verifyState(query, false, async () => undefined);
-  } catch (error) { validationError = error instanceof Error ? error.message : 'Invalid pack-status outbox.'; }
+    } else projectionCount = await verifyState(query, false, async () => { await renew?.(); });
+  } catch (error) {
+    if (renew) throw error;
+    validationError = error instanceof Error ? error.message : 'Invalid pack-status outbox.';
+  }
+  await renew?.();
   const groups = await query(`SELECT state, COUNT(*) AS count,
       MIN(CASE WHEN state = 'pending' THEN created_at_ms END) AS oldest_pending_at_ms,
       MIN(next_attempt_at_ms) AS oldest_due_at_ms
     FROM commerce_pack_status_outbox GROUP BY state ORDER BY state`);
+  await renew?.();
   const failures = await query(`SELECT state, last_error_code, COUNT(*) AS count FROM commerce_pack_status_outbox
     WHERE last_error_code IS NOT NULL GROUP BY state, last_error_code ORDER BY state, last_error_code`);
   return { ...current, projectionCount, validationError, groups, failures };
@@ -188,24 +195,20 @@ export async function runPackStatusOutboxControl(argv: string[], overrides: Part
     if (!current.paused || current.revision !== options.expectedRevision) throw new Error('Pack-status outbox changes require the expected authority revision and completed Commerce pause/drain.');
   };
   requirePause(await state(dependencies.query));
-  let lease = await acquireCommerceAuthorityLease(dependencies.query, dependencies.uuid());
-  let renewedAt = Date.now();
-  const renew = async () => {
-    if (Date.now() - renewedAt < 60_000) return;
-    lease = await renewCommerceAuthorityLease(dependencies.query, lease);
-    renewedAt = Date.now();
-  };
-  let operationError: unknown;
-  try {
+  return withCommerceMaintenanceLease({
+    query: dependencies.query,
+    token: dependencies.uuid(),
+    releaseFailureMessage: 'Pack-status outbox operation failed and its lease release could not be confirmed; keep Commerce paused.',
+  }, async ({ token, renew }) => {
     const current = await state(dependencies.query);
     requirePause(current);
     if ((await dependencies.query('SELECT guard_id FROM commerce_wipe_guards LIMIT 1')).length) throw new Error('A drop wipe is unfinished; complete it before pack-status outbox changes.');
     if (current.mode === 'table') {
       await verifyState(dependencies.query, false, renew);
-      return summary(dependencies.query);
+      return summary(dependencies.query, renew);
     }
     await eachDocument(dependencies.query, async (document) => { planPackStatusOutboxBackfill(document); await renew(); });
-    const mutationGuard = guard(current, lease.token);
+    const mutationGuard = guard(current, token);
     if (options.command === 'prepare') {
       await mutate(dependencies.query, `UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing',
           source_documents_revision = ${current.documentsRevision}, prepared_at_ms = NULL
@@ -235,15 +238,8 @@ export async function runPackStatusOutboxControl(argv: string[], overrides: Part
           observed.documentsRevision !== current.documentsRevision) throw error;
       }
     }
-    return summary(dependencies.query);
-  } catch (error) { operationError = error; throw error; }
-  finally {
-    try { await releaseCommerceAuthorityLease(dependencies.query, lease); }
-    catch (error) {
-      if (operationError !== undefined) throw new AggregateError([operationError, error], 'Pack-status outbox operation failed and its lease release could not be confirmed; keep Commerce paused.');
-      throw error;
-    }
-  }
+    return summary(dependencies.query, renew);
+  });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
