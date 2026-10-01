@@ -18,10 +18,6 @@ body:has(.drop-page-frame--mi-note-cards) {
   -webkit-user-select: none;
 }
 
-.mi-note-cards--selection > .mi-note-cards__content {
-  padding-bottom: 92px;
-}
-
 .mi-note-cards__content {
   display: flex;
   flex-direction: column;
@@ -275,10 +271,6 @@ body:has(.drop-page-frame--mi-note-cards) {
 }
 
 @media (max-width: 480px) {
-  .mi-note-cards--selection > .mi-note-cards__content {
-    padding-bottom: 160px;
-  }
-
   .mi-note-preorder-panel {
     flex-wrap: wrap;
     gap: 10px;

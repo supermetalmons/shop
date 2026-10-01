@@ -279,7 +279,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
 
   return (
     <>
-      <main className={`mi-note-cards${!verified ? ' mi-note-cards--connect' : ''}${(preorderEnabled && panelIds.length) || viewableItem ? ' mi-note-cards--selection' : ''}`} aria-label="Mi Note cards">
+      <main className={`mi-note-cards${!verified ? ' mi-note-cards--connect' : ''}`} aria-label="Mi Note cards">
         <div className="mi-note-cards__content">
           <MiNoteWalletControls key={preorder?.config.preorderId} wallet={wallet} verification={verification} verified={verified} />
           {verified && (
