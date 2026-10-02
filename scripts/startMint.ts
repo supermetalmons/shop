@@ -1,6 +1,5 @@
-import { lstatSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'crypto';
 import { clusterApiUrl, Connection, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from '@solana/web3.js';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
@@ -33,31 +32,6 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function pathEntryExists(filePath: string): boolean {
-  try {
-    lstatSync(filePath);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
-async function importDeploymentModule(
-  filePath: string,
-): Promise<Record<string, unknown>> {
-  try {
-    return (await import(pathToFileURL(filePath).href)) as Record<
-      string,
-      unknown
-    >;
-  } catch (err) {
-    throw new Error(
-      `Could not load deployment config from ${filePath}: ${String(err)}`,
-    );
-  }
-}
-
 export async function resolveDeploymentConfig(args: {
   root: string;
   requestedDropId: string;
@@ -75,70 +49,27 @@ export async function resolveDeploymentConfig(args: {
     'shared',
     'deploymentRegistry.ts',
   );
-  const legacyPath = path.join(args.root, 'src', 'config', 'deployed.ts');
-  if (pathEntryExists(canonicalPath)) {
-    const registry = await readDeploymentDropRegistry(canonicalPath);
-    const knownDropIds = Object.keys(registry.drops).sort((left, right) =>
-      left.localeCompare(right),
-    );
-    const dropConfig = Object.prototype.hasOwnProperty.call(
-      registry.drops,
-      requestedDropId,
-    )
-      ? registry.drops[requestedDropId]
-      : undefined;
-    if (!isObjectRecord(dropConfig)) {
-      throw new Error(
-        `Drop ${requestedDropId} is not present in ${canonicalPath}.\n` +
-          `Known deployed drops: ${formatKnownDrops(knownDropIds)}\n` +
-          `Run npm run deploy-all-onchain -- ${requestedDropId} for this drop before start-mint.`,
-      );
-    }
-    return {
-      dropConfig,
-      knownDropIds,
-      registryLabel: canonicalPath,
-    };
-  }
-
-  if (!pathEntryExists(legacyPath)) {
+  const registry = await readDeploymentDropRegistry(canonicalPath);
+  const knownDropIds = Object.keys(registry.drops).sort((left, right) =>
+    left.localeCompare(right),
+  );
+  const dropConfig = Object.prototype.hasOwnProperty.call(
+    registry.drops,
+    requestedDropId,
+  )
+    ? registry.drops[requestedDropId]
+    : undefined;
+  if (!isObjectRecord(dropConfig)) {
     throw new Error(
-      `Could not find deployment config.\n` +
-        `Checked:\n` +
-        `  - ${canonicalPath}\n` +
-        `  - ${legacyPath}\n` +
-        `Make sure you've run:\n` +
-        `  npm run deploy-all-onchain -- ${requestedDropId}\n`,
-    );
-  }
-
-  const mod = await importDeploymentModule(legacyPath);
-  const legacyConfig = mod.DEPLOYMENT || mod.default;
-  if (!isObjectRecord(legacyConfig)) {
-    throw new Error(
-      `Could not parse deployment config from ${legacyPath}.\n` +
-        `Run npm run deploy-all-onchain -- <dropId> and retry.`,
-    );
-  }
-  const configuredDropId =
-    Object.prototype.hasOwnProperty.call(legacyConfig, 'dropId') &&
-    typeof legacyConfig.dropId === 'string'
-      ? legacyConfig.dropId
-      : '';
-  const legacyDropId = configuredDropId
-    ? normalizeAndValidateDropId(configuredDropId, 'deployed dropId')
-    : '';
-  if (legacyDropId && legacyDropId !== requestedDropId) {
-    throw new Error(
-      `Drop ${requestedDropId} does not match the deployed config in ${legacyPath}.\n` +
-        `Configured deployed drop: ${legacyDropId}\n` +
-        `Pass the deployed dropId explicitly, or rerun npm run deploy-all-onchain -- ${requestedDropId} first.`,
+      `Drop ${requestedDropId} is not present in ${canonicalPath}.\n` +
+        `Known deployed drops: ${formatKnownDrops(knownDropIds)}\n` +
+        `Run npm run deploy-all-onchain -- ${requestedDropId} for this drop before start-mint.`,
     );
   }
   return {
-    dropConfig: legacyConfig,
-    knownDropIds: legacyDropId ? [legacyDropId] : [],
-    registryLabel: legacyPath,
+    dropConfig,
+    knownDropIds,
+    registryLabel: canonicalPath,
   };
 }
 

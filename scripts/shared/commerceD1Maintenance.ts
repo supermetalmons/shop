@@ -260,44 +260,33 @@ export function queryRemoteCommerceDocuments(
   sql: string,
   query: typeof queryRemoteCommerceD1 = queryRemoteCommerceD1,
 ): CommerceD1Document[] {
-  const rows = query(sql);
-  if (!rows.some((row) => row.document_kind === 'stripe_checkout' || row.document_kind === 'delivery_order')) {
-    return rows.map(parseCommerceD1DocumentRow);
+  const controls = query(`SELECT
+    (SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1) AS checkout_state_mode,
+    (SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1) AS recovery_state_mode`);
+  if (controls.length !== 1 || controls[0].checkout_state_mode !== 'table' || controls[0].recovery_state_mode !== 'table') {
+    return fail('Commerce maintenance requires active checkout and delivery recovery table storage.');
   }
-  const checkoutSchema = hasStripeCheckoutStateSchema(query);
-  const recoverySchema = hasDeliveryRecoveryStateSchema(query);
-  if (!checkoutSchema && !recoverySchema) return rows.map(parseCommerceD1DocumentRow);
   const checkoutColumns = ['document_path', 'document_version', ...Object.values(STRIPE_CHECKOUT_STATE_FIELD_COLUMNS)];
   const recoveryColumns = Object.values(DELIVERY_RECOVERY_FIELD_COLUMNS).filter((column) => column !== 'receipt_recovery_json');
-  const activeRecovery = `snapshot.document_kind = 'delivery_order' AND
-    (SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1) = 'table'`;
-  const projections = [
-    ...(checkoutSchema ? [`(SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1) AS checkout_state_mode`,
-      `CASE WHEN snapshot.document_kind = 'stripe_checkout' THEN (
+  const snapshot = query(`SELECT snapshot.document_path, snapshot.document_kind, snapshot.drop_id, snapshot.document_id,
+      snapshot.version, snapshot.create_time, snapshot.update_time, snapshot.document_json,
+      (SELECT storage_mode FROM commerce_stripe_checkout_state_control WHERE singleton = 1) AS checkout_state_mode,
+      (SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1) AS recovery_state_mode,
+      CASE WHEN snapshot.document_kind = 'stripe_checkout' THEN (
         SELECT json_object(${checkoutColumns.map((column) => `'${column}', checkout.${column}`).join(', ')})
         FROM commerce_stripe_checkout_state AS checkout WHERE checkout.document_path = snapshot.document_path
-      ) END AS checkout_state_json`] : []),
-    ...(recoverySchema ? [`(SELECT storage_mode FROM commerce_delivery_recovery_control WHERE singleton = 1) AS recovery_state_mode`,
-      `CASE WHEN snapshot.document_kind = 'delivery_order' THEN (
+      ) END AS checkout_state_json,
+      CASE WHEN snapshot.document_kind = 'delivery_order' THEN (
         SELECT json_object(${recoveryColumns.map((column) => `'${column}', recovery.${column}`).join(', ')})
         FROM commerce_delivery_recovery AS recovery WHERE recovery.parent_path = snapshot.document_path
-      ) END AS recovery_state_json`,
-      `CASE WHEN ${activeRecovery} THEN (
-        SELECT recovery.receipt_recovery_json FROM commerce_delivery_recovery AS recovery
-        WHERE recovery.parent_path = snapshot.document_path
-      ) END AS recovery_payload_json`] : []),
-  ];
-  const documentJson = recoverySchema
-    ? `CASE WHEN ${activeRecovery} THEN json_remove(snapshot.document_json, '$.receiptRecovery')
-        ELSE snapshot.document_json END AS document_json`
-    : 'snapshot.document_json';
-  const snapshot = query(`SELECT snapshot.document_path, snapshot.document_kind, snapshot.drop_id, snapshot.document_id,
-      snapshot.version, snapshot.create_time, snapshot.update_time, ${documentJson}, ${projections.join(', ')}
+      ) END AS recovery_state_json,
+      CASE WHEN snapshot.document_kind = 'delivery_order' THEN (
+        SELECT recovery.receipt_recovery_json FROM commerce_delivery_recovery AS recovery WHERE recovery.parent_path = snapshot.document_path
+      ) END AS recovery_payload_json
     FROM (${sql.trim().replace(/;$/, '')}) AS snapshot`);
   return snapshot.map((row) => {
     const document = parseCommerceD1DocumentRow(row);
-    if (document.kind === 'delivery_order' && recoverySchema) {
-      if (row.recovery_state_mode === 'legacy') return document;
+    if (document.kind === 'delivery_order') {
       if (row.recovery_state_mode !== 'table') return fail('Delivery recovery state control is invalid.');
       if (typeof row.recovery_state_json !== 'string') return fail(`Delivery recovery state is missing: ${document.path}.`);
       const state = parseDeliveryRecoveryRow({
@@ -309,7 +298,7 @@ export function queryRemoteCommerceDocuments(
       if (state.receiptRecoveryJson !== null) data.receiptRecovery = JSON.parse(state.receiptRecoveryJson);
       return { ...document, data };
     }
-    if (document.kind !== 'stripe_checkout' || !checkoutSchema || row.checkout_state_mode === 'legacy') return document;
+    if (document.kind !== 'stripe_checkout') return document;
     if (row.checkout_state_mode !== 'table') return fail('Stripe checkout state control is invalid.');
     if (typeof row.checkout_state_json !== 'string') return fail(`Stripe checkout state is missing or stale: ${document.path}.`);
     const state = parseStripeCheckoutStateRow(JSON.parse(row.checkout_state_json));
@@ -318,30 +307,6 @@ export function queryRemoteCommerceDocuments(
     }
     return { ...document, data: hydrateStripeCheckoutState(document.data, state) };
   });
-}
-
-export function hasDeliveryRecoveryStateSchema(query: typeof queryRemoteCommerceD1): boolean {
-  const tables = query(`SELECT name FROM sqlite_schema WHERE type = 'table'
-    AND name IN ('commerce_delivery_recovery', 'commerce_delivery_recovery_control')`);
-  if (tables.length === 0) return false;
-  if (tables.length !== 2) return fail('Delivery recovery state schema is incomplete.');
-  return true;
-}
-
-export function hasStripeCheckoutStateSchema(query: typeof queryRemoteCommerceD1): boolean {
-  const tables = query(`SELECT name FROM sqlite_schema WHERE type = 'table'
-    AND name IN ('commerce_stripe_checkout_state', 'commerce_stripe_checkout_state_control')`);
-  if (tables.length === 0) return false;
-  if (tables.length !== 2) return fail('Stripe checkout state schema is incomplete.');
-  return true;
-}
-
-export function hasPackStatusOutboxSchema(query: typeof queryRemoteCommerceD1): boolean {
-  const tables = query(`SELECT name FROM sqlite_schema WHERE type = 'table'
-    AND name IN ('commerce_pack_status_outbox', 'commerce_pack_status_outbox_control')`);
-  if (tables.length === 0) return false;
-  if (tables.length !== 2) return fail('Pack-status outbox schema is incomplete.');
-  return true;
 }
 
 export function readRemoteCommerceAuthority(): CommerceD1Authority {

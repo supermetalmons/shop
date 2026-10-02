@@ -4,7 +4,7 @@ import { calculateDeliveryLamports, canDeliverItemKind } from '../../../shared/s
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import { canAdminIrlRedeemSelection } from '../../lib/adminIrlRedeem';
 import { clearCardModelUrl } from '../../lib/clearCardModels';
-import { dropAssetCount } from '../../lib/dropLabels';
+import { dropAssetCount } from '../../../shared/dropLabels.ts';
 import { getInteractiveCardPackCardByFigureId } from '../../lib/interactiveCardPackReveal';
 import { toggleInventorySelection } from '../../lib/inventorySelection';
 import type { InventoryItem } from '../../types';

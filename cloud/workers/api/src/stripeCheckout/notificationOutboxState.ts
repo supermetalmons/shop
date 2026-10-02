@@ -1,5 +1,5 @@
 import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from '../notificationOutboxPublication.js';
-import { STRIPE_CHECKOUT_STATUS } from './contract.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import type { StripeCheckoutTerminalState } from './readModel.js';
 
 export type StripeTerminalNotificationOutcome = 'fulfilled' | 'manual_review';

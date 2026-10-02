@@ -4,11 +4,8 @@ import {
   hasAlphabeticClaimCodeCharacters,
   isStripeReceiptClaimCode,
   normalizeStripeReceiptClaimCode,
-} from '../src/lib/stripeReceiptClaims.ts';
-import {
-  normalizeStripeReceiptClaimCode as normalizeBackendStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
-} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+} from '../shared/stripeReceiptClaims.ts';
 
 test('Stripe receipt claim helpers normalize and detect canonical codes', () => {
   assert.equal(normalizeStripeReceiptClaimCode('  abcdef-0123456789  '), 'ABCDEF-0123456789');
@@ -22,10 +19,9 @@ test('claim code alphabetic detection separates invalid Stripe-like input from n
   assert.equal(hasAlphabeticClaimCodeCharacters('123-456 7890'), false);
 });
 
-test('frontend and backend Stripe receipt claim code contracts stay aligned', () => {
+test('Stripe receipt claim validation returns canonical codes and rejects malformed codes', () => {
   const validCodes = ['ABCDEF-0123456789', '  abcdef-0123456789  '];
   for (const code of validCodes) {
-    assert.equal(normalizeStripeReceiptClaimCode(code), normalizeBackendStripeReceiptClaimCode(code));
     assert.equal(isStripeReceiptClaimCode(code), true);
     assert.equal(requireStripeReceiptClaimCode(code), normalizeStripeReceiptClaimCode(code));
   }

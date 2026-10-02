@@ -5,7 +5,7 @@ import {
   LITTLE_SWAG_HOODIE_IMAGE_BASE_URL,
   PONCHO_DRIFELLA_CDN_BASE_URL,
 } from '../config/dropMediaDefaults.ts';
-import { CARD_NFT_2_ASSET_CDN_BASES } from './cardNft2Assets.ts';
+import { CARD_NFT_2_ASSET_CDN_BASES } from '../../shared/cardNft2Assets.ts';
 
 type LegacyAssetsMonsDisplayMediaMapping = {
   prefix: string;

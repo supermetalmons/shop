@@ -35,9 +35,6 @@ import {
 import {
   acquireCommerceAuthorityLease,
   executeRemoteCommerceD1File,
-  hasPackStatusOutboxSchema,
-  hasDeliveryRecoveryStateSchema,
-  hasStripeCheckoutStateSchema,
   queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
   readRemoteCommerceAuthority,
@@ -1034,18 +1031,12 @@ export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
     inventory: readRemoteCommerceInventory(dropId),
     notificationOutboxCount: safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
       FROM commerce_notification_outbox WHERE drop_id = ${sqlString(dropId)}`)[0]?.count, 'Notification outbox count'),
-    packStatusOutboxCount: hasPackStatusOutboxSchema(queryRemoteCommerceD1)
-      ? safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
-        FROM commerce_pack_status_outbox WHERE drop_id = ${sqlString(dropId)}`)[0]?.count, 'Pack-status outbox count')
-      : undefined,
-    stripeCheckoutStateCount: hasStripeCheckoutStateSchema(queryRemoteCommerceD1)
-      ? safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
-        FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}`)[0]?.count, 'Stripe checkout state count')
-      : undefined,
-    deliveryRecoveryRecords: hasDeliveryRecoveryStateSchema(queryRemoteCommerceD1)
-      ? queryRemoteCommerceD1(`SELECT * FROM commerce_delivery_recovery WHERE ${deliveryRecoveryDropPredicate(dropId)}
-          ORDER BY parent_path`).map(parseDeliveryRecoveryRow)
-      : undefined,
+    packStatusOutboxCount: safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
+        FROM commerce_pack_status_outbox WHERE drop_id = ${sqlString(dropId)}`)[0]?.count, 'Pack-status outbox count'),
+    stripeCheckoutStateCount: safeInteger(queryRemoteCommerceD1(`SELECT COUNT(*) AS count
+        FROM commerce_stripe_checkout_state WHERE ${stripeCheckoutDropPredicate(dropId)}`)[0]?.count, 'Stripe checkout state count'),
+    deliveryRecoveryRecords: queryRemoteCommerceD1(`SELECT * FROM commerce_delivery_recovery WHERE ${deliveryRecoveryDropPredicate(dropId)}
+          ORDER BY parent_path`).map(parseDeliveryRecoveryRow),
     targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
     claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
     assignmentDocuments: commerceDocuments(`document_kind = 'box_assignment'`),
@@ -1063,7 +1054,7 @@ function readRemoteCommerceInventory(dropId: string): CommerceD1InventorySnapsho
   if (rows.length !== 1) fail('Commerce D1 inventory state is invalid.');
   const row = rows[0];
   const mode = row.dude_inventory_mode;
-  if (mode !== 'legacy' && mode !== 'rows') fail('Commerce D1 inventory mode is invalid.');
+  if (mode !== 'rows') fail('Commerce D1 inventory requires initialized rows mode.');
   const availableCount = safeInteger(row.available_count, 'Commerce available inventory count');
   if (row.generation === null) {
     if (availableCount !== 0) fail('Commerce D1 inventory metadata is missing.');

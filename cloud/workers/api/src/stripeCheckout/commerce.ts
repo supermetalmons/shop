@@ -16,11 +16,11 @@ import {
 } from '../commerceRepositoryTypes.js';
 import { isRecord } from '../dataAccess.js';
 import { toMillisMaybe } from '../time.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import {
-  STRIPE_CHECKOUT_STATUS,
   validateStripeCheckoutDocumentData,
   type StripeCheckoutDocumentData,
-} from './contract.js';
+} from '../../../../../shared/stripeWebhook.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
 import { stripeCheckoutNotificationView, type StripeCheckoutNotificationView } from './readModel.js';
 import type { StripeWebhookTransition } from '../../../../../shared/stripeWebhook.js';

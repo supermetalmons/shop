@@ -18,12 +18,14 @@ import {
 import {
   buildStripeOffchainDeliveryOrderDocument,
   buildStripeOffchainOrderMarkerDocument,
-  requireStripeReceiptClaimCode,
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
-  STRIPE_CHECKOUT_STATUS,
-  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   type StripeOffchainDeliveryOrderDocumentInput,
 } from './contract.js';
+import {
+  requireStripeReceiptClaimCode,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+} from '../../../../../shared/stripeReceiptClaims.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import { StripeCheckoutProcessingAttemptOwnershipCheckError } from './errors.js';
 import { enqueueStripeTerminalNotifications } from './notificationOutboxState.js';
 

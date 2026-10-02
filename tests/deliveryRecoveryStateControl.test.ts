@@ -1,369 +1,331 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { parseDeliveryRecoveryStateControlArgs, runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
 import { parseCommerceD1DocumentRow, queryRemoteCommerceDocuments } from '../scripts/shared/commerceD1Maintenance.ts';
-import { parseDeliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
+import { parseDeliveryRecoveryRow, updateDeliveryRecoveryRecord } from '../shared/deliveryRecoveryState.ts';
+import {
+  D1CommerceRepository,
+  commerceKeys,
+  type CommerceDocumentData,
+  type CommerceJsonValue,
+} from '../cloud/workers/api/src/commerceRepository.ts';
+import {
+  createCommerceD1Harness,
+  seedCommerceDocument,
+  seedCommerceDocuments,
+  type CommerceDocumentSeed,
+} from '../cloud/workers/api/test/commerceD1Harness.ts';
+import { createCurrentCommerceDatabase } from './helpers/commerceDatabase.ts';
 
-const timestamp = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
+const ORDERS_SQL = "SELECT * FROM commerce_documents WHERE document_kind = 'delivery_order' ORDER BY document_path";
+const LEASE_ID = '00000000-0000-4000-8000-000000001099';
 
-function withLease(db: DatabaseSync, operation: () => void) {
-  db.exec(`INSERT INTO commerce_authority_control_lease VALUES
-    (1, '00000000-0000-4000-8000-000000001099', ${timestamp}, ${timestamp} + 60000)`);
-  try { operation(); } finally { db.exec('DELETE FROM commerce_authority_control_lease'); }
+function harness(context: { after: (cleanup: () => void) => void }) {
+  const result = createCommerceD1Harness();
+  context.after(() => result.database.close());
+  return result;
 }
 
-function database(context: { after: (cleanup: () => void) => void }, current = true) {
-  const db = new DatabaseSync(':memory:');
-  context.after(() => db.close());
-  db.exec('PRAGMA foreign_keys = ON');
-  const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
-  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '0033' && (current || name < '0030')).sort()) {
-    db.exec(readFileSync(new URL(name, directory), 'utf8'));
+function orderSeed(id: string, data: CommerceDocumentData = {}, dropId = 'drop', version = 1): CommerceDocumentSeed {
+  return {
+    key: commerceKeys.deliveryOrder(dropId, id),
+    data: { status: 'processing', updatedAt: 1000, ...data },
+    version,
+    createTime: '2026-09-01T00:00:00.000Z',
+    updateTime: `2026-09-01T00:00:0${version}.000Z`,
+  };
+}
+
+function query(database: DatabaseSync) {
+  return (sql: string) => database.prepare(sql).all().map((row) => ({ ...row }));
+}
+
+function responseBytes(rows: Record<string, unknown>[]): number {
+  return Buffer.byteLength(JSON.stringify([{ success: true, results: rows, meta: {} }], null, 2));
+}
+
+test('recovery state control accepts only read-only status and rejects retired commands before querying', async () => {
+  assert.deepEqual(parseDeliveryRecoveryStateControlArgs(['status']), { command: 'status' });
+  for (const argv of [
+    [], ['prepare'], ['activate'], ['status', '--write'], ['status', '--expected-revision', '1'],
+    ['prepare', '--write', '--expected-revision', '1'],
+    ['activate', '--write', '--expected-revision', '1', '--worker-deployed'],
+  ]) {
+    assert.throws(() => parseDeliveryRecoveryStateControlArgs(argv), /Status is read-only.*bootstrap:commerce/);
+    await assert.rejects(runDeliveryRecoveryStateControl(argv, {
+      query: () => assert.fail('Invalid commands must not query or mutate Commerce.'),
+    }), /Status is read-only/);
   }
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp};
-    UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
-      paused_at_ms = NULL, updated_at_ms = ${timestamp}`));
-  return db;
-}
-
-function pause(db: DatabaseSync) {
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET authority_state = 'paused',
-    revision = revision + 1, paused_at_ms = NULL, updated_at_ms = ${timestamp};
-    UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp}`));
-}
-
-function resume(db: DatabaseSync) {
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET authority_state = 'd1',
-    revision = revision + 1, paused_at_ms = NULL, updated_at_ms = ${timestamp}`));
-}
-
-function insert(db: DatabaseSync, id: string, data: Record<string, unknown> = {}) {
-  db.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
-  ) VALUES (?, 'delivery_order', 'drop', ?, ?, 1, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`)
-    .run(`drops/drop/deliveryOrders/${id}`, id, JSON.stringify({ status: 'processing', updatedAt: 1000, ...data }));
-  db.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1');
-}
-
-function query(db: DatabaseSync) { return (sql: string) => db.prepare(sql).all().map((row) => ({ ...row })); }
-function execute(db: DatabaseSync, command: string, overrides = {}) {
-  const revision = db.prepare('SELECT revision FROM commerce_authority_control').get()!.revision;
-  return runDeliveryRecoveryStateControl([command, ...(command === 'status' ? [] : ['--write', '--expected-revision', String(revision)]),
-    ...(command === 'activate' ? ['--worker-deployed'] : [])], { query: query(db), ...overrides });
-}
-
-test('recovery state control requires explicit mutation flags and compatible Worker publication', () => {
-  assert.throws(() => parseDeliveryRecoveryStateControlArgs(['prepare']), /requires --write/);
-  assert.throws(() => parseDeliveryRecoveryStateControlArgs(['status', '--write']), /read-only/);
-  assert.throws(() => parseDeliveryRecoveryStateControlArgs(['activate', '--write', '--expected-revision', '1']), /--worker-deployed/);
-  assert.throws(() => parseDeliveryRecoveryStateControlArgs(['prepare', '--write', '--expected-revision', '1', '--worker-deployed']), /only to activation/);
 });
 
-test('recovery preparation preserves every value, pending journals, legacy lease expiry, and parent versions', async (context) => {
-  const db = database(context);
-  const values = [undefined, null, false, 3, ['future'], { preparedProbeCount: '2.9', nextPreparedProbeAt: 1500,
-    lastAttemptAt: 1000, leaseExpiresAt: 5000, pendingTransactions: [{ serializedTransaction: 'signed', signature: 'sig' }], future: { keep: true } }];
-  for (let index = 0; index < values.length; index += 1) insert(db, String(index), values[index] === undefined ? {} : { receiptRecovery: values[index] });
-  const before = query(db)('SELECT * FROM commerce_documents ORDER BY document_path');
-  pause(db);
-  const revisions = query(db)('SELECT documents_revision FROM commerce_authority_control');
-  assert.equal((await execute(db, 'prepare')).deliveryCount, values.length);
-  const records = query(db)('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path').map(parseDeliveryRecoveryRow);
-  for (let index = 0; index < values.length; index += 1) {
-    assert.equal(records[index].receiptRecoveryJson, values[index] === undefined ? null : JSON.stringify(values[index]));
-    assert.equal(records[index].revision, 1);
-    assert.equal(records[index].leaseId, null);
-  }
-  assert.equal(records.at(-1)!.preparedDelayMs, 600000);
-  assert.equal(records.at(-1)!.leaseExpiresAtMs, 5000);
-  assert.deepEqual(query(db)('SELECT * FROM commerce_documents ORDER BY document_path'), before);
-  assert.deepEqual(query(db)('SELECT documents_revision FROM commerce_authority_control'), revisions);
-  assert.throws(() => resume(db), /cutover is incomplete/);
-  assert.equal((await execute(db, 'activate')).mode, 'table');
-  assert.throws(() => withLease(db, () => db.exec("UPDATE commerce_delivery_recovery_control SET storage_mode = 'legacy'")), /irreversible/);
-  resume(db);
-  const hydrated = queryRemoteCommerceDocuments('SELECT * FROM commerce_documents ORDER BY document_path', query(db));
-  assert.deepEqual(hydrated.map((document) => document.data.receiptRecovery), values);
-  assert.equal((await execute(db, 'status')).legacyMetadataCount, values.length - 1);
-});
-
-test('interrupted recovery preparation resumes without replacing imported generations and bounds source reads', async (context) => {
-  const db = database(context);
-  for (let index = 0; index < 30; index += 1) insert(db, String(100 + index));
-  pause(db);
-  const normal = query(db);
-  let imports = 0;
-  await assert.rejects(execute(db, 'prepare', { query: (sql: string) => {
-    const rows = normal(sql);
-    if (sql.startsWith('INSERT INTO commerce_delivery_recovery (') && ++imports === 1) throw new Error('lost acknowledgement');
-    return rows;
-  } }), /lost acknowledgement/);
-  const saved = normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
-  assert.equal((await execute(db, 'status')).preparation, 'preparing');
-  await assert.rejects(execute(db, 'activate'), /incomplete or stale/);
-  imports = 0;
-  await execute(db, 'prepare', { query: (sql: string) => {
-    if (sql.startsWith('INSERT INTO commerce_delivery_recovery (')) imports += 1;
-    if (sql.startsWith('SELECT document.document_path, document.document_kind')) assert.match(sql, /LIMIT 5$/);
-    assert.ok(Buffer.byteLength(sql) < 100000);
+test('uninitialized recovery status reports the bootstrap path without preparing storage', async (context) => {
+  const database = createCurrentCommerceDatabase(context);
+  const normal = query(database);
+  const before = normal('SELECT * FROM commerce_delivery_recovery_control');
+  const result = await runDeliveryRecoveryStateControl(['status'], { query: (sql) => {
+    assert.match(sql, /^SELECT\b/);
     return normal(sql);
   } });
-  assert.equal(imports, 5);
-  assert.equal(saved.length, 5);
-  assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path LIMIT 5'), saved);
-  assert.equal((await execute(db, 'activate')).deliveryCount, 30);
+  assert.equal(result.mode, 'legacy');
+  assert.equal(result.preparation, 'idle');
+  assert.equal(result.deliveryCount, 0);
+  assert.match(result.validationError!, /Storage is not initialized.*commerce_operations\.md/);
+  assert.deepEqual(result.groups, []);
+  assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery_control'), before);
+  assert.throws(() => queryRemoteCommerceDocuments(`${ORDERS_SQL} LIMIT 0`, normal), /requires active checkout and delivery recovery table storage/);
 });
 
-test('recovery imports copy large source payloads without expanding SQL statements', async (context) => {
-  const db = database(context);
-  const payloads = [...Array<string>(25).fill('x'.repeat(4000)), 'large-source-payload\'"\\🌍'.repeat(10_000)];
-  for (const [index, custom] of payloads.entries()) {
-    insert(db, String(1000 + index), { receiptRecovery: { custom, preparedProbeCount: '1' } });
-  }
-  const normal = query(db);
+test('status and hydration preserve absent, null, scalar, future and signed recovery payloads without writes', async (context) => {
+  const fixture = harness(context);
+  const values: Array<CommerceJsonValue | undefined> = [
+    undefined, null, false, 3, 'future-value', ['future'],
+    {
+      preparedProbeCount: '2.9', nextPreparedProbeAt: 1500, lastAttemptAt: 1000, leaseExpiresAt: 5000,
+      pendingTransactions: [{ serializedTransaction: 'signed-test-transaction', signature: 'test-signature' }],
+      future: { keep: true, text: '\\"🌍' },
+    },
+  ];
+  seedCommerceDocuments(fixture, values.map((value, index) => orderSeed(String(100 + index),
+    value === undefined ? {} : { receiptRecovery: value })));
+  const repository = new D1CommerceRepository(fixture.db);
+  const journalKey = commerceKeys.deliveryOrder('drop', '106');
+  await repository.run(2000, async (unit) => {
+    const snapshot = await unit.getRecoverySnapshot(journalKey);
+    assert.ok(snapshot);
+    unit.stageRecovery(updateDeliveryRecoveryRecord(snapshot.state, { leaseId: LEASE_ID }, 2000));
+  });
+  const normal = query(fixture.database);
   const parents = normal('SELECT * FROM commerce_documents ORDER BY document_path');
-  const expected = normal(`SELECT document_path AS parent_path, document_json -> '$.receiptRecovery' AS receipt_recovery_json
-    FROM commerce_documents ORDER BY document_path`);
-  assert.ok(Buffer.byteLength(String(expected.at(-1)!.receipt_recovery_json)) > 100_000);
-  pause(db);
-  const importedPageSizes: number[] = [];
-  const boundedQuery = (sql: string) => {
-    assert.ok(Buffer.byteLength(sql) < 100_000, 'Every statement must fit the D1 SQL size limit');
+  const savedRows = normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
+  const authority = normal('SELECT * FROM commerce_authority_control');
+  const changes = normal('SELECT total_changes() AS count')[0].count;
+  const readOnly = (sql: string) => {
+    assert.match(sql, /^SELECT\b/);
+    return normal(sql);
+  };
+  const result = await runDeliveryRecoveryStateControl(['status'], { query: readOnly });
+  const hydrated = queryRemoteCommerceDocuments(ORDERS_SQL, readOnly);
+  assert.equal(result.mode, 'table');
+  assert.equal(result.preparation, 'ready');
+  assert.equal(result.validationError, null);
+  assert.equal(result.deliveryCount, values.length);
+  assert.equal(result.legacyMetadataCount, 0);
+  assert.deepEqual(hydrated.map((document) => document.data.receiptRecovery), values);
+  assert.equal(Object.hasOwn(hydrated[0].data, 'receiptRecovery'), false);
+  assert.equal(Object.hasOwn(hydrated[1].data, 'receiptRecovery'), true);
+  const records = savedRows.map(parseDeliveryRecoveryRow);
+  records.forEach((record, index) => {
+    assert.equal(record.receiptRecoveryJson, values[index] === undefined ? null : JSON.stringify(values[index]));
+    assert.equal(record.revision, index === values.length - 1 ? 2 : 1);
+  });
+  assert.equal(records.at(-1)!.leaseId, LEASE_ID);
+  assert.equal(records.at(-1)!.leaseExpiresAtMs, 5000);
+  assert.equal(records.at(-1)!.preparedDelayMs, 600000);
+  assert.equal(records.at(-1)!.preparedExplicitAtMs, 1500);
+  assert.equal(records.at(-1)!.processingRetryAtMs, 31000);
+  assert.deepEqual(normal('SELECT * FROM commerce_documents ORDER BY document_path'), parents);
+  assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), savedRows);
+  assert.deepEqual(normal('SELECT * FROM commerce_authority_control'), authority);
+  assert.equal(normal('SELECT total_changes() AS count')[0].count, changes);
+  assert.ok(parents.every((row) => !Object.hasOwn(parseCommerceD1DocumentRow(row).data, 'receiptRecovery')));
+});
+
+test('recovery status reports current retry schedules and active versus expired leases', async (context) => {
+  const fixture = harness(context);
+  const now = Date.now();
+  seedCommerceDocuments(fixture, [
+    orderSeed('1', { receiptRecovery: { lastAttemptAt: 1000, leaseExpiresAt: now + 60000 } }),
+    orderSeed('2', { receiptRecovery: { lastAttemptAt: 2000, leaseExpiresAt: 1000 } }),
+    orderSeed('3', { status: 'prepared' }),
+  ]);
+  const result = await runDeliveryRecoveryStateControl(['status'], { query: query(fixture.database) });
+  assert.equal(result.validationError, null);
+  assert.deepEqual(result.groups, [
+    { status: 'prepared', count: 1, oldest_retry_at_ms: null, expired_leases: 0, active_leases: 0 },
+    { status: 'processing', count: 2, oldest_retry_at_ms: 31000, expired_leases: 1, active_leases: 1 },
+  ]);
+});
+
+for (const condition of ['missing', 'corrupt-projections', 'malformed-parent'] as const) {
+  test(`recovery status diagnoses ${condition} state without repairing it`, async (context) => {
+    const fixture = harness(context);
+    seedCommerceDocument(fixture, orderSeed('1', { receiptRecovery: { preparedProbeCount: 0 } }));
+    if (condition === 'missing') {
+      fixture.database.exec('DROP TRIGGER commerce_delivery_recovery_delete_guard; DELETE FROM commerce_delivery_recovery');
+    } else if (condition === 'corrupt-projections') {
+      fixture.database.exec('DROP TRIGGER commerce_delivery_recovery_update_guard; UPDATE commerce_delivery_recovery SET prepared_delay_ms = 120000');
+    } else {
+      const seed = orderSeed('1', {}, 'drop', 2);
+      seed.updateTime = 'broken';
+      seedCommerceDocument(fixture, seed);
+    }
+    const normal = query(fixture.database);
+    const changes = normal('SELECT total_changes() AS count')[0].count;
+    const result = await runDeliveryRecoveryStateControl(['status'], { query: normal });
+    const error = condition === 'missing' ? /state is missing/ : condition === 'corrupt-projections' ? /projections/ : /identity is inconsistent/;
+    assert.match(result.validationError!, error);
+    assert.throws(() => queryRemoteCommerceDocuments(ORDERS_SQL, normal), error);
+    assert.equal(normal('SELECT total_changes() AS count')[0].count, changes);
+  });
+}
+
+test('maintenance hydration follows current recovery state without restoring parent metadata', async (context) => {
+  const fixture = harness(context);
+  seedCommerceDocument(fixture, orderSeed('1', { receiptRecovery: { preparedProbeCount: 0, future: 'initial' } }));
+  const normal = query(fixture.database);
+  const parents = normal('SELECT * FROM commerce_documents');
+  const original = parseDeliveryRecoveryRow(normal('SELECT * FROM commerce_delivery_recovery')[0]);
+  const repository = new D1CommerceRepository(fixture.db);
+  await repository.run(3000, async (unit) => {
+    const snapshot = await unit.getRecoverySnapshot(commerceKeys.deliveryOrder('drop', '1'));
+    assert.ok(snapshot);
+    unit.stageRecovery(updateDeliveryRecoveryRecord(snapshot.state, {
+      receiptRecoveryJson: JSON.stringify({ preparedProbeCount: 3, future: 'current' }), leaseId: LEASE_ID,
+    }, 3000));
+  });
+  assert.deepEqual(queryRemoteCommerceDocuments(ORDERS_SQL, normal)[0].data.receiptRecovery, { preparedProbeCount: 3, future: 'current' });
+  assert.equal((await runDeliveryRecoveryStateControl(['status'], { query: normal })).validationError, null);
+  assert.deepEqual(normal('SELECT * FROM commerce_documents'), parents);
+  const current = parseDeliveryRecoveryRow(normal('SELECT * FROM commerce_delivery_recovery')[0]);
+  assert.equal(current.generation, original.generation);
+  assert.equal(current.revision, original.revision + 1);
+  assert.equal(current.leaseId, LEASE_ID);
+});
+
+for (const boundary of ['preflight', 'snapshot'] as const) {
+  test(`maintenance hydration keeps a coherent parent and recovery record across a concurrent ${boundary} update`, (context) => {
+    const fixture = harness(context);
+    seedCommerceDocument(fixture, orderSeed('1', { snapshotLabel: 'original', receiptRecovery: { preparedProbeCount: 0 } }));
+    const normal = query(fixture.database);
+    let calls = 0;
+    const hydrated = queryRemoteCommerceDocuments(`${ORDERS_SQL} LIMIT 1;`, (sql) => {
+      const rows = normal(sql);
+      calls += 1;
+      if (calls === (boundary === 'preflight' ? 1 : 2)) {
+        seedCommerceDocument(fixture, orderSeed('1', { snapshotLabel: 'updated', receiptRecovery: { preparedProbeCount: 1 } }, 'drop', 2));
+      }
+      return rows;
+    });
+    assert.equal(calls, 2);
+    assert.equal(hydrated.length, 1);
+    const updated = boundary === 'preflight';
+    assert.equal(hydrated[0].version, updated ? 2 : 1);
+    assert.equal(hydrated[0].data.snapshotLabel, updated ? 'updated' : 'original');
+    assert.deepEqual(hydrated[0].data.receiptRecovery, { preparedProbeCount: updated ? 1 : 0 });
+    assert.equal(normal('SELECT version FROM commerce_documents')[0].version, 2);
+    assert.equal(parseDeliveryRecoveryRow(normal('SELECT * FROM commerce_delivery_recovery')[0]).revision, 2);
+  });
+}
+
+test('maintenance snapshots preserve filtering, ordering and limits while hydrating each selected order', (context) => {
+  const fixture = harness(context);
+  seedCommerceDocuments(fixture, [
+    orderSeed('1', { receiptRecovery: { marker: 1 } }),
+    orderSeed('2', { receiptRecovery: { marker: 2 } }),
+    orderSeed('3', { receiptRecovery: { marker: 3 } }),
+    orderSeed('9', { receiptRecovery: { marker: 9 } }, 'other'),
+  ]);
+  const rows = queryRemoteCommerceDocuments(`SELECT * FROM commerce_documents
+    WHERE document_kind = 'delivery_order' AND drop_id = 'drop' AND document_id > '1'
+    ORDER BY document_path DESC LIMIT 1;`, query(fixture.database));
+  assert.deepEqual(rows.map((row) => [row.path, row.data.receiptRecovery]), [
+    ['drops/drop/deliveryOrders/3', { marker: 3 }],
+  ]);
+});
+
+test('maintenance reads reject inactive or missing state tables even for empty delivery results', (context) => {
+  for (const options of [{ deliveryRecoveryMode: 'legacy' }, { stripeCheckoutStateMode: 'legacy' }] as const) {
+    const fixture = createCommerceD1Harness(options);
+    context.after(() => fixture.database.close());
+    assert.throws(() => queryRemoteCommerceDocuments(`${ORDERS_SQL} LIMIT 0`, query(fixture.database)), /requires active checkout and delivery recovery table storage/);
+  }
+  for (const table of ['commerce_delivery_recovery_control', 'commerce_delivery_recovery', 'commerce_stripe_checkout_state']) {
+    const fixture = harness(context);
+    fixture.database.exec(`DROP TABLE ${table}`);
+    assert.throws(() => queryRemoteCommerceDocuments(`${ORDERS_SQL} LIMIT 0`, query(fixture.database)), /no such table/);
+  }
+});
+
+test('recovery status reads 548 orders in bounded pages without per-order queries or writes', async (context) => {
+  const fixture = harness(context);
+  const orderCount = 548;
+  seedCommerceDocuments(fixture, Array.from({ length: orderCount }, (_, index) => orderSeed(String(1000 + index))));
+  const normal = query(fixture.database);
+  const saved = normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
+  const pageSizes: number[] = [];
+  const paths: string[] = [];
+  let calls = 0;
+  const result = await runDeliveryRecoveryStateControl(['status'], { query: (sql) => {
+    calls += 1;
+    assert.match(sql, /^SELECT\b/);
+    assert.ok(Buffer.byteLength(sql) < 100000);
     const rows = normal(sql);
-    if (sql.startsWith('INSERT INTO commerce_delivery_recovery (')) {
-      assert.doesNotMatch(sql, /large-source-payload|x{100}/);
-      importedPageSizes.push(rows.length);
+    if (rows.length && Object.hasOwn(rows[0], 'document_json')) {
+      assert.ok(rows.length <= 5, 'Status must not return an unbounded page of recovery journals.');
+      pageSizes.push(rows.length);
+      paths.push(...rows.map((row) => String(row.document_path)));
     }
     return rows;
-  };
-  assert.equal((await execute(db, 'prepare', { query: boundedQuery })).preparation, 'ready');
-  assert.deepEqual(importedPageSizes, [5, 5, 5, 5, 5, 1]);
-  assert.deepEqual(normal('SELECT parent_path, receipt_recovery_json FROM commerce_delivery_recovery ORDER BY parent_path'), expected);
-  assert.deepEqual(normal('SELECT * FROM commerce_documents ORDER BY document_path'), parents);
-  assert.equal((await execute(db, 'activate', { query: boundedQuery })).mode, 'table');
+  } });
+  assert.equal(result.deliveryCount, orderCount);
+  assert.equal(result.validationError, null);
+  assert.deepEqual(pageSizes, [...Array(109).fill(5), 3]);
+  assert.equal(new Set(paths).size, orderCount);
+  assert.deepEqual(paths, saved.map((row) => String(row.parent_path)));
+  assert.ok(calls <= Math.ceil(orderCount / 5) + 4, `Status made ${calls} queries for ${orderCount} orders.`);
+  assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), saved);
 });
 
-test('large recovery pages stay below the runner output limit throughout the cutover', async (context) => {
-  const db = database(context);
-  const payload = { custom: '\\'.repeat(900_000) };
-  for (let index = 0; index < 11; index += 1) {
-    insert(db, String(1000 + index), { retained: '\\'.repeat(75_000), receiptRecovery: payload });
-  }
-  pause(db);
-  const normal = query(db);
-  let sawImportedPage = false;
-  const boundedQuery = (sql: string) => {
+test('large recovery status pages remain below the runner output limit without duplicate parent journals', async (context) => {
+  const fixture = harness(context);
+  const receiptRecovery = { custom: '\\'.repeat(900_000), preparedProbeCount: 1 };
+  seedCommerceDocuments(fixture, Array.from({ length: 11 }, (_, index) =>
+    orderSeed(String(1000 + index), { retained: '\\'.repeat(75_000), receiptRecovery })));
+  const normal = query(fixture.database);
+  let inspected = 0;
+  const result = await runDeliveryRecoveryStateControl(['status'], { query: (sql) => {
     const rows = normal(sql);
-    const responseBytes = Buffer.byteLength(JSON.stringify([{ success: true, results: rows, meta: {} }], null, 2));
-    assert.ok(responseBytes < 64 * 1024 * 1024, `Query output is ${responseBytes} bytes`);
-    if (sql.startsWith('SELECT document.document_path, document.document_kind')) {
+    assert.ok(responseBytes(rows) < 64 * 1024 * 1024, 'Each status response must fit the runner output limit.');
+    if (rows.length && Object.hasOwn(rows[0], 'document_json')) {
       assert.ok(rows.length <= 5);
       for (const row of rows) {
         assert.equal(Object.hasOwn(JSON.parse(String(row.document_json)), 'receiptRecovery'), false);
-        if (row.parent_path === null) continue;
-        sawImportedPage = true;
-        assert.equal(row.receipt_recovery_json, row.legacy_receipt_recovery_json);
+        assert.deepEqual(JSON.parse(String(row.receipt_recovery_json)), receiptRecovery);
+        inspected += 1;
       }
     }
     return rows;
-  };
-  assert.equal((await execute(db, 'prepare', { query: boundedQuery })).preparation, 'ready');
-  assert.equal(sawImportedPage, true);
-  assert.equal((await execute(db, 'status', { query: boundedQuery })).validationError, null);
-  assert.equal((await execute(db, 'prepare', { query: boundedQuery })).deliveryCount, 11);
-  assert.equal((await execute(db, 'activate', { query: boundedQuery })).mode, 'table');
-  assert.equal((await execute(db, 'status', { query: boundedQuery })).validationError, null);
-  resume(db);
+  } });
+  assert.equal(result.deliveryCount, 11);
+  assert.equal(result.validationError, null);
+  assert.equal(inspected, 11);
 });
 
-test('recovery preparation rejects malformed parent metadata before writing state', async (context) => {
-  const db = database(context);
-  insert(db, 'bad');
-  db.exec("UPDATE commerce_documents SET update_time = 'broken', version = version + 1");
-  pause(db);
-  await assert.rejects(execute(db, 'prepare'), /identity is inconsistent/);
-  assert.match((await execute(db, 'status')).validationError!, /identity is inconsistent/);
-  assert.equal(query(db)('SELECT preparation_state FROM commerce_delivery_recovery_control')[0].preparation_state, 'idle');
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_delivery_recovery')[0].count, 0);
-});
-
-test('recovery activation rejects stale preparation and reconciles a lost acknowledgement', async (context) => {
-  const db = database(context);
-  insert(db, '1');
-  pause(db);
-  await execute(db, 'prepare');
-  db.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1');
-  await assert.rejects(execute(db, 'activate'), /incomplete or stale/);
-  assert.match((await execute(db, 'status')).validationError!, /stale/);
-  await execute(db, 'prepare');
-  const normal = query(db);
-  assert.equal((await execute(db, 'activate', { query: (sql: string) => {
-    const rows = normal(sql);
-    if (sql.startsWith("UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'")) throw new Error('lost acknowledgement');
-    return rows;
-  } })).mode, 'table');
-});
-
-test('active maintenance hydration uses recovery rows and prepare never restores frozen JSON', async (context) => {
-  const db = database(context);
-  insert(db, '1', { receiptRecovery: { preparedProbeCount: 0, future: 'frozen' } });
-  pause(db);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-  const normal = query(db);
-  db.exec(`DROP TRIGGER commerce_delivery_recovery_update_guard;
-    UPDATE commerce_delivery_recovery SET receipt_recovery_json = '{"preparedProbeCount":3}', prepared_delay_ms = NULL,
-      revision = revision + 1, updated_at_ms = updated_at_ms + 1`);
-  assert.deepEqual(queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal)[0].data.receiptRecovery, { preparedProbeCount: 3 });
-  await execute(db, 'prepare');
-  assert.deepEqual(queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal)[0].data.receiptRecovery, { preparedProbeCount: 3 });
-  const parent = parseCommerceD1DocumentRow(normal('SELECT * FROM commerce_documents')[0]);
-  assert.deepEqual(parent.data.receiptRecovery, { preparedProbeCount: 0, future: 'frozen' });
-  db.exec('UPDATE commerce_delivery_recovery SET prepared_delay_ms = 30000');
-  assert.throws(() => queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', normal), /projections/);
-  await assert.rejects(execute(db, 'prepare'), /projections/);
-});
-
-test('maintenance hydration avoids duplicate large payloads before and after activation', async (context) => {
-  const db = database(context);
-  const receiptRecovery = { preparedProbeCount: 1, future: '\"\\'.repeat(275_000) };
-  for (let index = 0; index < 16; index += 1) insert(db, String(1000 + index), { receiptRecovery });
-  const normal = query(db);
-  const sourceJson = normal("SELECT document_json -> '$.receiptRecovery' AS recovery FROM commerce_documents LIMIT 1")[0].recovery;
-  assert.equal(typeof sourceJson, 'string');
-  assert.ok(Buffer.byteLength(String(sourceJson)) > 1_100_000);
-  let active = false;
+test('maintenance hydration returns large journals once without duplicating them in metadata or state JSON', (context) => {
+  const fixture = harness(context);
+  const receiptRecovery = { preparedProbeCount: 1, future: '"\\'.repeat(275_000) };
+  seedCommerceDocuments(fixture, Array.from({ length: 16 }, (_, index) => orderSeed(String(1000 + index), { receiptRecovery })));
+  const normal = query(fixture.database);
+  const payloadJson = JSON.stringify(receiptRecovery);
+  assert.ok(Buffer.byteLength(payloadJson) > 1_100_000);
   let snapshots = 0;
-  const boundedQuery = (sql: string) => {
+  const hydrated = queryRemoteCommerceDocuments(ORDERS_SQL, (sql) => {
     const rows = normal(sql);
-    assert.ok(Buffer.byteLength(JSON.stringify([{ success: true, results: rows, meta: {} }], null, 2)) < 64 * 1024 * 1024);
-    if (sql.startsWith('SELECT snapshot.document_path,')) {
+    assert.ok(responseBytes(rows) < 64 * 1024 * 1024, 'Hydrated query output must fit the runner output limit.');
+    if (rows.length && Object.hasOwn(rows[0], 'recovery_payload_json')) {
       snapshots += 1;
       assert.equal(rows.length, 16);
       for (const row of rows) {
-        assert.equal(Object.hasOwn(JSON.parse(String(row.document_json)), 'receiptRecovery'), !active);
-        assert.equal(row.recovery_payload_json, active ? sourceJson : null);
-        if (active) {
-          assert.ok(Buffer.byteLength(String(row.recovery_state_json)) < 1024);
-          assert.equal(Object.hasOwn(JSON.parse(String(row.recovery_state_json)), 'receipt_recovery_json'), false);
-        }
+        assert.equal(Object.hasOwn(JSON.parse(String(row.document_json)), 'receiptRecovery'), false);
+        assert.equal(row.recovery_payload_json, payloadJson);
+        assert.equal(Object.hasOwn(JSON.parse(String(row.recovery_state_json)), 'receipt_recovery_json'), false);
+        assert.ok(Buffer.byteLength(String(row.recovery_state_json)) < 1024);
       }
     }
     return rows;
-  };
-  const sql = 'SELECT * FROM commerce_documents ORDER BY document_path';
-  const legacy = queryRemoteCommerceDocuments(sql, boundedQuery);
-  pause(db);
-  await execute(db, 'prepare');
-  assert.deepEqual(queryRemoteCommerceDocuments(sql, boundedQuery), legacy);
-  await execute(db, 'activate');
-  active = true;
-  const hydrated = queryRemoteCommerceDocuments(sql, boundedQuery);
-  assert.equal(snapshots, 3);
-  assert.deepEqual(hydrated, legacy);
-  assert.deepEqual(hydrated[0].data.receiptRecovery, receiptRecovery);
-  assert.equal(normal("SELECT COUNT(*) AS count FROM commerce_documents WHERE json_type(document_json, '$.receiptRecovery') IS NOT NULL")[0].count, 16);
-});
-
-test('maintenance reads support pre-cutover delivery schemas and reject incomplete new schemas', (context) => {
-  const previous = database(context, false);
-  insert(previous, '1', { receiptRecovery: { leaseExpiresAt: 1000 } });
-  assert.deepEqual(queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', query(previous))[0].data.receiptRecovery, { leaseExpiresAt: 1000 });
-  const current = database(context);
-  insert(current, '1');
-  current.exec('DROP TABLE commerce_delivery_recovery_control');
-  assert.throws(() => queryRemoteCommerceDocuments('SELECT * FROM commerce_documents', query(current)), /schema is incomplete/);
-});
-
-test('recovery control refuses an undrained pause, stale authority, unfinished wipe, and overlapping maintenance', async (context) => {
-  const db = database(context);
-  await assert.rejects(execute(db, 'prepare'), /pause\/drain/);
-  pause(db);
-  await assert.rejects(runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', '1'], { query: query(db) }), /expected authority revision/);
-  const normal = query(db);
-  await assert.rejects(execute(db, 'prepare', { query: (sql: string) => sql.startsWith('SELECT guard_id') ? [{ guard_id: 'unfinished' }] : normal(sql) }), /wipe is unfinished/);
-  db.exec(`INSERT INTO commerce_authority_control_lease VALUES
-    (1, '00000000-0000-4000-8000-000000001099', ${timestamp}, ${timestamp} + 60000)`);
-  await assert.rejects(execute(db, 'prepare'), /already running/);
-});
-
-test('maintenance reads hydrate parent and recovery from one current snapshot after a concurrent update', async (context) => {
-  const db = database(context);
-  insert(db, '1', { receiptRecovery: { preparedProbeCount: 0 }, snapshotLabel: 'original' });
-  pause(db);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-  resume(db);
-  const normal = query(db);
-  const record = parseDeliveryRecoveryRow(normal('SELECT * FROM commerce_delivery_recovery')[0]);
-  const sql = "SELECT * FROM commerce_documents WHERE document_id = '1' ORDER BY document_path LIMIT 1;";
-  const hydrated = queryRemoteCommerceDocuments(sql, (statement) => {
-    const rows = normal(statement);
-    if (statement === sql) {
-      db.prepare(`INSERT INTO commerce_commit_guards
-        (guard_id, expectations_json, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
-        VALUES ('recovery-update', ?, 2000, ?, ?)`).run(JSON.stringify([{ path: record.parentPath, version: 1 }]),
-        JSON.stringify([record.parentPath]), JSON.stringify([{ parentPath: record.parentPath, generation: record.generation, revision: 1 }]));
-      db.exec(`UPDATE commerce_documents SET document_json = json_set(document_json, '$.snapshotLabel', 'updated'),
-        version = 2, update_time = '2026-09-01T00:00:01.000Z';
-        UPDATE commerce_delivery_recovery SET receipt_recovery_json = '{"preparedProbeCount":1}', prepared_delay_ms = 120000,
-          revision = 2, updated_at_ms = updated_at_ms + 1;
-        UPDATE commerce_authority_control SET documents_revision = documents_revision + 1;
-        DELETE FROM commerce_commit_guards WHERE guard_id = 'recovery-update'`);
-    }
-    return rows;
   });
-  assert.equal(hydrated.length, 1);
-  assert.equal(hydrated[0].version, 2);
-  assert.equal(hydrated[0].data.snapshotLabel, 'updated');
-  assert.deepEqual(hydrated[0].data.receiptRecovery, { preparedProbeCount: 1 });
-});
-
-test('recovery preparation, status, and activation use page-bounded remote calls for hundreds of orders', async (context) => {
-  const db = database(context);
-  const orderCount = 548;
-  const pageCount = Math.ceil(orderCount / 5);
-  for (let index = 0; index < orderCount; index += 1) insert(db, String(1000 + index));
-  pause(db);
-  const normal = query(db);
-  let calls = 0;
-  let imports = 0;
-  const importedPageSizes: number[] = [];
-  const observed = (sql: string) => {
-    calls += 1;
-    assert.doesNotMatch(sql, /^SELECT \* FROM commerce_delivery_recovery WHERE parent_path/);
-    if (sql.startsWith('SELECT document.document_path, document.document_kind')) {
-      assert.match(sql, /LEFT JOIN commerce_delivery_recovery/);
-      assert.match(sql, /LIMIT 5$/);
-    }
-    const rows = normal(sql);
-    if (sql.startsWith('INSERT INTO commerce_delivery_recovery (')) {
-      imports += 1;
-      importedPageSizes.push(rows.length);
-      assert.match(sql, /UNION ALL/);
-    }
-    assert.ok(Buffer.byteLength(sql) < 100000);
-    return rows;
-  };
-  assert.equal((await execute(db, 'prepare', { query: observed })).deliveryCount, orderCount);
-  assert.equal(imports, pageCount);
-  assert.deepEqual(importedPageSizes, [...Array(pageCount - 1).fill(5), 3]);
-  assert.ok(calls <= pageCount * 4 + 20, `prepare made ${calls} queries for ${pageCount} pages`);
-  const saved = normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
-  calls = 0;
-  imports = 0;
-  assert.equal((await execute(db, 'status', { query: observed })).validationError, null);
-  assert.ok(calls <= pageCount + 4, `status made ${calls} queries for ${pageCount} pages`);
-  assert.equal(imports, 0);
-  calls = 0;
-  await execute(db, 'prepare', { query: observed });
-  assert.equal(imports, 0);
-  assert.deepEqual(normal('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), saved);
-  assert.ok(calls <= pageCount * 3 + 20, `repeated prepare made ${calls} queries for ${pageCount} pages`);
-  calls = 0;
-  assert.equal((await execute(db, 'activate', { query: observed })).mode, 'table');
-  assert.ok(calls <= pageCount + 15, `activate made ${calls} queries for ${pageCount} pages`);
-  assert.equal(imports, 0);
+  assert.equal(snapshots, 1);
+  assert.equal(hydrated.length, 16);
+  hydrated.forEach((document) => assert.deepEqual(document.data.receiptRecovery, receiptRecovery));
 });

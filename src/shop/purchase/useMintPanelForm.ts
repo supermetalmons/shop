@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { MintStats } from '../../types';
 import type { MintSelectionConfig } from '../../config/deployment';
 import { deriveMintSelectionAvailabilityFromConfig } from '../../lib/boxMinter';
-import { dropAssetCount } from '../../lib/dropLabels';
+import { dropAssetCount } from '../../../shared/dropLabels.ts';
 
 export interface MintPanelFormOptions {
   stats?: MintStats;

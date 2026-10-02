@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { D1CommerceRepository, commerceKeys } from '../cloud/workers/api/src/commerceRepository.ts';
 import { d1Database } from '../cloud/workers/api/test/commerceD1Harness.ts';
-import { runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
+import { activateRecoveryFixture } from './helpers/deliveryRecoveryFixture.ts';
 import { queryRemoteCommerceDocuments } from '../scripts/shared/commerceD1Maintenance.ts';
 import { readCommerceMigrations, replayCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
 import { updateDeliveryRecoveryRecord } from '../shared/deliveryRecoveryState.ts';
@@ -65,12 +65,6 @@ function seed(database: DatabaseSync, id: string, recoveryJson: string | null): 
   database.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1');
 }
 
-async function activateRecovery(database: DatabaseSync): Promise<void> {
-  const revision = String(database.prepare('SELECT revision FROM commerce_authority_control').get()!.revision);
-  const dependencies = { query: query(database) };
-  await runDeliveryRecoveryStateControl(['prepare', '--expected-revision', revision, '--write'], dependencies);
-  await runDeliveryRecoveryStateControl(['activate', '--expected-revision', revision, '--write', '--worker-deployed'], dependencies);
-}
 
 async function populatedDatabase(context: test.TestContext): Promise<DatabaseSync> {
   const db = database(context);
@@ -80,7 +74,11 @@ async function populatedDatabase(context: test.TestContext): Promise<DatabaseSyn
     JSON.stringify({ future: '\\"'.repeat(100_000) })];
   payloads.forEach((payload, index) => seed(db, String(index + 1), payload));
   pause(db);
-  await activateRecovery(db);
+  activateRecoveryFixture(db);
+  withLease(db, () => db.exec(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing',
+    source_documents_revision = (SELECT documents_revision FROM commerce_authority_control);
+    UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = ${sqlNow};
+    UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table'`));
   return db;
 }
 
@@ -190,7 +188,7 @@ test('fresh migration replay keeps bootstrap controls and supports native initia
   resume(db);
   assert.throws(() => seed(db, '1', '{}'), /legacy delivery recovery writes are disabled/);
   pause(db);
-  await activateRecovery(db);
+  activateRecoveryFixture(db);
   resume(db);
   const repository = new D1CommerceRepository(d1Database(db));
   const key = commerceKeys.deliveryOrder('drop', '1');

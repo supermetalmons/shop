@@ -1,6 +1,6 @@
 import type { FrontendDeploymentConfig } from '../config/deployment';
 import type { BoxMinterConfigAccount, buildMintBoxesTxWithAccounts } from '../lib/boxMinter';
-import { dropAssetCount, dropAssetLabel } from '../lib/dropLabels';
+import { dropAssetCount, dropAssetLabel } from '../../shared/dropLabels.ts';
 import { isBlockhashExpiredError } from '../lib/solana';
 
 export type MintMode = 'mint' | 'discount';

@@ -6,6 +6,21 @@ import Stripe from 'stripe';
 import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
+  buildStripeOffchainDeliveryOrderDocument,
+  buildStripeOffchainOrderMarkerDocument,
+  buildStripeOffchainAddressSnapshot,
+  decodeAdminDeliveryOrderRecord,
+  deriveAdminOrderPda,
+  encodeAdminDeliverVariantOrderArgs,
+  shouldProcessStripeCheckoutFulfillmentWrite,
+  stripeCheckoutSessionOrderHash,
+  stripeFulfillmentAddressFromSession,
+  validateStripeCheckoutContract,
+  validateStripeTestCheckoutContract,
+  type StripeOffchainDeliveryOrderDocumentInput,
+  STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
+} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+import {
   STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
@@ -15,53 +30,51 @@ import {
   STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
   STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   buildStripeCheckoutDocument,
   buildStripeCheckoutSessionMetadata,
-  buildStripeOffchainDeliveryOrderDocument,
-  buildStripeOffchainOrderMarkerDocument,
-  buildStripeOffchainAddressSnapshot,
-  decodeAdminDeliveryOrderRecord,
-  deriveAdminOrderPda,
-  encodeAdminDeliverVariantOrderArgs,
-  generateStripeReceiptClaimCode,
-  isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
+  resolveMintSelectionVariantIndex,
+  stripeCheckoutAnonymousOwnerId,
+  createStripeCheckoutSessionCore,
+  createStripeCheckoutIdentity,
+  normalizeStripeCheckoutReturnUrl,
+  stripeCheckoutProductName,
+  stripeCheckoutProductTaxCodeForDrop,
+  stripeCheckoutShippingCountriesForDropFamily,
+  stripeCheckoutUnitAmountCentsForDrop,
+} from '../shared/stripeCheckoutSession.ts';
+import {
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
+  generateStripeReceiptClaimCode,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
-  resolveMintSelectionVariantIndex,
-  shouldProcessStripeCheckoutFulfillmentWrite,
-  stripeCheckoutAnonymousOwnerId,
-  stripeCheckoutSessionOrderHash,
-  stripeFulfillmentAddressFromSession,
-  validateStripeCheckoutContract,
-  validateStripeCheckoutDocumentData,
-  validateStripeTestCheckoutContract,
-  type StripeOffchainDeliveryOrderDocumentInput,
-} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
-import {
   orderStripeReceiptClaimByBoxId,
   stripeAssignedIrlClaimForBox,
 } from '../shared/stripeReceiptClaims.ts';
 import {
-  STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
+  isStripeOffchainFulfillmentSession,
+  validateStripeCheckoutDocumentData,
+} from '../shared/stripeWebhook.ts';
+import {
   StripeCheckoutPackStatusProjectionError,
   buildStripeCheckoutManualReviewSummary,
   createOrGetStripeOffchainDeliveryOrder,
   isRetryableStripeCheckoutFulfillmentError,
-  markStripeCheckoutFulfillmentFailed,
-  markStripeCheckoutFulfillmentFulfilled,
   processStripeCheckoutFulfillmentDocument,
-  releaseStripeCheckoutFulfillmentForRetry,
   runStripeCheckoutFulfillmentWithRetry,
   isStripeCheckoutManualReviewCandidate,
-  startStripeCheckoutFulfillmentDocument,
   stripeApiModeForCluster,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
   stripeCheckoutKindForDrop,
   stripeTestApiKey,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
+import {
+  markStripeCheckoutFulfillmentFailed,
+  markStripeCheckoutFulfillmentFulfilled,
+  releaseStripeCheckoutFulfillmentForRetry,
+  startStripeCheckoutFulfillmentDocument,
+} from '../cloud/workers/api/src/stripeCheckout/store.ts';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -77,15 +90,6 @@ import {
 import type { StripeCheckoutCommerceContext } from '../cloud/workers/api/src/stripeCheckout/commerce.ts';
 import { StripeCheckoutFulfillmentError } from '../cloud/workers/api/src/stripeCheckout/errors.ts';
 import { stripeClientForKey } from '../cloud/workers/api/src/stripeCheckout/provider.ts';
-import {
-  createStripeCheckoutSessionCore,
-  createStripeCheckoutIdentity,
-  normalizeStripeCheckoutReturnUrl,
-  stripeCheckoutProductName,
-  stripeCheckoutProductTaxCodeForDrop,
-  stripeCheckoutShippingCountriesForDropFamily,
-  stripeCheckoutUnitAmountCentsForDrop,
-} from '../shared/stripeCheckoutSession.ts';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../cloud/workers/api/src/claimCodes.ts';
 import {
   IX_BUBBLEGUM_MINT_V2,

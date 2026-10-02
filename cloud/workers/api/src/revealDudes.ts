@@ -70,14 +70,6 @@ import {
   enqueueRevealBackgroundJob,
 } from './revealDudesBackground.js';
 
-export { RevealDudesError } from './revealDudesDomain.js';
-export {
-  isRevealBackgroundJob,
-  processRevealBackgroundJobMessage,
-  revealBackgroundJobRetryDelaySeconds,
-  type RevealBackgroundJob,
-} from './revealDudesBackground.js';
-
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
 
 const REQUEST_MAX_BYTES = 4096;

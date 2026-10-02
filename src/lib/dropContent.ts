@@ -20,10 +20,10 @@ import {
   type DropRevealRenderer,
   type DropRevealSoundProfile,
 } from '../config/dropsExtraContent.ts';
-import { cardNft2AssetUrl } from './cardNft2Assets.ts';
+import { cardNft2AssetUrl } from '../../shared/cardNft2Assets.ts';
 import { getMediaIdForFigureId } from './figureMediaMap.ts';
 import { isKnownCdnUrl, rewriteLegacyDisplayMediaUrl } from './legacyDisplayMediaPaths.ts';
-import { getMediaIdForTokenId } from './mediaMap.ts';
+import { getMediaIdForTokenId } from '../../shared/mediaMap.ts';
 
 export type ResolvedDropContent = {
   box: {

@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from
 import { type DropFamily } from '../config/deployment';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
-import { dropAssetLabel } from '../lib/dropLabels';
+import { dropAssetLabel } from '../../shared/dropLabels.ts';
 import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
 import {
   isDirectDeliveryItemsPerBox,

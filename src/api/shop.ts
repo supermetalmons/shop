@@ -4,7 +4,7 @@ import {
   normalizeDropId,
   type FrontendDeploymentConfig,
 } from '../config/deployment';
-import { dropAssetLabel } from '../lib/dropLabels';
+import { dropAssetLabel } from '../../shared/dropLabels.ts';
 import { fetchPackStatus } from '../lib/shopApi';
 import {
   isPackStatusSupportedDropId,

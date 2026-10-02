@@ -4,7 +4,7 @@ import test from 'node:test';
 import { updateDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys, type CommerceDocumentWriteData } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
-import { runDeliveryRecoveryStateControl } from '../../../../scripts/ops/deliveryRecoveryStateControl.ts';
+import { activateRecoveryFixture } from '../../../../tests/helpers/deliveryRecoveryFixture.ts';
 
 const key = commerceKeys.deliveryOrder('card_nft_2', '7');
 const leaseId = '00000000-0000-4000-8000-000000000030';
@@ -192,9 +192,7 @@ test('metadata updates preserve authoritative recovery JSON after frozen metadat
       paused_at_ms = NULL, updated_at_ms = ${now};
     UPDATE commerce_authority_control SET paused_at_ms = ${now}, updated_at_ms = ${now};
     DELETE FROM commerce_authority_control_lease`);
-  const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
-  await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
-  await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+  activateRecoveryFixture(database);
   const recoveryBefore = query('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
   database.exec('BEGIN');
   try {

@@ -1,7 +1,7 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import WipInteractiveCard from '../components/WipInteractiveCard';
-import { CARD_NFT_2_MAX_CARD_ID, normalizeCardNft2CardId } from '../lib/cardNft2Assets';
+import { CARD_NFT_2_MAX_CARD_ID, normalizeCardNft2CardId } from '../../shared/cardNft2Assets.ts';
 import { getInteractiveCardPackCardByFigureId } from '../lib/interactiveCardPackReveal';
 import { drifCardIdentityKey, getDrifCardAssetSources, type DrifCardConfig } from '../drifCards';
 import { recordCard, type RecordProgress } from './recordCard';

@@ -18,14 +18,13 @@ import {
   type PackStatusDropRuntime,
 } from '../shared/packStatus.ts';
 import {
-  hasPackStatusOutboxSchema,
   queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
   sqlString,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
 import { parsePackStatusOutboxRow, type PackStatusOutboxRecord } from '../../shared/packStatusOutbox.ts';
-import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusOutboxMaintenance.ts';
+import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusProjectionFields.ts';
 import {
   readD1Integrity,
   writeD1RebuiltSummaries,
@@ -130,32 +129,19 @@ function packStatusContainerPlural(dropId: string): string {
   return dropId === 'little_swag_boxes' ? 'boxes' : 'packs';
 }
 
-export function requireSettledPackStatusProjectionOutboxes(
-  deliveryOrders: readonly PackStatusDeliveryOrderRecord[],
-  outboxes?: readonly PackStatusOutboxRecord[],
-): void {
-  if (outboxes !== undefined) {
-    if (outboxes.some((outbox) => outbox.state !== 'completed' && outbox.state !== 'cancelled')) {
-      fail('Pack-status rebuild requires every durable delivery projection outbox to be settled.');
-    }
-    return;
-  }
-  for (const order of deliveryOrders) {
-    const state = (order as Record<string, unknown>)?.packStatusProjectionState;
-    if (state !== undefined && state !== 'completed') {
-      fail('Pack-status rebuild requires every durable delivery projection outbox to be settled.');
-    }
+export function requireSettledPackStatusProjectionOutboxes(outboxes: readonly PackStatusOutboxRecord[]): void {
+  if (outboxes.some((outbox) => outbox.state !== 'completed' && outbox.state !== 'cancelled')) {
+    fail('Pack-status rebuild requires every durable delivery projection outbox to be settled.');
   }
 }
 
 export type PackStatusCommerceSnapshot = {
   assignments: CommerceD1Document[];
   deliveryOrders: CommerceD1Document[];
-  packStatusOutboxes?: PackStatusOutboxRecord[];
+  packStatusOutboxes: PackStatusOutboxRecord[];
 };
 
 function requirePackStatusOutboxParents(snapshot: PackStatusCommerceSnapshot): void {
-  if (snapshot.packStatusOutboxes === undefined) return;
   const parents = new Map(snapshot.deliveryOrders.map((document) => [document.path, document]));
   const outboxes = new Map(snapshot.packStatusOutboxes.map((outbox) => [outbox.parentPath, outbox]));
   for (const outbox of snapshot.packStatusOutboxes) {
@@ -186,18 +172,15 @@ export function readPackStatusCommerceSnapshot(
   const snapshot: PackStatusCommerceSnapshot = {
     assignments: loadCommerceDocuments(dropId, 'box_assignment', query),
     deliveryOrders: loadCommerceDocuments(dropId, 'delivery_order', query),
+    packStatusOutboxes: [],
   };
-  if (hasPackStatusOutboxSchema(query)) {
-    const controls = query('SELECT storage_mode FROM commerce_pack_status_outbox_control WHERE singleton = 1');
-    if (controls.length !== 1 || (controls[0].storage_mode !== 'legacy' && controls[0].storage_mode !== 'table')) {
-      fail('Pack-status outbox control is invalid.');
-    }
-    if (controls[0].storage_mode === 'table') {
-      snapshot.packStatusOutboxes = query(`SELECT * FROM commerce_pack_status_outbox
-        WHERE drop_id = ${sqlString(dropId)} ORDER BY parent_path`).map(parsePackStatusOutboxRow);
-      requirePackStatusOutboxParents(snapshot);
-    }
+  const controls = query('SELECT storage_mode FROM commerce_pack_status_outbox_control WHERE singleton = 1');
+  if (controls.length !== 1 || controls[0].storage_mode !== 'table') {
+    fail('Pack-status outbox control requires active table storage.');
   }
+  snapshot.packStatusOutboxes = query(`SELECT * FROM commerce_pack_status_outbox
+    WHERE drop_id = ${sqlString(dropId)} ORDER BY parent_path`).map(parsePackStatusOutboxRow);
+  requirePackStatusOutboxParents(snapshot);
   return snapshot;
 }
 
@@ -222,7 +205,7 @@ export function rebuildPackStatusCounters(
     !Array.isArray(assignment.irlClaim) &&
     (assignment.irlClaim as Record<string, unknown>).namespace === IRL_CLAIM_CODE_NAMESPACE
   ).length;
-  requireSettledPackStatusProjectionOutboxes(deliveryOrders, snapshot.packStatusOutboxes);
+  requireSettledPackStatusProjectionOutboxes(snapshot.packStatusOutboxes);
 
   const inFlightNormalBoxAssetIds = new Set<string>();
   const adminIrlReceiptAssetIds = new Set<string>();

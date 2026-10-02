@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
-import { isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
+import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 
 type ClaimFormResult = {

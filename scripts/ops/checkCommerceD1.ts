@@ -1,15 +1,9 @@
 import { pathToFileURL } from 'node:url';
-import { isDeepStrictEqual } from 'node:util';
-import { PREORDER_CARD_IDS } from '../../shared/preorderCardIds.generated.ts';
 import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
-import { LEGACY_DELIVERY_RECOVERY_JSON_SQL, planDeliveryRecoveryStateBackfill } from '../shared/deliveryRecoveryStateMaintenance.ts';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
 import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
-import { planNotificationOutboxBackfill } from '../shared/notificationOutboxMaintenance.ts';
-import { LEGACY_PACK_STATUS_PROJECTION_FIELDS, legacyPackStatusProjectionsQuery, planPackStatusOutboxBackfill } from '../shared/packStatusOutboxMaintenance.ts';
-import { planStripeCheckoutStateBackfill } from '../shared/stripeCheckoutStateMaintenance.ts';
+import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusProjectionFields.ts';
 import { parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
-import { stripeCheckoutStateSelectColumns } from '../../cloud/workers/api/src/stripeCheckoutStateStore.ts';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
   commerceD1DocumentIdentity,
@@ -17,8 +11,7 @@ import {
   queryRemoteCommerceD1 as defaultQueryRemoteCommerceD1,
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
-import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
-import { readCommerceSchemaManifest, selectCommerceSchemaCheckpoint, type CommerceSchemaManifest, type CommerceSchemaCheckpoint } from '../shared/commerceSchemaManifest.ts';
+import { checkCurrentCommerceSchema } from '../shared/currentCommerceSchema.ts';
 import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
@@ -84,119 +77,11 @@ function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: str
 
 export type CheckCommerceD1Query = typeof defaultQueryRemoteCommerceD1;
 
-function createCommerceSchemaCatalog(query: CheckCommerceD1Query) {
-  type Rows = ReturnType<CheckCommerceD1Query>;
-  let catalog: { rows: Rows; objects: Map<string, Rows> } | undefined;
-  const load = () => {
-    if (catalog) return catalog;
-    const rows = query(`SELECT type, name, sql,
-      type = 'trigger' AND name LIKE 'commerce_%' AS commerce_trigger
-      FROM sqlite_schema ORDER BY name`);
-    const objects = new Map<string, Rows>();
-    for (const row of rows) {
-      const key = `${String(row.type)}:${String(row.name)}`;
-      const existing = objects.get(key);
-      if (existing) existing.push(row);
-      else objects.set(key, [row]);
-    }
-    catalog = { rows, objects };
-    return catalog;
-  };
-  return {
-    get: (type: string, name: string): Rows => load().objects.get(`${type}:${name}`) || [],
-    commerceTriggers: (): Rows => load().rows.filter((row) => row.commerce_trigger === 1),
-  };
-}
-
-function validateCommerceSchema(
-  manifest: CommerceSchemaManifest,
-  checkpoint: CommerceSchemaCheckpoint,
-  catalog: ReturnType<typeof createCommerceSchemaCatalog>,
-  query: CheckCommerceD1Query,
-  migration: string,
-): void {
-  const invalidObject = (name: string): never => fail(`Commerce D1 schema ${name} is invalid at ${migration}.`);
-  const expected = new Set(checkpoint.objects.map(({ type, name }) => `${type}:${name}`));
-  for (const { type, name, fingerprint } of checkpoint.objects) {
-    const rows = catalog.get(type, name);
-    if (rows.length !== 1 || typeof rows[0].sql !== 'string' || sqlSchemaFingerprint(rows[0].sql) !== fingerprint) {
-      invalidObject(name);
-    }
-  }
-  const historicalObjects = new Map(Object.values(manifest.checkpoints)
-    .flatMap((version) => version.objects).map((object) => [`${object.type}:${object.name}`, object]));
-  for (const [key, { type, name }] of historicalObjects) {
-    if (!expected.has(key) && catalog.get(type, name).length) invalidObject(name);
-  }
-  const tables = query(`SELECT name, strict
-    FROM pragma_table_list
-    WHERE schema = 'main' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '_cf_*'
-      AND name <> 'd1_migrations'
-    ORDER BY name`);
-  const expectedTables = checkpoint.objects.filter(({ type }) => type === 'table').map(({ name }) => name).sort();
-  if (tables.length !== expectedTables.length || tables.some((row, index) => row.name !== expectedTables[index] || row.strict !== 1)) {
-    fail('Commerce D1 authoritative strict table inventory is invalid.');
-  }
-  const expectedTriggers = new Set(checkpoint.objects.filter(({ type, name }) =>
-    type === 'trigger' && /^commerce./i.test(name)).map(({ name }) => name));
-  const triggers = catalog.commerceTriggers();
-  if (triggers.length !== expectedTriggers.size || triggers.some((row) => !expectedTriggers.has(String(row.name)))) {
-    fail('Commerce D1 trigger inventory is invalid.');
-  }
-  if (checkpoint.preorderCardIds) {
-    const cards = query('SELECT card_id FROM commerce_preorder_cards ORDER BY card_id').map((row) => row.card_id);
-    if (!isDeepStrictEqual(cards, checkpoint.preorderCardIds)) fail('Commerce D1 preorder catalog is invalid.');
-  }
-}
-
-function legacyCheckoutQuery(query: CommerceSqlQuery): CommerceSqlQuery {
-  let sql = query.sql;
-  for (const alias of ['commerce_documents', 'document']) {
-    sql = sql.replaceAll(`, ${stripeCheckoutStateSelectColumns(alias)}`, '');
-  }
-  sql = sql.replace(/AND EXISTS \(SELECT 1 FROM commerce_stripe_checkout_state AS checkout_state\s+WHERE checkout_state.document_path = commerce_documents.document_path\s+AND checkout_state.status = 'fulfillment_failed'\)/,
-    "AND status = 'fulfillment_failed'");
-  sql = sql.replace(/AND EXISTS \(SELECT 1 FROM commerce_stripe_checkout_state AS checkout_state\s+WHERE checkout_state.document_path = document.document_path\s+AND \(\(outbox.outcome = 'fulfilled' AND checkout_state.status = 'fulfilled'\) OR\s+\(outbox.outcome = 'manual_review' AND checkout_state.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1\)\)\)/,
-    "AND ((outbox.outcome = 'fulfilled' AND document.status = 'fulfilled') OR (outbox.outcome = 'manual_review' AND document.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1))");
-  if (sql.includes('INDEXED BY commerce_stripe_checkout_state_reconciliation_due')) {
-    sql = `SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'stripe_checkout' AND fulfillment_processor = 'cloudflare_queue_v1'
-        AND status IN ('fulfillment_pending', 'processing')
-        AND json_type(document_json, '$.updatedAt') IN ('integer', 'real')
-        AND json_type(document_json, '$.lastStripeWebhookEventId') = 'text'
-        AND CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`;
-  }
-  return { ...query, sql };
-}
-
 export function checkCommerceD1(
   queryRemoteCommerceD1: CheckCommerceD1Query = defaultQueryRemoteCommerceD1,
-  options: { forDeployment?: boolean } = {},
+  _options: { forDeployment?: boolean } = {},
 ): Record<string, unknown> {
-  const schemaCatalog = createCommerceSchemaCatalog(queryRemoteCommerceD1);
-  const quick = queryRemoteCommerceD1('PRAGMA quick_check');
-  if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
-  if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
-
-  const manifest = readCommerceSchemaManifest();
-  const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
-  const checkpoint = selectCommerceSchemaCheckpoint(manifest, migrations.map((migration) => migration.name));
-  if (options.forDeployment && migrations.length !== manifest.migrations.length) {
-    fail(`Commerce D1 deployment requires the latest migration: ${manifest.migrations.at(-1)!.name}.`);
-  }
-  if (options.forDeployment && !isDeepStrictEqual(checkpoint.preorderCardIds, PREORDER_CARD_IDS)) {
-    fail('Commerce D1 deployment catalog differs from the generated application catalog.');
-  }
-  const hasMigration = (name: string) => migrations.some((migration) => migration.name === name);
-  const stripeCheckoutStateReady = hasMigration('0026_stripe_checkout_state.sql');
-  const deliveryRecoveryStateReady = hasMigration('0030_delivery_recovery.sql');
-  const deliveryRecoveryMetadataClean = hasMigration('0033_delivery_recovery_metadata_cleanup.sql');
-  const packStatusOutboxReady = hasMigration('0029_pack_status_outbox.sql');
-  const manualReviewPaginationReady = hasMigration('0015_manual_review_pagination.sql');
-  const shipmentPaginationReady = hasMigration('0016_shipment_history_pagination.sql');
-  const receiptClaimWorkflowReady = hasMigration('0017_receipt_claim_workflow.sql');
-  validateCommerceSchema(manifest, checkpoint, schemaCatalog, queryRemoteCommerceD1, String(migrations.at(-1)!.name));
+  checkCurrentCommerceSchema(queryRemoteCommerceD1);
 
   for (const row of queryRemoteCommerceD1('SELECT * FROM stripe_order_disputes')) {
     if ((row.livemode !== 0 && row.livemode !== 1) || !isStripeChargebackSessionId(row.session_id) ||
@@ -211,19 +96,18 @@ export function checkCommerceD1(
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
   if (authorityRows.length !== 1) fail('Commerce D1 authority singleton is invalid.');
   const authority = authorityRows[0];
-  const stripeCheckoutControls = stripeCheckoutStateReady ? queryRemoteCommerceD1('SELECT * FROM commerce_stripe_checkout_state_control') : [];
+  const stripeCheckoutControls = queryRemoteCommerceD1('SELECT * FROM commerce_stripe_checkout_state_control');
   const stripeCheckoutControl = stripeCheckoutControls[0];
-  if (stripeCheckoutStateReady && (stripeCheckoutControls.length !== 1 ||
-    !['legacy', 'table'].includes(String(stripeCheckoutControl.storage_mode)) ||
-    !['idle', 'preparing', 'ready'].includes(String(stripeCheckoutControl.preparation_state)))) fail('Stripe checkout state control is invalid.');
+  if (stripeCheckoutControls.length !== 1 || stripeCheckoutControl.storage_mode !== 'table' ||
+    stripeCheckoutControl.preparation_state !== 'ready') fail('Stripe checkout state control is invalid.');
   if (!['paused', 'd1'].includes(String(authority.authority_state))) {
     fail('Commerce D1 authority state is invalid.');
   }
   if (authority.dude_inventory_mode !== 'legacy' && authority.dude_inventory_mode !== 'rows') {
     fail('Commerce D1 inventory mode is invalid.');
   }
-  if (options.forDeployment && authority.dude_inventory_mode !== 'rows') {
-    fail('API deployment requires activated figure inventory (rows mode). Follow scripts/docs/dude_inventory_cutover.md for the initial cutover.');
+  if (authority.dude_inventory_mode !== 'rows') {
+    fail('Commerce requires initialized figure inventory (rows mode). See scripts/docs/commerce_operations.md.');
   }
   safeInteger(authority.revision, 'Commerce authority revision');
   safeInteger(authority.documents_revision, 'Commerce document revision');
@@ -297,7 +181,7 @@ export function checkCommerceD1(
     safeInteger(documentPathRevisionState[0].missing_live_count, 'Commerce missing live path-revision count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
-  if (deliveryRecoveryMetadataClean) {
+  {
     const legacyRecovery = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND json_type(document_json, '$.receiptRecovery') IS NOT NULL`);
     if (legacyRecovery.length !== 1 || safeInteger(legacyRecovery[0].count, 'Legacy delivery recovery metadata count') !== 0) {
@@ -338,7 +222,7 @@ export function checkCommerceD1(
       !readyInventoryDrops.has(String(document.drop_id)))
   )) fail('Commerce D1 inventory initialization is incomplete.');
 
-  if (receiptClaimWorkflowReady) {
+  {
     requireSearchIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_operation
       WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') = 'src-v1-check'`),
     'commerce_receipt_claim_workflow_operation');
@@ -350,7 +234,7 @@ export function checkCommerceD1(
   }
 
   const queryPlan = (query: CommerceSqlQuery) =>
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN ${renderCommerceQuerySql(stripeCheckoutStateReady ? query : legacyCheckoutQuery(query))}`);
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN ${renderCommerceQuerySql(query)}`);
 
   const initialDeliveryOwnerPlan = queryPlan(deliveryOrderOwnersQuery({ limit: 501 }));
   requireSearchIndex(initialDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
@@ -361,7 +245,7 @@ export function checkCommerceD1(
   }));
   requireSearchIndex(keysetDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
   requireNoTemporaryBTree(keysetDeliveryOwnerPlan, 'keyset delivery-owner');
-  if (deliveryRecoveryStateReady) {
+  {
     const deliveryRecoveryPlan = queryPlan(deliveryRecoveryStateQuery('11111111111111111111111111111111', 1, 1));
     requireSearchIndex(deliveryRecoveryPlan, 'commerce_documents_delivery_owner_status');
     if (!deliveryRecoveryPlan.some((row) => normalizedSql(row.detail).includes(
@@ -369,7 +253,7 @@ export function checkCommerceD1(
     ))) fail('Commerce D1 delivery-recovery summary does not use the full owner-status prefix.');
     requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery summary');
   }
-  if (shipmentPaginationReady) {
+  {
     const owner = '11111111111111111111111111111111';
     for (const startAfter of [undefined, {
       version: 1 as const, owner, sortAtMs: 1, documentPath: 'drops/drop/deliveryOrders/1',
@@ -401,7 +285,7 @@ export function checkCommerceD1(
       WHERE document_kind = 'delivery_order' AND fulfillment_status = 'pending'`),
     'commerce_documents_fulfillment_status',
   );
-  if (manualReviewPaginationReady) {
+  {
     for (const startAfter of [undefined, {
       version: 1 as const, dropId: 'drop', sortAtMs: 1, sessionId: 'cs_cursor',
       documentPath: 'drops/drop/stripeCheckouts/cs_cursor',
@@ -413,10 +297,6 @@ export function checkCommerceD1(
         '(manual_review_sort_at_ms,manual_review_session_id,document_path)<(?,?,?)',
       ))) fail('Commerce D1 manual-review query plan does not seek the full cursor.');
     }
-  } else {
-    requireIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'stripe_checkout' AND drop_id = 'drop' AND manual_refund_review_required = 1
-      ORDER BY document_path ASC`), 'commerce_documents_manual_review');
   }
   for (const startAfter of [undefined, {
     processedAt: { seconds: 1, nanos: 1 },
@@ -447,22 +327,17 @@ export function checkCommerceD1(
     startAfterPath: 'drops/a/deliveryOrders/1',
   }));
   requireSearchIndex(ownerlessNotificationPlan, 'commerce_notification_outbox_pending_path');
-  if (packStatusOutboxReady) {
+  {
     const plan = queryPlan(packStatusOutboxDueQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 }));
     requireSearchIndex(plan, 'commerce_pack_status_outbox_due');
     if (!plan.some((row) => normalizedSql(row.detail).includes('(drop_id=? AND next_attempt_at_ms<?)'))) {
       fail('Commerce D1 pack-status outbox query plan does not seek the full drop-due prefix.');
     }
     requireNoTemporaryBTree(plan, 'pack-status outbox');
-  } else {
-    requireIndex(
-      queryPlan(legacyPackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
-      'commerce_documents_pack_projection',
-    );
   }
   requireIndex(
     queryPlan(staleStripeFulfillmentsQuery(1)),
-    stripeCheckoutStateReady ? 'commerce_stripe_checkout_state_reconciliation_due' : 'commerce_stripe_checkouts_reconciliation_due',
+    'commerce_stripe_checkout_state_reconciliation_due',
   );
 
   const readyNotificationDuePlan = queryPlan(dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 }));
@@ -501,31 +376,24 @@ export function checkCommerceD1(
 
   const notificationControls = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox_control');
   const notificationControl = notificationControls[0];
-  if (notificationControls.length !== 1 || !['legacy', 'table'].includes(String(notificationControl.storage_mode)) ||
-    !['idle', 'preparing', 'ready'].includes(String(notificationControl.preparation_state))) fail('Notification outbox control is invalid.');
+  if (notificationControls.length !== 1 || notificationControl.storage_mode !== 'table' ||
+    notificationControl.preparation_state !== 'ready') fail('Notification outbox control is invalid.');
   const notificationRows = queryRemoteCommerceD1('SELECT * FROM commerce_notification_outbox ORDER BY parent_path, family')
     .map(parseNotificationOutboxRow);
   const parents = new Map(authoritativeDocuments.map((document) => [document.document_path, document]));
-  const recoveryControls = deliveryRecoveryStateReady
-    ? queryRemoteCommerceD1('SELECT * FROM commerce_delivery_recovery_control') : [];
+  const recoveryControls = queryRemoteCommerceD1('SELECT * FROM commerce_delivery_recovery_control');
   const recoveryControl = recoveryControls[0];
-  if (deliveryRecoveryStateReady) {
-    if (recoveryControls.length !== 1 || recoveryControl.singleton !== 1 ||
-      !['legacy', 'table'].includes(String(recoveryControl.storage_mode)) ||
-      !['idle', 'preparing', 'ready'].includes(String(recoveryControl.preparation_state)) ||
-      (recoveryControl.storage_mode === 'table' && recoveryControl.preparation_state !== 'ready') ||
-      (recoveryControl.preparation_state === 'ready' &&
-        (recoveryControl.source_documents_revision === null || recoveryControl.prepared_at_ms === null))) {
-      fail('Delivery recovery state control is invalid.');
-    }
-    if (recoveryControl.source_documents_revision !== null) safeInteger(recoveryControl.source_documents_revision, 'Delivery recovery source revision');
-    if (recoveryControl.prepared_at_ms !== null) safeInteger(recoveryControl.prepared_at_ms, 'Delivery recovery preparation timestamp');
+  if (recoveryControls.length !== 1 || recoveryControl.singleton !== 1 ||
+    recoveryControl.storage_mode !== 'table' || recoveryControl.preparation_state !== 'ready' ||
+    recoveryControl.source_documents_revision === null || recoveryControl.prepared_at_ms === null) {
+    fail('Delivery recovery state control is invalid.');
   }
+  safeInteger(recoveryControl.source_documents_revision, 'Delivery recovery source revision');
+  safeInteger(recoveryControl.prepared_at_ms, 'Delivery recovery preparation timestamp');
   const recoveryParentColumns = `document.document_path, document.document_kind, document.drop_id, document.document_id,
     json_remove(document.document_json, '$.receiptRecovery') AS document_json,
     document.version, document.create_time, document.update_time`;
-  const recoveryJoinedRows = deliveryRecoveryStateReady
-    ? queryRemoteCommerceD1(`SELECT recovery.*, ${recoveryParentColumns}
+  const recoveryJoinedRows = queryRemoteCommerceD1(`SELECT recovery.*, ${recoveryParentColumns}
       FROM commerce_documents AS document
       LEFT JOIN commerce_delivery_recovery AS recovery ON recovery.parent_path = document.document_path
       WHERE document.document_kind = 'delivery_order'
@@ -534,60 +402,34 @@ export function checkCommerceD1(
       FROM commerce_delivery_recovery AS recovery
       LEFT JOIN commerce_documents AS document ON document.document_path = recovery.parent_path
       WHERE document.document_kind IS NOT 'delivery_order'
-      ORDER BY parent_path`) : [];
+      ORDER BY parent_path`);
   for (const row of recoveryJoinedRows) {
     if (row.parent_path === null) {
-      if (recoveryControl?.storage_mode === 'table') fail(`Delivery recovery state is missing: ${String(row.document_path)}.`);
+      fail(`Delivery recovery state is missing: ${String(row.document_path)}.`);
     } else {
       if (row.document_kind !== 'delivery_order' || row.document_path !== row.parent_path) fail('Delivery recovery state parent is invalid.');
       parseCommerceD1DocumentRow(row);
     }
   }
   const recoveryRows = recoveryJoinedRows.filter((row) => row.parent_path !== null).map(parseDeliveryRecoveryRow);
-  const recoveryStates = new Map(recoveryRows.map((record) => [record.parentPath, record]));
-  if (recoveryControl?.storage_mode === 'legacy' && recoveryControl.preparation_state === 'ready') {
-    if (recoveryControl.source_documents_revision !== authority.documents_revision) fail('Delivery recovery state preparation is stale.');
-    const sources = queryRemoteCommerceD1(`SELECT document_path, ${LEGACY_DELIVERY_RECOVERY_JSON_SQL} AS receipt_recovery_json
-      FROM commerce_documents WHERE document_kind = 'delivery_order' ORDER BY document_path`);
-    if (sources.length !== recoveryRows.length) fail('Delivery recovery state preparation differs from source documents.');
-    const recoveryParents = new Map(recoveryJoinedRows.map((row) => [row.document_path, row]));
-    for (const source of sources) {
-      const actual = recoveryStates.get(String(source.document_path));
-      const parent = recoveryParents.get(source.document_path);
-      if (!actual || !parent || (source.receipt_recovery_json !== null && typeof source.receipt_recovery_json !== 'string') ||
-        !isDeepStrictEqual(actual, planDeliveryRecoveryStateBackfill(parseCommerceD1DocumentRow(parent),
-          source.receipt_recovery_json as string | null, actual.generation))) fail('Delivery recovery state preparation differs from source documents.');
-    }
-  }
-  const packStatusControls = packStatusOutboxReady
-    ? queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox_control') : [];
+
+  const packStatusControls = queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox_control');
   const packStatusControl = packStatusControls[0];
-  if (packStatusOutboxReady) {
-    if (packStatusControls.length !== 1 || packStatusControl.singleton !== 1 ||
-      !['legacy', 'table'].includes(String(packStatusControl.storage_mode)) ||
-      !['idle', 'preparing', 'ready'].includes(String(packStatusControl.preparation_state)) ||
-      (packStatusControl.storage_mode === 'table' && packStatusControl.preparation_state !== 'ready') ||
-      (packStatusControl.preparation_state === 'ready' &&
-        (packStatusControl.source_documents_revision === null || packStatusControl.prepared_at_ms === null))) {
-      fail('Pack-status outbox control is invalid.');
-    }
-    if (packStatusControl.source_documents_revision !== null) {
-      safeInteger(packStatusControl.source_documents_revision, 'Pack-status outbox source revision');
-    }
-    if (packStatusControl.prepared_at_ms !== null) {
-      safeInteger(packStatusControl.prepared_at_ms, 'Pack-status outbox preparation timestamp');
-    }
+  if (packStatusControls.length !== 1 || packStatusControl.singleton !== 1 ||
+    packStatusControl.storage_mode !== 'table' || packStatusControl.preparation_state !== 'ready' ||
+    packStatusControl.source_documents_revision === null || packStatusControl.prepared_at_ms === null) {
+    fail('Pack-status outbox control is invalid.');
   }
-  const packStatusRows = packStatusOutboxReady
-    ? queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path').map(parsePackStatusOutboxRow)
-    : [];
+  safeInteger(packStatusControl.source_documents_revision, 'Pack-status outbox source revision');
+  safeInteger(packStatusControl.prepared_at_ms, 'Pack-status outbox preparation timestamp');
+  const packStatusRows = queryRemoteCommerceD1('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path').map(parsePackStatusOutboxRow);
   for (const row of packStatusRows) {
     const parent = parents.get(row.parentPath);
     if (!parent || parent.document_kind !== 'delivery_order' || parent.drop_id !== row.dropId) {
       fail('Pack-status outbox parent identity is invalid.');
     }
   }
-  if (packStatusControl?.storage_mode === 'table') {
+  {
     const outboxPaths = new Set(packStatusRows.map((row) => row.parentPath));
     for (const document of authoritativeDocuments) {
       const data = JSON.parse(String(document.document_json)) as Record<string, unknown>;
@@ -597,35 +439,20 @@ export function checkCommerceD1(
       }
     }
   }
-  if (packStatusControl?.storage_mode === 'legacy' && packStatusControl.preparation_state === 'ready') {
-    const expected = authoritativeDocuments.map(parseCommerceD1DocumentRow)
-      .flatMap((document) => planPackStatusOutboxBackfill(document) || [])
-      .sort((left, right) => left.parentPath.localeCompare(right.parentPath));
-    if (packStatusControl.source_documents_revision !== authority.documents_revision ||
-      !isDeepStrictEqual(packStatusRows.slice().sort((left, right) => left.parentPath.localeCompare(right.parentPath)), expected)) {
-      fail('Pack-status outbox preparation differs from source documents.');
-    }
-  }
-  const stripeCheckoutJoinedRows = stripeCheckoutStateReady ? queryRemoteCommerceD1(`SELECT checkout.*,
+
+  const stripeCheckoutJoinedRows = queryRemoteCommerceD1(`SELECT checkout.*,
       document.document_kind AS parent_kind, document.version AS parent_version
     FROM commerce_stripe_checkout_state AS checkout
-    LEFT JOIN commerce_documents AS document ON document.document_path = checkout.document_path`) : [];
+    LEFT JOIN commerce_documents AS document ON document.document_path = checkout.document_path`);
   const stripeCheckoutRows = stripeCheckoutJoinedRows.map(parseStripeCheckoutStateRow);
-  const checkoutStates = new Map(stripeCheckoutRows.map((row) => [row.documentPath, row]));
   for (const row of stripeCheckoutJoinedRows) {
     if (row.parent_kind !== 'stripe_checkout' || row.parent_version !== row.document_version) fail('Stripe checkout state parent or version is invalid.');
   }
-  if (stripeCheckoutControl?.storage_mode === 'table') {
+  {
     const missing = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents AS document
       LEFT JOIN commerce_stripe_checkout_state AS checkout ON checkout.document_path = document.document_path
       WHERE document.document_kind = 'stripe_checkout' AND checkout.document_path IS NULL`);
     if (missing.length !== 1 || safeInteger(missing[0].count, 'Missing checkout state count') !== 0) fail('Stripe checkout state differs from source documents.');
-  } else if (stripeCheckoutControl?.preparation_state === 'ready') {
-    for (const parent of authoritativeDocuments.filter((row) => row.document_kind === 'stripe_checkout')) {
-      const actual = checkoutStates.get(String(parent.document_path));
-      if (!actual || !isDeepStrictEqual(actual, planStripeCheckoutStateBackfill(parseCommerceD1DocumentRow(parent)))) fail('Stripe checkout state preparation differs from source documents.');
-    }
-    if (stripeCheckoutControl.storage_mode === 'legacy' && stripeCheckoutControl.source_documents_revision !== authority.documents_revision) fail('Stripe checkout state preparation is stale.');
   }
   for (const row of notificationRows) {
     const parent = parents.get(row.parentPath);
@@ -654,8 +481,7 @@ export function checkCommerceD1(
     safeInteger(invalidNotificationOwners[0].count, 'Notification outbox owner invalid count') !== 0) {
     fail('Notification outbox pending-owner lookup is inconsistent.');
   }
-  const stripeStatus = stripeCheckoutControl?.storage_mode === 'table'
-    ? '(SELECT status FROM commerce_stripe_checkout_state WHERE document_path = document.document_path)' : 'document.status';
+  const stripeStatus = '(SELECT status FROM commerce_stripe_checkout_state WHERE document_path = document.document_path)';
   const invalidStripeDue = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM (
     SELECT outbox.parent_path
     FROM commerce_notification_outbox AS outbox
@@ -681,30 +507,7 @@ export function checkCommerceD1(
   if (invalidStripeDue.length !== 1 || safeInteger(invalidStripeDue[0].count, 'Stripe notification due invalid count') !== 0) {
     fail('Notification outbox Stripe due lookup is inconsistent.');
   }
-  if (notificationControl.storage_mode === 'legacy' && notificationControl.preparation_state === 'ready') {
-    const expected = authoritativeDocuments.map(parseCommerceD1DocumentRow).flatMap(planNotificationOutboxBackfill)
-      .sort((left, right) => left.parentPath.localeCompare(right.parentPath) || left.family.localeCompare(right.family));
-    if (notificationControl.source_documents_revision !== authority.documents_revision ||
-      !isDeepStrictEqual(notificationRows.slice().sort((left, right) => left.parentPath.localeCompare(right.parentPath) || left.family.localeCompare(right.family)), expected)) {
-      fail('Notification outbox preparation differs from source documents.');
-    }
-  }
-  if (options.forDeployment && notificationControl.storage_mode !== 'table' && !(
-    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
-    notificationControl.preparation_state === 'ready' && notificationControl.source_documents_revision === authority.documents_revision
-  )) fail('API deployment requires activated notification outbox storage or fully paused, verified preparation. Follow scripts/docs/notification_outbox_cutover.md.');
-  if (options.forDeployment && stripeCheckoutControl?.storage_mode !== 'table' && !(
-    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
-    stripeCheckoutControl?.preparation_state === 'ready' && stripeCheckoutControl.source_documents_revision === authority.documents_revision
-  )) fail('API deployment requires activated Stripe checkout state or fully paused, verified preparation. Follow scripts/docs/stripe_checkout_state_cutover.md.');
-  if (options.forDeployment && packStatusControl?.storage_mode !== 'table' && !(
-    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
-    packStatusControl?.preparation_state === 'ready' && packStatusControl.source_documents_revision === authority.documents_revision
-  )) fail('API deployment requires activated pack-status outbox storage or fully paused, verified preparation. Follow scripts/docs/pack_status_outbox_cutover.md.');
-  if (options.forDeployment && recoveryControl?.storage_mode !== 'table' && !(
-    authority.authority_state === 'paused' && authority.paused_at_ms !== null &&
-    recoveryControl?.preparation_state === 'ready' && recoveryControl.source_documents_revision === authority.documents_revision
-  )) fail('API deployment requires activated delivery recovery state or fully paused, verified preparation. Follow scripts/docs/delivery_recovery_state_cutover.md.');
+
   for (const family of ['ready', 'stripe_terminal', 'shipped'] as const) {
     const plan = queryPlan(notificationOutboxDueQuery({ family, dueAtMs: 1, limit: 8 }));
     requireSearchIndex(plan, 'commerce_notification_outbox_family_due');
@@ -726,21 +529,15 @@ export function checkCommerceD1(
     notificationOutboxPreparation: notificationControl.preparation_state,
     notificationOutboxGroups: notificationRows.length,
     notificationOutboxFailures: notificationFailures,
-    ...(stripeCheckoutStateReady ? {
-      stripeCheckoutStateMode: stripeCheckoutControl.storage_mode,
-      stripeCheckoutStatePreparation: stripeCheckoutControl.preparation_state,
-      stripeCheckoutStateRows: stripeCheckoutRows.length,
-    } : {}),
-    ...(packStatusOutboxReady ? {
-      packStatusOutboxMode: packStatusControl.storage_mode,
-      packStatusOutboxPreparation: packStatusControl.preparation_state,
-      packStatusOutboxRows: packStatusRows.length,
-    } : {}),
-    ...(deliveryRecoveryStateReady ? {
-      deliveryRecoveryStateMode: recoveryControl.storage_mode,
-      deliveryRecoveryStatePreparation: recoveryControl.preparation_state,
-      deliveryRecoveryStateRows: recoveryRows.length,
-    } : {}),
+    stripeCheckoutStateMode: stripeCheckoutControl.storage_mode,
+    stripeCheckoutStatePreparation: stripeCheckoutControl.preparation_state,
+    stripeCheckoutStateRows: stripeCheckoutRows.length,
+    packStatusOutboxMode: packStatusControl.storage_mode,
+    packStatusOutboxPreparation: packStatusControl.preparation_state,
+    packStatusOutboxRows: packStatusRows.length,
+    deliveryRecoveryStateMode: recoveryControl.storage_mode,
+    deliveryRecoveryStatePreparation: recoveryControl.preparation_state,
+    deliveryRecoveryStateRows: recoveryRows.length,
     inventoryDrops: inventory.length,
     availableDudes,
     authoritativeDocuments: authoritativeDocuments.length,

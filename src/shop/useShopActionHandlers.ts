@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import type { InventoryItem } from '../types';
 import type { PreorderCheckout } from '../hooks/usePreorderCheckout';
 import { profileApiTimeoutMs } from '../api/transport';
-import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
+import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
 import type { useShopActionContinuation } from './account/useShopActionContinuation';
 import type { useShopInventoryQueries } from './inventory/useShopInventoryQueries';
 import type { useShopInventorySelectionState, ShopInventorySelection } from './inventory/useShopInventorySelection';

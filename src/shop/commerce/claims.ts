@@ -7,7 +7,7 @@ import {
 } from '../../lib/dropContent';
 import {
   dropAssetReference
-} from '../../lib/dropLabels';
+} from '../../../shared/dropLabels.ts';
 import {
   InventoryItem
 } from '../../types';

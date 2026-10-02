@@ -4,7 +4,7 @@ import type { DropFigureFulfillmentPreviewMode } from '../config/dropsExtraConte
 import { getMediaIdForFigureId } from './figureMediaMap';
 import { figureMetadataCacheKey, figureMetadataHasImage, getCachedFigureMetadata, type FigureMetadataRecord } from './figureMetadata';
 import { resolveFigureMediaImageUrlForMediaId } from './dropContent';
-import { dropAssetReference, dropMintSelectionLabel } from './dropLabels';
+import { dropAssetReference, dropMintSelectionLabel } from '../../shared/dropLabels.ts';
 
 type FulfillmentLabelSource =
   | Partial<

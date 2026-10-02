@@ -15,7 +15,6 @@ import {
   registerRecentExpectedInventoryAssets,
   registerRecentExpectedInventoryAssetsInState,
   shouldUseRecentExpectedInventoryAssets,
-  takeRecentExpectedInventoryAssets,
   takeRecentExpectedInventoryAssetsFromState,
   type RecentExpectedInventoryAssetState,
   type SessionStorageLike,
@@ -102,22 +101,26 @@ test('expired and recovered expected assets are removed without crossing owner o
   registerRecentExpectedInventoryAssets(OWNER_A, 'devnet', [devnetId], { storage, now: now + 1 });
   registerRecentExpectedInventoryAssets(OWNER_B, 'mainnet-beta', [assetId(203)], { storage, now });
 
-  assert.deepEqual(takeRecentExpectedInventoryAssets(OWNER_A, false, { storage, now: now + 2 }), {
+  const mainnetSelection = prepareRecentExpectedInventoryAssets(OWNER_A, false, { storage, now: now + 2 });
+  assert.deepEqual(mainnetSelection.expectedAssetIds, {
     'mainnet-beta': [mainnetId, recoveredId],
   });
+  mainnetSelection.commit();
   reconcileRecentExpectedInventoryAssets(OWNER_A, [recoveredId], { storage, now: now + 3 });
-  assert.deepEqual(takeRecentExpectedInventoryAssets(OWNER_A, true, { storage, now: now + 4 }), {
+  const allClustersSelection = prepareRecentExpectedInventoryAssets(OWNER_A, true, { storage, now: now + 4 });
+  assert.deepEqual(allClustersSelection.expectedAssetIds, {
     devnet: [devnetId],
     'mainnet-beta': [mainnetId],
   });
-  assert.deepEqual(takeRecentExpectedInventoryAssets(OWNER_B, false, { storage, now: now + 4 }), {
+  allClustersSelection.commit();
+  assert.deepEqual(prepareRecentExpectedInventoryAssets(OWNER_B, false, { storage, now: now + 4 }).expectedAssetIds, {
     'mainnet-beta': [assetId(203)],
   });
   assert.equal(
-    takeRecentExpectedInventoryAssets(OWNER_A, true, {
+    prepareRecentExpectedInventoryAssets(OWNER_A, true, {
       storage,
       now: now + RECENT_EXPECTED_INVENTORY_ASSET_TTL_MS + 1,
-    }),
+    }).expectedAssetIds,
     undefined,
   );
 });
@@ -286,7 +289,7 @@ test('inventory query reads registered hints synchronously and reconciles a succ
   );
   assert.deepEqual(events, ['prepare', 'fetch', 'commit', 'reconcile']);
   assert.deepEqual(items.map((item) => item.id), [expectedId]);
-  assert.equal(takeRecentExpectedInventoryAssets(OWNER_A, false, { storage, now }), undefined);
+  assert.equal(prepareRecentExpectedInventoryAssets(OWNER_A, false, { storage, now }).expectedAssetIds, undefined);
 });
 
 test('inventory query preserves the selected hint batch when its request fails', async () => {

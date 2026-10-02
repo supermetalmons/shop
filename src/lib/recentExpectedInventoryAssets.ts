@@ -224,24 +224,6 @@ export function registerRecentExpectedInventoryAssets(
   writeState(normalizedOwner, storage, state);
 }
 
-export function takeRecentExpectedInventoryAssets(
-  owner: string,
-  includeDevnet: boolean,
-  options: StoreOptions = {},
-): ShopExpectedAssetIds | undefined {
-  const normalizedOwner = owner.trim();
-  const storage = resolveStorage(options);
-  if (!normalizedOwner || !storage) return undefined;
-  const now = options.now ?? Date.now();
-  const result = takeRecentExpectedInventoryAssetsFromState(
-    readState(normalizedOwner, storage, now),
-    includeDevnet,
-    now,
-  );
-  writeState(normalizedOwner, storage, result.state);
-  return result.expectedAssetIds;
-}
-
 export function prepareRecentExpectedInventoryAssets(
   owner: string,
   includeDevnet: boolean,

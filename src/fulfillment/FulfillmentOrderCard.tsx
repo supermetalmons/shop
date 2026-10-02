@@ -9,7 +9,7 @@ import {
 import { isDropFamily, type FrontendDeploymentConfig } from '../config/deployment';
 import { CARD_NFT_2_PACK_IMAGES } from '../lib/cardNft2Packs';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from '../lib/dropContent';
-import { dropAssetLabel } from '../lib/dropLabels';
+import { dropAssetLabel } from '../../shared/dropLabels.ts';
 import type { FigureMetadataRecord } from '../lib/figureMetadata';
 import {
   fulfillmentBoxSecretCode,

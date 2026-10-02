@@ -4,7 +4,7 @@ import {
   CLEAR_CARDS_CARD_CLEAN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
 } from '../src/config/dropMediaDefaults.ts';
-import { cardNft2AssetUrl } from '../src/lib/cardNft2Assets.ts';
+import { cardNft2AssetUrl } from '../shared/cardNft2Assets.ts';
 import { getCachedFigureMetadata, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 
 test('card_nft_2 figure metadata resolves from derived CDN image without fetching json', async () => {

@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
-import { legacyPackStatusProjectionsQuery } from '../scripts/shared/packStatusOutboxMaintenance.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrdersByOwnerQuery,
@@ -1395,10 +1394,6 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
             : ['drops/drop/deliveryOrders/100', 'drops/drop/deliveryOrders/200']);
       }
     }
-    assert.match(
-      planDetails(db, legacyPackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
-      /commerce_documents_pack_projection/,
-    );
     assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkout_state_reconciliation_due/);
     const terminalNotificationPlan = planDetails(db, dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
     assert.match(terminalNotificationPlan, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);

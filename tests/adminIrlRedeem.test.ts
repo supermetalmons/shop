@@ -11,9 +11,9 @@ import {
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
-  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   isReceiptClaimDeliveryOrderSource,
-} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+} from '../shared/fulfillmentSources.ts';
+import { STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE } from '../shared/stripeReceiptClaims.ts';
 import {
   canAdminIrlRedeemCardReceipt,
   canAdminIrlRedeemSelection,

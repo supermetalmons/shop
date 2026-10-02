@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STRIPE_CHECKOUT_STATUS } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+import { STRIPE_CHECKOUT_STATUS } from '../shared/stripeCheckoutSession.ts';
 import {
   prepareStripeCheckoutTerminalNotifications,
   shouldPublishStripeCheckoutTerminalNotificationsWrite,

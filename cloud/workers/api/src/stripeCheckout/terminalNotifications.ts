@@ -7,7 +7,7 @@ import {
   type NotificationEmailJobV1,
 } from '../../../../../shared/notificationEmailJob.js';
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
-import { STRIPE_CHECKOUT_STATUS } from './contract.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
 import type { StripeCheckoutNotificationView, StripeCheckoutTerminalState } from './readModel.js';
 

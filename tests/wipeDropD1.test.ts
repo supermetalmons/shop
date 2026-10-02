@@ -14,10 +14,9 @@ import {
   verifyCommerceD1Wipe,
   withCommerceWipeAuthorityLease,
 } from '../scripts/ops/wipeDrop.ts';
-import { acquireCommerceAuthorityLease, hasDeliveryRecoveryStateSchema, hasPackStatusOutboxSchema } from '../scripts/shared/commerceD1Maintenance.ts';
-import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
-import { runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
-import { parseDeliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
+import { acquireCommerceAuthorityLease } from '../scripts/shared/commerceD1Maintenance.ts';
+import { createDeliveryRecoveryRecord, deliveryRecoveryRow, parseDeliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
+import { stripeCheckoutStateFromDocument, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
 import type {
   CommerceD1Authority,
   CommerceD1Document,
@@ -667,7 +666,7 @@ test('Commerce D1 wipe snapshots notification rows and cascades them with their 
   verifyCommerceD1Wipe('target', wipePlan, 'wipe:target:outbox:', (sql) => db.prepare(sql).all().map((row) => ({ ...row })));
 });
 
-test('Commerce D1 wipe guards checkout state counts and verifies parent cascades preserve other drops', async (context) => {
+test('Commerce D1 wipe guards checkout state counts and verifies parent cascades preserve other drops', (context) => {
   const db = database();
   context.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0015_manual_review_pagination.sql', 'utf8'));
@@ -677,10 +676,16 @@ test('Commerce D1 wipe guards checkout state counts and verifies parent cascades
   insertDocumentEpoch(db, [target, other]);
   pauseCommerce(db);
   const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
-  const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
-  await runStripeCheckoutStateControl(['prepare', '--write', '--expected-revision', revision], { query });
-  await runStripeCheckoutStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
   insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_stripe_checkout_state_control
+    SET preparation_state = 'preparing', source_documents_revision = 1`);
+  for (const parent of [target, other]) {
+    const row = stripeCheckoutStateRow(stripeCheckoutStateFromDocument(parent.path, { status: 'fulfilled' }, 1));
+    db.prepare(`INSERT INTO commerce_stripe_checkout_state (${Object.keys(row).join(', ')})
+      VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
+  }
+  db.exec(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 67000;
+    UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table'`);
   const wipePlan = buildCommerceD1PlanFromDocuments({
     authority: { ...authority, documentsRevision: 1 }, dropId: 'target', inventory: emptyInventory,
     targetDocuments: [target], assignmentDocuments: [], claimDocuments: [], stripeCheckoutStateCount: 1,
@@ -695,17 +700,11 @@ test('Commerce D1 wipe guards checkout state counts and verifies parent cascades
   }))), /verification failed/);
 });
 
-test('Commerce D1 wipe keeps old schemas compatible and rejects partial pack-status schemas', (context) => {
-  const db = database();
-  context.after(() => db.close());
-  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
-  assert.equal(hasPackStatusOutboxSchema(query), false);
+test('persisted wipe plans retain absent pack-status counts without changing their SQL', () => {
   const legacyPlan = plan();
   assert.equal(legacyPlan.packStatusOutboxCount, null);
   assert.doesNotMatch(buildCommerceD1WipeSql(legacyPlan, 'legacy-schema', 67_000), /commerce_pack_status_outbox/);
   assert.equal(sameCommerceD1Plan(legacyPlan, { ...legacyPlan, packStatusOutboxCount: 0 }), false);
-  db.exec('CREATE TABLE commerce_pack_status_outbox (parent_path TEXT PRIMARY KEY)');
-  assert.throws(() => hasPackStatusOutboxSchema(query), /Pack-status outbox schema is incomplete/);
 });
 
 test('Commerce D1 wipe snapshots pack-status rows and verifies exact parent cascades', (context) => {
@@ -713,7 +712,6 @@ test('Commerce D1 wipe snapshots pack-status rows and verifies exact parent casc
   context.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0029_pack_status_outbox.sql', 'utf8'));
   const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
-  assert.equal(hasPackStatusOutboxSchema(query), true);
   const target = document('delivery_order', 'target', '7', { packStatusProjectionState: 'pending' });
   const other = document('delivery_order', 'other', '8', { packStatusProjectionState: 'pending' });
   insertDocumentEpoch(db, [target, other]);
@@ -762,7 +760,7 @@ test('Commerce D1 wipe snapshots pack-status rows and verifies exact parent casc
   assert.equal(query('SELECT COUNT(*) AS count FROM commerce_wipe_guards')[0].count, 0);
 });
 
-test('Commerce D1 wipe validates recovery generations and revisions and verifies parent cascades', async (context) => {
+test('Commerce D1 wipe validates recovery generations and revisions and verifies parent cascades', (context) => {
   const db = database();
   context.after(() => db.close());
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0030_delivery_recovery.sql', 'utf8'));
@@ -771,10 +769,21 @@ test('Commerce D1 wipe validates recovery generations and revisions and verifies
   insertDocumentEpoch(db, [target, other]);
   pauseCommerce(db);
   const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
-  const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
-  await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
-  await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
   insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_delivery_recovery_control
+    SET preparation_state = 'preparing', source_documents_revision = 1`);
+  for (const parent of [target, other]) {
+    const row = deliveryRecoveryRow(createDeliveryRecoveryRecord({
+      parentPath: parent.path,
+      receiptRecoveryJson: parent === target ? JSON.stringify({ leaseExpiresAt: 90000 }) : null,
+      generation: crypto.randomUUID(),
+      nowMs: Date.parse(parent.updateTime),
+    }));
+    db.prepare(`INSERT INTO commerce_delivery_recovery (${Object.keys(row).join(', ')})
+      VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
+  }
+  db.exec(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 67000;
+    UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'`);
   const recoveryRecords = query("SELECT * FROM commerce_delivery_recovery WHERE parent_path = 'drops/target/deliveryOrders/7'")
     .map(parseDeliveryRecoveryRow);
   const input = {
@@ -809,14 +818,9 @@ test('Commerce D1 wipe validates recovery generations and revisions and verifies
   verifyCommerceD1Wipe('target', wipePlan, `${guardId}:`, query);
 });
 
-test('Commerce D1 wipe preserves pre-recovery schemas and rejects partial recovery schemas', (context) => {
-  const db = database();
-  context.after(() => db.close());
-  const query = (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
-  assert.equal(hasDeliveryRecoveryStateSchema(query), false);
+test('persisted wipe plans retain absent recovery tokens without changing their SQL', () => {
   const legacyPlan = plan();
   assert.equal(legacyPlan.deliveryRecoveryStateCount, null);
   assert.doesNotMatch(buildCommerceD1WipeSql(legacyPlan, 'legacy-recovery', 67000), /delivery_recovery/);
-  db.exec('CREATE TABLE commerce_delivery_recovery (parent_path TEXT PRIMARY KEY)');
-  assert.throws(() => hasDeliveryRecoveryStateSchema(query), /schema is incomplete/);
+  assert.equal(sameCommerceD1Plan(legacyPlan, { ...legacyPlan, deliveryRecoveryStateCount: 0 }), false);
 });

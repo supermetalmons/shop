@@ -3,7 +3,7 @@ import { claimStripeReceipt, requestClaimTx } from '../../api/commerce';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import { sendPreparedTransaction, shortAddress } from '../../lib/solana';
 import { pendingSubmittedClaim } from '../../lib/pendingPreparedTransactions';
-import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../../lib/stripeReceiptClaims';
+import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../../../shared/stripeReceiptClaims.ts';
 import type { InventoryItem } from '../../types';
 import { createPreparedTransactionCoordinator, runPreparedSubmission } from '../preparedSubmission';
 import type { CommerceWalletContext, CommerceInventoryRefresh, PreparedTransactionSender, DropConnection } from './contracts';

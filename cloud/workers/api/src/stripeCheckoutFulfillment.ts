@@ -41,10 +41,10 @@ import {
   processStripeCheckoutFulfillmentDocument,
   type StripeCheckoutDropRuntime,
   type StripeCheckoutFlowDeps,
-  type StripeCheckoutFulfillmentCompletionFields,
   type StripeCheckoutFulfillmentProcessResult,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
+import type { StripeCheckoutFulfillmentCompletionFields } from './stripeCheckout/store.js';
 import { StripeCheckoutFulfillmentError } from './stripeCheckout/errors.js';
 import { stripeCheckoutSessionOrderHash } from './stripeCheckout/contract.js';
 import {

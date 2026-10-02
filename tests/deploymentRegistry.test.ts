@@ -2051,7 +2051,7 @@ test('start-mint resolves valid current checkouts from the canonical registry', 
   assert.equal(resolved.dropConfig.boxMinterProgramId, alpha.boxMinterProgramId);
 });
 
-test('start-mint never downgrades when an existing canonical registry is malformed', async (t) => {
+test('start-mint rejects a malformed canonical registry', async (t) => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), 'start-mint-malformed-canonical-test-'),
   );
@@ -2061,34 +2061,19 @@ test('start-mint never downgrades when an existing canonical registry is malform
     'shared',
     'deploymentRegistry.ts',
   );
-  const legacyPath = path.join(root, 'src', 'config', 'deployed.ts');
-  await Promise.all([
-    mkdir(path.dirname(canonicalPath), { recursive: true }),
-    mkdir(path.dirname(legacyPath), { recursive: true }),
-  ]);
-  await Promise.all([
-    writeFile(
-      canonicalPath,
-      'export const SOMETHING_ELSE = {};\n',
-      'utf8',
-    ),
-    writeFile(
-      legacyPath,
-      "export const DEPLOYMENT = { dropId: 'legacy_drop' };\n",
-      'utf8',
-    ),
-  ]);
+  await mkdir(path.dirname(canonicalPath), { recursive: true });
+  await writeFile(canonicalPath, 'export const SOMETHING_ELSE = {};\n', 'utf8');
 
   await assert.rejects(
     resolveDeploymentConfig({
       root,
-      requestedDropId: 'legacy_drop',
+      requestedDropId: 'missing_drop',
     }),
     /exactly one top-level exported const DEPLOYMENT_DROPS declaration/,
   );
 });
 
-test('start-mint never downgrades when the canonical path is a dangling symlink', async (t) => {
+test('start-mint rejects a dangling canonical registry symlink', async (t) => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), 'start-mint-dangling-canonical-test-'),
   );
@@ -2098,24 +2083,13 @@ test('start-mint never downgrades when the canonical path is a dangling symlink'
     'shared',
     'deploymentRegistry.ts',
   );
-  const legacyPath = path.join(root, 'src', 'config', 'deployed.ts');
-  await Promise.all([
-    mkdir(path.dirname(canonicalPath), { recursive: true }),
-    mkdir(path.dirname(legacyPath), { recursive: true }),
-  ]);
-  await Promise.all([
-    symlink('missing-deployment-registry.ts', canonicalPath),
-    writeFile(
-      legacyPath,
-      "export const DEPLOYMENT = { dropId: 'legacy_drop' };\n",
-      'utf8',
-    ),
-  ]);
+  await mkdir(path.dirname(canonicalPath), { recursive: true });
+  await symlink('missing-deployment-registry.ts', canonicalPath);
 
   await assert.rejects(
     resolveDeploymentConfig({
       root,
-      requestedDropId: 'legacy_drop',
+      requestedDropId: 'missing_drop',
     }),
     /Missing canonical deployment registry/,
   );
@@ -2140,7 +2114,7 @@ test('start-mint does not treat the frontend projection as a raw-Node fallback',
       requestedDropId: 'frontend_only',
     }),
     (error: unknown) => {
-      assert.match(String(error), /Could not find deployment config/);
+      assert.match(String(error), /Missing canonical deployment registry/);
       assert.doesNotMatch(String(error), /src\/config\/deployment\.ts/);
       return true;
     },
@@ -2159,33 +2133,26 @@ test('start-mint rejects unsafe IDs before attempting any config resolution', as
   }
 });
 
-test('start-mint retains the legacy deployed.ts fallback', async () => {
+test('start-mint requires the canonical registry without importing old deployment files', async (t) => {
   const root = await mkdtemp(
     path.join(os.tmpdir(), 'start-mint-legacy-config-test-'),
   );
+  t.after(() => rm(root, { recursive: true, force: true }));
   const legacyDir = path.join(root, 'src', 'config');
   const legacyPath = path.join(legacyDir, 'deployed.ts');
-  try {
-    await mkdir(legacyDir, { recursive: true });
-    await writeFile(
-      legacyPath,
-      `export const DEPLOYMENT = {
-        dropId: 'legacy_drop',
-        solanaCluster: 'devnet',
-        boxMinterProgramId: 'Program1111111111111111111111111111111111',
-      };\n`,
-      'utf8',
-    );
-    const resolved = await resolveDeploymentConfig({
+  await mkdir(legacyDir, { recursive: true });
+  await writeFile(
+    legacyPath,
+    "throw new Error('old deployment module was imported');\n",
+    'utf8',
+  );
+  await assert.rejects(
+    resolveDeploymentConfig({
       root,
       requestedDropId: 'legacy_drop',
-    });
-    assert.equal(resolved.registryLabel, legacyPath);
-    assert.deepEqual(resolved.knownDropIds, ['legacy_drop']);
-    assert.equal(resolved.dropConfig.dropId, 'legacy_drop');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    }),
+    /Missing canonical deployment registry/,
+  );
 });
 
 test('set-mint-prices preserves its historical schema and discriminator errors', () => {

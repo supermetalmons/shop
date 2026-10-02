@@ -31,7 +31,7 @@ import {
   dropOpenActionLabel,
   dropOpenActionProgress,
   dropOpenGerund
-} from '../lib/dropLabels';
+} from '../../shared/dropLabels.ts';
 import { createShopConnection } from '../lib/shopRpc';
 import { getNormalizedPathname } from '../navigation';
 import { cardNft2PackVideoSourcesForBrowser, createCardNft2PackInventoryPreviewVideo, formatStripeUsdAmountCents, resolveMintPreviewMedia, stripeCheckoutUnitAmountCentsForDrop } from './purchase/media';

@@ -18,7 +18,7 @@ import {
 } from '../../lib/dropContent';
 import {
   dropAssetReference
-} from '../../lib/dropLabels';
+} from '../../../shared/dropLabels.ts';
 import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import {
   figureMetadataCacheKey,

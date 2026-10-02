@@ -6,6 +6,7 @@ import {
   CARD_NFT_2_BOX_MEDIA,
   CARD_NFT_2_CDN_BASE_URL,
   CARD_NFT_2_PACK_BASE_URL,
+  CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
   CARD_NFT_BINDER_CDN_BASE_URL,
@@ -38,9 +39,7 @@ import {
   PONCHO_DRIFELLA_RECEIPT_BASE_URL,
 } from '../src/config/dropMediaDefaults.ts';
 import {
-  CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_IMAGE_SRCS,
-  CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS,
 } from '../src/lib/cardNft2Packs.ts';
 import {
   mintPanelPreviewAspectRatio,
@@ -52,7 +51,7 @@ import {
   resolveBoxMediaIdForDrop,
   resolveDropContent,
 } from '../src/lib/dropContent.ts';
-import { getMediaIdForTokenId } from '../src/lib/mediaMap.ts';
+import { getMediaIdForTokenId } from '../shared/mediaMap.ts';
 import {
   dropAssetCount,
   dropAssetLabel,
@@ -61,12 +60,12 @@ import {
   dropOpenActionLabel,
   dropOpenActionProgress,
   dropOpenGerund,
-} from '../src/lib/dropLabels.ts';
+} from '../shared/dropLabels.ts';
 import {
   CARD_NFT_2_ASSET_CDN_BASES,
   cardNft2AssetUrl,
   isCardNft2CommonCardId,
-} from '../src/lib/cardNft2Assets.ts';
+} from '../shared/cardNft2Assets.ts';
 import {
   getInteractiveCardPackCardByFigureId,
   PONCHO_DRIFELLA_PACK_REVEAL_SEQUENCE,
@@ -136,13 +135,17 @@ test('shared drop labels preserve pluralization, actions, and mint selection ran
 });
 
 test('card_nft_2 box inventory images resolve from token id', () => {
-  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS.length, CARD_NFT_2_PACK_INITIAL_COUNT);
   assert.equal(
     CARD_NFT_2_PACK_IMAGE_SRCS[0],
     `${CARD_NFT_2_PACK_BASE_URL}/1/tight.webp?v=b60db42ea73570ce877f7f47ea037132`,
   );
   assert.ok(CARD_NFT_2_PACK_IMAGE_SRCS.every((src) => /\/tight\.webp\?v=[a-f0-9]{32}$/.test(src)));
-  assert.equal(CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0], `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`);
+  for (let mediaId = 1; mediaId <= CARD_NFT_2_PACK_INITIAL_COUNT; mediaId += 1) {
+    assert.equal(
+      normalizeBoxDisplayImage({ dropId: 'card_nft_2', boxId: mediaId }),
+      `${CARD_NFT_2_PACK_BASE_URL}/${mediaId}/initial.webp`,
+    );
+  }
   assert.deepEqual(FRONTEND_DROPS.card_nft_2.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(CARD_NFT_2_PACK_RECEIPT_MEDIA, CARD_NFT_2_BOX_MEDIA);
   assert.equal(resolveDropContent('card_nft_2').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
@@ -154,7 +157,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 1,
     }),
-    CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0],
+    `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`,
   );
   assert.equal(
     normalizeBoxDisplayImage({
@@ -162,7 +165,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 5,
     }),
-    CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[0],
+    `${CARD_NFT_2_PACK_BASE_URL}/1/initial.webp`,
   );
   assert.equal(
     normalizeBoxDisplayImage({
@@ -170,7 +173,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
       imageRaw: 'https://assets.example.com/metadata-pack.webp',
       boxId: 6,
     }),
-    CARD_NFT_2_PACK_INITIAL_IMAGE_SRCS[1],
+    `${CARD_NFT_2_PACK_BASE_URL}/2/initial.webp`,
   );
   assert.equal(
     normalizeBoxDisplayImage({

@@ -8,10 +8,7 @@ import {
 } from '../scripts/ops/checkCommerceD1.ts';
 import { inventoryDropConfigs } from '../scripts/shared/dudeInventoryMaintenance.ts';
 import { createDeliveryRecoveryRecord, deliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
-import { runDeliveryRecoveryStateControl } from '../scripts/ops/deliveryRecoveryStateControl.ts';
 import { packStatusOutboxRow } from '../shared/packStatusOutbox.ts';
-import { legacyPackStatusProjectionsQuery, planPackStatusOutboxBackfill } from '../scripts/shared/packStatusOutboxMaintenance.ts';
-import { parseCommerceD1DocumentRow } from '../scripts/shared/commerceD1Maintenance.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
   deliveryOrderOwnersQuery,
@@ -29,432 +26,230 @@ import {
   stripeChargebackMatchedDocumentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
-import { runStripeCheckoutStateControl } from '../scripts/ops/stripeCheckoutStateControl.ts';
 import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
+import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
 
 const commerceMigrations = readCommerceMigrations();
 const latestMigrationError = {
-  message: `Commerce D1 deployment requires the latest migration: ${commerceMigrations.at(-1)!.name}.`,
+  message: `Commerce D1 requires the latest migration: ${commerceMigrations.at(-1)!.name}.`,
 };
+const FIXTURE_NOW_SQL = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
+const FIXTURE_TIME = '2026-01-01T00:00:00.000Z';
+const FIXTURE_GENERATION = '00000000-0000-4000-8000-000000000408';
+const CONTROL_TABLES = [
+  'commerce_notification_outbox_control', 'commerce_stripe_checkout_state_control',
+  'commerce_pack_status_outbox_control', 'commerce_delivery_recovery_control',
+] as const;
 
-function schemaError(name: string, migration = commerceMigrations.at(-1)!.name) {
-  return { message: `Commerce D1 schema ${name} is invalid at ${migration}.` };
-}
-
-test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
-  const previous = currentDatabase(false, 17);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.close();
-  for (const [type, name] of [['index', 'commerce_preorder_active_buyer'], ['trigger', 'commerce_preorder_claim_delete_guard']] as const) {
-    const database = currentDatabase(false);
-    database.exec(`DROP ${type} ${name}`);
-    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
-    database.close();
-  }
-});
-
-test('Stripe checkout state migration is required for deployment while the previous baseline remains inspectable', () => {
-  const previous = currentDatabase(false, 25);
-  try {
-    assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-    assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  } finally { previous.close(); }
-});
-
-test('Stripe checkout state schema checks reject missing state guards and reconciliation indexes', () => {
-  for (const [type, name] of [
-    ['TRIGGER', 'commerce_stripe_checkout_state_update_guard'],
-    ['TRIGGER', 'commerce_commit_guard_stripe_checkout_finish'],
-    ['INDEX', 'commerce_stripe_checkout_state_reconciliation_due'],
-  ]) {
-    const database = currentDatabase(false);
-    try {
-      database.exec(`DROP ${type} ${name}`);
-      assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
-    } finally { database.close(); }
-  }
-});
-
-test('active checkout health uses authoritative state and rejects missing or stale parent versions', async () => {
-  const database = currentDatabase();
-  try {
-    database.exec(`INSERT INTO commerce_authority_control_lease VALUES
-      (1, '00000000-0000-4000-8000-000000000907', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
-      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
-        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      DELETE FROM commerce_authority_control_lease`);
-    const query = localQuery(database);
-    const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
-    await runStripeCheckoutStateControl(['prepare', '--write', '--expected-revision', revision], { query });
-    await runStripeCheckoutStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
-    assert.equal(checkCommerceD1(query).stripeCheckoutStateRows, 256);
-    assert.equal(checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT checkout.*,')
-      ? { ...row, document_version: Number(row.document_version) + 1, parent_version: Number(row.parent_version) + 1 }
-      : row)).stripeCheckoutStateRows, 256);
-    const updateGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_update_guard'")[0].sql);
-    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
-      UPDATE commerce_stripe_checkout_state SET status = 'fulfilled' WHERE document_path = 'drops/drop/stripeCheckouts/0';
-      ${updateGuard}`);
-    assert.equal(checkCommerceD1(query).stripeCheckoutStateMode, 'table');
-    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
-      UPDATE commerce_stripe_checkout_state SET document_version = 2 WHERE document_path = 'drops/drop/stripeCheckouts/0';
-      ${updateGuard}`);
-    assert.throws(() => checkCommerceD1(query), /parent or version is invalid/);
-    const deleteGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_delete_guard'")[0].sql);
-    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_delete_guard;
-      DELETE FROM commerce_stripe_checkout_state WHERE document_path = 'drops/drop/stripeCheckouts/0';
-      ${deleteGuard}`);
-    assert.throws(() => checkCommerceD1(query), /differs from source/);
-  } finally { database.close(); }
-});
-
-test('preorder buyer index is required for deployment and its definition is verified', () => {
-  const previous = currentDatabase(false, 18);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.close();
-  const database = currentDatabase(false);
-  database.exec('DROP INDEX commerce_preorder_succeeded_buyer');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_succeeded_buyer'));
-  database.exec('CREATE INDEX commerce_preorder_succeeded_buyer ON commerce_preorder_orders (buyer)');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_succeeded_buyer'));
-  database.close();
-});
-
-test('preorder expiry index is required for deployment and its definition is verified', () => {
-  const previous = currentDatabase(false, 19);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.close();
-  const database = currentDatabase(false);
-  database.exec('DROP INDEX commerce_preorder_prepared_expiry');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_prepared_expiry'));
-  database.exec('CREATE INDEX commerce_preorder_prepared_expiry ON commerce_preorder_orders (expires_at_ms)');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_prepared_expiry'));
-  database.close();
-});
-
-test('preorder Ethereum identity migration is required for deployment and its guards are verified', () => {
-  const previous = currentDatabase(false, 20);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.close();
-  const database = currentDatabase(false);
-  database.exec('DROP TRIGGER commerce_preorder_order_update_guard');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_order_update_guard'));
-  database.close();
-});
-
-test('preorder confirmation migration is required for deployment and its recovery guards are verified', () => {
-  const previous = currentDatabase(false, 21);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.close();
-  for (const [type, name] of [
-    ['trigger', 'commerce_preorder_confirmation_guard'],
-    ['index', 'commerce_preorder_confirmed_recovery'],
-    ['index', 'commerce_preorder_inventory_buyer'],
-  ] as const) {
-    const database = currentDatabase(false);
-    database.exec(`DROP ${type} ${name}`);
-    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
-    database.close();
-  }
-  const database = currentDatabase(false);
-  database.exec(`DROP INDEX commerce_preorder_active_buyer;
-    CREATE UNIQUE INDEX commerce_preorder_active_buyer ON commerce_preorder_orders (cluster, collection, buyer)
-      WHERE status IN ('prepared', 'submitted')`);
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_active_buyer'));
-  database.close();
-});
-
-test('preorder card range migration is required for deployment and its table and claim guards are verified', () => {
-  const previous = currentDatabase(false, 22);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0023_preorder_card_range.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0023_preorder_card_range.sql'));
-  previous.close();
-  for (const [type, name] of [
-    ['index', 'commerce_preorder_claim_order'],
-    ['trigger', 'commerce_preorder_claim_insert_guard'],
-    ['trigger', 'commerce_preorder_claim_update_guard'],
-    ['trigger', 'commerce_preorder_claim_delete_guard'],
-  ] as const) {
-    const database = currentDatabase(false);
-    database.exec(`DROP ${type} ${name}`);
-    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
-    database.close();
-  }
-});
-
-test('preorder card range 1400 migration is required for deployment and its table is verified', () => {
-  const previous = currentDatabase(false, 23);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0024_preorder_card_range_1400.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0024_preorder_card_range_1400.sql'));
-  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0024_preorder_card_range_1400.sql', import.meta.url), 'utf8'));
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  previous.close();
-});
-
-test('preorder scoped expiry migration is required for deployment and its index definition is verified', () => {
-  const previous = currentDatabase(false, 24);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0025_preorder_scoped_expiry.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_prepared_expiry', '0025_preorder_scoped_expiry.sql'));
-  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0025_preorder_scoped_expiry.sql', import.meta.url), 'utf8'));
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  previous.close();
-});
-
-test('preorder expiry claim release migration is required for deployment while the previous baseline remains inspectable', (context) => {
-  const previous = currentDatabase(false, 26);
-  context.after(() => previous.close());
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0027_preorder_expiry_claim_release.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_expiry_claim_release', '0027_preorder_expiry_claim_release.sql'));
-  previous.exec(readFileSync(new URL('../cloud/workers/api/commerce-migrations/0027_preorder_expiry_claim_release.sql', import.meta.url), 'utf8'));
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-});
-
-test('preorder card range 1413 migration is required for deployment and its excluded specials are verified', (context) => {
-  const previous = currentDatabase(false, 27);
-  context.after(() => previous.close());
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0028_preorder_card_range_1413.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0028_preorder_card_range_1413.sql'));
-  const migration = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0028_preorder_card_range_1413.sql', import.meta.url), 'utf8');
-  previous.exec(migration);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  previous.exec(migration.replace('card_id BETWEEN 1 AND 1400 OR card_id BETWEEN 1409 AND 1413', 'card_id BETWEEN 1 AND 1413'));
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0028_preorder_card_range_1413.sql'));
-});
-
-test('preorder expiry claim release schema rejects a missing or broadened trigger', (context) => {
-  const database = currentDatabase(false);
-  context.after(() => database.close());
-  database.exec('DROP TRIGGER commerce_preorder_expiry_claim_release');
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_expiry_claim_release'));
-  database.exec(`CREATE TRIGGER commerce_preorder_expiry_claim_release
-    AFTER UPDATE OF status ON commerce_preorder_orders WHEN NEW.status = 'expired'
-    BEGIN DELETE FROM commerce_preorder_claims WHERE order_id = NEW.order_id; END`);
-  assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_preorder_expiry_claim_release'));
-});
-
-test('preorder card range 1419 migration is required for deployment and its excluded specials are verified', (context) => {
-  const previous = currentDatabase(false, 30);
-  context.after(() => previous.close());
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), latestMigrationError);
-  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0031_preorder_card_range_1419.sql');
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0031_preorder_card_range_1419.sql'));
-  const migration = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0031_preorder_card_range_1419.sql', import.meta.url), 'utf8');
-  previous.exec(migration);
-  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
-  previous.exec(migration.replace('card_id BETWEEN 1 AND 1400 OR card_id BETWEEN 1409 AND 1419', 'card_id BETWEEN 1 AND 1419'));
-  assert.throws(() => checkCommerceD1(localQuery(previous)), schemaError('commerce_preorder_claims', '0031_preorder_card_range_1419.sql'));
-});
-
-function currentDatabase(seedDocuments = true, migrationCount = commerceMigrations.length): DatabaseSync {
-  const database = new DatabaseSync(':memory:');
-  const appliedMigrations = commerceMigrations.slice(0, migrationCount);
-  for (const { sql } of appliedMigrations) database.exec(sql);
-  database.exec(`CREATE TABLE d1_migrations (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
-  )`);
-  const recordMigration = database.prepare('INSERT INTO d1_migrations (name) VALUES (?)');
-  for (const { name } of appliedMigrations) {
-    recordMigration.run(name);
-  }
-  if (!seedDocuments) return database;
-  database.exec(`BEGIN IMMEDIATE;
-    INSERT INTO commerce_authority_control_lease (
-      singleton, lease_token, acquired_at_ms, expires_at_ms
-    ) VALUES (
-      1,
-      '00000000-0000-4000-8000-000000000406',
-      CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-      CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
-    );
-    UPDATE commerce_authority_control
-    SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
-    WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL;
-    UPDATE commerce_authority_control
-    SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
-      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
-    WHERE singleton = 1 AND authority_state = 'paused';
-    DELETE FROM commerce_authority_control_lease
-    WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000406';
-    COMMIT`);
-  const insertDocument = database.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, document_json,
-    version, create_time, update_time, processed_at_seconds, processed_at_nanos
-  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`);
-  database.exec('BEGIN IMMEDIATE');
-  try {
-    insertDocument.run(
-      'claimCodes/HEALTHY',
-      'claim_code',
-      null,
-      'HEALTHY',
-      JSON.stringify({ status: 'unused' }),
-      '2026-01-01T00:00:00.000Z',
-      '2026-01-01T00:00:00.000Z',
-      null,
-      null,
-    );
-    const ownerCharacters = '123456789ABCDEFG';
-    for (let index = 0; index < 256; index += 1) {
-      const owner = ownerCharacters[index % ownerCharacters.length].repeat(32);
-      const deliveryStatus = index % 16 === 0
-        ? 'ready_to_ship'
-        : index % 16 === 1
-          ? 'processing'
-          : 'shipped';
-      insertDocument.run(
-        `drops/drop/deliveryOrders/${index}`,
-        'delivery_order',
-        'drop',
-        String(index),
-        JSON.stringify({
-          owner,
-          source: 'stripe_offchain',
-          stripeCheckoutSessionId: `cs_live_${index}`,
-          status: deliveryStatus,
-          buyerOrderReceivedEmailState: index % 32 === 0 ? 'pending' : 'sent',
-          shipperReadyToShipEmailState: index % 32 === 16 ? 'pending' : 'sent',
-          fulfillmentStatus: index % 32 === 0 ? 'pending' : 'complete',
-          packStatusProjectionState: index % 32 === 0 ? 'pending' : 'complete',
-          packStatusProjectionNextAttemptAtMs: index,
-        }),
-        '2026-01-01T00:00:00.000Z',
-        '2026-01-01T00:00:00.000Z',
-        index,
-        0,
-      );
-      insertDocument.run(
-        `drops/drop/stripeCheckouts/${index}`,
-        'stripe_checkout',
-        'drop',
-        String(index),
-        JSON.stringify({
-          stripePaymentIntentId: `pi_${index}`,
-          fulfillmentProcessor: 'cloudflare_queue_v1',
-          status: index % 32 === 0 ? 'fulfillment_pending' : 'fulfilled',
-          updatedAt: index,
-          lastStripeWebhookEventId: `evt_${index}`,
-          manualRefundReviewRequired: index % 32 === 0,
-          stripeTerminalNotificationState: index % 32 === 1 ? 'pending' : 'queued',
-          stripeTerminalNotificationNextAttemptAtMs: index,
-        }),
-        '2026-01-01T00:00:00.000Z',
-        '2026-01-01T00:00:00.000Z',
-        null,
-        null,
-      );
-    }
-    database.exec(`UPDATE commerce_authority_control
-      SET documents_revision = documents_revision + 1, updated_at_ms = updated_at_ms + 1
-      WHERE singleton = 1`);
-    database.exec('COMMIT');
-  } catch (error) {
-    database.exec('ROLLBACK');
-    throw error;
-  }
-  return database;
+function schemaError(name: string) {
+  return { message: `Commerce D1 schema ${name} is invalid at ${commerceMigrations.at(-1)!.name}.` };
 }
 
 function localQuery(database: DatabaseSync): CheckCommerceD1Query {
   return (sql) => database.prepare(sql).all().map((row) => ({ ...row }));
 }
 
-function seedInventory(database: DatabaseSync, ready = true) {
-  database.exec(`INSERT INTO commerce_authority_control_lease (
-      singleton, lease_token, acquired_at_ms, expires_at_ms
-    ) VALUES (
-      1, '00000000-0000-4000-8000-000000000407',
-      CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-      CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
-    );
-    UPDATE commerce_authority_control
-    SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
-    WHERE singleton = 1`);
-  const configs = inventoryDropConfigs();
-  const insert = database.prepare(`INSERT INTO commerce_inventory_drops (
-    drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms
-  ) VALUES (?, '00000000-0000-4000-8000-000000000408', 0, ?, ?, ?, 1000)`);
-  for (const config of configs) {
-    insert.run(config.dropId, config.dropFamily, config.itemsPerBox, config.maxDudeId);
+function rawDatabase(migrationCount = commerceMigrations.length): DatabaseSync {
+  const database = new DatabaseSync(':memory:');
+  database.exec('PRAGMA foreign_keys = ON; CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)');
+  for (const { name, sql } of commerceMigrations.slice(0, migrationCount)) {
+    database.exec(sql);
+    database.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run(name);
   }
-  database.prepare(`INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position)
-    VALUES (?, 1, 0)`).run(configs[0].dropId);
-  if (ready) database.exec('UPDATE commerce_inventory_drops SET ready = 1');
+  return database;
+}
+
+function pauseDatabase(database: DatabaseSync): void {
+  database.exec(`INSERT INTO commerce_authority_control_lease VALUES
+    (1, '00000000-0000-4000-8000-000000000407', ${FIXTURE_NOW_SQL}, ${FIXTURE_NOW_SQL} + 60000)
+    ON CONFLICT(singleton) DO NOTHING;
+    UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
+      paused_at_ms = NULL, updated_at_ms = ${FIXTURE_NOW_SQL} WHERE authority_state = 'd1';
+    UPDATE commerce_authority_control SET paused_at_ms = ${FIXTURE_NOW_SQL}, updated_at_ms = ${FIXTURE_NOW_SQL}
+      WHERE authority_state = 'paused' AND paused_at_ms IS NULL`);
+}
+
+function resumeDatabase(database: DatabaseSync): void {
+  pauseDatabase(database);
+  database.exec(`UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
+    paused_at_ms = NULL, updated_at_ms = ${FIXTURE_NOW_SQL}; DELETE FROM commerce_authority_control_lease`);
+}
+
+function seedInventory(database: DatabaseSync) {
+  pauseDatabase(database);
+  const configs = inventoryDropConfigs();
+  if (database.prepare('SELECT COUNT(*) AS count FROM commerce_inventory_drops').get()!.count !== 0) return configs[0];
+  const insert = database.prepare(`INSERT INTO commerce_inventory_drops
+    (drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms)
+    VALUES (?, ?, 0, ?, ?, ?, 1000)`);
+  for (const config of configs) insert.run(config.dropId, FIXTURE_GENERATION, config.dropFamily, config.itemsPerBox, config.maxDudeId);
+  database.prepare('INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position) VALUES (?, 1, 0)').run(configs[0].dropId);
+  database.exec("UPDATE commerce_inventory_drops SET ready = 1; UPDATE commerce_authority_control SET dude_inventory_mode = 'rows'");
   return configs[0];
 }
 
-function prepareRecoveryState(database: DatabaseSync, activate = true): void {
-  database.exec(`UPDATE commerce_delivery_recovery_control SET preparation_state = 'preparing',
-    source_documents_revision = (SELECT documents_revision FROM commerce_authority_control)`);
-  for (const source of localQuery(database)(`SELECT document_path, update_time, document_json -> '$.receiptRecovery' AS recovery
-    FROM commerce_documents WHERE document_kind = 'delivery_order'`)) {
-    const record = deliveryRecoveryRow(createDeliveryRecoveryRecord({
-      parentPath: String(source.document_path), receiptRecoveryJson: source.recovery as string | null,
-      generation: crypto.randomUUID(), nowMs: Date.parse(String(source.update_time)),
-    }));
-    database.prepare(`INSERT INTO commerce_delivery_recovery (${Object.keys(record).join(',')})
-      VALUES (${Object.keys(record).map(() => '?').join(',')})`).run(...Object.values(record));
-  }
-  database.exec("UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 1");
-  if (activate) database.exec("UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'");
+function insertRow(database: DatabaseSync, table: string, row: Record<string, string | number | null>): void {
+  database.prepare(`INSERT INTO ${table} (${Object.keys(row).join(', ')})
+    VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
 }
 
-function preparedPackStatusDatabase(recoveryActive = true): DatabaseSync {
-  const database = currentDatabase(false);
+type FixtureDocument = {
+  path: string;
+  kind: 'claim_code' | 'delivery_order' | 'stripe_checkout';
+  dropId: string | null;
+  id: string;
+  data: Record<string, unknown>;
+  processedAt?: number;
+};
+
+function insertDocuments(database: DatabaseSync, documents: FixtureDocument[]): void {
+  const deliveries = documents.filter((document) => document.kind === 'delivery_order');
+  const checkouts = documents.filter((document) => document.kind === 'stripe_checkout');
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.prepare(`INSERT INTO commerce_commit_guards (guard_id, expectations_json, created_at_ms,
+      delivery_recovery_paths_json, delivery_recovery_expectations_json, stripe_checkout_paths_json)
+      VALUES ('checker-fixture', ?, 1000, ?, ?, ?)`).run(
+      JSON.stringify(documents.map((document) => ({ path: document.path, version: -1 }))),
+      JSON.stringify(deliveries.map((document) => document.path)),
+      JSON.stringify(deliveries.map((document) => ({ parentPath: document.path, generation: null, revision: -1 }))),
+      JSON.stringify(checkouts.map((document) => document.path)),
+    );
+    for (const document of documents) {
+      const data = document.kind === 'stripe_checkout'
+        ? stripeCheckoutStateMetadata(document.data, {}) : document.data;
+      database.prepare(`INSERT INTO commerce_documents (document_path, document_kind, drop_id, document_id, document_json,
+        version, create_time, update_time, processed_at_seconds, processed_at_nanos)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).run(
+        document.path, document.kind, document.dropId, document.id, JSON.stringify(data), FIXTURE_TIME, FIXTURE_TIME,
+        document.processedAt ?? null, document.processedAt === undefined ? null : 0,
+      );
+      if (document.kind === 'delivery_order') insertRow(database, 'commerce_delivery_recovery', deliveryRecoveryRow(
+        createDeliveryRecoveryRecord({ parentPath: document.path, receiptRecoveryJson: null,
+          generation: FIXTURE_GENERATION, nowMs: Date.parse(FIXTURE_TIME) }),
+      ));
+      if (document.kind === 'stripe_checkout') insertRow(database, 'commerce_stripe_checkout_state',
+        stripeCheckoutStateRow(stripeCheckoutStateFromDocument(document.path, document.data, 1)));
+    }
+    database.exec(`UPDATE commerce_authority_control SET documents_revision = documents_revision + 1,
+      updated_at_ms = updated_at_ms + 1; DELETE FROM commerce_commit_guards WHERE guard_id = 'checker-fixture'; COMMIT`);
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function currentDatabase(seedDocuments = true): DatabaseSync {
+  const database = rawDatabase();
   seedInventory(database);
-  database.exec(`UPDATE commerce_authority_control SET authority_state = 'd1',
-    revision = revision + 1, paused_at_ms = NULL,
-    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    BEGIN IMMEDIATE`);
-  database.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
-  ) VALUES ('drops/card_nft_2/deliveryOrders/1', 'delivery_order', 'card_nft_2', '1', ?,
-    1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`).run(JSON.stringify({
-    deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }],
-    packStatusProjectionState: 'pending', packStatusProjectionNextAttemptAtMs: 17,
-    packStatusProjectionFailureCount: 2, packStatusProjectionLastErrorCode: 'unavailable',
-  }));
-  database.exec(`UPDATE commerce_authority_control SET documents_revision = documents_revision + 1,
-    updated_at_ms = updated_at_ms + 1; COMMIT;
-    UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
-      paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    UPDATE commerce_authority_control SET dude_inventory_mode = 'rows';
-    UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 1;
-    UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1;
-    UPDATE commerce_notification_outbox_control SET storage_mode = 'table';
-    UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing', source_documents_revision = 1;
-    UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 1;
-    UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table';
-    UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', source_documents_revision = 1`);
-  const document = parseCommerceD1DocumentRow(localQuery(database)('SELECT * FROM commerce_documents')[0]);
-  const row = packStatusOutboxRow(planPackStatusOutboxBackfill(document)!);
-  database.prepare(`INSERT INTO commerce_pack_status_outbox (${Object.keys(row).join(', ')})
-    VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
-  database.exec("UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1");
-  if (recoveryActive) prepareRecoveryState(database);
+  for (const table of CONTROL_TABLES) database.exec(`UPDATE ${table}
+    SET preparation_state = 'preparing', source_documents_revision = 0;
+    UPDATE ${table} SET preparation_state = 'ready', prepared_at_ms = 1;
+    UPDATE ${table} SET storage_mode = 'table'`);
+  database.exec('DELETE FROM commerce_authority_control_lease');
+  if (!seedDocuments) return database;
+  resumeDatabase(database);
+  const documents: FixtureDocument[] = [{ path: 'claimCodes/HEALTHY', kind: 'claim_code', dropId: null,
+    id: 'HEALTHY', data: { status: 'unused' } }];
+  const ownerCharacters = '123456789ABCDEFG';
+  for (let index = 0; index < 256; index += 1) {
+    documents.push({ path: `drops/drop/deliveryOrders/${index}`, kind: 'delivery_order', dropId: 'drop', id: String(index),
+      processedAt: index, data: {
+        owner: ownerCharacters[index % ownerCharacters.length].repeat(32), source: 'stripe_offchain',
+        stripeCheckoutSessionId: `cs_live_${index}`,
+        status: index % 16 === 0 ? 'ready_to_ship' : index % 16 === 1 ? 'processing' : 'shipped',
+        fulfillmentStatus: index % 32 === 0 ? 'pending' : 'complete',
+      } });
+    documents.push({ path: `drops/drop/stripeCheckouts/${index}`, kind: 'stripe_checkout', dropId: 'drop', id: String(index),
+      data: { stripePaymentIntentId: `pi_${index}`, fulfillmentProcessor: 'cloudflare_queue_v1',
+        status: index % 32 === 0 ? 'fulfillment_pending' : 'fulfilled', updatedAt: index,
+        lastStripeWebhookEventId: `evt_${index}`, manualRefundReviewRequired: index % 32 === 0,
+      } });
+  }
+  insertDocuments(database, documents);
   return database;
 }
+
+function currentPackStatusDatabase(): DatabaseSync {
+  const database = currentDatabase(false);
+  resumeDatabase(database);
+  const fence = String(database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commerce_pack_status_legacy_insert_fence'").get()!.sql);
+  database.exec('DROP TRIGGER commerce_pack_status_legacy_insert_fence');
+  insertDocuments(database, [{ path: 'drops/card_nft_2/deliveryOrders/1', kind: 'delivery_order', dropId: 'card_nft_2', id: '1',
+    data: { deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }],
+      packStatusProjectionState: 'pending', packStatusProjectionNextAttemptAtMs: 17,
+      packStatusProjectionFailureCount: 2, packStatusProjectionLastErrorCode: 'unavailable' } }]);
+  database.exec(fence);
+  insertRow(database, 'commerce_pack_status_outbox', packStatusOutboxRow({
+    parentPath: 'drops/card_nft_2/deliveryOrders/1', dropId: 'card_nft_2', generation: FIXTURE_GENERATION,
+    state: 'pending', revision: 1, failureCount: 2, nextAttemptAtMs: 17,
+    completedAtMs: null, failedAtMs: null, lastErrorCode: 'unavailable',
+    createdAtMs: Date.parse(FIXTURE_TIME), updatedAtMs: Date.parse(FIXTURE_TIME),
+  }));
+  pauseDatabase(database);
+  return database;
+}
+
+for (let count = 1; count < commerceMigrations.length; count += 1) {
+  test(`Commerce D1 checker rejects historical schema ${commerceMigrations[count - 1].name} for inspection and deployment`, () => {
+    const database = rawDatabase(count);
+    try {
+      const query = localQuery(database);
+      let catalogReads = 0;
+      const checked: CheckCommerceD1Query = (sql) => {
+        if (/\bFROM sqlite_(?:schema|master)\b/i.test(sql)) catalogReads += 1;
+        return query(sql);
+      };
+      assert.throws(() => checkCommerceD1(checked), latestMigrationError);
+      assert.throws(() => checkCommerceD1(checked, { forDeployment: true }), latestMigrationError);
+      assert.equal(catalogReads, 0);
+    } finally { database.close(); }
+  });
+}
+
+for (const [type, name] of [
+  ['index', 'commerce_preorder_active_buyer'], ['index', 'commerce_preorder_succeeded_buyer'],
+  ['index', 'commerce_preorder_prepared_expiry'], ['index', 'commerce_preorder_confirmed_recovery'],
+  ['index', 'commerce_preorder_inventory_buyer'], ['index', 'commerce_preorder_claim_order'],
+  ['index', 'commerce_stripe_checkout_state_reconciliation_due'],
+  ['trigger', 'commerce_preorder_order_update_guard'], ['trigger', 'commerce_preorder_confirmation_guard'],
+  ['trigger', 'commerce_preorder_claim_insert_guard'], ['trigger', 'commerce_preorder_claim_update_guard'],
+  ['trigger', 'commerce_preorder_claim_delete_guard'], ['trigger', 'commerce_preorder_expiry_claim_release'],
+  ['trigger', 'commerce_stripe_checkout_state_update_guard'], ['trigger', 'commerce_commit_guard_stripe_checkout_finish'],
+] as const) {
+  test(`Commerce D1 checker rejects missing or weakened current schema object ${name}`, () => {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`DROP ${type} ${name}`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
+      database.exec(type === 'index' ? `CREATE INDEX ${name} ON commerce_documents (document_path)`
+        : `CREATE TRIGGER ${name} BEFORE INSERT ON commerce_documents BEGIN SELECT 1; END`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), schemaError(name));
+    } finally { database.close(); }
+  });
+}
+
+test('active checkout health uses authoritative state and rejects missing or stale parent versions', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    assert.equal(checkCommerceD1(query).stripeCheckoutStateRows, 256);
+    assert.equal(checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT checkout.*,')
+      ? { ...row, document_version: Number(row.document_version) + 1, parent_version: Number(row.parent_version) + 1 }
+      : row)).stripeCheckoutStateRows, 256);
+    const guard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_update_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
+      UPDATE commerce_stripe_checkout_state SET status = 'fulfilled' WHERE document_path = 'drops/drop/stripeCheckouts/0'; ${guard}`);
+    assert.equal(checkCommerceD1(query).stripeCheckoutStateMode, 'table');
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_update_guard;
+      UPDATE commerce_stripe_checkout_state SET document_version = 2 WHERE document_path = 'drops/drop/stripeCheckouts/0'; ${guard}`);
+    assert.throws(() => checkCommerceD1(query), /parent or version is invalid/);
+    const deleteGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_stripe_checkout_state_delete_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_stripe_checkout_state_delete_guard;
+      DELETE FROM commerce_stripe_checkout_state WHERE document_path = 'drops/drop/stripeCheckouts/0'; ${deleteGuard}`);
+    assert.throws(() => checkCommerceD1(query), /differs from source/);
+  } finally { database.close(); }
+});
 
 test('Commerce D1 checker accepts the current schema using complete production queries', () => {
   const database = currentDatabase();
@@ -467,22 +262,22 @@ test('Commerce D1 checker accepts the current schema using complete production q
     }), {
       authorityState: 'd1',
       authorityRevision: 3,
-      inventoryMode: 'legacy',
-      notificationOutboxMode: 'legacy',
-      notificationOutboxPreparation: 'idle',
+      inventoryMode: 'rows',
+      notificationOutboxMode: 'table',
+      notificationOutboxPreparation: 'ready',
       notificationOutboxGroups: 0,
       notificationOutboxFailures: [],
-      stripeCheckoutStateMode: 'legacy',
-      stripeCheckoutStatePreparation: 'idle',
-      stripeCheckoutStateRows: 0,
-      packStatusOutboxMode: 'legacy',
-      packStatusOutboxPreparation: 'idle',
+      stripeCheckoutStateMode: 'table',
+      stripeCheckoutStatePreparation: 'ready',
+      stripeCheckoutStateRows: 256,
+      packStatusOutboxMode: 'table',
+      packStatusOutboxPreparation: 'ready',
       packStatusOutboxRows: 0,
-      deliveryRecoveryStateMode: 'legacy',
-      deliveryRecoveryStatePreparation: 'idle',
-      deliveryRecoveryStateRows: 0,
-      inventoryDrops: 0,
-      availableDudes: 0,
+      deliveryRecoveryStateMode: 'table',
+      deliveryRecoveryStatePreparation: 'ready',
+      deliveryRecoveryStateRows: 256,
+      inventoryDrops: inventoryDropConfigs().length,
+      availableDudes: 1,
       authoritativeDocuments: 513,
       deliveryOwnerRevisions: 16,
       documentPathRevisions: 513,
@@ -544,38 +339,17 @@ test('Commerce D1 checker accepts the current schema using complete production q
   }
 });
 
-test('Commerce D1 checker reads one schema catalog for each supported migration baseline', () => {
-  for (let migrationCount = 13; migrationCount <= commerceMigrations.length; migrationCount += 1) {
-    const database = currentDatabase(false, migrationCount);
-    try {
-      let catalogReads = 0;
-      const query = localQuery(database);
-      checkCommerceD1((sql) => {
-        if (/\bFROM sqlite_(?:schema|master)\b/i.test(sql)) catalogReads += 1;
-        return query(sql);
-      });
-      assert.equal(catalogReads, 1, `migration ${migrationCount}`);
-    } finally {
-      database.close();
-    }
-  }
-});
-
-test('Commerce D1 checker inspects migration 0031 without requiring the preorder catalog', () => {
-  const migrationCount = commerceMigrations.findIndex(({ name }) => name === '0031_preorder_card_range_1419.sql') + 1;
-  const database = currentDatabase(false, migrationCount);
+test('Commerce D1 checker reads one schema catalog for the current schema', () => {
+  const database = currentDatabase(false);
   try {
-    const queries: string[] = [];
+    let catalogReads = 0;
     const query = localQuery(database);
-    assert.equal(checkCommerceD1((sql) => {
-      queries.push(sql);
+    checkCommerceD1((sql) => {
+      if (/\bFROM sqlite_(?:schema|master)\b/i.test(sql)) catalogReads += 1;
       return query(sql);
-    }).authorityState, 'paused');
-    assert.equal(queries.some((sql) => sql.includes('FROM commerce_preorder_cards')), false);
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), latestMigrationError);
-  } finally {
-    database.close();
-  }
+    });
+    assert.equal(catalogReads, 1);
+  } finally { database.close(); }
 });
 
 for (const [label, mutation] of [
@@ -673,7 +447,7 @@ test('Commerce D1 checker reloads its schema catalog between invocations', () =>
 });
 
 test('Commerce D1 checker keeps schema loading behind integrity and deployment preconditions', () => {
-  const database = currentDatabase(false, 13);
+  const database = rawDatabase(13);
   try {
     let catalogReads = 0;
     const query: CheckCommerceD1Query = (sql) => {
@@ -687,7 +461,7 @@ test('Commerce D1 checker keeps schema loading behind integrity and deployment p
     /Commerce D1 foreign-key check failed/);
     assert.throws(() => checkCommerceD1(query, { forDeployment: true }), latestMigrationError);
     database.exec("UPDATE d1_migrations SET name = 'unexpected.sql' WHERE id = 1");
-    assert.throws(() => checkCommerceD1(query), /schema baseline is invalid/);
+    assert.throws(() => checkCommerceD1(query), latestMigrationError);
     assert.equal(catalogReads, 0);
   } finally {
     database.close();
@@ -700,22 +474,6 @@ test('Commerce D1 schema catalog preserves SQLite trigger inventory matching', (
     database.exec(`CREATE TRIGGER COMMERCEaunexpected BEFORE INSERT ON commerce_documents
       BEGIN SELECT 1; END`);
     assert.throws(() => checkCommerceD1(localQuery(database)), /Commerce D1 trigger inventory is invalid/);
-  } finally {
-    database.close();
-  }
-});
-
-test('pack-status outbox migration is required for deployment while legacy inspection keeps its production query', () => {
-  const database = currentDatabase(false, 28);
-  try {
-    const queries: string[] = [];
-    const query = localQuery(database);
-    const report = checkCommerceD1((sql) => { queries.push(sql); return query(sql); });
-    assert.equal(report.packStatusOutboxMode, undefined);
-    assert.ok(queries.includes(`EXPLAIN QUERY PLAN ${renderCommerceQuerySql(
-      legacyPackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 }),
-    )}`));
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), latestMigrationError);
   } finally {
     database.close();
   }
@@ -743,32 +501,26 @@ test('pack-status outbox schema checks reject missing and weakened indexes and w
   }
 });
 
-test('pack-status outbox deployment accepts exact paused preparation and authoritative state after activation', () => {
-  const database = preparedPackStatusDatabase();
+test('pack-status outbox checks accept authoritative state while frozen markers remain unchanged', () => {
+  const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
-    const prepared = checkCommerceD1(query, { forDeployment: true });
-    assert.equal(prepared.packStatusOutboxMode, 'legacy');
-    assert.equal(prepared.packStatusOutboxPreparation, 'ready');
-    assert.equal(prepared.packStatusOutboxRows, 1);
-    database.exec(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table';
-      UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
-        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_pack_status_outbox SET state = 'completed', next_attempt_at_ms = NULL,
-        completed_at_ms = updated_at_ms + 1, updated_at_ms = updated_at_ms + 1, revision = revision + 1`);
+    const paused = checkCommerceD1(query, { forDeployment: true });
+    assert.equal(paused.packStatusOutboxMode, 'table');
+    assert.equal(paused.packStatusOutboxPreparation, 'ready');
+    assert.equal(paused.packStatusOutboxRows, 1);
+    resumeDatabase(database);
+    database.exec(`UPDATE commerce_pack_status_outbox SET state = 'completed', next_attempt_at_ms = NULL,
+      completed_at_ms = updated_at_ms + 1, updated_at_ms = updated_at_ms + 1, revision = revision + 1`);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).packStatusOutboxMode, 'table');
     assert.equal(JSON.parse(String(query('SELECT document_json FROM commerce_documents')[0].document_json))
       .packStatusProjectionState, 'pending');
-  } finally {
-    database.close();
-  }
+  } finally { database.close(); }
 });
-
 test('active pack-status checks reject lost migrated obligations and allow unmarked historical parents', () => {
-  const database = preparedPackStatusDatabase();
+  const database = currentPackStatusDatabase();
   try {
-    database.exec(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table';
-      DELETE FROM commerce_pack_status_outbox`);
+    database.exec('DELETE FROM commerce_pack_status_outbox');
     const query = localQuery(database);
     const expectedError = /Pack-status outbox is missing for source document: drops\/card_nft_2\/deliveryOrders\/1/;
     assert.throws(() => checkCommerceD1(query), expectedError);
@@ -788,30 +540,24 @@ test('active pack-status checks reject lost migrated obligations and allow unmar
   }
 });
 
-test('pack-status outbox checker rejects missing rows, changed preparation, and stale source revisions', () => {
-  const database = preparedPackStatusDatabase();
+test('pack-status outbox checker rejects missing or malformed current rows without comparing frozen source markers', () => {
+  const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
-    for (const corruption of ['missing', 'failure-count', 'generation', 'stale-revision'] as const) {
-      assert.throws(() => checkCommerceD1((sql) => {
-        const rows = query(sql);
-        if (sql === 'SELECT * FROM commerce_pack_status_outbox_control' && corruption === 'stale-revision') {
-          return rows.map((row) => ({ ...row, source_documents_revision: 0 }));
-        }
-        if (sql !== 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path') return rows;
-        if (corruption === 'missing') return [];
-        if (corruption === 'failure-count') return rows.map((row) => ({ ...row, failure_count: 3 }));
-        if (corruption === 'generation') return rows.map((row) => ({ ...row, generation: '00000000-0000-4000-8000-000000000999' }));
-        return rows;
-      }), /Pack-status outbox preparation differs from source documents/);
+    assert.throws(() => checkCommerceD1((sql) => sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
+      ? [] : query(sql)), /Pack-status outbox is missing for source document/);
+    for (const corruption of [{ failure_count: -1 }, { generation: 'invalid' }, { revision: 0 }]) {
+      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
+        sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path' ? { ...row, ...corruption } : row)),
+      /Invalid pack-status outbox/);
     }
-  } finally {
-    database.close();
-  }
+    assert.equal(checkCommerceD1((sql) => query(sql).map((row) =>
+      sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
+        ? { ...row, failure_count: 3, revision: 2, updated_at_ms: Number(row.updated_at_ms) + 1 } : row)).packStatusOutboxRows, 1);
+  } finally { database.close(); }
 });
-
 test('pack-status outbox checker rejects invalid controls, orphan rows, and malformed retry state', () => {
-  const database = preparedPackStatusDatabase();
+  const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
     for (const changes of [
@@ -836,26 +582,25 @@ test('pack-status outbox checker rejects invalid controls, orphan rows, and malf
   }
 });
 
-test('pack-status outbox deployment rejects unready preparation and preparation without a drained pause', () => {
-  const database = preparedPackStatusDatabase();
+test('Commerce D1 checker rejects every inactive control state for inspection and deployment', () => {
+  const database = currentDatabase(false);
   try {
     const query = localQuery(database);
-    for (const state of ['idle', 'preparing']) {
-      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-        sql === 'SELECT * FROM commerce_pack_status_outbox_control'
-          ? { ...row, preparation_state: state } : row), { forDeployment: true }),
-      /requires activated pack-status outbox storage or fully paused, verified preparation/);
+    for (const table of CONTROL_TABLES) {
+      for (const state of [
+        { storage_mode: 'legacy', preparation_state: 'idle' },
+        { storage_mode: 'legacy', preparation_state: 'preparing' },
+        { storage_mode: 'legacy', preparation_state: 'ready' },
+        { storage_mode: 'table', preparation_state: 'preparing' },
+      ]) {
+        const invalid: CheckCommerceD1Query = (sql) => query(sql).map((row) =>
+          sql === `SELECT * FROM ${table}` ? { ...row, ...state } : row);
+        assert.throws(() => checkCommerceD1(invalid), /control is invalid/, `${table}: ${JSON.stringify(state)}`);
+        assert.throws(() => checkCommerceD1(invalid, { forDeployment: true }), /control is invalid/);
+      }
     }
-    for (const changes of [{ paused_at_ms: null }, { authority_state: 'd1', paused_at_ms: null }]) {
-      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-        sql === 'SELECT * FROM commerce_authority_control' ? { ...row, ...changes } : row), { forDeployment: true }),
-      /requires activated pack-status outbox storage or fully paused, verified preparation/);
-    }
-  } finally {
-    database.close();
-  }
+  } finally { database.close(); }
 });
-
 test('pack-status outbox query plan must search by drop and due time without a temporary sort', () => {
   const database = currentDatabase(false);
   try {
@@ -900,56 +645,24 @@ test('Commerce D1 checker rejects chargeback history with mismatched Stripe mode
   }
 });
 
-test('Commerce D1 checker accepts the exact empty post-migration state', () => {
+test('Commerce D1 checker rejects uninitialized latest schema and accepts initialized empty storage', () => {
+  const uninitialized = rawDatabase();
+  try {
+    assert.throws(() => checkCommerceD1(localQuery(uninitialized)), /control is invalid/);
+    assert.throws(() => checkCommerceD1(localQuery(uninitialized), { forDeployment: true }), /control is invalid/);
+  } finally { uninitialized.close(); }
   const database = currentDatabase(false);
   try {
     assert.deepEqual(checkCommerceD1(localQuery(database)), {
-      authorityState: 'paused',
-      authorityRevision: 2,
-      inventoryMode: 'legacy',
-      notificationOutboxMode: 'legacy',
-      notificationOutboxPreparation: 'idle',
-      notificationOutboxGroups: 0,
-      notificationOutboxFailures: [],
-      stripeCheckoutStateMode: 'legacy',
-      stripeCheckoutStatePreparation: 'idle',
-      stripeCheckoutStateRows: 0,
-      packStatusOutboxMode: 'legacy',
-      packStatusOutboxPreparation: 'idle',
-      packStatusOutboxRows: 0,
-      deliveryRecoveryStateMode: 'legacy',
-      deliveryRecoveryStatePreparation: 'idle',
-      deliveryRecoveryStateRows: 0,
-      inventoryDrops: 0,
-      availableDudes: 0,
-      authoritativeDocuments: 0,
-      deliveryOwnerRevisions: 0,
-      documentPathRevisions: 0,
-      kindCounts: {},
+      authorityState: 'paused', authorityRevision: 2, inventoryMode: 'rows',
+      notificationOutboxMode: 'table', notificationOutboxPreparation: 'ready', notificationOutboxGroups: 0,
+      notificationOutboxFailures: [], stripeCheckoutStateMode: 'table', stripeCheckoutStatePreparation: 'ready',
+      stripeCheckoutStateRows: 0, packStatusOutboxMode: 'table', packStatusOutboxPreparation: 'ready',
+      packStatusOutboxRows: 0, deliveryRecoveryStateMode: 'table', deliveryRecoveryStatePreparation: 'ready',
+      deliveryRecoveryStateRows: 0, inventoryDrops: inventoryDropConfigs().length, availableDudes: 1,
+      authoritativeDocuments: 0, deliveryOwnerRevisions: 0, documentPathRevisions: 0, kindCounts: {},
     });
-  } finally {
-    database.close();
-  }
-});
-
-test('Commerce D1 checker still accepts migration 0013 during notification cutover', () => {
-  const database = currentDatabase(true, 13);
-  try {
-    assert.equal(checkCommerceD1(localQuery(database)).notificationOutboxMode, 'legacy');
-  } finally {
-    database.close();
-  }
-});
-
-test('Commerce D1 checker accepts migration 0014 for inspection but requires pagination before deployment', () => {
-  const database = currentDatabase(true, 14);
-  try {
-    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
-      latestMigrationError);
-  } finally {
-    database.close();
-  }
+  } finally { database.close(); }
 });
 
 test('Commerce D1 checker rejects a weakened manual-review cursor index', () => {
@@ -963,17 +676,6 @@ test('Commerce D1 checker rejects a weakened manual-review cursor index', () => 
   }
 });
 
-test('Commerce D1 checker accepts migration 0015 for inspection but requires shipment pagination before deployment', () => {
-  const database = currentDatabase(true, 15);
-  try {
-    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
-      latestMigrationError);
-  } finally {
-    database.close();
-  }
-});
-
 test('receipt Workflow readiness checks retain indexed searches before any operations exist', () => {
   const database = currentDatabase();
   try {
@@ -982,17 +684,6 @@ test('receipt Workflow readiness checks retain indexed searches before any opera
       ANALYZE sqlite_schema;`);
     assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
   } finally { database.close(); }
-});
-
-test('Commerce D1 checker requires receipt claim Workflow migration for deployment', () => {
-  const database = currentDatabase(true, 16);
-  try {
-    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }),
-      latestMigrationError);
-  } finally {
-    database.close();
-  }
 });
 
 for (const index of ['commerce_receipt_claim_workflow_operation', 'commerce_receipt_claim_workflow_due']) {
@@ -1115,7 +806,7 @@ for (const mutation of [
       assert.throws(() => checkCommerceD1((sql) => {
         if (/\bFROM sqlite_(?:schema|master)\b/i.test(sql)) catalogReads += 1;
         return query(sql);
-      }), /schema baseline is invalid/);
+      }), /schema baseline is invalid|requires the latest migration/);
       assert.equal(catalogReads, 0);
     } finally {
       database.close();
@@ -1123,69 +814,15 @@ for (const mutation of [
   });
 }
 
-test('API deployment rejects active legacy inventory while standalone inspection succeeds', () => {
-  const database = currentDatabase();
-  try {
-    const query = localQuery(database);
-    assert.equal(checkCommerceD1(query).inventoryMode, 'legacy');
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated figure inventory/);
-  } finally {
-    database.close();
-  }
-});
-
-test('API deployment requires activation even after inventory preparation and accepts ready rows mode', () => {
+test('Commerce D1 checker rejects legacy inventory for inspection and deployment', () => {
   const database = currentDatabase(false);
   try {
-    seedInventory(database);
     const query = localQuery(database);
-    assert.equal(checkCommerceD1(query).inventoryMode, 'legacy');
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated figure inventory/);
-    database.exec('DELETE FROM commerce_available_dudes');
-    database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated notification outbox/);
-    database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
-      UPDATE commerce_notification_outbox_control SET storage_mode = 'table'`);
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated Stripe checkout state/);
-    database.exec(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 0;
-      UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table'`);
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated pack-status outbox/);
-    database.exec(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 0;
-      UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table'`);
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated delivery recovery state/);
-    prepareRecoveryState(database);
-    assert.equal(checkCommerceD1(query, { forDeployment: true }).inventoryMode, 'rows');
-    assert.equal(checkCommerceD1(query, { forDeployment: true }).availableDudes, 0);
-    database.exec(`UPDATE commerce_authority_control
-      SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
-        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
-      WHERE singleton = 1`);
-    assert.equal(checkCommerceD1(query, { forDeployment: true }).authorityState, 'd1');
-  } finally {
-    database.close();
-  }
-});
-
-test('Commerce D1 checker accepts staged legacy inventory and ready native inventory', () => {
-  const database = currentDatabase(false);
-  try {
-    seedInventory(database, false);
-    const staged = checkCommerceD1(localQuery(database));
-    assert.equal(staged.inventoryMode, 'legacy');
-    assert.equal(staged.inventoryDrops, inventoryDropConfigs().length);
-    assert.equal(staged.availableDudes, 1);
-    database.exec(`UPDATE commerce_inventory_drops SET ready = 1;
-      UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1`);
-    const ready = checkCommerceD1(localQuery(database));
-    assert.equal(ready.inventoryMode, 'rows');
-    assert.equal(ready.inventoryDrops, inventoryDropConfigs().length);
-    assert.equal(ready.availableDudes, 1);
-  } finally {
-    database.close();
-  }
+    const legacy: CheckCommerceD1Query = (sql) => query(sql).map((row) =>
+      sql === 'SELECT * FROM commerce_authority_control' ? { ...row, dude_inventory_mode: 'legacy' } : row);
+    assert.throws(() => checkCommerceD1(legacy), /requires initialized figure inventory/);
+    assert.throws(() => checkCommerceD1(legacy, { forDeployment: true }), /requires initialized figure inventory/);
+  } finally { database.close(); }
 });
 
 test('Commerce D1 checker rejects native mode with missing or unready inventory', () => {
@@ -1223,6 +860,21 @@ test('Commerce D1 checker rejects inventory configuration drift', () => {
     database.close();
   }
 });
+
+for (const column of ['dude_id', 'pool_position'] as const) {
+  test(`Commerce D1 checker rejects out-of-range inventory ${column}`, () => {
+    const database = currentDatabase(false);
+    try {
+      const config = inventoryDropConfigs()[0];
+      const guard = String(database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commerce_available_dude_update_guard'").get()!.sql);
+      database.exec('DROP TRIGGER commerce_available_dude_update_guard');
+      database.prepare(`UPDATE commerce_available_dudes SET ${column} = ? WHERE drop_id = ?`)
+        .run(config.maxDudeId + 1, config.dropId);
+      database.exec(guard);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /inventory state is invalid/);
+    } finally { database.close(); }
+  });
+}
 
 test('Commerce D1 checker rejects figures that are both available and assigned', () => {
   const database = currentDatabase(false);
@@ -1347,23 +999,14 @@ test('Commerce D1 checker rejects a malformed Stripe reconciliation index', () =
 });
 
 test('Commerce D1 checker rejects a missing or malformed due ready-notification index', () => {
-  const database = currentDatabase(true, 13);
+  const database = currentDatabase();
   try {
-    database.exec('DROP INDEX commerce_ready_notifications_due');
-    assert.throws(
-      () => checkCommerceD1(localQuery(database)),
-      schemaError('commerce_ready_notifications_due', '0013_notification_outbox.sql'),
-    );
-    database.exec('CREATE INDEX commerce_ready_notifications_due ON commerce_documents (document_path)');
-    assert.throws(
-      () => checkCommerceD1(localQuery(database)),
-      schemaError('commerce_ready_notifications_due', '0013_notification_outbox.sql'),
-    );
-  } finally {
-    database.close();
-  }
+    database.exec('DROP INDEX commerce_notification_outbox_family_due');
+    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_notification_outbox_family_due'));
+    database.exec('CREATE INDEX commerce_notification_outbox_family_due ON commerce_notification_outbox (parent_path)');
+    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_notification_outbox_family_due'));
+  } finally { database.close(); }
 });
-
 test('Commerce D1 checker rejects due ready-notification scans and temporary sorts', () => {
   const database = currentDatabase();
   try {
@@ -1385,20 +1028,13 @@ test('Commerce D1 checker rejects due ready-notification scans and temporary sor
 });
 
 test('Commerce D1 checker rejects a malformed Stripe terminal-notification index', () => {
-  const database = currentDatabase(true, 13);
+  const database = currentDatabase();
   try {
-    database.exec(`DROP INDEX commerce_stripe_terminal_notifications_due;
-      CREATE INDEX commerce_stripe_terminal_notifications_due
-      ON commerce_documents (document_path)`);
-    assert.throws(
-      () => checkCommerceD1(localQuery(database)),
-      schemaError('commerce_stripe_terminal_notifications_due', '0013_notification_outbox.sql'),
-    );
-  } finally {
-    database.close();
-  }
+    database.exec(`DROP INDEX commerce_notification_outbox_stripe_due_at;
+      CREATE INDEX commerce_notification_outbox_stripe_due_at ON commerce_notification_outbox_stripe_due (parent_path)`);
+    assert.throws(() => checkCommerceD1(localQuery(database)), schemaError('commerce_notification_outbox_stripe_due_at'));
+  } finally { database.close(); }
 });
-
 test('Commerce D1 checker rejects missing, malformed, or unique Stripe identity indexes', () => {
   for (const name of [
     'commerce_documents_stripe_payment_intent',
@@ -1487,26 +1123,6 @@ test('Commerce D1 checker rejects a malformed Admin IRL Workflow operation index
   }
 });
 
-test('API deployment accepts a fully paused verified notification preparation before activation', () => {
-  const database = currentDatabase(false);
-  try {
-    seedInventory(database);
-    database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
-    database.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1;
-      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 1;
-      UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', source_documents_revision = 0;
-      UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = 1`);
-    prepareRecoveryState(database, false);
-    const result = checkCommerceD1(localQuery(database), { forDeployment: true });
-    assert.equal(result.notificationOutboxMode, 'legacy');
-    assert.equal(result.notificationOutboxPreparation, 'ready');
-    database.exec('UPDATE commerce_notification_outbox_control SET preparation_state = \'preparing\', prepared_at_ms = NULL');
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), /requires activated notification outbox/);
-  } finally { database.close(); }
-});
-
 test('Commerce D1 checker rejects weakened notification fences and outbox indexes', () => {
   for (const name of ['commerce_notification_legacy_update_fence', 'commerce_notification_outbox_resume_guard', 'commerce_notification_outbox_family_due']) {
     const database = currentDatabase(false);
@@ -1524,15 +1140,7 @@ test('Commerce D1 checker rejects missing or stale pending-owner lookup entries'
   for (const corruption of ['missing', 'wrong-owner', 'terminal-row'] as const) {
     const database = currentDatabase();
     try {
-      database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
-        1, '00000000-0000-4000-8000-000000000407',
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
-      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
-        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing';`);
+
       database.prepare(`INSERT INTO commerce_notification_outbox (
         parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
         attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
@@ -1557,15 +1165,7 @@ test('Commerce D1 checker rejects missing or stale Stripe due lookup entries', (
   for (const corruption of ['missing', 'wrong-due', 'terminal-row'] as const) {
     const database = currentDatabase();
     try {
-      database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
-        1, '00000000-0000-4000-8000-000000000407',
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
-      UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
-        paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
-        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-      UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing';`);
+
       database.prepare(`INSERT INTO commerce_notification_outbox (
         parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
         attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code
@@ -1585,22 +1185,6 @@ test('Commerce D1 checker rejects missing or stale Stripe due lookup entries', (
       assert.throws(() => checkCommerceD1(localQuery(database)), /Stripe due lookup is inconsistent/);
     } finally { database.close(); }
   }
-});
-
-test('delivery recovery migration is required for deployment while previous schemas remain inspectable', () => {
-  const database = currentDatabase(false, 29);
-  try {
-    assert.equal(checkCommerceD1(localQuery(database)).deliveryRecoveryStateMode, undefined);
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), latestMigrationError);
-  } finally { database.close(); }
-});
-
-test('delivery recovery metadata cleanup is required for deployment while migration 0032 remains inspectable', () => {
-  const database = currentDatabase(false, 32);
-  try {
-    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
-    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), latestMigrationError);
-  } finally { database.close(); }
 });
 
 test('delivery recovery checker rejects reintroduced frozen metadata after cleanup', () => {
@@ -1640,24 +1224,11 @@ test('delivery recovery checker validates all fences and the altered commit and 
   } finally { database.close(); }
 });
 
-test('delivery recovery deployment accepts verified paused preparation and rejects stale, missing, or corrupt rows', async () => {
-  const database = preparedPackStatusDatabase(false);
+test('delivery recovery checker rejects missing, malformed, and orphan authoritative rows', () => {
+  const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
-    const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
-    database.exec('DELETE FROM commerce_authority_control_lease');
-    assert.throws(() => checkCommerceD1(query, { forDeployment: true }), /requires activated delivery recovery state/);
-    await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
-    const prepared = checkCommerceD1(query, { forDeployment: true });
-    assert.equal(prepared.deliveryRecoveryStateMode, 'legacy');
-    assert.equal(prepared.deliveryRecoveryStatePreparation, 'ready');
-    assert.equal(prepared.deliveryRecoveryStateRows, 1);
-    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql === 'SELECT * FROM commerce_delivery_recovery_control'
-      ? { ...row, source_documents_revision: 0 } : row)), /preparation is stale/);
-    assert.throws(() => checkCommerceD1((sql) => sql.startsWith('SELECT recovery.*,')
-      ? [] : query(sql)), /differs from source/);
-    await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
-    assert.equal(checkCommerceD1(query, { forDeployment: true }).deliveryRecoveryStateMode, 'table');
+    assert.equal(checkCommerceD1(query, { forDeployment: true }).deliveryRecoveryStateRows, 1);
     assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
       ? { ...row, parent_path: null } : row)), /state is missing/);
     for (const corruption of [{ revision: 0 }, { generation: 'broken' }, { prepared_delay_ms: 120000 }]) {
@@ -1683,12 +1254,9 @@ test('delivery recovery deployment accepts verified paused preparation and rejec
 
 for (const change of ['creation', 'cleanup'] as const) {
   test(`delivery recovery checker accepts concurrent prepared delivery ${change}`, () => {
-    const database = preparedPackStatusDatabase();
+    const database = currentPackStatusDatabase();
     try {
-      database.exec(`UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table';
-        UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
-          paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-        DELETE FROM commerce_authority_control_lease`);
+      resumeDatabase(database);
       const parentPath = 'drops/card_nft_2/deliveryOrders/2';
       const recovery = createDeliveryRecoveryRecord({
         parentPath, receiptRecoveryJson: null, generation: '00000000-0000-4000-8000-000000000002', nowMs: 1_000,

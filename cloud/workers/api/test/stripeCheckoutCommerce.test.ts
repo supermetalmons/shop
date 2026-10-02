@@ -17,7 +17,7 @@ import {
 } from '../src/stripeCheckout/commerce.ts';
 import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
 import { createStripeCheckoutIdentity } from '../../../../shared/checkoutIdentity.ts';
-import { markStripeCheckoutFulfillmentFulfilled } from '../src/stripeCheckout/service.ts';
+import { markStripeCheckoutFulfillmentFulfilled } from '../src/stripeCheckout/store.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import {
   markStripeCheckoutReenqueued,

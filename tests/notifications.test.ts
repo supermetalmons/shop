@@ -32,7 +32,7 @@ import {
   CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
 } from '../shared/dropMediaDefaults.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

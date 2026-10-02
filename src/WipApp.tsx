@@ -16,7 +16,7 @@ import {
 } from './lib/interactiveCardPackRevealSounds';
 import { getFrontendDrop } from './config/deployment';
 import { resolveDropContent } from './lib/dropContent';
-import { dropAssetLabel } from './lib/dropLabels';
+import { dropAssetLabel } from '../shared/dropLabels.ts';
 import {
   calcPonchoDrifellaRevealTargetRectInViewport,
   PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,

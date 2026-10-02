@@ -1,321 +1,80 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { parsePackStatusOutboxControlArgs, runPackStatusOutboxControl } from '../scripts/ops/packStatusOutboxControl.ts';
-import {
-  acquireCommerceAuthorityLease,
-  COMMERCE_D1_NOW_MS_SQL,
-  parseCommerceD1DocumentRow,
-} from '../scripts/shared/commerceD1Maintenance.ts';
-import { planPackStatusOutboxBackfill } from '../scripts/shared/packStatusOutboxMaintenance.ts';
-import { parsePackStatusOutboxRow } from '../shared/packStatusOutbox.ts';
+import { commerceKeys } from '../cloud/workers/api/src/commerceRepository.ts';
+import { createCommerceD1Harness, seedCommerceDocuments, seedPackStatusOutbox } from '../cloud/workers/api/test/commerceD1Harness.ts';
+import type { PackStatusOutboxRecord } from '../shared/packStatusOutbox.ts';
+import { commerceTestQuery, createCurrentCommerceDatabase } from './helpers/commerceDatabase.ts';
 
-const timestamp = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
-const dropId = 'card_nft_2';
-
-function withLease(db: DatabaseSync, operation: () => void) {
-  db.exec(`INSERT INTO commerce_authority_control_lease VALUES
-    (1, '00000000-0000-4000-8000-000000002099', ${timestamp}, ${timestamp} + 60000)`);
-  try { operation(); } finally { db.exec('DELETE FROM commerce_authority_control_lease'); }
+function record(id: number): PackStatusOutboxRecord {
+  return { parentPath: `drops/drop/deliveryOrders/${id}`, dropId: 'drop', generation: crypto.randomUUID(),
+    state: 'pending', revision: 1, failureCount: 0, nextAttemptAtMs: 0, completedAtMs: null, failedAtMs: null,
+    lastErrorCode: null, createdAtMs: 0, updatedAtMs: 0 };
+}
+function fixture(t: test.TestContext, count = 1, marker = false) {
+  const harness = createCommerceD1Harness();
+  t.after(() => harness.database.close());
+  seedCommerceDocuments(harness, Array.from({ length: count }, (_, index) => ({
+    key: commerceKeys.deliveryOrder('drop', String(index + 1)), data: { status: 'ready_to_ship', deliveryId: index + 1,
+      ...(marker ? { packStatusProjectionState: 'pending' } : {}) },
+  })));
+  return { harness, query: commerceTestQuery(harness.database) };
 }
 
-function database(context: { after: (cleanup: () => void) => void }) {
-  const db = new DatabaseSync(':memory:');
-  context.after(() => db.close());
-  db.exec('PRAGMA foreign_keys = ON');
-  const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
-  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql')).sort()) {
-    db.exec(readFileSync(new URL(name, directory), 'utf8'));
-  }
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp};
-    UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
-      paused_at_ms = NULL, updated_at_ms = ${timestamp}`));
-  return db;
-}
-
-function pause(db: DatabaseSync) {
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET authority_state = 'paused',
-    revision = revision + 1, paused_at_ms = NULL, updated_at_ms = ${timestamp};
-    UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp}`));
-}
-
-function resume(db: DatabaseSync) {
-  withLease(db, () => db.exec(`UPDATE commerce_authority_control SET authority_state = 'd1',
-    revision = revision + 1, paused_at_ms = NULL, updated_at_ms = ${timestamp}`));
-}
-
-function insert(db: DatabaseSync, id: number, data: Record<string, unknown> = {}) {
-  db.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
-  ) VALUES (?, 'delivery_order', ?, ?, ?, 1, '2026-09-01T00:00:00.000Z', '2026-09-01T00:01:00.000Z')`)
-    .run(`drops/${dropId}/deliveryOrders/${id}`, dropId, String(id), JSON.stringify({
-      deliveryId: id, status: 'ready_to_ship', items: [{ kind: 'box', refId: 1 }], ...data,
-    }));
-  db.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1');
-}
-
-function query(db: DatabaseSync) { return (sql: string) => db.prepare(sql).all().map((row) => ({ ...row })); }
-function execute(db: DatabaseSync, command: string, overrides: Parameters<typeof runPackStatusOutboxControl>[1] = {}) {
-  const revision = db.prepare('SELECT revision FROM commerce_authority_control').get()!.revision;
-  return runPackStatusOutboxControl([command, ...(command === 'status' ? [] : ['--write', '--expected-revision', String(revision)]),
-    ...(command === 'activate' ? ['--worker-deployed'] : [])], { query: query(db), ...overrides });
-}
-
-test('pack-status control requires deliberate writes and compatible publication', () => {
-  assert.throws(() => parsePackStatusOutboxControlArgs(['prepare']), /requires --write/);
-  assert.throws(() => parsePackStatusOutboxControlArgs(['status', '--write']), /read-only/);
-  assert.throws(() => parsePackStatusOutboxControlArgs(['activate', '--write', '--expected-revision', '1']), /--worker-deployed/);
-  assert.throws(() => parsePackStatusOutboxControlArgs(['prepare', '--write', '--expected-revision', '1', '--worker-deployed']), /only to activation/);
-});
-
-test('preparation preserves explicit projection states and leaves unmarked historical orders alone', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending', packStatusProjectionFailureCount: 2,
-    packStatusProjectionNextAttemptAtMs: 1700000000000, packStatusProjectionLastErrorCode: 'd1-write-failed' });
-  insert(db, 2, { packStatusProjectionState: 'completed', packStatusProjectionFailureCount: 1,
-    packStatusProjectionCompletedAt: 1700000000100 });
-  insert(db, 3, { packStatusProjectionState: 'failed', packStatusProjectionFailedAt: 1700000000200,
-    packStatusProjectionLastErrorCode: 'invalid-order-items' });
-  insert(db, 4);
-  const documents = query(db)('SELECT * FROM commerce_documents ORDER BY document_path');
-  const revision = query(db)('SELECT documents_revision FROM commerce_authority_control')[0].documents_revision;
-  pause(db);
-  const prepared = await execute(db, 'prepare');
-  assert.equal(prepared.preparation, 'ready');
-  assert.equal(prepared.projectionCount, 3);
-  assert.equal(prepared.validationError, null);
-  const expected = documents.map(parseCommerceD1DocumentRow).flatMap((document) => planPackStatusOutboxBackfill(document) ?? []);
-  assert.deepEqual(query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path').map(parsePackStatusOutboxRow), expected);
-  assert.deepEqual(query(db)('SELECT * FROM commerce_documents ORDER BY document_path'), documents);
-  assert.equal(query(db)('SELECT documents_revision FROM commerce_authority_control')[0].documents_revision, revision);
-  const active = await execute(db, 'activate');
-  assert.equal(active.mode, 'table');
-  assert.equal(active.validationError, null);
-  assert.deepEqual(query(db)('SELECT * FROM commerce_documents ORDER BY document_path'), documents);
-  assert.throws(() => withLease(db, () => db.exec("UPDATE commerce_pack_status_outbox_control SET storage_mode = 'legacy'")), /irreversible/);
-  resume(db);
-  assert.throws(() => db.exec(`UPDATE commerce_documents SET document_json = json_set(document_json, '$.packStatusProjectionState', 'completed'),
-    version = version + 1 WHERE document_id = '1'`), /legacy pack-status projection/);
-  assert.throws(() => insert(db, 5, { packStatusProjectionState: 'pending' }), /legacy pack-status projection/);
-});
-
-test('legacy defaults match the existing retry reader and preparation is deterministic', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  insert(db, 2, { packStatusProjectionState: 'completed' });
-  pause(db);
-  await execute(db, 'prepare');
-  const before = query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path');
-  assert.equal(before[0].failure_count, 0);
-  assert.equal(before[0].next_attempt_at_ms, 0);
-  assert.equal(before[1].completed_at_ms, null);
-  await execute(db, 'prepare');
-  assert.deepEqual(query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'), before);
-});
-
-for (const mode of ['legacy', 'table'] as const) {
-  test(`${mode} final maintenance summary renews its lease throughout a long scan`, async (context) => {
-    const db = database(context);
-    for (let id = 1; id <= 151; id += 1) insert(db, id, { packStatusProjectionState: 'pending' });
-    pause(db);
-    if (mode === 'table') {
-      await execute(db, 'prepare');
-      await execute(db, 'activate');
-    }
-    let now = Date.now();
-    context.mock.method(Date, 'now', () => now);
-    const startedAt = now;
-    const read = (sql: string) => query(db)(sql.replaceAll(COMMERCE_D1_NOW_MS_SQL, String(now)));
-    let stateReads = 0;
-    let competingAttempts = 0;
-    const result = await execute(db, 'prepare', { query: async (sql) => {
-      const rows = read(sql);
-      if (sql.startsWith('SELECT authority.authority_state')) stateReads += 1;
-      if (stateReads === 3 && (sql.startsWith('SELECT document_path') || sql.startsWith('SELECT outbox.*'))) {
-        now += 5 * 60_000;
-        competingAttempts += 1;
-        await assert.rejects(acquireCommerceAuthorityLease(read, '00000000-0000-4000-8000-000000002098'), /already running/);
-      }
-      return rows;
-    } });
-    assert.ok(now - startedAt > 30 * 60_000);
-    assert.ok(competingAttempts > 6);
-    assert.equal(result.mode, mode);
-    assert.equal(result.projectionCount, 151);
-    assert.equal(result.validationError, null);
-    assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
-  });
-}
-
-test('a final summary renewal failure rejects maintenance and still releases the lease', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  pause(db);
-  let now = Date.now();
-  context.mock.method(Date, 'now', () => now);
-  let stateReads = 0;
-  let renewalFailed = false;
-  await assert.rejects(execute(db, 'prepare', { query: (sql) => {
-    if (sql.startsWith('UPDATE commerce_authority_control_lease')) {
-      renewalFailed = true;
-      throw new Error('renewal unavailable');
-    }
-    const rows = query(db)(sql);
-    if (sql.startsWith('SELECT authority.authority_state') && ++stateReads === 3) now += 60_000;
-    return rows;
-  } }), /lease could not be renewed/);
-  assert.equal(renewalFailed, true);
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
-});
-
-test('status performs no lease writes while reporting invalid state', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'unknown' });
-  const status = await execute(db, 'status', { query: (sql) => {
-    assert.match(sql, /^SELECT /);
-    return query(db)(sql);
-  } });
-  assert.match(status.validationError || '', /validation failed/);
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
-});
-
-test('all legacy sources are validated before importing any rows', async (context) => {
-  for (const invalid of [
-    { packStatusProjectionState: 'unknown' },
-    { packStatusProjectionState: 'pending', packStatusProjectionFailureCount: null },
-    { packStatusProjectionState: 'pending', packStatusProjectionNextAttemptAtMs: -1 },
-    { packStatusProjectionState: 'completed', packStatusProjectionCompletedAt: 'yesterday' },
-    { packStatusProjectionFailureCount: 1 },
-    { packStatusProjectionState: 'pending', deliveryId: 999 },
-    { packStatusProjectionState: 'pending', items: [] },
-    { packStatusProjectionState: 'pending', source: 'stripe_offchain' },
-  ]) {
-    const db = database(context);
-    insert(db, 1, { packStatusProjectionState: 'pending' });
-    insert(db, 2, invalid);
-    pause(db);
-    await assert.rejects(execute(db, 'prepare'), /validation failed for drops\/card_nft_2\/deliveryOrders\/2/);
-    assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 0);
-    assert.equal(query(db)('SELECT preparation_state FROM commerce_pack_status_outbox_control')[0].preparation_state, 'idle');
-    assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
+test('pack-status inspection accepts only read-only status', () => {
+  assert.deepEqual(parsePackStatusOutboxControlArgs(['status']), { command: 'status' });
+  for (const args of [[], ['prepare'], ['activate'], ['status', '--write'], ['status', '--expected-revision', '2']]) {
+    assert.throws(() => parsePackStatusOutboxControlArgs(args), /read-only/);
   }
 });
 
-test('interrupted preparation retains identical rows and blocks resume until activation', async (context) => {
-  const db = database(context);
-  for (let id = 1; id <= 30; id += 1) insert(db, id, { packStatusProjectionState: 'pending' });
-  pause(db);
-  let imports = 0;
-  await assert.rejects(execute(db, 'prepare', { query: (sql) => {
-    if (sql.startsWith('INSERT INTO commerce_pack_status_outbox (') && ++imports === 3) throw new Error('interrupted');
-    return query(db)(sql);
-  } }), /interrupted/);
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 2);
-  const partial = query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path');
-  assert.throws(() => resume(db), /cutover is incomplete/);
-  await execute(db, 'prepare');
-  const complete = query(db)('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path');
-  assert.equal(complete.length, 30);
-  assert.deepEqual(complete.slice(0, 2), partial);
-  await execute(db, 'activate');
-  resume(db);
+test('uninitialized pack-status reports readiness and never imports markers', async (t) => {
+  const database = createCurrentCommerceDatabase(t);
+  const query = commerceTestQuery(database);
+  const result = await runPackStatusOutboxControl(['status'], { query: (sql) => { assert.match(sql, /^SELECT/); return query(sql); } });
+  assert.equal(result.mode, 'legacy');
+  assert.equal(result.preparation, 'idle');
+  assert.match(result.validationError || '', /not initialized/);
+  assert.deepEqual(result.groups, []);
 });
 
-test('misplaced legacy markers on non-order records fail before preparation or imports', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  db.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
-  ) VALUES ('claimCodes/misplaced', 'claim_code', NULL, 'misplaced', ?, 1,
-    '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')`)
-    .run(JSON.stringify({ packStatusProjectionState: 'pending' }));
-  db.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1');
-  pause(db);
-  assert.match((await execute(db, 'status')).validationError || '', /claimCodes\/misplaced/);
-  await assert.rejects(execute(db, 'prepare'), /claimCodes\/misplaced/);
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 0);
-  assert.equal(query(db)('SELECT preparation_state FROM commerce_pack_status_outbox_control')[0].preparation_state, 'idle');
-  assert.doesNotThrow(() => resume(db));
-});
-
-test('maintenance rejects missing drain, stale revision, stale preparation and overlapping leases', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  await assert.rejects(execute(db, 'prepare'), /completed Commerce pause/);
-  pause(db);
-  await assert.rejects(runPackStatusOutboxControl(['prepare', '--write', '--expected-revision', '999'], { query: query(db) }), /expected authority revision/);
-  db.exec(`INSERT INTO commerce_authority_control_lease VALUES
-    (1, '00000000-0000-4000-8000-000000002098', ${timestamp}, ${timestamp} + 60000)`);
-  await assert.rejects(execute(db, 'prepare'), /already running/);
-  db.exec('DELETE FROM commerce_authority_control_lease');
-  await execute(db, 'prepare');
-  withLease(db, () => db.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1'));
-  await assert.rejects(execute(db, 'activate'), /preparation is incomplete or stale/);
-  assert.throws(() => resume(db), /cutover is incomplete/);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-});
-
-test('activation requires exact prepared rows and source equality', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  pause(db);
-  await execute(db, 'prepare');
-  withLease(db, () => db.exec(`UPDATE commerce_pack_status_outbox_control SET preparation_state = 'preparing', prepared_at_ms = NULL;
-    UPDATE commerce_pack_status_outbox SET failure_count = 5;
-    UPDATE commerce_pack_status_outbox_control SET preparation_state = 'ready', prepared_at_ms = ${timestamp}`));
-  await assert.rejects(execute(db, 'activate'), /differs from source/);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-});
-
-test('active preparation validates current state without replaying frozen JSON', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  pause(db);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-  resume(db);
-  db.exec(`UPDATE commerce_pack_status_outbox SET state = 'completed', next_attempt_at_ms = NULL,
-    completed_at_ms = ${timestamp}, revision = revision + 1, updated_at_ms = ${timestamp}`);
-  pause(db);
-  const before = query(db)('SELECT * FROM commerce_pack_status_outbox');
-  const status = await execute(db, 'prepare');
-  assert.equal(status.mode, 'table');
-  assert.equal(status.validationError, null);
-  assert.deepEqual(query(db)('SELECT * FROM commerce_pack_status_outbox'), before);
-  assert.equal(JSON.parse(String(query(db)('SELECT document_json FROM commerce_documents')[0].document_json)).packStatusProjectionState, 'pending');
-});
-
-test('lost activation response is recovered by observing the committed control state', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  pause(db);
-  await execute(db, 'prepare');
-  let lost = false;
-  const status = await execute(db, 'activate', { query: (sql) => {
-    const rows = query(db)(sql);
-    if (!lost && sql.startsWith("UPDATE commerce_pack_status_outbox_control SET storage_mode = 'table'")) {
-      lost = true;
-      throw new Error('response lost');
-    }
-    return rows;
+test('active pack-status inspection is bounded, read-only and preserves terminal retry metadata', async (t) => {
+  const { harness, query } = fixture(t, 53, true);
+  for (let id = 1; id <= 53; id += 1) seedPackStatusOutbox(harness, { ...record(id),
+    state: 'completed', nextAttemptAtMs: null, completedAtMs: 10, updatedAtMs: 10, failureCount: 2 });
+  const before = query('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path');
+  let pages = 0;
+  const result = await runPackStatusOutboxControl(['status'], { query: (sql) => {
+    assert.match(sql, /^SELECT/);
+    if (sql.includes('SELECT outbox.*, document.document_kind')) { pages += 1; assert.match(sql, /LIMIT 25$/); }
+    return query(sql);
   } });
-  assert.equal(lost, true);
-  assert.equal(status.mode, 'table');
+  assert.equal(pages, 3);
+  assert.equal(result.projectionCount, 53);
+  assert.equal(result.validationError, null);
+  assert.equal(result.groups[0].state, 'completed');
+  assert.deepEqual(query('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'), before);
 });
 
-test('active validation detects a lost migrated obligation without comparing frozen retry state', async (context) => {
-  const db = database(context);
-  insert(db, 1, { packStatusProjectionState: 'pending' });
-  insert(db, 2);
-  pause(db);
-  await execute(db, 'prepare');
-  await execute(db, 'activate');
-  withLease(db, () => db.exec('DELETE FROM commerce_pack_status_outbox'));
-  const status = await execute(db, 'status');
-  assert.match(status.validationError || '', /outbox is missing: drops\/card_nft_2\/deliveryOrders\/1/);
-  await assert.rejects(execute(db, 'prepare'), /outbox is missing/);
-  assert.equal(query(db)('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 0);
+test('active status detects lost historical obligations without inventing work for unmarked orders', async (t) => {
+  const { harness, query } = fixture(t, 1, true);
+  const missing = await runPackStatusOutboxControl(['status'], { query });
+  assert.match(missing.validationError || '', /outbox is missing/);
+  assert.equal(query('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 0);
+  seedPackStatusOutbox(harness, record(1));
+  assert.equal((await runPackStatusOutboxControl(['status'], { query })).validationError, null);
+  const unmarked = fixture(t);
+  const empty = await runPackStatusOutboxControl(['status'], { query: unmarked.query });
+  assert.equal(empty.validationError, null);
+  assert.equal(empty.projectionCount, 0);
+});
+
+test('active pack-status inspection surfaces corrupt rows and parent mismatches', async (t) => {
+  const { harness, query } = fixture(t);
+  seedPackStatusOutbox(harness, record(1));
+  for (const patch of [{ parent_kind: 'stripe_checkout' }, { parent_drop_id: 'other' }, { failure_count: -1 }]) {
+    const result = await runPackStatusOutboxControl(['status'], { query: (sql) => query(sql).map((row) =>
+      sql.includes('SELECT outbox.*, document.document_kind') ? { ...row, ...patch } : row) });
+    assert.ok(result.validationError);
+  }
 });

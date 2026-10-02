@@ -10,10 +10,8 @@ import {
   buildAdminIrlRedeemMarkerDocument,
   buildAdminIrlRedeemSelectionKey,
 } from '../cloud/workers/api/src/adminIrlRedeem.ts';
-import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
-  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import { STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE } from '../shared/stripeReceiptClaims.ts';
 
 const OWNER = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const RECEIPT_OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';

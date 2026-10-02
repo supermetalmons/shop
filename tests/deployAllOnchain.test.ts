@@ -42,16 +42,8 @@ import {
   BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC,
   BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
 } from '../shared/boxMinterConfigCodec.ts';
-import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
-import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
-import { NEW_DROP as LITTLE_SWAG_HOODIES_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies.ts';
-import { NEW_DROP as LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies_devnet.ts';
-import { NEW_DROP as CARD_NFT_BINDER_NEW_DROP } from '../scripts/newDrops/card_nft_binder.ts';
-import { NEW_DROP as CARD_NFT_BINDER_DEVNET_NEW_DROP } from '../scripts/newDrops/card_nft_binder_devnet.ts';
-import {
-  MONS_SHOP_RECEIPTS_POOL_ID,
-  requireReceiptPoolSpec,
-} from '../scripts/shared/receiptPoolConfig.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
+import { MONS_SHOP_RECEIPTS_POOL_ID } from '../scripts/shared/receiptPoolConfig.ts';
 import {
   assertReceiptPoolRpcGenesisHash,
   classifyReceiptPoolJournalRetry,
@@ -1299,62 +1291,11 @@ test('formatFreshProgramKeypairNotice warns to back up non-git fresh shared prog
   assert.match(notice, /Previous keypair backup: .*onchain\/target\/deploy\/box_minter-keypair\.bak\.json/);
 });
 
-test('card_nft_2 new drop config enables live Stripe Checkout at $44', () => {
-  assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeCheckoutEnabled, true);
-  assert.equal(CARD_NFT_2_NEW_DROP.onchain.stripeLiveUnitAmountCents, 4400);
-});
-
-test('little_swag_hoodies new drop configs use CDN collection image', () => {
-  for (const drop of [LITTLE_SWAG_HOODIES_NEW_DROP, LITTLE_SWAG_HOODIES_DEVNET_NEW_DROP]) {
-    assert.equal(drop.onchain.collectionMetadata.image, LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL);
-    assert.match(drop.onchain.collectionMetadata.image || '', /^https:\/\/cdn\.lil\.org\//);
-  }
-});
-
-test('card_nft_binder configs use the shared Stripe-only receipt pool', () => {
-  const spec = requireReceiptPoolSpec(MONS_SHOP_RECEIPTS_POOL_ID);
-  assert.equal(spec.collectionMetadataUri, 'https://cdn.lil.org/nft/mons_shop_receipts/collection.json');
-  assert.equal(spec.receiptsTree.maxDepth, 14);
-  assert.equal(spec.receiptsTree.maxBufferSize, 64);
-  assert.equal(spec.receiptsTree.canopyDepth, 8);
-
-  for (const drop of [
-    CARD_NFT_BINDER_NEW_DROP,
-    CARD_NFT_BINDER_DEVNET_NEW_DROP,
-  ]) {
-    assert.equal(drop.onchain.dropFamily, 'card_nft_binder');
-    assert.equal(drop.onchain.displayName, 'Card NFT Binder');
-    assert.equal(drop.onchain.salesMode, 'stripe_receipt_only');
-    assert.equal(drop.onchain.receiptPoolId, MONS_SHOP_RECEIPTS_POOL_ID);
-    assert.equal(drop.onchain.metadataBase, 'https://cdn.lil.org/nft/card_nft_binder/json');
-    assert.equal(drop.onchain.collectionMetadata, undefined);
-    assert.equal(drop.onchain.receiptsTree, undefined);
-    assert.equal(drop.onchain.coreCollectionRoyaltiesBps, undefined);
-    assert.equal(drop.onchain.symbol, undefined);
-    assert.equal(drop.onchain.priceSol, 1_000_000);
-    assert.equal(drop.onchain.discountPriceSol, 1_000_000);
-    assert.equal(drop.onchain.stripeCheckoutEnabled, true);
-    assert.equal(drop.onchain.itemsPerBox, 0);
-    assert.equal(drop.onchain.maxPerTx, 1);
-    assert.equal(drop.onchain.maxSupply, 15);
-  }
-
-  assert.equal(
-    CARD_NFT_BINDER_NEW_DROP.deploy.reuseProgramIdFromDropId,
-    'little_swag_hoodies',
-  );
-  assert.equal(
-    CARD_NFT_BINDER_DEVNET_NEW_DROP.deploy.reuseProgramIdFromDropId,
-    'little_swag_hoodies_devnet',
-  );
-  assert.equal(
-    CARD_NFT_BINDER_NEW_DROP.onchain.stripeLiveUnitAmountCents,
-    10_000,
-  );
-  assert.equal(
-    CARD_NFT_BINDER_DEVNET_NEW_DROP.onchain.stripeLiveUnitAmountCents,
-    undefined,
-  );
+test('deployed drops retain their recorded Stripe prices', () => {
+  assert.equal(DEPLOYMENT_DROPS.card_nft_2.stripeLiveUnitAmountCents, 4400);
+  assert.equal(DEPLOYMENT_DROPS.little_swag_hoodies.stripeLiveUnitAmountCents, 21_900);
+  assert.equal(DEPLOYMENT_DROPS.little_swag_hoodies.stripeCheckoutEnabled, true);
+  assert.equal(DEPLOYMENT_DROPS.little_swag_hoodies_devnet.stripeCheckoutEnabled, true);
 });
 
 test('shared receipt pool capacity is aggregate and rejects untracked mints', () => {

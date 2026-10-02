@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { InventoryItem, InventoryPreviewVideo } from '../types';
 import { getFrontendDrop, isDropFamily } from '../config/deployment';
-import { dropAssetCount, dropMintSelectionLabel } from '../lib/dropLabels';
+import { dropAssetCount, dropMintSelectionLabel } from '../../shared/dropLabels.ts';
 import { getInventoryRevealRect } from '../lib/inventoryMediaRect';
 import { playMutedAutoplayVideo } from '../lib/autoplayVideo';
 import { ColorSchemeImage, colorSchemeBackgroundImageStyle } from './ColorSchemeImage';

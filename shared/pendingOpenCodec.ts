@@ -1,7 +1,6 @@
 import { isOpenableBoxMinterItemsPerBox } from './boxMinterProtocol.ts';
 import {
   bytesEqual,
-  hasAnyNonZeroByte,
   readU32LE,
   readU64LE,
 } from './byteCodec.ts';
@@ -38,8 +37,6 @@ export type DecodedPendingOpenData = {
 
 export type DecodePendingOpenDataOptions = {
   legacyDudeCounts?: readonly unknown[];
-  inferLegacyDudeCount?: boolean;
-  allowZeroPaddingAfterConfig?: boolean;
 };
 
 const HEADER_LEN = 8 + 32 + 32;
@@ -49,12 +46,6 @@ const VEC_BASE_LEN = HEADER_LEN + 4 + 8 + 1;
 export function normalizePendingOpenDudeCount(value: unknown): number | null {
   const count = Number(value);
   return isOpenableBoxMinterItemsPerBox(count) ? count : null;
-}
-
-function inferLegacyFixedDudeCount(dataLength: number): number | null {
-  const dudeBytes = dataLength - LEGACY_BASE_LEN;
-  if (dudeBytes < 32 || dudeBytes % 32 !== 0) return null;
-  return normalizePendingOpenDudeCount(dudeBytes / 32);
 }
 
 function decodeLegacyFixed(
@@ -79,10 +70,7 @@ function decodeLegacyFixed(
   return { owner, boxAsset, dudeAssets, createdSlot, bump, layout: 'legacyFixed' };
 }
 
-function decodeVec(
-  data: Uint8Array,
-  allowZeroPaddingAfterConfig: boolean,
-): DecodedPendingOpenData {
+function decodeVec(data: Uint8Array): DecodedPendingOpenData {
   if (data.length < VEC_BASE_LEN) {
     throw new PendingOpenCodecError('too-short');
   }
@@ -117,10 +105,7 @@ function decodeVec(
     }
     config = trailing.subarray(0, 32);
     const padding = trailing.subarray(32);
-    if (
-      (!allowZeroPaddingAfterConfig && padding.length > 0) ||
-      hasAnyNonZeroByte(padding)
-    ) {
+    if (padding.length > 0) {
       throw new PendingOpenCodecError('unexpected-trailing-bytes');
     }
   }
@@ -159,13 +144,7 @@ export function decodePendingOpenData(
       const decoded = decodeLegacyFixed(data, dudeCount);
       if (decoded) return decoded;
     }
-  } else if (options.inferLegacyDudeCount) {
-    const inferredDudeCount = inferLegacyFixedDudeCount(data.length);
-    if (inferredDudeCount != null) {
-      const decoded = decodeLegacyFixed(data, inferredDudeCount);
-      if (decoded) return decoded;
-    }
   }
 
-  return decodeVec(data, options.allowZeroPaddingAfterConfig === true);
+  return decodeVec(data);
 }

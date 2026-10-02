@@ -1,7 +1,6 @@
 import { createDeliveryRecoveryRecord, parseDeliveryRecoveryRow, updateDeliveryRecoveryRecord, deliveryRecoveryRow } from '../../../../shared/deliveryRecoveryState.ts';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
 import { readCommerceMigrations } from '../../../../scripts/shared/commerceMigrationReplay.ts';
 import { parseNotificationOutboxRecord, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.ts';
 import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
@@ -310,7 +309,9 @@ export function initializeCommerceInventory(harness: CommerceD1Harness, args: {
   const legacyPool = database.prepare(`SELECT document_json FROM commerce_documents
     WHERE document_kind = 'dude_pool' AND drop_id = ?`).get(args.dropId);
   const rawPool = args.available ?? (legacyPool ? JSON.parse(String(legacyPool.document_json)).available : undefined);
-  const pool = sanitizeDudeAssignmentPool(rawPool, args.maxDudeId).pool;
+  const pool = Array.isArray(rawPool)
+    ? [...new Set(rawPool.map((value) => Math.floor(Number(value))).filter((id) => Number.isFinite(id) && id >= 1 && id <= args.maxDudeId))]
+    : Array.from({ length: args.maxDudeId }, (_, index) => index + 1);
   const assigned = new Set(database.prepare(`SELECT document_id FROM commerce_documents
     WHERE document_kind = 'dude_assignment' AND drop_id = ?`).all(args.dropId)
     .map((row) => Number(row.document_id)));

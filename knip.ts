@@ -1,4 +1,9 @@
 import type { KnipConfig } from 'knip';
+import { readdirSync } from 'node:fs';
+
+const newDropEntries = readdirSync(new URL('./scripts/newDrops/', import.meta.url), { withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.startsWith('.'))
+  .map((entry) => `scripts/newDrops/${entry.name}`);
 
 const config = {
   compilers: {
@@ -13,9 +18,8 @@ const config = {
         'cloud/workers/api/test/*.test.ts',
         'cloud/workers/api/runtime-test/*.test.ts',
         'cloud/workers/frontend/test/*.test.ts',
-        'scripts/newDrops/*.ts',
+        ...newDropEntries,
         'scripts/newPreorderCollections/*.ts',
-        'scripts/ops/*.ts',
         'tests/api/*.test.ts',
         'tests/*.test.ts',
       ],

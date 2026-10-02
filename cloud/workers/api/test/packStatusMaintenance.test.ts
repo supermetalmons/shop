@@ -20,6 +20,7 @@ import type { CommerceD1Document } from '../../../../scripts/shared/commerceD1Ma
 import type { PackStatusCounters } from '../../../../shared/packStatus.ts';
 import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 import { createDeliveryRecoveryRecord, deliveryRecoveryRow } from '../../../../shared/deliveryRecoveryState.ts';
+import { bootstrapTestCommerce, commerceTestQuery, createCurrentCommerceDatabase } from '../../../../tests/helpers/commerceDatabase.ts';
 
 const dropRows = [
   ['card_nft_2', 100, 300, 3],
@@ -135,27 +136,31 @@ function projectionOutbox(state: PackStatusOutboxRecord['state']): PackStatusOut
 }
 
 test('pack-status rebuild uses active table state instead of frozen legacy markers', () => {
-  const order = { packStatusProjectionState: 'pending' };
+  const runtime = { dropId: 'card_nft_2', cluster: 'mainnet-beta' as const, itemsPerBox: 3, maxSupply: 100 };
+  const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
   for (const state of ['completed', 'cancelled'] as const) {
-    assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([order], [projectionOutbox(state)]));
+    assert.doesNotThrow(() => rebuildPackStatusCounters(runtime, {
+      assignments: [], deliveryOrders: [parent], packStatusOutboxes: [projectionOutbox(state)],
+    }));
   }
-  assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([{}], []));
+  assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([]));
   for (const state of ['pending', 'failed'] as const) {
-    assert.throws(() => requireSettledPackStatusProjectionOutboxes([{ packStatusProjectionState: 'completed' }],
-      [projectionOutbox(state)]), /outbox to be settled/);
+    assert.throws(() => rebuildPackStatusCounters(runtime, {
+      assignments: [],
+      deliveryOrders: [commerceDocument('delivery_order', '1', { packStatusProjectionState: 'completed' })],
+      packStatusOutboxes: [projectionOutbox(state)],
+    }), /outbox to be settled/);
   }
 });
 
-test('pack-status snapshot reads table authority and refuses partial schemas or invalid control', () => {
+test('pack-status snapshot reads table authority and rejects invalid controls or missing parents', () => {
   const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
   const recovery = createDeliveryRecoveryRecord({ parentPath: parent.path, receiptRecoveryJson: null,
     nowMs: 1, generation: '00000000-0000-4000-8000-000000000030' });
   const { receipt_recovery_json: recoveryPayload, ...recoveryMetadata } = deliveryRecoveryRow(recovery);
   const rows = (sql: string): Record<string, unknown>[] => {
-    if (sql.includes('FROM sqlite_schema')) {
-      if (sql.includes('commerce_delivery_recovery')) return [{ name: 'commerce_delivery_recovery' }, { name: 'commerce_delivery_recovery_control' }];
-      if (sql.includes('commerce_stripe_checkout_state')) return [];
-      return [{ name: 'commerce_pack_status_outbox' }, { name: 'commerce_pack_status_outbox_control' }];
+    if (sql.startsWith('SELECT\n    (SELECT storage_mode')) {
+      return [{ checkout_state_mode: 'table', recovery_state_mode: 'table' }];
     }
     if (sql.startsWith('SELECT storage_mode')) return [{ storage_mode: 'table' }];
     if (sql.startsWith('SELECT * FROM commerce_pack_status_outbox')) return [packStatusOutboxRow(projectionOutbox('completed'))];
@@ -168,22 +173,32 @@ test('pack-status snapshot reads table authority and refuses partial schemas or 
       } : {}) }];
   };
   const snapshot = readPackStatusCommerceSnapshot('card_nft_2', rows);
-  assert.equal(snapshot.packStatusOutboxes?.[0].state, 'completed');
+  assert.equal(snapshot.packStatusOutboxes[0].state, 'completed');
   assert.equal(snapshot.deliveryOrders[0].data.packStatusProjectionState, 'pending');
-  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes('FROM sqlite_schema')
-    ? [{ name: 'commerce_pack_status_outbox_control' }] : rows(sql)), /schema is incomplete/);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
-    ? [{ storage_mode: 'unknown' }] : rows(sql)), /control is invalid/);
+    ? [{ storage_mode: 'unknown' }] : rows(sql)), /requires active table storage/);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes("document_kind = 'delivery_order'")
     ? [] : rows(sql)), /parent is invalid/);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT * FROM commerce_pack_status_outbox')
     ? [] : rows(sql)), /outbox is missing/);
   assert.throws(() => rebuildPackStatusCounters({ dropId: 'card_nft_2', cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 100 },
     { assignments: [], deliveryOrders: [parent], packStatusOutboxes: [] }), /outbox is missing/);
-  assert.equal(readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
-    ? [{ storage_mode: 'legacy' }] : rows(sql)).packStatusOutboxes, undefined);
-  assert.equal(readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes('FROM sqlite_schema')
-    ? [] : rows(sql)).packStatusOutboxes, undefined);
+  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
+    ? [{ storage_mode: 'legacy' }] : rows(sql)), /requires active table storage/);
+});
+
+test('pack-status snapshots require current state tables even when no orders exist', async (context) => {
+  for (const table of ['commerce_pack_status_outbox', 'commerce_pack_status_outbox_control',
+    'commerce_stripe_checkout_state', 'commerce_delivery_recovery']) {
+    const database = createCurrentCommerceDatabase(context);
+    await bootstrapTestCommerce(database);
+    const query = commerceTestQuery(database);
+    assert.deepEqual(readPackStatusCommerceSnapshot('card_nft_2', query), {
+      assignments: [], deliveryOrders: [], packStatusOutboxes: [],
+    });
+    database.exec(`DROP TABLE ${table}`);
+    assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', query), /no such table/);
+  }
 });
 
 test('D1 integrity reads all checks in one command without changing the report', () => {
@@ -414,13 +429,12 @@ test('rebuild CLI supports exact one-drop or all-drop D1 rebuilds', () => {
 
 test('authoritative rebuild rejects unsettled durable delivery projection outboxes', () => {
   assert.doesNotThrow(() => requireSettledPackStatusProjectionOutboxes([
-    { status: 'ready_to_ship', packStatusProjectionState: 'completed' },
-    { status: 'ready_to_ship' },
+    projectionOutbox('completed'), projectionOutbox('cancelled'),
   ]));
   for (const state of ['pending', 'failed', 'unexpected']) {
     assert.throws(
       () => requireSettledPackStatusProjectionOutboxes([
-        { status: 'ready_to_ship', packStatusProjectionState: state },
+        { ...projectionOutbox('completed'), state: state as PackStatusOutboxRecord['state'] },
       ]),
       /outbox to be settled/,
     );
@@ -434,6 +448,9 @@ test('authoritative rebuild derives assignment and delivery counters from Commer
     itemsPerBox: 3,
     maxSupply: 10,
   }, {
+    packStatusOutboxes: ['1', '2', '3'].map((id) => ({
+      ...projectionOutbox('completed'), parentPath: `drops/card_nft_2/deliveryOrders/${id}`,
+    })),
     assignments: [
       commerceDocument('box_assignment', 'normal-box', {}),
       commerceDocument('box_assignment', 'irl-box', { irlClaim: { namespace: 'irl_v2' } }),

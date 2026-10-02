@@ -32,8 +32,8 @@ control, rate-limit state, and shipment and fulfillment data.
 - Delivery receipt recovery leases, pending transaction journals, and retry
   timestamps use `commerce_delivery_recovery`. Recovery updates have their own
   generation and revision; ordinary order edits do not invalidate a recovery claim.
-  Migration `0033_delivery_recovery_metadata_cleanup.sql` removes frozen recovery
-  copies from parent documents after a completed Commerce pause and drain.
+  Parent documents contain no duplicate recovery state; migration `0033`
+  removed the frozen copies while preserving journals, leases, and revisions.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -198,15 +198,14 @@ share the bounded lookup budget; unresolved preorders do not depend on a fixed T
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
 migrations through `0033_delivery_recovery_metadata_cleanup.sql`, followed by the
-API release and then the frontend. Complete the
-[delivery recovery cleanup](scripts/docs/delivery_recovery_state_cutover.md)
-pause and drain before the first deployment that applies `0033`. The normal API
-deployment command applies migrations and validates their schemas. The existing `COSIGNER_SECRET` must
+API release and then the frontend. The normal API deployment command applies
+migrations and validates the current schema and active storage. Fresh databases
+use the [Commerce bootstrap procedure](scripts/docs/commerce_operations.md#initialize-an-empty-database).
+The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
-The preorder expiry migration atomically releases an unsigned reservation's claims
-when its order expires. Apply it before publishing the API; it remains compatible
-with the previous API and requires no backfill or additional cutover. Availability
-still expires reservations in its selected collection before returning.
+Preorder expiry atomically releases an unsigned reservation's claims when its
+order expires. Availability expires reservations in its selected collection
+before returning.
 Both existing collections are enabled in the shared configuration. Preparation,
 broadcasting, blockhash validation, and reconciliation verify the RPC genesis
 hash against the configured devnet or mainnet cluster.
@@ -415,41 +414,25 @@ expects a schema that has not been applied.
 
 Both API and frontend release checks verify generated catalog and schema files.
 `generate:db` updates the catalog first, then replays Commerce migrations to build
-`scripts/generated/commerceSchemaManifest.json`. This manifest records migration
-checksums and schema fingerprints for every supported checkpoint from 0013 onward,
-including versioned preorder catalog contents. `generate:commerce-schema` refuses
-changes to recorded migration files or historical checkpoints. Inspection accepts
-supported migration prefixes; deployment requires the latest checkpoint and retains
-all semantic integrity, query-plan, and cutover-readiness checks. Applied migrations
-and historical seeds must never be edited; append a new migration and regenerate.
+`scripts/generated/commerceSchemaManifest.json`. The manifest preserves migration
+checksums, schema fingerprints, and versioned preorder catalogs for historical
+checkpoints. Generation refuses changes to recorded migrations or checkpoints.
+Current inspection and deployment require the latest checkpoint, initialized
+inventory in `rows` mode, and all four state controls in `table` mode. Applied
+migrations and historical seeds must never be edited; append a migration and
+regenerate for schema changes.
 
-`deploy:api` also requires activated figure inventory through
-`check:commerce-d1 -- --for-deployment`. The standalone database check still
-accepts staged legacy inventory. Use the
-[inventory cutover runbook](scripts/docs/dude_inventory_cutover.md) for the first activation.
-Notification deployment also requires active table storage, or a fully paused and
-verified preparation for the initial publication. Follow the
-[notification outbox cutover runbook](scripts/docs/notification_outbox_cutover.md).
+The completed populated-database import commands have been retired. Use the
+[Commerce operations guide](scripts/docs/commerce_operations.md) for read-only
+status, new-drop inventory initialization, pause/resume, and recovery. A fresh
+database applies every migration, completes the coordinated pause/drain, and
+runs `bootstrap:commerce` before its first API deployment. Historical populated
+databases use the pinned checkout documented in that guide.
 
-Stripe checkout state migration `0026_stripe_checkout_state.sql` requires a
-coordinated pause, preparation, compatible API publication, and one-way
-activation before resuming Commerce. Follow the
-[checkout state cutover](scripts/docs/stripe_checkout_state_cutover.md) for the
-initial deployment; `deploy:api` verifies this readiness. Inspect state with
-`npm run stripe-checkout-state-control -- status`. Preparation is resumable,
-does not broadcast transactions or send emails, and retains checkout versions,
-processing claims, and retry history. Publish the frontend after API activation
-and resumption so the delivery recovery cursor API is available first.
-
-Delivery recovery migration `0030_delivery_recovery.sql` requires the same
-pause, backfill, compatible API publication, activation, and resume sequence.
-Follow the [delivery recovery cutover](scripts/docs/delivery_recovery_state_cutover.md).
-`npm run delivery-recovery-state-control -- status` verifies source or active
-state without contacting providers. Backfill preserves pending transaction
-journals and legacy lease expiry. Activation freezes the parent recovery JSON;
-old Workers cannot overwrite it. Broad recovery requests must explicitly send
-`cursor: null` for the first page. Cached clients that omit it receive a refresh
-error; targeted recovery requests retain their existing contract.
+Delivery recovery reads its authoritative table, preserving pending transaction
+journals and leases. Broad recovery requests must explicitly send `cursor: null`
+for the first page. Cached clients that omit it receive a refresh error;
+targeted recovery requests retain their existing contract.
 
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
@@ -492,12 +475,9 @@ stored Workflow payload:
 npx wrangler workflows trigger mons-shop-admin-irl-redeem-finalize-v1 '{"version":1,"dropId":"<DROP_ID>","requestId":"<REQUEST_ID>"}' --id '<OPERATION_ID>' --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env
 ```
 
-Roll out the compatible frontend first, then the API binding and routes, then
-the final frontend timeout cleanup. Cached pre-compatibility tabs must refresh
-before the API cutover. After the final frontend release, roll the frontend back
-to its compatibility version before rolling the API back. Drain active v1 Admin
-instances before changing the signer, drop configuration, or on-chain
-configuration.
+Keep the Workflow binding, status routes, and compatible frontend available
+while operations are active. Drain active v1 Admin instances before changing
+the signer, drop configuration, or on-chain configuration.
 
 ### Stripe receipt claim Workflow
 
@@ -541,14 +521,12 @@ and increments cache generation once. Run a write only while reveal,
 fulfillment, delivery, and admin mutations are quiesced. The tool refuses
 pending, failed, or unknown durable delivery projection outboxes.
 
-Migration `0029_pack_status_outbox.sql` moves delivery projection retry state
-to `COMMERCE_DB.commerce_pack_status_outbox` through the
-[pack-status outbox cutover](scripts/docs/pack_status_outbox_cutover.md).
-It requires the existing coordinated maintenance pause, verified preparation,
-compatible API publication, and one-way activation. Historical JSON markers
-remain frozen after activation; rebuild and wipe tools use the table as the
-authority. Inspect mode, preparation, pending age, and failures with
-`npm run pack-status-outbox-control -- status`.
+Delivery projection retry state lives in
+`COMMERCE_DB.commerce_pack_status_outbox`. Historical JSON markers remain frozen;
+rebuild and wipe tools require the authoritative table. Inspect mode, readiness,
+pending age, and failures with `npm run pack-status-outbox-control -- status`.
+The [Commerce operations guide](scripts/docs/commerce_operations.md) covers
+bootstrap, maintenance, and recovery.
 
 Do not mark every legacy delivery order as projection-pending. Historical
 summary rebuilds can include orders without per-order event documents, so
@@ -628,96 +606,50 @@ canonical fulfillment origin address.
 ### Commerce database
 
 `mons-shop-commerce` is the authoritative commerce document database. Its
-schema starts at
-`cloud/workers/api/commerce-migrations/0001_current_schema.sql`; migration
-`0002_authority_control_lease.sql` adds operational serialization and
-`0003_wipe_readiness_guard.sql` makes destructive maintenance readiness atomic,
-`0004_ready_notification_owner_indexes.sql` adds owner-targeted
-ready-notification indexes, and `0005_delivery_owner_query_revisions.sql` adds
-owner-scoped delivery-order query guards without replacing the global revision
-used by maintenance. `0006_document_path_revisions.sql` adds path-scoped
-revision guards for point reads. Owner- and document-path revision rows are
-retained as tombstones so deleted scopes cannot return to an earlier epoch.
-Migration `0006` requires Commerce to be paused with `paused_at_ms` confirming
-the drain. The exact untouched seed state may migrate without a prior pause, but
-the migration atomically leaves it paused and unready so old readers cannot cross
-the cutover. Keep Commerce paused through `npm run deploy:api` and until the
-`0006`-capable Worker is verified. For an automatic seed-state pause, rerun the
-`paused` authority command with the current revision to complete the normal drain
-before resuming; unready authority cannot resume. This is a pause-and-cutover
-migration, not a rolling Worker migration. Never deploy or roll back to a
-pre-`0006` Worker while Commerce is active: pause and fully drain it first, then
-keep it paused until a compatible Worker is restored. Legacy existing-path write
-expectations remain accepted; tombstoned absent-path expectations fail closed.
-`0007_stripe_terminal_notifications.sql` indexes pending Stripe terminal
-notifications, and `0008_admin_irl_redeem_workflow_operation.sql` indexes Admin IRL
-Workflow operation IDs. Migration `0008` is additive and preserves existing
-documents and authority state. For a database already at `0007`, apply it with
-`npm run db:migrate:commerce`, then run `npm run check:commerce-d1` from the updated
-checkout; no Commerce pause or Worker publication is required for this index.
-Migration `0009_ready_notification_due_index.sql` adds an index for pending
-ready-to-ship notifications, ordered by their existing publication lease expiry
-and document path. Apply it before publishing the updated API Worker through
-`npm run deploy:api`. It requires no document backfill or Commerce pause and
-preserves the older notification indexes and Ops cursor storage for compatible
-overlap with the previous Worker.
-Migration `0010_dude_inventory.sql` adds per-figure availability and an inactive,
-one-way inventory storage switch. Apply its additive schema before maintenance,
-then follow the [figure inventory cutover](scripts/docs/dude_inventory_cutover.md)
-to prepare inventory, publish the compatible Worker, activate, and resume.
-New allocations require initialized inventory in `rows` mode. Existing figure
-ownership and box assignment documents stay authoritative. New drops require
-explicit initialization, and old allocators cannot be resumed after activation.
-Migration `0011_stripe_order_disputes.sql` adds independent, additive Stripe
-chargeback history. It changes no commerce documents or processing timestamps
-and requires no Commerce pause. Apply it before the chargeback-capable Worker.
-Migration `0012_stripe_identity_lookup_indexes.sql` adds non-unique partial
-indexes for Stripe payment-intent and checkout-session lookups. Apply it before
-publishing the updated Worker through `npm run deploy:api`; the deployment check
-verifies the index definitions and selective query plans. It preserves commerce
-documents, revisions, and authority state, requires no Commerce pause or document
-backfill, and remains compatible with the previous Worker.
-Migration `0013_notification_outbox.sql` moves notification publication state to
-dedicated tables through the [notification outbox cutover](scripts/docs/notification_outbox_cutover.md).
-Migration `0014_drop_legacy_notification_indexes.sql` removes the six legacy
-notification indexes after activation, while preserving their historical fields
-and write fences. An untouched, empty paused database can apply all migrations
-before initialization. Populated legacy databases must finish the `0013` cutover
-first. The checker supports both exact migration baselines during that transition.
-Migration `0015_manual_review_pagination.sql` adds indexed, newest-first
-manual-review pagination. It is additive and keeps the prior index available;
-apply it before publishing the API Worker. Coordinate the API and frontend
-release and refresh staff clients: legacy callers receive the first page only.
+immutable SQL history starts at
+`cloud/workers/api/commerce-migrations/0001_current_schema.sql` and currently ends
+at `0033_delivery_recovery_metadata_cleanup.sql`. Append `0034_<description>.sql`
+for the next change and regenerate the schema manifest. The checker validates
+the exact current schema, semantic integrity, and selective query plans.
+
+Owner- and document-path revision rows remain as tombstones so deleted scopes
+cannot return to an earlier epoch. Legacy existing-path write expectations
+remain accepted; tombstoned absent-path expectations fail closed. Maintenance
+uses the shared authority revision, completed pause/drain marker, and renewable
+coordination lease.
+
+Figure availability uses initialized inventory in `rows` mode. Existing figure
+ownership and box assignment documents remain authoritative. New drops require
+explicit initialization; ready stock is never replenished from historical pool
+documents. Notification publication, Stripe checkout lifecycle, pack-status
+retries, and delivery recovery each use their authoritative state tables.
+Historical notification and checkout fields stay frozen. Delivery metadata no
+longer contains duplicate `receiptRecovery`; recovery rows, journals, leases,
+generations, revisions, and parent timestamps remain intact.
+
+Use the [Commerce operations guide](scripts/docs/commerce_operations.md) for
+fresh-database bootstrap, new-drop inventory setup, status, and recovery. Current
+tools do not import populated legacy databases or accept older schema prefixes.
+Historical SQL and schema checkpoints remain available for integrity checks and
+recovery from a matched historical checkout.
+
 Manual-review requests accept `dropId`, optional `limit` (default 25, maximum
 100), and a versioned `cursor`; responses return `checkouts` and `nextCursor`.
 The fulfillment menu loads older pages on demand and shows `+` after its loaded
 count while more pages remain. Stripe hydration is limited to four concurrent
-requests per page, and OPS/DATA integrity checks batch their read-only statements
+requests per page. OPS/DATA integrity checks batch their read-only statements
 into one Wrangler command per database.
-Migration `0016_shipment_history_pagination.sql` adds shipment-history and
-session-presence indexes. Apply it and deploy the API before the frontend.
-Profile-state, shipment, admin-profile, and anonymous-history requests always
-paginate with `shipmentsPage: { limit, cursor }` (default 50, maximum 100).
-Omitting `shipmentsPage` returns the first page. Successful shipment pages retain
-their existing arrays and include `nextCursor`, which is `null` at the end;
-profile-state shipment errors omit the cursor, and no-wallet states return `null`.
-Older clients receive only the first page and may need a refresh to browse further.
-Publish this API behavior before the client cleanup; no new migration is needed.
-The frontend loads older shipments automatically while scrolling;
-checkout and prepared-delivery recovery use owner-scoped
+
+Profile-state, shipment, admin-profile, and anonymous-history requests paginate
+with `shipmentsPage: { limit, cursor }` (default 50, maximum 100). Omitting it
+returns the first page. Successful pages retain their arrays and include
+`nextCursor`, which is `null` at the end; profile-state shipment errors omit it,
+and no-wallet states return `null`. Older clients may need a refresh to browse
+further. The frontend loads older shipments automatically while scrolling.
+Checkout and prepared-delivery recovery use owner-scoped
 `/profile/shipment-presence` lookups instead of relying on loaded history pages.
 Wallet-scoped presence requests include `expectedWallet`; a changed binding
 returns an authentication error before reading shipments.
-Migration `0033_delivery_recovery_metadata_cleanup.sql` removes only frozen
-`receiptRecovery` metadata from delivery documents. Recovery rows, transaction
-journals, leases, document versions, timestamps, and revisions stay unchanged.
-Apply it after the existing Commerce pause and drain, before deploying the
-updated Worker, following the [delivery recovery runbook](scripts/docs/delivery_recovery_state_cutover.md).
-The previous Worker remains compatible with the cleaned schema. An untouched
-empty database can replay the migration before normal initialization.
-Append `0034_<description>.sql` for the next Commerce schema change.
-The Worker preserves the existing commerce API and transaction behavior through
-the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
 
@@ -779,8 +711,8 @@ Use `npm run notification-outbox-control -- status` for mode, readiness, pending
 age, failures, and expired claims. The public shipped state remains `pending` or
 `queued`; `queued` means Queue acceptance. Reconcile saved identities with Queue
 and Resend outcomes before deliberately replaying work. The
-[cutover runbook](scripts/docs/notification_outbox_cutover.md) covers backfill,
-legacy ambiguous shipped markers, maintenance, and recovery.
+[Commerce operations guide](scripts/docs/commerce_operations.md#recovery-and-ongoing-maintenance)
+covers ambiguous historical shipped markers, maintenance, and recovery.
 
 Queue a synthetic notification email through the production API:
 
@@ -956,26 +888,26 @@ configuration.
 
 ## On-chain deployments and metadata compatibility
 
-Create a reusable preorder collection from
-`scripts/newPreorderCollections/mi_note_cards.ts`:
+The mainnet Mi Note Cards collection is already deployed. Verify its saved
+deployment using `scripts/newPreorderCollections/mi_note_cards.ts`:
 
 ```bash
 npm run deploy-preorder-collection -- mi_note_cards
 ```
 
-Fill every unfinished field in its typed `NEW_PREORDER_COLLECTION` export before
-running the command: expected authority public key, hosted
+For a new collection, copy the typed `NEW_PREORDER_COLLECTION` configuration
+and set its identity, expected authority public key, hosted
 `collectionMetadataUri`, symbol, description, image URL, `sellerFeeBasisPoints`
 (explicitly use `0` for no royalties), and royalty creators with address/share
-entries totaling 100. The stub already supplies `mi_note_cards`, `Mi Note Cards`,
-`https://mons.shop`, and `isMainnet: true`.
+entries totaling 100. Preserve existing configurations and deployment records
+for verified reruns and recovery.
 An optional `solanaRpcUrl` overrides the cluster's default RPC. Publish the
 collection metadata JSON and image yourself first. Its name, symbol, description,
 image, `external_url`, `seller_fee_basis_points`, and `properties.creators` must
 match the configuration; the tool validates hosted metadata and does not upload it.
 
-The dedicated `mi_note_cards_devnet` configuration reuses the mainnet metadata
-and authority with the devnet RPC. Deploy it with the same deployer key:
+The deployed `mi_note_cards_devnet` collection reuses the mainnet metadata
+and authority with the devnet RPC. Verify it with:
 
 ```bash
 npm run deploy-preorder-collection -- mi_note_cards_devnet
@@ -1017,13 +949,18 @@ Provision a reusable cluster-scoped receipt pool:
 npm run deploy-receipt-pool -- <poolId> <devnet|mainnet-beta>
 ```
 
-Deploy a drop from `scripts/newDrops/<dropId>.ts`:
+Create a new drop configuration by following the
+[typed example instructions](scripts/newDrops/README.md), then deploy it from
+`scripts/newDrops/<dropId>.ts`:
 
 ```bash
 npm run deploy-all-onchain -- <dropId>
 ```
 
-The deploy tool updates only `shared/deploymentRegistry.ts`. It accepts HTTPS,
+The deploy tool refuses already-registered drop IDs and updates only
+`shared/deploymentRegistry.ts`. Historical launch recipes remain in Git; current
+deployment records and compatibility tests use the canonical registry. The tool
+accepts HTTPS,
 `ipfs://`, or raw CID metadata bases and normalizes raw CIDs to canonical
 `ipfs://CID` values.
 

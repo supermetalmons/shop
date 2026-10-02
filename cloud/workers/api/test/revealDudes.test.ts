@@ -24,16 +24,14 @@ import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { RevealSubmissionStoragePausedError } from '../src/revealSubmissionD1.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { REVEAL_DUDES_PATH, handleRevealDudes, revealDudesTestHooks } from '../src/revealDudes.ts';
+import { RevealDudesError } from '../src/revealDudesDomain.ts';
 import {
-  REVEAL_DUDES_PATH,
-  RevealDudesError,
-  handleRevealDudes,
   isRevealBackgroundJob,
   processRevealBackgroundJobMessage,
   revealBackgroundJobRetryDelaySeconds,
-  revealDudesTestHooks,
   type RevealBackgroundJob,
-} from '../src/revealDudes.ts';
+} from '../src/revealDudesBackground.ts';
 
 const OWNER = Keypair.generate().publicKey;
 const BOX_ASSET = Keypair.generate().publicKey;
