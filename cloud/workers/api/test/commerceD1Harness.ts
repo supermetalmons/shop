@@ -211,6 +211,7 @@ export function createCommerceD1Harness(
     packStatusOutboxMode?: 'legacy' | 'table';
     deliveryRecoveryMode?: 'legacy' | 'table';
     deliveryRecoveryMetadataCleanupMigration?: boolean;
+    obsoleteIndexesMigration?: boolean;
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
@@ -275,6 +276,7 @@ export function createCommerceD1Harness(
     if (options.preorderCatalogMigration !== false) {
       for (const migration of readCommerceMigrations().slice(31)) {
         if (options.deliveryRecoveryMetadataCleanupMigration === false && migration.name >= '0033_') break;
+        if (options.obsoleteIndexesMigration === false && migration.name >= '0034_') break;
         database.exec(migration.sql);
       }
     }

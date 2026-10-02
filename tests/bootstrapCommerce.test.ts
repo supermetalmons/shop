@@ -48,7 +48,7 @@ test('fresh replay bootstraps registry inventory and passes current deployment c
 test('bootstrap rejects stale schema, missing drain and wrong authority revision before writes', async (t) => {
   for (const condition of ['schema', 'drain', 'revision'] as const) {
     const database = createCurrentCommerceDatabase(t, condition !== 'drain');
-    if (condition === 'schema') database.exec('DELETE FROM d1_migrations WHERE id = 33');
+    if (condition === 'schema') database.exec('DELETE FROM d1_migrations WHERE id = (SELECT MAX(id) FROM d1_migrations)');
     const query = commerceTestQuery(database);
     const before = snapshot(query);
     await assert.rejects(runBootstrapCommerce(condition === 'revision' ? ['--expected-revision', '3', '--write'] : args,

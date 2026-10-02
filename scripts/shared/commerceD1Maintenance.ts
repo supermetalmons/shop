@@ -1,5 +1,5 @@
 import { DELIVERY_RECOVERY_FIELD_COLUMNS, parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
-import { createD1MaintenanceRunner } from './d1MaintenanceRunner.ts';
+import { createD1MaintenanceRunner, type D1MaintenanceQueryBatch } from './d1MaintenanceRunner.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { hydrateStripeCheckoutState, parseStripeCheckoutStateRow, STRIPE_CHECKOUT_STATE_FIELD_COLUMNS } from '../../shared/stripeCheckoutState.ts';
 
@@ -58,6 +58,8 @@ function fail(message: string): never {
 export function queryRemoteCommerceD1(sql: string): CommerceD1Row[] {
   return commerceD1.query(sql);
 }
+
+export const queryRemoteCommerceD1Batch: D1MaintenanceQueryBatch = commerceD1.queryBatch;
 
 export function commerceAuthorityLeaseToken(value: unknown): string {
   const token = typeof value === 'string' ? value.trim() : '';

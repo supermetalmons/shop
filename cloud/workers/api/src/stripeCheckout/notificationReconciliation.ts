@@ -1,7 +1,7 @@
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
 import { D1CommerceRepository } from '../commerceRepository.js';
 import { getApiDrop } from '../dropConfig.js';
-import { drainNotificationCandidates } from '../notificationReconciliation.js';
+import { drainReconciliationCandidates } from '../reconciliationPass.js';
 import type { StripeCheckoutCommerceContext } from './commerce.js';
 import { publishPendingStripeCheckoutTerminalNotifications } from './notificationOutbox.js';
 import {
@@ -16,7 +16,7 @@ export async function reconcilePendingStripeTerminalNotifications(
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const commerce: StripeCheckoutCommerceContext = { repository, signal, nowMs };
-  return drainNotificationCandidates({
+  return drainReconciliationCandidates({
     signal,
     onResult: overrides.onResult,
     loadCandidates: () => repository.queryDueStripeTerminalNotifications(nowMs()),

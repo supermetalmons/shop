@@ -6,6 +6,8 @@ import {
   checkCommerceD1,
   type CheckCommerceD1Query,
 } from '../scripts/ops/checkCommerceD1.ts';
+import { commerceD1AuditRows } from '../scripts/shared/commerceD1Audit.ts';
+import { createD1MaintenanceRunner } from '../scripts/shared/d1MaintenanceRunner.ts';
 import { inventoryDropConfigs } from '../scripts/shared/dudeInventoryMaintenance.ts';
 import { createDeliveryRecoveryRecord, deliveryRecoveryRow } from '../shared/deliveryRecoveryState.ts';
 import { packStatusOutboxRow } from '../shared/packStatusOutbox.ts';
@@ -208,7 +210,7 @@ for (let count = 1; count < commerceMigrations.length; count += 1) {
 }
 
 for (const [type, name] of [
-  ['index', 'commerce_preorder_active_buyer'], ['index', 'commerce_preorder_succeeded_buyer'],
+  ['index', 'commerce_preorder_active_buyer'],
   ['index', 'commerce_preorder_prepared_expiry'], ['index', 'commerce_preorder_confirmed_recovery'],
   ['index', 'commerce_preorder_inventory_buyer'], ['index', 'commerce_preorder_claim_order'],
   ['index', 'commerce_stripe_checkout_state_reconciliation_due'],
@@ -438,8 +440,8 @@ test('Commerce D1 checker reloads its schema catalog between invocations', () =>
       return localQuery(database)(sql);
     };
     checkCommerceD1(query);
-    database.exec('DROP INDEX commerce_preorder_succeeded_buyer');
-    assert.throws(() => checkCommerceD1(query), schemaError('commerce_preorder_succeeded_buyer'));
+    database.exec('DROP INDEX commerce_preorder_inventory_buyer');
+    assert.throws(() => checkCommerceD1(query), schemaError('commerce_preorder_inventory_buyer'));
     assert.equal(catalogReads, 2);
   } finally {
     database.close();
@@ -526,7 +528,7 @@ test('active pack-status checks reject lost migrated obligations and allow unmar
     assert.throws(() => checkCommerceD1(query), expectedError);
     const unmarked = { deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }] };
     const withFields = (fields: Record<string, unknown>): CheckCommerceD1Query => (sql) => query(sql).map((row) =>
-      sql.includes('FROM commerce_documents ORDER BY document_path')
+      sql.startsWith('SELECT document.document_path, document.document_kind,')
         ? { ...row, document_json: JSON.stringify({ ...unmarked, ...fields }) } : row);
     for (const field of [
       'packStatusProjectionState', 'packStatusProjectionNextAttemptAtMs', 'packStatusProjectionFailureCount',
@@ -544,15 +546,16 @@ test('pack-status outbox checker rejects missing or malformed current rows witho
   const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
-    assert.throws(() => checkCommerceD1((sql) => sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
-      ? [] : query(sql)), /Pack-status outbox is missing for source document/);
+    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
+      sql.startsWith('SELECT document.document_path, document.document_kind,')
+        ? { ...row, pack_status_parent_path: null } : row)), /Pack-status outbox is missing for source document/);
     for (const corruption of [{ failure_count: -1 }, { generation: 'invalid' }, { revision: 0 }]) {
       assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-        sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path' ? { ...row, ...corruption } : row)),
+        sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox') ? { ...row, ...corruption } : row)),
       /Invalid pack-status outbox/);
     }
     assert.equal(checkCommerceD1((sql) => query(sql).map((row) =>
-      sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
+      sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox')
         ? { ...row, failure_count: 3, revision: 2, updated_at_ms: Number(row.updated_at_ms) + 1 } : row)).packStatusOutboxRows, 1);
   } finally { database.close(); }
 });
@@ -571,11 +574,11 @@ test('pack-status outbox checker rejects invalid controls, orphan rows, and malf
     assert.throws(() => checkCommerceD1((sql) => sql === 'SELECT * FROM commerce_pack_status_outbox_control'
       ? [] : query(sql)), /Pack-status outbox control is invalid/);
     assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-      sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
-        ? { ...row, parent_path: 'drops/card_nft_2/deliveryOrders/999' } : row)),
+      sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox')
+        ? { ...row, parent_document_path: 'drops/card_nft_2/deliveryOrders/999' } : row)),
     /Pack-status outbox parent identity is invalid/);
     assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-      sql === 'SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'
+      sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox')
         ? { ...row, next_attempt_at_ms: null } : row)), /Invalid pack-status outbox/);
   } finally {
     database.close();
@@ -986,12 +989,12 @@ test('Commerce D1 checker rejects a missing live document-path revision', () => 
 test('Commerce D1 checker rejects a malformed Stripe reconciliation index', () => {
   const database = currentDatabase();
   try {
-    database.exec(`DROP INDEX commerce_stripe_checkouts_reconciliation_due;
-      CREATE INDEX commerce_stripe_checkouts_reconciliation_due
-      ON commerce_documents (document_path)`);
+    database.exec(`DROP INDEX commerce_stripe_checkout_state_reconciliation_due;
+      CREATE INDEX commerce_stripe_checkout_state_reconciliation_due
+      ON commerce_stripe_checkout_state (document_path)`);
     assert.throws(
       () => checkCommerceD1(localQuery(database)),
-      schemaError('commerce_stripe_checkouts_reconciliation_due'),
+      schemaError('commerce_stripe_checkout_state_reconciliation_due'),
     );
   } finally {
     database.close();
@@ -1229,14 +1232,14 @@ test('delivery recovery checker rejects missing, malformed, and orphan authorita
   try {
     const query = localQuery(database);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).deliveryRecoveryStateRows, 1);
-    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
-      ? { ...row, parent_path: null } : row)), /state is missing/);
+    assert.throws(() => checkCommerceD1((sql) => sql.includes('AND recovery.parent_path IS NULL LIMIT 1')
+      ? [{ document_path: 'drops/card_nft_2/deliveryOrders/999' }] : query(sql)), /state is missing/);
     for (const corruption of [{ revision: 0 }, { generation: 'broken' }, { prepared_delay_ms: 120000 }]) {
       assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
         ? { ...row, ...corruption } : row)), /Invalid delivery recovery/);
     }
     assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
-      ? { ...row, parent_path: 'drops/card_nft_2/deliveryOrders/999' } : row)), /parent is invalid/);
+      ? { ...row, document_path: 'drops/card_nft_2/deliveryOrders/999' } : row)), /parent is invalid/);
     assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => sql.startsWith('SELECT recovery.*,')
       ? { ...row, document_path: null, document_kind: null } : row)), /parent is invalid/);
     const updateGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_delivery_recovery_update_guard'")[0].sql);
@@ -1289,7 +1292,7 @@ for (const change of ['creation', 'cleanup'] as const) {
       let changed = false;
       const checked = checkCommerceD1((sql) => {
         const rows = query(sql);
-        if (sql.startsWith('SELECT\n    document_path, document_kind, drop_id, document_id, document_json') && !changed) {
+        if (sql.startsWith('SELECT document.document_path, document.document_kind,') && !changed) {
           changed = true;
           writeOrder(change === 'cleanup');
         }
@@ -1301,3 +1304,188 @@ for (const change of ['creation', 'cleanup'] as const) {
     } finally { database.close(); }
   });
 }
+
+
+test('Commerce D1 batches small checks and preserves paged payload validation in both modes', () => {
+  const database = currentDatabase();
+  try {
+    for (let index = 0; index < 256; index += 1) {
+      const parentPath = `drops/drop/deliveryOrders/${index}`;
+      insertRow(database, 'commerce_pack_status_outbox', packStatusOutboxRow({
+        parentPath, dropId: 'drop', generation: FIXTURE_GENERATION, state: 'pending', revision: 1,
+        failureCount: 0, nextAttemptAtMs: 0, completedAtMs: null, failedAtMs: null, lastErrorCode: null,
+        createdAtMs: 0, updatedAtMs: 0,
+      }));
+      for (const family of ['ready', 'shipped']) {
+        if (index === 0 && family === 'ready') continue;
+        database.prepare(`INSERT INTO commerce_notification_outbox (
+          parent_path, family, drop_id, generation, outcome, state, entries_json, revision,
+          attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms,
+          created_at_ms, updated_at_ms, last_error_code
+        ) VALUES (?, ?, 'drop', ?, NULL, 'failed', ?, 1, 0, NULL, NULL, NULL, 10000, 0, 0, 'fixture')`).run(
+          parentPath, family, FIXTURE_GENERATION, JSON.stringify([{
+            kind: family === 'ready' ? 'buyer_order_received' : 'buyer_order_shipped',
+            jobId: FIXTURE_GENERATION, idempotencyKey: `drop:${index}:${family}`, state: 'failed',
+          }]),
+        );
+      }
+    }
+    for (let index = 0; index < 201; index += 1) {
+      database.prepare('INSERT INTO stripe_order_disputes VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+        index < 150 ? 0 : 1, index < 150 ? 'cs_test_history' : 'cs_live_history',
+        `du_${String(index).padStart(3, '0')}`, 'drop', 'ch_history', 'pi_history', 1, 2,
+      );
+    }
+    const query = localQuery(database);
+    const expected = checkCommerceD1(query);
+    assert.equal(expected.authoritativeDocuments, 513);
+    assert.equal(expected.notificationOutboxGroups, 511);
+    assert.equal(expected.packStatusOutboxRows, 256);
+    assert.deepEqual(expected.notificationOutboxFailures, [
+      { family: 'ready', last_error_code: 'fixture', count: 255 },
+      { family: 'shipped', last_error_code: 'fixture', count: 256 },
+    ]);
+    for (const forDeployment of [false, true]) {
+      let commands = 0;
+      let batches = 0;
+      const pages = new Map<string, number[]>();
+      const runner = createD1MaintenanceRunner('commerce', (_file, args) => {
+        commands += 1;
+        const sql = args[args.indexOf('--command') + 1];
+        const statements = sql.split(';\n');
+        if (statements.length > 1) batches += 1;
+        return JSON.stringify(statements.map((statement) => {
+          const results = query(statement);
+          if (statement.startsWith('SELECT ') && statement.endsWith('LIMIT 100')) {
+            const table = /FROM (\w+) AS/.exec(statement)![1];
+            assert.ok(results.length <= 100);
+            pages.set(table, [...(pages.get(table) ?? []), results.length]);
+          }
+          return { success: true, results };
+        }));
+      });
+      assert.deepEqual(checkCommerceD1(runner.query, { queryBatch: runner.queryBatch, forDeployment }), expected);
+      assert.equal(batches, 5);
+      assert.ok(commands < 40, String(commands));
+      assert.deepEqual(Object.fromEntries(pages), {
+        stripe_order_disputes: [100, 100, 1],
+        commerce_documents: [100, 100, 100, 100, 100, 13],
+        commerce_notification_outbox: [100, 100, 100, 100, 100, 11],
+        commerce_delivery_recovery: [100, 100, 56],
+        commerce_pack_status_outbox: [100, 100, 56],
+        commerce_stripe_checkout_state: [100, 100, 56],
+      });
+      for (const [table, corruption, error] of [
+        ['commerce_documents', { document_json: '{"nested":{"authSubject":"invalid"}}' }, /invalid identity document/],
+        ['commerce_notification_outbox', { entries_json: '[]' }, /Invalid notification outbox/],
+        ['commerce_pack_status_outbox', { revision: 0 }, /Invalid pack-status outbox/],
+        ['commerce_stripe_checkout_state', { document_version: -1 }, /Invalid Stripe checkout state/],
+        ['commerce_delivery_recovery', { prepared_delay_ms: -1 }, /Invalid delivery recovery projections/],
+        ['stripe_order_disputes', { payment_intent_id: 'invalid' }, /chargeback history identity is invalid/],
+      ] as const) {
+        let changed = false;
+        assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => {
+          if (sql.includes(`FROM ${table} AS`) && sql.includes(' > ') && sql.endsWith('LIMIT 100')) {
+            changed = true;
+            return { ...row, ...corruption };
+          }
+          return row;
+        }), { forDeployment }), error);
+        assert.equal(changed, true, table);
+      }
+    }
+  } finally { database.close(); }
+});
+
+test('Commerce D1 rejects lossy UTF-8 high-water keys in both audit modes', () => {
+  const database = currentDatabase(false);
+  try {
+    database.exec(`INSERT INTO stripe_order_disputes VALUES
+      (1, CAST(X'63735f6c6976655fff' AS TEXT), 'dp_valid', 'drop', 'ch_valid', 'pi_valid', 0, 0)`);
+    assert.equal(database.prepare('PRAGMA quick_check').get()!.quick_check, 'ok');
+    for (const forDeployment of [false, true]) {
+      assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment }),
+        /Commerce D1 audit page is invalid for stripe_order_disputes/);
+    }
+  } finally { database.close(); }
+});
+
+test('Commerce D1 validates cursor bytes before yielding rows and preserves valid Unicode', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('CREATE TABLE audit_rows (id TEXT PRIMARY KEY) STRICT');
+    const insert = database.prepare('INSERT INTO audit_rows VALUES (?)');
+    for (const id of [...Array.from({ length: 101 }, (_, index) => `${index}-é\uFFFD😀`), '\uE000', '𐀀']) insert.run(id);
+    assert.deepEqual([...commerceD1AuditRows(localQuery(database), { table: 'audit_rows', keys: ['id'] })],
+      localQuery(database)('SELECT id FROM audit_rows ORDER BY id'));
+    database.exec('DELETE FROM audit_rows');
+    for (let index = 0; index < 99; index += 1) insert.run(`a${String(index).padStart(2, '0')}`);
+    insert.run('z');
+    database.exec("INSERT INTO audit_rows VALUES (CAST(X'61ff' AS TEXT))");
+    const rows = commerceD1AuditRows(localQuery(database), { table: 'audit_rows', keys: ['id'] });
+    for (let index = 0; index < 99; index += 1) assert.equal(rows.next().value!.id, `a${String(index).padStart(2, '0')}`);
+    assert.throws(() => rows.next(), /Commerce D1 audit page is invalid for audit_rows/);
+  } finally { database.close(); }
+});
+
+for (const count of [0, 100, 101, 200]) {
+  test(`Commerce D1 audit handles ${count} rows and escaped cursor values`, () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      database.exec('CREATE TABLE audit_rows (id TEXT PRIMARY KEY, payload TEXT) STRICT');
+      for (let index = 0; index < count; index += 1) {
+        database.prepare('INSERT INTO audit_rows VALUES (?, ?)').run(`key\'${String(index).padStart(3, '0')}`, 'payload');
+      }
+      let pages = 0;
+      const rows = [...commerceD1AuditRows((sql) => {
+        if (sql.endsWith('LIMIT 100')) pages += 1;
+        return localQuery(database)(sql);
+      }, { table: 'audit_rows', keys: ['id'] })];
+      assert.equal(rows.length, count);
+      assert.equal(new Set(rows.map((row) => row.id)).size, count);
+      assert.equal(pages, Math.ceil(count / 100));
+    } finally { database.close(); }
+  });
+}
+
+test('Commerce D1 audit defers appended keys and tolerates deletion of its high-water row', () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('CREATE TABLE audit_rows (id INTEGER PRIMARY KEY, payload TEXT) STRICT');
+    for (let index = 0; index < 201; index += 1) database.prepare('INSERT INTO audit_rows VALUES (?, ?)').run(index, 'payload');
+    let pages = 0;
+    const rows = [...commerceD1AuditRows((sql) => {
+      const result = localQuery(database)(sql);
+      if (sql.endsWith('LIMIT 100')) {
+        pages += 1;
+        database.prepare('INSERT INTO audit_rows VALUES (?, ?)').run(200 + pages, 'appended');
+        if (pages === 1) database.exec('DELETE FROM audit_rows WHERE id IN (0, 150, 200)');
+      }
+      return result;
+    }, { table: 'audit_rows', keys: ['id'] })];
+    assert.equal(pages, 2);
+    assert.equal(rows.length, 199);
+    assert.ok(rows.some((row) => row.id === 0));
+    assert.ok(rows.every((row) => Number(row.id) < 200 && row.id !== 150));
+  } finally { database.close(); }
+});
+
+test('Commerce D1 audit rejects malformed, oversized, out-of-range, or nonadvancing pages', () => {
+  for (const result of [
+    null, {}, [null], [[]], [{ id: null }], [{ id: 101 }],
+    [{ id: 1 }, { id: 1 }], [{ id: 2 }, { id: 1 }],
+    Array.from({ length: 101 }, (_, id) => ({ id })),
+  ]) {
+    const query = (sql: string) => sql.endsWith('LIMIT 1') ? [{ id: 100 }] : result;
+    assert.throws(() => [...commerceD1AuditRows(query as CheckCommerceD1Query, {
+      table: 'audit_rows', keys: ['id'],
+    })], /Commerce D1 audit page is invalid/);
+  }
+  let pages = 0;
+  assert.throws(() => [...commerceD1AuditRows((sql) => {
+    if (sql.endsWith('LIMIT 1')) return [{ id: 199 }];
+    pages += 1;
+    return Array.from({ length: 100 }, (_, id) => ({ id }));
+  }, { table: 'audit_rows', keys: ['id'] })], /Commerce D1 audit page is invalid/);
+  assert.equal(pages, 2);
+});

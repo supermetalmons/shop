@@ -926,6 +926,73 @@ test('scheduled recovery keeps disabled submitted reservations after their origi
   assert.equal((await h.store.claims(config.cluster, config.collection))[0]?.orderId, submitted.orderId);
 });
 
+test('cancelled scheduled recovery still discovers due orders before checking cancellation', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const cancellation = new Error('cancelled');
+  const due = PreorderStore.prototype.due;
+  const queries: number[] = [];
+  const summaries: unknown[] = [];
+  t.mock.method(PreorderStore.prototype, 'due', async function (this: PreorderStore, nowMs: number) {
+    queries.push(nowMs);
+    return due.call(this, nowMs);
+  });
+  const options = { ...h.deps, onResult: (result: unknown) => { summaries.push(result); } };
+  assert.deepEqual(await reconcilePendingPreorders(h.env, AbortSignal.abort(cancellation), options),
+    { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
+  const prepared = await h.prepare();
+  const dueAtMs = (await h.store.get(prepared.body.order.orderId))!.expiresAtMs;
+  h.time(dueAtMs);
+  await assert.rejects(reconcilePendingPreorders(h.env, AbortSignal.abort(cancellation), options),
+    (error: unknown) => error === cancellation);
+  assert.deepEqual(queries, [1000, dueAtMs]);
+  assert.deepEqual(summaries, [
+    { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
+    { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
+  ]);
+});
+
+test('scheduled recovery awaits failed-order deferral without replacing the processing failure', async (t) => {
+  const h = harness();
+  const deferral = gate();
+  t.after(() => { deferral.resolve(); h.database.close(); });
+  const firstPrepared = await h.prepare([1]);
+  const first = await h.store.submit((await h.store.get(firstPrepared.body.order.orderId))!,
+    { transactionBase64: 'first-signed', signature: 'first-signature' }, 2000);
+  h.wallet(OTHER);
+  const secondPrepared = await h.prepare([2]);
+  const second = await h.store.submit((await h.store.get(secondPrepared.body.order.orderId))!,
+    { transactionBase64: 'second-signed', signature: 'second-signature' }, 2000);
+  const failure = new Error('probe failed');
+  const probes: string[] = [];
+  const summaries: unknown[] = [];
+  t.mock.method(PreorderStore.prototype, 'due', async () => [first, second]);
+  t.mock.method(PreorderStore.prototype, 'defer', async (order: typeof first) => {
+    assert.equal(order.orderId, first.orderId);
+    await deferral.enter();
+    throw new Error('deferral failed');
+  });
+  const pass = reconcilePendingPreorders(h.env, new AbortController().signal, {
+    ...h.deps,
+    probe: async ({ signature }) => {
+      probes.push(signature);
+      if (signature === first.signature) throw failure;
+      return { status: 'finalized', slot: 550 };
+    },
+    onResult: (result) => { summaries.push(result); },
+  });
+  const rejected = assert.rejects(pass, (error: unknown) => error instanceof AggregateError &&
+    error.message === 'Preorder reconciliation failed.' && error.errors.length === 1 && error.errors[0] === failure);
+  await deferral.started;
+  assert.deepEqual(probes, [first.signature]);
+  assert.deepEqual(summaries, []);
+  deferral.resolve();
+  await rejected;
+  assert.deepEqual(probes, [first.signature, second.signature]);
+  assert.equal((await h.store.get(second.orderId))!.status, 'succeeded');
+  assert.deepEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
+});
+
 test('an uncertain first broadcast retains its transaction for status retry', async () => {
   const h = harness();
   const prepared = await h.prepare();

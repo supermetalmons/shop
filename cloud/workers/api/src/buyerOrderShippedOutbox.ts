@@ -13,7 +13,7 @@ import {
   updateClaimedNotificationOutbox,
 } from './notificationOutboxStore.js';
 import { publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
-import { drainNotificationCandidates } from './notificationReconciliation.js';
+import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
   reportReconciliationFailure, type ReconciliationOptions, type ReconciliationOutcome, type ReconciliationResult,
 } from './reconciliationResult.js';
@@ -154,7 +154,7 @@ export async function reconcilePendingShippedNotifications(
 ): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  return drainNotificationCandidates({
+  return drainReconciliationCandidates({
     signal,
     onResult: overrides.onResult,
     loadCandidates: async () => {

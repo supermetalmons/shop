@@ -216,6 +216,38 @@ test('cron repairs persisted work without a client retry token', async () => {
   assert.deepEqual(count, { attempted: 1, completed: 0, deferred: 1, skipped: 0, failed: 0 });
 });
 
+test('cron cancellation before discovery never queries and reports an empty result', async () => {
+  const fixture = harness();
+  const cancellation = new Error('cancelled');
+  const summaries: unknown[] = [];
+  await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, AbortSignal.abort(cancellation), {
+    queryDue: async () => assert.fail('cancelled discovery must not query'),
+    onResult: (result) => { summaries.push(result); },
+  }), (error: unknown) => error === cancellation);
+  assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 }]);
+});
+
+test('cron cancellation between operations preserves its reason after an earlier failure', async () => {
+  const fixture = harness();
+  const controller = new AbortController();
+  const cancellation = new Error('cancelled');
+  const failure = new Error('load failed');
+  const loaded: string[] = [];
+  const summaries: unknown[] = [];
+  await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, controller.signal, {
+    queryDue: async () => ['failed', 'pending', 'unvisited'],
+    load: async (_context, operationId) => {
+      loaded.push(operationId);
+      if (operationId === 'failed') throw failure;
+      return fixture.snapshot;
+    },
+    ensure: async (_env, snapshot) => { controller.abort(cancellation); return snapshot; },
+    onResult: (result) => { summaries.push(result); },
+  }), (error: unknown) => error === cancellation);
+  assert.deepEqual(loaded, ['failed', 'pending']);
+  assert.deepEqual(summaries, [{ attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1 }]);
+});
+
 test('Workflow paused and unknown statuses are active; inspection errors are not absence', async () => {
   const snapshot = receiptWorkflowSnapshot();
   for (const status of ['paused', 'unknown', 'waiting', 'waitingForPause', 'queued', 'running']) {

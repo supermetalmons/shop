@@ -3,8 +3,10 @@ import {
   type ReconciliationOptions, type ReconciliationOutcome, type ReconciliationResult,
 } from './reconciliationResult.js';
 
-export async function drainNotificationCandidates<T>(args: {
+export async function drainReconciliationCandidates<T>(args: {
   signal: AbortSignal;
+  checkAbortedBeforeLoad?: boolean;
+  cancellationMode?: 'aggregate' | 'throw';
   loadCandidates: () => Promise<readonly T[]>;
   processCandidate: (candidate: T) => Promise<ReconciliationOutcome | 'stop'>;
   failureMessage: string;
@@ -12,11 +14,12 @@ export async function drainNotificationCandidates<T>(args: {
 } & ReconciliationOptions): Promise<ReconciliationResult> {
   const result = emptyReconciliationResult();
   try {
-    args.signal.throwIfAborted();
+    if (args.checkAbortedBeforeLoad !== false) args.signal.throwIfAborted();
     const candidates = await args.loadCandidates();
     const failures: unknown[] = [];
     for (const candidate of candidates) {
       if (args.signal.aborted) {
+        if (args.cancellationMode === 'throw') throw args.signal.reason;
         failures.push(args.signal.reason);
         break;
       }

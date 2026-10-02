@@ -20,9 +20,22 @@ npm run check:queue-backlogs
 
 The database check requires the latest schema, initialized inventory, active
 state tables, matching parent records, and valid indexes and query plans.
-`--for-deployment` remains supported by the deployment gate. State-control
-commands are read-only inspectors; their old `prepare` and `activate` commands
-have been retired. Inventory preparation remains available for new drops.
+`--for-deployment` remains supported by the deployment gate and runs the same
+complete validation as inspection. Small checks use batched queries; documents,
+outboxes, checkout state, recovery state, and dispute history are validated in
+pages of at most 100 rows. Every shared row parser and integrity check still runs.
+Total database work and transferred data grow with the records being checked;
+the existing response-size limit still fails closed on oversized payloads.
+
+Each table scan captures its final key when that scan starts. Parent checks use
+the same SQL statement as the child rows. Active writes may appear between
+pages; new keys behind the cursor or beyond the captured final key are checked
+on the next run. The report is not one database-wide snapshot. Failure summaries
+retain every error-code group, so their output can grow with distinct failures.
+
+State-control commands are read-only inspectors; their old `prepare` and
+`activate` commands have been retired. Inventory preparation remains available
+for new drops.
 
 Status includes validation errors, pending ages, failure reasons, and processing
 leases. It does not send emails or contact payment or chain providers. Inventory

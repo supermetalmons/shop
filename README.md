@@ -197,7 +197,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0033_delivery_recovery_metadata_cleanup.sql`, followed by the
+migrations through `0034_drop_obsolete_commerce_indexes.sql`, followed by the
 API release and then the frontend. The normal API deployment command applies
 migrations and validates the current schema and active storage. Fresh databases
 use the [Commerce bootstrap procedure](scripts/docs/commerce_operations.md#initialize-an-empty-database).
@@ -608,7 +608,7 @@ canonical fulfillment origin address.
 `mons-shop-commerce` is the authoritative commerce document database. Its
 immutable SQL history starts at
 `cloud/workers/api/commerce-migrations/0001_current_schema.sql` and currently ends
-at `0033_delivery_recovery_metadata_cleanup.sql`. Append `0034_<description>.sql`
+at `0034_drop_obsolete_commerce_indexes.sql`. Append `0035_<description>.sql`
 for the next change and regenerate the schema manifest. The checker validates
 the exact current schema, semantic integrity, and selective query plans.
 

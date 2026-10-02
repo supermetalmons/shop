@@ -1,0 +1,3 @@
+DROP INDEX commerce_documents_pack_projection;
+DROP INDEX commerce_stripe_checkouts_reconciliation_due;
+DROP INDEX commerce_preorder_succeeded_buyer;

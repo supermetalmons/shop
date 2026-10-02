@@ -113,6 +113,20 @@ test('empty query batches fail before running Wrangler', () => {
   }
 });
 
+test('Commerce named batches preserve empty positions and reject malformed statement envelopes', () => {
+  const queries = { first: 'SELECT 1', empty: 'SELECT 2 WHERE 0', last: 'SELECT 3' };
+  const valid = createD1MaintenanceRunner('commerce', () => envelope([[{ value: 1 }], [], [{ value: 3 }]]));
+  assert.deepEqual(valid.queryBatch(queries), { first: [{ value: 1 }], empty: [], last: [{ value: 3 }] });
+  for (const output of [
+    envelope([[], []]), envelope([[], [], [], []]),
+    JSON.stringify([{ success: true, results: [] }, { success: false, results: [] }, { success: true, results: [] }]),
+    JSON.stringify([{ success: true, results: [] }, { success: true, results: null }, { success: true, results: [] }]),
+  ]) {
+    const runner = createD1MaintenanceRunner('commerce', () => output);
+    assert.throws(() => runner.queryBatch(queries), /(?:Expected exactly 3 Commerce D1 statement results|Commerce D1 query failed)/);
+  }
+});
+
 test('Commerce file execution preserves file mode and import summary results', () => {
   const summary = [{ 'Total queries executed': 2, 'Rows read': 0, 'Rows written': 2 }];
   const runner = createD1MaintenanceRunner('commerce', (_file, args) => {

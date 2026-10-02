@@ -4,7 +4,7 @@ import {
 } from './deliveryOrderSummaries.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
-import { drainNotificationCandidates } from './notificationReconciliation.js';
+import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
   markPendingReadyToShipNotificationsFailed,
   notificationPersistenceContext,
@@ -34,7 +34,7 @@ export async function reconcilePendingReadyToShipNotifications(
   };
   const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
   let publicationAttempts = 0;
-  return drainNotificationCandidates({
+  return drainReconciliationCandidates({
     signal,
     onResult: overrides.onResult,
     loadCandidates: () => repository.queryDueReadyNotifications({

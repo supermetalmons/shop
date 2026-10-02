@@ -17,9 +17,9 @@ import {
   type ReceiptClaimWorkflowSnapshot,
 } from './stripeReceiptClaimWorkflowState.js';
 import { receiptClaimWorkflowContext } from './stripeReceiptClaimWorkflowSupport.js';
+import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
-  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
-  reportReconciliationResult, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
+  reportReconciliationFailure, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
 } from './reconciliationResult.js';
 
 type InstanceObservation = 'missing' | 'active' | 'terminal' | 'unavailable';
@@ -161,37 +161,25 @@ export async function reconcileReceiptClaimWorkflows(
     nowMs?: () => number;
   } & ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
-  const result = emptyReconciliationResult();
-  try {
-    const nowMs = overrides.nowMs || Date.now;
-    signal.throwIfAborted();
-    const operationIds = await (overrides.queryDue || queryDueReceiptClaimWorkflows)(env.COMMERCE_DB, nowMs(), 8);
-    const failures: unknown[] = [];
-    for (const operationId of operationIds) {
-      signal.throwIfAborted();
-      try {
-        const snapshot = await (overrides.load || loadReceiptClaimWorkflow)(receiptClaimWorkflowContext(env, signal, nowMs()), operationId);
-        if (!snapshot) {
-          recordReconciliationOutcome(result, 'skipped');
-          continue;
-        }
-        const current = await (overrides.ensure || ensureReceiptClaimWorkflowRunning)(env, snapshot, signal);
-        const outcome = current.operation.phase === 'complete' ? 'completed'
-          : current.operation.phase === 'pending' ? 'deferred' : 'failed';
-        recordReconciliationOutcome(result, outcome);
-        if (outcome === 'failed') {
-          reportReconciliationFailure('receiptClaims', { operationId, generation: current.operation.generation },
-            undefined, current.operation.error?.code || 'workflow-failed');
-        }
-      } catch (error) {
-        recordReconciliationOutcome(result, 'failed');
-        reportReconciliationFailure('receiptClaims', { operationId }, error);
-        failures.push(error);
+  const nowMs = overrides.nowMs || Date.now;
+  return drainReconciliationCandidates({
+    signal,
+    cancellationMode: 'throw',
+    onResult: overrides.onResult,
+    loadCandidates: () => (overrides.queryDue || queryDueReceiptClaimWorkflows)(env.COMMERCE_DB, nowMs(), 8),
+    failureMessage: 'Receipt claim Workflow reconciliation failed',
+    processCandidate: async (operationId) => {
+      const snapshot = await (overrides.load || loadReceiptClaimWorkflow)(receiptClaimWorkflowContext(env, signal, nowMs()), operationId);
+      if (!snapshot) return 'skipped';
+      const current = await (overrides.ensure || ensureReceiptClaimWorkflowRunning)(env, snapshot, signal);
+      const outcome = current.operation.phase === 'complete' ? 'completed'
+        : current.operation.phase === 'pending' ? 'deferred' : 'failed';
+      if (outcome === 'failed') {
+        reportReconciliationFailure('receiptClaims', { operationId, generation: current.operation.generation },
+          undefined, current.operation.error?.code || 'workflow-failed');
       }
-    }
-    if (failures.length) throw new AggregateError(failures, 'Receipt claim Workflow reconciliation failed');
-    return result;
-  } finally {
-    reportReconciliationResult(result, overrides.onResult);
-  }
+      return outcome;
+    },
+    onFailure: (operationId, error) => reportReconciliationFailure('receiptClaims', { operationId }, error),
+  });
 }
