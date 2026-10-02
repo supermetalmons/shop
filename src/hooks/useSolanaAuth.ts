@@ -8,20 +8,19 @@ import {
 } from '../api/profile';
 import { isRetryableApiError, retryWithBackoff } from '../lib/apiErrors';
 import type {
-  DeliveryOrderSummary,
   GetProfileStateResponse,
-  Profile,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
 } from '../types';
 import { buildSignInMessage } from '../lib/solana';
 import { normalizeApiErrorCode } from '../../shared/apiErrorCode';
-import { deliveryOrderSummarySortAt } from '../../shared/deliveryOrderSummary.js';
-import type { ShipmentHistoryCursor } from '../../shared/shipmentHistory.ts';
 import {
-  deliveryOrderSummariesEqual,
+  mergeProfileState,
   authSubjectChangeInvalidatesSession,
+  type ProfileSnapshotState,
 } from '../lib/profileState';
+import { useProfileRefreshController } from './useProfileRefreshController';
+import { useProfileRefreshLifecycle } from './useProfileRefreshLifecycle';
 import { isStaffWalletAddress } from '../../shared/fulfillmentAccess';
 import {
   createStaffWalletChallenge,
@@ -39,18 +38,7 @@ import {
   subscribeAnonymousSession,
 } from '../lib/anonymousSession';
 
-export type SolanaAuthState = {
-  profile: Profile | null;
-  shipments: DeliveryOrderSummary[];
-  shipmentsNextCursor: ShipmentHistoryCursor | null;
-  shipmentsRevision: number;
-  sessionWallet: string | null;
-  authenticated: boolean;
-  loading: boolean;
-  profileReady: boolean;
-  shipmentsReady: boolean;
-  profileError: string | null;
-  shipmentsError: string | null;
+export type SolanaAuthState = ProfileSnapshotState & {
   deliveryRecoveryNextCheckAt: number | null;
 };
 
@@ -96,14 +84,6 @@ type SignInAttempt = {
   contextGeneration: number;
   uid: string | null;
   promise: Promise<SignInResult>;
-};
-
-type RefreshRun = {
-  contextGeneration: number;
-  sessionRevision: number;
-  queued: boolean;
-  promise: Promise<boolean>;
-  attempt: Promise<boolean>;
 };
 
 type SessionReset = {
@@ -219,19 +199,7 @@ function retryDelay(delays: readonly [number, ...number[]], retryCount: number):
   return delays[Math.min(retryCount, delays.length - 1)];
 }
 
-function shipmentsInDisplayOrder(shipments: DeliveryOrderSummary[]): DeliveryOrderSummary[] {
-  return [...shipments].sort((left, right) => {
-    const leftAt = deliveryOrderSummarySortAt(left);
-    const rightAt = deliveryOrderSummarySortAt(right);
-    if (leftAt !== rightAt) return rightAt - leftAt;
-    if (left.dropId !== right.dropId) return left.dropId < right.dropId ? -1 : 1;
-    return left.deliveryId - right.deliveryId;
-  });
-}
-
 const PERSISTENT_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000] as const;
-const PROFILE_REFRESH_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000, 30_000, 60_000] as const;
-const PROFILE_REFRESH_INTERVAL_MS = 60_000;
 const ACTION_RESTORATION_TIMEOUT_MS = 20_000;
 
 export function useSolanaAuthWithRuntime(
@@ -269,7 +237,11 @@ export function useSolanaAuthWithRuntime(
   const deliveryRecoveryRequestGenerationRef = useRef(0);
   const deliveryRecoveryAppliedGenerationRef = useRef(0);
   const signInAttemptRef = useRef<SignInAttempt | null>(null);
-  const refreshRunRef = useRef<RefreshRun | null>(null);
+  const {
+    refresh: refreshProfile,
+    getCurrentRun: getProfileRefreshRun,
+    invalidate: invalidateProfileRefresh,
+  } = useProfileRefreshController();
   const sessionResetRef = useRef<SessionReset | null>(null);
   const authBootstrapInFlightRef = useRef(0);
   const restorationGenerationRef = useRef(0);
@@ -318,10 +290,10 @@ export function useSolanaAuthWithRuntime(
       invalidateIntentContext();
       contextGenerationRef.current += 1;
       signInAttemptRef.current = null;
-      refreshRunRef.current = null;
+      invalidateProfileRefresh();
       clearMismatchSignOutTimer();
     };
-  }, [clearMismatchSignOutTimer, invalidateIntentContext]);
+  }, [clearMismatchSignOutTimer, invalidateIntentContext, invalidateProfileRefresh]);
 
   const ensureAuthSubject = useCallback(async () => {
     authBootstrapInFlightRef.current += 1;
@@ -434,87 +406,37 @@ export function useSolanaAuthWithRuntime(
     }
     const profileError = response.profile?.status === 'error' ? response.profile.error : null;
     const shipmentsError = response.shipments?.status === 'error' ? response.shipments.error : null;
-    setState((current) => {
-      const base = current.sessionWallet === wallet
-        ? current
-        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, authenticated: true };
-      const nextShipments = response.shipments?.status === 'ready'
-        ? response.nextCursor !== undefined
-          ? response.shipments.value
-          : shipmentsInDisplayOrder(response.shipments.value)
-        : base.shipments;
-      const next: SolanaAuthState = {
-        ...base,
-        sessionWallet: wallet,
-        authenticated: true,
-        loading: false,
-        profile: response.profile?.status === 'ready' ? response.profile.value : base.profile,
-        profileReady: response.profile?.status === 'ready' ? true : base.profileReady,
-        profileError: response.profile?.status === 'ready' ? null : profileError?.message || base.profileError,
-        shipments: nextShipments,
-        shipmentsNextCursor: response.shipments?.status === 'ready' ? response.nextCursor ?? null : base.shipmentsNextCursor,
-        shipmentsRevision: response.shipments?.status === 'ready' ? base.shipmentsRevision + 1 : base.shipmentsRevision,
-        shipmentsReady: response.shipments?.status === 'ready' ? true : base.shipmentsReady,
-        shipmentsError: response.shipments?.status === 'ready' ? null : shipmentsError?.message || base.shipmentsError,
-      };
-      if (
-        current.sessionWallet === next.sessionWallet &&
-        current.authenticated === next.authenticated &&
-        current.loading === next.loading &&
-        current.profile === next.profile &&
-        current.profileReady === next.profileReady &&
-        current.profileError === next.profileError &&
-        current.shipmentsReady === next.shipmentsReady &&
-        current.shipmentsError === next.shipmentsError &&
-        current.shipmentsRevision === next.shipmentsRevision &&
-        deliveryOrderSummariesEqual(current.shipments, next.shipments)
-      ) return current;
-      return next;
-    });
+    setState((current) => mergeProfileState(current, response, wallet, EMPTY_AUTH_STATE));
     setError(null);
     setSessionResolution('settled');
     return !profileError && !shipmentsError;
   }, [deactivateOwner, endMismatchedAuthSession, runtime]);
 
   const refreshProfileState = useCallback((): Promise<boolean> => {
-    const requestedGeneration = contextGenerationRef.current;
-    const existing = refreshRunRef.current;
-    if (existing && existing.contextGeneration === requestedGeneration &&
-      existing.sessionRevision === sessionRevisionRef.current) {
-      existing.queued = true;
-      return existing.promise;
-    }
-    const run: RefreshRun = {
-      contextGeneration: requestedGeneration,
-      sessionRevision: sessionRevisionRef.current,
-      queued: false,
-      promise: Promise.resolve(true),
-      attempt: Promise.resolve(true),
-    };
-    const isCurrent = () => mountedRef.current && contextGenerationRef.current === run.contextGeneration &&
-      sessionRevisionRef.current === run.sessionRevision;
-    const execute = async (): Promise<boolean> => {
-      try {
-        const uid = await ensureAuthSubject();
-        if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
-        const response = await runtime.loadProfileState();
-        if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
-        return applyProfileState(response, uid);
-      } catch (refreshError) {
-        if (!isCurrent()) return true;
+    const contextGeneration = contextGenerationRef.current;
+    const sessionRevision = sessionRevisionRef.current;
+    return refreshProfile({
+      contextGeneration,
+      sessionRevision,
+      isCurrent: () => mountedRef.current && contextGenerationRef.current === contextGeneration &&
+        sessionRevisionRef.current === sessionRevision,
+      ensureAuthSubject,
+      applyProfileState,
+      onError: (refreshError) => {
         if (errorCode(refreshError) === 'unauthenticated') {
           contextGenerationRef.current += 1;
           deactivateOwner(true);
           setError(null);
           setSessionResolution('resolving');
-          try {
-            await resetAuthSession();
-          } catch (signOutError) {
-            if (!activeRestorationGatesRef.current) {
-              setError(errorMessage(signOutError, 'Unable to reset authentication'));
+          return (async () => {
+            try {
+              await resetAuthSession();
+            } catch (signOutError) {
+              if (!activeRestorationGatesRef.current) {
+                setError(errorMessage(signOutError, 'Unable to reset authentication'));
+              }
             }
-          }
-          throw refreshError;
+          })();
         }
         const message = errorMessage(refreshError, 'Unable to refresh profile');
         const hasValidatedSession = Boolean(
@@ -530,23 +452,9 @@ export function useSolanaAuthWithRuntime(
           if (!activeRestorationGatesRef.current) setError(message);
           setSessionResolution('resolving');
         }
-        throw refreshError;
-      }
-    };
-    run.promise = (async () => {
-      let complete = true;
-      do {
-        run.queued = false;
-        run.attempt = execute();
-        complete = await run.attempt;
-      } while (run.queued && isCurrent());
-      return complete;
-    })().finally(() => {
-      if (refreshRunRef.current === run) refreshRunRef.current = null;
-    });
-    refreshRunRef.current = run;
-    return run.promise;
-  }, [applyProfileState, deactivateOwner, ensureAuthSubject, resetAuthSession, runtime]);
+      },
+    }, runtime);
+  }, [applyProfileState, deactivateOwner, ensureAuthSubject, refreshProfile, resetAuthSession, runtime]);
 
   const awaitWalletSessionRestoration = useCallback(async (
     expectedWallet: string,
@@ -559,7 +467,7 @@ export function useSolanaAuthWithRuntime(
       sessionSubjectRef.current !== null && sessionSubjectRef.current === authSubjectRef.current;
     if (!isCurrent()) return 'cancelled';
     if (restored()) return 'restored';
-    if (sessionResolutionRef.current === 'settled' && !refreshRunRef.current && !mismatchSignOutRef.current &&
+    if (sessionResolutionRef.current === 'settled' && !getProfileRefreshRun() && !mismatchSignOutRef.current &&
       sessionResetRef.current?.status !== 'pending') return 'sign-in-required';
 
     let cancel!: () => void;
@@ -593,10 +501,10 @@ export function useSolanaAuthWithRuntime(
         }
         if (restored()) return 'restored';
 
-        let run = refreshRunRef.current;
+        let run = getProfileRefreshRun();
         if (!run || run.contextGeneration !== contextGenerationRef.current) {
           void refreshProfileState().catch(() => undefined);
-          run = refreshRunRef.current;
+          run = getProfileRefreshRun();
         }
         if (!run) return 'sign-in-required';
         const resetBeforeAttempt = sessionResetRef.current;
@@ -608,7 +516,7 @@ export function useSolanaAuthWithRuntime(
             throw new Error('Unable to sign in. Please try again.');
           }
           contextGenerationRef.current += 1;
-          refreshRunRef.current = null;
+          invalidateProfileRefresh();
           return 'sign-in-required';
         }
         if (sessionResetRef.current?.status === 'pending') continue;
@@ -627,7 +535,7 @@ export function useSolanaAuthWithRuntime(
       restorationWaitersRef.current.delete(cancel);
       activeRestorationGatesRef.current -= 1;
     }
-  }, [refreshProfileState, runtime]);
+  }, [getProfileRefreshRun, invalidateProfileRefresh, refreshProfileState, runtime]);
 
   const beginDeliveryRecoveryScheduleUpdate = useCallback(() => {
     const wallet = sessionWalletRef.current;
@@ -696,11 +604,11 @@ export function useSolanaAuthWithRuntime(
       previousSubject === null && nextSubject !== null;
     if (!internalReset && !internalBootstrap && reason !== 'credential-expired' && reason !== 'session-renewed') invalidateIntentContext();
     contextGenerationRef.current += 1;
-    refreshRunRef.current = null;
+    invalidateProfileRefresh();
     deactivateOwner(false);
     setError(null);
     setAuthUserRevision((revision) => revision + 1);
-  }), [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, runtime]);
+  }), [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, invalidateProfileRefresh, runtime]);
 
   useLayoutEffect(() => {
     const currentAuthSubject = authSubjectRef.current;
@@ -716,105 +624,29 @@ export function useSolanaAuthWithRuntime(
     }
   }, [connectedWallet, endMismatchedAuthSession]);
 
-  useEffect(() => {
-    if (mismatchSignOutRef.current) return;
+  const beginProfileRefreshCycle = useCallback(() => {
+    if (mismatchSignOutRef.current) return false;
     const currentAuthSubject = authSubjectRef.current;
     const activeWallet = sessionWalletRef.current;
     contextGenerationRef.current += 1;
-    refreshRunRef.current = null;
+    invalidateProfileRefresh();
     if (!activeWallet && connectedWallet) setState((current) => ({ ...current, loading: true }));
     const validated = Boolean(
       activeWallet && currentAuthSubject && sessionSubjectRef.current === currentAuthSubject && (!connectedWallet || connectedWallet === activeWallet),
     );
     setSessionResolution(validated ? 'settled' : 'resolving');
-    let cancelled = false;
-    let timer: unknown = null;
-    let retryCount = 0;
-    const clearTimer = () => {
-      if (timer === null) return;
-      runtime.clearTimer(timer);
-      timer = null;
-    };
-    const schedule = (delay: number) => {
-      clearTimer();
-      if (cancelled || !runtime.isPageVisible()) return;
-      timer = runtime.setTimer(() => {
-        timer = null;
-        if (!runtime.isPageVisible()) return;
-        run();
-      }, delay);
-    };
-    const run = () => {
-      if (cancelled) return;
-      clearTimer();
-      void refreshProfileState().then(
-        (complete) => {
-          if (cancelled) return;
-          if (complete) {
-            retryCount = 0;
-            schedule(PROFILE_REFRESH_INTERVAL_MS);
-          } else {
-            const delay = retryDelay(PROFILE_REFRESH_RETRY_DELAYS_MS, retryCount);
-            retryCount += 1;
-            schedule(delay);
-          }
-        },
-        (refreshError) => {
-          if (cancelled) return;
-          if (isRetryableApiError(refreshError)) {
-            const delay = retryDelay(PROFILE_REFRESH_RETRY_DELAYS_MS, retryCount);
-            retryCount += 1;
-            schedule(delay);
-          } else {
-            retryCount = 0;
-            schedule(PROFILE_REFRESH_INTERVAL_MS);
-          }
-        },
-      );
-    };
-    const unsubscribeRefreshEvents = runtime.subscribeRefreshEvents(run);
-    run();
-    return () => {
-      cancelled = true;
-      clearTimer();
-      unsubscribeRefreshEvents();
-    };
-  }, [authUserRevision, connectedWallet, refreshProfileState, runtime]);
+    return true;
+  }, [connectedWallet, invalidateProfileRefresh]);
 
-  useEffect(() => {
-    if (!state.sessionWallet) return;
-    let cancelled = false;
-    let retryTimer: unknown = null;
-    let retryCount = 0;
-    const clearRetryTimer = () => {
-      if (retryTimer === null) return;
-      runtime.clearTimer(retryTimer);
-      retryTimer = null;
-    };
-    const run = () => {
-      if (cancelled) return;
-      clearRetryTimer();
-      void reconcileProfile()
-        .then(() => {
-          retryCount = 0;
-        })
-        .catch((reconcileError) => {
-          if (cancelled) return;
-          if (!isRetryableApiError(reconcileError)) {
-            console.warn('[mons] failed to reconcile profile state', reconcileError);
-            return;
-          }
-          const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
-          retryCount += 1;
-          retryTimer = runtime.setTimer(run, delay);
-        });
-    };
-    run();
-    return () => {
-      cancelled = true;
-      clearRetryTimer();
-    };
-  }, [connectedWallet, reconcileProfile, runtime, state.sessionWallet]);
+  useProfileRefreshLifecycle({
+    runtime,
+    connectedWallet,
+    authUserRevision,
+    sessionWallet: state.sessionWallet,
+    beginCycle: beginProfileRefreshCycle,
+    refreshProfileState,
+    reconcileProfile,
+  });
 
   const signIn = useCallback((): Promise<SignInResult> => {
     if (!mountedRef.current) {
@@ -832,7 +664,7 @@ export function useSolanaAuthWithRuntime(
     }
     contextGeneration += 1;
     contextGenerationRef.current = contextGeneration;
-    refreshRunRef.current = null;
+    invalidateProfileRefresh();
     let resolveAttempt!: (result: SignInResult) => void;
     let rejectAttempt!: (error: unknown) => void;
     const promise = new Promise<SignInResult>((resolve, reject) => {
@@ -961,14 +793,14 @@ export function useSolanaAuthWithRuntime(
       }
     })();
     return promise;
-  }, [activateOwner, ensureAuthSubject, publicKey, refreshProfileState, runtime, signMessage]);
+  }, [activateOwner, ensureAuthSubject, invalidateProfileRefresh, publicKey, refreshProfileState, runtime, signMessage]);
 
   const signOut = useCallback(async () => {
     invalidateIntentContext();
     contextGenerationRef.current += 1;
     clearMismatchSignOutTimer();
     mismatchSignOutRef.current = null;
-    refreshRunRef.current = null;
+    invalidateProfileRefresh();
     deactivateOwner(false);
     setError(null);
     lastSignedRef.current = null;
@@ -978,7 +810,7 @@ export function useSolanaAuthWithRuntime(
       await refreshProfileState().catch(() => false);
       throw signOutError;
     }
-  }, [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, refreshProfileState, resetAuthSession]);
+  }, [clearMismatchSignOutTimer, deactivateOwner, invalidateIntentContext, invalidateProfileRefresh, refreshProfileState, resetAuthSession]);
 
   const hasAuthenticatedWalletSession = useCallback(
     (wallet: string | null | undefined) => Boolean(

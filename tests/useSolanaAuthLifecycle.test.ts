@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { useLayoutEffect } from 'react';
+import { createElement, StrictMode, useLayoutEffect, type ReactNode } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import type { DeliveryOrderSummary, GetProfileStateResponse, ReconcileProfileStateResponse } from '../src/types.ts';
 import {
@@ -1090,4 +1090,209 @@ test('sign-in rejects if its final profile refresh outlives the connected wallet
     finalRefresh.resolve(readyState(WALLET_A));
     await rejected;
   });
+});
+
+test('an authenticated action skips restoration and signing during a stalled profile refresh', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  let signatures = 0;
+  let restorations = 0;
+  const messages: string[] = [];
+  const { result } = renderHook(() => {
+    const auth = useSolanaAuthWithRuntime({
+      ...walletState(WALLET_A),
+      signMessage: async () => { signatures += 1; return new Uint8Array(64); },
+    }, harness.runtime);
+    const shopSignIn = useShopSignIn({
+      auth: {
+        ...auth,
+        awaitWalletSessionRestoration: (...args) => {
+          restorations += 1;
+          return auth.awaitWalletSessionRestoration(...args);
+        },
+      },
+      connectedWallet: WALLET_A,
+      publicKey: new PublicKey(WALLET_A),
+      wallet: { connecting: false, disconnecting: false },
+      walletModalVisible: false,
+      setVisible: () => undefined,
+      isSignedInWallet: auth.authenticated && auth.sessionWallet === WALLET_A,
+      hasAuthenticatedAccount: auth.authenticated,
+      showToast: (message) => { messages.push(message); },
+      isUserRejectedError: () => false,
+    });
+    return { auth, shopSignIn };
+  });
+  await waitFor(() => assert.equal(result.current.auth.shipmentsReady, true));
+  const profile = result.current.auth.profile;
+  const shipments = result.current.auth.shipments;
+  const background = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => background.promise;
+  const previousLoads = harness.loadCalls;
+  let refresh!: Promise<boolean>;
+  act(() => { refresh = result.current.auth.refreshProfileState(); });
+  await waitFor(() => assert.equal(harness.loadCalls, previousLoads + 1));
+
+  let completed = false;
+  act(() => {
+    void result.current.shopSignIn.ensureSignedIn().then((signedIn) => { completed = signedIn; });
+  });
+  await waitFor(() => assert.equal(completed, true));
+  assert.equal(result.current.auth.loading, false);
+  assert.equal(result.current.auth.sessionResolution, 'settled');
+  assert.equal(result.current.auth.profile, profile);
+  assert.equal(result.current.auth.shipments, shipments);
+  assert.equal(restorations, 0);
+  assert.equal(signatures, 0);
+  assert.equal(harness.authenticateCalls, 0);
+  assert.equal(harness.loadCalls, previousLoads + 1);
+  assert.deepEqual(messages, []);
+  await act(async () => {
+    background.resolve(harness.nextState);
+    await refresh;
+  });
+});
+
+test('concurrent direct sign-ins share one promise, signature and wallet exchange', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const signature = deferred<Uint8Array>();
+  let signatures = 0;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime({
+    ...walletState(WALLET_A),
+    signMessage: () => { signatures += 1; return signature.promise; },
+  }, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  let first!: Promise<{ wallet: string }>;
+  let second!: Promise<{ wallet: string }>;
+  act(() => {
+    first = result.current.signIn();
+    second = result.current.signIn();
+  });
+  assert.equal(first, second);
+  await waitFor(() => assert.equal(signatures, 1));
+  await act(async () => {
+    signature.resolve(new Uint8Array(64));
+    assert.deepEqual(await Promise.all([first, second]), [{ wallet: WALLET_A }, { wallet: WALLET_A }]);
+  });
+  assert.equal(signatures, 1);
+  assert.equal(harness.authenticateCalls, 1);
+});
+
+test('same-wallet sign-ins reuse a signature through two minutes and renew it after expiry', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  let signatures = 0;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime({
+    ...walletState(WALLET_A),
+    signMessage: async () => { signatures += 1; return new Uint8Array(64).fill(signatures); },
+  }, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  await act(async () => { await result.current.signIn(); });
+  harness.nowMs += 120_000;
+  await act(async () => { await result.current.signIn(); });
+  assert.equal(signatures, 1);
+  assert.equal(harness.authenticateCalls, 2);
+  harness.nowMs += 1;
+  await act(async () => { await result.current.signIn(); });
+  assert.equal(signatures, 2);
+  assert.equal(harness.authenticateCalls, 3);
+});
+
+test('a changed auth subject cannot reuse the previous subject sign-in signature', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const messages: string[] = [];
+  const { result } = renderHook(() => useSolanaAuthWithRuntime({
+    ...walletState(WALLET_A),
+    signMessage: async (message) => {
+      messages.push(new TextDecoder().decode(message));
+      return new Uint8Array(64);
+    },
+  }, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  await act(async () => { await result.current.signIn(); });
+  await act(async () => harness.emitAuthSubject('auth-b'));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  await act(async () => { await result.current.signIn(); });
+  assert.equal(messages.length, 2);
+  assert.notEqual(messages[0], messages[1]);
+  assert.equal(harness.authenticateCalls, 2);
+  assert.equal(result.current.authSubject, 'auth-b');
+  assert.equal(result.current.hasAuthenticatedWalletSession(WALLET_A), true);
+});
+
+test('an invalid-signature response clears the cached signature before retrying sign-in', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  let signatures = 0;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime({
+    ...walletState(WALLET_A),
+    signMessage: async () => { signatures += 1; return new Uint8Array(64).fill(signatures); },
+  }, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  await act(async () => { await result.current.signIn(); });
+  const authenticate = harness.authenticateImpl;
+  harness.authenticateImpl = async () => {
+    throw Object.assign(new Error('Invalid signature'), { code: 'invalid-argument' });
+  };
+  await act(async () => { await assert.rejects(result.current.signIn(), /Invalid signature/); });
+  assert.equal(signatures, 1);
+  harness.authenticateImpl = authenticate;
+  await act(async () => { await result.current.signIn(); });
+  assert.equal(signatures, 2);
+  assert.equal(harness.authenticateCalls, 3);
+});
+
+test('StrictMode and unrelated rerenders preserve polling and clean up subscriptions and late refreshes', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result, rerender, unmount } = renderHook(
+    ({ revision }: { revision: number }) => ({
+      auth: useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime),
+      revision,
+    }),
+    {
+      initialProps: { revision: 0 },
+      wrapper: ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children),
+    },
+  );
+  await waitFor(() => assert.equal(result.current.auth.shipmentsReady, true));
+  await waitFor(() => assert.deepEqual(harness.timerDelays(), [60_000]));
+  assert.equal(harness.authSubjectListeners.size, 1);
+  assert.equal(harness.refreshListeners.size, 1);
+  const loads = harness.loadCalls;
+  const timers = [...harness.timers.entries()];
+  const authListeners = [...harness.authSubjectListeners];
+  const refreshListeners = [...harness.refreshListeners];
+  rerender({ revision: 1 });
+  await act(async () => undefined);
+  assert.equal(harness.loadCalls, loads);
+  assert.deepEqual([...harness.timers.entries()], timers);
+  assert.deepEqual([...harness.authSubjectListeners], authListeners);
+  assert.deepEqual([...harness.refreshListeners], refreshListeners);
+
+  await act(async () => harness.advance(60_000));
+  await waitFor(() => assert.equal(harness.loadCalls, loads + 1));
+  assert.deepEqual(harness.timerDelays(), [60_000]);
+  const background = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => background.promise;
+  await act(async () => harness.emitRefresh());
+  assert.equal(harness.loadCalls, loads + 2);
+  unmount();
+  assert.equal(harness.authSubjectListeners.size, 0);
+  assert.equal(harness.refreshListeners.size, 0);
+  assert.deepEqual(harness.timerDelays(), []);
+  await act(async () => {
+    background.resolve(harness.nextState);
+    harness.emitRefresh();
+    harness.advance(60_000);
+  });
+  assert.equal(harness.loadCalls, loads + 2);
+  assert.deepEqual(harness.timerDelays(), []);
 });
