@@ -163,8 +163,9 @@ async function authorizedFixture(config = CONFIG) {
   };
 }
 
-test('preorder transaction mints exact IDs and atomically splits the full item subtotal', async () => {
-  const { args, deps, state } = fixture();
+for (const ids of [[1409, 1410, 1413], [1414, 1415, 1416], [1417, 1418, 1419]]) test(`preorder transaction mints exact IDs ${ids.join(', ')} and atomically splits the full item subtotal`, async () => {
+  const { args: defaults, deps, state } = fixture();
+  const args = { ...defaults, ids };
   const prepared = await preparePreorderTransaction(args, deps);
   const transaction = decode(prepared.transactionBase64);
   const message = TransactionMessage.decompile(transaction.message);
@@ -205,7 +206,7 @@ test('preorder transaction mints exact IDs and atomically splits the full item s
   });
 });
 
-for (const ids of [[], [0], [1401], [1408], [1414], [1.5], [1, 1], [1, 2, 3, 4]]) {
+for (const ids of [[], [0], [1401], [1408], [1420], [1.5], [1, 1], [1, 2, 3, 4]]) {
   test(`preorder refuses invalid selected IDs ${JSON.stringify(ids)}`, async () => {
     const { args, deps } = fixture();
     await assert.rejects(preparePreorderTransaction({ ...args, ids }, deps), /one and three different/);
@@ -214,8 +215,8 @@ for (const ids of [[], [0], [1401], [1408], [1414], [1.5], [1, 1], [1, 2, 3, 4]]
 
 test('preorder accepts legacy and new catalog endpoints without changing their identity', async () => {
   const { args, deps } = fixture();
-  const prepared = await preparePreorderTransaction({ ...args, ids: [1, 1400, 1413] }, deps);
-  assert.deepEqual(prepared.assets.map(({ id }) => id), [1, 1400, 1413]);
+  const prepared = await preparePreorderTransaction({ ...args, ids: [1, 1400, 1419] }, deps);
+  assert.deepEqual(prepared.assets.map(({ id }) => id), [1, 1400, 1419]);
 });
 
 test('preorder rejects unsupported clusters and disabled collections before accessing the provider', async () => {

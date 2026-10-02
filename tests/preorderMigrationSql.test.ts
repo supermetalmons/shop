@@ -74,6 +74,9 @@ for (const migration of [
   { name: '0028_preorder_card_range_1413.sql', options: { preorderCardRange1413Migration: false },
     previousMaximum: 1400, maximum: 1413, newIds: [1409, 1410, 1411, 1412, 1413],
     reservedIds: [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408], statements: 10 },
+  { name: '0031_preorder_card_range_1419.sql', options: { preorderCardRange1419Migration: false },
+    previousMaximum: 1413, maximum: 1419, newIds: [1414, 1415, 1416, 1417, 1418, 1419],
+    reservedIds: [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408], statements: 10 },
 ] as const) {
   for (const mode of ['whole', 'remote split'] as const) {
     test(`${migration.name} preserves orders, claims and guards when applied ${mode}`, async (context) => {

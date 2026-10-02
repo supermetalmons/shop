@@ -165,6 +165,8 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     const cards = [
       { id: 1409, tokenId: 130 }, { id: 1410, tokenId: 131 }, { id: 1411, tokenId: 132 },
       { id: 1412, tokenId: 133 }, { id: 1413, tokenId: 134 },
+      { id: 1414, tokenId: 135 }, { id: 1415, tokenId: 136 }, { id: 1416, tokenId: 137 },
+      { id: 1417, tokenId: 139 }, { id: 1418, tokenId: 140 }, { id: 1419, tokenId: 141 },
     ];
     const preorder = checkout();
     preorder.config = getPreorderConfig(preorderId)!;
@@ -179,12 +181,13 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       assert.equal(button.querySelector('img')!.getAttribute('src'),
         `https://cdn.lil.org/player/mi_note_3/mid/${card.tokenId}.webp`);
     }
-    for (const selection of [cards.slice(0, 3), cards.slice(3)]) {
+    for (let offset = 0; offset < cards.length; offset += 3) {
+      const selection = cards.slice(offset, offset + 3);
       for (const { id } of selection) fireEvent.click(view.getByRole('button', { name: new RegExp(`Select preorder #${id}:`) }));
       await act(async () => { fireEvent.click(view.getByRole('button', { name: `Preorder for ${selection.length * 0.25} SOL` })); });
       fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
     }
-    assert.deepEqual(purchased, [[1409, 1410, 1411], [1412, 1413]]);
+    assert.deepEqual(purchased, [[1409, 1410, 1411], [1412, 1413, 1414], [1415, 1416, 1417], [1418, 1419]]);
     view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder,
       availability: { ...preorder.availability, items: cards.map(({ id }) => ({ id, status: 'preordered' as const })) },
     } }));

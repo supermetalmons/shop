@@ -216,6 +216,7 @@ export function createCommerceD1Harness(
     preorderCardRange1400Migration?: boolean;
     preorderExpiryClaimReleaseMigration?: boolean;
     preorderCardRange1413Migration?: boolean;
+    preorderCardRange1419Migration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -264,6 +265,12 @@ export function createCommerceD1Harness(
   }
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0029_pack_status_outbox.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0030_delivery_recovery.sql', 'utf8'));
+  if (options.preorderEthereumMigration !== false && options.preorderConfirmationMigration !== false &&
+    options.preorderCardRangeMigration !== false && options.preorderCardRange1400Migration !== false &&
+    options.preorderExpiryClaimReleaseMigration !== false && options.preorderCardRange1413Migration !== false &&
+    options.preorderCardRange1419Migration !== false) {
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0031_preorder_card_range_1419.sql', 'utf8'));
+  }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table', options.deliveryRecoveryMode ?? 'table');
   return {
     database,

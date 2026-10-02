@@ -125,14 +125,14 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
         await store.finish(replacement, 'cancelled', 3000);
       }
     }
-    const newCardIds = [1398, 1399, 1400, 1409, 1410, 1411, 1412, 1413];
+    const newCardIds = [1398, 1399, 1400, 1409, 1410, 1411, 1412, 1413, 1414, 1415, 1416, 1417, 1418, 1419];
     const newOrders: StoredPreorder[] = [];
     for (let index = 0; index < newCardIds.length; index += 3) {
       newOrders.push(await store.reserve(candidate(Keypair.generate().publicKey.toBase58(), newCardIds.slice(index, index + 3))));
     }
     assert.deepEqual((await store.claims(config.cluster, config.collection))
       .filter((claim) => newOrders.some((order) => order.orderId === claim.orderId)).map((claim) => claim.id), newCardIds);
-    for (const id of [0, 1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1414]) {
+    for (const id of [0, 1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1420]) {
       const invalid = candidate(Keypair.generate().publicKey.toBase58(), [id]);
       await assert.rejects(store.reserve(invalid), /CHECK constraint/);
       assert.equal(await store.get(invalid.orderId), null);

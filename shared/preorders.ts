@@ -2,7 +2,7 @@ import type { SolanaCluster } from './deploymentCore.js';
 
 const PREORDER_CARD_IDS: readonly number[] = Object.freeze([
   ...Array.from({ length: 1400 }, (_, index) => index + 1),
-  1409, 1410, 1411, 1412, 1413,
+  1409, 1410, 1411, 1412, 1413, 1414, 1415, 1416, 1417, 1418, 1419,
 ]);
 export const PREORDER_CARD_COUNT = PREORDER_CARD_IDS.length;
 const preorderCardIds: ReadonlySet<number> = new Set(PREORDER_CARD_IDS);

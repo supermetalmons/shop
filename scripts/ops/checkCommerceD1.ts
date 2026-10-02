@@ -92,6 +92,11 @@ const PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS: Readonly<Record<string, read
   commerce_preorder_claims: ['table', 'ea7e6b31493320727b61bccf2970b295eb2eb92ac5e60488804ed3bc41941e46'],
 };
 
+const PREORDER_CARD_RANGE_1419_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
+  ...PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS,
+  commerce_preorder_claims: ['table', 'ef27420f6dcc020602bf32536d854a49f33d8ed36dfb9b6719fc26ab38a6dd4f'],
+};
+
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
   commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
   commerce_notification_legacy_insert_fence: ['trigger', '0dbe842e565314c6247a3e8d9a6717daa1df00840f0bc061e5acde00179ed0bf'],
@@ -428,7 +433,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    (migrations.length < 13 || migrations.length > 30) ||
+    (migrations.length < 13 || migrations.length > 31) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -458,7 +463,8 @@ export function checkCommerceD1(
     (migrations.length >= 27 && migrations[26].name !== '0027_preorder_expiry_claim_release.sql') ||
     (migrations.length >= 28 && migrations[27].name !== '0028_preorder_card_range_1413.sql') ||
     (migrations.length >= 29 && migrations[28].name !== '0029_pack_status_outbox.sql') ||
-    (migrations.length >= 30 && migrations[29].name !== '0030_delivery_recovery.sql')
+    (migrations.length >= 30 && migrations[29].name !== '0030_delivery_recovery.sql') ||
+    (migrations.length >= 31 && migrations[30].name !== '0031_preorder_card_range_1419.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -487,7 +493,9 @@ export function checkCommerceD1(
   const preorderCardRange1400Ready = migrations.some((migration) => migration.name === '0024_preorder_card_range_1400.sql');
   const preorderExpiryClaimReleaseReady = migrations.some((migration) => migration.name === '0027_preorder_expiry_claim_release.sql');
   const preorderCardRange1413Ready = migrations.some((migration) => migration.name === '0028_preorder_card_range_1413.sql');
-  const preorderSchema = preorderCardRange1413Ready ? PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS
+  const preorderCardRange1419Ready = migrations.some((migration) => migration.name === '0031_preorder_card_range_1419.sql');
+  const preorderSchema = preorderCardRange1419Ready ? PREORDER_CARD_RANGE_1419_SCHEMA_FINGERPRINTS
+    : preorderCardRange1413Ready ? PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS
     : preorderExpiryClaimReleaseReady ? PREORDER_EXPIRY_CLAIM_RELEASE_SCHEMA_FINGERPRINTS
     : preorderCardRange1400Ready ? PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS
     : preorderCardRangeReady ? PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS
@@ -526,6 +534,7 @@ export function checkCommerceD1(
   if (options.forDeployment && !preorderCardRange1413Ready) fail('Commerce D1 preorder card range 1413 migration is required for deployment.');
   if (options.forDeployment && !packStatusOutboxReady) fail('Commerce D1 pack-status outbox migration is required for deployment.');
   if (options.forDeployment && !deliveryRecoveryStateReady) fail('Commerce D1 delivery recovery migration is required for deployment.');
+  if (options.forDeployment && !preorderCardRange1419Ready) fail('Commerce D1 preorder card range 1419 migration is required for deployment.');
   if (deliveryRecoveryStateReady) for (const [name, [type, fingerprint]] of Object.entries(DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS)) {
     const schema = schemaCatalog.get(type, name);
     if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Delivery recovery state schema is invalid: ${name}.`);

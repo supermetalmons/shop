@@ -62,6 +62,7 @@ const migrationNames = [
   '0028_preorder_card_range_1413.sql',
   '0029_pack_status_outbox.sql',
   '0030_delivery_recovery.sql',
+  '0031_preorder_card_range_1419.sql',
 ] as const;
 
 test('preorder migration is required for deployment and its unique claims and permanent-history guards are checked', () => {
@@ -272,7 +273,21 @@ test('preorder expiry claim release schema rejects a missing or broadened trigge
   assert.throws(() => checkCommerceD1(localQuery(database)), /preorder schema commerce_preorder_expiry_claim_release/);
 });
 
-function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 = 30): DatabaseSync {
+test('preorder card range 1419 migration is required for deployment and its excluded specials are verified', (context) => {
+  const previous = currentDatabase(false, 30);
+  context.after(() => previous.close());
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  assert.throws(() => checkCommerceD1(localQuery(previous), { forDeployment: true }), /card range 1419 migration/);
+  previous.prepare('INSERT INTO d1_migrations (name) VALUES (?)').run('0031_preorder_card_range_1419.sql');
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder schema commerce_preorder_claims/);
+  const migration = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0031_preorder_card_range_1419.sql', import.meta.url), 'utf8');
+  previous.exec(migration);
+  assert.doesNotThrow(() => checkCommerceD1(localQuery(previous)));
+  previous.exec(migration.replace('card_id BETWEEN 1 AND 1400 OR card_id BETWEEN 1409 AND 1419', 'card_id BETWEEN 1 AND 1419'));
+  assert.throws(() => checkCommerceD1(localQuery(previous)), /preorder schema commerce_preorder_claims/);
+});
+
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 = 31): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   const appliedMigrations = migrationNames.slice(0, migrationCount);
   for (const name of appliedMigrations) {
@@ -559,7 +574,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
 });
 
 test('Commerce D1 checker reads one schema catalog for each supported migration baseline', () => {
-  for (const migrationCount of [13, 25, 28, 29, 30] as const) {
+  for (const migrationCount of [13, 25, 28, 29, 30, 31] as const) {
     const database = currentDatabase(false, migrationCount);
     try {
       let catalogReads = 0;
