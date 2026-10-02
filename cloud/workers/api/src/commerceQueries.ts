@@ -140,27 +140,22 @@ export function shipmentPresenceQuery(args: {
 
 export function fulfillmentOrdersQuery(args: FulfillmentOrdersQueryArgs): CommerceSqlQuery {
   const cursor = args.startAfter;
-  const cursorPredicate = cursor === undefined ? '' : ` AND (
-        processed_at_seconds IS NULL OR
-        processed_at_seconds < ? OR
-        (processed_at_seconds = ? AND processed_at_nanos < ?) OR
-        (processed_at_seconds = ? AND processed_at_nanos = ? AND document_path < ?)
-      )`;
+  const select = `SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_documents INDEXED BY commerce_documents_drop_processed_cursor
+      WHERE document_kind = 'delivery_order' AND drop_id = ? AND status = 'ready_to_ship'`;
   return {
-    sql: `SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_documents_drop_processed_cursor
-      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
-        AND document_kind = 'delivery_order' AND drop_id = ? AND status = 'ready_to_ship'${cursorPredicate}
+    sql: `${select}${cursor === undefined ? '' : `
+        AND (processed_at_seconds, processed_at_nanos, document_path) < (?, ?, ?)
+      UNION ALL
+      ${select} AND processed_at_seconds IS NULL`}
       ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC
-      LIMIT ?`,
+      LIMIT CASE WHEN EXISTS (SELECT 1 FROM commerce_authority_control
+        WHERE singleton = 1 AND authority_state = 'd1') THEN ? ELSE 0 END`,
     bindings: [args.dropId, ...(cursor === undefined ? [] : [
-      cursor.processedAt.seconds,
-      cursor.processedAt.seconds,
-      cursor.processedAt.nanos,
       cursor.processedAt.seconds,
       cursor.processedAt.nanos,
       cursor.documentPath,
+      args.dropId,
     ]), args.limit],
   };
 }

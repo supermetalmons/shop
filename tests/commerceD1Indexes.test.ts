@@ -1355,13 +1355,6 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     const historyPlan = planDetails(db, shipmentHistoryPageQuery({ owner: 'owner', limit: 51 }));
     assert.match(historyPlan, /SEARCH commerce_documents USING INDEX commerce_delivery_orders_shipment_cursor \(owner=\?\)/);
     assert.doesNotMatch(historyPlan, /USE TEMP B-TREE/);
-    for (const startAfter of [undefined, {
-      processedAt: { seconds: 1, nanos: 1 },
-      documentPath: 'drops/drop/deliveryOrders/100',
-    }]) {
-      const fulfillmentPlan = planDetails(db, fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001, startAfter }));
-      assert.match(fulfillmentPlan, /SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor/);
-    }
     const manualReviewPlan = planDetails(db, manualReviewCheckoutsQuery({ dropId: 'drop', limit: 26 }));
     assert.match(manualReviewPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_checkouts_manual_review_cursor/);
     const manualReviewCursorPlan = planDetails(db, manualReviewCheckoutsQuery({
@@ -1416,6 +1409,42 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.doesNotMatch(readyPlan, /USE TEMP B-TREE/);
     assert.deepEqual(db.prepare(readyQuery.sql).all(...readyQuery.bindings).map((row) => row.document_path),
       ['drops/drop/deliveryOrders/100', 'drops/drop/deliveryOrders/200']);
+  } finally {
+    db.close();
+  }
+});
+
+test('fulfillment pagination seeks timestamp and null rows without temporary sorting before and after ANALYZE', () => {
+  const db = database();
+  try {
+    const insert = db.prepare(`INSERT INTO commerce_documents (
+      document_path, document_kind, drop_id, document_id, document_json,
+      version, create_time, update_time, processed_at_seconds, processed_at_nanos
+    ) VALUES (?, 'delivery_order', 'drop', ?, '{"status":"ready_to_ship"}', 1, 'created', 'updated', ?, ?)`);
+    runDocumentEpoch(db, () => {
+      for (let id = 0; id < 500; id += 1) {
+        insert.run(`drops/drop/deliveryOrders/${id}`, String(id), id < 450 ? id : null, id < 450 ? 0 : null);
+      }
+    });
+    const first = fulfillmentOrdersQuery({ dropId: 'drop', limit: 20 });
+    const next = fulfillmentOrdersQuery({
+      dropId: 'drop', limit: 20,
+      startAfter: { processedAt: { seconds: 100, nanos: 0 }, documentPath: 'drops/drop/deliveryOrders/100' },
+    });
+    for (const analyze of [false, true]) {
+      if (analyze) db.exec('ANALYZE');
+      const initialPlan = planDetails(db, first);
+      const cursorPlan = planDetails(db, next);
+      assert.match(initialPlan, /SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor \(document_kind=\? AND drop_id=\? AND status=\?\)/);
+      assert.match(cursorPlan, /MERGE \(UNION ALL\)/);
+      assert.match(cursorPlan, /\(processed_at_seconds,processed_at_nanos,document_path\)<\(\?,\?,\?\)/);
+      assert.match(cursorPlan, /SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor \(document_kind=\? AND drop_id=\? AND status=\? AND processed_at_seconds=\?\)/);
+      assert.doesNotMatch(initialPlan + cursorPlan, /SCAN commerce_documents|USE TEMP B-TREE/);
+      assert.deepEqual(db.prepare(first.sql).all(...first.bindings).map((row) => row.document_id),
+        Array.from({ length: 20 }, (_, index) => String(449 - index)));
+      assert.deepEqual(db.prepare(next.sql).all(...next.bindings).map((row) => row.document_id),
+        Array.from({ length: 20 }, (_, index) => String(99 - index)));
+    }
   } finally {
     db.close();
   }

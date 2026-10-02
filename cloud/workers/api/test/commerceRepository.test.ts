@@ -84,7 +84,9 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
     return;
   }
   assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
-  if (/INDEXED BY commerce_(?:stripe_checkouts_manual_review|delivery_orders_shipment)_cursor/.test(dataSql)) {
+  if (/INDEXED BY commerce_documents_drop_processed_cursor/.test(dataSql)) {
+    assert.match(dataSql, /LIMIT CASE WHEN EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\) THEN \? ELSE 0 END/);
+  } else if (/INDEXED BY commerce_(?:stripe_checkouts_manual_review|delivery_orders_shipment)_cursor/.test(dataSql)) {
     assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1'\)/);
   } else if (dataSql.includes('recovery_state_json')) {
     assert.match(dataSql, /EXISTS \(SELECT 1 FROM commerce_authority_control AS authority/);
@@ -252,9 +254,13 @@ test('plain JSON objects with mutation-like kind fields remain document data', a
   assert.deepEqual((await repository.get(key))?.data, collisions);
 });
 
-test('native cursors preserve nanosecond and document-path ordering', async () => {
-  const harness = createCommerceD1Harness();
+test('native cursors preserve nanosecond and document-path ordering across timestamp and null pages', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
+  const page = (args: Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]) =>
+    readWithSingleBatch(calls, () => repository.queryFulfillmentOrders(args));
   await repository.run(10, async (unit) => {
     await unit.create(commerceKeys.deliveryOrder('poncho', '1'), {
       processedAt: commerceFieldValue.timestamp(1_787_054_400, 123_000_001),
@@ -280,18 +286,31 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
     ],
   );
 
+  assert.deepEqual(await page({
+    dropId: 'poncho',
+    limit: 10,
+    startAfter: {
+      processedAt: { seconds: 1_787_054_400, nanos: 123_000_001 },
+      documentPath: commerceKeys.deliveryOrder('poncho', '1').path,
+    },
+  }), []);
   seedCommerceDocuments(harness, [
+    {
+      key: commerceKeys.deliveryOrder('poncho', 'older'),
+      data: { status: 'ready_to_ship' },
+      processedAt: { seconds: 1_787_054_399, nanos: 999_999_999 },
+    },
     { key: commerceKeys.deliveryOrder('poncho', 'null-a'), data: { status: 'ready_to_ship' } },
     { key: commerceKeys.deliveryOrder('poncho', 'null-z'), data: { status: 'ready_to_ship' } },
     { key: commerceKeys.deliveryOrder('other', '4'), data: { status: 'ready_to_ship' } },
     { key: commerceKeys.deliveryOrder('poncho', 'processing'), data: { status: 'processing' } },
   ]);
   assert.deepEqual(
-    (await repository.queryFulfillmentOrders({ dropId: 'poncho', limit: 2 }))
+    (await page({ dropId: 'poncho', limit: 2 }))
       .map((record) => record.key.documentId),
     ['3', '2'],
   );
-  const records = await repository.queryFulfillmentOrders({
+  const records = await page({
     dropId: 'poncho',
     limit: 10,
     startAfter: {
@@ -299,8 +318,35 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
       documentPath: 'drops/poncho/deliveryOrders/3',
     },
   });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1', 'null-z', 'null-a']);
+  assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1', 'older', 'null-z', 'null-a']);
   assert.deepEqual(records.slice(-2).map((record) => record.processedAt), [null, null]);
+
+  for (const scenario of [
+    { id: '3', seconds: 1_787_054_400, nanos: 123_000_002, limit: 1, expected: ['2'] },
+    { id: '2', seconds: 1_787_054_400, nanos: 123_000_002, limit: 1, expected: ['1'] },
+    { id: '1', seconds: 1_787_054_400, nanos: 123_000_001, limit: 1, expected: ['older'] },
+    { id: '1', seconds: 1_787_054_400, nanos: 123_000_001, limit: 2, expected: ['older', 'null-z'] },
+    { id: 'older', seconds: 1_787_054_399, nanos: 999_999_999, limit: 10, expected: ['null-z', 'null-a'] },
+    { id: 'before-all', seconds: 0, nanos: 0, limit: 1, expected: ['null-z'] },
+  ]) {
+    const result = await page({
+      dropId: 'poncho',
+      limit: scenario.limit,
+      startAfter: {
+        processedAt: { seconds: scenario.seconds, nanos: scenario.nanos },
+        documentPath: commerceKeys.deliveryOrder('poncho', scenario.id).path,
+      },
+    });
+    assert.deepEqual(result.map((record) => record.key.documentId), scenario.expected);
+  }
+  assert.deepEqual(await page({
+    dropId: 'missing',
+    limit: 1,
+    startAfter: {
+      processedAt: { seconds: 1_787_054_400, nanos: 123_000_002 },
+      documentPath: commerceKeys.deliveryOrder('missing', '3').path,
+    },
+  }), []);
 });
 
 test('shipment pages filter owner, kind, source, and status across drops', async (context) => {
@@ -413,7 +459,7 @@ test('legacy claim assignments filter by code across drops and stop after two or
   assert.deepEqual(await repository.queryLegacyClaimAssignments({ code: 'MISSING' }), []);
 });
 
-test('named reads reject empty owners and invalid fulfillment limits before querying D1', async () => {
+test('named reads reject empty owners and invalid fulfillment pagination before querying D1', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   const repository = new D1CommerceRepository(harness.db);
@@ -422,6 +468,21 @@ test('named reads reject empty owners and invalid fulfillment limits before quer
   await assert.rejects(repository.queryShipmentHistoryPage({ owner: '', limit: 1 }), isInvalidArgument);
   for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     await assert.rejects(repository.queryFulfillmentOrders({ dropId: 'drop', limit }), isInvalidArgument);
+  }
+  for (const startAfter of [
+    null,
+    {},
+    { processedAt: null, documentPath: 'drops/drop/deliveryOrders/1' },
+    { processedAt: { seconds: 1, nanos: -1 }, documentPath: 'drops/drop/deliveryOrders/1' },
+    { processedAt: { seconds: 1, nanos: 1_000_000_000 }, documentPath: 'drops/drop/deliveryOrders/1' },
+    { processedAt: { seconds: 1.5, nanos: 0 }, documentPath: 'drops/drop/deliveryOrders/1' },
+    { processedAt: { seconds: 1, nanos: 0 }, documentPath: 1 },
+  ]) {
+    await assert.rejects(repository.queryFulfillmentOrders({
+      dropId: 'drop',
+      limit: 1,
+      startAfter: startAfter as Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]['startAfter'],
+    }), isInvalidArgument);
   }
   assert.equal(calls.length, 0);
 });

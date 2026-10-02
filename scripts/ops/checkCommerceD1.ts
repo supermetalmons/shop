@@ -1011,21 +1011,23 @@ export function checkCommerceD1(
       WHERE document_kind = 'stripe_checkout' AND drop_id = 'drop' AND manual_refund_review_required = 1
       ORDER BY document_path ASC`), 'commerce_documents_manual_review');
   }
-  requireIndex(
-    queryPlan(fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001 })),
-    'commerce_documents_drop_processed_cursor',
-  );
-  requireIndex(
-    queryPlan(fulfillmentOrdersQuery({
-      dropId: 'drop',
-      limit: 1001,
-      startAfter: {
-        processedAt: { seconds: 1, nanos: 1 },
-        documentPath: 'drops/drop/deliveryOrders/1',
-      },
-    })),
-    'commerce_documents_drop_processed_cursor',
-  );
+  for (const startAfter of [undefined, {
+    processedAt: { seconds: 1, nanos: 1 },
+    documentPath: 'drops/drop/deliveryOrders/1',
+  }]) {
+    const plan = queryPlan(fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001, startAfter }));
+    requireSearchIndex(plan, 'commerce_documents_drop_processed_cursor');
+    requireNoTemporaryBTree(plan, 'fulfillment');
+    const searches = plan.map((row) => normalizedSql(row.detail)).filter((detail) => detail.startsWith(
+      'SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor ',
+    ));
+    if (startAfter && !searches.some((detail) => detail.includes(
+      '(document_kind=? AND drop_id=? AND status=? AND (processed_at_seconds,processed_at_nanos,document_path)<(?,?,?))',
+    ))) fail('Commerce D1 fulfillment query plan does not seek the full cursor.');
+    if (startAfter && !searches.some((detail) => detail.includes(
+      '(document_kind=? AND drop_id=? AND status=? AND processed_at_seconds=?)',
+    ))) fail('Commerce D1 fulfillment query plan does not search the null-timestamp tail.');
+  }
   const ownerNotificationPlan = queryPlan(pendingReadyNotificationsQuery({
     limit: 8,
     owner: 'owner',

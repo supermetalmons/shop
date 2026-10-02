@@ -11,6 +11,7 @@ import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
+  fulfillmentOrdersQuery,
   manualReviewCheckoutsQuery,
   shipmentHistoryPageQuery,
   shipmentPresenceQuery,
@@ -193,7 +194,7 @@ test('document-path migration backfills a populated Commerce D1 in the real runt
   }
 });
 
-test('commerce repository reads and transaction guards run through the real D1 runtime', async () => {
+test('commerce repository reads and transaction guards run through the real D1 runtime', async (context) => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtimeConfig = {
     ...productionConfig,
@@ -1100,6 +1101,86 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(0, 20), []);
     assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
 
+    const fulfillmentDropId = 'fulfillment-pagination-load';
+    const fulfillmentId = (seconds: number) => String(seconds).padStart(5, '0');
+    for (let offset = 0; offset < 10_000; offset += 50) {
+      const fixtures = Array.from({ length: 50 }, (_, index) => {
+        const position = offset + index;
+        const seconds = position < 9_900 ? position + 1 : null;
+        const id = seconds === null ? `null-${fulfillmentId(position - 9_900)}` : fulfillmentId(seconds);
+        return { id, path: commerceKeys.deliveryOrder(fulfillmentDropId, id).path, seconds, generation: crypto.randomUUID() };
+      });
+      const guardId = crypto.randomUUID();
+      const fixturesJson = JSON.stringify(fixtures);
+      await env.COMMERCE_DB.batch([
+        env.COMMERCE_DB.prepare(`INSERT INTO commerce_commit_guards
+          (guard_id, expectations_json, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
+          VALUES (?, '[]', 0, ?, ?)`).bind(guardId, JSON.stringify(fixtures.map(({ path }) => path)),
+            JSON.stringify(fixtures.map(({ path }) => ({ parentPath: path, generation: null, revision: -1 })))),
+        env.COMMERCE_DB.prepare(`INSERT INTO commerce_documents (
+          document_path, document_kind, drop_id, document_id, document_json,
+          version, create_time, update_time, processed_at_seconds, processed_at_nanos
+        ) SELECT json_extract(value, '$.path'), 'delivery_order', ?, json_extract(value, '$.id'),
+          '{"status":"ready_to_ship"}', 1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          json_extract(value, '$.seconds'), CASE WHEN json_extract(value, '$.seconds') IS NULL THEN NULL ELSE 0 END
+          FROM json_each(?)`).bind(fulfillmentDropId, fixturesJson),
+        env.COMMERCE_DB.prepare(`INSERT INTO commerce_delivery_recovery
+          (parent_path, generation, revision, created_at_ms, updated_at_ms)
+          SELECT json_extract(value, '$.path'), json_extract(value, '$.generation'), 1, 0, 0
+          FROM json_each(?)`).bind(fixturesJson),
+        env.COMMERCE_DB.prepare('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1 WHERE singleton = 1'),
+        env.COMMERCE_DB.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId),
+      ]);
+    }
+    const fulfillmentCursor = (seconds: number) => ({
+      processedAt: { seconds, nanos: 0 },
+      documentPath: commerceKeys.deliveryOrder(fulfillmentDropId, fulfillmentId(seconds)).path,
+    });
+    const nullFulfillmentIds = Array.from({ length: 20 }, (_, index) => `null-${fulfillmentId(99 - index)}`);
+    const fulfillmentPages = [
+      { name: 'initial', startAfter: undefined, expected: Array.from({ length: 20 }, (_, index) => fulfillmentId(9_900 - index)) },
+      { name: 'deep', startAfter: fulfillmentCursor(100), expected: Array.from({ length: 20 }, (_, index) => fulfillmentId(99 - index)) },
+      { name: 'mixed', startAfter: fulfillmentCursor(6),
+        expected: [...Array.from({ length: 5 }, (_, index) => fulfillmentId(5 - index)), ...nullFulfillmentIds.slice(0, 15)] },
+      { name: 'null tail', startAfter: fulfillmentCursor(0), expected: nullFulfillmentIds },
+    ];
+    const fulfillmentRowsRead: string[] = [];
+    await env.COMMERCE_DB.batch([
+      env.COMMERCE_DB.prepare("DELETE FROM sqlite_stat1 WHERE tbl = 'commerce_documents'"),
+      env.COMMERCE_DB.prepare('ANALYZE sqlite_schema'),
+    ]);
+    assert.equal((await env.COMMERCE_DB.prepare(
+      "SELECT COUNT(*) AS count FROM sqlite_stat1 WHERE tbl = 'commerce_documents'",
+    ).first<{ count: number }>())?.count, 0);
+
+    for (const analyzed of [false, true]) {
+      if (analyzed) await env.COMMERCE_DB.prepare('ANALYZE').run();
+      for (const { name, startAfter, expected } of fulfillmentPages) {
+        const args = { dropId: fulfillmentDropId, limit: 20, startAfter };
+        observedBatchSizes.length = 0;
+        observedBatchResults = undefined;
+        const documents = await observedRepository.queryFulfillmentOrders(args);
+        assert.deepEqual(documents.map((record) => record.key.documentId), expected);
+        assert.deepEqual(observedBatchSizes, [2]);
+        const rowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+        assert.ok(Number.isSafeInteger(rowsRead) && rowsRead >= 0 && rowsRead <= 100,
+          `Fulfillment ${name} page read ${rowsRead} rows (analyzed: ${analyzed})`);
+        fulfillmentRowsRead.push(`${name}${analyzed ? ' analyzed' : ''}: ${rowsRead}`);
+        const query = fulfillmentOrdersQuery(args);
+        const plan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
+          .bind(...query.bindings).all<{ detail: string }>();
+        const details = plan.results.map((row) => row.detail).join('\n');
+        assert.doesNotMatch(details, /SCAN commerce_documents|USE TEMP B-TREE/i);
+        if (startAfter) {
+          assert.match(details, /MERGE \(UNION ALL\)/);
+          assert.match(details, /commerce_documents_drop_processed_cursor.*\(processed_at_seconds,processed_at_nanos,document_path\)<\(\?,\?,\?\)/);
+          assert.match(details, /commerce_documents_drop_processed_cursor.*processed_at_seconds=\?/);
+        }
+      }
+    }
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+
     const pausedReadUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:24.000Z'));
     const pausedWriteUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:25.000Z'));
     const pausedEmptyUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:26.000Z'));
@@ -1192,6 +1273,19 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const pausedReadyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedReadyNotificationRowsRead), true);
     assert.equal(pausedReadyNotificationRowsRead <= 4, true, `Paused ready notifications read ${pausedReadyNotificationRowsRead} rows`);
+
+    for (const { name, startAfter } of fulfillmentPages) {
+      observedBatchSizes.length = 0;
+      observedBatchResults = undefined;
+      await assert.rejects(observedRepository.queryFulfillmentOrders({ dropId: fulfillmentDropId, limit: 20, startAfter }),
+        (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
+      assert.deepEqual(observedBatchSizes, [2]);
+      const rowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+      assert.ok(Number.isSafeInteger(rowsRead) && rowsRead >= 0 && rowsRead <= 4,
+        `Paused fulfillment ${name} page read ${rowsRead} rows`);
+      fulfillmentRowsRead.push(`${name} paused: ${rowsRead}`);
+    }
+    context.diagnostic(`Fulfillment pagination rows read: ${fulfillmentRowsRead.join(', ')}`);
 
     for (const read of [
       () => observedRepository.queryShipmentHistoryPage({ owner: 'named-owner', limit: 2 }),

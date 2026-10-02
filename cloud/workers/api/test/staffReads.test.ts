@@ -682,8 +682,9 @@ test('staff commerce read routes use D1 without Commerce in d1 mode', async () =
   assert.equal(commerceCalls, 0);
 });
 
-test('D1 staff reads enforce drop, status, ordering, and cursor filters', async () => {
+test('D1 staff reads preserve cursor ordering and terminate pages ending in null timestamps', async (context) => {
   const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
   const seedOrder = (args: {
     deliveryId: number;
     dropId: string;
@@ -709,6 +710,7 @@ test('D1 staff reads enforce drop, status, ordering, and cursor filters', async 
   seedOrder({ deliveryId: 3, dropId: 'card_nft_2', nanos: 0, owner: OWNER, seconds: 101, status: 'processing' });
   seedOrder({ deliveryId: 4, dropId: 'little_swag_boxes', nanos: 0, owner: OWNER, seconds: 102, status: 'ready_to_ship' });
   seedOrder({ deliveryId: 5, dropId: 'card_nft_2', nanos: 0, owner: OWNER, seconds: 103, status: 'failed' });
+  seedOrder({ deliveryId: 6, dropId: 'card_nft_2', nanos: 2, owner: OWNER, seconds: 100, status: 'ready_to_ship' });
 
   const staffDependencies = d1StaffDependencies(async () => Response.json({}), {
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
@@ -718,37 +720,75 @@ test('D1 staff reads enforce drop, status, ordering, and cursor filters', async 
     ADDRESS_DECRYPTION_SECRET: '',
     OPS_DB: {} as D1Database,
   };
-  const firstPage = await handleStaffReadRequest(
-    tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 1, cursor: null }),
-    fulfillmentEnv,
-    FULFILLMENT_ORDERS_PATH,
-    {},
-    staffDependencies,
-  );
-  assert.equal(firstPage.response.status, 200);
-  const firstPayload = await firstPage.response.json() as {
+  type Page = {
     orders: Array<{ deliveryId: number }>;
     nextCursor: { processedAt: { seconds: number; nanos: number }; id: string } | null;
   };
-  assert.deepEqual(firstPayload.orders.map((order) => order.deliveryId), [2]);
-  assert.deepEqual(firstPayload.nextCursor, { processedAt: { seconds: 100, nanos: 2 }, id: '2' });
-
-  const secondPage = await handleStaffReadRequest(
-    tokenRequest(FULFILLMENT_ORDERS_PATH, {
-      dropId: 'card_nft_2',
-      limit: 1,
-      cursor: firstPayload.nextCursor,
-    }),
-    fulfillmentEnv,
-    FULFILLMENT_ORDERS_PATH,
-    {},
-    staffDependencies,
-  );
-  assert.equal(secondPage.response.status, 200);
-  const secondPayload = await secondPage.response.json() as {
-    orders: Array<{ deliveryId: number }>;
-    nextCursor: unknown;
+  const page = async (limit: number, cursor: Page['nextCursor']): Promise<Page> => {
+    const result = await handleStaffReadRequest(
+      tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit, cursor }),
+      fulfillmentEnv,
+      FULFILLMENT_ORDERS_PATH,
+      {},
+      staffDependencies,
+    );
+    assert.equal(result.response.status, 200);
+    return await result.response.json() as Page;
   };
-  assert.deepEqual(secondPayload.orders.map((order) => order.deliveryId), [1]);
-  assert.equal(secondPayload.nextCursor, null);
+  let cursor: Page['nextCursor'] = null;
+  for (const id of ['6', '2', '1']) {
+    const result = await page(1, cursor);
+    assert.deepEqual(result.orders.map((order) => order.deliveryId), [Number(id)]);
+    assert.deepEqual(result.nextCursor, id === '1' ? null : { processedAt: { seconds: 100, nanos: 2 }, id });
+    cursor = result.nextCursor;
+  }
+  const oldestCursor = { processedAt: { seconds: 100, nanos: 1 }, id: '1' };
+  assert.deepEqual(await page(1, oldestCursor), { orders: [], nextCursor: null });
+
+  for (const deliveryId of [7, 8, 9]) {
+    seedCommerceDocument(harness, {
+      key: commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
+      data: { deliveryId, owner: OWNER, status: 'ready_to_ship', items: [{ kind: 'box', refId: deliveryId }] },
+    });
+  }
+  const mixedPage = await page(2, { processedAt: { seconds: 100, nanos: 2 }, id: '2' });
+  assert.deepEqual(mixedPage.orders.map((order) => order.deliveryId), [1, 9]);
+  assert.equal(mixedPage.nextCursor, null);
+  const nullPage = await page(1, oldestCursor);
+  assert.deepEqual(nullPage.orders.map((order) => order.deliveryId), [9]);
+  assert.equal(nullPage.nextCursor, null);
+  const nullTail = await page(5, oldestCursor);
+  assert.deepEqual(nullTail.orders.map((order) => order.deliveryId), [9, 8, 7]);
+  assert.equal(nullTail.nextCursor, null);
+});
+
+test('fulfillment routes reject invalid pagination before accessing data', async () => {
+  const cursor = { processedAt: { seconds: 100, nanos: 1 }, id: '1' };
+  const invalidCursors = [
+    {},
+    { ...cursor, id: '' },
+    { ...cursor, id: '1'.repeat(129) },
+    { ...cursor, processedAt: null },
+    { ...cursor, processedAt: { seconds: -1, nanos: 1 } },
+    { ...cursor, processedAt: { seconds: 1.5, nanos: 1 } },
+    { ...cursor, processedAt: { seconds: 100, nanos: -1 } },
+    { ...cursor, processedAt: { seconds: 100, nanos: 1_000_000_000 } },
+    { ...cursor, extra: true },
+    { ...cursor, processedAt: { ...cursor.processedAt, extra: true } },
+  ];
+  for (const pagination of [
+    ...invalidCursors.map((value) => ({ cursor: value })),
+    ...[0, -1, 1.5, 1001].map((limit) => ({ limit })),
+  ]) {
+    const result = await handleStaffReadRequest(
+      tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', ...pagination }),
+      { COMMERCE_DB: {} as D1Database },
+      FULFILLMENT_ORDERS_PATH,
+      {},
+      staffDependencies(async () => assert.fail('Invalid pagination must not contact a provider'),
+        () => assert.fail('Invalid pagination must not access Commerce')),
+    );
+    assert.equal(result.response.status, 400);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
+  }
 });

@@ -1014,6 +1014,40 @@ test('Commerce D1 checker rejects shipment scans, partial cursor seeks, and temp
   }
 });
 
+test('Commerce D1 checker rejects fulfillment scans, partial cursor seeks, and temporary sorts', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    for (const startAfter of [undefined, {
+      processedAt: { seconds: 1, nanos: 1 },
+      documentPath: 'drops/drop/deliveryOrders/1',
+    }]) {
+      const sql = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(fulfillmentOrdersQuery({
+        dropId: 'drop', limit: 1001, startAfter,
+      }))}`;
+      const plan = query(sql);
+      const searches = plan.filter((row) => String(row.detail).startsWith(
+        'SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor ',
+      ));
+      assert.equal(searches.length, startAfter ? 2 : 1);
+      const replacements = [
+        [...plan, { detail: 'USE TEMP B-TREE FOR ORDER BY' }],
+        ...searches.map((search) => plan.map((row) => row === search
+          ? { ...row, detail: String(row.detail).replace(/^SEARCH /, 'SCAN ') } : row)),
+        ...(startAfter ? searches.map((search) => plan.map((row) => row === search
+          ? { ...row, detail: 'SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor (document_kind=? AND drop_id=? AND status=?)' }
+          : row)) : []),
+      ];
+      for (const replacement of replacements) {
+        assert.throws(() => checkCommerceD1((requestedSql) => requestedSql === sql ? replacement : query(requestedSql)),
+          /does not search commerce_documents_drop_processed_cursor|does not seek the full cursor|does not search the null-timestamp tail|uses a temporary B-tree/);
+      }
+    }
+  } finally {
+    database.close();
+  }
+});
+
 for (const index of [
   'commerce_delivery_orders_buyer_notifications_pending',
   'commerce_delivery_orders_shipper_notifications_pending',
