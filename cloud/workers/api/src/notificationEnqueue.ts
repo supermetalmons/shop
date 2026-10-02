@@ -16,6 +16,7 @@ import {
 import { isRequestCancellationError, readBoundedRequestText } from './boundedRequest.js';
 import { jsonResponse } from './httpResponse.js';
 import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
+import type { BackgroundJobMessage, BackgroundJobOutcome } from './backgroundJobOutcome.js';
 
 type NotificationEnqueueDependencies = {
   nowMs: () => number;
@@ -109,14 +110,14 @@ export async function handleNotificationEnqueue(
 }
 
 export async function processNotificationQueueMessage(
-  message: Message<unknown>,
+  message: BackgroundJobMessage,
   env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'NOTIFICATION_ENQUEUE_SECRET' | 'RESEND_API_KEY'>,
   overrides: {
     notification?: typeof processNotificationEmailMessage;
     nowMs?: () => number;
     log?: (entry: Record<string, unknown>) => void;
   } = {},
-): Promise<void> {
+): Promise<BackgroundJobOutcome> {
   if (!isNotificationEnqueueSmokeJobV1(message.body)) {
     return (overrides.notification || processNotificationEmailMessage)(message, env);
   }
@@ -145,7 +146,7 @@ export async function processNotificationQueueMessage(
     event: 'notification_enqueue_smoke_forwarded',
     jobId: message.body.job.jobId,
   });
-  message.ack();
+  return { outcome: 'complete' };
 }
 
 export { NOTIFICATION_ENQUEUE_PATH };

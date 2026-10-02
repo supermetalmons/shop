@@ -195,7 +195,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0031_preorder_card_range_1419.sql`, followed by the API
+migrations through `0032_preorder_catalog.sql`, followed by the API
 release and then the frontend. The normal API deployment command applies the
 migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
@@ -247,10 +247,27 @@ selections, and pending asynchronous results. Solana sign-in changes refresh
 eligibility so the devnet test inventory appears only for the admin buyer.
 
 Its `specialCards` list reserves IDs 1401–1408 for a later public sale;
-these cards currently have no sale or preorder eligibility. The preorder IDs in
-`shared/preorders.ts` are 1–1400 and 1409–1419, totaling 1411 cards; the next
+these cards currently have no sale or preorder eligibility. The generated preorder
+IDs are 1–1400 and 1409–1419, totaling 1411 cards; the next
 unallocated card ID is 1420. Shared validation and the database exclude the
 reserved special IDs from preorder eligibility.
+
+For catalog additions, edit `mi_note_cards.json`, then run:
+
+```bash
+npm run generate:db
+npm run check:db-generated
+```
+
+Generation extracts ordinary `clean_card_id` values into
+`shared/preorderCardIds.generated.ts` and appends an insert-only Commerce migration.
+It rejects duplicate IDs, special-card overlap, and removals. Existing migrations
+are immutable; repeated generation without catalog changes produces no changes.
+The initial `0032_preorder_catalog.sql` migration seeds `commerce_preorder_cards`
+and replaces the claims table's changing ID range with a catalog foreign key,
+preserving reservations and their existing guards. It needs no separate cutover.
+Review the generated files, run the API and frontend checks, then release the
+database and API before the frontend.
 
 Holdings and preorder availability endpoints require Ethereum verification,
 derive the address from its session, and scope results to that wallet. The
@@ -391,6 +408,16 @@ the API checks, applies all pending remote D1 migration sets, checks remote
 pack-status, ops-state, and commerce read-model integrity, and then publishes the API Worker with
 native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
+
+Both API and frontend release checks verify generated catalog and schema files.
+`generate:db` updates the catalog first, then replays Commerce migrations to build
+`scripts/generated/commerceSchemaManifest.json`. This manifest records migration
+checksums and schema fingerprints for every supported checkpoint from 0013 onward,
+including versioned preorder catalog contents. `generate:commerce-schema` refuses
+changes to recorded migration files or historical checkpoints. Inspection accepts
+supported migration prefixes; deployment requires the latest checkpoint and retains
+all semantic integrity, query-plan, and cutover-readiness checks. Applied migrations
+and historical seeds must never be edited; append a new migration and regenerate.
 
 `deploy:api` also requires activated figure inventory through
 `check:commerce-d1 -- --for-deployment`. The standalone database check still

@@ -8,6 +8,11 @@ import { listPreorderInventoryAssets, PreorderStore, type StoredPreorder } from 
 import { getPreorderConfig } from '../shared/preorders.ts';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 
+const BOOTSTRAP_CARD_IDS = [
+  ...Array.from({ length: 1400 }, (_, index) => index + 1),
+  ...Array.from({ length: 11 }, (_, index) => index + 1409),
+];
+
 function reservation(id: number, overrides: Partial<StoredPreorder> = {}): StoredPreorder {
   const config = getPreorderConfig('mi_note_cards_devnet')!;
   return {
@@ -133,6 +138,73 @@ for (const migration of [
     });
   }
 }
+
+for (const mode of ['whole', 'remote split'] as const) {
+  test(`catalog migration preserves existing commerce state when applied ${mode}`, async (context) => {
+    const { database, db } = createCommerceD1Harness({ preorderCatalogMigration: false });
+    context.after(() => database.close());
+    const store = new PreorderStore(db);
+    const prepared = await store.reserve(reservation(1));
+    await store.submit(await store.reserve(reservation(1409)), { transactionBase64: 'signed-1409', signature: 'signature-1409' }, 1500);
+    const succeeded = await store.finish(await store.submit(await store.reserve(reservation(1419)), {
+      transactionBase64: 'signed-1419', signature: 'signature-1419',
+    }, 1500), 'succeeded', 1600);
+    await store.finish(await store.reserve(reservation(2)), 'cancelled', 1600);
+    const snapshot = () => ({
+      claims: database.prepare('SELECT * FROM commerce_preorder_claims ORDER BY card_id').all(),
+      orders: database.prepare('SELECT * FROM commerce_preorder_orders ORDER BY order_id').all(),
+      authority: database.prepare('SELECT * FROM commerce_authority_control').all(),
+      guards: database.prepare(`SELECT type, name, sql FROM sqlite_schema
+        WHERE name GLOB 'commerce_preorder_*' AND type IN ('index', 'trigger') ORDER BY name`).all(),
+    });
+    const before = snapshot();
+    const sql = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0032_preorder_catalog.sql', import.meta.url), 'utf8');
+    assert.doesNotMatch(sql, /\bSELECT\s+CASE\b/i);
+    database.exec('BEGIN');
+    if (mode === 'whole') database.exec(sql);
+    else for (const statement of unstable_splitSqlQuery(sql)) database.prepare(statement).run();
+    database.exec('COMMIT');
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(database.prepare('SELECT card_id FROM commerce_preorder_cards ORDER BY card_id').all().map(({ card_id }) => card_id), BOOTSTRAP_CARD_IDS);
+    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
+    const catalogForeignKey = database.prepare("PRAGMA foreign_key_list('commerce_preorder_claims')").all()
+      .find((row) => row.table === 'commerce_preorder_cards');
+    assert.equal(catalogForeignKey?.from, 'card_id');
+    assert.equal(catalogForeignKey?.to, 'card_id');
+    for (const id of [0, 1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1420]) {
+      await assert.rejects(store.reserve(reservation(id)), /FOREIGN KEY constraint/);
+      assert.equal(await store.get(`expiry-${id}`), null);
+    }
+    await assert.rejects(store.reserve(reservation(1409.5)), /cannot store REAL/);
+    assert.equal(await store.get('expiry-1409.5'), null);
+    await assert.rejects(store.reserve(reservation(1419, { orderId: 'duplicate', buyer: 'other-buyer', requestId: 'duplicate' })), /already reserved/);
+    assert.equal(await store.get('duplicate'), null);
+    assert.throws(() => database.exec('UPDATE commerce_preorder_claims SET card_id = 3 WHERE card_id = 1'), /immutable/);
+    assert.throws(() => database.exec('DELETE FROM commerce_preorder_claims WHERE card_id = 1419'), /permanent/);
+    await store.expirePrepared(prepared.cluster, prepared.collection, 2000);
+    assert.deepEqual((await store.claims(prepared.cluster, prepared.collection)).map(({ id }) => id), [1409, 1419]);
+    assert.deepEqual(await store.get(succeeded.orderId), succeeded);
+    await store.finish(await store.reserve(reservation(3)), 'cancelled', 1700);
+    assert.equal((await store.claims(prepared.cluster, prepared.collection)).some(({ id }) => id === 3), false);
+  });
+}
+
+test('catalog migration rolls back if its seed would omit an existing claim', async (context) => {
+  const { database, db } = createCommerceD1Harness({ preorderCatalogMigration: false });
+  context.after(() => database.close());
+  const store = new PreorderStore(db);
+  const order = await store.reserve(reservation(1419));
+  const stored = await store.get(order.orderId);
+  const sql = readFileSync(new URL('../cloud/workers/api/commerce-migrations/0032_preorder_catalog.sql', import.meta.url), 'utf8')
+    .replace('(1419)', '(1420)');
+  const before = database.prepare('SELECT type, name, sql FROM sqlite_schema ORDER BY name').all();
+  database.exec('BEGIN');
+  assert.throws(() => database.exec(sql), /FOREIGN KEY constraint/);
+  database.exec('ROLLBACK');
+  assert.deepEqual(database.prepare('SELECT type, name, sql FROM sqlite_schema ORDER BY name').all(), before);
+  assert.deepEqual(await store.get(order.orderId), stored);
+  assert.equal((await store.claims(order.cluster, order.collection))[0]?.id, 1419);
+});
 
 test('recent preorder inventory uses the buyer index without scanning or sorting order history', async (context) => {
   let query = '';

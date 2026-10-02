@@ -32,7 +32,7 @@ import type {
   PurchaseFulfillmentShipStationLabelResponse,
   VoidFulfillmentShipStationLabelResponse,
 } from '../../../../../shared/contracts.js';
-import { isSignalCancellationError } from '../boundedRequest.js';
+import { createTimedAbortScope, isSignalCancellationError } from '../boundedRequest.js';
 import { ProfileReadError } from '../dataAccess.js';
 import { loadDeliveryOrderDocument } from '../deliveryOrderStore.js';
 import type { CommerceWriteCommon } from '../profileWriteCommerce.js';
@@ -264,12 +264,11 @@ async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
   shipmentId: string;
   wallet: string;
 }): Promise<VoidFulfillmentShipStationLabelResponse | undefined> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Label void cleanup timed out', 'TimeoutError')),
-    SHIPSTATION_LABEL_VOID_CLEANUP_TIMEOUT_MS,
-  );
-  const common = { ...args.common, signal: controller.signal };
+  const scope = createTimedAbortScope(undefined, {
+    timeoutMs: SHIPSTATION_LABEL_VOID_CLEANUP_TIMEOUT_MS,
+    timeoutMessage: 'Label void cleanup timed out',
+  });
+  const common = { ...args.common, signal: scope.signal };
   try {
     try {
       const current = await loadDeliveryOrderDocument(common, args.dropId, args.body.deliveryId);
@@ -312,7 +311,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
       return undefined;
     }
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 
@@ -417,19 +416,18 @@ async function failFulfillmentShipStationLabelPurchase(args: {
   shipmentId: string;
   wallet: string;
 }): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Label purchase cleanup timed out', 'TimeoutError')),
-    SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
-  );
+  const scope = createTimedAbortScope(undefined, {
+    timeoutMs: SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
+    timeoutMessage: 'Label purchase cleanup timed out',
+  });
   try {
     return await transitionFulfillmentShipStationLabelPurchase({
       ...args,
-      common: { ...args.common, signal: controller.signal },
+      common: { ...args.common, signal: scope.signal },
       nextStatus: 'failed',
     });
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 
@@ -442,12 +440,11 @@ async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
   shipmentId: string;
   wallet: string;
 }): Promise<PurchaseFulfillmentShipStationLabelResponse | undefined> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Label purchase cleanup timed out', 'TimeoutError')),
-    SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
-  );
-  const common = { ...args.common, signal: controller.signal };
+  const scope = createTimedAbortScope(undefined, {
+    timeoutMs: SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
+    timeoutMessage: 'Label purchase cleanup timed out',
+  });
+  const common = { ...args.common, signal: scope.signal };
   try {
     try {
       const current = await loadDeliveryOrderDocument(common, args.dropId, args.body.deliveryId);
@@ -509,7 +506,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
     }
     return undefined;
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 

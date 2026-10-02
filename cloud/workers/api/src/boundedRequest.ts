@@ -53,17 +53,17 @@ export function isSignalCancellationError(signal: AbortSignal, error: unknown): 
 }
 
 export function createTimedAbortScope(
-  parentSignal: AbortSignal,
+  parentSignal: AbortSignal | undefined,
   options: TimedAbortScopeOptions,
 ): TimedAbortScope {
   validateTimeoutMs(options.timeoutMs);
   const controller = new AbortController();
   let timedOut = false;
   const onParentAbort = () => {
-    if (!controller.signal.aborted) controller.abort(parentSignal.reason);
+    if (!controller.signal.aborted) controller.abort(parentSignal?.reason);
   };
-  if (parentSignal.aborted) onParentAbort();
-  else parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  if (parentSignal?.aborted) onParentAbort();
+  else parentSignal?.addEventListener('abort', onParentAbort, { once: true });
   const timeout = setTimeout(() => {
     if (controller.signal.aborted) return;
     timedOut = true;
@@ -74,7 +74,7 @@ export function createTimedAbortScope(
     timedOut: () => timedOut,
     dispose: () => {
       clearTimeout(timeout);
-      parentSignal.removeEventListener('abort', onParentAbort);
+      parentSignal?.removeEventListener('abort', onParentAbort);
     },
   };
 }

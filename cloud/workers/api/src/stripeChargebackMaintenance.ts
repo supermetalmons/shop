@@ -4,7 +4,7 @@ import type {
   StripeChargebackMaintenanceErrorResult,
   StripeChargebackWebhookConfigurationResult,
 } from '../../../../shared/stripeChargebacks.js';
-import { raceWithSignal } from './boundedRequest.js';
+import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import {
   stripeChargebackBackfillRequestSchema,
@@ -27,20 +27,22 @@ export class StripeChargebackMaintenance extends WorkerEntrypoint<Env> {
   }
 
   async #run<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T | StripeChargebackMaintenanceErrorResult> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new DOMException('Maintenance timed out', 'TimeoutError')), 55_000);
+    const scope = createTimedAbortScope(undefined, {
+      timeoutMs: 55_000,
+      timeoutMessage: 'Maintenance timed out',
+    });
     try {
-      const authority = await raceWithSignal(loadCommerceAuthorityControl(this.env.COMMERCE_DB), controller.signal);
+      const authority = await raceWithSignal(loadCommerceAuthorityControl(this.env.COMMERCE_DB), scope.signal);
       if (authority.state === 'paused') return { ok: false, error: { code: 'commerce-maintenance', status: 503 } };
-      const pending = operation(controller.signal);
+      const pending = operation(scope.signal);
       this.ctx.waitUntil(pending.then(() => undefined, () => undefined));
-      return await raceWithSignal(pending, controller.signal);
+      return await raceWithSignal(pending, scope.signal);
     } catch (error) {
-      if (controller.signal.aborted) return { ok: false, error: { code: 'deadline-exceeded', status: 504 } };
+      if (scope.signal.aborted) return { ok: false, error: { code: 'deadline-exceeded', status: 504 } };
       if (error instanceof StripeChargebackError) return { ok: false, error: { code: error.code, status: error.status } };
       return { ok: false, error: { code: 'unavailable', status: 503 } };
     } finally {
-      clearTimeout(timeout);
+      scope.dispose();
     }
   }
 }

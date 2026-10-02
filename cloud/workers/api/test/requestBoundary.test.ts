@@ -320,14 +320,60 @@ test('timed abort scopes distinguish parent cancellation from their timeout', as
   assert.equal(parentScope.timedOut(), false);
   parentScope.dispose();
 
-  const timedScope = createTimedAbortScope(new AbortController().signal, {
+  const timedScope = createTimedAbortScope(undefined, {
     timeoutMs: 5,
     timeoutMessage: 'attempt timed out',
   });
   await waitForAbort(timedScope.signal);
   assert.equal(timedScope.timedOut(), true);
   assert.equal(timedScope.signal.reason.name, 'TimeoutError');
+  assert.equal(timedScope.signal.reason.message, 'attempt timed out');
   timedScope.dispose();
+});
+
+test('timed abort scopes preserve the first cancellation reason', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const parentReason = new Error('already cancelled');
+  const cancelled = createTimedAbortScope(AbortSignal.abort(parentReason), {
+    timeoutMs: 5,
+    timeoutMessage: 'later timeout',
+  });
+  assert.equal(cancelled.signal.reason, parentReason);
+  context.mock.timers.tick(5);
+  assert.equal(cancelled.signal.reason, parentReason);
+  assert.equal(cancelled.timedOut(), false);
+  cancelled.dispose();
+
+  const parent = new AbortController();
+  const timed = createTimedAbortScope(parent.signal, {
+    timeoutMs: 5,
+    timeoutMessage: 'first timeout',
+  });
+  context.mock.timers.tick(5);
+  const timeoutReason = timed.signal.reason;
+  parent.abort(new Error('later parent cancellation'));
+  assert.equal(timed.signal.reason, timeoutReason);
+  assert.equal(timed.timedOut(), true);
+  timed.dispose();
+});
+
+test('disposing timed abort scopes prevents later parent cancellation and timeouts', (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const parent = new AbortController();
+  const scopes = [parent.signal, undefined].map((signal) => createTimedAbortScope(signal, {
+    timeoutMs: 5,
+    timeoutMessage: 'disposed timeout',
+  }));
+  for (const scope of scopes) {
+    scope.dispose();
+    scope.dispose();
+  }
+  parent.abort(new Error('parent cancelled after disposal'));
+  context.mock.timers.tick(5);
+  for (const scope of scopes) {
+    assert.equal(scope.signal.aborted, false);
+    assert.equal(scope.timedOut(), false);
+  }
 });
 
 test('critical operations cap client-abort continuation before the server deadline', async () => {

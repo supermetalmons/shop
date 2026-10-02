@@ -28,7 +28,7 @@
     "types:frontend-worker:check": "wrangler types cloud/workers/frontend/worker-configuration.d.ts --check --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
     "typecheck:frontend-worker": "tsc -p cloud/workers/frontend/tsconfig.json",
     "test:frontend-worker": "node --import tsx --test cloud/workers/frontend/test/*.test.ts",
-    "check:frontend": "npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run test:shop-api && npm run test:card-nft-2-common-ids && npm test && npm run build && npm run validate:browser-bundle",
+    "check:frontend": "npm run check:db-generated && npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run test:shop-api && npm run test:card-nft-2-common-ids && npm test && npm run build && npm run validate:browser-bundle",
     "dry-run:frontend": "npm run check:frontend && wrangler deploy --dry-run --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
     "preview": "vite preview",
     "latest": "npm exec --yes --package=node@22.23.1 --package=npm@12.0.2 -- node scripts/updateLatest.mjs",
@@ -43,7 +43,7 @@
     "test:api:runtime": "node --import tsx --test cloud/workers/api/runtime-test/*.test.ts",
     "dry-run:api": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && wrangler deploy --dry-run --outfile .cache/mons-shop-api-dry-run.js --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env && node --experimental-strip-types scripts/validate-api-bundle.ts .cache/mons-shop-api-dry-run.js",
     "startup:api": "node -e \"require('fs').mkdirSync('.cache',{recursive:true})\" && wrangler check startup --args=\"--config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env\" --outfile .cache/mons-shop-api-startup.cpuprofile",
-    "check:api": "npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api",
+    "check:api": "npm run check:db-generated && npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api",
     "validate:lsb-cdn": "node --experimental-strip-types scripts/validate-lsb-cdn.ts",
     "validate:poncho-cdn": "node --experimental-strip-types scripts/validate-poncho-cdn.ts",
     "validate:card-nft-2-cdn": "node --experimental-strip-types scripts/validate-card-nft-2-cdn.ts",
@@ -87,7 +87,13 @@
     "start-mint": "node --experimental-strip-types scripts/startMint.ts",
     "set-mint-prices": "node --experimental-strip-types scripts/setMintPrices.ts",
     "export_collection_files": "node --experimental-strip-types scripts/exportCollectionFiles.ts",
-    "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts"
+    "get_token_holders": "node --experimental-strip-types scripts/getTokenHolders.ts",
+    "generate:preorder-catalog": "node --import tsx scripts/generatePreorderCatalog.ts --write",
+    "check:preorder-catalog": "node --import tsx scripts/generatePreorderCatalog.ts --check",
+    "generate:commerce-schema": "node --import tsx scripts/generateCommerceSchema.ts --write",
+    "check:commerce-schema": "node --import tsx scripts/generateCommerceSchema.ts --check",
+    "generate:db": "npm run generate:preorder-catalog && npm run generate:commerce-schema",
+    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema"
   },
   "repository": {
     "type": "git",

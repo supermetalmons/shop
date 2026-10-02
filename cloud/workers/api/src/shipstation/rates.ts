@@ -36,6 +36,7 @@ import {
   type ShipStationPackageInput,
 } from '../../../../../shared/shipstationPackage.js';
 import type { GetFulfillmentShipStationRatesResponse } from '../../../../../shared/contracts.js';
+import { createTimedAbortScope } from '../boundedRequest.js';
 import {
   isRecord,
   ProfileReadError,
@@ -200,15 +201,14 @@ async function safelyReleaseShipStationRatesClaim(args: {
   shipmentId: string;
   wallet: string;
 }): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Claim cleanup timed out', 'TimeoutError')),
-    3_000,
-  );
+  const scope = createTimedAbortScope(undefined, {
+    timeoutMs: 3_000,
+    timeoutMessage: 'Claim cleanup timed out',
+  });
   try {
     await releaseShipStationRatesClaim({
       ...args,
-      common: { ...args.common, signal: controller.signal },
+      common: { ...args.common, signal: scope.signal },
     });
   } catch (error) {
     console.error(JSON.stringify({
@@ -218,7 +218,7 @@ async function safelyReleaseShipStationRatesClaim(args: {
       error: error instanceof Error ? error.message : String(error),
     }));
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 

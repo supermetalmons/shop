@@ -25,7 +25,7 @@ import type {
   AddFulfillmentOrderToShipStationResponse,
   ShipStationAddressPatch,
 } from '../../../../../shared/contracts.js';
-import { isSignalCancellationError } from '../boundedRequest.js';
+import { createTimedAbortScope, isSignalCancellationError } from '../boundedRequest.js';
 import { ProfileReadError } from '../dataAccess.js';
 import {
   type CommerceWriteCommon,
@@ -85,15 +85,14 @@ async function safelyTransitionFulfillmentShipStationShipmentClaim(args: {
   retain: boolean;
   wallet: string;
 }): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Claim cleanup timed out', 'TimeoutError')),
-    3_000,
-  );
+  const scope = createTimedAbortScope(undefined, {
+    timeoutMs: 3_000,
+    timeoutMessage: 'Claim cleanup timed out',
+  });
   try {
     await transitionFulfillmentShipStationShipmentClaim({
       ...args,
-      common: { ...args.common, signal: controller.signal },
+      common: { ...args.common, signal: scope.signal },
     });
   } catch (error) {
     console.error(JSON.stringify({
@@ -104,7 +103,7 @@ async function safelyTransitionFulfillmentShipStationShipmentClaim(args: {
       error: error instanceof Error ? error.message : String(error),
     }));
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 

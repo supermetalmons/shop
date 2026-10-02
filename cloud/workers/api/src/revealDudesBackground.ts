@@ -18,6 +18,7 @@ import {
 import { reconcileRevealSubmission } from './revealDudesTransactions.js';
 import type { RevealSubmissionStorageControl } from './revealSubmissionD1.js';
 import { resolveRevealSubmission } from './revealSubmissionLifecycle.js';
+import type { BackgroundJobMessage, BackgroundJobOutcome } from './backgroundJobOutcome.js';
 
 export const REVEAL_BACKGROUND_JOB_TIMEOUT_MS = 60_000;
 
@@ -114,11 +115,11 @@ export function revealBackgroundJobRetryDelaySeconds(attempts: number): number {
 }
 
 function retryRevealBackgroundJob(
-  message: Message<unknown>,
+  message: BackgroundJobMessage,
   dependencies: RevealBackgroundJobDependencies,
   job: RevealBackgroundJob,
   reason: string,
-): void {
+): BackgroundJobOutcome {
   const delaySeconds = revealBackgroundJobRetryDelaySeconds(message.attempts);
   dependencies.warn({
     event: 'reveal_background_job_retry',
@@ -129,14 +130,14 @@ function retryRevealBackgroundJob(
     delaySeconds,
     reason,
   });
-  message.retry({ delaySeconds });
+  return { outcome: 'retry', delaySeconds };
 }
 
 export async function processRevealBackgroundJobMessage(
-  message: Message<unknown>,
+  message: BackgroundJobMessage,
   env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
   overrides: Partial<RevealBackgroundJobDependencies> = {},
-): Promise<void> {
+): Promise<BackgroundJobOutcome> {
   const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
   if (!isRevealBackgroundJob(message.body)) {
     dependencies.error({
@@ -144,8 +145,7 @@ export async function processRevealBackgroundJobMessage(
       queueMessageId: message.id,
       attempts: message.attempts,
     });
-    message.ack();
-    return;
+    return { outcome: 'complete' };
   }
   const job = message.body;
   const signal = AbortSignal.timeout(REVEAL_BACKGROUND_JOB_TIMEOUT_MS);
@@ -153,17 +153,15 @@ export async function processRevealBackgroundJobMessage(
   try {
     storageControl = await dependencies.loadStorageControl(env.OPS_DB, signal);
   } catch (error) {
-    retryRevealBackgroundJob(
+    return retryRevealBackgroundJob(
       message,
       dependencies,
       job,
       error instanceof Error ? error.message : 'storage_control_unavailable',
     );
-    return;
   }
   if (storageControl.paused) {
-    retryRevealBackgroundJob(message, dependencies, job, 'reveal_submissions_paused');
-    return;
+    return retryRevealBackgroundJob(message, dependencies, job, 'reveal_submissions_paused');
   }
   const revealContext: RevealContext = {
     commerceDb: env.COMMERCE_DB,
@@ -187,12 +185,10 @@ export async function processRevealBackgroundJobMessage(
         boxAssetId: job.boxAssetId,
         signature: job.signature,
       });
-      message.ack();
-      return;
+      return { outcome: 'complete' };
     }
     if (submission.status === 'failed') {
-      message.ack();
-      return;
+      return { outcome: 'complete' };
     }
     const outcome = await resolveRevealSubmission({
       submission,
@@ -209,8 +205,7 @@ export async function processRevealBackgroundJobMessage(
       fail: () => dependencies.failRevealSubmission(revealContext, runtime, job.boxAssetId, submission),
     });
     if (outcome === 'unknown') {
-      retryRevealBackgroundJob(message, dependencies, job, 'transaction_status_unknown');
-      return;
+      return retryRevealBackgroundJob(message, dependencies, job, 'transaction_status_unknown');
     }
     if (outcome !== 'confirmed') {
       dependencies.log({
@@ -220,8 +215,7 @@ export async function processRevealBackgroundJobMessage(
         signature: job.signature,
         outcome: 'failed',
       });
-      message.ack();
-      return;
+      return { outcome: 'complete' };
     }
     await dependencies.countOnlineRevealPackStatus(
       revealContext,
@@ -236,9 +230,9 @@ export async function processRevealBackgroundJobMessage(
       signature: job.signature,
       outcome: 'confirmed',
     });
-    message.ack();
+    return { outcome: 'complete' };
   } catch (error) {
-    retryRevealBackgroundJob(
+    return retryRevealBackgroundJob(
       message,
       dependencies,
       job,

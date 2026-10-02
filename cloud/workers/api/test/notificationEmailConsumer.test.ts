@@ -92,7 +92,7 @@ function backgroundEnv(commerceDb: D1Database): Env {
   } as Env;
 }
 
-test('notification consumer acknowledges successful sends with the exact job and key', async () => {
+test('notification consumer completes successful sends with the exact job and key', async () => {
   const queued = queueMessage(JOB);
   const sent: unknown[] = [];
   const logs: Record<string, unknown>[] = [];
@@ -100,15 +100,14 @@ test('notification consumer acknowledges successful sends with the exact job and
     sent.push({ job, apiKey });
     return { data: { id: 'email-message-id' }, error: null };
   };
-  await processNotificationEmailMessage(queued.message, env(), {
+  const queuedOutcome = await processNotificationEmailMessage(queued.message, env(), {
     send,
     log: (entry) => logs.push(entry),
     warn: (entry) => logs.push(entry),
     error: (entry) => logs.push(entry),
   });
   assert.deepEqual(sent, [{ job: JOB, apiKey: 'resend-test-key' }]);
-  assert.equal(queued.actions.acks, 1);
-  assert.deepEqual(queued.actions.retries, []);
+  assert.deepEqual(queuedOutcome, { outcome: 'complete' });
   assert.deepEqual(logs, [{
     event: 'notification_email_sent',
     jobId: JOB.jobId,
@@ -137,7 +136,7 @@ test('notification enqueue smoke self-signs with the Worker secret and forwards 
     sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
     metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
   };
-  await processNotificationQueueMessage(queued.message, {
+  const queuedOutcome = await processNotificationQueueMessage(queued.message, {
     NOTIFICATION_EMAIL_QUEUE: queue,
     NOTIFICATION_ENQUEUE_SECRET: 'worker-only-secret',
     RESEND_API_KEY: 'resend-test-key',
@@ -145,7 +144,7 @@ test('notification enqueue smoke self-signs with the Worker secret and forwards 
     nowMs: () => 1_700_000_000_000,
     log: (entry) => logs.push(entry),
   });
-  assert.equal(queued.actions.acks, 1);
+  assert.deepEqual(queuedOutcome, { outcome: 'complete' });
   assert.deepEqual(sent, [{ body: JOB, options: { contentType: 'json' } }]);
   assert.deepEqual(logs.map((entry) => entry.event), [
     'notification_email_enqueued',
@@ -209,12 +208,10 @@ test('notification consumer retries transient provider and transport failures pe
     warn: (entry) => logs.push(entry),
     error: (entry) => logs.push(entry),
   };
-  await processNotificationEmailMessage(transport.message, env(), overrides);
-  await processNotificationEmailMessage(rateLimited.message, env(), overrides);
-  assert.equal(transport.actions.acks, 0);
-  assert.deepEqual(transport.actions.retries, [{ delaySeconds: 30 }]);
-  assert.equal(rateLimited.actions.acks, 0);
-  assert.deepEqual(rateLimited.actions.retries, [{ delaySeconds: 10 * 60 }]);
+  const transportOutcome = await processNotificationEmailMessage(transport.message, env(), overrides);
+  const rateLimitedOutcome = await processNotificationEmailMessage(rateLimited.message, env(), overrides);
+  assert.deepEqual(transportOutcome, { outcome: 'retry', delaySeconds: 30 });
+  assert.deepEqual(rateLimitedOutcome, { outcome: 'retry', delaySeconds: 10 * 60 });
   const serialized = JSON.stringify(logs);
   assert.equal(serialized.includes('private-buyer@example.com'), false);
   assert.equal(serialized.includes('private transport error'), false);
@@ -223,7 +220,7 @@ test('notification consumer retries transient provider and transport failures pe
 test('notification consumer retries transient HTTP statuses before provider names', async () => {
   for (const statusCode of [408, 429, 503]) {
     const queued = queueMessage({ ...JOB, jobId: `423e4567-e89b-42d3-a456-426614174${statusCode}` });
-    await processNotificationEmailMessage(queued.message, env(), {
+    const queuedOutcome = await processNotificationEmailMessage(queued.message, env(), {
       send: async () => ({
         data: null,
         error: { name: 'validation_error', message: 'recognized but transient', statusCode },
@@ -232,12 +229,11 @@ test('notification consumer retries transient HTTP statuses before provider name
       warn: () => undefined,
       error: () => undefined,
     });
-    assert.equal(queued.actions.acks, 0, String(statusCode));
-    assert.deepEqual(queued.actions.retries, [{ delaySeconds: 30 }], String(statusCode));
+    assert.deepEqual(queuedOutcome, { outcome: 'retry', delaySeconds: 30 }, String(statusCode));
   }
 });
 
-test('notification consumer acknowledges permanent errors and malformed jobs', async () => {
+test('notification consumer completes permanent errors and malformed jobs', async () => {
   const permanent = queueMessage(JOB);
   const malformed = queueMessage({ ...JOB, recipients: ['not an email'] });
   let sends = 0;
@@ -253,32 +249,30 @@ test('notification consumer acknowledges permanent errors and malformed jobs', a
     warn: () => undefined,
     error: () => undefined,
   };
-  await processNotificationEmailMessage(permanent.message, env(), overrides);
-  await processNotificationEmailMessage(malformed.message, env(), overrides);
+  const permanentOutcome = await processNotificationEmailMessage(permanent.message, env(), overrides);
+  const malformedOutcome = await processNotificationEmailMessage(malformed.message, env(), overrides);
   assert.equal(sends, 1);
-  assert.equal(permanent.actions.acks, 1);
-  assert.deepEqual(permanent.actions.retries, []);
-  assert.equal(malformed.actions.acks, 1);
-  assert.deepEqual(malformed.actions.retries, []);
+  assert.deepEqual(permanentOutcome, { outcome: 'complete' });
+  assert.deepEqual(malformedOutcome, { outcome: 'complete' });
 });
 
 test('notification consumer retries missing configuration and malformed successes', async () => {
   const missingSecret = queueMessage(JOB, 2);
   const malformedSuccess = queueMessage({ ...JOB, jobId: '323e4567-e89b-42d3-a456-426614174000' }, 5);
-  await processNotificationEmailMessage(missingSecret.message, env(''), {
+  const missingSecretOutcome = await processNotificationEmailMessage(missingSecret.message, env(''), {
     send: async () => ({ data: { id: 'unused' }, error: null }),
     log: () => undefined,
     warn: () => undefined,
     error: () => undefined,
   });
-  await processNotificationEmailMessage(malformedSuccess.message, env(), {
+  const malformedSuccessOutcome = await processNotificationEmailMessage(malformedSuccess.message, env(), {
     send: async () => ({ data: {}, error: null }),
     log: () => undefined,
     warn: () => undefined,
     error: () => undefined,
   });
-  assert.deepEqual(missingSecret.actions.retries, [{ delaySeconds: 2 * 60 }]);
-  assert.deepEqual(malformedSuccess.actions.retries, [{ delaySeconds: 2 * 60 * 60 }]);
+  assert.deepEqual(missingSecretOutcome, { outcome: 'retry', delaySeconds: 2 * 60 });
+  assert.deepEqual(malformedSuccessOutcome, { outcome: 'retry', delaySeconds: 2 * 60 * 60 });
 });
 
 test('notification retry delays are bounded to the approved schedule', () => {
@@ -313,11 +307,11 @@ test('queue batches route by exact queue name and isolate individual failures', 
     reveal: async (message) => {
       routes.push('reveal');
       if (message === reveal.message) throw new Error('reveal failed');
-      message.ack();
+      return { outcome: 'complete' };
     },
-    notification: async (message) => {
+    notification: async () => {
       routes.push('notification');
-      message.ack();
+      return { outcome: 'complete' };
     },
     fulfillment: async () => {
       routes.push('fulfillment');
@@ -363,6 +357,73 @@ test('queue batches route by exact queue name and isolate individual failures', 
   ]);
 });
 
+test('queue batches apply each processor outcome once and preserve retry delay defaults', async () => {
+  const complete = queueMessage(JOB, 1);
+  const delayed = queueMessage(JOB, 2);
+  const defaultDelay = queueMessage(JOB, 3);
+  const immediate = queueMessage(JOB, 4);
+  const failed = queueMessage(JOB, 5);
+  const sibling = queueMessage(JOB, 6);
+  const visited: number[] = [];
+  await processBackgroundJobBatch(
+    batch('mons-shop-notification-emails', complete.message, delayed.message, defaultDelay.message,
+      immediate.message, failed.message, sibling.message),
+    env() as Env,
+    {
+      notification: async (message) => {
+        visited.push(message.attempts);
+        if (message.attempts === 1) {
+          assert.equal(complete.actions.acks, 0);
+          return { outcome: 'complete' };
+        }
+        assert.equal(complete.actions.acks, 1);
+        if (message.attempts === 2) return { outcome: 'retry', delaySeconds: 120 };
+        if (message.attempts === 3) return { outcome: 'retry' };
+        if (message.attempts === 4) return { outcome: 'retry', delaySeconds: 0 };
+        if (message.attempts === 5) throw new Error('unexpected processor failure');
+        return { outcome: 'complete' };
+      },
+      error: () => undefined,
+    },
+  );
+  assert.deepEqual(visited, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(complete.actions, { acks: 1, retries: [] });
+  assert.deepEqual(delayed.actions, { acks: 0, retries: [{ delaySeconds: 120 }] });
+  assert.deepEqual(defaultDelay.actions, { acks: 0, retries: [undefined] });
+  assert.deepEqual(immediate.actions, { acks: 0, retries: [{ delaySeconds: 0 }] });
+  assert.deepEqual(failed.actions, { acks: 0, retries: [undefined] });
+  assert.deepEqual(sibling.actions, { acks: 1, retries: [] });
+});
+
+test('notification smoke acknowledges after enqueue and retries forwarding failures', async () => {
+  for (const succeeds of [true, false]) {
+    const queued = queueMessage({ version: 1, kind: 'notification_enqueue_smoke', job: JOB });
+    const errors: Record<string, unknown>[] = [];
+    const workerEnv: Pick<Env, 'RESEND_API_KEY' | 'NOTIFICATION_ENQUEUE_SECRET' | 'NOTIFICATION_EMAIL_QUEUE'> = {
+      ...env(),
+      NOTIFICATION_ENQUEUE_SECRET: 'worker-only-secret',
+      NOTIFICATION_EMAIL_QUEUE: {
+        send: async () => {
+          assert.deepEqual(queued.actions, { acks: 0, retries: [] });
+          if (!succeeds) throw new Error('queue unavailable');
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } } };
+        },
+        sendBatch: async () => assert.fail('smoke forwarding must send one job'),
+        metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+      },
+    };
+    await processBackgroundJobBatch(batch('mons-shop-notification-emails', queued.message), workerEnv as Env, {
+      notification: (message, notificationEnv) => processNotificationQueueMessage(message, notificationEnv, {
+        nowMs: () => 1_700_000_000_000,
+        log: () => undefined,
+      }),
+      error: (entry) => errors.push(entry),
+    });
+    assert.deepEqual(queued.actions, succeeds ? { acks: 1, retries: [] } : { acks: 0, retries: [undefined] });
+    assert.deepEqual(errors.map((entry) => entry.event), succeeds ? [] : ['background_job_unhandled_error']);
+  }
+});
+
 test('commerce maintenance gates only commerce-dependent queue batches', async () => {
   const notification = queueMessage(JOB);
   const reveal = queueMessage(JOB);
@@ -379,9 +440,9 @@ test('commerce maintenance gates only commerce-dependent queue batches', async (
     authorityReads += 1;
   });
   const overrides: NonNullable<Parameters<typeof processBackgroundJobBatch>[2]> = {
-    notification: async (message) => {
+    notification: async () => {
       routes.push('notification');
-      message.ack();
+      return { outcome: 'complete' };
     },
     reveal: async () => assert.fail('reveal processing must pause during commerce maintenance'),
     fulfillment: async () => assert.fail('fulfillment processing must pause during commerce maintenance'),
@@ -448,7 +509,7 @@ test('Stripe fulfillment queue processing validates jobs and records terminal ou
     enqueuedAtMs: Date.now(),
   }));
   const logs: Record<string, unknown>[] = [];
-  await processStripeFulfillmentMessage(queued.message, env() as Env, {
+  const outcome = await processStripeFulfillmentMessage(queued.message, env() as Env, {
     process: async (_job, _env, signal, options) => {
       assert.equal(options?.treatRetryableFailureAsTerminal, false);
       assert.notEqual(options?.persistenceSignal, signal);
@@ -464,6 +525,7 @@ test('Stripe fulfillment queue processing validates jobs and records terminal ou
     },
     log: (entry) => logs.push(entry),
   });
+  assert.deepEqual(outcome, { outcome: 'complete' });
   assert.deepEqual(logs.map((entry) => entry.event), [
     'stripe_fulfillment_job_started',
     'stripe_fulfillment_job_completed',
@@ -492,7 +554,7 @@ test('Stripe fulfillment persists retryable failures on the final Queue attempt'
     stripeEventType: 'checkout.session.completed',
     enqueuedAtMs: Date.now(),
   }), Number(maxRetries) + 1);
-  await processStripeFulfillmentMessage(queued.message, env() as Env, {
+  const outcome = await processStripeFulfillmentMessage(queued.message, env() as Env, {
     log: () => undefined,
     process: async (_job, _env, _signal, options) => {
       assert.equal(options?.treatRetryableFailureAsTerminal, true);
@@ -507,6 +569,46 @@ test('Stripe fulfillment persists retryable failures on the final Queue attempt'
       };
     },
   });
+  assert.deepEqual(outcome, { outcome: 'complete' });
+});
+
+test('Stripe fulfillment acknowledges completed work but retries malformed jobs', async () => {
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_success',
+    stripeEventId: 'evt_test_success',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: Date.now(),
+  }), 10);
+  const malformed = queueMessage({ invalid: true });
+  const logs: Record<string, unknown>[] = [];
+  await processBackgroundJobBatch(batch('mons-shop-stripe-fulfillment', queued.message, malformed.message), env() as Env, {
+    fulfillment: (message, workerEnv) => processStripeFulfillmentMessage(message, workerEnv, {
+      process: async (_job, _env, _signal, options) => {
+        assert.deepEqual(queued.actions, { acks: 0, retries: [] });
+        assert.equal(options?.treatRetryableFailureAsTerminal, false);
+        return {
+          fulfillment: {
+            status: 'ignored', dropId: 'card_nft_binder_devnet', sessionId: 'cs_test_success',
+            reason: 'already_fulfilled',
+          },
+          notifications: { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 },
+        };
+      },
+      log: (entry) => {
+        assert.deepEqual(queued.actions, { acks: 0, retries: [] });
+        logs.push(entry);
+      },
+    }),
+    log: (entry) => logs.push(entry),
+    error: (entry) => logs.push(entry),
+  });
+  assert.deepEqual(queued.actions, { acks: 1, retries: [] });
+  assert.deepEqual(malformed.actions, { acks: 0, retries: [{ delaySeconds: 60 }] });
+  assert.deepEqual(logs.map((entry) => entry.event), [
+    'stripe_fulfillment_job_started', 'stripe_fulfillment_job_completed',
+    'background_job_unhandled_error', 'stripe_fulfillment_job_retry',
+  ]);
 });
 
 test('Stripe fulfillment queue processing enforces its top-level deadline', async () => {
@@ -530,6 +632,44 @@ test('Stripe fulfillment queue processing enforces its top-level deadline', asyn
     }),
     (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
   );
+});
+
+test('Stripe fulfillment preserves the full independent persistence deadline', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_persistence_timeout',
+    stripeEventId: 'evt_test_persistence_timeout',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: Date.now(),
+  }));
+  let signals!: { operation: AbortSignal; persistence: AbortSignal };
+  const pending = processStripeFulfillmentMessage(queued.message, env() as Env, {
+    process: async (_job, _env, signal, options) => {
+      assert.ok(options?.persistenceSignal);
+      const persistenceSignal = options.persistenceSignal;
+      signals = { operation: signal, persistence: persistenceSignal };
+      return new Promise<never>((_resolve, reject) => {
+        persistenceSignal.addEventListener('abort', () => reject(persistenceSignal.reason), { once: true });
+      });
+    },
+    log: () => undefined,
+    timeoutMs: 5,
+  });
+  const rejected = assert.rejects(pending, (error: unknown) => (
+    error instanceof DOMException
+    && error.name === 'TimeoutError'
+    && error.message === 'Stripe checkout fulfillment persistence timed out'
+  ));
+  context.mock.timers.tick(5);
+  assert.equal(signals.operation.aborted, true);
+  assert.equal(signals.operation.reason.message, 'Stripe checkout fulfillment timed out');
+  assert.equal(signals.persistence.aborted, false);
+  context.mock.timers.tick(59_999);
+  assert.equal(signals.persistence.aborted, false);
+  context.mock.timers.tick(1);
+  assert.equal(signals.persistence.aborted, true);
+  await rejected;
 });
 
 test('Stripe fulfillment logs final unhandled failures as DLQ-bound', async () => {

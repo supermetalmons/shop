@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { PREORDER_CARD_IDS } from '../../shared/preorderCardIds.generated.ts';
 import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
 import { LEGACY_DELIVERY_RECOVERY_JSON_SQL, planDeliveryRecoveryStateBackfill } from '../shared/deliveryRecoveryStateMaintenance.ts';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
@@ -17,6 +18,7 @@ import {
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
+import { readCommerceSchemaManifest, selectCommerceSchemaCheckpoint, type CommerceSchemaManifest, type CommerceSchemaCheckpoint } from '../shared/commerceSchemaManifest.ts';
 import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
@@ -40,297 +42,11 @@ import {
 } from '../../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
 
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function fail(message: string): never {
   throw new Error(message);
 }
-
-const PREORDER_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_preorder_active_buyer: ['index', '62c6e4e10fd71b65ccfd45702c7fe845ff40d6becb0d664287b851e1d11182f9'],
-  commerce_preorder_claim_delete_guard: ['trigger', 'c03a4679962423ee89162c6062f495b728e2d7707719a64292032106b6487171'],
-  commerce_preorder_claim_insert_guard: ['trigger', '2abb7dcf123eabfadd5b47a69ffbcbbc16acec0b8b53c6afba6aab6ed7a41925'],
-  commerce_preorder_claim_order: ['index', 'cf3aa0bd6370b9cba5499fab1899a82fdcb9f2f3bd726c039bf04d68855878e7'],
-  commerce_preorder_claim_update_guard: ['trigger', 'eee762df423788dc074157fd8d165895eb18ef2a0fe69c5dbb0a79b5916fb5fc'],
-  commerce_preorder_claims: ['table', '5b84bb81921235c72db786700f4296f6bbf0142094e39914834173db2697846d'],
-  commerce_preorder_order_delete_guard: ['trigger', '79e571b7d902d063e2e4e34a5f4a63b143edd12d0faca92bcdb09febc8199b83'],
-  commerce_preorder_order_insert_guard: ['trigger', 'a95495a3aef956980da027a5bb897b35a2b6cb8007421db9b0d9ecb4411eb622'],
-  commerce_preorder_order_update_guard: ['trigger', 'b9bb7da4d56951516074f191182e47622f2a3aaef9ebdb018eb3d527b2df35a7'],
-  commerce_preorder_orders: ['table', 'bd3b74ed4d0360609d6f47698b32c1e1b7d10f43fd349ecb3fd2481a593fbc5a'],
-  commerce_preorder_reconciliation: ['index', '6605760dce8f5eb7f4a52dba4bac4390491a6ccf4a6d7db8818efd4fdf13e7bb'],
-});
-const PREORDER_BUYER_INDEX_FINGERPRINT = '03d0921e2fe4834a986d2d2aae6dc1b2ba40d323a5f5c146f061af7db60c90f9';
-const PREORDER_EXPIRY_INDEX_FINGERPRINT = '6e75d815ecd1bd2ed85f545e17b0b5c212259dfbb7c59e2c29040b16a4d5ac01';
-const PREORDER_SCOPED_EXPIRY_INDEX_FINGERPRINT = '4298ccc639a6b3aa6a48fb004ba2c2c7ec4839b3a13f61c5134f87b39d2d1367';
-const PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_SCHEMA_FINGERPRINTS,
-  commerce_preorder_orders: ['table', 'ac7078da7591fba9f0d174a5cb3316e1abe9b1f824d076261aa0430a67af269c'],
-  commerce_preorder_order_insert_guard: ['trigger', '339733b8e21416c6093a5709a0ba66ff0a8c9d532ad56ebf692dc86a84bf7418'],
-  commerce_preorder_order_update_guard: ['trigger', '42ccd00e40b38e03ad5aede8e3bd1f6579dec89b9e4dd924dae39301c72bb9b7'],
-};
-const PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS,
-  commerce_preorder_orders: ['table', '22b63cb91686a54e5a74248187c3f8a583f6fa4c9442d4ad22301937f57931e4'],
-  commerce_preorder_active_buyer: ['index', 'bd33880aea35825dc71c2957262b3fa9a2f8a9d6e314487f7c6b2854ac536fb9'],
-  commerce_preorder_confirmation_guard: ['trigger', 'c51062e946a9d4473aff51e3f808bc6c7f0056745cd386d05a8b8abc5f922ed5'],
-  commerce_preorder_confirmed_recovery: ['index', '79f8695108f0e6eb4ab3b0a4c94ef620945693033fb308cd55f2922c18aff7ca'],
-  commerce_preorder_inventory_buyer: ['index', '515862b3632b470be6112c17192ec070ad4793334bddf23f6a10aa741f7d8ab9'],
-};
-const PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS,
-  commerce_preorder_claims: ['table', '84dc3065ba58bb6dd1fbb80bcf486dd79d7c9843df923d1a5d8dc5d899021aee'],
-};
-const PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS,
-  commerce_preorder_claims: ['table', 'b43ebdcffc1aafce08778c69d669f434ce6177339f519b761cc8477d117ab6f8'],
-};
-const PREORDER_EXPIRY_CLAIM_RELEASE_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS,
-  commerce_preorder_expiry_claim_release: ['trigger', '633086250eaf8a3cdc688bf6b6b77c24c93d2f063c152fd35a7a3dc8faec949c'],
-};
-
-const PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_EXPIRY_CLAIM_RELEASE_SCHEMA_FINGERPRINTS,
-  commerce_preorder_claims: ['table', 'ea7e6b31493320727b61bccf2970b295eb2eb92ac5e60488804ed3bc41941e46'],
-};
-
-const PREORDER_CARD_RANGE_1419_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = {
-  ...PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS,
-  commerce_preorder_claims: ['table', 'ef27420f6dcc020602bf32536d854a49f33d8ed36dfb9b6719fc26ab38a6dd4f'],
-};
-
-const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
-  commerce_notification_legacy_insert_fence: ['trigger', '0dbe842e565314c6247a3e8d9a6717daa1df00840f0bc061e5acde00179ed0bf'],
-  commerce_notification_legacy_update_fence: ['trigger', 'd62e43b923b7575c8059821ab57159483f1944b151c39a127ba04aeeed810340'],
-  commerce_notification_outbox: ['table', '929002240cc9b6bdc4ad070cb7b3beff103687c4daa2819d1847e54b4c5be986'],
-  commerce_notification_outbox_control: ['table', '7ba8128b4cbed9569851c913f7c0d7ebb7171728dba0556fca0189808733284e'],
-  commerce_notification_outbox_control_delete_guard: ['trigger', '7066c5566748ee845d3ef223326c2a4176462087f4002538c26e604bd0bef331'],
-  commerce_notification_outbox_control_insert_guard: ['trigger', 'bbd9280a3c7680efc71558459186be0fdf84ac308c04850985c6a970cc807f3f'],
-  commerce_notification_outbox_control_update_guard: ['trigger', 'f059bc8ed19851aecea61118829b23cdeb19f826f267320fd55270ce58dafafc'],
-  commerce_notification_outbox_delete_guard: ['trigger', '0bd6dbf7c0a44193862b61a8ad0484ce7a7795106319fc7b505a889b24706821'],
-  commerce_notification_outbox_drop: ['index', '6695c84402bec160831be68e5a163d104e00293aaa28ccce5b21da74458b04af'],
-  commerce_notification_outbox_due: ['index', '0c41e4ed80645314f38b7a743ff629b8d48094f62c2688eac6d420e5594cba70'],
-  commerce_notification_outbox_family_due: ['index', '77bf8dbb5045e3d29727f5ec1e24ba200e2d2d7703bf1137e365511751e76f3b'],
-  commerce_notification_outbox_insert_guard: ['trigger', '1a70336b7739c20139f107881b31b1d86e3363100a8fd19f2d6d0b4a28584ea2'],
-  commerce_notification_outbox_pending_owner_insert: ['trigger', '289dfdbdd4b62a43efce7c8f7a57f4b344ad5b55722bdfec42f56f547279d51e'],
-  commerce_notification_outbox_pending_owner_path: ['index', 'b12c746376afd70803ab0936f3501f6aab1f6c402da1f5573aeaa8edc7ace346'],
-  commerce_notification_outbox_pending_owner_source: ['trigger', '2cde471901e82575575329a663604ba061c4dcf9755806b72ac14f8478d0dc94'],
-  commerce_notification_outbox_pending_owner_state: ['trigger', '7bcc978359b0ce245db50f451e30a03e52bd45564a7bf49e80839fbae5fc7a17'],
-  commerce_notification_outbox_pending_owners: ['table', '5a8d5783c9d2d2e25648f1bf82b4684519d2f91b3ba36fb986fb831f3fb5da0b'],
-  commerce_notification_outbox_pending_path: ['index', '1359f130f5e0cafc7995d45288f5d2cfe5482cc07bce319b43b831da6ef4d4bf'],
-  commerce_notification_outbox_resume_guard: ['trigger', '0a73b8805ba7d15e3399265969ca02ca5873178b2b7b38a33fb80a1a0f8cf331'],
-  commerce_notification_outbox_stripe_due: ['table', '5afa0b407a916e626402b876a0d3bc2992af426d21e6914c71c7c49b61ef06d7'],
-  commerce_notification_outbox_stripe_due_at: ['index', '8a4d0e2385d715badc63e633140e5b2d2a1b7ab02521fbb04b858ea6d83c5f06'],
-  commerce_notification_outbox_stripe_due_insert: ['trigger', 'b756dc5d600bb1344ffdd08f86848fc7243598ea4113d98879538df3269d17fb'],
-  commerce_notification_outbox_stripe_due_source: ['trigger', '8c13c3a33bad1e89807dfc9740128a3f60e34d41f152a5b3c1f8f9c4d7c8dad4'],
-  commerce_notification_outbox_stripe_due_state: ['trigger', '55a3f2c4ea6b3d140c1fd9a8470d2330ea0dacbe8a45d35b5143c79868b6443e'],
-  commerce_notification_outbox_update_guard: ['trigger', 'c1bb18cdb3f6848f2b8bd1481beb7403d30ab96502b28acd999a7e53c9c87169'],
-});
-const STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_commit_guard_stripe_checkout_finish: ['trigger', '7439d2e67f92340fe05dbc3fe90f6df055741761107f6b0d53e749de59797218'],
-  commerce_commit_guard_stripe_checkout_validate: ['trigger', '90d5f2288f9d5f4257cdb45ae558970b80a0369f913cd1943018221a937ffd90'],
-  commerce_commit_guards: ['table', 'cfec9226d1061feeb08612678c1fad53989c0a34458183a90f5fa57739c20f1c'],
-  commerce_notification_outbox_stripe_due_insert: ['trigger', '0d24cbab1d5bdcbe9887736c3e93e1bb14f0f7ec486df7b1a4dd47586048a081'],
-  commerce_notification_outbox_stripe_due_source: ['trigger', '1a8627e407e6a14252ab6948f3022c24e04f17772f7745392fa25d385ee5ba7a'],
-  commerce_notification_outbox_stripe_due_state: ['trigger', 'c9c1d2e1f3198f2f0c0c54fac1a0648edb50e9bcf9991c6aca6ca70bee8e1a3d'],
-  commerce_stripe_checkout_control_delete_guard: ['trigger', 'c59328eb4c9eacaed4bc207000d80a0e82f9d67072d0a386a722aa0946877031'],
-  commerce_stripe_checkout_control_insert_guard: ['trigger', '5983ec28f8a64eba84078fc44bf6c75195f4c07931ca97700d9df4823bca0518'],
-  commerce_stripe_checkout_control_update_guard: ['trigger', '01587c5b7b6b3224a7489e5019207654b94eb4ea5e35f1750a474b90a13e91c8'],
-  commerce_stripe_checkout_parent_insert_guard: ['trigger', '0bb08d786436bf91635cd26c1c582a76ffcbc0077a4064ff2180b1319872fac8'],
-  commerce_stripe_checkout_parent_update_guard: ['trigger', '337fd22a3a16a0ef3bb5f8327e87a2533a135d8797e131819d345d4108877e58'],
-  commerce_stripe_checkout_resume_guard: ['trigger', '386f1749cf96c9ce7c8d46d62d09e08c87c705da9329dc7ccbf40cd74b5012cd'],
-  commerce_stripe_checkout_state: ['table', 'f999de99854d9aeb73cdcd0417f8cf213b17101fce8fcd6dba5e6dc2913fa08f'],
-  commerce_stripe_checkout_state_activate_due: ['trigger', '9ac185af9d1b0d5a70e512f599e1300d2847176d2a669babab36da44a157f23e'],
-  commerce_stripe_checkout_state_control: ['table', 'b8c5daac6ee6ff4fb539caef067e0e9b4d63f3e587ab507e213b1d2f493aa387'],
-  commerce_stripe_checkout_state_delete_guard: ['trigger', '4eee610ca0a8e72cff22f907f0a516fa451a7271788f7539b088b9a5e8f8a48a'],
-  commerce_stripe_checkout_state_due_insert: ['trigger', 'ced1b9c70e762f2093d47ef450747e61627f2a0e60af2df5dfd76994db47ea46'],
-  commerce_stripe_checkout_state_due_update: ['trigger', '746f2409a60ac40820b767958e13f4545521780c717d9739539e80611b942e12'],
-  commerce_stripe_checkout_state_insert_guard: ['trigger', '8ae5a8e5a34bd07a53c3f03e41174b80afbf7336d7ff7bf4d6b9c36fbe0f1733'],
-  commerce_stripe_checkout_state_reconciliation_due: ['index', '33a00a977c2835918699d8ebcf6795d0688f522c6cc5e4cafb883c3ba120c39c'],
-  commerce_stripe_checkout_state_update_guard: ['trigger', 'a3c24f0ba0d2064b758f3c7d719e9a1cb5bdc4d0bf3234092433b259a156ee80'],
-  commerce_stripe_checkouts_manual_review_cursor: ['index', '21ffc6599703703842adb5e233fedf7b5203912c5d718637d43b45ff1cdfbb59'],
-});
-const DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_commit_guard_delivery_recovery_finish: ['trigger', 'c6d633f733c29fca8fff1852eec84124b55e15c4c6c404997f5876e7131e3b60'],
-  commerce_commit_guard_delivery_recovery_validate: ['trigger', 'cb304d88a2c58e9fc2e5c5973bd30d1eed22376fb59f2088ce60ed5845905967'],
-  commerce_commit_guards: ['table', '6407f79973f7f4b763ed232fc660ec9dddf62d3c14673debe25475c5d8a8363b'],
-  commerce_delivery_recovery: ['table', '82c7c0a54193aaec1593209df13bbe294a4432a68a94c39ba4031c03c23cd41f'],
-  commerce_delivery_recovery_control: ['table', 'cd145465b3c37fa466f1407d67cf2472795c197e7e954afa3979f69ccf7db334'],
-  commerce_delivery_recovery_control_delete_guard: ['trigger', 'f9760f6e7e588f3e96360ef9c63e7493b73a35b2c4fc7dd73c6c9ae3986d9c2a'],
-  commerce_delivery_recovery_control_insert_guard: ['trigger', '379249abc43be92a893c751bb66e67794c9b9e4445000942c9e1ef3b6d27ee9f'],
-  commerce_delivery_recovery_control_update_guard: ['trigger', 'edef08d64133dd93548dc587dcbdf20f2a5318061f8d885a9e7bb68365a95bc8'],
-  commerce_delivery_recovery_delete_guard: ['trigger', '13ef4a30613d7269f782126ff78facce06178b741890ceac40d8ecc48fa09c4a'],
-  commerce_delivery_recovery_insert_guard: ['trigger', 'a132d64871ab352a2a237e75cf30529bebc8da9ab70cddb01a259f78da4b3b0c'],
-  commerce_delivery_recovery_parent_delete_guard: ['trigger', 'f102e4efaf4d9caebbc0c7f21dbf068ef653e704d4883a504a641ae02a6a05d4'],
-  commerce_delivery_recovery_parent_insert_guard: ['trigger', 'a8c166315d157095d295667a2875de4a2acade1b8abb56272614aca4c48f068a'],
-  commerce_delivery_recovery_parent_update_guard: ['trigger', '2559c5cf1dadd666653bce9e4b5ffe73286c771e66d0c70f2bcc7b130456d881'],
-  commerce_delivery_recovery_resume_guard: ['trigger', '3ec1529f526c52c2fc452fe8a9e548ed201b0495f99e8cc45aca8041c3159977'],
-  commerce_delivery_recovery_update_guard: ['trigger', 'ba3fe21c43b192cf3da7e50c3629f0e5b33b0833cea8351173ca1f9977a55683'],
-  commerce_wipe_guard_delivery_recovery_validate: ['trigger', 'b4bc1de2fd765df6ea534ad8ef7981adcb67e2bde74055cc630ef27df6bacc51'],
-  commerce_wipe_guards: ['table', '5425bb71f76f90d411b123428095e540652749e412edab0b5d814a1877efb19e'],
-});
-const PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_pack_status_control_delete_guard: ['trigger', 'b5e923301376ec5a34792dbb4c5fac28afa54e6efd9c3d717503efabb14effeb'],
-  commerce_pack_status_control_insert_guard: ['trigger', '033a672c8adc8e74facafad13209e5c8a0de846c7cb1225445429cdab4c9ddc5'],
-  commerce_pack_status_control_update_guard: ['trigger', '443a40315dc44495283fba30cf238a0b736bd85a6f1a1b0fca0eaf300a47dc0f'],
-  commerce_pack_status_legacy_insert_fence: ['trigger', 'a9a6627a98250d0e7d73651990a4c2cab6a72547a985b51eb8d1d96230ac714c'],
-  commerce_pack_status_legacy_update_fence: ['trigger', '52b2071795034705d6c1ce094a1a6f1a5a4d3e0290bca3da3ff509b04f2724ee'],
-  commerce_pack_status_outbox: ['table', 'a38a305a3a6b5f35451e86149fdfa59712db947e8766142e40ccaa1eedfaa8a7'],
-  commerce_pack_status_outbox_control: ['table', '8cd8a2b2b5becc7028a094a0d8740104d7da10ae79269f130e11c14eab155258'],
-  commerce_pack_status_outbox_delete_guard: ['trigger', '99a7425360c6c744cdc63a55c61b06fde9ecab0c879ffa66e2221a907244e43e'],
-  commerce_pack_status_outbox_drop: ['index', 'a7bba976dad7a6ef10ed210198c77ddb0ffd8162ef8d3deb2282534599900dc7'],
-  commerce_pack_status_outbox_due: ['index', 'fb49fbed1e637578b3579071f515c90114052498a7099ab3bb6c311e3a564947'],
-  commerce_pack_status_outbox_insert_guard: ['trigger', '839d3c04745cd1b162c37ca58aa7d18864a1ed32d738d5efa5d034d6e687ba23'],
-  commerce_pack_status_outbox_update_guard: ['trigger', 'ca1df49d62065f1a414f4cf8ac8455a25550d35f43d30cbf8d431485d29bf744'],
-  commerce_pack_status_resume_guard: ['trigger', '6a9b573ca8131810f0b563ad1a27b42a4b22cd48f7ab3c9377660309893c37e4'],
-});
-const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '376e5c3579dd47c8742fb68171df543c2c35fc144a8c2277d66d68fd73c82b07';
-const COMMIT_GUARD_SCHEMA_FINGERPRINT = '13c79bbc939b01898f4a4ebc429d7d83899158f0e65a54d3b9592290d4884f80';
-const COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT = '1556298f47f92ca475dae746d1a730706cdcc5ff1df34ac21e911ffcbd570c26';
-const DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT = '64fd01604169a0b6c3834a5f88e8dd3b6f08f0d7a9404882ced957aca35225a5';
-const DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
-  commerce_delivery_owner_revision_arrival: '46b377200b52c8e68da92a817c05c9184bdd643096fd91dbfde6990d06a34e1c',
-  commerce_delivery_owner_revision_delete: 'a45238a9712999ab3134b09902b3db44b0b60d4aa67e2c705dc92d0f105cd948',
-  commerce_delivery_owner_revision_delete_guard: '8ec4759f31ac8ef627540b38625716146a207b3148a85aedeb17789a4be5f3b7',
-  commerce_delivery_owner_revision_departure: '8dda9c6b40f0dd6f90f23a0c99240f822a4d31acf3ba2bae020d65017db811d8',
-  commerce_delivery_owner_revision_insert: '077b04d7a03627aae9d6682afd1e8e3051fc955c9218d58ce50c3966314c4b7c',
-  commerce_delivery_owner_revision_insert_guard: 'd907d773cda243f0aa33d4f91c6974b5d27296f40e21cb20e39c4248fb89f1ff',
-  commerce_delivery_owner_revision_path: '87a255cadf25e3783bc9899e46efdeff9a7d66af9c6e28156ec6be246dbbca59',
-  commerce_delivery_owner_revision_update_guard: '2dd28173ec6f7db767181fc6cddac53e15fd863e149b59365497eaf51bf5b91f',
-});
-const DOCUMENT_PATH_REVISION_SCHEMA_FINGERPRINT = '42f79a74554f9e4b2972ed201a410831af814ad5c5d83bed2efbcf5f4b245926';
-const DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
-  commerce_document_path_revision_delete: '758e743aee5c022d52a902753d53d9b0ce9eec1e28387f049cda87c280c3c2f8',
-  commerce_document_path_revision_delete_guard: 'bd0013872b66a14fcf62ef56ad879820a8db2809e382c39988951a9e576fee01',
-  commerce_document_path_revision_insert: 'aaff9c60e93c89324dd22ff69cf4fc464b23cfb0d31aa566e2785d4bc9a945cd',
-  commerce_document_path_revision_insert_guard: '7cb5d8ad678cb5a9e3a85360da0349beb4708e41a69a2932124d30250a25e5c8',
-  commerce_document_path_revision_path_departure: '4a52b4b3f42e69e3bb1d2d4677337f1cb8271b3e750effa38dd9ee46e5669f1e',
-  commerce_document_path_revision_update: '666f6fe344b6d8a32520ce68483b6a99cce7cbfd58f1448fb7cbb0ab2bf9c54f',
-  commerce_document_path_revision_update_guard: '1c50faac9f28884b0c63a981861a870c4ac24c81aaf79deb4b3c38ae063720cf',
-});
-const DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT = '4d4dbe364e9ffcae153407fd64732d1593adf240d59f06d7b05837f61c5ce106';
-const LEASE_SCHEMA_FINGERPRINT = 'a243cba949108449376cf4df9b99eadb75d80e118120dd367f093636e57eb752';
-const WIPE_GUARD_SCHEMA_FINGERPRINT = 'b6aca59498285edd6d66adb915170774a8fb17903802bcce4c783b81317cb40a';
-const INVENTORY_TABLE_SCHEMA_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
-  commerce_authority_control: '56e85468c566ce15194d936c2a4e71da19973420e0b51631e5088d226ccad794',
-  commerce_inventory_drops: '0d7e041097d610fd56347c7041916ed093d9daad1a7e998192098d7c6188f841',
-  commerce_available_dudes: '566abda64362ec252f4dbfa5738cf94964dee392c60c88ab53cf826e53958628',
-});
-const INVENTORY_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
-  commerce_inventory_drop_insert_guard: '0dee5e9624568019fd0f8ab5df005c17ac6693855fea12f393e0a313687ed480',
-  commerce_inventory_drop_update_guard: 'bad6152a599de6ea051984d96e4221170687b68733c81798e46243b8a5b8ac7f',
-  commerce_inventory_drop_delete_guard: 'b983b9d424bbddcd5788d83667c99c92c36fc5639e1ad126e30b07b4238f84cb',
-  commerce_available_dude_insert_guard: 'd1c5d9e4b6077e10a7b0fa1c24d3cf3a57029532290b766e2911aac5f2b08b73',
-  commerce_available_dude_update_guard: '2130fd3767482323bad5255db8e03af5cc50292921cf16d5825714d9d76a2a54',
-  commerce_available_dude_delete_guard: '2dc3cc3ef3b6c68aa2a392a063135411127ae299dfd490f8db3e00e5636c83a4',
-  commerce_dude_inventory_mode_guard: '0ead2fac0102823fd8a5e391692d746d1ad11658352a14e31179cbd44ce75636',
-  commerce_dude_inventory_resume_guard: '7999f72d6f05b67963540e20bc20d6f657accc9e33bc380480ec900692b4daa6',
-  commerce_dude_pool_insert_fence: 'ac36b14758fb354600e977dfd5fc974f048725076fffa1105ad880c834950a21',
-  commerce_dude_pool_update_fence: '7991f212aa00ed7bca2a85e083600df3a796f9976104c5d0b458744cd9169413',
-  commerce_dude_assignment_inventory_guard: '69cc411cd7bdbfb77283c3bdba4e18f50f0a16f72007c848ab2cfe21a2b9a557',
-  commerce_dude_assignment_consume_inventory: 'f91f17ad32a84cb2fa3474608b2c8c258c853e55e1f9c585ee4c1b9fd0bb2991',
-  commerce_dude_assignment_update_guard: '6b6bda941dcd1a028c08b930378053164d52f595e4722c8f287e62d65f6ef2f3',
-  commerce_dude_assignment_delete_guard: 'e8a6a8d3f8e2597282ac5f0cc2ca39a1dddf1123435a61372de12adabed42557',
-});
-const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
-  commerce_delivery_orders_buyer_notifications_pending: `CREATE INDEX
-    commerce_delivery_orders_buyer_notifications_pending ON commerce_documents (document_path)
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-      buyer_notification_state = 'pending'`,
-  commerce_delivery_orders_buyer_notifications_pending_owner_path: `CREATE INDEX
-    commerce_delivery_orders_buyer_notifications_pending_owner_path ON commerce_documents (owner, document_path)
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-      buyer_notification_state = 'pending'`,
-  commerce_delivery_orders_shipper_notifications_pending: `CREATE INDEX
-    commerce_delivery_orders_shipper_notifications_pending ON commerce_documents (document_path)
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-      shipper_notification_state = 'pending'`,
-  commerce_delivery_orders_shipper_notifications_pending_owner_path: `CREATE INDEX
-    commerce_delivery_orders_shipper_notifications_pending_owner_path ON commerce_documents (owner, document_path)
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-      shipper_notification_state = 'pending'`,
-});
-const DELIVERY_RECOVERY_INDEX_SQL = `CREATE INDEX commerce_documents_delivery_owner_status
-  ON commerce_documents (document_kind, owner, status, document_path)`;
-const SHIPMENT_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
-  commerce_delivery_orders_shipment_cursor: `CREATE INDEX commerce_delivery_orders_shipment_cursor
-    ON commerce_documents (owner, shipment_sort_at_ms DESC, document_path DESC)
-    WHERE document_kind = 'delivery_order'
-      AND status IN ('processing', 'ready_to_ship')
-      AND source IS NOT 'admin_irl_redeem'`,
-  commerce_delivery_orders_shipment_session: `CREATE INDEX commerce_delivery_orders_shipment_session
-    ON commerce_documents (owner, json_extract(document_json, '$.stripeCheckoutSessionId'))
-    WHERE document_kind = 'delivery_order'
-      AND status IN ('processing', 'ready_to_ship')
-      AND source IS NOT 'admin_irl_redeem'`,
-});
-const MANUAL_REVIEW_CURSOR_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_manual_review_cursor
-  ON commerce_documents (
-    drop_id,
-    manual_review_sort_at_ms DESC,
-    manual_review_session_id COLLATE BINARY DESC,
-    document_path COLLATE BINARY DESC
-  )
-  WHERE document_kind = 'stripe_checkout'
-    AND status = 'fulfillment_failed'
-    AND manual_refund_review_required = 1
-    AND json_type(document_json, '$.manualRefundReviewRequired') = 'true'`;
-const STRIPE_RECONCILIATION_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_reconciliation_due
-  ON commerce_documents (
-    CAST(json_extract(document_json, '$.updatedAt') AS INTEGER),
-    document_path
-  )
-  WHERE
-    document_kind = 'stripe_checkout' AND
-    fulfillment_processor = 'cloudflare_queue_v1' AND
-    status IN ('fulfillment_pending', 'processing')`;
-const STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL = `CREATE INDEX commerce_stripe_terminal_notifications_due
-  ON commerce_documents (
-    CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
-    document_path
-  )
-  WHERE
-    document_kind = 'stripe_checkout' AND
-    (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
-    json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending'`;
-const STRIPE_IDENTITY_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
-  commerce_documents_stripe_payment_intent: `CREATE INDEX commerce_documents_stripe_payment_intent
-    ON commerce_documents (json_extract(document_json, '$.stripePaymentIntentId'))
-    WHERE document_kind IN ('stripe_checkout', 'delivery_order')`,
-  commerce_stripe_checkouts_session_id: `CREATE INDEX commerce_stripe_checkouts_session_id
-    ON commerce_documents (document_id)
-    WHERE document_kind = 'stripe_checkout'`,
-  commerce_stripe_delivery_orders_session_id: `CREATE INDEX commerce_stripe_delivery_orders_session_id
-    ON commerce_documents (source, json_extract(document_json, '$.stripeCheckoutSessionId'))
-    WHERE document_kind = 'delivery_order'`,
-});
-const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_redeem_workflow_operation
-  ON commerce_documents (
-    json_extract(document_json, '$.workflowFinalizeV1.operationId'),
-    document_path
-  )
-  WHERE document_kind = 'admin_irl_redeem_request'`;
-const RECEIPT_CLAIM_WORKFLOW_INDEX_SQL = {
-  commerce_receipt_claim_workflow_operation: `CREATE UNIQUE INDEX commerce_receipt_claim_workflow_operation
-    ON commerce_documents (json_extract(document_json, '$.receiptClaimWorkflowV1.operationId'))
-    WHERE document_kind = 'claim_code'`,
-  commerce_receipt_claim_workflow_due: `CREATE INDEX commerce_receipt_claim_workflow_due
-    ON commerce_documents (json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path)
-    WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.phase') = 'pending'`,
-};
-const READY_NOTIFICATION_DUE_INDEX_SQL = `CREATE INDEX commerce_ready_notifications_due
-  ON commerce_documents (
-    CASE WHEN
-      json_type(document_json, '$.readyToShipNotificationPublishClaimId') = 'text' AND
-      json_extract(document_json, '$.readyToShipNotificationPublishClaimId') <> '' AND
-      json_type(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') IN ('integer', 'real') AND
-      json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') BETWEEN 0 AND 9007199254740991 AND
-      json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') = CAST(json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') AS INTEGER)
-    THEN CAST(json_extract(document_json, '$.readyToShipNotificationPublishClaimExpiresAtMs') AS INTEGER) ELSE 0 END,
-    document_path
-  )
-  WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-    (buyer_notification_state = 'pending' OR shipper_notification_state = 'pending')`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -368,22 +84,13 @@ function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: str
 
 export type CheckCommerceD1Query = typeof defaultQueryRemoteCommerceD1;
 
-type CommerceSchemaGroup =
-  | 'commerce_trigger'
-  | 'delivery_owner_revision_trigger'
-  | 'document_path_revision_trigger'
-  | 'pending_ready_notification_index';
-
 function createCommerceSchemaCatalog(query: CheckCommerceD1Query) {
   type Rows = ReturnType<CheckCommerceD1Query>;
   let catalog: { rows: Rows; objects: Map<string, Rows> } | undefined;
   const load = () => {
     if (catalog) return catalog;
     const rows = query(`SELECT type, name, sql,
-      type = 'trigger' AND name LIKE 'commerce_%' AS commerce_trigger,
-      type = 'trigger' AND name GLOB 'commerce_delivery_owner_revision_*' AS delivery_owner_revision_trigger,
-      type = 'trigger' AND name GLOB 'commerce_document_path_revision_*' AS document_path_revision_trigger,
-      type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*' AS pending_ready_notification_index
+      type = 'trigger' AND name LIKE 'commerce_%' AS commerce_trigger
       FROM sqlite_schema ORDER BY name`);
     const objects = new Map<string, Rows>();
     for (const row of rows) {
@@ -397,8 +104,49 @@ function createCommerceSchemaCatalog(query: CheckCommerceD1Query) {
   };
   return {
     get: (type: string, name: string): Rows => load().objects.get(`${type}:${name}`) || [],
-    group: (group: CommerceSchemaGroup): Rows => load().rows.filter((row) => row[group] === 1),
+    commerceTriggers: (): Rows => load().rows.filter((row) => row.commerce_trigger === 1),
   };
+}
+
+function validateCommerceSchema(
+  manifest: CommerceSchemaManifest,
+  checkpoint: CommerceSchemaCheckpoint,
+  catalog: ReturnType<typeof createCommerceSchemaCatalog>,
+  query: CheckCommerceD1Query,
+  migration: string,
+): void {
+  const invalidObject = (name: string): never => fail(`Commerce D1 schema ${name} is invalid at ${migration}.`);
+  const expected = new Set(checkpoint.objects.map(({ type, name }) => `${type}:${name}`));
+  for (const { type, name, fingerprint } of checkpoint.objects) {
+    const rows = catalog.get(type, name);
+    if (rows.length !== 1 || typeof rows[0].sql !== 'string' || sqlSchemaFingerprint(rows[0].sql) !== fingerprint) {
+      invalidObject(name);
+    }
+  }
+  const historicalObjects = new Map(Object.values(manifest.checkpoints)
+    .flatMap((version) => version.objects).map((object) => [`${object.type}:${object.name}`, object]));
+  for (const [key, { type, name }] of historicalObjects) {
+    if (!expected.has(key) && catalog.get(type, name).length) invalidObject(name);
+  }
+  const tables = query(`SELECT name, strict
+    FROM pragma_table_list
+    WHERE schema = 'main' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '_cf_*'
+      AND name <> 'd1_migrations'
+    ORDER BY name`);
+  const expectedTables = checkpoint.objects.filter(({ type }) => type === 'table').map(({ name }) => name).sort();
+  if (tables.length !== expectedTables.length || tables.some((row, index) => row.name !== expectedTables[index] || row.strict !== 1)) {
+    fail('Commerce D1 authoritative strict table inventory is invalid.');
+  }
+  const expectedTriggers = new Set(checkpoint.objects.filter(({ type, name }) =>
+    type === 'trigger' && /^commerce./i.test(name)).map(({ name }) => name));
+  const triggers = catalog.commerceTriggers();
+  if (triggers.length !== expectedTriggers.size || triggers.some((row) => !expectedTriggers.has(String(row.name)))) {
+    fail('Commerce D1 trigger inventory is invalid.');
+  }
+  if (checkpoint.preorderCardIds) {
+    const cards = query('SELECT card_id FROM commerce_preorder_cards ORDER BY card_id').map((row) => row.card_id);
+    if (!isDeepStrictEqual(cards, checkpoint.preorderCardIds)) fail('Commerce D1 preorder catalog is invalid.');
+  }
 }
 
 function legacyCheckoutQuery(query: CommerceSqlQuery): CommerceSqlQuery {
@@ -431,163 +179,24 @@ export function checkCommerceD1(
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
   if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
 
+  const manifest = readCommerceSchemaManifest();
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
-  if (
-    (migrations.length < 13 || migrations.length > 31) ||
-    migrations[0].name !== '0001_current_schema.sql' ||
-    migrations[1].name !== '0002_authority_control_lease.sql' ||
-    migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
-    migrations[3].name !== '0004_ready_notification_owner_indexes.sql' ||
-    migrations[4].name !== '0005_delivery_owner_query_revisions.sql' ||
-    migrations[5].name !== '0006_document_path_revisions.sql' ||
-    migrations[6].name !== '0007_stripe_terminal_notifications.sql' ||
-    migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql' ||
-    migrations[8].name !== '0009_ready_notification_due_index.sql' ||
-    migrations[9].name !== '0010_dude_inventory.sql' ||
-    migrations[10].name !== '0011_stripe_order_disputes.sql' ||
-    migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql' ||
-    migrations[12].name !== '0013_notification_outbox.sql' ||
-    (migrations.length >= 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql') ||
-    (migrations.length >= 15 && migrations[14].name !== '0015_manual_review_pagination.sql') ||
-    (migrations.length >= 16 && migrations[15].name !== '0016_shipment_history_pagination.sql') ||
-    (migrations.length >= 17 && migrations[16].name !== '0017_receipt_claim_workflow.sql') ||
-    (migrations.length >= 18 && migrations[17].name !== '0018_preorders.sql') ||
-    (migrations.length >= 19 && migrations[18].name !== '0019_preorder_buyer_index.sql') ||
-    (migrations.length >= 20 && migrations[19].name !== '0020_preorder_expiry_index.sql') ||
-    (migrations.length >= 21 && migrations[20].name !== '0021_preorder_ethereum_ownership.sql') ||
-    (migrations.length >= 22 && migrations[21].name !== '0022_preorder_confirmation.sql') ||
-    (migrations.length >= 23 && migrations[22].name !== '0023_preorder_card_range.sql') ||
-    (migrations.length >= 24 && migrations[23].name !== '0024_preorder_card_range_1400.sql') ||
-    (migrations.length >= 25 && migrations[24].name !== '0025_preorder_scoped_expiry.sql') ||
-    (migrations.length >= 26 && migrations[25].name !== '0026_stripe_checkout_state.sql') ||
-    (migrations.length >= 27 && migrations[26].name !== '0027_preorder_expiry_claim_release.sql') ||
-    (migrations.length >= 28 && migrations[27].name !== '0028_preorder_card_range_1413.sql') ||
-    (migrations.length >= 29 && migrations[28].name !== '0029_pack_status_outbox.sql') ||
-    (migrations.length >= 30 && migrations[29].name !== '0030_delivery_recovery.sql') ||
-    (migrations.length >= 31 && migrations[30].name !== '0031_preorder_card_range_1419.sql')
-  ) {
-    fail('Commerce D1 schema baseline is invalid.');
+  const checkpoint = selectCommerceSchemaCheckpoint(manifest, migrations.map((migration) => migration.name));
+  if (options.forDeployment && migrations.length !== manifest.migrations.length) {
+    fail(`Commerce D1 deployment requires the latest migration: ${manifest.migrations.at(-1)!.name}.`);
   }
-  const legacyNotificationIndexesRemoved = migrations.some((migration) =>
-    migration.name === '0014_drop_legacy_notification_indexes.sql');
-  const stripeCheckoutStateReady = migrations.some((migration) => migration.name === '0026_stripe_checkout_state.sql');
-  const deliveryRecoveryStateReady = migrations.some((migration) => migration.name === '0030_delivery_recovery.sql');
-  const packStatusOutboxReady = migrations.some((migration) => migration.name === '0029_pack_status_outbox.sql');
-  const manualReviewPaginationReady = migrations.some((migration) =>
-    migration.name === '0015_manual_review_pagination.sql');
-  if (options.forDeployment && !manualReviewPaginationReady) {
-    fail('Commerce D1 manual-review pagination migration is required for deployment.');
+  if (options.forDeployment && !isDeepStrictEqual(checkpoint.preorderCardIds, PREORDER_CARD_IDS)) {
+    fail('Commerce D1 deployment catalog differs from the generated application catalog.');
   }
-  const shipmentPaginationReady = migrations.some((migration) =>
-    migration.name === '0016_shipment_history_pagination.sql');
-  if (options.forDeployment && !shipmentPaginationReady) {
-    fail('Commerce D1 shipment-history pagination migration is required for deployment.');
-  }
-  const receiptClaimWorkflowReady = migrations.some((migration) => migration.name === '0017_receipt_claim_workflow.sql');
-  if (options.forDeployment && !receiptClaimWorkflowReady) fail('Commerce D1 receipt claim Workflow migration is required for deployment.');
+  const hasMigration = (name: string) => migrations.some((migration) => migration.name === name);
+  const stripeCheckoutStateReady = hasMigration('0026_stripe_checkout_state.sql');
+  const deliveryRecoveryStateReady = hasMigration('0030_delivery_recovery.sql');
+  const packStatusOutboxReady = hasMigration('0029_pack_status_outbox.sql');
+  const manualReviewPaginationReady = hasMigration('0015_manual_review_pagination.sql');
+  const shipmentPaginationReady = hasMigration('0016_shipment_history_pagination.sql');
+  const receiptClaimWorkflowReady = hasMigration('0017_receipt_claim_workflow.sql');
+  validateCommerceSchema(manifest, checkpoint, schemaCatalog, queryRemoteCommerceD1, String(migrations.at(-1)!.name));
 
-  const preordersReady = migrations.some((migration) => migration.name === '0018_preorders.sql');
-  const preorderEthereumReady = migrations.some((migration) => migration.name === '0021_preorder_ethereum_ownership.sql');
-  const preorderConfirmationReady = migrations.some((migration) => migration.name === '0022_preorder_confirmation.sql');
-  const preorderCardRangeReady = migrations.some((migration) => migration.name === '0023_preorder_card_range.sql');
-  const preorderCardRange1400Ready = migrations.some((migration) => migration.name === '0024_preorder_card_range_1400.sql');
-  const preorderExpiryClaimReleaseReady = migrations.some((migration) => migration.name === '0027_preorder_expiry_claim_release.sql');
-  const preorderCardRange1413Ready = migrations.some((migration) => migration.name === '0028_preorder_card_range_1413.sql');
-  const preorderCardRange1419Ready = migrations.some((migration) => migration.name === '0031_preorder_card_range_1419.sql');
-  const preorderSchema = preorderCardRange1419Ready ? PREORDER_CARD_RANGE_1419_SCHEMA_FINGERPRINTS
-    : preorderCardRange1413Ready ? PREORDER_CARD_RANGE_1413_SCHEMA_FINGERPRINTS
-    : preorderExpiryClaimReleaseReady ? PREORDER_EXPIRY_CLAIM_RELEASE_SCHEMA_FINGERPRINTS
-    : preorderCardRange1400Ready ? PREORDER_CARD_RANGE_1400_SCHEMA_FINGERPRINTS
-    : preorderCardRangeReady ? PREORDER_CARD_RANGE_SCHEMA_FINGERPRINTS
-    : preorderConfirmationReady ? PREORDER_CONFIRMATION_SCHEMA_FINGERPRINTS
-    : preorderEthereumReady ? PREORDER_ETHEREUM_SCHEMA_FINGERPRINTS : PREORDER_SCHEMA_FINGERPRINTS;
-  if (options.forDeployment && !preordersReady) fail('Commerce D1 preorder migration is required for deployment.');
-  if (preordersReady) for (const [name, [type, fingerprint]] of Object.entries(preorderSchema)) {
-    const schema = schemaCatalog.get(type, name);
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Commerce D1 preorder schema ${name} is invalid.`);
-  }
-  const preorderBuyerIndexReady = migrations.some((migration) => migration.name === '0019_preorder_buyer_index.sql');
-  if (options.forDeployment && !preorderBuyerIndexReady) fail('Commerce D1 preorder buyer index migration is required for deployment.');
-  if (preorderBuyerIndexReady) {
-    const schema = schemaCatalog.get('index', 'commerce_preorder_succeeded_buyer');
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== PREORDER_BUYER_INDEX_FINGERPRINT) {
-      fail('Commerce D1 preorder buyer index is invalid.');
-    }
-  }
-  const preorderExpiryIndexReady = migrations.some((migration) => migration.name === '0020_preorder_expiry_index.sql');
-  const preorderScopedExpiryReady = migrations.some((migration) => migration.name === '0025_preorder_scoped_expiry.sql');
-  if (options.forDeployment && !preorderExpiryIndexReady) fail('Commerce D1 preorder expiry index migration is required for deployment.');
-  if (preorderExpiryIndexReady) {
-    const schema = schemaCatalog.get('index', 'commerce_preorder_prepared_expiry');
-    const fingerprint = preorderScopedExpiryReady ? PREORDER_SCOPED_EXPIRY_INDEX_FINGERPRINT : PREORDER_EXPIRY_INDEX_FINGERPRINT;
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) {
-      fail('Commerce D1 preorder expiry index is invalid.');
-    }
-  }
-  if (options.forDeployment && !preorderEthereumReady) fail('Commerce D1 preorder Ethereum ownership migration is required for deployment.');
-  if (options.forDeployment && !preorderConfirmationReady) fail('Commerce D1 preorder confirmation migration is required for deployment.');
-  if (options.forDeployment && !preorderCardRangeReady) fail('Commerce D1 preorder card range migration is required for deployment.');
-  if (options.forDeployment && !preorderCardRange1400Ready) fail('Commerce D1 preorder card range 1400 migration is required for deployment.');
-  if (options.forDeployment && !preorderScopedExpiryReady) fail('Commerce D1 preorder scoped expiry migration is required for deployment.');
-  if (options.forDeployment && !stripeCheckoutStateReady) fail('Commerce D1 Stripe checkout state migration is required for deployment.');
-  if (options.forDeployment && !preorderExpiryClaimReleaseReady) fail('Commerce D1 preorder expiry claim release migration is required for deployment.');
-  if (options.forDeployment && !preorderCardRange1413Ready) fail('Commerce D1 preorder card range 1413 migration is required for deployment.');
-  if (options.forDeployment && !packStatusOutboxReady) fail('Commerce D1 pack-status outbox migration is required for deployment.');
-  if (options.forDeployment && !deliveryRecoveryStateReady) fail('Commerce D1 delivery recovery migration is required for deployment.');
-  if (options.forDeployment && !preorderCardRange1419Ready) fail('Commerce D1 preorder card range 1419 migration is required for deployment.');
-  if (deliveryRecoveryStateReady) for (const [name, [type, fingerprint]] of Object.entries(DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS)) {
-    const schema = schemaCatalog.get(type, name);
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Delivery recovery state schema is invalid: ${name}.`);
-  }
-  if (stripeCheckoutStateReady) for (const [name, [type, fingerprint]] of Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS)) {
-    if (name === 'commerce_stripe_checkouts_manual_review_cursor' || (deliveryRecoveryStateReady && name === 'commerce_commit_guards')) continue;
-    const schema = schemaCatalog.get(type, name);
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Stripe checkout state schema is invalid: ${name}.`);
-  }
-  if (packStatusOutboxReady) for (const [name, [type, fingerprint]] of Object.entries(PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS)) {
-    const schema = schemaCatalog.get(type, name);
-    if (schema.length !== 1 || sqlSchemaFingerprint(String(schema[0].sql)) !== fingerprint) fail(`Pack-status outbox schema is invalid: ${name}.`);
-  }
-
-  const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
-    FROM pragma_table_list
-    WHERE schema = 'main' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '_cf_*'
-      AND name <> 'd1_migrations'
-    ORDER BY name`);
-  const requiredTables = [
-    'commerce_authority_control',
-    'commerce_authority_control_lease',
-    'commerce_available_dudes',
-    'commerce_commit_guards',
-    'commerce_delivery_owner_revisions',
-    ...(deliveryRecoveryStateReady ? ['commerce_delivery_recovery', 'commerce_delivery_recovery_control'] : []),
-    'commerce_document_path_revisions',
-    'commerce_documents',
-    'commerce_inventory_drops',
-    'commerce_notification_outbox',
-    'commerce_notification_outbox_control',
-    'commerce_notification_outbox_pending_owners',
-    'commerce_notification_outbox_stripe_due',
-    ...(packStatusOutboxReady ? ['commerce_pack_status_outbox', 'commerce_pack_status_outbox_control'] : []),
-    ...(preordersReady ? ['commerce_preorder_claims', 'commerce_preorder_orders'] : []),
-    ...(stripeCheckoutStateReady ? ['commerce_stripe_checkout_state', 'commerce_stripe_checkout_state_control'] : []),
-    'commerce_wipe_guards',
-    'stripe_order_disputes',
-  ];
-  if (
-    authoritativeTables.length !== requiredTables.length ||
-    authoritativeTables.some((row, index) => row.name !== requiredTables[index] || row.strict !== 1)
-  ) {
-    fail('Commerce D1 authoritative strict table inventory is invalid.');
-  }
-  const chargebackSchema = schemaCatalog.get('table', 'stripe_order_disputes');
-  const chargebackIndex = schemaCatalog.get('index', 'stripe_order_disputes_drop_session');
-  if (chargebackSchema.length !== 1 ||
-    sqlSchemaFingerprint(String(chargebackSchema[0].sql)) !== '722711e091525e0b50cced4e2c85593574bc0dbcc471f9232f156db94de5754f' ||
-    chargebackIndex.length !== 1 ||
-    sqlSchemaFingerprint(String(chargebackIndex[0].sql)) !== '6f82bc70a76c4d1d960e01da07a6a9df42c067965134d4cd68a5abf0d4b3600e') {
-    fail('Stripe chargeback history schema is invalid.');
-  }
   for (const row of queryRemoteCommerceD1('SELECT * FROM stripe_order_disputes')) {
     if ((row.livemode !== 0 && row.livemode !== 1) || !isStripeChargebackSessionId(row.session_id) ||
       row.session_id.startsWith('cs_live_') !== (row.livemode === 1) || !isStripeDisputeId(row.dispute_id) ||
@@ -644,53 +253,6 @@ export function checkCommerceD1(
     }
   }
 
-  const authorityColumns = queryRemoteCommerceD1(
-    "SELECT name FROM pragma_table_info('commerce_authority_control') ORDER BY cid",
-  ).map((row) => String(row.name));
-  const commitGuardColumns = queryRemoteCommerceD1(
-    "SELECT name FROM pragma_table_info('commerce_commit_guards') ORDER BY cid",
-  ).map((row) => String(row.name));
-  const documentPathRevisionColumns = queryRemoteCommerceD1(
-    "SELECT name FROM pragma_table_info('commerce_document_path_revisions') ORDER BY cid",
-  ).map((row) => String(row.name));
-  const leaseColumns = queryRemoteCommerceD1(
-    "SELECT name FROM pragma_table_info('commerce_authority_control_lease') ORDER BY cid",
-  ).map((row) => String(row.name));
-  const wipeGuardColumns = queryRemoteCommerceD1(
-    "SELECT name FROM pragma_table_info('commerce_wipe_guards') ORDER BY cid",
-  ).map((row) => String(row.name));
-  const leaseSchema = schemaCatalog.get('table', 'commerce_authority_control_lease');
-  const leaseFingerprint = leaseSchema.length === 1
-    ? sqlSchemaFingerprint(String(leaseSchema[0].sql || ''))
-    : '';
-  const wipeGuardSchema = schemaCatalog.get('trigger', 'commerce_wipe_guard_validate');
-  const wipeGuardFingerprint = wipeGuardSchema.length === 1
-    ? sqlSchemaFingerprint(String(wipeGuardSchema[0].sql || ''))
-    : '';
-  const authorityUpdateGuardSchema = schemaCatalog.get('trigger', 'commerce_authority_update_guard');
-  const authorityUpdateGuardFingerprint = authorityUpdateGuardSchema.length === 1
-    ? sqlSchemaFingerprint(String(authorityUpdateGuardSchema[0].sql || ''))
-    : '';
-  const commitGuardSchema = schemaCatalog.get('trigger', 'commerce_commit_guard_validate');
-  const commitGuardFingerprint = commitGuardSchema.length === 1
-    ? sqlSchemaFingerprint(String(commitGuardSchema[0].sql || ''))
-    : '';
-  const commitGuardTableSchema = schemaCatalog.get('table', 'commerce_commit_guards');
-  const commitGuardTableFingerprint = commitGuardTableSchema.length === 1
-    ? sqlSchemaFingerprint(String(commitGuardTableSchema[0].sql || ''))
-    : '';
-  const deliveryOwnerRevisionSchema = schemaCatalog.get('table', 'commerce_delivery_owner_revisions');
-  const deliveryOwnerRevisionFingerprint = deliveryOwnerRevisionSchema.length === 1
-    ? sqlSchemaFingerprint(String(deliveryOwnerRevisionSchema[0].sql || ''))
-    : '';
-  const documentPathRevisionSchema = schemaCatalog.get('table', 'commerce_document_path_revisions');
-  const documentPathRevisionFingerprint = documentPathRevisionSchema.length === 1
-    ? sqlSchemaFingerprint(String(documentPathRevisionSchema[0].sql || ''))
-    : '';
-  const documentVersionUpdateGuardSchema = schemaCatalog.get('trigger', 'commerce_documents_version_update_guard');
-  const documentVersionUpdateGuardFingerprint = documentVersionUpdateGuardSchema.length === 1
-    ? sqlSchemaFingerprint(String(documentVersionUpdateGuardSchema[0].sql || ''))
-    : '';
   const leaseRows = queryRemoteCommerceD1('SELECT lease_token, acquired_at_ms, expires_at_ms FROM commerce_authority_control_lease');
   if (leaseRows.length > 1 || leaseRows.some((row) => {
     const acquiredAtMs = safeInteger(row.acquired_at_ms, 'Commerce authority lease acquisition');
@@ -721,20 +283,6 @@ export function checkCommerceD1(
           ON path_revision.document_path = document.document_path
         WHERE path_revision.document_path IS NULL) AS missing_live_count`);
   if (
-    authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms,dude_inventory_mode' ||
-    commitGuardColumns.join(',') !==
-      `guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json,notification_outbox_expectations_json${stripeCheckoutStateReady ? ',stripe_checkout_paths_json' : ''}${deliveryRecoveryStateReady ? ',delivery_recovery_expectations_json,delivery_recovery_paths_json' : ''}` ||
-    documentPathRevisionColumns.join(',') !== 'document_path,revision' ||
-    leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
-    wipeGuardColumns.join(',') !== `guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision${deliveryRecoveryStateReady ? ',delivery_recovery_expectations_json' : ''}` ||
-    authorityUpdateGuardFingerprint !== AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
-    commitGuardFingerprint !== COMMIT_GUARD_SCHEMA_FINGERPRINT ||
-    commitGuardTableFingerprint !== (deliveryRecoveryStateReady ? DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS.commerce_commit_guards[1] : stripeCheckoutStateReady ? STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS.commerce_commit_guards[1] : COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT) ||
-    deliveryOwnerRevisionFingerprint !== DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT ||
-    documentPathRevisionFingerprint !== DOCUMENT_PATH_REVISION_SCHEMA_FINGERPRINT ||
-    documentVersionUpdateGuardFingerprint !== DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
-    leaseFingerprint !== LEASE_SCHEMA_FINGERPRINT ||
-    wipeGuardFingerprint !== WIPE_GUARD_SCHEMA_FINGERPRINT ||
     identityState.length !== 1 ||
     safeInteger(identityState[0].root_uid_count, 'Commerce root UID count') !== 0 ||
     commitGuardState.length !== 1 ||
@@ -747,58 +295,6 @@ export function checkCommerceD1(
     safeInteger(documentPathRevisionState[0].future_count, 'Commerce future document-path revision count') !== 0 ||
     safeInteger(documentPathRevisionState[0].missing_live_count, 'Commerce missing live path-revision count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
-
-  const requiredTriggers = new Set([
-    ...(deliveryRecoveryStateReady ? Object.entries(DELIVERY_RECOVERY_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
-    ...(packStatusOutboxReady ? Object.entries(PACK_STATUS_OUTBOX_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
-    ...(stripeCheckoutStateReady ? Object.entries(STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
-    ...(preordersReady ? Object.entries(preorderSchema).filter(([, [type]]) => type === 'trigger').map(([name]) => name) : []),
-    'commerce_authority_transition_guard',
-    'commerce_authority_update_guard',
-    'commerce_authority_delete_guard',
-    'commerce_authority_revision_guard',
-    'commerce_commit_guard_validate',
-    'commerce_wipe_guard_validate',
-    'commerce_documents_insert_authority_guard',
-    'commerce_documents_update_authority_guard',
-    'commerce_documents_delete_authority_guard',
-    'commerce_documents_identity_insert_guard',
-    'commerce_documents_identity_update_guard',
-    'commerce_documents_version_update_guard',
-    'commerce_document_path_revision_delete',
-    'commerce_document_path_revision_delete_guard',
-    'commerce_document_path_revision_insert',
-    'commerce_document_path_revision_insert_guard',
-    'commerce_document_path_revision_path_departure',
-    'commerce_document_path_revision_update',
-    'commerce_document_path_revision_update_guard',
-    'commerce_delivery_owner_revision_arrival',
-    'commerce_delivery_owner_revision_delete',
-    'commerce_delivery_owner_revision_delete_guard',
-    'commerce_delivery_owner_revision_departure',
-    'commerce_delivery_owner_revision_insert',
-    'commerce_delivery_owner_revision_insert_guard',
-    'commerce_delivery_owner_revision_path',
-    'commerce_delivery_owner_revision_update_guard',
-    ...Object.keys(INVENTORY_TRIGGER_FINGERPRINTS),
-    ...Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS).filter(([, [type]]) => type === 'trigger').map(([name]) => name),
-  ]);
-  const triggers = schemaCatalog.group('commerce_trigger');
-  if (
-    triggers.length !== requiredTriggers.size ||
-    triggers.some((row) => !requiredTriggers.has(String(row.name)))
-  ) fail('Commerce D1 trigger inventory is invalid.');
-
-  for (const [type, fingerprints] of [
-    ['table', INVENTORY_TABLE_SCHEMA_FINGERPRINTS],
-    ['trigger', INVENTORY_TRIGGER_FINGERPRINTS],
-  ] as const) {
-    const inventorySchema = Object.keys(fingerprints).flatMap((name) => schemaCatalog.get(type, name));
-    if (
-      inventorySchema.length !== Object.keys(fingerprints).length ||
-      inventorySchema.some((row) => sqlSchemaFingerprint(String(row.sql || '')) !== fingerprints[String(row.name)])
-    ) fail(`Commerce D1 inventory ${type} schema is invalid.`);
-  }
 
   const inventory = queryRemoteCommerceD1(`SELECT inventory.*,
       (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = inventory.drop_id) AS available_count,
@@ -833,67 +329,7 @@ export function checkCommerceD1(
       !readyInventoryDrops.has(String(document.drop_id)))
   )) fail('Commerce D1 inventory initialization is incomplete.');
 
-  const deliveryOwnerRevisionTriggers = schemaCatalog.group('delivery_owner_revision_trigger');
-  if (
-    deliveryOwnerRevisionTriggers.length !== Object.keys(DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS).length ||
-    deliveryOwnerRevisionTriggers.some((row) =>
-      sqlSchemaFingerprint(String(row.sql || '')) !== DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
-  ) fail('Commerce D1 delivery-owner revision triggers are invalid.');
-
-  const documentPathRevisionTriggers = schemaCatalog.group('document_path_revision_trigger');
-  if (
-    documentPathRevisionTriggers.length !== Object.keys(DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS).length ||
-    documentPathRevisionTriggers.some((row) =>
-      sqlSchemaFingerprint(String(row.sql || '')) !== DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
-  ) fail('Commerce D1 document-path revision triggers are invalid.');
-
-  const deliveryOwnerIndex = schemaCatalog.get('index', 'commerce_documents_delivery_owner_path');
-  const deliveryOwnerIndexSql = String(deliveryOwnerIndex[0]?.sql || '').replace(/\s+/g, ' ').trim();
-  if (
-    deliveryOwnerIndex.length !== 1 ||
-    deliveryOwnerIndexSql !== `CREATE INDEX commerce_documents_delivery_owner_path
-      ON commerce_documents (owner, document_path)
-      WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim()
-  ) fail('Commerce D1 delivery-owner partial index is invalid.');
-
-  const deliveryRecoveryIndex = schemaCatalog.get('index', 'commerce_documents_delivery_owner_status');
-  if (
-    deliveryRecoveryIndex.length !== 1 ||
-    normalizedSql(deliveryRecoveryIndex[0].sql) !== normalizedSql(DELIVERY_RECOVERY_INDEX_SQL)
-  ) fail('Commerce D1 delivery-recovery index is invalid.');
-
-  const stripeReconciliationIndex = schemaCatalog.get('index', 'commerce_stripe_checkouts_reconciliation_due');
-  if (
-    stripeReconciliationIndex.length !== 1 ||
-    normalizedSql(stripeReconciliationIndex[0].sql) !== normalizedSql(STRIPE_RECONCILIATION_INDEX_SQL)
-  ) fail('Commerce D1 Stripe-reconciliation index is invalid.');
-
-  const stripeTerminalNotificationIndex = schemaCatalog.get('index', 'commerce_stripe_terminal_notifications_due');
-  if (legacyNotificationIndexesRemoved ? stripeTerminalNotificationIndex.length !== 0 : (
-    stripeTerminalNotificationIndex.length !== 1 ||
-    normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
-  )) fail('Commerce D1 Stripe terminal-notification index is invalid.');
-
-  for (const [name, expectedSql] of Object.entries(STRIPE_IDENTITY_INDEX_SQL)) {
-    const index = schemaCatalog.get('index', name);
-    if (
-      index.length !== 1 ||
-      sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)
-    ) fail(`Commerce D1 Stripe identity index ${name} is invalid.`);
-  }
-
-  const adminIrlWorkflowOperationIndex = schemaCatalog.get('index', 'commerce_admin_irl_redeem_workflow_operation');
-  if (
-    adminIrlWorkflowOperationIndex.length !== 1 ||
-    normalizedSql(adminIrlWorkflowOperationIndex[0].sql) !== normalizedSql(ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL)
-  ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
   if (receiptClaimWorkflowReady) {
-    for (const [name, expectedSql] of Object.entries(RECEIPT_CLAIM_WORKFLOW_INDEX_SQL)) {
-      const index = schemaCatalog.get('index', name);
-      if (index.length !== 1 || sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)) {
-        fail(`Commerce D1 receipt claim Workflow index ${name} is invalid.`);
-      }
-    }
     requireSearchIndex(queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_operation
       WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') = 'src-v1-check'`),
     'commerce_receipt_claim_workflow_operation');
@@ -902,27 +338,6 @@ export function checkCommerceD1(
         AND json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs') <= 0
       ORDER BY json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path LIMIT 20`),
     'commerce_receipt_claim_workflow_due');
-  }
-
-  const readyNotificationDueIndex = schemaCatalog.get('index', 'commerce_ready_notifications_due');
-  if (legacyNotificationIndexesRemoved ? readyNotificationDueIndex.length !== 0 : (
-    readyNotificationDueIndex.length !== 1 ||
-    normalizedSql(readyNotificationDueIndex[0].sql) !== normalizedSql(READY_NOTIFICATION_DUE_INDEX_SQL)
-  )) fail('Commerce D1 due ready-notification index is invalid.');
-
-  const pendingReadyNotificationIndexes = schemaCatalog.group('pending_ready_notification_index');
-  if (legacyNotificationIndexesRemoved ? pendingReadyNotificationIndexes.length !== 0 : (
-    pendingReadyNotificationIndexes.length !== Object.keys(PENDING_READY_NOTIFICATION_INDEX_SQL).length ||
-    pendingReadyNotificationIndexes.some((row) =>
-      normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
-  )) fail('Commerce D1 pending ready-notification indexes are invalid.');
-
-  for (const [name, [type, fingerprint]] of Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS)) {
-    if (stripeCheckoutStateReady && name in STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS) continue;
-    const rows = schemaCatalog.get(type, name);
-    if (rows.length !== 1 || sqlSchemaFingerprint(String(rows[0].sql)) !== fingerprint) {
-      fail(`Notification outbox schema is invalid: ${name}.`);
-    }
   }
 
   const queryPlan = (query: CommerceSqlQuery) =>
@@ -946,17 +361,6 @@ export function checkCommerceD1(
     requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery summary');
   }
   if (shipmentPaginationReady) {
-    const sortColumns = queryRemoteCommerceD1(`SELECT type, hidden FROM pragma_table_xinfo('commerce_documents')
-      WHERE name = 'shipment_sort_at_ms'`);
-    if (sortColumns.length !== 1 || sortColumns[0].type !== 'REAL' || sortColumns[0].hidden !== 2) {
-      fail('Commerce D1 shipment-history sort projection is invalid.');
-    }
-    for (const [name, expectedSql] of Object.entries(SHIPMENT_INDEX_SQL)) {
-      const index = schemaCatalog.get('index', name);
-      if (index.length !== 1 || normalizedSql(index[0].sql) !== normalizedSql(expectedSql)) {
-        fail(`Commerce D1 shipment-history index ${name} is invalid.`);
-      }
-    }
     const owner = '11111111111111111111111111111111';
     for (const startAfter of [undefined, {
       version: 1 as const, owner, sortAtMs: 1, documentPath: 'drops/drop/deliveryOrders/1',
@@ -989,12 +393,6 @@ export function checkCommerceD1(
     'commerce_documents_fulfillment_status',
   );
   if (manualReviewPaginationReady) {
-    const index = schemaCatalog.get('index', 'commerce_stripe_checkouts_manual_review_cursor');
-    if (index.length !== 1 || (stripeCheckoutStateReady
-      ? sqlSchemaFingerprint(String(index[0].sql)) !== STRIPE_CHECKOUT_SCHEMA_FINGERPRINTS.commerce_stripe_checkouts_manual_review_cursor[1]
-      : normalizedSql(index[0].sql) !== normalizedSql(MANUAL_REVIEW_CURSOR_INDEX_SQL))) {
-      fail('Commerce D1 manual-review cursor index is invalid.');
-    }
     for (const startAfter of [undefined, {
       version: 1 as const, dropId: 'drop', sortAtMs: 1, sessionId: 'cs_cursor',
       documentPath: 'drops/drop/stripeCheckouts/cs_cursor',

@@ -7,6 +7,7 @@ import { Keypair } from '@solana/web3.js';
 import { createTestHarness } from 'wrangler';
 import { PreorderStore, publicPreorder, type StoredPreorder } from '../src/preorderStore.ts';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
+import { PREORDER_CARD_IDS } from '../../../../shared/preorderCardIds.generated.ts';
 import { recoverPreorder } from '../../../../scripts/ops/recoverPreorder.ts';
 
 test('real D1 atomically claims preorders, fences submission and safely recovers verified outcomes', async (t) => {
@@ -22,6 +23,8 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const worker = server.getWorker<Env>('mons-shop-api');
     await worker.applyD1Migrations('COMMERCE_DB');
     const { COMMERCE_DB: db } = await worker.getEnv();
+    const catalog = await db.prepare('SELECT card_id FROM commerce_preorder_cards ORDER BY card_id').all<{ card_id: number }>();
+    assert.deepEqual(catalog.results.map(({ card_id }) => card_id), PREORDER_CARD_IDS);
     await db.batch([
       db.prepare(`INSERT INTO commerce_authority_control_lease (singleton, lease_token, acquired_at_ms, expires_at_ms)
         VALUES (1, '00000000-0000-4000-8000-000000001801', CAST(strftime('%s', 'now') AS INTEGER) * 1000,
@@ -134,7 +137,7 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       .filter((claim) => newOrders.some((order) => order.orderId === claim.orderId)).map((claim) => claim.id), newCardIds);
     for (const id of [0, 1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1420]) {
       const invalid = candidate(Keypair.generate().publicKey.toBase58(), [id]);
-      await assert.rejects(store.reserve(invalid), /CHECK constraint/);
+      await assert.rejects(store.reserve(invalid), /FOREIGN KEY constraint/);
       assert.equal(await store.get(invalid.orderId), null);
     }
     await assert.rejects(db.prepare('UPDATE commerce_preorder_claims SET card_id = 100 WHERE card_id = 1400').run(), /immutable/);

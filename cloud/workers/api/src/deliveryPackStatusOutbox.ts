@@ -15,7 +15,7 @@ import {
   type PackStatusEvent,
 } from '../../../../shared/packStatus.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import { raceWithSignal } from './boundedRequest.js';
+import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import {
   D1CommerceRepository,
   commerceKeys,
@@ -154,20 +154,14 @@ export async function projectPendingDeliveryPackStatus(args: {
 }): Promise<DeliveryPackStatusProjectionOutcome> {
   const log = args.log || ((entry: Record<string, unknown>) => console.log(entry));
   const attemptStartedAtMs = (args.nowMs || Date.now)();
-  const controller = new AbortController();
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(args.context.signal.reason);
-  };
-  args.context.signal.addEventListener('abort', onAbort, { once: true });
-  if (args.context.signal.aborted) onAbort();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Pack-status projection timed out', 'TimeoutError')),
-    PACK_STATUS_TIMEOUT_MS,
-  );
+  const scope = createTimedAbortScope(args.context.signal, {
+    timeoutMs: PACK_STATUS_TIMEOUT_MS,
+    timeoutMessage: 'Pack-status projection timed out',
+  });
   const context: DeliveryPackStatusContext = {
     ...args.context,
     nowMs: attemptStartedAtMs,
-    signal: controller.signal,
+    signal: scope.signal,
   };
   const key = commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId));
   const documentPath = key.path;
@@ -275,8 +269,7 @@ export async function projectPendingDeliveryPackStatus(args: {
     });
     return 'pending';
   } finally {
-    clearTimeout(timeout);
-    args.context.signal.removeEventListener('abort', onAbort);
+    scope.dispose();
   }
 }
 

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { BackgroundJobMessage } from '../src/backgroundJobOutcome.ts';
 import {
   availableCommerceDudeIds,
   createCommerceD1,
@@ -1363,23 +1364,9 @@ function revealJob(overrides: Partial<RevealBackgroundJob> = {}): RevealBackgrou
 }
 
 function revealQueueMessage(body: unknown = revealJob(), attempts = 1) {
-  const actions: { acks: number; retries: Array<QueueRetryOptions | undefined> } = {
-    acks: 0,
-    retries: [],
+  return {
+    message: { id: `reveal-message-${attempts}`, body, attempts } satisfies BackgroundJobMessage,
   };
-  const message: Message<unknown> = {
-    id: `reveal-message-${attempts}`,
-    timestamp: new Date('2026-08-21T12:00:00.000Z'),
-    body,
-    attempts,
-    ack: () => {
-      actions.acks += 1;
-    },
-    retry: (options) => {
-      actions.retries.push(options);
-    },
-  };
-  return { actions, message };
 }
 
 function revealConsumerEnv(apiKey = 'helius-test-key') {
@@ -2372,10 +2359,25 @@ test('reveal background job guard is strict and independent of the current drop 
   assert.equal(revealDudesTestHooks.revealBackgroundJobTimeoutMs, 60_000);
 });
 
+test('reveal background consumer completes malformed jobs without reading storage', async () => {
+  const queued = revealQueueMessage({ ...revealJob(), signature: 'invalid' });
+  const logs: Record<string, unknown>[] = [];
+  const outcome = await processRevealBackgroundJobMessage(queued.message, revealConsumerEnv(), {
+    loadStorageControl: async () => assert.fail('malformed jobs must not read storage'),
+    error: (entry) => logs.push(entry),
+  });
+  assert.deepEqual(outcome, { outcome: 'complete' });
+  assert.deepEqual(logs, [{
+    event: 'reveal_background_job_invalid',
+    queueMessageId: queued.message.id,
+    attempts: 1,
+  }]);
+});
+
 test('reveal background consumer retries structurally valid jobs for unsupported drops', async () => {
   const unsupported = revealQueueMessage(revealJob({ dropId: 'future_drop' }));
 
-  await processRevealBackgroundJobMessage(unsupported.message, revealConsumerEnv(), {
+  const unsupportedOutcome = await processRevealBackgroundJobMessage(unsupported.message, revealConsumerEnv(), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => {
       throw new Error('unexpected submission read');
@@ -2385,15 +2387,14 @@ test('reveal background consumer retries structurally valid jobs for unsupported
     error: () => undefined,
   });
 
-  assert.equal(unsupported.actions.acks, 0);
-  assert.deepEqual(unsupported.actions.retries, [{ delaySeconds: 5 }]);
+  assert.deepEqual(unsupportedOutcome, { outcome: 'retry', delaySeconds: 5 });
 });
 
 test('paused reveal storage retries background jobs without reading submissions', async () => {
   const paused = revealQueueMessage();
   let reads = 0;
 
-  await processRevealBackgroundJobMessage(paused.message, revealConsumerEnv(), {
+  const pausedOutcome = await processRevealBackgroundJobMessage(paused.message, revealConsumerEnv(), {
     loadStorageControl: async () => ({
       paused: true,
       source: 'd1' as const,
@@ -2410,14 +2411,13 @@ test('paused reveal storage retries background jobs without reading submissions'
   });
 
   assert.equal(reads, 0);
-  assert.equal(paused.actions.acks, 0);
-  assert.deepEqual(paused.actions.retries, [{ delaySeconds: 5 }]);
+  assert.deepEqual(pausedOutcome, { outcome: 'retry', delaySeconds: 5 });
 });
 
 test('reveal background consumer retries a terminal-write pause race with existing backoff', async () => {
   const raced = revealQueueMessage(revealJob(), 3);
 
-  await processRevealBackgroundJobMessage(raced.message, revealConsumerEnv(), {
+  const racedOutcome = await processRevealBackgroundJobMessage(raced.message, revealConsumerEnv(), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'confirmed',
@@ -2432,8 +2432,7 @@ test('reveal background consumer retries a terminal-write pause race with existi
     error: () => undefined,
   });
 
-  assert.equal(raced.actions.acks, 0);
-  assert.deepEqual(raced.actions.retries, [{ delaySeconds: 30 }]);
+  assert.deepEqual(racedOutcome, { outcome: 'retry', delaySeconds: 30 });
 });
 
 test('reveal background consumer confirms, counts, and safely repeats confirmed jobs', async () => {
@@ -2462,21 +2461,19 @@ test('reveal background consumer confirms, counts, and safely repeats confirmed 
   const first = revealQueueMessage();
   const duplicate = revealQueueMessage();
 
-  await processRevealBackgroundJobMessage(first.message, revealConsumerEnv(), overrides);
-  await processRevealBackgroundJobMessage(duplicate.message, revealConsumerEnv(''), overrides);
+  const firstOutcome = await processRevealBackgroundJobMessage(first.message, revealConsumerEnv(), overrides);
+  const duplicateOutcome = await processRevealBackgroundJobMessage(duplicate.message, revealConsumerEnv(''), overrides);
 
   assert.equal(reconcileCalls, 1);
   assert.equal(confirmCalls, 1);
   assert.equal(countCalls, 2);
-  assert.equal(first.actions.acks, 1);
-  assert.equal(duplicate.actions.acks, 1);
-  assert.deepEqual(first.actions.retries, []);
-  assert.deepEqual(duplicate.actions.retries, []);
+  assert.deepEqual(firstOutcome, { outcome: 'complete' });
+  assert.deepEqual(duplicateOutcome, { outcome: 'complete' });
 });
 
 test('reveal background consumer retries unknown outcomes and pack-count outages with bounded delays', async () => {
   const unknown = revealQueueMessage(revealJob(), 99);
-  await processRevealBackgroundJobMessage(unknown.message, revealConsumerEnv(), {
+  const unknownOutcome = await processRevealBackgroundJobMessage(unknown.message, revealConsumerEnv(), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'unknown',
@@ -2495,7 +2492,7 @@ test('reveal background consumer retries unknown outcomes and pack-count outages
   });
 
   const countOutage = revealQueueMessage(revealJob(), 2);
-  await processRevealBackgroundJobMessage(countOutage.message, revealConsumerEnv(''), {
+  const countOutageOutcome = await processRevealBackgroundJobMessage(countOutage.message, revealConsumerEnv(''), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission({ status: 'confirmed' }),
     reconcileRevealSubmission: async () => {
@@ -2509,17 +2506,15 @@ test('reveal background consumer retries unknown outcomes and pack-count outages
     error: () => undefined,
   });
 
-  assert.equal(unknown.actions.acks, 0);
-  assert.deepEqual(unknown.actions.retries, [{ delaySeconds: 300 }]);
+  assert.deepEqual(unknownOutcome, { outcome: 'retry', delaySeconds: 300 });
   assert.equal(revealBackgroundJobRetryDelaySeconds(10_000), 300);
-  assert.equal(countOutage.actions.acks, 0);
-  assert.deepEqual(countOutage.actions.retries, [{ delaySeconds: 15 }]);
+  assert.deepEqual(countOutageOutcome, { outcome: 'retry', delaySeconds: 15 });
 });
 
-test('reveal background consumer marks expired submissions failed and acknowledges stale jobs', async () => {
+test('reveal background consumer marks expired submissions failed and completes stale jobs', async () => {
   let failCalls = 0;
   const expired = revealQueueMessage();
-  await processRevealBackgroundJobMessage(expired.message, revealConsumerEnv(), {
+  const expiredOutcome = await processRevealBackgroundJobMessage(expired.message, revealConsumerEnv(), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'expired',
@@ -2536,7 +2531,7 @@ test('reveal background consumer marks expired submissions failed and acknowledg
   });
 
   const stale = revealQueueMessage();
-  await processRevealBackgroundJobMessage(stale.message, revealConsumerEnv(''), {
+  const staleOutcome = await processRevealBackgroundJobMessage(stale.message, revealConsumerEnv(''), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission({
       reservationId: '123e4567-e89b-42d3-b456-426614174001',
@@ -2553,17 +2548,15 @@ test('reveal background consumer marks expired submissions failed and acknowledg
   });
 
   assert.equal(failCalls, 1);
-  assert.equal(expired.actions.acks, 1);
-  assert.deepEqual(expired.actions.retries, []);
-  assert.equal(stale.actions.acks, 1);
-  assert.deepEqual(stale.actions.retries, []);
+  assert.deepEqual(expiredOutcome, { outcome: 'complete' });
+  assert.deepEqual(staleOutcome, { outcome: 'complete' });
 });
 
 test('reveal background consumer counts when a failure transition loses to confirmation', async () => {
   let countCalls = 0;
   const confirmed = revealQueueMessage();
 
-  await processRevealBackgroundJobMessage(confirmed.message, revealConsumerEnv(), {
+  const confirmedOutcome = await processRevealBackgroundJobMessage(confirmed.message, revealConsumerEnv(), {
     loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'expired',
@@ -2577,8 +2570,7 @@ test('reveal background consumer counts when a failure transition loses to confi
   });
 
   assert.equal(countCalls, 1);
-  assert.equal(confirmed.actions.acks, 1);
-  assert.deepEqual(confirmed.actions.retries, []);
+  assert.deepEqual(confirmedOutcome, { outcome: 'complete' });
 });
 
 test('ambiguous transaction submission succeeds when its derived signature confirms', async () => {

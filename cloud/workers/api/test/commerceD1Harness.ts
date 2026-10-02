@@ -2,6 +2,7 @@ import { createDeliveryRecoveryRecord, parseDeliveryRecoveryRow, updateDeliveryR
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
+import { readCommerceMigrations } from '../../../../scripts/shared/commerceMigrationReplay.ts';
 import { parseNotificationOutboxRecord, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.ts';
 import { packStatusOutboxRow, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../../../../shared/stripeCheckoutState.ts';
@@ -217,6 +218,7 @@ export function createCommerceD1Harness(
     preorderExpiryClaimReleaseMigration?: boolean;
     preorderCardRange1413Migration?: boolean;
     preorderCardRange1419Migration?: boolean;
+    preorderCatalogMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -270,6 +272,9 @@ export function createCommerceD1Harness(
     options.preorderExpiryClaimReleaseMigration !== false && options.preorderCardRange1413Migration !== false &&
     options.preorderCardRange1419Migration !== false) {
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0031_preorder_card_range_1419.sql', 'utf8'));
+    if (options.preorderCatalogMigration !== false) {
+      for (const migration of readCommerceMigrations().slice(31)) database.exec(migration.sql);
+    }
   }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table', options.deliveryRecoveryMode ?? 'table');
   return {

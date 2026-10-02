@@ -11,6 +11,7 @@ import {
 } from '../../../../shared/resendErrors.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 import { createTimedAbortScope } from './boundedRequest.js';
+import type { BackgroundJobMessage, BackgroundJobOutcome } from './backgroundJobOutcome.js';
 
 const RETRY_DELAYS_SECONDS = [30, 2 * 60, 10 * 60, 30 * 60, 2 * 60 * 60] as const;
 const RESEND_EMAILS_API_URL = 'https://api.resend.com/emails';
@@ -69,7 +70,7 @@ export async function resendSend(
     text: job.text,
     html: job.html,
   };
-  const scope = createTimedAbortScope(new AbortController().signal, {
+  const scope = createTimedAbortScope(undefined, {
     timeoutMs,
     timeoutMessage: 'Resend request timed out',
   });
@@ -162,10 +163,10 @@ async function deliverNotificationEmail(
 }
 
 export async function processNotificationEmailMessage(
-  message: Message<unknown>,
+  message: BackgroundJobMessage,
   env: NotificationConsumerEnv,
   overrides: Partial<NotificationConsumerDependencies> = {},
-): Promise<void> {
+): Promise<BackgroundJobOutcome> {
   const dependencies = { ...defaultDependencies, ...overrides };
   if (!isNotificationEmailJobV1(message.body)) {
     dependencies.error({
@@ -173,8 +174,7 @@ export async function processNotificationEmailMessage(
       queueMessageId: message.id,
       attempts: message.attempts,
     });
-    message.ack();
-    return;
+    return { outcome: 'complete' };
   }
   const job = message.body;
   try {
@@ -189,8 +189,7 @@ export async function processNotificationEmailMessage(
           statusCode: result.providerError.statusCode,
         },
       });
-      message.ack();
-      return;
+      return { outcome: 'complete' };
     }
     dependencies.log({
       event: 'notification_email_sent',
@@ -198,7 +197,7 @@ export async function processNotificationEmailMessage(
       attempts: message.attempts,
       messageId: result.messageId,
     });
-    message.ack();
+    return { outcome: 'complete' };
   } catch (error) {
     const delaySeconds = notificationEmailRetryDelaySeconds(message.attempts);
     const providerError = error instanceof RetryableNotificationDeliveryError ? error.providerError : undefined;
@@ -212,6 +211,6 @@ export async function processNotificationEmailMessage(
         providerError: { name: providerError.name, statusCode: providerError.statusCode },
       } : {}),
     });
-    message.retry({ delaySeconds });
+    return { outcome: 'retry', delaySeconds };
   }
 }

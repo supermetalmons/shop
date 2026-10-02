@@ -35,6 +35,7 @@ import {
 } from './workerRoutes.js';
 import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
 import {
+  createTimedAbortScope,
   isRequestCancellationError,
   raceWithSignal,
 } from './boundedRequest.js';
@@ -353,15 +354,14 @@ export default {
     return processBackgroundJobBatch(batch, env);
   },
   async scheduled(_controller, env) {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException('Scheduled reconciliation timed out', 'TimeoutError')),
-      SCHEDULED_RECONCILIATION_TIMEOUT_MS,
-    );
+    const scope = createTimedAbortScope(undefined, {
+      timeoutMs: SCHEDULED_RECONCILIATION_TIMEOUT_MS,
+      timeoutMessage: 'Scheduled reconciliation timed out',
+    });
     try {
-      await runScheduledReconciliations(env, controller.signal);
+      await runScheduledReconciliations(env, scope.signal);
     } finally {
-      clearTimeout(timeout);
+      scope.dispose();
     }
   },
 } satisfies ExportedHandler<Env, unknown>;

@@ -1,4 +1,6 @@
 import { isExactStripeCheckoutFulfillmentJobV1 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
+import type { BackgroundJobMessage, BackgroundJobOutcome } from './backgroundJobOutcome.js';
+import { createTimedAbortScope } from './boundedRequest.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import { processNotificationQueueMessage } from './notificationEnqueue.js';
 import { processRevealBackgroundJobMessage } from './revealDudesBackground.js';
@@ -21,7 +23,7 @@ export type BackgroundJobProcessors = {
   error: (entry: Record<string, unknown>) => void;
 };
 
-type BackgroundJobProcessor = (message: Message<unknown>, env: Env) => Promise<void>;
+type BackgroundJobProcessor = (message: BackgroundJobMessage, env: Env) => Promise<BackgroundJobOutcome>;
 
 type BackgroundJobRoute = Readonly<{
   processor: BackgroundJobProcessor;
@@ -29,14 +31,14 @@ type BackgroundJobRoute = Readonly<{
 }>;
 
 export async function processStripeFulfillmentMessage(
-  message: Message<unknown>,
+  message: BackgroundJobMessage,
   env: Env,
   overrides: {
     process?: typeof processStripeCheckoutFulfillmentJob;
     log?: (entry: Record<string, unknown>) => void;
     timeoutMs?: number;
   } = {},
-): Promise<void> {
+): Promise<BackgroundJobOutcome> {
   const process = overrides.process || processStripeCheckoutFulfillmentJob;
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   if (!isExactStripeCheckoutFulfillmentJobV1(message.body)) {
@@ -44,29 +46,27 @@ export async function processStripeFulfillmentMessage(
   }
   const job = message.body;
   const timeoutMs = overrides.timeoutMs ?? STRIPE_FULFILLMENT_TIMEOUT_MS;
-  const controller = new AbortController();
-  const persistenceController = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Stripe checkout fulfillment timed out', 'TimeoutError')),
+  const scope = createTimedAbortScope(undefined, {
     timeoutMs,
-  );
-  const persistenceTimeout = setTimeout(
-    () => persistenceController.abort(new DOMException('Stripe checkout fulfillment persistence timed out', 'TimeoutError')),
-    timeoutMs + STRIPE_FULFILLMENT_CLEANUP_GRACE_MS,
-  );
-  log({
-    event: 'stripe_fulfillment_job_started',
-    queueMessageId: message.id,
-    queueAttempts: message.attempts,
-    dropId: job.dropId,
-    sessionId: job.sessionId,
-    stripeEventId: job.stripeEventId,
-    stripeEventType: job.stripeEventType,
-    queueAgeMs: Math.max(0, Date.now() - job.enqueuedAtMs),
+    timeoutMessage: 'Stripe checkout fulfillment timed out',
+  });
+  const persistenceScope = createTimedAbortScope(undefined, {
+    timeoutMs: timeoutMs + STRIPE_FULFILLMENT_CLEANUP_GRACE_MS,
+    timeoutMessage: 'Stripe checkout fulfillment persistence timed out',
   });
   try {
-    const result = await process(job, env, controller.signal, {
-      persistenceSignal: persistenceController.signal,
+    log({
+      event: 'stripe_fulfillment_job_started',
+      queueMessageId: message.id,
+      queueAttempts: message.attempts,
+      dropId: job.dropId,
+      sessionId: job.sessionId,
+      stripeEventId: job.stripeEventId,
+      stripeEventType: job.stripeEventType,
+      queueAgeMs: Math.max(0, Date.now() - job.enqueuedAtMs),
+    });
+    const result = await process(job, env, scope.signal, {
+      persistenceSignal: persistenceScope.signal,
       treatRetryableFailureAsTerminal: message.attempts >= STRIPE_FULFILLMENT_TERMINAL_ATTEMPT,
     });
     log({
@@ -81,9 +81,10 @@ export async function processStripeFulfillmentMessage(
       notificationPublication: result.notifications.publication,
       notificationQueuedJobs: result.notifications.queuedJobs,
     });
+    return { outcome: 'complete' };
   } finally {
-    clearTimeout(timeout);
-    clearTimeout(persistenceTimeout);
+    scope.dispose();
+    persistenceScope.dispose();
   }
 }
 
@@ -142,7 +143,10 @@ export async function processBackgroundJobBatch(
   }
   for (const message of batch.messages) {
     try {
-      await route.processor(message, env);
+      const outcome = await route.processor(message, env);
+      if (outcome.outcome === 'complete') message.ack();
+      else if (outcome.delaySeconds === undefined) message.retry();
+      else message.retry({ delaySeconds: outcome.delaySeconds });
     } catch (error) {
       processors.error({
         event: 'background_job_unhandled_error',
