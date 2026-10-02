@@ -21,7 +21,7 @@ function fresh() {
   const clock = { nowMs: 2_000_000_000_000 };
   database.function('strftime', (format, value) => format === '%s' && value === 'now' ? String(clock.nowMs / 1000) : null);
   const directory = 'cloud/workers/api/commerce-migrations';
-  for (const file of readdirSync(directory).filter((name) => name.endsWith('.sql')).sort()) {
+  for (const file of readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '0033_').sort()) {
     database.exec(readFileSync(`${directory}/${file}`, 'utf8'));
   }
   database.exec(`INSERT INTO commerce_authority_control_lease (singleton, lease_token, acquired_at_ms, expires_at_ms)

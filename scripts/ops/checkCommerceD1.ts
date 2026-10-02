@@ -191,6 +191,7 @@ export function checkCommerceD1(
   const hasMigration = (name: string) => migrations.some((migration) => migration.name === name);
   const stripeCheckoutStateReady = hasMigration('0026_stripe_checkout_state.sql');
   const deliveryRecoveryStateReady = hasMigration('0030_delivery_recovery.sql');
+  const deliveryRecoveryMetadataClean = hasMigration('0033_delivery_recovery_metadata_cleanup.sql');
   const packStatusOutboxReady = hasMigration('0029_pack_status_outbox.sql');
   const manualReviewPaginationReady = hasMigration('0015_manual_review_pagination.sql');
   const shipmentPaginationReady = hasMigration('0016_shipment_history_pagination.sql');
@@ -295,6 +296,14 @@ export function checkCommerceD1(
     safeInteger(documentPathRevisionState[0].future_count, 'Commerce future document-path revision count') !== 0 ||
     safeInteger(documentPathRevisionState[0].missing_live_count, 'Commerce missing live path-revision count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
+
+  if (deliveryRecoveryMetadataClean) {
+    const legacyRecovery = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND json_type(document_json, '$.receiptRecovery') IS NOT NULL`);
+    if (legacyRecovery.length !== 1 || safeInteger(legacyRecovery[0].count, 'Legacy delivery recovery metadata count') !== 0) {
+      fail('Commerce D1 delivery recovery metadata is not canonical.');
+    }
+  }
 
   const inventory = queryRemoteCommerceD1(`SELECT inventory.*,
       (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = inventory.drop_id) AS available_count,

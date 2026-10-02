@@ -1,5 +1,6 @@
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
 import { commerceKeys } from '../commerceRepository.js';
+import { reconciliationLogger } from '../reconciliationResult.js';
 import { publishClaimedNotificationBatch } from '../notificationOutboxPublication.js';
 import type { StripeCheckoutCommerceContext } from './commerce.js';
 import { prepareStripeCheckoutTerminalNotifications } from './terminalNotifications.js';
@@ -95,7 +96,7 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
   const claimed = await claimStripeTerminalNotifications(args);
   if ('result' in claimed) {
     if (claimed.result.publication === 'failed') {
-      console.error({ event: 'stripe_terminal_notifications_failed', dropId: args.dropId, sessionId: args.sessionId,
+      reconciliationLogger((entry) => console.error(entry))({ event: 'stripe_terminal_notifications_failed', dropId: args.dropId, sessionId: args.sessionId,
         reason: claimed.result.reason || 'manual-review-required' });
     }
     return claimed.result;
@@ -113,7 +114,7 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
       finalize: async (jobs) => {
         const finalized = await markStripeTerminalNotificationsQueued(cleanupPublication(args), claim, jobs);
         if (!finalized) throw new Error('stripe_terminal_notification_finalization_lost');
-        console.log({ event: 'stripe_terminal_notifications_queued', dropId: args.dropId,
+        reconciliationLogger((entry) => console.log(entry))({ event: 'stripe_terminal_notifications_queued', dropId: args.dropId,
           sessionId: args.sessionId, jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })) });
         return { outcome: claim.record.outcome!, publication: 'queued', queuedJobs: jobs.length };
       },
@@ -122,7 +123,7 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
       },
     });
   } catch (error) {
-    console.error({ event: 'stripe_terminal_notifications_publish_failed', dropId: args.dropId,
+    reconciliationLogger((entry) => console.error(entry))({ event: 'stripe_terminal_notifications_publish_failed', dropId: args.dropId,
       sessionId: args.sessionId, error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' } });
     throw error;
   }

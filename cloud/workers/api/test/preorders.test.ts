@@ -901,11 +901,11 @@ test('scheduled recovery drains expired disabled reservations before processing 
   h.outcome('finalized');
   Object.assign(config, { enabled: false });
 
-  assert.equal(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), 20);
+  assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), { attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(await h.store.claims(config.cluster, config.collection), []);
   assert.equal(h.database.prepare("SELECT COUNT(*) AS count FROM commerce_preorder_orders WHERE status = 'expired'").get()!.count, 20);
   assert.equal((await h.store.get(active.orderId))!.status, 'submitted');
-  assert.equal(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), 1);
+  assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.equal((await h.store.get(active.orderId))!.status, 'succeeded');
 });
 

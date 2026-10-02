@@ -1595,6 +1595,28 @@ test('delivery recovery migration is required for deployment while previous sche
   } finally { database.close(); }
 });
 
+test('delivery recovery metadata cleanup is required for deployment while migration 0032 remains inspectable', () => {
+  const database = currentDatabase(false, 32);
+  try {
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+    assert.throws(() => checkCommerceD1(localQuery(database), { forDeployment: true }), latestMigrationError);
+  } finally { database.close(); }
+});
+
+test('delivery recovery checker rejects reintroduced frozen metadata after cleanup', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    const updateGuard = String(query("SELECT sql FROM sqlite_schema WHERE name = 'commerce_delivery_recovery_parent_update_guard'")[0].sql);
+    database.exec(`DROP TRIGGER commerce_delivery_recovery_parent_update_guard;
+      UPDATE commerce_documents SET document_json = json_set(document_json, '$.receiptRecovery', null), version = version + 1
+        WHERE document_path = 'drops/drop/deliveryOrders/0';
+      UPDATE commerce_authority_control SET documents_revision = documents_revision + 1;
+      ${updateGuard}`);
+    assert.throws(() => checkCommerceD1(query), /delivery recovery metadata is not canonical/);
+  } finally { database.close(); }
+});
+
 test('delivery recovery checker validates all fences and the altered commit and wipe guard schemas', () => {
   for (const name of [
     'commerce_delivery_recovery_control_update_guard', 'commerce_delivery_recovery_insert_guard',

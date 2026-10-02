@@ -14,6 +14,9 @@ import {
 } from './notificationOutboxStore.js';
 import { publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
 import { drainNotificationCandidates } from './notificationReconciliation.js';
+import {
+  reportReconciliationFailure, type ReconciliationOptions, type ReconciliationOutcome, type ReconciliationResult,
+} from './reconciliationResult.js';
 
 type ShippedRepository = Pick<D1CommerceRepository, 'get' | 'notificationOutbox'>;
 
@@ -28,31 +31,32 @@ function cancelledNotification(record: NotificationOutboxRecord) {
   };
 }
 
-export async function publishBuyerOrderShippedNotification(args: {
+export async function publishBuyerOrderShippedNotificationDetailed(args: {
   repository: ShippedRepository;
   parentPath: string;
   queue: Pick<Queue<NotificationEmailJobV1>, 'sendBatch'>;
   signal: AbortSignal;
   nowMs?: () => number;
-}): Promise<boolean> {
+}): Promise<{ outcome: ReconciliationOutcome; published: boolean; errorCode?: string }> {
   const nowMs = args.nowMs || Date.now;
   const key = commerceKeyFromPath(args.parentPath);
   if (!key || key.kind !== 'delivery_order' || !key.dropId) throw new Error('Invalid shipped notification parent.');
   args.signal.throwIfAborted();
   const document = await args.repository.get(key);
-  if (!document) return false;
+  if (!document) return { outcome: 'skipped', published: false };
   if (!isBuyerOrderShippedNotificationEligible(document.data)) {
     const record = await args.repository.notificationOutbox.get(key.path, 'shipped');
-    if (record?.state === 'queued') return true;
+    if (record?.state === 'queued') return { outcome: 'completed', published: true };
     if (record?.state === 'pending') {
-      await args.repository.notificationOutbox.compareAndSet({
+      const cancelled = await args.repository.notificationOutbox.compareAndSet({
         expected: record,
         changes: cancelledNotification(record),
         nowMs: nowMs(),
         parentVersion: document.version,
       });
+      if (!cancelled) return { outcome: 'deferred', published: false };
     }
-    return false;
+    return { outcome: 'skipped', published: false };
   }
   const claimed = await claimNotificationOutbox({
     repository: args.repository,
@@ -62,7 +66,14 @@ export async function publishBuyerOrderShippedNotification(args: {
     signal: args.signal,
     parentVersion: document.version,
   });
-  if (claimed.outcome !== 'claimed') return claimed.record?.state === 'queued';
+  if (claimed.outcome !== 'claimed') {
+    return {
+      outcome: claimed.record?.state === 'queued' ? 'completed' : claimed.record?.state === 'failed' ? 'failed'
+        : claimed.record?.state === 'pending' ? 'deferred' : 'skipped',
+      published: claimed.record?.state === 'queued',
+      ...(claimed.record?.lastErrorCode ? { errorCode: claimed.record.lastErrorCode } : {}),
+    };
+  }
   const claim = claimed.claim;
   const claimArgs = { repository: args.repository, claim, nowMs };
   return publishClaimedNotificationBatch({
@@ -120,7 +131,7 @@ export async function publishBuyerOrderShippedNotification(args: {
         throw new Error('Shipped notification finalization lost its claim.');
       }
       claimArgs.claim = updated;
-      return true;
+      return { outcome: 'completed' as const, published: true };
     },
     releaseUnusedClaim: async () => {
       const released = await releaseNotificationOutboxClaim(claimArgs);
@@ -130,27 +141,37 @@ export async function publishBuyerOrderShippedNotification(args: {
   });
 }
 
+export async function publishBuyerOrderShippedNotification(
+  args: Parameters<typeof publishBuyerOrderShippedNotificationDetailed>[0],
+): Promise<boolean> {
+  return (await publishBuyerOrderShippedNotificationDetailed(args)).published;
+}
+
 export async function reconcilePendingShippedNotifications(
   env: Pick<Env, 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE'>,
   signal: AbortSignal,
-  overrides: { nowMs?: () => number } = {},
-): Promise<number> {
+  overrides: { nowMs?: () => number } & ReconciliationOptions = {},
+): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   return drainNotificationCandidates({
     signal,
+    onResult: overrides.onResult,
     loadCandidates: async () => {
       const candidates = await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: nowMs(), limit: 8 });
       return candidates.slice(0, 4);
     },
     failureMessage: 'Shipped notification reconciliation failed',
     processCandidate: async (candidate) => {
-      const published = await publishBuyerOrderShippedNotification({
+      const published = await publishBuyerOrderShippedNotificationDetailed({
         repository, parentPath: candidate.parentPath, queue: env.NOTIFICATION_EMAIL_QUEUE, signal, nowMs,
       });
-      return published ? 1 : 0;
+      if (published.outcome === 'failed') reportReconciliationFailure('shippedNotifications', { parentPath: candidate.parentPath },
+        undefined, published.errorCode || 'notification-outbox-failed');
+      return published.outcome;
     },
     onFailure: (candidate, error) => {
+      reportReconciliationFailure('shippedNotifications', { parentPath: candidate.parentPath }, error);
       console.error({ event: 'buyer_order_shipped_notification_enqueue_failed', parentPath: candidate.parentPath,
         error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' } });
     },

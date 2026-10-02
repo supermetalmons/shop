@@ -1,8 +1,7 @@
 import { parseDeliveryOrderStatus } from './deliveryOrderReadModel.js';
 import {
-  deliveryOrderDocument, deliveryOrderKey, readDeliveryOrder,
+  deliveryOrderKey, readDeliveryOrder, type DeliveryOrderKey,
 } from './deliveryOrderStore.js';
-import type { CommerceDocumentRecord } from './commerceRepository.js';
 import { type CommerceRepositoryContext } from './commerceTransactions.js';
 import { DeliveryReceiptError } from './deliveryReceiptErrors.js';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.js';
@@ -17,6 +16,13 @@ import {
   createReadyToShipNotificationJobs, readyToShipNotificationMarker,
   type ReadyToShipNotificationStateField,
 } from './readyToShipNotifications.js';
+import { reconciliationLogger, type ReconciliationOutcome } from './reconciliationResult.js';
+
+type ReadyNotificationPublication = {
+  outcome: ReconciliationOutcome;
+  published: boolean;
+  errorCode?: string;
+};
 
 export class ReadyToShipNotificationEnqueueError extends DeliveryReceiptError {
   constructor(message = 'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.') {
@@ -66,21 +72,29 @@ export async function markPendingReadyToShipNotificationsFailed(
 async function publishReadyNotifications(args: {
   context: CommerceRepositoryContext;
   deliveryId: number;
-  document: CommerceDocumentRecord;
+  key: DeliveryOrderKey;
   dropId: string;
   queue: Pick<Queue<NotificationEmailJobV1>, 'sendBatch'>;
   nowMs?: () => number;
-}): Promise<boolean> {
+}): Promise<ReadyNotificationPublication> {
   args.context.signal.throwIfAborted();
-  const supplied = deliveryOrderDocument(args.document);
-  const document = await readDeliveryOrder(args.context, supplied.key);
-  if (!document || parseDeliveryOrderStatus(document.data).status !== 'ready_to_ship') return false;
+  if (args.key.kind !== 'delivery_order') throw new Error('Invalid delivery order document kind.');
+  const document = await readDeliveryOrder(args.context, args.key);
+  if (!document || parseDeliveryOrderStatus(document.data).status !== 'ready_to_ship') {
+    return { outcome: 'skipped', published: false };
+  }
   const startedAt = performance.now();
   const nowMs = args.nowMs || (() => args.context.nowMs + Math.max(0, Math.floor(performance.now() - startedAt)));
   let initialRecord: NotificationOutboxRecord | undefined;
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const record = await args.context.repository.notificationOutbox.get(document.key.path, 'ready');
-    if (!record || record.state !== 'pending') return false;
+    if (!record || record.state !== 'pending') {
+      return {
+        outcome: record?.state === 'failed' ? 'failed' : record?.state === 'queued' ? 'completed' : 'skipped',
+        published: false,
+        ...(record?.lastErrorCode ? { errorCode: record.lastErrorCode } : {}),
+      };
+    }
     const entries = record.entries.map((entry) => {
       if (entry.state !== 'pending') return entry;
       const suffix = entry.kind === 'buyer_order_received' ? 'order_received' : 'ready_to_ship';
@@ -110,11 +124,18 @@ async function publishReadyNotifications(args: {
     repository: args.context.repository, parentPath: document.key.path,
     family: 'ready', nowMs, signal: args.context.signal, parentVersion: document.version, initialRecord,
   });
-  if (claimed.outcome !== 'claimed') return false;
+  if (claimed.outcome !== 'claimed') {
+    return {
+      outcome: claimed.record?.state === 'queued' ? 'completed' : claimed.record?.state === 'failed' ? 'failed'
+        : claimed.record?.state === 'pending' ? 'deferred' : 'skipped',
+      published: false,
+      ...(claimed.record?.lastErrorCode ? { errorCode: claimed.record.lastErrorCode } : {}),
+    };
+  }
   const { claim } = claimed;
   const options = { repository: args.context.repository, claim, nowMs };
   const buildErrors: unknown[] = [];
-  const result = await publishClaimedNotificationBatch({
+  const result = await publishClaimedNotificationBatch<ReadyNotificationPublication>({
     signal: args.context.signal, nowMs,
     expiresAtMs: claim.claimExpiresAtMs!, retryUntilMs: claim.retryUntilMs,
     queue: args.queue,
@@ -147,9 +168,13 @@ async function publishReadyNotifications(args: {
       const updated = await markClaimedNotificationQueued({ ...options, jobs });
       if (!updated) throw new ReadyToShipNotificationEnqueueError('Notifications were queued, but their recovery state could not be saved. Retry later.');
       options.claim = updated;
-      console.log({ event: 'ready_to_ship_notifications_queued', dropId: args.dropId,
+      reconciliationLogger((entry) => console.log(entry))({ event: 'ready_to_ship_notifications_queued', dropId: args.dropId,
         deliveryId: args.deliveryId, jobs: jobs.map(({ jobId, kind }) => ({ jobId, kind })) });
-      return jobs.length > 0;
+      return {
+        outcome: updated.state === 'failed' ? 'failed' : 'completed',
+        published: jobs.length > 0,
+        ...(updated.lastErrorCode ? { errorCode: updated.lastErrorCode } : {}),
+      };
     },
     releaseUnusedClaim: async () => {
       const released = await releaseNotificationOutboxClaim(options);
@@ -160,7 +185,9 @@ async function publishReadyNotifications(args: {
   return result;
 }
 
-export async function publishReadyToShipNotifications(args: Parameters<typeof publishReadyNotifications>[0]): Promise<boolean> {
+export async function publishReadyToShipNotificationsDetailed(
+  args: Parameters<typeof publishReadyNotifications>[0],
+): Promise<ReadyNotificationPublication> {
   try {
     return await publishReadyNotifications(args);
   } catch (error) {
@@ -170,4 +197,8 @@ export async function publishReadyToShipNotifications(args: Parameters<typeof pu
     unavailable.cause = error;
     throw unavailable;
   }
+}
+
+export async function publishReadyToShipNotifications(args: Parameters<typeof publishReadyNotifications>[0]): Promise<boolean> {
+  return (await publishReadyToShipNotificationsDetailed(args)).published;
 }

@@ -12,7 +12,7 @@ import {
   settlePendingReceiptSubmission,
   type DeliveryReceiptCompletion,
 } from '../src/deliveryReceiptStore.ts';
-import { deliveryOrderDocument, deliveryOrderKey, readDeliveryOrder, readDeliveryRecovery } from '../src/deliveryOrderStore.ts';
+import { deliveryOrderKey, readDeliveryOrder, readDeliveryRecovery } from '../src/deliveryOrderStore.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { DeliveryReceiptError, runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
 import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
@@ -52,17 +52,18 @@ test('delivery document adapters preserve sparse data, unknown fields, and repos
     const key = deliveryOrderKey('drops/card_nft_2/deliveryOrders/7');
     const record = await native.context.repository.get(key);
     assert.ok(record);
-    const document = deliveryOrderDocument(record);
+    const document = await readDeliveryOrder({ ...native.context, repository: { get: async () => record } }, key);
+    assert.ok(document);
     assert.deepEqual(document, record);
     assert.equal(document.data, record.data);
     assert.deepEqual(await readDeliveryOrder(native.context, key), record);
     const { receiptRecovery: _recovery, ...businessFields } = fields;
     assert.deepEqual(document.data, businessFields);
     assert.deepEqual((await readDeliveryRecovery(native.context, key))?.order.data, fields);
-    assert.throws(() => deliveryOrderDocument({
-      ...record,
-      key: commerceKeys.stripeCheckout('card_nft_2', 'session'),
-    }), /Invalid delivery order document kind/);
+    await assert.rejects(readDeliveryOrder({
+      ...native.context,
+      repository: { get: async () => ({ ...record, key: commerceKeys.stripeCheckout('card_nft_2', 'session') }) },
+    }, key), /Invalid delivery order document kind/);
   }
   assert.throws(() => deliveryOrderKey('drops/card_nft_2/stripeCheckouts/session'), /Invalid delivery order document path/);
 });
@@ -161,16 +162,16 @@ test('native ready-to-ship persistence includes notification and pack-status out
       addressSnapshot: { email: 'buyer@example.com' },
       items: [{ kind: 'box', refId: 3 }],
     });
-    const document = await readCommerceRecord(
+    const document = await readDeliveryOrder(
       native.context,
-      requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
+      deliveryOrderKey('drops/card_nft_2/deliveryOrders/7'),
     );
     assert.ok(document);
     const lease = await claimRecoveryLease(native.context);
     native.context.signal = signal;
     await markDeliveryReady(
       native.context,
-      deliveryOrderDocument(document),
+      document,
       runtime,
       {
         signature: SIGNATURE,
@@ -206,7 +207,7 @@ test('native ready-notification publication claims, queues, and finalizes atomic
   assert.equal(await publishReadyToShipNotifications({
     context: native.context,
     deliveryId: 7,
-    document,
+    key: deliveryOrderKey(document.key.path),
     dropId: 'card_nft_2',
     queue: notificationQueue({
       sendBatch: async (messages) => {
@@ -241,7 +242,7 @@ test('pre-enqueue cancellation releases the ready-notification claim and attempt
     publishReadyToShipNotifications({
       context: native.context,
       deliveryId: 7,
-      document,
+      key: deliveryOrderKey(document.key.path),
       dropId: 'card_nft_2',
       queue: notificationQueue({
         sendBatch: async () => {

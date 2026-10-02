@@ -897,7 +897,7 @@ async function resumeReadyOrder(
   await publishReadyToShipNotifications({
     context: args.commerce,
     deliveryId,
-    document,
+    key: document.key,
     dropId: runtime.dropId,
     queue: args.env.NOTIFICATION_EMAIL_QUEUE,
   });
@@ -1068,7 +1068,7 @@ async function issueVerifiedReceipts(
   await publishReadyToShipNotifications({
     context: args.commerce,
     deliveryId,
-    document: readyDocument,
+    key: readyDocument.key,
     dropId: runtime.dropId,
     queue: args.env.NOTIFICATION_EMAIL_QUEUE,
   });

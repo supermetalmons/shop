@@ -19,7 +19,7 @@ function database(context: { after: (cleanup: () => void) => void }, current = t
   context.after(() => db.close());
   db.exec('PRAGMA foreign_keys = ON');
   const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
-  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql') && (current || name < '0030')).sort()) {
+  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql') && name < '0033' && (current || name < '0030')).sort()) {
     db.exec(readFileSync(new URL(name, directory), 'utf8'));
   }
   withLease(db, () => db.exec(`UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp};
@@ -86,6 +86,7 @@ test('recovery preparation preserves every value, pending journals, legacy lease
   resume(db);
   const hydrated = queryRemoteCommerceDocuments('SELECT * FROM commerce_documents ORDER BY document_path', query(db));
   assert.deepEqual(hydrated.map((document) => document.data.receiptRecovery), values);
+  assert.equal((await execute(db, 'status')).legacyMetadataCount, values.length - 1);
 });
 
 test('interrupted recovery preparation resumes without replacing imported generations and bounds source reads', async (context) => {
@@ -354,7 +355,7 @@ test('recovery preparation, status, and activation use page-bounded remote calls
   calls = 0;
   imports = 0;
   assert.equal((await execute(db, 'status', { query: observed })).validationError, null);
-  assert.ok(calls <= pageCount + 3, `status made ${calls} queries for ${pageCount} pages`);
+  assert.ok(calls <= pageCount + 4, `status made ${calls} queries for ${pageCount} pages`);
   assert.equal(imports, 0);
   calls = 0;
   await execute(db, 'prepare', { query: observed });

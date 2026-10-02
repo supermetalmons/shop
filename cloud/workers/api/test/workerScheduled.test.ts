@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import { runScheduledReconciliations, type ScheduledReconcilers } from '../src/workerScheduled.ts';
+import { emptyReconciliationResult } from '../src/reconciliationResult.ts';
 
 type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions' | 'mi_note_auth_sessions';
 const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions', 'mi_note_auth_sessions'];
@@ -45,13 +46,13 @@ function cleanupDatabase(options: {
 
 function commerceReconcilers(calls: string[] = []): Omit<ScheduledReconcilers, 'ops'> {
   return {
-    notifications: async () => { calls.push('notifications'); return 0; },
-    packStatus: async () => { calls.push('packStatus'); return 0; },
-    stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
-    stripeNotifications: async () => { calls.push('stripeNotifications'); return 0; },
-    shippedNotifications: async () => { calls.push('shippedNotifications'); return 0; },
-    receiptClaims: async () => { calls.push('receiptClaims'); return 0; },
-    preorders: async () => { calls.push('preorders'); return 0; },
+    notifications: async () => { calls.push('notifications'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    packStatus: async () => { calls.push('packStatus'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    stripe: async () => { calls.push('stripe'); return emptyReconciliationResult(); },
+    stripeNotifications: async () => { calls.push('stripeNotifications'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    shippedNotifications: async () => { calls.push('shippedNotifications'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    receiptClaims: async () => { calls.push('receiptClaims'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
   };
 }
 
@@ -71,14 +72,14 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
   context.mock.method(console, 'log', (entry: Record<string, unknown>) => { logs.push(entry); });
   const calls: string[] = [];
   const reconciliation = runScheduledReconciliations({} as Env, new AbortController().signal, {
-    stripe: async () => { calls.push('stripe'); return { enqueued: 2, failed: 1 }; },
-    stripeNotifications: async () => { calls.push('stripeNotifications'); return 3; },
-    shippedNotifications: async () => { calls.push('shippedNotifications'); return 4; },
-    packStatus: async () => { calls.push('packStatus'); return 5; },
-    notifications: async () => { calls.push('notifications'); return 6; },
-    receiptClaims: async () => { calls.push('receiptClaims'); return 7; },
-    preorders: async () => { calls.push('preorders'); return 0; },
-    ops: async () => { calls.push('ops'); },
+    stripe: async () => { calls.push('stripe'); return { ...emptyReconciliationResult(), attempted: 3, completed: 2, failed: 1 }; },
+    stripeNotifications: async () => { calls.push('stripeNotifications'); return { ...emptyReconciliationResult(), attempted: 3, completed: 3 }; },
+    shippedNotifications: async () => { calls.push('shippedNotifications'); return { ...emptyReconciliationResult(), attempted: 4, completed: 4 }; },
+    packStatus: async () => { calls.push('packStatus'); return { ...emptyReconciliationResult(), attempted: 5, completed: 5 }; },
+    notifications: async () => { calls.push('notifications'); return { ...emptyReconciliationResult(), attempted: 6, completed: 6 }; },
+    receiptClaims: async () => { calls.push('receiptClaims'); return { ...emptyReconciliationResult(), attempted: 7, completed: 7 }; },
+    preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
   });
   assert.deepEqual(calls, [
     'stripe', 'stripeNotifications', 'shippedNotifications', 'packStatus',
@@ -94,14 +95,14 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
     assert.ok((entry.durationMs as number) >= 0);
   }
   assert.deepEqual(Object.fromEntries(logs.map(({ job, durationMs: _durationMs, ...entry }) => [job, entry])), {
-    stripe: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', enqueued: 2, failed: 1 },
-    stripeNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 3 },
-    shippedNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 4 },
-    packStatus: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 5 },
-    notifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 6 },
-    receiptClaims: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 7 },
-    preorders: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', processedCount: 0 },
-    ops: { event: 'scheduled_reconciliation_job', outcome: 'succeeded' },
+    stripe: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 3, completed: 2, deferred: 0, skipped: 0, failed: 1 },
+    stripeNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 3, completed: 3, deferred: 0, skipped: 0, failed: 0 },
+    shippedNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 },
+    packStatus: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 5, completed: 5, deferred: 0, skipped: 0, failed: 0 },
+    notifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 6, completed: 6, deferred: 0, skipped: 0, failed: 0 },
+    receiptClaims: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 7, completed: 7, deferred: 0, skipped: 0, failed: 0 },
+    preorders: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
+    ops: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
   });
 });
 
@@ -123,8 +124,8 @@ test('failed scheduled jobs report only error names and preserve original failur
     return true;
   });
   assert.deepEqual(errors.map(({ durationMs: _durationMs, ...entry }) => entry), [
-    { event: 'scheduled_reconciliation_job', job: 'stripe', outcome: 'failed', errorName: 'TypeError' },
-    { event: 'scheduled_reconciliation_job', job: 'ops', outcome: 'failed', errorName: 'UnknownError' },
+    { event: 'scheduled_reconciliation_job', job: 'stripe', outcome: 'failed', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0, errorName: 'TypeError' },
+    { event: 'scheduled_reconciliation_job', job: 'ops', outcome: 'failed', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0, errorName: 'UnknownError' },
   ]);
 });
 
@@ -134,13 +135,13 @@ test('scheduled job logging cannot change successful results or replace failures
   context.mock.method(console, 'error', () => { throw loggerFailure; });
   await runScheduledReconciliations({} as Env, new AbortController().signal, {
     ...commerceReconcilers(),
-    ops: async () => {},
+    ops: async () => emptyReconciliationResult(),
   });
   const jobFailure = new Error('job failed');
   await assert.rejects(runScheduledReconciliations({} as Env, new AbortController().signal, {
     ...commerceReconcilers(),
     stripe: async () => { throw jobFailure; },
-    ops: async () => {},
+    ops: async () => emptyReconciliationResult(),
   }), (error: unknown) => {
     assert.ok(error instanceof AggregateError);
     assert.equal(error.errors.length, 1);
@@ -160,7 +161,7 @@ test('synchronous commerce failure still skips later commerce jobs and waits for
   const reconciliation = runScheduledReconciliations({} as Env, new AbortController().signal, {
     ...commerceReconcilers(calls),
     stripe: () => { calls.push('stripe'); throw failure; },
-    ops: () => { calls.push('ops'); return opsFinished.promise; },
+    ops: () => { calls.push('ops'); return opsFinished.promise.then(() => emptyReconciliationResult()); },
   }).finally(() => { settled = true; });
   const rejection = assert.rejects(reconciliation, (error: unknown) => {
     assert.ok(error instanceof AggregateError);
@@ -283,7 +284,7 @@ test('OPS cleanup runs while commerce authority is pending', async () => {
     COMMERCE_DB: { prepare: () => ({ first: () => authority.promise }) },
   } as unknown as Env, new AbortController().signal, {
     ...commerceReconcilers(commerceCalls),
-    ops: async () => { opsFinished.resolve(); },
+    ops: async () => { opsFinished.resolve(); return emptyReconciliationResult(); },
   }).finally(() => { settled = true; });
   await opsFinished.promise;
   assert.equal(settled, false);
@@ -394,6 +395,10 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   assert.equal(jobLogs.length, 1);
   assert.equal(jobLogs[0].job, 'ops');
   assert.equal(jobLogs[0].outcome, 'succeeded');
+  assert.deepEqual(Object.fromEntries(['attempted', 'completed', 'deferred', 'skipped', 'failed']
+    .map((field) => [field, jobLogs[0][field]])), {
+    attempted: 4, completed: 0, deferred: 4, skipped: 0, failed: 0,
+  });
   assert.deepEqual(logs.filter((entry) => entry.event !== 'scheduled_reconciliation_job'), [
     { event: 'receipt_transfer_rate_limit_cleanup_completed', deletedCount: rateLimitCount, limitReached: true, hasMore: true },
     { event: 'staff_auth_cleanup_completed', ...staffCounts },
@@ -406,4 +411,38 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
     { event: 'anonymous_auth_cleanup_backlog', ...anonymousCounts },
     { event: 'mi_note_auth_cleanup_backlog', ...miNoteCounts },
   ]);
+});
+
+test('failed scheduled jobs retain reported partial counters without wrapping their rejection', async (context) => {
+  const logs: Array<Record<string, unknown>> = [];
+  context.mock.method(console, 'log', () => {});
+  context.mock.method(console, 'error', (entry: Record<string, unknown>) => { logs.push(entry); });
+  const failure = new AggregateError([new Error('private provider details')], 'original aggregate');
+  await assert.rejects(runScheduledReconciliations({} as Env, new AbortController().signal, {
+    ...commerceReconcilers(),
+    stripe: async (_env, _signal, options) => {
+      options?.onResult?.({ attempted: 3, completed: 1, deferred: 1, skipped: 0, failed: 1 });
+      throw failure;
+    },
+    ops: async () => emptyReconciliationResult(),
+  }), (error: unknown) => error instanceof AggregateError && error.errors[0] === failure);
+  assert.deepEqual(logs.map(({ durationMs: _durationMs, ...entry }) => entry), [{
+    event: 'scheduled_reconciliation_job', job: 'stripe', outcome: 'failed',
+    attempted: 3, completed: 1, deferred: 1, skipped: 0, failed: 1, errorName: 'AggregateError',
+  }]);
+});
+
+test('OPS completion and backlog logger failures cannot interrupt cleanup or replace its errors', async (context) => {
+  context.mock.method(console, 'log', () => { throw new Error('logger unavailable'); });
+  context.mock.method(console, 'error', () => { throw new Error('logger unavailable'); });
+  const failure = { privateDetail: 'original cleanup rejection' };
+  const harness = cleanupDatabase({
+    deleted: { rate_limit_buckets: OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit, anonymous_auth_sessions: 1 },
+    hasMore: true,
+    onBatch: (table) => { if (table === 'staff_auth_sessions') throw failure; },
+  });
+  await assert.rejects(runScheduledReconciliations({ OPS_DB: harness.db } as Env,
+    new AbortController().signal, commerceReconcilers()), (error) => assertOpsFailures(error, [failure]));
+  assert.deepEqual(harness.calls, CLEANUP_TABLES);
+  assert.equal(harness.maxActive(), 1);
 });

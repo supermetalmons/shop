@@ -2,7 +2,7 @@ import { parseDeliveryOrderProjectionView, type DeliveryOrderProjectionView } fr
 import { readDeliveryOrder } from './deliveryOrderStore.js';
 import { API_DROPS } from './dropConfig.js';
 import { runtimeForDrop, type DeliveryRuntime } from './deliveryReceiptOnchain.js';
-import { DeliveryReceiptError, summarizeDeliveryReceiptError as summarizeError } from './deliveryReceiptErrors.js';
+import { DeliveryReceiptError } from './deliveryReceiptErrors.js';
 import { resolveDeliveryOrderIdentity } from './deliveryOrderSummaries.js';
 import type { PackStatusOutboxMutation, PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.js';
 import {
@@ -23,6 +23,10 @@ import {
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
+import {
+  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
+  reportReconciliationResult, reconciliationLogger, reconciliationErrorSummary, type ReconciliationOptions, type ReconciliationResult,
+} from './reconciliationResult.js';
 
 const CLEANUP_TIMEOUT_MS = 5_000;
 const PACK_STATUS_TIMEOUT_MS = 10_000;
@@ -100,7 +104,7 @@ async function countNormalIrlPackStatus(
   await applyPackStatusProjection({
     dataDb: context.dataDb,
     event,
-    log: (entry) => console.warn(entry),
+    log: reconciliationLogger((entry) => console.warn(entry)),
   });
 }
 
@@ -152,7 +156,7 @@ export async function projectPendingDeliveryPackStatus(args: {
   log?: (entry: Record<string, unknown>) => void;
   nowMs?: () => number;
 }): Promise<DeliveryPackStatusProjectionOutcome> {
-  const log = args.log || ((entry: Record<string, unknown>) => console.log(entry));
+  const log = reconciliationLogger(args.log || ((entry) => console.log(entry)));
   const attemptStartedAtMs = (args.nowMs || Date.now)();
   const scope = createTimedAbortScope(args.context.signal, {
     timeoutMs: PACK_STATUS_TIMEOUT_MS,
@@ -168,7 +172,8 @@ export async function projectPendingDeliveryPackStatus(args: {
   let outbox: PackStatusOutboxRecord | null = null;
   try {
     outbox = await raceWithSignal(context.repository.packStatusOutbox.get(documentPath), context.signal);
-    if (!outbox || outbox.state !== 'pending') return 'not-needed';
+    if (!outbox || outbox.state === 'cancelled') return 'not-needed';
+    if (outbox.state !== 'pending') return outbox.state;
     if (outbox.nextAttemptAtMs! > attemptStartedAtMs) return 'not-due';
     const order = await raceWithSignal(readDeliveryOrder(context, key), context.signal);
     if (!order) return 'not-needed';
@@ -249,7 +254,7 @@ export async function projectPendingDeliveryPackStatus(args: {
         dropId: args.dropId,
         deliveryId: args.deliveryId,
         errorCode,
-        error: summarizeError(error),
+        error: reconciliationErrorSummary(error),
       });
       return 'failed';
     }
@@ -265,7 +270,7 @@ export async function projectPendingDeliveryPackStatus(args: {
       dropId: args.dropId,
       deliveryId: args.deliveryId,
       errorCode,
-      error: summarizeError(error),
+      error: reconciliationErrorSummary(error),
     });
     return 'pending';
   } finally {
@@ -294,88 +299,104 @@ export async function reconcilePendingDeliveryPackStatusProjections(
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
     providerFetch?: ProfileProviderFetch;
-  } = {},
-): Promise<number> {
-  const nowMs = overrides.nowMs || Date.now;
-  const dueAtMs = nowMs();
-  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const context: DeliveryPackStatusContext = {
-    repository: new D1CommerceRepository(env.COMMERCE_DB),
-    nowMs: dueAtMs,
-    signal,
-    dataDb: env.DATA_DB,
-  };
-  const lanes = await Promise.all(
-    (overrides.dropIds || Object.keys(API_DROPS).sort()).flatMap((dropId) => {
-      const runtime = runtimeForDrop(dropId);
-      if (!shouldTrackPackStatusForDrop(runtime)) return [];
-      return [runDueDeliveryPackStatusProjectionQuery(
-        context,
-        runtime.dropId,
-        dueAtMs,
-        PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE,
-      ).then((documents) => ({ documents, dropId: runtime.dropId }))];
-    }),
-  );
-  const candidates: Array<{ deliveryId: number; dropId: string }> = [];
-  const errors: unknown[] = [];
-  let inspected = 0;
-  while (
-    inspected < PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE &&
-    lanes.some((lane) => lane.documents.length)
-  ) {
-    for (const lane of lanes) {
-      if (inspected >= PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE) break;
-      const document = lane.documents.shift();
-      if (!document) continue;
-      inspected += 1;
-      const documentId = document.parentPath.split('/').at(-1)!;
-      const resolution = resolveDeliveryOrderIdentity(documentId, {}, document.parentPath);
-      if (!('identity' in resolution) || resolution.identity.dropId !== lane.dropId) {
+  } & ReconciliationOptions = {},
+): Promise<ReconciliationResult> {
+  const summary = emptyReconciliationResult();
+  try {
+    const nowMs = overrides.nowMs || Date.now;
+    const dueAtMs = nowMs();
+    const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
+    const context: DeliveryPackStatusContext = {
+      repository: new D1CommerceRepository(env.COMMERCE_DB),
+      nowMs: dueAtMs,
+      signal,
+      dataDb: env.DATA_DB,
+    };
+    const lanes = await Promise.all(
+      (overrides.dropIds || Object.keys(API_DROPS).sort()).flatMap((dropId) => {
+        const runtime = runtimeForDrop(dropId);
+        if (!shouldTrackPackStatusForDrop(runtime)) return [];
+        return [runDueDeliveryPackStatusProjectionQuery(
+          context,
+          runtime.dropId,
+          dueAtMs,
+          PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE,
+        ).then((documents) => ({ documents, dropId: runtime.dropId }))];
+      }),
+    );
+    const candidates: Array<{ deliveryId: number; dropId: string }> = [];
+    const errors: unknown[] = [];
+    let inspected = 0;
+    while (
+      inspected < PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE &&
+      lanes.some((lane) => lane.documents.length)
+    ) {
+      for (const lane of lanes) {
+        if (inspected >= PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE) break;
+        const document = lane.documents.shift();
+        if (!document) continue;
+        inspected += 1;
+        const documentId = document.parentPath.split('/').at(-1)!;
+        const resolution = resolveDeliveryOrderIdentity(documentId, {}, document.parentPath);
+        if (!('identity' in resolution) || resolution.identity.dropId !== lane.dropId) {
+          try {
+            const cleanup = cleanupContext(context);
+            const changed = await transitionDeliveryPackStatusProjection(cleanup, document,
+              terminalProjectionMutation(document, 'failed', cleanup.nowMs, 'invalid-order-identity'));
+            recordReconciliationOutcome(summary, changed ? 'failed' : 'deferred');
+            if (changed) reportReconciliationFailure('packStatus', { parentPath: document.parentPath },
+              undefined, 'invalid-order-identity');
+          } catch (error) {
+            recordReconciliationOutcome(summary, 'failed');
+            reportReconciliationFailure('packStatus', { parentPath: document.parentPath }, error);
+            errors.push(error);
+          }
+          continue;
+        }
+        candidates.push({
+          deliveryId: resolution.identity.deliveryId,
+          dropId: lane.dropId,
+        });
+      }
+    }
+    let nextCandidate = 0;
+    const worker = async () => {
+      while (nextCandidate < candidates.length) {
+        if (signal.aborted) {
+          errors.push(signal.reason);
+          return;
+        }
+        const candidate = candidates[nextCandidate];
+        nextCandidate += 1;
         try {
-          const cleanup = cleanupContext(context);
-          await transitionDeliveryPackStatusProjection(cleanup, document,
-            terminalProjectionMutation(document, 'failed', cleanup.nowMs, 'invalid-order-identity'));
+          const projected = await projectPendingDeliveryPackStatus({
+            ...candidate,
+            context,
+            log,
+            nowMs,
+          });
+          const outcome = projected === 'completed' ? 'completed' : projected === 'failed' ? 'failed'
+            : projected === 'not-needed' ? 'skipped' : 'deferred';
+          recordReconciliationOutcome(summary, outcome);
+          if (outcome === 'failed') reportReconciliationFailure('packStatus', candidate, undefined, 'projection-failed');
         } catch (error) {
+          recordReconciliationOutcome(summary, 'failed');
+          reportReconciliationFailure('packStatus', candidate, error);
           errors.push(error);
         }
-        continue;
       }
-      candidates.push({
-        deliveryId: resolution.identity.deliveryId,
-        dropId: lane.dropId,
-      });
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY, candidates.length) },
+        worker,
+      ),
+    );
+    if (errors.length) throw new AggregateError(errors, 'Pack-status projection reconciliation failed');
+    return summary;
+  } finally {
+    reportReconciliationResult(summary, overrides.onResult);
   }
-  let nextCandidate = 0;
-  const worker = async () => {
-    while (nextCandidate < candidates.length) {
-      if (signal.aborted) {
-        errors.push(signal.reason);
-        return;
-      }
-      const candidate = candidates[nextCandidate];
-      nextCandidate += 1;
-      try {
-        await projectPendingDeliveryPackStatus({
-          ...candidate,
-          context,
-          log,
-          nowMs,
-        });
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY, candidates.length) },
-      worker,
-    ),
-  );
-  if (errors.length) throw new AggregateError(errors, 'Pack-status projection reconciliation failed');
-  return candidates.length;
 }
 
 export function scheduleDeliveryPackStatusProjection(args: {
@@ -388,11 +409,11 @@ export function scheduleDeliveryPackStatusProjection(args: {
     ...args,
     context: { ...args.context, signal: new AbortController().signal },
   }).catch((error) => {
-    console.error({
+    reconciliationLogger((entry) => console.error(entry))({
       event: 'delivery_pack_status_projection_background_failed',
       dropId: args.dropId,
       deliveryId: args.deliveryId,
-      error: summarizeError(error),
+      error: reconciliationErrorSummary(error),
     });
   });
   registerDeferredWork(args.waitUntil, task);

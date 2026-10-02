@@ -2,6 +2,7 @@ import { createDeliveryRecoveryRecord } from '../../../../shared/deliveryRecover
 import { deliveryRecoveryWriteStatement } from '../src/deliveryRecoveryPersistence.ts';
 import { LEGACY_NOTIFICATION_FIELDS, type NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
 import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepository.ts';
+import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -252,6 +253,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0030_delivery_recovery.sql',
       '0031_preorder_card_range_1419.sql',
       '0032_preorder_catalog.sql',
+      '0033_delivery_recovery_metadata_cleanup.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -326,6 +328,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
         owner: 'runtime-owner',
         shipperReadyToShipEmailState: 'queued',
         status: 'ready_to_ship',
+        unrelatedPayload: 'x'.repeat(64 * 1024),
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-a'), {
         owner: validOwnerA,
@@ -352,6 +355,8 @@ test('commerce repository reads and transaction guards run through the real D1 r
           buyerOrderReceivedEmailState: 'pending',
           shipperReadyToShipEmailState: 'pending',
           status: 'ready_to_ship',
+          deliveryId: expiry === 10 ? null : String(expiry),
+          dropId: 'runtime',
           readyToShipNotificationPublishClaimId: 'claim',
           readyToShipNotificationPublishClaimExpiresAtMs: expiry,
         },
@@ -364,6 +369,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), {
         status: 'fulfilled',
+        unrelatedPayload: 'x'.repeat(64 * 1024),
         stripeTerminalNotificationState: 'pending',
         stripeTerminalNotificationNextAttemptAtMs: 10,
       }),
@@ -547,19 +553,17 @@ test('commerce repository reads and transaction guards run through the real D1 r
         .map((record) => record.key.documentId),
       ['1'],
     );
-    assert.deepEqual(
-      (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }))
-        .map((record) => record.key.documentId),
-      ['1', 'notification-10'],
-    );
+    assert.deepEqual(await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }), [
+      { key: deliveryKey, identityFields: {} },
+      { key: commerceKeys.deliveryOrder('runtime', 'notification-10'), identityFields: { deliveryId: null, dropId: 'runtime' } },
+    ]);
     assert.deepEqual(
       (await repository.queryStaleStripeFulfillments(10)).map((record) => record.key.documentId),
       ['cs_runtime'],
     );
-    assert.deepEqual(
-      (await repository.queryDueStripeTerminalNotifications(10)).map((record) => record.key.documentId),
-      ['cs_terminal'],
-    );
+    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(10), [
+      { key: commerceKeys.stripeCheckout('runtime', 'cs_terminal') },
+    ]);
     assert.deepEqual(await repository.queryDueStripeTerminalNotifications(9), []);
 
     const ownerUnit = await repository.begin(Date.parse('2026-01-01T00:00:01.000Z'));
@@ -875,6 +879,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
       ['1', 'notification-10'],
     );
     const dueReadyRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.deepEqual(latestObservedBatchResults()?.[1]?.results.map((row) => Object.keys(row).sort()),
+      Array.from({ length: 2 }, () => [
+        'delivery_id_json', 'document_id', 'document_kind', 'document_path', 'drop_id', 'drop_id_json',
+      ]));
     assert.equal(Number.isSafeInteger(dueReadyRowsRead), true);
     assert.equal(dueReadyRowsRead <= 10, true, `Due notification query read ${dueReadyRowsRead} rows: ${observedPreparedSql.join("\n")}`);
     const readyDueSql = observedPreparedSql.find((sql) => sql.includes('commerce_notification_outbox') && sql.includes('next_attempt_at_ms'));
@@ -1084,6 +1092,8 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 2)).map((record) => record.key.path),
       [stripeDueKeys[2].path, stripeDueKeys[0].path]);
     const matchedStripeDueRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.deepEqual(latestObservedBatchResults()?.[1]?.results.map((row) => Object.keys(row).sort()),
+      Array.from({ length: 2 }, () => ['document_id', 'document_kind', 'document_path', 'drop_id']));
     assert.ok(Number.isSafeInteger(matchedStripeDueRowsRead) && matchedStripeDueRowsRead <= 16,
       `Matching Stripe notification query read ${matchedStripeDueRowsRead} rows`);
     const stripeDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_stripe_due_at'));
@@ -1097,6 +1107,31 @@ test('commerce repository reads and transaction guards run through the real D1 r
       [stripeDueKeys[2].path, stripeDueKeys[0].path, stripeDueKeys[1].path]);
     await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { status: 'fulfillment_failed' }));
     assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
+
+    const shippedPayload = createNotificationEmailJobV1({
+      jobId: crypto.randomUUID(), kind: 'buyer_order_shipped', idempotencyKey: 'runtime:1:order_shipped',
+      recipients: ['buyer@example.com'], subject: 'Shipped', text: 'x'.repeat(32 * 1024),
+      html: `<p>${'x'.repeat(32 * 1024)}</p>`, context: { dropId: 'runtime', deliveryId: 1 },
+    });
+    await notificationOutboxWriteStatement(env.COMMERCE_DB, {
+      parentPath: deliveryKey.path, family: 'shipped', dropId: 'runtime', generation: crypto.randomUUID(),
+      outcome: null, state: 'pending', revision: 1, attemptCount: 0, nextAttemptAtMs: 0,
+      claimId: null, claimExpiresAtMs: null, retryUntilMs: 100, createdAtMs: 0, updatedAtMs: 0,
+      lastErrorCode: null, entries: [{ kind: shippedPayload.kind, jobId: shippedPayload.jobId,
+        idempotencyKey: shippedPayload.idempotencyKey, state: 'pending', payload: shippedPayload }],
+    }).run();
+    observedPreparedSql.length = 0;
+    assert.deepEqual(await observedRepository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: 0, limit: 8 }),
+      [{ parentPath: deliveryKey.path, family: 'shipped' }]);
+    assert.deepEqual(latestObservedBatchResults()?.[1]?.results, [{ parent_path: deliveryKey.path, family: 'shipped' }]);
+    const shippedDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_family_due'));
+    assert.ok(shippedDueSql);
+    const shippedDuePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${shippedDueSql}`)
+      .bind(0, 'shipped', 8).all<{ detail: string }>();
+    const shippedDuePlanDetails = shippedDuePlan.results.map((row) => row.detail).join('\n');
+    assert.match(shippedDuePlanDetails, /SEARCH outbox USING (?:COVERING )?INDEX commerce_notification_outbox_family_due/);
+    assert.doesNotMatch(shippedDuePlanDetails, /SCAN .*outbox|USE TEMP B-TREE/i);
+    assert.deepEqual((await repository.notificationOutbox.get(deliveryKey.path, 'shipped'))?.entries[0].payload, shippedPayload);
     assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(0, 20)).map((record) => record.key.path), [suspendedKey.path]);
     await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { manualRefundReviewRequired: false }));
     assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(0, 20), []);

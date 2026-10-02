@@ -34,7 +34,7 @@ export function deliveryOrderKey(path: string): DeliveryOrderKey {
   return { ...key, kind: key.kind };
 }
 
-export function deliveryOrderDocument(record: CommerceDocumentRecord): DeliveryOrderDocument {
+function deliveryOrderDocument(record: CommerceDocumentRecord): DeliveryOrderDocument {
   if (record.key.kind !== 'delivery_order') throw new Error('Invalid delivery order document kind.');
   return { ...record, key: { ...record.key, kind: record.key.kind } };
 }

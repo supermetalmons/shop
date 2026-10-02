@@ -8,6 +8,7 @@ import {
 import { CommerceRepositoryError } from './commerceRepositoryTypes.js';
 import { NOTIFICATION_OUTBOX_COLUMNS, notificationOutboxDueQuery } from './commerceQueries.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
+import { parseNotificationOutboxCandidate, type NotificationOutboxCandidate } from './commerceDiscoveryCandidates.js';
 
 export function notificationOutboxAuthorityStatement(db: D1Database, includeCheckoutState = false): D1PreparedStatement {
   return db.prepare(`SELECT authority_state,
@@ -52,7 +53,7 @@ export class NotificationOutboxRepository {
 
   async get(parentPath: string, family: NotificationOutboxFamily): Promise<NotificationOutboxRecord | null> {
     const rows = await this.readBatch([this.db.prepare(`SELECT ${NOTIFICATION_OUTBOX_COLUMNS}
-      FROM commerce_notification_outbox WHERE parent_path = ? AND family = ?`).bind(parentPath, family)]);
+      FROM commerce_notification_outbox WHERE parent_path = ? AND family = ?`).bind(parentPath, family)], parseNotificationOutboxRow);
     return rows[0] ?? null;
   }
 
@@ -65,16 +66,16 @@ export class NotificationOutboxRepository {
         FROM commerce_notification_outbox WHERE family = ? AND parent_path IN (${batch.map(() => '?').join(', ')})`)
         .bind(family, ...batch));
     }
-    return this.readBatch(statements);
+    return this.readBatch(statements, parseNotificationOutboxRow);
   }
 
-  async queryDue(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): Promise<NotificationOutboxRecord[]> {
+  async queryDue(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): Promise<NotificationOutboxCandidate[]> {
     limitValue(args.limit);
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid notification outbox cutoff.');
     }
     const query = notificationOutboxDueQuery(args);
-    return this.readBatch([this.db.prepare(query.sql).bind(...query.bindings)]);
+    return this.readBatch([this.db.prepare(query.sql).bind(...query.bindings)], parseNotificationOutboxCandidate);
   }
 
   async compareAndSet(args: {
@@ -100,11 +101,14 @@ export class NotificationOutboxRepository {
       next.claimId, next.claimExpiresAtMs, next.retryUntilMs, next.updatedAtMs, next.lastErrorCode,
       expected.parentPath, expected.family, expected.generation, expected.revision, expected.claimId,
       ...(args.parentVersion === undefined ? [] : [args.parentVersion]),
-    )]);
+    )], parseNotificationOutboxRow);
     return rows[0] ?? null;
   }
 
-  private async readBatch(statements: D1PreparedStatement[]): Promise<NotificationOutboxRecord[]> {
+  private async readBatch<T>(
+    statements: D1PreparedStatement[],
+    parse: (row: Record<string, unknown>) => T,
+  ): Promise<T[]> {
     if (statements.length === 0) return [];
     const results = await executeCommerceD1Batch(this.db, () => [
       notificationOutboxAuthorityStatement(this.db), ...statements,
@@ -115,6 +119,6 @@ export class NotificationOutboxRepository {
         : error,
     });
     requireNotificationOutboxAuthority(results[0]);
-    return results.slice(1).flatMap((result) => result.results.map(parseNotificationOutboxRow));
+    return results.slice(1).flatMap((result) => result.results.map(parse));
   }
 }

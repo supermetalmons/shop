@@ -3,6 +3,7 @@ import test, { type TestContext } from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { reconcilePendingReadyToShipNotifications } from '../src/readyToShipNotificationReconciliation.ts';
+import { ReadyToShipNotificationEnqueueError } from '../src/readyToShipNotificationOutbox.ts';
 import {
   NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
 } from '../src/notificationOutboxPublication.ts';
@@ -93,13 +94,13 @@ test('successive bounded passes drain due notifications without OPS_DB or revisi
     { id: 92, fields: { buyerOrderReceivedEmailState: 'failed' } },
     ...ids.map((id) => ({ id })),
   ]);
-  assert.equal(await native.run(), 4);
+  assert.deepEqual(await native.run(), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), ids.slice(0, 4));
-  assert.equal(await native.run(), 4);
+  assert.deepEqual(await native.run(), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), ids.slice(0, 8));
-  assert.equal(await native.run(), 4);
+  assert.deepEqual(await native.run(), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), ids);
-  assert.equal(await native.run(), 0);
+  assert.deepEqual(await native.run(), { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
   assert.equal((await native.load(90)).claimId, '00000000-0000-4000-8000-000000000090');
 });
 
@@ -109,7 +110,7 @@ test('the eight-candidate scan cap bounds malformed-order cleanup without refill
     ...invalidIds.map((id) => ({ id, fields: { deliveryId: -1 } })),
     { id: 109 },
   ]);
-  assert.equal(await native.run(), 0);
+  assert.deepEqual(await native.run(), { attempted: 8, completed: 0, deferred: 0, skipped: 0, failed: 8 });
   assert.equal(native.jobs.length, 0);
   assert.equal(native.logs.length, 8);
   for (const id of invalidIds.slice(0, 8)) {
@@ -119,7 +120,7 @@ test('the eight-candidate scan cap bounds malformed-order cleanup without refill
   }
   assert.equal((await native.load(108)).state, 'pending');
   assert.equal((await native.load(109)).state, 'pending');
-  assert.equal(await native.run(), 1);
+  assert.deepEqual(await native.run(), { attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 });
   assert.equal(native.logs.length, 9);
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [109]);
 });
@@ -132,21 +133,21 @@ test('malformed candidates are cleaned after four publication attempts until the
     { id: 106 },
     { id: 107, fields: { deliveryId: -1 } },
   ]);
-  assert.equal(await native.run(), 4);
+  assert.deepEqual(await native.run(), { attempted: 6, completed: 4, deferred: 0, skipped: 0, failed: 2 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103]);
   assert.equal(native.logs.length, 2);
   for (const id of [104, 105]) assert.equal((await native.load(id)).state, 'failed');
   for (const id of [106, 107]) assert.equal((await native.load(id)).state, 'pending');
-  assert.equal(await native.run(), 1);
+  assert.deepEqual(await native.run(), { attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 });
   assert.equal((await native.load(107)).state, 'failed');
 });
 
 test('a ready order producing two emails contributes one processed order', async (context) => {
   const state = await notificationFixture(context, 'ready');
-  assert.equal(await reconcilePendingReadyToShipNotifications({
+  assert.deepEqual(await reconcilePendingReadyToShipNotifications({
     COMMERCE_DB: state.harness.db,
     NOTIFICATION_EMAIL_QUEUE: state.queue as Queue<NotificationEmailJobV1>,
-  }, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), 1);
+  }, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.equal(state.sent.flat().length, 2);
 });
 
@@ -166,10 +167,10 @@ test('individual publication failures consume four slots and defer their retries
     assert.equal(pending.claimExpiresAtMs, NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS);
   }
   native.setSend(undefined);
-  assert.equal(await native.run(), 4);
+  assert.deepEqual(await native.run(), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.slice(4).map((job) => job.context.deliveryId), ids.slice(4));
-  assert.equal(await native.run(), 0);
-  assert.equal(await native.run(NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS), 4);
+  assert.deepEqual(await native.run(), { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await native.run(NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.slice(8).map((job) => job.context.deliveryId), ids.slice(0, 4));
 });
 
@@ -202,10 +203,44 @@ test('a claim acquired after candidate selection consumes one slot without dupli
         claimExpiresAtMs: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
         nextAttemptAtMs: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS } });
   });
-  assert.equal(await native.run(), 3);
+  assert.deepEqual(await native.run(), { attempted: 4, completed: 3, deferred: 1, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 102, 103]);
   assert.equal((await native.load(101)).claimId, '00000000-0000-4000-8000-000000000101');
   assert.equal((await native.load(104)).attemptCount, 0);
-  assert.equal(await native.run(), 1);
+  assert.deepEqual(await native.run(), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(native.jobs.map((job) => job.context.deliveryId), [100, 102, 103, 104]);
+});
+
+test('partial email publication reports one failed parent and retains queued siblings', async (context) => {
+  const state = await notificationFixture(context, 'ready');
+  await state.updateOrder({ addressSnapshot: { email: 'invalid' } });
+  const summaries: unknown[] = [];
+  const logs: unknown[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => { logs.push(entry); });
+  await assert.rejects(reconcilePendingReadyToShipNotifications({
+    COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue as Queue<NotificationEmailJobV1>,
+  }, new AbortController().signal, {
+    nowMs: () => OUTBOX_NOW,
+    onResult: (result) => { summaries.push(result); throw new Error('reporter unavailable'); },
+  }), (error: unknown) => error instanceof AggregateError && error.errors[0] instanceof ReadyToShipNotificationEnqueueError);
+  assert.deepEqual(summaries, [{ attempted: 1, completed: 0, deferred: 0, skipped: 0, failed: 1 }]);
+  assert.deepEqual((await state.read()).entries.map(({ kind, state }) => [kind, state]), [
+    ['buyer_order_received', 'pending'], ['shipper_ready_to_ship', 'queued'],
+  ]);
+  assert.deepEqual(logs, [{ event: 'scheduled_reconciliation_item_failed', job: 'notifications',
+    parentPath: state.parentKey.path, errorName: 'ReadyToShipNotificationEnqueueError', errorCode: 'unavailable' }]);
+});
+
+test('publication and result log failures do not undo ready notification completion', async (context) => {
+  const state = await notificationFixture(context, 'ready');
+  context.mock.method(console, 'log', () => { throw new Error('logger unavailable'); });
+  const result = await reconcilePendingReadyToShipNotifications({
+    COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue as Queue<NotificationEmailJobV1>,
+  }, new AbortController().signal, {
+    nowMs: () => OUTBOX_NOW,
+    onResult: () => { throw new Error('reporter unavailable'); },
+  });
+  assert.deepEqual(result, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  assert.equal((await state.read()).state, 'queued');
+  assert.equal(state.sent.flat().length, 2);
 });

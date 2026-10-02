@@ -283,9 +283,7 @@ export function parseRow(value: unknown): StoredDocument {
     createTime,
     data: key.kind === 'stripe_checkout'
       ? hydrateStripeCheckoutState(data as CommerceDocumentData, stripeCheckoutStateFromJoinedRow(row, documentPath, version))
-      : key.kind === 'delivery_order'
-        ? Object.fromEntries(Object.entries(data).filter(([field]) => field !== 'receiptRecovery')) as CommerceDocumentData
-        : data as CommerceDocumentData,
+      : data as CommerceDocumentData,
     rawData: data as CommerceDocumentData,
     key,
     processedAt: processedAt as CommerceTimestamp | null,

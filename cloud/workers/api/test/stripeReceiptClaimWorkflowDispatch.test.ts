@@ -213,7 +213,7 @@ test('cron repairs persisted work without a client retry token', async () => {
     ensure: async (_env, snapshot, _signal, requestId) => { called += 1; assert.equal(requestId, undefined); return snapshot; },
   });
   assert.equal(called, 1);
-  assert.equal(count, 1);
+  assert.deepEqual(count, { attempted: 1, completed: 0, deferred: 1, skipped: 0, failed: 0 });
 });
 
 test('Workflow paused and unknown statuses are active; inspection errors are not absence', async () => {

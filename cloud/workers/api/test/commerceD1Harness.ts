@@ -211,6 +211,7 @@ export function createCommerceD1Harness(
     stripeCheckoutStateMode?: 'legacy' | 'table';
     packStatusOutboxMode?: 'legacy' | 'table';
     deliveryRecoveryMode?: 'legacy' | 'table';
+    deliveryRecoveryMetadataCleanupMigration?: boolean;
     preorderEthereumMigration?: boolean;
     preorderConfirmationMigration?: boolean;
     preorderCardRangeMigration?: boolean;
@@ -273,7 +274,10 @@ export function createCommerceD1Harness(
     options.preorderCardRange1419Migration !== false) {
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0031_preorder_card_range_1419.sql', 'utf8'));
     if (options.preorderCatalogMigration !== false) {
-      for (const migration of readCommerceMigrations().slice(31)) database.exec(migration.sql);
+      for (const migration of readCommerceMigrations().slice(31)) {
+        if (options.deliveryRecoveryMetadataCleanupMigration === false && migration.name >= '0033_') break;
+        database.exec(migration.sql);
+      }
     }
   }
   resumeFreshCommerce(database, options.notificationOutboxMode ?? 'table', options.stripeCheckoutStateMode ?? 'table', options.packStatusOutboxMode ?? 'table', options.deliveryRecoveryMode ?? 'table');
@@ -444,9 +448,6 @@ function writeCommerceDocument(
   if (typedRecovery) {
     data = { ...seed.data };
     delete data.receiptRecovery;
-    const parent = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(seed.key.path);
-    const oldData = parent ? JSON.parse(String(parent.document_json)) : {};
-    if (Object.hasOwn(oldData, 'receiptRecovery')) data.receiptRecovery = oldData.receiptRecovery;
     harness.database.prepare(`INSERT INTO commerce_commit_guards
       (guard_id, expectations_json, expected_documents_revision, created_at_ms, delivery_recovery_paths_json, delivery_recovery_expectations_json)
       VALUES (?, '[]', NULL, 0, ?, ?)`).run(guardId, JSON.stringify([seed.key.path]), JSON.stringify([

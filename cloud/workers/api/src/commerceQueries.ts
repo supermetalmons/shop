@@ -64,7 +64,7 @@ const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
 
 export function notificationOutboxDueQuery(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): CommerceSqlQuery {
   return {
-    sql: `SELECT ${NOTIFICATION_OUTBOX_COLUMNS.split(', ').map((name) => `outbox.${name}`).join(', ')}
+    sql: `SELECT outbox.parent_path, outbox.family
       FROM commerce_notification_outbox AS outbox
         INDEXED BY ${args.family ? 'commerce_notification_outbox_family_due' : 'commerce_notification_outbox_due'}
       WHERE outbox.state = 'pending' AND outbox.next_attempt_at_ms <= ?${args.family ? ' AND outbox.family = ?' : ''}
@@ -358,7 +358,9 @@ export function dueReadyNotificationsQuery(args: Readonly<{
   limit: number;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${qualifiedDocumentColumns('document')}
+    sql: `SELECT document.document_path, document.document_kind, document.drop_id, document.document_id,
+        document.document_json -> '$.deliveryId' AS delivery_id_json,
+        document.document_json -> '$.dropId' AS drop_id_json
       FROM commerce_notification_outbox AS outbox INDEXED BY commerce_notification_outbox_family_due
       CROSS JOIN commerce_documents AS document
       WHERE document.document_path = outbox.parent_path
@@ -405,7 +407,7 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
   limit: number;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT ${qualifiedDocumentColumns('document', true)}
+    sql: `SELECT document.document_path, document.document_kind, document.drop_id, document.document_id
       FROM commerce_notification_outbox_stripe_due AS due INDEXED BY commerce_notification_outbox_stripe_due_at
       CROSS JOIN commerce_notification_outbox AS outbox
       CROSS JOIN commerce_documents AS document

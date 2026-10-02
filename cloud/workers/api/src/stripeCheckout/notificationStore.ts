@@ -78,9 +78,12 @@ export async function claimStripeTerminalNotifications(args: StripeTerminalNotif
     nowMs: args.nowMs || args.commerce.nowMs, signal: args.signal, parentVersion: document.version,
     initialRecord: record,
   });
-  if (result.outcome !== 'claimed') return { result: skipped(outcome,
-    result.outcome === 'none' ? result.record?.state === 'queued' ? 'queued' : 'none' : result.outcome,
-    result.outcome === 'failed' ? result.record?.lastErrorCode || 'manual-review-required' : undefined) };
+  if (result.outcome !== 'claimed') {
+    const state = result.record?.state;
+    return { result: skipped(outcome,
+      state === 'queued' || state === 'failed' ? state : state === 'pending' ? 'busy' : 'none',
+      state === 'failed' ? result.record?.lastErrorCode || 'manual-review-required' : undefined) };
+  }
   return { claim: { record: result.claim, checkout: document.notification, parentVersion: document.version } };
 }
 

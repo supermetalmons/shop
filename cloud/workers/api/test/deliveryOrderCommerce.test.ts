@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { setDeliveryOrderFulfillment } from '../src/deliveryOrderCommerce.ts';
-import { publishBuyerOrderShippedNotification, reconcilePendingShippedNotifications } from '../src/buyerOrderShippedOutbox.ts';
+import { publishBuyerOrderShippedNotification, publishBuyerOrderShippedNotificationDetailed, reconcilePendingShippedNotifications } from '../src/buyerOrderShippedOutbox.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { claimNotificationOutbox, markClaimedNotificationQueued } from '../src/notificationOutboxStore.ts';
@@ -100,6 +100,20 @@ test('shipment publication updates only the outbox and completed jobs are not se
   assert.equal((await update()).response.buyerOrderShippedEmailState, 'queued');
 });
 
+test('a lost shipment cancellation claim reports deferred without another read or an enqueue', async (context) => {
+  const { repository, update } = fixture(context);
+  await update();
+  await repository.run(NOW_MS, (unit) => unit.update(key, { fulfillmentStatus: 'Preparing' }));
+  context.mock.method(repository.notificationOutbox, 'compareAndSet', async () => null);
+  const reads = context.mock.method(repository.notificationOutbox, 'get');
+  const result = await publishBuyerOrderShippedNotificationDetailed({
+    repository, parentPath: key.path, signal: new AbortController().signal, nowMs: () => NOW_MS,
+    queue: queue(async () => assert.fail('a lost cancellation must not publish')),
+  });
+  assert.deepEqual(result, { outcome: 'deferred', published: false });
+  assert.equal(reads.mock.callCount(), 1);
+});
+
 for (const afterSnapshot of [false, true]) {
   test(`shipment cancellation after ${afterSnapshot ? 'snapshot' : 'claim'} reuses the latest record for cleanup`, async (context) => {
     const { repository, update } = fixture(context);
@@ -145,7 +159,7 @@ test('scheduled shipment recovery reuses the exact saved email after an uncertai
     COMMERCE_DB: harness.db,
     NOTIFICATION_EMAIL_QUEUE: queue(async (batch) => { jobs.push(...batch); }) as Queue,
   }, new AbortController().signal, { nowMs: () => NOW_MS + 10 * 60_000 });
-  assert.equal(retried, 1);
+  assert.deepEqual(retried, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(jobs[1], jobs[0]);
 });
 
@@ -156,11 +170,11 @@ test('shipment recovery processes four candidates including ineligible orders wi
   }));
   const jobs: NotificationEmailJobV1[] = [];
   const send = async (batch: NotificationEmailJobV1[]) => { jobs.push(...batch); };
-  assert.equal(await state.run(send), 3);
+  assert.deepEqual(await state.run(send), { attempted: 4, completed: 3, deferred: 0, skipped: 1, failed: 0 });
   assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103]);
   assert.equal((await state.load(100))?.state, 'cancelled');
   for (const id of [104, 105]) assert.equal((await state.load(id))?.attemptCount, 0);
-  assert.equal(await state.run(send), 2);
+  assert.deepEqual(await state.run(send), { attempted: 2, completed: 2, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103, 104, 105]);
 });
 
@@ -179,7 +193,7 @@ test('shipment recovery continues after failure while retaining the four-candida
     return true;
   });
   assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103]);
-  assert.deepEqual(logs.mock.calls.map((call) => call.arguments[0]), [{
+  assert.deepEqual(logs.mock.calls.map((call) => call.arguments[0]).filter((entry) => entry.event !== 'scheduled_reconciliation_item_failed'), [{
     event: 'buyer_order_shipped_notification_enqueue_failed',
     parentPath: commerceKeys.deliveryOrder(DROP_ID, '100').path,
     error: { name: 'Error' },
@@ -188,7 +202,7 @@ test('shipment recovery continues after failure while retaining the four-candida
   assert.equal((await state.load(100))?.attemptCount, 1);
   for (const id of [101, 102, 103]) assert.equal((await state.load(id))?.state, 'queued');
   assert.equal((await state.load(104))?.attemptCount, 0);
-  assert.equal(await state.run(async (batch) => { jobs.push(...batch); }), 1);
+  assert.deepEqual(await state.run(async (batch) => { jobs.push(...batch); }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103, 104]);
 });
 

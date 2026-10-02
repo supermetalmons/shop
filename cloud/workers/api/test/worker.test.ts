@@ -1,3 +1,4 @@
+import { emptyReconciliationResult } from '../src/reconciliationResult.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -216,7 +217,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
     runScheduledReconciliations(env(), new AbortController().signal, {
       notifications: async () => {
         calls.push('notifications');
-        return 0;
+        return emptyReconciliationResult();
       },
       ops: async () => {
         calls.push('ops');
@@ -224,18 +225,18 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       },
       packStatus: async () => {
         calls.push('packStatus');
-        return 0;
+        return emptyReconciliationResult();
       },
       stripe: async () => {
         calls.push('stripe');
-        return { enqueued: 0, failed: 0 };
+        return emptyReconciliationResult();
       },
       stripeNotifications: async () => {
         calls.push('stripeNotifications');
-        return 0;
+        return emptyReconciliationResult();
       },
-      shippedNotifications: async () => { calls.push('shippedNotifications'); return 0; },
-      receiptClaims: async () => { calls.push('receiptClaims'); return 0; },
+      shippedNotifications: async () => { calls.push('shippedNotifications'); return emptyReconciliationResult(); },
+      receiptClaims: async () => { calls.push('receiptClaims'); return emptyReconciliationResult(); },
     }),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
@@ -261,11 +262,11 @@ test('commerce maintenance blocks HTTP mutations and skips commerce cron work', 
 
   const calls: string[] = [];
   await runScheduledReconciliations(env({ commerceState: 'paused' }), new AbortController().signal, {
-    notifications: async () => { calls.push('notifications'); return 0; },
-    ops: async () => { calls.push('ops'); },
-    packStatus: async () => { calls.push('packStatus'); return 0; },
-    stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
-    stripeNotifications: async () => { calls.push('stripeNotifications'); return 0; },
+    notifications: async () => { calls.push('notifications'); return emptyReconciliationResult(); },
+    ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
+    packStatus: async () => { calls.push('packStatus'); return emptyReconciliationResult(); },
+    stripe: async () => { calls.push('stripe'); return emptyReconciliationResult(); },
+    stripeNotifications: async () => { calls.push('stripeNotifications'); return emptyReconciliationResult(); },
   });
   assert.deepEqual(calls, ['ops']);
 });

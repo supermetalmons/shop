@@ -247,6 +247,7 @@ const productionExportBaseline = [
   ["src/lib/mobileInteractionGuards.ts","exports","shouldPreventMobileContextMenu"],
   ["src/lib/monsApiOrigin.ts","exports","normalizeMonsApiOrigin"],
   ["src/lib/pendingPreparedTransactions.ts","exports","parsePendingPreparedTransaction"],
+  ["src/lib/profileState.ts","exports","deliveryOrderSummariesEqual"],
   ["src/lib/recentExpectedInventoryAssets.ts","exports","RECENT_EXPECTED_INVENTORY_ASSET_MAX_ENTRIES"],
   ["src/lib/recentExpectedInventoryAssets.ts","exports","RECENT_EXPECTED_INVENTORY_ASSET_TTL_MS"],
   ["src/lib/recentExpectedInventoryAssets.ts","exports","reconcileRecentExpectedInventoryAssetsInState"],

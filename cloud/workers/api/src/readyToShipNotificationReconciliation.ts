@@ -8,8 +8,11 @@ import { drainNotificationCandidates } from './notificationReconciliation.js';
 import {
   markPendingReadyToShipNotificationsFailed,
   notificationPersistenceContext,
-  publishReadyToShipNotifications,
+  publishReadyToShipNotificationsDetailed,
 } from './readyToShipNotificationOutbox.js';
+import {
+  reportReconciliationFailure, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
+} from './reconciliationResult.js';
 
 const READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE = 8;
 const READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT = 4;
@@ -20,8 +23,8 @@ export async function reconcilePendingReadyToShipNotifications(
   overrides: {
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
-  } = {},
-): Promise<number> {
+  } & ReconciliationOptions = {},
+): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const context: CommerceRepositoryContext = {
@@ -29,41 +32,47 @@ export async function reconcilePendingReadyToShipNotifications(
     nowMs: nowMs(),
     signal,
   };
-  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
+  const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
   let publicationAttempts = 0;
   return drainNotificationCandidates({
     signal,
+    onResult: overrides.onResult,
     loadCandidates: () => repository.queryDueReadyNotifications({
       dueAtMs: context.nowMs,
       limit: READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
     }),
     failureMessage: 'Ready-notification reconciliation failed',
-    processCandidate: async (document) => {
-      const resolution = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
-      const dropId = resolveDeliveryOrderDropId(document.data, document.key.path);
+    processCandidate: async (candidate) => {
+      const resolution = resolveDeliveryOrderIdentity(candidate.key.documentId, candidate.identityFields, candidate.key.path);
+      const dropId = resolveDeliveryOrderDropId(candidate.identityFields, candidate.key.path);
       if (!('identity' in resolution) || !dropId || dropId !== resolution.identity.dropId) {
-        await markPendingReadyToShipNotificationsFailed(
+        const changed = await markPendingReadyToShipNotificationsFailed(
           notificationPersistenceContext(context),
-          document.key.path,
+          candidate.key.path,
           'invalid-order-identity',
         );
         log({
           event: 'ready_to_ship_notifications_invalid_order',
-          documentPath: document.key.path,
+          documentPath: candidate.key.path,
         });
-        return 0;
+        if (changed.length) reportReconciliationFailure('notifications', { parentPath: candidate.key.path },
+          undefined, 'invalid-order-identity');
+        return changed.length ? 'failed' : 'skipped';
       }
       if (publicationAttempts >= READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT) return 'stop';
       publicationAttempts += 1;
-      const published = await publishReadyToShipNotifications({
+      const published = await publishReadyToShipNotificationsDetailed({
         context,
         deliveryId: resolution.identity.deliveryId,
-        document,
+        key: candidate.key,
         dropId,
         queue: env.NOTIFICATION_EMAIL_QUEUE,
         nowMs,
       });
-      return published ? 1 : 0;
+      if (published.outcome === 'failed') reportReconciliationFailure('notifications', { parentPath: candidate.key.path },
+        undefined, published.errorCode || 'notification-outbox-failed');
+      return published.outcome;
     },
+    onFailure: (candidate, error) => reportReconciliationFailure('notifications', { parentPath: candidate.key.path }, error),
   });
 }

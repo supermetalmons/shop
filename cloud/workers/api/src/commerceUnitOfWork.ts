@@ -355,7 +355,7 @@ export class CommerceUnitOfWork {
         ? updateDeliveryRecoveryRecord(previous, { receiptRecoveryJson, leaseId: null }, this.nowMs)
         : createDeliveryRecoveryRecord({ parentPath: key.path, receiptRecoveryJson, nowMs: this.nowMs, generation: crypto.randomUUID() }));
       delete document.data.receiptRecovery;
-      document.rawData = this.deliveryMetadata(document.data, this.original.get(key.path) ?? null);
+      document.rawData = document.data;
     }
     this.pending.set(key.path, document);
     return publicRecord(document);
@@ -510,13 +510,6 @@ export class CommerceUnitOfWork {
     if (key.kind === 'delivery_order' && Object.keys(updates).some((field) => field === 'receiptRecovery' || field.startsWith('receiptRecovery.'))) {
       throw new CommerceRepositoryError('invalid-argument', 'Use the delivery recovery state store.');
     }
-  }
-
-  private deliveryMetadata(data: CommerceDocumentData, current: StoredDocument | null): CommerceDocumentData {
-    const metadata = { ...data };
-    delete metadata.receiptRecovery;
-    if (current && Object.hasOwn(current.rawData, 'receiptRecovery')) metadata.receiptRecovery = current.rawData.receiptRecovery;
-    return metadata;
   }
 
   private serializedOutboxExpectations(): string {
@@ -736,7 +729,7 @@ export class CommerceUnitOfWork {
       data: materialized.data,
       rawData: key.kind === 'stripe_checkout'
         ? stripeCheckoutStateMetadata(materialized.data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {})
-        : key.kind === 'delivery_order' ? this.deliveryMetadata(materialized.data, current) : materialized.data,
+        : materialized.data,
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
@@ -772,7 +765,7 @@ export class CommerceUnitOfWork {
     if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, data, version);
     const rawData = key.kind === 'stripe_checkout'
       ? stateOnly && current ? current.rawData : this.checkoutMetadata(key, data, current)
-      : key.kind === 'delivery_order' ? this.deliveryMetadata(data, current) : data;
+      : data;
     return {
       createTime: current?.createTime || commitTime,
       data,

@@ -10,12 +10,16 @@ import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
 import { reconcilePendingPreorders } from './preorders.js';
+import {
+  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
+  reportReconciliationResult, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
+} from './reconciliationResult.js';
 
 export const SCHEDULED_RECONCILIATION_TIMEOUT_MS = 60_000;
 
 export type ScheduledReconcilers = {
   notifications: typeof reconcilePendingReadyToShipNotifications;
-  ops: (env: Pick<Env, 'OPS_DB'>, signal: AbortSignal) => Promise<void>;
+  ops: typeof cleanupScheduledOpsState;
   packStatus: typeof reconcilePendingDeliveryPackStatusProjections;
   stripe: typeof reconcileStaleStripeFulfillments;
   stripeNotifications: typeof reconcilePendingStripeTerminalNotifications;
@@ -27,13 +31,16 @@ export type ScheduledReconcilers = {
 async function cleanupScheduledOpsState(
   env: Pick<Env, 'OPS_DB'>,
   signal: AbortSignal,
-): Promise<void> {
-  if (signal.aborted) throw signal.reason;
+  options: ReconciliationOptions = {},
+): Promise<ReconciliationResult> {
+  const summary = emptyReconciliationResult();
+  const log = reconciliationLogger((entry) => console.log(entry));
+  const errorLog = reconciliationLogger((entry) => console.error(entry));
   const cleanups = [
     async function cleanupReceiptTransferRateLimits() {
       const result = await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, Date.now());
       if (result.deletedCount > 0) {
-        console.log({
+        log({
           event: 'receipt_transfer_rate_limit_cleanup_completed',
           deletedCount: result.deletedCount,
           limitReached: result.limitReached,
@@ -41,11 +48,12 @@ async function cleanupScheduledOpsState(
         });
       }
       if (result.limitReached && result.hasMore) {
-        console.error({
+        errorLog({
           event: 'receipt_transfer_rate_limit_cleanup_backlog',
           deletedCount: result.deletedCount,
         });
       }
+      return result.limitReached && result.hasMore;
     },
     async function cleanupStaffAuth() {
       const staffAuthCleanup = await cleanupExpiredStaffAuthState(env.OPS_DB, Date.now());
@@ -53,47 +61,59 @@ async function cleanupScheduledOpsState(
         staffAuthCleanup.challengesDeleted > 0 ||
         staffAuthCleanup.sessionsDeleted > 0
       ) {
-        console.log({
+        log({
           event: 'staff_auth_cleanup_completed',
           ...staffAuthCleanup,
         });
       }
       if (staffAuthCleanup.limitReached && staffAuthCleanup.hasMore) {
-        console.error({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
+        errorLog({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
       }
+      return staffAuthCleanup.limitReached && staffAuthCleanup.hasMore;
     },
     async function cleanupAnonymousAuth() {
       const anonymousAuthCleanup = await cleanupExpiredAnonymousAuthSessions(env.OPS_DB, Date.now());
       if (anonymousAuthCleanup.deletedCount > 0) {
-        console.log({ event: 'anonymous_auth_cleanup_completed', ...anonymousAuthCleanup });
+        log({ event: 'anonymous_auth_cleanup_completed', ...anonymousAuthCleanup });
       }
       if (anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore) {
-        console.error({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
+        errorLog({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
       }
+      return anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore;
     },
     async function cleanupMiNoteAuth() {
       const result = await cleanupExpiredMiNoteAuthState(env.OPS_DB, Date.now());
       if (result.challengesDeleted > 0 || result.sessionsDeleted > 0) {
-        console.log({ event: 'mi_note_auth_cleanup_completed', ...result });
+        log({ event: 'mi_note_auth_cleanup_completed', ...result });
       }
       if (result.limitReached && result.hasMore) {
-        console.error({ event: 'mi_note_auth_cleanup_backlog', ...result });
+        errorLog({ event: 'mi_note_auth_cleanup_backlog', ...result });
       }
+      return result.limitReached && result.hasMore;
     },
   ];
-  const failures: unknown[] = [];
-  for (const cleanup of cleanups) {
-    try {
-      await cleanup();
-    } catch (error) {
-      failures.push(error);
+  try {
+    if (signal.aborted) throw signal.reason;
+    const failures: unknown[] = [];
+    for (const cleanup of cleanups) {
+      try {
+        const backlog = await cleanup();
+        recordReconciliationOutcome(summary, backlog ? 'deferred' : 'completed');
+      } catch (error) {
+        recordReconciliationOutcome(summary, 'failed');
+        reportReconciliationFailure('ops', { cleanup: cleanup.name }, error);
+        failures.push(error);
+      }
+      if (signal.aborted) {
+        if (!failures.includes(signal.reason)) failures.push(signal.reason);
+        break;
+      }
     }
-    if (signal.aborted) {
-      if (!failures.includes(signal.reason)) failures.push(signal.reason);
-      break;
-    }
+    if (failures.length) throw new AggregateError(failures, 'Scheduled OPS cleanup failed');
+    return summary;
+  } finally {
+    reportReconciliationResult(summary, options.onResult);
   }
-  if (failures.length) throw new AggregateError(failures, 'Scheduled OPS cleanup failed');
 }
 
 const defaultScheduledReconcilers: ScheduledReconcilers = {
@@ -107,10 +127,9 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   preorders: reconcilePendingPreorders,
 };
 
-type ScheduledJobResult = Awaited<ReturnType<ScheduledReconcilers[keyof ScheduledReconcilers]>>;
 type ScheduledJobOutcome =
-  | { outcome: 'succeeded'; result: ScheduledJobResult }
-  | { outcome: 'failed'; error: unknown };
+  | { outcome: 'succeeded'; result: ReconciliationResult }
+  | { outcome: 'failed'; error: unknown; result: ReconciliationResult };
 
 function reportScheduledJob(
   job: keyof ScheduledReconcilers,
@@ -123,34 +142,34 @@ function reportScheduledJob(
       job,
       outcome: outcome.outcome,
       durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      ...outcome.result,
       ...(outcome.outcome === 'failed'
         ? { errorName: outcome.error instanceof Error ? outcome.error.name : 'UnknownError' }
-        : typeof outcome.result === 'number'
-          ? { processedCount: outcome.result }
-          : outcome.result ? { enqueued: outcome.result.enqueued, failed: outcome.result.failed } : {}),
+        : {}),
     };
     if (outcome.outcome === 'failed') console.error(entry);
     else console.log(entry);
   } catch {}
 }
 
-function runScheduledJob<T extends ScheduledJobResult>(
+function runScheduledJob(
   job: keyof ScheduledReconcilers,
-  action: () => Promise<T>,
-): Promise<T> {
+  action: (onResult: NonNullable<ReconciliationOptions['onResult']>) => Promise<ReconciliationResult>,
+): Promise<ReconciliationResult> {
   const startedAt = performance.now();
-  let result: Promise<T>;
+  let summary: ReconciliationResult = emptyReconciliationResult();
+  let result: Promise<ReconciliationResult>;
   try {
-    result = action();
+    result = action((value) => { summary = { ...value }; });
   } catch (error) {
-    reportScheduledJob(job, startedAt, { outcome: 'failed', error });
+    reportScheduledJob(job, startedAt, { outcome: 'failed', error, result: summary });
     throw error;
   }
   return result.then((value) => {
     reportScheduledJob(job, startedAt, { outcome: 'succeeded', result: value });
     return value;
   }, (error: unknown) => {
-    reportScheduledJob(job, startedAt, { outcome: 'failed', error });
+    reportScheduledJob(job, startedAt, { outcome: 'failed', error, result: summary });
     throw error;
   });
 }
@@ -164,13 +183,13 @@ async function runScheduledCommerceReconciliations(
     return [];
   }
   const results = await Promise.allSettled([
-    runScheduledJob('stripe', () => reconcilers.stripe(env, signal)),
-    runScheduledJob('stripeNotifications', () => reconcilers.stripeNotifications(env, signal)),
-    runScheduledJob('shippedNotifications', () => reconcilers.shippedNotifications(env, signal)),
-    runScheduledJob('packStatus', () => reconcilers.packStatus(env, signal)),
-    runScheduledJob('notifications', () => reconcilers.notifications(env, signal)),
-    runScheduledJob('receiptClaims', () => reconcilers.receiptClaims(env, signal)),
-    runScheduledJob('preorders', () => reconcilers.preorders(env, signal)),
+    runScheduledJob('stripe', (onResult) => reconcilers.stripe(env, signal, { onResult })),
+    runScheduledJob('stripeNotifications', (onResult) => reconcilers.stripeNotifications(env, signal, { onResult })),
+    runScheduledJob('shippedNotifications', (onResult) => reconcilers.shippedNotifications(env, signal, { onResult })),
+    runScheduledJob('packStatus', (onResult) => reconcilers.packStatus(env, signal, { onResult })),
+    runScheduledJob('notifications', (onResult) => reconcilers.notifications(env, signal, { onResult })),
+    runScheduledJob('receiptClaims', (onResult) => reconcilers.receiptClaims(env, signal, { onResult })),
+    runScheduledJob('preorders', (onResult) => reconcilers.preorders(env, signal, { onResult })),
   ]);
   return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
 }
@@ -183,7 +202,7 @@ export async function runScheduledReconciliations(
   const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
   const [commerce, ops] = await Promise.allSettled([
     runScheduledCommerceReconciliations(env, signal, reconcilers),
-    runScheduledJob('ops', () => reconcilers.ops(env, signal)),
+    runScheduledJob('ops', (onResult) => reconcilers.ops(env, signal, { onResult })),
   ]);
   const failures = commerce.status === 'rejected' ? [commerce.reason] : commerce.value;
   if (ops.status === 'rejected') failures.push(ops.reason);

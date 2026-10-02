@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import {
+  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
+  reportReconciliationResult, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
+} from './reconciliationResult.js';
+import {
   getPreorderConfig, isPreorderCardId, PREORDER_RESERVATION_TTL_MS,
   type PreorderConfig, type PreorderPrepareResponse,
 } from '../../../../shared/preorders.js';
@@ -87,7 +91,7 @@ async function broadcastOrder(
   try { await dependencies.send({ ...args, transactionBase64: order.signedTransaction! }); }
   catch (error) {
     args.signal.throwIfAborted();
-    console.warn({ event: 'preorder_broadcast_uncertain', orderId: order.orderId,
+    reconciliationLogger((entry) => console.warn(entry))({ event: 'preorder_broadcast_uncertain', orderId: order.orderId,
       error: error instanceof Error ? error.name : 'UnknownError' });
   }
 }
@@ -115,7 +119,7 @@ async function reconcileOrder(
   if (outcome.status === 'confirmed') {
     const confirmed = await store.confirm(order, outcome.slot, dependencies.nowMs());
     if (order.confirmedSlot == null && confirmed.status === 'submitted' && confirmed.confirmedSlot != null) {
-      console.log({ event: 'preorder_confirmed', orderId: order.orderId, preorderId: order.preorderId, slot: confirmed.confirmedSlot });
+      reconciliationLogger((entry) => console.log(entry))({ event: 'preorder_confirmed', orderId: order.orderId, preorderId: order.preorderId, slot: confirmed.confirmedSlot });
     }
     return confirmed;
   }
@@ -123,7 +127,7 @@ async function reconcileOrder(
     const finished = await store.finish(order, outcome.status === 'finalized' ? 'succeeded' : outcome.status,
       dependencies.nowMs(), outcome.status === 'finalized' ? outcome.slot : undefined);
     if (finished.status !== 'submitted') {
-      console.log({ event: finished.status === 'succeeded' ? 'preorder_finalized'
+      reconciliationLogger((entry) => console.log(entry))({ event: finished.status === 'succeeded' ? 'preorder_finalized'
         : finished.confirmedSlot != null ? 'preorder_optimistic_rollback' : 'preorder_resolved',
         orderId: order.orderId, preorderId: order.preorderId, status: finished.status, confirmedSlot: finished.confirmedSlot ?? null });
     }
@@ -343,7 +347,7 @@ export async function handlePreorderRequest(
           rebroadcast: !broadcastAttempted && (path === '/preorders/submit' || path === '/preorders/status'),
         }); }
         catch (error) {
-          console.warn({ event: 'preorder_submission_uncertain', orderId: order.orderId,
+          reconciliationLogger((entry) => console.warn(entry))({ event: 'preorder_submission_uncertain', orderId: order.orderId,
             error: error instanceof Error ? error.name : 'UnknownError' });
           order = (await store.get(order.orderId))!;
         }
@@ -364,19 +368,38 @@ export async function handlePreorderRequest(
   return result;
 }
 
-export async function reconcilePendingPreorders(env: Env, signal: AbortSignal, overrides: Partial<PreorderDependencies> = {}): Promise<number> {
-  const dependencies = { ...defaults, ...overrides };
-  const store = new PreorderStore(env.COMMERCE_DB);
-  const due = await store.due(dependencies.nowMs());
-  const failures: unknown[] = [];
-  for (const order of due) {
-    signal.throwIfAborted();
-    try { await reconcileOrder(order, store, env, dependencies, signal, { rebroadcast: true }); }
-    catch (error) {
-      if (order.status === 'submitted') await store.defer(order, dependencies.nowMs()).catch(() => undefined);
-      failures.push(error);
+export async function reconcilePendingPreorders(
+  env: Env,
+  signal: AbortSignal,
+  overrides: Partial<PreorderDependencies> & ReconciliationOptions = {},
+): Promise<ReconciliationResult> {
+  const result = emptyReconciliationResult();
+  try {
+    const dependencies = { ...defaults, ...overrides };
+    const store = new PreorderStore(env.COMMERCE_DB);
+    const due = await store.due(dependencies.nowMs());
+    const failures: unknown[] = [];
+    for (const order of due) {
+      signal.throwIfAborted();
+      try {
+        const current = await reconcileOrder(order, store, env, dependencies, signal, { rebroadcast: true });
+        const outcome = current.status === 'prepared' || current.status === 'submitted' ? 'deferred'
+          : current.status === 'failed' ? 'failed' : 'completed';
+        recordReconciliationOutcome(result, outcome);
+        if (outcome === 'failed') {
+          reportReconciliationFailure('preorders', { preorderId: order.preorderId, orderId: order.orderId },
+            undefined, 'preorder-failed');
+        }
+      } catch (error) {
+        if (order.status === 'submitted') await store.defer(order, dependencies.nowMs()).catch(() => undefined);
+        recordReconciliationOutcome(result, 'failed');
+        reportReconciliationFailure('preorders', { preorderId: order.preorderId, orderId: order.orderId }, error);
+        failures.push(error);
+      }
     }
+    if (failures.length) throw new AggregateError(failures, 'Preorder reconciliation failed.');
+    return result;
+  } finally {
+    reportReconciliationResult(result, overrides.onResult);
   }
-  if (failures.length) throw new AggregateError(failures, 'Preorder reconciliation failed.');
-  return due.length;
 }

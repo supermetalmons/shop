@@ -52,7 +52,7 @@ test('Stripe fulfillment reconciliation requeues and marks stale pending checkou
       nowMs: () => nowMs,
     },
   );
-  assert.deepEqual(result, { enqueued: 1, failed: 0 });
+  assert.deepEqual(result, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.equal(cutoffMs, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS);
   assert.deepEqual(marked, [candidate]);
   assert.deepEqual(jobs, [{
@@ -205,4 +205,54 @@ test('Stripe fulfillment reconciliation decoder selects only stale marked D1 che
       stripeEventType: 'checkout.session.completed',
     },
   ]);
+});
+
+test('throwing Stripe loggers do not change queue outcomes, progress or the failure summary', async (context) => {
+  const failure = new Error('private provider request and customer data');
+  const summaries: unknown[] = [];
+  const failures: unknown[] = [];
+  const sent: string[] = [];
+  const marked: string[] = [];
+  const second = { ...candidate, sessionId: 'cs_test_other' };
+  context.mock.method(console, 'error', (entry: unknown) => { failures.push(entry); });
+  await assert.rejects(reconcileStaleStripeFulfillments({
+    COMMERCE_DB: createCommerceD1(),
+    STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
+      const sessionId = (body as { sessionId: string }).sessionId;
+      sent.push(sessionId);
+      if (sessionId === candidate.sessionId) throw failure;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    }),
+  }, new AbortController().signal, {
+    loadCandidates: async () => [candidate, second],
+    markEnqueued: async (value) => { marked.push(value.sessionId); },
+    log: () => { throw new Error('logger unavailable'); },
+    error: () => { throw new Error('error logger unavailable'); },
+    onResult: (result) => { summaries.push(result); throw new Error('reporter unavailable'); },
+    nowMs: () => 2_000_000,
+  }), /Stripe fulfillment reconciliation failed for 1 checkout/);
+  assert.deepEqual(sent, [candidate.sessionId, second.sessionId]);
+  assert.deepEqual(marked, [second.sessionId]);
+  assert.deepEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
+  assert.deepEqual(failures, [{ event: 'scheduled_reconciliation_item_failed', job: 'stripe',
+    dropId: candidate.dropId, sessionId: candidate.sessionId, errorName: 'Error' }]);
+});
+
+test('an accepted Stripe enqueue with a failed persistence write is not counted as completed', async () => {
+  let sends = 0;
+  const summaries: unknown[] = [];
+  await assert.rejects(reconcileStaleStripeFulfillments({
+    COMMERCE_DB: createCommerceD1(),
+    STRIPE_FULFILLMENT_QUEUE: queue(async () => {
+      sends += 1;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    }),
+  }, new AbortController().signal, {
+    loadCandidates: async () => [candidate],
+    markEnqueued: async () => { throw new Error('persistence unavailable'); },
+    log: () => {}, error: () => {}, nowMs: () => 2_000_000,
+    onResult: (result) => { summaries.push(result); },
+  }), /failed for 1 checkout/);
+  assert.equal(sends, 1);
+  assert.deepEqual(summaries, [{ attempted: 1, completed: 0, deferred: 0, skipped: 0, failed: 1 }]);
 });

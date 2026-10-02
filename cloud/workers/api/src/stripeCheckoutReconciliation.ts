@@ -7,6 +7,10 @@ import {
 } from './commerceRepository.js';
 import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
 import { stripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCandidate } from './stripeCheckout/readModel.js';
+import {
+  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
+  reportReconciliationResult, reconciliationLogger, reconciliationErrorSummary, type ReconciliationOptions, type ReconciliationResult,
+} from './reconciliationResult.js';
 
 export const STRIPE_FULFILLMENT_REQUEUE_AFTER_MS = 15 * 60 * 1000;
 type RequeueCandidate = StripeCheckoutRequeueCandidate;
@@ -15,7 +19,7 @@ type ReconciliationEnv = Pick<Env,
   'COMMERCE_DB' | 'STRIPE_FULFILLMENT_QUEUE'
 >;
 
-type ReconciliationDependencies = {
+type ReconciliationDependencies = ReconciliationOptions & {
   error?: (entry: Record<string, unknown>) => void;
   loadCandidates?: (cutoffMs: number, signal: AbortSignal) => Promise<RequeueCandidate[]>;
   log?: (entry: Record<string, unknown>) => void;
@@ -59,77 +63,87 @@ export async function reconcileStaleStripeFulfillments(
   env: ReconciliationEnv,
   signal: AbortSignal,
   overrides: ReconciliationDependencies = {},
-): Promise<{ enqueued: number; failed: number }> {
-  const nowMs = Math.floor(overrides.nowMs?.() ?? Date.now());
-  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const errorLog = overrides.error || ((entry: Record<string, unknown>) => console.error(entry));
-  const candidates = await (overrides.loadCandidates
-    ? overrides.loadCandidates(nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal)
-    : loadCandidates(env, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal));
-  const commerce = {
-    repository: new D1CommerceRepository(env.COMMERCE_DB),
-    nowMs: () => Date.now(),
-    signal,
-  };
-  const markEnqueued = overrides.markEnqueued || ((candidate: RequeueCandidate) =>
-    markStripeCheckoutReenqueued(commerce, candidate));
-  const markInvalid = overrides.markInvalid || ((candidate: RequeueCandidate, error: unknown) =>
-    recordStripeCheckoutReconciliationFailure(commerce, candidate, reconciliationError(error)));
-  let enqueued = 0;
-  let failed = 0;
-  for (const candidate of candidates) {
-    if (signal.aborted) throw signal.reason;
-    let job: ReturnType<typeof createStripeCheckoutFulfillmentJobV1>;
-    try {
-      job = createStripeCheckoutFulfillmentJobV1({
-        dropId: candidate.dropId,
-        sessionId: candidate.sessionId,
-        stripeEventId: candidate.stripeEventId,
-        stripeEventType: candidate.stripeEventType,
-        enqueuedAtMs: nowMs,
-      });
-    } catch (error) {
-      let loggedError = error;
+): Promise<ReconciliationResult> {
+  const summary = emptyReconciliationResult();
+  try {
+    const nowMs = Math.floor(overrides.nowMs?.() ?? Date.now());
+    const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
+    const errorLog = reconciliationLogger(overrides.error || ((entry) => console.error(entry)));
+    const candidates = await (overrides.loadCandidates
+      ? overrides.loadCandidates(nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal)
+      : loadCandidates(env, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal));
+    const commerce = {
+      repository: new D1CommerceRepository(env.COMMERCE_DB),
+      nowMs: () => Date.now(),
+      signal,
+    };
+    const markEnqueued = overrides.markEnqueued || ((candidate: RequeueCandidate) =>
+      markStripeCheckoutReenqueued(commerce, candidate));
+    const markInvalid = overrides.markInvalid || ((candidate: RequeueCandidate, error: unknown) =>
+      recordStripeCheckoutReconciliationFailure(commerce, candidate, reconciliationError(error)));
+    let enqueued = 0;
+    let failed = 0;
+    for (const candidate of candidates) {
+      if (signal.aborted) throw signal.reason;
+      let job: ReturnType<typeof createStripeCheckoutFulfillmentJobV1>;
       try {
-        await markInvalid(candidate, error);
-      } catch (markError) {
-        loggedError = new AggregateError([error, markError], 'Invalid reconciliation candidate could not be deferred');
+        job = createStripeCheckoutFulfillmentJobV1({
+          dropId: candidate.dropId,
+          sessionId: candidate.sessionId,
+          stripeEventId: candidate.stripeEventId,
+          stripeEventType: candidate.stripeEventType,
+          enqueuedAtMs: nowMs,
+        });
+      } catch (error) {
+        let loggedError = error;
+        try {
+          await markInvalid(candidate, error);
+        } catch (markError) {
+          loggedError = new AggregateError([error, markError], 'Invalid reconciliation candidate could not be deferred');
+        }
+        failed += 1;
+        recordReconciliationOutcome(summary, 'failed');
+        reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
+        errorLog({
+          event: 'stripe_fulfillment_job_reconciliation_failed',
+          dropId: candidate.dropId,
+          sessionId: candidate.sessionId,
+          error: reconciliationErrorSummary(loggedError),
+        });
+        continue;
       }
-      failed += 1;
-      errorLog({
-        event: 'stripe_fulfillment_job_reconciliation_failed',
-        dropId: candidate.dropId,
-        sessionId: candidate.sessionId,
-        error: reconciliationError(loggedError),
-      });
-      continue;
+      try {
+        await env.STRIPE_FULFILLMENT_QUEUE.send(job);
+        await markEnqueued(candidate);
+        enqueued += 1;
+        log({
+          event: 'stripe_fulfillment_job_reconciled',
+          dropId: candidate.dropId,
+          sessionId: candidate.sessionId,
+          stripeEventId: candidate.stripeEventId,
+        });
+        recordReconciliationOutcome(summary, 'completed');
+      } catch (error) {
+        failed += 1;
+        recordReconciliationOutcome(summary, 'failed');
+        reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
+        errorLog({
+          event: 'stripe_fulfillment_job_reconciliation_failed',
+          dropId: candidate.dropId,
+          sessionId: candidate.sessionId,
+          error: reconciliationErrorSummary(error),
+        });
+      }
     }
-    try {
-      await env.STRIPE_FULFILLMENT_QUEUE.send(job);
-      await markEnqueued(candidate);
-      enqueued += 1;
-      log({
-        event: 'stripe_fulfillment_job_reconciled',
-        dropId: candidate.dropId,
-        sessionId: candidate.sessionId,
-        stripeEventId: candidate.stripeEventId,
-      });
-    } catch (error) {
-      failed += 1;
-      errorLog({
-        event: 'stripe_fulfillment_job_reconciliation_failed',
-        dropId: candidate.dropId,
-        sessionId: candidate.sessionId,
-        error: reconciliationError(error),
-      });
-    }
+    log({
+      event: 'stripe_fulfillment_reconciliation_completed',
+      candidates: candidates.length,
+      enqueued,
+      failed,
+    });
+    if (failed) throw new Error(`Stripe fulfillment reconciliation failed for ${failed} checkout(s)`);
+    return summary;
+  } finally {
+    reportReconciliationResult(summary, overrides.onResult);
   }
-  log({
-    event: 'stripe_fulfillment_reconciliation_completed',
-    candidates: candidates.length,
-    enqueued,
-    failed,
-  });
-  if (failed) throw new Error(`Stripe fulfillment reconciliation failed for ${failed} checkout(s)`);
-  return { enqueued, failed };
 }

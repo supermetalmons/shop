@@ -507,7 +507,7 @@ test('receipt API reports notification claim read failures as unavailable withou
         await publishReadyToShipNotifications({
           context: commerce,
           deliveryId: body.deliveryId,
-          document,
+          key: deliveryOrderKey(document.key.path),
           dropId: body.dropId,
           queue: requestEnv.NOTIFICATION_EMAIL_QUEUE,
         });

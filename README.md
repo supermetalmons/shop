@@ -32,6 +32,8 @@ control, rate-limit state, and shipment and fulfillment data.
 - Delivery receipt recovery leases, pending transaction journals, and retry
   timestamps use `commerce_delivery_recovery`. Recovery updates have their own
   generation and revision; ordinary order edits do not invalidate a recovery claim.
+  Migration `0033_delivery_recovery_metadata_cleanup.sql` removes frozen recovery
+  copies from parent documents after a completed Commerce pause and drain.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -195,9 +197,11 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0032_preorder_catalog.sql`, followed by the API
-release and then the frontend. The normal API deployment command applies the
-migrations and validates their schemas. The existing `COSIGNER_SECRET` must
+migrations through `0033_delivery_recovery_metadata_cleanup.sql`, followed by the
+API release and then the frontend. Complete the
+[delivery recovery cleanup](scripts/docs/delivery_recovery_state_cutover.md)
+pause and drain before the first deployment that applies `0033`. The normal API
+deployment command applies migrations and validates their schemas. The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
 The preorder expiry migration atomically releases an unsigned reservation's claims
 when its order expires. Apply it before publishing the API; it remains compatible
@@ -704,7 +708,14 @@ checkout and prepared-delivery recovery use owner-scoped
 `/profile/shipment-presence` lookups instead of relying on loaded history pages.
 Wallet-scoped presence requests include `expectedWallet`; a changed binding
 returns an authentication error before reading shipments.
-Append `0030_<description>.sql` for the next Commerce schema change.
+Migration `0033_delivery_recovery_metadata_cleanup.sql` removes only frozen
+`receiptRecovery` metadata from delivery documents. Recovery rows, transaction
+journals, leases, document versions, timestamps, and revisions stay unchanged.
+Apply it after the existing Commerce pause and drain, before deploying the
+updated Worker, following the [delivery recovery runbook](scripts/docs/delivery_recovery_state_cutover.md).
+The previous Worker remains compatible with the cleaned schema. An untouched
+empty database can replay the migration before normal initialization.
+Append `0034_<description>.sql` for the next Commerce schema change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 
@@ -744,6 +755,14 @@ reconciliation, and Stripe fulfillment queues, each with a dead-letter queue.
 The shared five-minute scheduled trigger recovers Stripe fulfillment,
 pack-status projections, and ready-to-ship notification work. Do not disable
 the schedule to control one subsystem.
+
+Each `scheduled_reconciliation_job` log reports `attempted`, `completed`,
+`deferred`, `skipped`, and `failed`. Counts refer to orders or operations, or
+cleanup tasks for OPS; email and deleted-row totals remain in their domain logs.
+Partial counts survive invocation failures. The invocation `outcome` describes
+whether the pass resolved or rejected, so a successful pass may still report a
+terminal item failure. Failure logs identify the affected work without including
+provider messages or notification payloads.
 
 Ready-to-ship, Stripe terminal, and shipped email publication state lives in
 `COMMERCE_DB.commerce_notification_outbox` after its one-way activation. Publication

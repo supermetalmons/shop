@@ -23,11 +23,7 @@ export function commerceDocumentWriteStatement(
     document_kind = excluded.document_kind,
     drop_id = excluded.drop_id,
     document_id = excluded.document_id,
-    document_json = ${document.key.kind === 'delivery_order'
-      ? `CASE WHEN json_type(commerce_documents.document_json, '$.receiptRecovery') IS NULL
-          THEN json_remove(excluded.document_json, '$.receiptRecovery')
-          ELSE json_set(excluded.document_json, '$.receiptRecovery', json(commerce_documents.document_json -> '$.receiptRecovery')) END`
-      : 'excluded.document_json'},
+    document_json = excluded.document_json,
     version = excluded.version,
     create_time = excluded.create_time,
     update_time = excluded.update_time,

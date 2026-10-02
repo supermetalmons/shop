@@ -183,7 +183,11 @@ async function summary(
     FROM commerce_delivery_recovery AS recovery
     JOIN commerce_documents AS document ON document.document_path = recovery.parent_path
     GROUP BY document.status ORDER BY document.status`);
-  return { ...current, deliveryCount, validationError, groups };
+  const legacyMetadata = await query(`SELECT COUNT(*) AS count FROM commerce_documents
+    WHERE document_kind = 'delivery_order' AND json_type(document_json, '$.receiptRecovery') IS NOT NULL`);
+  if (legacyMetadata.length !== 1) throw new Error('Invalid legacy delivery recovery metadata count.');
+  const legacyMetadataCount = safeInteger(legacyMetadata[0].count, 'Legacy delivery recovery metadata count');
+  return { ...current, deliveryCount, legacyMetadataCount, validationError, groups };
 }
 
 export async function runDeliveryRecoveryStateControl(argv: string[], overrides: Partial<Dependencies> = {}) {

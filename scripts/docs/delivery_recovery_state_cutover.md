@@ -7,6 +7,12 @@ journals. Order status, identity, ownership, shipping data, and notifications
 remain in their existing stores. Each recovery row has an independent generation
 and revision. Recovery-only updates leave the parent version unchanged.
 
+For an already activated database, use the metadata cleanup procedure below.
+A populated database still in legacy mode must complete this initial cutover
+using a pre-0033 release before upgrading to the current release. An empty
+database can replay every migration and use the normal empty preparation and
+activation steps.
+
 Use a fixed, validated checkout. Complete `npm run check:api`,
 `npm run typecheck:tools`, `npm test`, and `npm run check:dead-code` before
 maintenance. Finish the inventory, notification, Stripe checkout, and pack-status
@@ -94,8 +100,9 @@ without a cursor. A target combined with any cursor is rejected.
   the stored control state.
 - Activation is one-way. Publish compatible fixes afterward. Repeating `prepare`
   in table mode validates active rows and never restores frozen legacy JSON.
-  Parent recovery fields are frozen, and parent mutations require compatible
-  commit guards. Old Workers fail closed after activation.
+  Parent recovery fields stay frozen until migration 0033 removes their copies;
+  later writes cannot restore them. Parent mutations require compatible commit
+  guards. Old Workers fail closed after activation.
 - `status` reports preparation and source revisions, validation errors, order
   counts, retry age, and active or expired leases. Active reads validate parent
   metadata and state together in bounded pages. Runtime wallet summaries return
@@ -107,3 +114,61 @@ without a cursor. A target combined with any cursor is rejected.
   requires zero recovery rows for the target drop.
 - Ordinary `deploy:api` checks require migration 0030 and active state, or the
   fully paused verified preparation used for the initial cutover.
+
+## Remove frozen parent metadata
+
+Migration `0033_delivery_recovery_metadata_cleanup.sql` removes only the obsolete
+`receiptRecovery` property from delivery parent metadata. The recovery table
+remains authoritative. It preserves every recovery row, pending transaction
+journal, lease, generation, revision, parent version and timestamp, and Commerce
+revision. It also replaces the old frozen-value fences with absence fences.
+Other state-table migrations and their controls are unchanged.
+
+Finish `npm run check:api`, `npm run typecheck:tools`, `npm test`, and
+`npm run check:dead-code` on one fixed checkout before maintenance. Inspect the
+existing database with the updated checker; migration 0032 remains inspectable.
+
+```sh
+npm run check:commerce-d1
+npm run delivery-recovery-state-control -- status
+npm run commerce-authority-control -- status
+npm run commerce-authority-control -- paused --expected-revision <CURRENT_REVISION> --write
+```
+
+Preserve both coordinator drains. Continue only after `paused_at_ms` is set and
+the coordinator has released its lease. Recovery must be in `table` mode with
+`validationError: null`. Finish any outstanding wipe before continuing. The
+migration refuses active or undrained Commerce, competing leases, unfinished
+guards, and missing recovery parents. Its only exception is a strictly empty
+initial database, whose bootstrap controls remain unchanged.
+
+The existing coordinator waits 15 minutes 5 seconds for Queue consumers and
+another 15 minutes 5 seconds for Commerce requests: allow about 30 minutes before
+the migration. Queue delivery pauses during both drains; Commerce remains
+available during the first drain.
+
+Apply the migration before publishing the new Worker. Use Wrangler migrations
+so trigger replacement and metadata removal roll back together on failure;
+never execute individual migration statements.
+
+```sh
+npm run db:migrate:commerce
+npm run check:commerce-d1 -- --for-deployment
+npm run delivery-recovery-state-control -- status
+node_modules/.bin/wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env
+npm run check:commerce-d1 -- --for-deployment
+npm run check:pack-status-d1
+npm run check:ops-d1
+npm run commerce-authority-control -- d1 --expected-revision <PAUSED_REVISION> --write
+npm run check:queue-backlogs
+```
+
+Verify `legacyMetadataCount: 0`, unchanged delivery count, and
+`validationError: null` before resuming. The previously deployed Worker can read
+and write the cleaned schema, so an unsuccessful publication can be retried
+while paused. The new Worker requires migration 0033; publishing it first would
+conflict with the old frozen-value fences. Do not restore parent copies from a
+backup or rerun a legacy backfill. After a failed migration, verify the migration
+history and the restored guards, correct its precondition, and retry while
+Commerce stays paused. After an uncertain acknowledgement, inspect migration
+history and status before retrying.

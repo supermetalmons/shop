@@ -1,3 +1,4 @@
+import { deliveryOrderKey } from '../src/deliveryOrderStore.ts';
 import assert from 'node:assert/strict';
 import type { TestContext } from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
@@ -74,7 +75,7 @@ export async function notificationFixture(context: TestContext, family: Exclude<
       const document = await repository.get(parentKey);
       assert.ok(document);
       return publishReadyToShipNotifications({ context: { repository, nowMs: now, signal },
-        document, dropId: dropId, deliveryId: 7, nowMs, queue: overrides.queue ?? queue });
+        key: deliveryOrderKey(document.key.path), dropId: dropId, deliveryId: 7, nowMs, queue: overrides.queue ?? queue });
     }
     return publishPendingStripeCheckoutTerminalNotifications({
       commerce: { repository, nowMs, signal }, dropId: dropId, sessionId: parentKey.documentId,

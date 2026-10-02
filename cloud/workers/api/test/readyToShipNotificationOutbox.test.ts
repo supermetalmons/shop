@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
-import { markPendingReadyToShipNotificationsFailed, ReadyToShipNotificationEnqueueError } from '../src/readyToShipNotificationOutbox.ts';
+import { markPendingReadyToShipNotificationsFailed, publishReadyToShipNotificationsDetailed, ReadyToShipNotificationEnqueueError } from '../src/readyToShipNotificationOutbox.ts';
 import { notificationFixture, OUTBOX_NOW, OUTBOX_LEASE, OUTBOX_WINDOW } from './notificationOutboxTestSupport.ts';
 
 for (const family of ['ready', 'stripe_terminal'] as const) {
@@ -19,6 +19,15 @@ for (const family of ['ready', 'stripe_terminal'] as const) {
     assert.ok(record.entries.every((entry) => entry.state === 'queued' && !entry.payload));
     assert.deepEqual(await state.repository.get(state.parentKey), before);
     await state.publish();
+    assert.equal(state.sent.length, 1);
+  });
+
+  test(`${family}: logging failure after publication cannot undo finalization`, async (context) => {
+    const state = await notificationFixture(context, family);
+    context.mock.method(console, 'log', () => { throw new Error('logger unavailable'); });
+    context.mock.method(console, 'error', () => { throw new Error('error logger unavailable'); });
+    await state.publish();
+    assert.equal((await state.read()).state, 'queued');
     assert.equal(state.sent.length, 1);
   });
 
@@ -184,6 +193,29 @@ test('ready: partial publication retries only the remaining sibling', async (con
   assert.deepEqual(state.sent.map((jobs: NotificationEmailJobV1[]) => jobs.map((job) => job.kind)), [
     ['shipper_ready_to_ship'], ['buyer_order_received'],
   ]);
+});
+
+test('ready: the final claim observation takes precedence over exhausted CAS retries', async (context) => {
+  const state = await notificationFixture(context, 'ready');
+  const original = state.repository.notificationOutbox.compareAndSet.bind(state.repository.notificationOutbox);
+  let attempts = 0;
+  context.mock.method(state.repository.notificationOutbox, 'compareAndSet', async (args: Parameters<typeof original>[0]) => {
+    attempts += 1;
+    if (attempts === 6) {
+      await original({ ...args, changes: {
+        state: 'queued', nextAttemptAtMs: null, claimId: null, claimExpiresAtMs: null,
+        entries: args.expected.entries.map((entry) => ({ ...entry, state: 'queued', queuedAtMs: OUTBOX_NOW })),
+      } });
+    }
+    return null;
+  });
+  const result = await publishReadyToShipNotificationsDetailed({
+    context: { repository: state.repository, nowMs: OUTBOX_NOW, signal: new AbortController().signal },
+    key: state.orderKey, deliveryId: 7, dropId: state.orderKey.dropId!, queue: state.queue, nowMs: () => OUTBOX_NOW,
+  });
+  assert.deepEqual(result, { outcome: 'completed', published: false });
+  assert.equal(attempts, 6);
+  assert.equal(state.sent.length, 0);
 });
 
 test('ready: explicit failure keeps unrelated sibling pending without rewriting order', async (context) => {

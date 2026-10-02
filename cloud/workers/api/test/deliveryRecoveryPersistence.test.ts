@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { updateDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys, type CommerceDocumentWriteData } from '../src/commerceRepository.ts';
@@ -168,8 +169,8 @@ test('generic delivery writes cannot mutate recovery state and missing state fai
   await assert.rejects(repository.run(2_000, (unit) => unit.delete(key)), /temporarily unavailable/);
 });
 
-test('metadata updates preserve frozen legacy recovery JSON without a JavaScript number round-trip', async (t) => {
-  const harness = createCommerceD1Harness({ deliveryRecoveryMode: 'legacy' });
+test('metadata updates preserve authoritative recovery JSON after frozen metadata cleanup', async (t) => {
+  const harness = createCommerceD1Harness({ deliveryRecoveryMode: 'legacy', deliveryRecoveryMetadataCleanupMigration: false });
   t.after(() => harness.database.close());
   const database = harness.database;
   const query = (sql: string) => database.prepare(sql).all().map((row) => ({ ...row }));
@@ -177,7 +178,7 @@ test('metadata updates preserve frozen legacy recovery JSON without a JavaScript
   const acquireLease = () => database.exec(`INSERT INTO commerce_authority_control_lease VALUES
     (1, '00000000-0000-4000-8000-000000000901', ${now}, ${now} + 60000)`);
   const legacyValues = [null, 'null', 'false', '17', '"legacy"', '[]', '9007199254740993', '1e999',
-    '{"future":[9007199254740993,1e999,null],"preparedProbeCount":"2.9"}'];
+    '{"future":[9007199254740993,1e999,null],"preparedProbeCount":"2.9","pendingSubmission":{"signature":"pending","serializedTransaction":"signed"}}'];
   for (const [index, raw] of legacyValues.entries()) {
     database.prepare(`INSERT INTO commerce_documents (
       document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
@@ -194,22 +195,32 @@ test('metadata updates preserve frozen legacy recovery JSON without a JavaScript
   const revision = String(query('SELECT revision FROM commerce_authority_control')[0].revision);
   await runDeliveryRecoveryStateControl(['prepare', '--write', '--expected-revision', revision], { query });
   await runDeliveryRecoveryStateControl(['activate', '--write', '--expected-revision', revision, '--worker-deployed'], { query });
+  const recoveryBefore = query('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
+  database.exec('BEGIN');
+  try {
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0033_delivery_recovery_metadata_cleanup.sql', 'utf8'));
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+  assert.deepEqual(query('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), recoveryBefore);
+  assert.equal(query(`SELECT COUNT(*) AS count FROM commerce_documents
+    WHERE json_type(document_json, '$.receiptRecovery') IS NOT NULL`)[0].count, 0);
   acquireLease();
   database.exec(`UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1,
       paused_at_ms = NULL, updated_at_ms = ${now};
     DELETE FROM commerce_authority_control_lease`);
-  const recoveryBefore = query('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path');
-  const frozenBefore = query(`SELECT document_path, document_json -> '$.receiptRecovery' AS recovery
-    FROM commerce_documents ORDER BY document_path`);
   const repository = new D1CommerceRepository(harness.db);
   for (const [index] of legacyValues.entries()) {
     const orderKey = commerceKeys.deliveryOrder('card_nft_2', String(index));
     await repository.run(Date.now(), (unit) => unit.update(orderKey, { fulfillmentTrackingCode: 'tracking' }));
     await repository.run(Date.now(), (unit) => unit.set(orderKey, { status: 'processing', owner: 'owner', replaced: true }));
     assert.equal((await repository.get(orderKey))?.data.replaced, true);
+    assert.equal((await repository.get(orderKey))?.data.receiptRecovery, undefined);
   }
-  assert.deepEqual(query(`SELECT document_path, document_json -> '$.receiptRecovery' AS recovery
-    FROM commerce_documents ORDER BY document_path`), frozenBefore);
+  assert.equal(query(`SELECT COUNT(*) AS count FROM commerce_documents
+    WHERE json_type(document_json, '$.receiptRecovery') IS NOT NULL`)[0].count, 0);
   assert.deepEqual(query('SELECT * FROM commerce_delivery_recovery ORDER BY parent_path'), recoveryBefore);
 });
 

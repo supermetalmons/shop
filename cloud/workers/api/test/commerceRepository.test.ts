@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deliveryOrderOwnersQuery } from '../src/commerceQueries.ts';
+import { parseReadyNotificationCandidate, parseStripeTerminalNotificationCandidate } from '../src/commerceDiscoveryCandidates.ts';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -705,6 +706,60 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
       (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
     );
   }
+});
+
+test('notification discovery projects only keys and preserves ready identity JSON types', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const identityFields: CommerceDocumentData[] = [
+    {},
+    { deliveryId: null, dropId: null },
+    { deliveryId: 3, dropId: 'drop' },
+    { deliveryId: '4', dropId: 'other' },
+    { deliveryId: true, dropId: false },
+    { deliveryId: [6], dropId: ['drop'] },
+    { deliveryId: { value: 7 }, dropId: { value: 'drop' } },
+  ];
+  const documents = identityFields.map((fields, index) => ({
+    key: commerceKeys.deliveryOrder('drop', String(index + 1)),
+    data: { ...fields, status: 'ready_to_ship', unrelatedPayload: 'x'.repeat(64 * 1024) },
+  }));
+  seedCommerceDocuments(harness, documents);
+  for (const document of documents) seedQueryNotification(harness, document.key);
+  assert.deepEqual(await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 8 }),
+    documents.map((document, index) => ({ key: document.key, identityFields: identityFields[index] })));
+
+  const checkoutKey = commerceKeys.stripeCheckout('drop', 'cs_projection');
+  seedCommerceDocument(harness, {
+    key: checkoutKey,
+    data: { status: 'fulfilled', unrelatedPayload: 'x'.repeat(64 * 1024) },
+  });
+  seedQueryNotification(harness, checkoutKey, { family: 'stripe_terminal' });
+  assert.deepEqual(await repository.queryDueStripeTerminalNotifications(0), [{ key: checkoutKey }]);
+});
+
+test('notification candidate parsing rejects inconsistent document identities', () => {
+  for (const [kind, collection, parse] of [
+    ['delivery_order', 'deliveryOrders', parseReadyNotificationCandidate],
+    ['stripe_checkout', 'stripeCheckouts', parseStripeTerminalNotificationCandidate],
+  ] as const) {
+    const row = { document_path: `drops/drop/${collection}/1`, document_kind: kind,
+      document_id: '1', drop_id: 'drop', delivery_id_json: null, drop_id_json: null };
+    for (const changes of [
+      { document_path: `drops/other/${collection}/1` },
+      { document_path: 'invalid' },
+      { document_kind: 'claim_code' },
+      { document_id: '2' },
+      { drop_id: null },
+    ]) {
+      assert.throws(() => parse({ ...row, ...changes }), isUnavailableCommerceError);
+    }
+  }
+  assert.throws(() => parseReadyNotificationCandidate({
+    document_path: 'drops/drop/deliveryOrders/1', document_kind: 'delivery_order',
+    document_id: '1', drop_id: 'drop', delivery_id_json: 'invalid-json', drop_id_json: null,
+  }), isUnavailableCommerceError);
 });
 
 test('delivery-order owner pagination uses a distinct indexed keyset query', async () => {

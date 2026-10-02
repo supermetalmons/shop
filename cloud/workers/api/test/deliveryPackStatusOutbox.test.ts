@@ -15,6 +15,7 @@ import {
 } from '../src/deliveryPackStatusOutbox.ts';
 import { runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { PackStatusOutboxRepository } from '../src/packStatusOutboxRepository.ts';
 import type { PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.ts';
 
 const READY_NOTIFICATION_NOW_MS = 1_700_000_000_000;
@@ -321,6 +322,48 @@ test('projection CAS preserves a concurrent terminal state', async () => {
   assert.equal(stored?.failureCount, 0);
 });
 
+for (const terminalState of ['completed', 'failed'] as const) {
+  test(`projection sweep reports ${terminalState} observed after discovery`, async (context) => {
+    const native = await nativeDeliveryContext(pendingOrder(7));
+    context.after(() => native.harness.database.close());
+    const errors: Record<string, unknown>[] = [];
+    context.mock.method(console, 'error', (entry: Record<string, unknown>) => { errors.push(entry); });
+    const queryDue = PackStatusOutboxRepository.prototype.queryDue;
+    context.mock.method(PackStatusOutboxRepository.prototype, 'queryDue', async function (
+      this: PackStatusOutboxRepository,
+      args: Parameters<typeof queryDue>[0],
+    ) {
+      const candidates = await queryDue.call(this, args);
+      assert.equal(candidates.length, 1);
+      assert.ok(await this.compareAndSet({
+        expected: candidates[0], nowMs: READY_NOTIFICATION_NOW_MS,
+        changes: {
+          state: terminalState, failureCount: candidates[0].failureCount, nextAttemptAtMs: null,
+          completedAtMs: terminalState === 'completed' ? READY_NOTIFICATION_NOW_MS : null,
+          failedAtMs: terminalState === 'failed' ? READY_NOTIFICATION_NOW_MS : null,
+          lastErrorCode: terminalState === 'failed' ? 'invalid-order-items' : null,
+        },
+      }));
+      return candidates;
+    });
+    const projection = projectionDataDb();
+    assert.deepEqual(await reconcilePendingDeliveryPackStatusProjections({
+      COMMERCE_DB: native.harness.db, DATA_DB: projection.db,
+    }, new AbortController().signal, {
+      dropIds: ['card_nft_2'], nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {},
+    }), {
+      attempted: 1, completed: terminalState === 'completed' ? 1 : 0,
+      deferred: 0, skipped: 0, failed: terminalState === 'failed' ? 1 : 0,
+    });
+    assert.equal(projection.attempts, 0);
+    assert.equal((await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))?.state, terminalState);
+    assert.deepEqual(errors, terminalState === 'failed' ? [{
+      event: 'scheduled_reconciliation_item_failed', job: 'packStatus', dropId: 'card_nft_2',
+      deliveryId: 7, errorCode: 'projection-failed',
+    }] : []);
+  });
+}
+
 test('a non-cooperative CAS reread remains bounded by request cancellation', { timeout: 1_000 }, async () => {
   const native = await nativeDeliveryContext(pendingOrder(7));
   const expected = (await native.context.repository.packStatusOutbox.get(pendingOutbox().parentPath))!;
@@ -368,11 +411,11 @@ test('projection sweep shares its four-order cap fairly across drops with concur
     },
   });
   const env = { COMMERCE_DB: harness.db, DATA_DB: projection.db };
-  assert.equal(await reconcilePendingDeliveryPackStatusProjections(env, new AbortController().signal, {
+  assert.deepEqual(await reconcilePendingDeliveryPackStatusProjections(env, new AbortController().signal, {
     dropIds,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     log: (event) => events.push(event),
-  }), 4);
+  }), { attempted: 4, completed: 4, deferred: 0, skipped: 0, failed: 0 });
   assert.equal(projection.applied, 4);
   assert.equal(maximumActive, 2);
   assert.deepEqual(events.filter((event) => event.event === 'delivery_pack_status_projection_completed')
@@ -391,15 +434,38 @@ test('projection sweep marks malformed identities failed and counts them against
     seedPackStatusOutbox(harness, pendingOutbox('card_nft_2', deliveryId));
   }
   const projection = projectionDataDb();
-  assert.equal(await reconcilePendingDeliveryPackStatusProjections(
+  assert.deepEqual(await reconcilePendingDeliveryPackStatusProjections(
     { COMMERCE_DB: harness.db, DATA_DB: projection.db },
     new AbortController().signal,
     { dropIds: ['card_nft_2'], nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} },
-  ), 4);
+  ), { attempted: 4, completed: 3, deferred: 0, skipped: 0, failed: 1 });
   const context = { repository: new D1CommerceRepository(harness.db), nowMs: READY_NOTIFICATION_NOW_MS, signal: new AbortController().signal };
   const invalid = await context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '1').path);
   assert.equal(invalid?.state, 'failed');
   assert.equal(invalid?.lastErrorCode, 'invalid-order-identity');
   assert.equal((await context.repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', '5').path))?.state, 'pending');
   assert.equal(projection.applied, 3);
+});
+
+test('projection logging failures do not turn completed projections into retries', async () => {
+  const harness = createCommerceD1Harness();
+  for (const deliveryId of [1, 2]) {
+    seedCommerceDocument(harness, { key: commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
+      data: pendingOrder(deliveryId) });
+    seedPackStatusOutbox(harness, pendingOutbox('card_nft_2', deliveryId));
+  }
+  const projection = projectionDataDb();
+  const result = await reconcilePendingDeliveryPackStatusProjections({ COMMERCE_DB: harness.db, DATA_DB: projection.db },
+    new AbortController().signal, {
+      dropIds: ['card_nft_2'], nowMs: () => READY_NOTIFICATION_NOW_MS,
+      log: () => { throw new Error('logger unavailable'); },
+      onResult: () => { throw new Error('reporter unavailable'); },
+    });
+  assert.deepEqual(result, { attempted: 2, completed: 2, deferred: 0, skipped: 0, failed: 0 });
+  assert.equal(projection.applied, 2);
+  const repository = new D1CommerceRepository(harness.db);
+  for (const deliveryId of [1, 2]) {
+    assert.equal((await repository.packStatusOutbox.get(commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)).path))?.state,
+      'completed');
+  }
 });

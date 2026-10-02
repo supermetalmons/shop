@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -98,8 +98,33 @@ test('native D1 delivery recovery cutover preserves state, fences old writers an
     await db.batch([
       db.prepare("UPDATE commerce_delivery_recovery_control SET preparation_state = 'ready', prepared_at_ms = 0"),
       db.prepare("UPDATE commerce_delivery_recovery_control SET storage_mode = 'table'"),
-      ...resume(db),
+      db.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1'),
     ]);
+    for (const name of readdirSync(source).filter((name) => name.endsWith('.sql') && name >= '0031_' && name < '0033_')) {
+      copyFileSync(join(source, name), join(directory, name));
+    }
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const cleanupName = '0033_delivery_recovery_metadata_cleanup.sql';
+    const cleanup = readFileSync(join(source, cleanupName), 'utf8');
+    const beforeCleanup = await db.prepare('SELECT * FROM commerce_documents WHERE document_path = ?').bind(key.path).first<Record<string, unknown>>();
+    const guardsBeforeCleanup = (await db.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all()).results;
+    const revisionsBeforeCleanup = (await db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all()).results;
+    const authorityBeforeCleanup = await db.prepare('SELECT * FROM commerce_authority_control').first();
+    writeFileSync(join(directory, cleanupName), `${cleanup}\nINSERT INTO commerce_preorder_cards (card_id) VALUES (0);`);
+    await assert.rejects(worker.applyD1Migrations('COMMERCE_DB'), /CHECK constraint failed/);
+    assert.deepEqual(await db.prepare('SELECT * FROM commerce_documents WHERE document_path = ?').bind(key.path).first(), beforeCleanup);
+    assert.deepEqual((await db.prepare("SELECT name, sql FROM sqlite_schema WHERE type = 'trigger' ORDER BY name").all()).results, guardsBeforeCleanup);
+    assert.equal(await db.prepare('SELECT name FROM d1_migrations WHERE name = ?').bind(cleanupName).first(), null);
+    writeFileSync(join(directory, cleanupName), cleanup);
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const cleaned = await db.prepare('SELECT * FROM commerce_documents WHERE document_path = ?').bind(key.path).first<Record<string, unknown>>();
+    const originalMetadata = JSON.parse(String(beforeCleanup!.document_json));
+    delete originalMetadata.receiptRecovery;
+    assert.deepEqual(JSON.parse(String(cleaned!.document_json)), originalMetadata);
+    assert.deepEqual({ ...cleaned, document_json: null }, { ...beforeCleanup, document_json: null });
+    assert.deepEqual((await db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all()).results, revisionsBeforeCleanup);
+    assert.deepEqual(await db.prepare('SELECT * FROM commerce_authority_control').first(), authorityBeforeCleanup);
+    await db.batch([lease(db), ...resume(db)]);
     const snapshot = await repository.getRecoverySnapshot(key);
     assert.ok(snapshot);
     assert.deepEqual(snapshot.state, imported);

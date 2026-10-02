@@ -31,6 +31,10 @@ import {
   type ManualReviewCheckoutsQueryArgs,
 } from './commerceQueries.js';
 import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
+import {
+  parseReadyNotificationCandidate, parseStripeTerminalNotificationCandidate,
+  type ReadyNotificationCandidate, type StripeTerminalNotificationCandidate,
+} from './commerceDiscoveryCandidates.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
 import type { WalletDeliveryRecoveryState } from '../../../../shared/contracts.js';
 import {
@@ -335,7 +339,7 @@ export class D1CommerceRepository {
   async queryDueReadyNotifications(args: {
     dueAtMs: number;
     limit: number;
-  }): Promise<CommerceDocumentRecord[]> {
+  }): Promise<ReadyNotificationCandidate[]> {
     const limit = positiveQueryLimit(args.limit);
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid ready-notification cutoff.');
@@ -345,7 +349,7 @@ export class D1CommerceRepository {
       () => this.db.prepare(query.sql).bind(...query.bindings),
     );
     reportInefficientQuery('due-ready-notifications', 'delivery_order', result, result.results.length);
-    return result.results.map(parseRow).map((document) => publicRecord(document));
+    return result.results.map(parseReadyNotificationCandidate);
   }
 
   async queryStaleStripeFulfillments(cutoffMs: number): Promise<CommerceDocumentRecord[]> {
@@ -362,7 +366,7 @@ export class D1CommerceRepository {
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
-  async queryDueStripeTerminalNotifications(dueAtMs: number, limit = 20): Promise<CommerceDocumentRecord[]> {
+  async queryDueStripeTerminalNotifications(dueAtMs: number, limit = 20): Promise<StripeTerminalNotificationCandidate[]> {
     positiveQueryLimit(limit);
     if (!Number.isSafeInteger(dueAtMs) || dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe notification cutoff.');
@@ -373,7 +377,7 @@ export class D1CommerceRepository {
       true,
     );
     reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
-    return result.results.map(parseRow).map((document) => publicRecord(document));
+    return result.results.map(parseStripeTerminalNotificationCandidate);
   }
 
   async begin(nowMs: number): Promise<CommerceUnitOfWork> {
