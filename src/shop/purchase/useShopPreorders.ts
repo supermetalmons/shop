@@ -8,12 +8,13 @@ import { usePreorderCheckout } from '../../hooks/usePreorderCheckout';
 import { usePreorderRecoveryRecords } from '../../hooks/usePreorderRecoveryRecords';
 import { revokePreorderInventoryAssets } from '../../lib/inventoryQuery';
 import { acknowledgePreorderFailure, listPreorderRecoveries } from '../../lib/preorderRecovery';
+import type { ResolvedAppRoute } from '../../routes';
 
 const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
 const MI_NOTE_MAINNET_PREORDER = getPreorderConfig('mi_note_cards')!;
 
 type ShopPreordersOptions = {
-  currentPath: string;
+  preorderId: ResolvedAppRoute['preorderId'];
   connectedWallet: string | undefined;
   authenticatedWallet: string | undefined;
   isSignedInWallet: boolean;
@@ -28,7 +29,7 @@ type ShopPreordersOptions = {
 };
 
 export function useShopPreorders({
-  currentPath,
+  preorderId,
   connectedWallet,
   authenticatedWallet,
   isSignedInWallet,
@@ -41,8 +42,8 @@ export function useShopPreorders({
   showToast,
   showSuccessHud,
 }: ShopPreordersOptions) {
-  const miNoteCardsPage = currentPath === '/mi_note_cards' || currentPath === '/mi_note_cards_devnet';
-  const preorderConfig = currentPath === '/mi_note_cards' ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
+  const miNoteCardsPage = preorderId !== null;
+  const preorderConfig = preorderId === MI_NOTE_MAINNET_PREORDER.preorderId ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
   const preorderActive = miNoteCardsPage && !commerceUiSuspended;
   const ethereumWallet = useMiNoteEthereumWallet(preorderActive);
   const ethereumVerification = useMiNoteVerification(preorderActive, preorderConfig.preorderId, ethereumWallet);

@@ -17,10 +17,6 @@ import {
 } from '../config/deployment';
 import { useHomePageScrollRestoration } from '../hooks/useHomePageScrollRestoration';
 import {
-  resolveFrontendDropByPath,
-  resolveUpcomingDropRouteByPath
-} from '../lib/dropConfig';
-import {
   mintPanelPreviewAspectRatio,
   mintPanelPreviewImage,
   resolveDropContent
@@ -33,10 +29,14 @@ import {
   dropOpenGerund
 } from '../../shared/dropLabels.ts';
 import { createShopConnection } from '../lib/shopRpc';
-import { getNormalizedPathname } from '../navigation';
+import type { ResolvedAppRoute } from '../routes';
 import { cardNft2PackVideoSourcesForBrowser, createCardNft2PackInventoryPreviewVideo, formatStripeUsdAmountCents, resolveMintPreviewMedia, stripeCheckoutUnitAmountCentsForDrop } from './purchase/media';
 
-export function useShopDrop(currentPath?: string) {
+export function useShopDrop({
+  shopPath: normalizedCurrentPath,
+  drop: routeDrop,
+  upcoming: upcomingDropRoute,
+}: Pick<ResolvedAppRoute, 'shopPath' | 'drop' | 'upcoming'>) {
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
 
   const cardNft2PackInventoryPreviewVideo = useMemo(
@@ -44,21 +44,9 @@ export function useShopDrop(currentPath?: string) {
     [cardNft2PackVideoSources],
   );
 
-  const normalizedCurrentPath = useMemo(
-    () => (currentPath ? currentPath : getNormalizedPathname()),
-    [currentPath],
-  );
-
   const restoreHomeOnNextNavigation = useHomePageScrollRestoration(normalizedCurrentPath);
 
-  const routeDrop = useMemo(() => resolveFrontendDropByPath(normalizedCurrentPath), [normalizedCurrentPath]);
-
   const routeStripeOnly = routeDrop?.salesMode === 'stripe_receipt_only';
-
-  const upcomingDropRoute = useMemo(
-    () => (routeDrop ? null : resolveUpcomingDropRouteByPath(normalizedCurrentPath)),
-    [normalizedCurrentPath, routeDrop],
-  );
 
   const allDrops = useMemo(() => listFrontendDrops(), []);
 

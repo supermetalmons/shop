@@ -4,9 +4,8 @@ import App from './App';
 import { BackgroundBlurPortal } from './components/BackgroundBlurLayer';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import { WalletContextProvider } from './wallet/WalletContext';
-import type { SolanaCluster } from './config/deployment';
 import { navigate } from './navigation';
-import type { ShopWipExperience } from './routes';
+import type { ResolvedAppRoute, ShopWipExperience } from './routes';
 
 const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
@@ -112,21 +111,12 @@ function WipForeground({
 }
 
 type ShopRouteProps = {
-  cluster: SolanaCluster;
-  currentPath: string;
-  claimDeepLinkCode?: string | null;
-  nfcDeepLinkCode?: string | null;
-  wipExperience?: ShopWipExperience | null;
+  route: ResolvedAppRoute;
 };
 
-export default function ShopRoute({
-  cluster,
-  currentPath,
-  claimDeepLinkCode = null,
-  nfcDeepLinkCode = null,
-  wipExperience = null,
-}: ShopRouteProps) {
-  const isWipRoute = wipExperience !== null;
+export default function ShopRoute({ route }: ShopRouteProps) {
+  const { wipExperience } = route;
+  const isWipRoute = route.kind === 'wip';
 
   React.useEffect(() => {
     if (!isWipRoute) return undefined;
@@ -140,14 +130,7 @@ export default function ShopRoute({
     };
   }, [isWipRoute]);
 
-  const app = (
-    <App
-      currentPath={isWipRoute ? '/' : currentPath}
-      claimDeepLinkCode={claimDeepLinkCode}
-      nfcDeepLinkCode={nfcDeepLinkCode}
-      suspended={isWipRoute}
-    />
-  );
+  const app = <App route={route} suspended={isWipRoute} />;
   const wip = wipExperience ? (
     <WipRouteErrorBoundary key={wipExperience} experience={wipExperience}>
       <React.Suspense fallback={<WipRouteShell experience={wipExperience} status="loading" />}>
@@ -161,7 +144,7 @@ export default function ShopRoute({
   ) : null;
 
   return (
-    <WalletContextProvider cluster={cluster}>
+    <WalletContextProvider cluster={route.walletCluster}>
       {app}
       {wip ? <WipForeground>{wip}</WipForeground> : null}
     </WalletContextProvider>

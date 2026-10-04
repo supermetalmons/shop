@@ -4,9 +4,7 @@ import { MintPanel, type MintPanelBoxMedia } from '../../components/MintPanel';
 import {
   type FrontendDeploymentConfig
 } from '../../config/deployment';
-import {
-  resolveUpcomingDropRouteByPath
-} from '../../lib/dropConfig';
+import type { UpcomingDropRouteConfig } from '../../lib/dropConfig';
 import type { MintStats } from '../../types';
 import type { useShopPurchaseActions } from '../purchase/useShopPurchaseActions';
 import type { useShopPurchaseState } from '../purchase/useShopPurchaseState';
@@ -27,7 +25,7 @@ type ShopPurchaseSectionProps = Pick<ReturnType<typeof useShopPurchaseActions>,
   | 'packStatusDisplayLabels'
 > & {
   routeDrop: FrontendDeploymentConfig | null;
-  upcomingDropRoute: ReturnType<typeof resolveUpcomingDropRouteByPath>;
+  upcomingDropRoute: UpcomingDropRouteConfig | null;
   upcomingMintPreviewMedia: MintPanelBoxMedia;
   mintPreviewMedia: MintPanelBoxMedia;
   effectiveMintStats: MintStats | undefined;

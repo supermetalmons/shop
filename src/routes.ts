@@ -59,6 +59,8 @@ type AppRouteKind =
 export type ResolvedAppRoute = {
   kind: AppRouteKind;
   path: string;
+  shopPath: string;
+  preorderId: 'mi_note_cards' | 'mi_note_cards_devnet' | null;
   replacementHref: string | null;
   claimDeepLinkCode: string | null;
   nfcDeepLinkCode: string | null;
@@ -85,6 +87,8 @@ function createRoute(
   return {
     kind,
     path,
+    shopPath: path,
+    preorderId: null,
     replacementHref,
     claimDeepLinkCode: null,
     nfcDeepLinkCode: null,
@@ -120,12 +124,16 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
-  if (path === '/mi_note_cards') return createRoute('mi-note-cards', path, replacementHref);
-  if (path === '/mi_note_cards_devnet') return createRoute('mi-note-cards', path, replacementHref, { walletCluster: 'devnet' });
+  if (path === '/mi_note_cards') return createRoute('mi-note-cards', path, replacementHref, { preorderId: 'mi_note_cards' });
+  if (path === '/mi_note_cards_devnet') return createRoute('mi-note-cards', path, replacementHref, {
+    preorderId: 'mi_note_cards_devnet',
+    walletCluster: 'devnet',
+  });
 
   const wipRoute = WIP_ROUTE_BY_PATH.get(path);
   if (wipRoute) {
     return createRoute('wip', path, replacementHref, {
+      shopPath: '/',
       wipExperience: wipRoute.experience,
     });
   }

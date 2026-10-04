@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach, mock, type TestContext } from 'node:test';
-import { createElement, useSyncExternalStore } from 'react';
+import { createElement } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -16,8 +16,9 @@ const { NfcClaimPage } = await import('../src/components/NfcClaimPage.tsx');
 const { ShopHeader } = await import('../src/components/ShopHeader.tsx');
 const { WalletModalFocusManager } = await import('../src/wallet/WalletModalFocusManager.tsx');
 const { useHomePageScrollRestoration } = await import('../src/hooks/useHomePageScrollRestoration.ts');
+const { useAppRoute } = await import('../src/hooks/useAppRoute.ts');
 const { useOverlayScrollLock } = await import('../src/hooks/useOverlayScrollLock.ts');
-const { getNormalizedPathname, navigate, subscribeToNavigation } = await import('../src/navigation.ts');
+const { navigate } = await import('../src/navigation.ts');
 
 const walletKey = new PublicKey(new Uint8Array(32).fill(1));
 
@@ -51,7 +52,7 @@ function walletState(publicKey: PublicKey | null = null) {
 }
 
 function PageContents() {
-  const pathname = useSyncExternalStore(subscribeToNavigation, getNormalizedPathname);
+  const route = useAppRoute();
   const { setVisible } = useWalletModal();
   return createElement('div', null,
     createElement(ShopHeader, {
@@ -61,7 +62,9 @@ function PageContents() {
         onClick: interactive ? () => setVisible(true) : undefined,
       }, 'Sign In'),
     }),
-    pathname === '/nfc' ? createElement(NfcClaimPage) : createElement('main', null, 'Home shop'),
+    route.kind === 'nfc'
+      ? createElement(NfcClaimPage, { key: route.nfcDeepLinkCode })
+      : createElement('main', null, 'Home shop'),
   );
 }
 
@@ -223,6 +226,36 @@ test('the standard header navigates home and browser history restores the NFC pa
   });
   assert.equal(view.queryByRole('main', { name: 'NFC claim' }), null);
   assert.ok(view.getByText('Home shop'));
+  assertPageIsUnlocked();
+});
+
+test('changing only the NFC code remounts the page and resets its initial scroll once', (t) => {
+  const viewport = controlledViewport(t, 600);
+  const view = renderPage(walletState(), '/nfc?code=first');
+  const firstPage = view.getByRole('main', { name: 'NFC claim' });
+  viewport.flushFrame();
+  assert.equal(window.scrollY, 0);
+
+  viewport.setScrollY(350);
+  act(() => {
+    window.history.replaceState(null, '', '/nfc?code=second');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  const secondPage = view.getByRole('main', { name: 'NFC claim' });
+  assert.notEqual(secondPage, firstPage);
+  assert.equal(firstPage.isConnected, false);
+  assert.equal(window.location.search, '?code=second');
+  viewport.flushFrame();
+  assert.equal(window.scrollY, 0);
+
+  viewport.setScrollY(275);
+  act(() => {
+    window.history.replaceState(null, '', '/nfc?code=second&from=wallet#receipt');
+    window.dispatchEvent(new dom.window.Event('pageshow'));
+  });
+  assert.equal(view.getByRole('main', { name: 'NFC claim' }), secondPage);
+  viewport.flushFrame();
+  assert.equal(window.scrollY, 275);
   assertPageIsUnlocked();
 });
 

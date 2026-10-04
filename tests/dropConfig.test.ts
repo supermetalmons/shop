@@ -26,9 +26,14 @@ test('Mi Note preorder route uses devnet while the public gallery stays on mainn
   const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet/' });
   assert.equal(route.kind, 'mi-note-cards');
   assert.equal(route.path, '/mi_note_cards_devnet');
+  assert.equal(route.shopPath, '/mi_note_cards_devnet');
+  assert.equal(route.preorderId, 'mi_note_cards_devnet');
   assert.equal(route.walletCluster, 'devnet');
   assert.equal(route.drop, null);
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).walletCluster, 'mainnet-beta');
+  const mainnetRoute = resolveAppRoute({ pathname: '/mi_note_cards' });
+  assert.equal(mainnetRoute.walletCluster, 'mainnet-beta');
+  assert.equal(mainnetRoute.shopPath, '/mi_note_cards');
+  assert.equal(mainnetRoute.preorderId, 'mi_note_cards');
 });
 
 const UPCOMING_ROUTES = [
@@ -88,6 +93,8 @@ test('Clear Cards keeps its public upcoming route separate from its WIP route', 
 
   assert.equal(wipRoute.kind, 'wip');
   assert.equal(wipRoute.path, '/clear_cards/wip');
+  assert.equal(wipRoute.shopPath, '/');
+  assert.equal(wipRoute.preorderId, null);
   assert.equal(wipRoute.wipExperience, 'clear_cards');
   assert.equal(wipRoute.walletCluster, 'mainnet-beta');
   assert.equal(wipRoute.replacementHref, null);
@@ -106,6 +113,11 @@ test('pack WIP routes stay separate from their live drop routes', () => {
     const route = resolveAppRoute({ pathname });
     assert.equal(route.kind, 'wip');
     assert.equal(route.path, pathname);
+    assert.equal(route.shopPath, '/');
+    assert.equal(route.preorderId, null);
+    assert.equal(route.drop, null);
+    assert.equal(route.upcoming, null);
+    assert.equal(route.walletCluster, 'mainnet-beta');
     assert.equal(route.wipExperience, experience);
   }
 
@@ -148,6 +160,8 @@ test('route aliases replace only the pathname and preserve search and hash bytes
     });
     assert.equal(route.kind, kind);
     assert.equal(route.path, targetPath);
+    assert.equal(route.shopPath, targetPath);
+    assert.equal(route.preorderId, null);
     assert.equal(route.replacementHref, `${targetPath}?code=a%2Fb&next=%2Fclaim#receipt-1`);
   }
 });
@@ -161,6 +175,8 @@ test('claim deep links render the home shop without replacing their URL', () => 
 
   assert.equal(route.kind, 'claim');
   assert.equal(route.path, '/');
+  assert.equal(route.shopPath, '/');
+  assert.equal(route.preorderId, null);
   assert.equal(route.claimDeepLinkCode, 'claim/123');
   assert.equal(route.nfcDeepLinkCode, null);
   assert.equal(route.replacementHref, null);
@@ -178,6 +194,8 @@ test('NFC deep links render a dedicated page without replacing their URL or open
 
     assert.equal(route.kind, 'nfc');
     assert.equal(route.path, '/nfc');
+    assert.equal(route.shopPath, '/nfc');
+    assert.equal(route.preorderId, null);
     assert.equal(route.nfcDeepLinkCode, 'stub/123+abc xyz');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);
@@ -212,6 +230,8 @@ test('home and special routes keep their canonical paths and neutral wallet clus
     const route = resolveAppRoute({ pathname });
     assert.equal(route.kind, kind);
     assert.equal(route.path, pathname);
+    assert.equal(route.shopPath, pathname);
+    assert.equal(route.preorderId, null);
     assert.equal(route.replacementHref, null);
     assert.equal(route.walletCluster, 'mainnet-beta');
   }
@@ -222,9 +242,13 @@ test('live deployments take precedence over upcoming routes at the same path', (
   const upcomingRoute = resolveAppRoute({ pathname: '/tbd/' });
 
   assert.equal(liveRoute.kind, 'drop');
+  assert.equal(liveRoute.shopPath, '/clear_cards');
+  assert.equal(liveRoute.preorderId, null);
   assert.equal(liveRoute.drop, FRONTEND_DROPS.clear_cards);
   assert.equal(liveRoute.upcoming, null);
   assert.equal(upcomingRoute.kind, 'upcoming');
+  assert.equal(upcomingRoute.shopPath, '/tbd');
+  assert.equal(upcomingRoute.preorderId, null);
   assert.equal(upcomingRoute.upcoming?.path, '/tbd');
 });
 
@@ -233,6 +257,8 @@ test('unknown and case-mismatched paths fall back to home while preserving URL s
     const route = resolveAppRoute({ pathname, search: '?from=unknown', hash: '#top' });
     assert.equal(route.kind, 'home');
     assert.equal(route.path, '/');
+    assert.equal(route.shopPath, '/');
+    assert.equal(route.preorderId, null);
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, '/?from=unknown#top');
   }

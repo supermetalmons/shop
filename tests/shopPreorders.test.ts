@@ -6,6 +6,7 @@ import { getPreorderConfig, type PreorderOrder } from '../shared/preorders.ts';
 import { MI_NOTE_SESSION_HEADER } from '../shared/miNoteAuth.ts';
 import { anonymousSessionTestHooks } from '../src/lib/anonymousSession.ts';
 import { listPreorderRecoveries, upsertPreorderRecovery } from '../src/lib/preorderRecovery.ts';
+import { resolveAppRoute } from '../src/routes.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { installBrowserLocks } from './helpers/browserLocks.ts';
@@ -89,7 +90,7 @@ function harness(overrides: Partial<Options> = {}, client = new QueryClient({
   const successes: string[] = [];
   let refreshes = 0;
   const options: Options = {
-    currentPath: '/', connectedWallet: buyer, authenticatedWallet: undefined,
+    preorderId: resolveAppRoute({ pathname: '/' }).preorderId, connectedWallet: buyer, authenticatedWallet: undefined,
     isSignedInWallet: false, isViewerMode: false, commerceUiSuspended: false, statusUiSuspended: false,
     signTransaction: undefined, ensureSignedIn: async () => false,
     refreshInventoryAfterMint: async () => { refreshes++; },
@@ -111,13 +112,13 @@ test('routes select the matching checkout and keep Ethereum verification scoped 
     removeListener: (_event: string, listener: unknown) => providerListeners.delete(listener),
   } });
   window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
-  const view = harness({ currentPath: '/mi_note_cards' });
+  const view = harness({ preorderId: resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId });
   await waitFor(() => assert.equal(view.result.current.ethereumWallet.address, ethereumAddress));
   await act(async () => { await view.result.current.ethereumVerification.verify(); });
   await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, mainnet.preorderId));
   assert.equal(view.result.current.miNoteCardsPage, true);
 
-  view.rerender({ ...view.options, currentPath: '/mi_note_cards_devnet' });
+  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId });
   assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);
   assert.equal(view.result.current.ethereumVerification.session, null);
   assert.equal(view.result.current.preorderCheckout.availability, null);
@@ -125,12 +126,12 @@ test('routes select the matching checkout and keep Ethereum verification scoped 
   await act(async () => { await view.result.current.ethereumVerification.verify(); });
   await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, devnet.preorderId));
 
-  view.rerender({ ...view.options, currentPath: '/mi_note_cards_devnet', commerceUiSuspended: true });
+  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId, commerceUiSuspended: true });
   const checks = calls.availabilityChecks.length;
   await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
   assert.equal(view.result.current.miNoteCardsPage, true);
   assert.equal(calls.availabilityChecks.length, checks);
-  view.rerender({ ...view.options, currentPath: '/' });
+  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/' }).preorderId });
   assert.equal(view.result.current.miNoteCardsPage, false);
   assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);
   view.unmount();
@@ -173,7 +174,7 @@ test('failed and expired recovery removes only the owner assets from both invent
   });
   assert.equal(cancel.mock.callCount(), 2);
   await act(async () => { await upsertPreorderRecovery(order(5, mainnet.preorderId, 'succeeded')); });
-  view.rerender({ ...view.options, currentPath: '/mi_note_cards_devnet' });
+  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId });
   assert.equal(cancel.mock.callCount(), 2);
   assert.deepEqual(view.toasts, []);
   assert.ok(listPreorderRecoveries(buyer).every(record => !record.failureNotified));

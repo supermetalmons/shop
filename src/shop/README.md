@@ -2,6 +2,8 @@
 
 `App.tsx` composes the shop and coordinates modal priority and shared wallet/owner resets.
 
+`useAppRoute` resolves browser navigation once and passes the route through `ShopRoute` to `App`. Shop hooks consume its drop, upcoming, and preorder fields instead of interpreting URLs. Use `shopPath` for shop presentation and lifecycle resets: claim links and suspended WIP backgrounds display Home while retaining their original URLs. Keep the shop and wallet provider mounted across shop routes so recovery continues.
+
 - `account`: sign-in, profile viewing, and shipment recovery/readiness.
 - `purchase`: mint queries, discounts, Solana/Stripe purchase actions, and Mi Note preorder coordination.
 - `inventory`: server queries, optimistic records, persistence, metadata, and selection.

@@ -13,6 +13,7 @@ import {
   shouldToastAppearAboveModal,
 } from './lib/modalLayers';
 import { navigate } from './navigation';
+import type { ResolvedAppRoute } from './routes';
 import { ADMIN_VIEWER_READ_ONLY_MESSAGE } from './shop/account/display';
 import { useDeliveryRecovery } from './shop/account/useDeliveryRecovery';
 import { useShopAccount, useShopAccountEffects } from './shop/account/useShopAccount';
@@ -71,13 +72,11 @@ class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { fail
 }
 
 type AppProps = {
-  currentPath?: string;
-  claimDeepLinkCode?: string | null;
-  nfcDeepLinkCode?: string | null;
+  route: ResolvedAppRoute;
   suspended?: boolean;
 };
 
-function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, suspended = false }: AppProps) {
+function App({ route, suspended = false }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey } = wallet;
@@ -86,8 +85,8 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const statusUiSuspended = suspended || walletModalVisible;
   const auth = useSolanaAuth();
-  const drop = useShopDrop(currentPath);
-  const isNfcPage = drop.normalizedCurrentPath === '/nfc';
+  const drop = useShopDrop(route);
+  const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
@@ -128,7 +127,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const modals = useCommerceModals({
     wallet, connectedWallet, connectedWalletRef,
     rebaseReceiptOperations: receiptState.rebaseReceiptOperations,
-    claimDeepLinkCode, navigate,
+    claimDeepLinkCode: route.claimDeepLinkCode, navigate,
   });
   useShopAccountEffects(account);
   const blockViewerModeAction = () => {
@@ -154,7 +153,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
   const { miNoteCardsPage, ethereumWallet, ethereumVerification, preorderCheckout } = useShopPreorders({
-    currentPath: drop.normalizedCurrentPath,
+    preorderId: route.preorderId,
     connectedWallet,
     authenticatedWallet: account.authenticatedWallet,
     isSignedInWallet,
@@ -403,7 +402,7 @@ function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, su
           />}
         />
         {isNfcPage ? (
-          <NfcClaimPage key={nfcDeepLinkCode} />
+          <NfcClaimPage key={route.nfcDeepLinkCode} />
         ) : miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
