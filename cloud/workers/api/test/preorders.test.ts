@@ -163,9 +163,9 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
       auth_subject TEXT PRIMARY KEY, wallet TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, revision INTEGER NOT NULL,
       reconcile_lease_id TEXT, reconcile_lease_expires_at_ms INTEGER)`);
     h.database.prepare('INSERT INTO auth_wallet_bindings VALUES (?, ?, 1000, 1, NULL, NULL)').run('buyer-session', BUYER);
-    const control = gate(), expiry = gate(), ethereum = gate(), identity = gate(), binding = gate();
+    const control = gate(), ethereum = gate(), identity = gate(), binding = gate();
     const ownership = gate(), claims = gate();
-    t.after(() => { for (const step of [control, expiry, ethereum, identity, binding, ownership, claims]) step.resolve(); });
+    t.after(() => { for (const step of [control, ethereum, identity, binding, ownership, claims]) step.resolve(); });
     const prepare = h.db.prepare.bind(h.db);
     t.mock.method(h.db, 'prepare', (sql: string) => {
       const statement = prepare(sql);
@@ -183,15 +183,11 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
       }
       return statement;
     });
-    const expirePrepared = PreorderStore.prototype.expirePrepared;
-    const readClaims = PreorderStore.prototype.claims;
-    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async function (this: PreorderStore, ...args: Parameters<PreorderStore['expirePrepared']>) {
-      await expiry.enter();
-      return expirePrepared.call(this, ...args);
-    });
-    const claimRead = t.mock.method(PreorderStore.prototype, 'claims', async function (this: PreorderStore, cluster: string, collection: string) {
+    const readClaims = PreorderStore.prototype.availabilityClaims;
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared');
+    const claimRead = t.mock.method(PreorderStore.prototype, 'availabilityClaims', async function (this: PreorderStore, ...args: Parameters<PreorderStore['availabilityClaims']>) {
       await claims.enter();
-      return readClaims.call(this, cluster, collection);
+      return readClaims.call(this, ...args);
     });
     let ownershipCalls = 0;
     const pending = h.call('availability', { preorderId }, {
@@ -207,8 +203,6 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     });
     await Promise.all([control.started, ethereum.started, identity.started]);
     assert.equal(expire.mock.callCount(), 0);
-    control.resolve();
-    await expiry.started;
     ethereum.resolve();
     identity.resolve();
     await binding.started;
@@ -218,15 +212,16 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(ownershipCalls, 0);
     assert.equal(claimRead.mock.callCount(), 0);
-    expiry.resolve();
+    control.resolve();
     await Promise.all([ownership.started, claims.started]);
     claims.resolve();
     ownership.resolve();
     assert.equal((await pending).status, 200);
+    assert.equal(expire.mock.callCount(), 0);
   });
 }
 
-for (const failure of ['maintenance', 'expiry', 'ethereum', 'identity'] as const) {
+for (const failure of ['maintenance', 'ethereum', 'identity'] as const) {
   test(`availability stops before ownership and preserves ${failure} failure precedence`, { timeout: 2000 }, async (t) => {
     const h = harness();
     const commerce = gate();
@@ -244,10 +239,8 @@ for (const failure of ['maintenance', 'expiry', 'ethereum', 'identity'] as const
       }
       return statement;
     });
-    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared', async () => {
-      if (failure === 'expiry') throw new ProfileReadError('unavailable', 503, 'Reservation cleanup failed.');
-    });
-    const claims = t.mock.method(PreorderStore.prototype, 'claims');
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared');
+    const claims = t.mock.method(PreorderStore.prototype, 'availabilityClaims');
     let ethereumCalls = 0, identityCalls = 0, ownershipCalls = 0;
     const pending = h.call('availability', { preorderId: config.preorderId }, {
       verifyEthereumSession: (...args) => {
@@ -267,20 +260,19 @@ for (const failure of ['maintenance', 'expiry', 'ethereum', 'identity'] as const
     const result = await pending;
     const expected = {
       maintenance: [503, 'unavailable', 'Preorders are temporarily unavailable for maintenance.'],
-      expiry: [503, 'unavailable', 'Reservation cleanup failed.'],
       ethereum: [401, 'unauthenticated', 'Verify your Ethereum wallet.'],
       identity: [401, 'unauthenticated', 'Authentication is required.'],
     }[failure];
     assert.deepEqual([result.status, result.body.error.code, result.body.error.message], expected);
     assert.equal(ethereumCalls, 1);
     assert.equal(identityCalls, 1);
-    assert.equal(expire.mock.callCount(), failure === 'maintenance' ? 0 : 1);
+    assert.equal(expire.mock.callCount(), 0);
     assert.equal(ownershipCalls, 0);
     assert.equal(claims.mock.callCount(), 0);
   });
 }
 
-for (const failure of ['maintenance', 'expiry', 'ethereum'] as const) {
+for (const failure of ['maintenance', 'ethereum'] as const) {
   test(`availability returns ${failure} failure before unrelated authentication reads finish`, { timeout: 2000 }, async (t) => {
     const h = harness();
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -305,10 +297,8 @@ for (const failure of ['maintenance', 'expiry', 'ethereum'] as const) {
       }
       return statement;
     });
-    t.mock.method(PreorderStore.prototype, 'expirePrepared', async () => {
-      if (failure === 'expiry') throw new ProfileReadError('unavailable', 503, 'Reservation cleanup failed.');
-    });
-    const claims = t.mock.method(PreorderStore.prototype, 'claims');
+    const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared');
+    const claims = t.mock.method(PreorderStore.prototype, 'availabilityClaims');
     let ownershipCalls = 0;
     const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, {
       headers: { Authorization: 'test-session' },
@@ -335,11 +325,11 @@ for (const failure of ['maintenance', 'expiry', 'ethereum'] as const) {
     assert.equal(result.response.status, failure === 'ethereum' ? 401 : 503);
     assert.equal(body.error.message, {
       maintenance: 'Preorders are temporarily unavailable for maintenance.',
-      expiry: 'Reservation cleanup failed.',
       ethereum: 'Verify your Ethereum wallet.',
     }[failure]);
     assert.equal(ownershipCalls, 0);
     assert.equal(claims.mock.callCount(), 0);
+    assert.equal(expire.mock.callCount(), 0);
     assert.equal(lateFailures, 0);
     assert.equal(identitySignal?.aborted, true);
     assert.equal(request.signal.aborted, false);
@@ -368,7 +358,7 @@ test('availability preserves provider-failure logging when optional identity tim
     }
     return statement;
   });
-  const claims = t.mock.method(PreorderStore.prototype, 'claims');
+  const claims = t.mock.method(PreorderStore.prototype, 'availabilityClaims');
   const eligibility = t.mock.fn(h.deps.eligibility!);
   const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, {
     headers: { Origin: 'https://mons.shop', 'X-Mons-CSRF': '1',
@@ -396,7 +386,7 @@ test('availability observes concurrent failures and preserves ownership failure 
   const h = harness();
   const ownership = gate(), claims = gate();
   t.after(() => { ownership.resolve(); claims.resolve(); });
-  t.mock.method(PreorderStore.prototype, 'claims', async () => {
+  t.mock.method(PreorderStore.prototype, 'availabilityClaims', async () => {
     await claims.enter();
     throw new ProfileReadError('unavailable', 503, 'Claim lookup failed.');
   });
@@ -422,7 +412,7 @@ test('availability retains the ownership deadline after a concurrent claims fail
   const h = harness();
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const started = Promise.withResolvers<AbortSignal>();
-  const claims = t.mock.method(PreorderStore.prototype, 'claims', async () => {
+  const claims = t.mock.method(PreorderStore.prototype, 'availabilityClaims', async () => {
     throw new ProfileReadError('unavailable', 503, 'Claim lookup failed.');
   });
   let settled = false;
@@ -453,7 +443,7 @@ for (const ownershipFails of [false, true]) {
     const claims = gate();
     t.after(() => claims.resolve());
     let lateFailure = false;
-    t.mock.method(PreorderStore.prototype, 'claims', async () => {
+    t.mock.method(PreorderStore.prototype, 'availabilityClaims', async () => {
       await claims.enter();
       lateFailure = true;
       throw new Error('Late claims failure');
@@ -507,7 +497,7 @@ test('availability cancels without waiting for stalled claims', { timeout: 2000 
   const started = Promise.withResolvers<AbortSignal>();
   const claims = gate();
   t.after(() => claims.resolve());
-  t.mock.method(PreorderStore.prototype, 'claims', async () => { await claims.enter(); return []; });
+  t.mock.method(PreorderStore.prototype, 'availabilityClaims', async () => { await claims.enter(); return []; });
   const request = new Request(`https://mons.shop/preorders/availability?preorderId=${config.preorderId}`, { signal: controller.signal });
   const pending = handlePreorderRequest(request, h.env, {}, { ...h.deps,
     eligibility: async ({ deadline }) => {
@@ -523,6 +513,112 @@ test('availability cancels without waiting for stalled claims', { timeout: 2000 
   const result = await pending;
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+});
+
+for (const method of ['GET', 'POST']) {
+  test(`availability ${method} ignores expired preparations without database writes`, async (t) => {
+    const writes: unknown[] = [];
+    const h = harness({ observeCall: (call) => {
+      if (call.method === 'run' || call.method === 'batch') writes.push(call);
+    } });
+    t.after(() => h.database.close());
+    h.holdings([1]);
+    const prepared = await h.prepare();
+    const order = (await h.store.get(prepared.body.order.orderId))!;
+    const claims = await h.store.claims(config.cluster, config.collection);
+    h.time(order.expiresAtMs);
+    writes.length = 0;
+    const query = method === 'GET' ? `?preorderId=${config.preorderId}` : '';
+    const request = new Request(`https://mons.shop/preorders/availability${query}`, {
+      method, headers: { Authorization: 'test-session', 'Content-Type': 'application/json' },
+      ...(method === 'POST' ? { body: JSON.stringify({ preorderId: config.preorderId }) } : {}),
+    });
+    const result = await handlePreorderRequest(request, h.env, {}, h.deps);
+    assert.equal(result.response.status, 200);
+    assert.deepEqual((await result.response.json() as { items: unknown[] }).items, [{ id: 1, status: 'available' }]);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(await h.store.get(order.orderId), order);
+    assert.deepEqual(await h.store.claims(config.cluster, config.collection), claims);
+  });
+}
+
+test('availability respects the injected expiry boundary for every viewer and preparation reclaims the retained claim', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  h.holdings([1]);
+  const prepared = await h.prepare();
+  const order = (await h.store.get(prepared.body.order.orderId))!;
+  const claims = await h.store.claims(config.cluster, config.collection);
+  const viewers = [
+    { wallet: BUYER, signedIn: true, reserved: [{ id: 1, status: 'reserved' }] },
+    { wallet: OTHER, signedIn: true, reserved: [] },
+    { wallet: BUYER, signedIn: false, reserved: [] },
+  ];
+  for (const nowMs of [order.expiresAtMs - 1, order.expiresAtMs]) {
+    h.time(nowMs);
+    for (const viewer of viewers) {
+      h.wallet(viewer.wallet);
+      h.signedIn(viewer.signedIn);
+      const response = await h.call('availability', { preorderId: config.preorderId });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.items, nowMs < order.expiresAtMs ? viewer.reserved : [{ id: 1, status: 'available' }]);
+    }
+    assert.deepEqual(await h.store.get(order.orderId), order);
+    assert.deepEqual(await h.store.claims(config.cluster, config.collection), claims);
+  }
+  h.wallet(OTHER);
+  h.signedIn(true);
+  const replacement = await h.prepare();
+  assert.equal(replacement.status, 200);
+  assert.equal(replacement.body.order.buyer, OTHER);
+  assert.equal((await h.store.get(order.orderId))?.status, 'expired');
+  assert.deepEqual((await h.store.claims(config.cluster, config.collection)).map(({ orderId }) => orderId), [replacement.body.order.orderId]);
+});
+
+for (const state of ['submitted', 'confirmed', 'succeeded'] as const) {
+  test(`availability retains ${state} claims beyond preparation expiry`, async (t) => {
+    const h = harness();
+    t.after(() => h.database.close());
+    h.holdings([1]);
+    const prepared = await h.prepare();
+    let order = await h.store.submit((await h.store.get(prepared.body.order.orderId))!,
+      { transactionBase64: 'signed', signature: 'signature' }, 2000);
+    if (state === 'confirmed') order = await h.store.confirm(order, 550, 3000);
+    if (state === 'succeeded') order = await h.store.finish(order, 'succeeded', 3000);
+    h.time(order.expiresAtMs + 1);
+    const own = await h.call('availability', { preorderId: config.preorderId });
+    assert.equal(own.status, 200);
+    assert.deepEqual(own.body.items, [{ id: 1, status: state === 'submitted' ? 'reserved' : 'preordered' }]);
+    h.wallet(OTHER);
+    assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items, []);
+    h.signedIn(false);
+    assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items, []);
+    assert.deepEqual(await h.store.get(order.orderId), order);
+    assert.equal((await h.store.claims(config.cluster, config.collection))[0]?.orderId, order.orderId);
+  });
+}
+
+test('disabled collection availability retains expired preparations without cleanup', async (t) => {
+  const h = harness();
+  const enabled = config.enabled;
+  t.after(() => { Object.assign(config, { enabled }); h.database.close(); });
+  h.holdings([1]);
+  const prepared = await h.prepare();
+  const order = (await h.store.get(prepared.body.order.orderId))!;
+  h.time(order.expiresAtMs);
+  Object.assign(config, { enabled: false });
+  const expire = t.mock.method(PreorderStore.prototype, 'expirePrepared');
+  const own = await h.call('availability', { preorderId: config.preorderId });
+  assert.equal(own.status, 200);
+  assert.deepEqual(own.body.items, [{ id: 1, status: 'reserved' }]);
+  h.wallet(OTHER);
+  assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items, []);
+  assert.equal((await h.prepare()).status, 409);
+  h.signedIn(false);
+  assert.deepEqual((await h.call('availability', { preorderId: config.preorderId })).body.items, []);
+  assert.equal(expire.mock.callCount(), 0);
+  assert.deepEqual(await h.store.get(order.orderId), order);
+  assert.equal((await h.store.claims(config.cluster, config.collection))[0]?.orderId, order.orderId);
 });
 
 for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
@@ -1052,7 +1148,7 @@ test('foreign wallets cannot read, submit, or cancel another order', async () =>
   })).status, 403);
 });
 
-test('mainnet availability is verified, collection-scoped, and expires unsigned reservations', async () => {
+test('mainnet availability is verified, collection-scoped, and ignores expired unsigned reservations', async () => {
   const h = harness();
   const mainnet = getPreorderConfig('mi_note_cards')!;
   const first = await h.prepare([1]);
@@ -1086,7 +1182,8 @@ test('mainnet availability is verified, collection-scoped, and expires unsigned 
   const devnet = await h.call('availability', { preorderId: config.preorderId });
   assert.equal(devnet.body.items[0].status, 'preordered');
   assert.equal(devnet.body.items[1].status, 'available');
-  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'expired');
+  assert.equal(devnet.body.items[2].status, 'available');
+  assert.equal((await h.store.get(expiring.body.order.orderId))?.status, 'prepared');
 });
 
 for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {

@@ -1,5 +1,6 @@
 import { buildWalletDeliveryRecoveryState } from '../../../../shared/deliveryRecovery.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
+import { executeGuardedCommerceRead } from './commerceGuardedRead.js';
 import {
   deliveryRecoveryAuthorityStatement, requireDeliveryRecoveryAuthority,
   recoverySnapshotColumns, parseRecoverySnapshot, type RecoverySnapshot,
@@ -277,7 +278,7 @@ export class D1CommerceRepository {
   }
 
   async getRecoverySnapshot(key: CommerceDocumentKey<'delivery_order'>): Promise<RecoverySnapshot | null> {
-    const result = await this.readRecoveryBatch(this.db.prepare(`SELECT ${DOCUMENT_COLUMNS},
+    const result = await this.readRecoveryBatch(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS},
       ${recoverySnapshotColumns('commerce_documents')} FROM commerce_documents WHERE document_path = ?`).bind(key.path));
     if (result.results.length > 1) throw unavailableCommerceData();
     const snapshot = result.results[0] ? parseRecoverySnapshot(result.results[0]) : null;
@@ -295,7 +296,7 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid recovery summary clock.');
     }
     const query = deliveryRecoveryStateQuery(deliveryOwner(args.owner), args.nowMs, args.preparedNowMs ?? Date.now());
-    const result = await this.readRecoveryBatch(this.db.prepare(query.sql).bind(...query.bindings));
+    const result = await this.readRecoveryBatch(() => this.db.prepare(query.sql).bind(...query.bindings));
     const row = result.results[0];
     if (result.results.length !== 1 || !row || row.invalid_count !== 0 ||
       typeof row.remaining_processing !== 'number' || !Number.isSafeInteger(row.remaining_processing) || row.remaining_processing < 0 ||
@@ -314,7 +315,7 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid recovery page.');
     }
     const query = deliveryRecoveryPageQuery({ ...args, owner, limit });
-    const statement = this.db.prepare(`SELECT page.*, ${recoverySnapshotColumns('page')} FROM (${query.sql}) AS page`).bind(...query.bindings);
+    const statement = () => this.db.prepare(`SELECT page.*, ${recoverySnapshotColumns('page')} FROM (${query.sql}) AS page`).bind(...query.bindings);
     const result = await this.readRecoveryBatch(statement, args.phase === 'ready');
     if (result.results.length > limit) throw unavailableCommerceData();
     reportInefficientQuery('delivery-recovery-page', 'delivery_order', result, result.results.length);
@@ -414,46 +415,49 @@ export class D1CommerceRepository {
     return documents.map((document) => publicRecord(document));
   }
 
-  private async readRecoveryBatch(statement: D1PreparedStatement, requireNotifications = false): Promise<D1Result<Record<string, unknown>>> {
-    const results = await executeCommerceD1Batch(this.db, () => [
-      deliveryRecoveryAuthorityStatement(this.db), statement,
-      ...(requireNotifications ? [notificationOutboxAuthorityStatement(this.db)] : []),
-    ], { invalidResult: unavailableCommerceData, mapBatchError: unavailableCommerce });
-    requireDeliveryRecoveryAuthority(results[0]);
-    if (requireNotifications) requireNotificationOutboxAuthority(results[2]);
-    return results[1];
+  private readRecoveryBatch(statement: () => D1PreparedStatement, requireNotifications = false): Promise<D1Result<Record<string, unknown>>> {
+    return executeGuardedCommerceRead(this.db, statement, {
+      guards: [{
+        createStatement: () => deliveryRecoveryAuthorityStatement(this.db),
+        validate: requireDeliveryRecoveryAuthority,
+      }, ...(requireNotifications ? [{
+        createStatement: () => notificationOutboxAuthorityStatement(this.db),
+        validate: requireNotificationOutboxAuthority,
+      }] : [])],
+      invalidResult: unavailableCommerceData,
+    });
   }
 
-  private async readBatchWithAuthority(
+  private readBatchWithAuthority(
     statement: () => D1PreparedStatement,
     allowPaused = false,
     requireCheckoutState = false,
   ): Promise<D1Result<Record<string, unknown>>> {
-    const results = await executeCommerceD1Batch(this.db, () => [
-      authorityStatement(this.db, requireCheckoutState),
-      statement(),
-    ], {
+    return executeGuardedCommerceRead(this.db, statement, {
+      guards: [{
+        createStatement: () => authorityStatement(this.db, requireCheckoutState),
+        validate: (result) => {
+          if (result.results.length !== 1) throw unavailableCommerce();
+          const control = parseAuthorityControl(result.results[0]);
+          if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
+          if (requireCheckoutState && result.results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
+        },
+      }],
       invalidResult: unavailableCommerce,
-      mapBatchError: (error) => {
-        reportCommerceReadFailure(error);
-        return unavailableCommerce(error);
-      },
       requireMeta: true,
     });
-    const [authorityResult, dataResult] = results;
-    if (authorityResult.results.length !== 1) throw unavailableCommerce();
-    const control = parseAuthorityControl(authorityResult.results[0]);
-    if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
-    if (requireCheckoutState && authorityResult.results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
-    return dataResult;
   }
 
-  private async readNotificationBatch(statement: () => D1PreparedStatement, requireCheckoutState = false): Promise<D1Result<Record<string, unknown>>> {
-    const results = await executeCommerceD1Batch(this.db, () => [
-      notificationOutboxAuthorityStatement(this.db, requireCheckoutState), statement(),
-    ], { invalidResult: unavailableCommerceData });
-    requireNotificationOutboxAuthority(results[0]);
-    if (requireCheckoutState && results[0].results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
-    return results[1];
+  private readNotificationBatch(statement: () => D1PreparedStatement, requireCheckoutState = false): Promise<D1Result<Record<string, unknown>>> {
+    return executeGuardedCommerceRead(this.db, statement, {
+      guards: [{
+        createStatement: () => notificationOutboxAuthorityStatement(this.db, requireCheckoutState),
+        validate: (result) => {
+          requireNotificationOutboxAuthority(result);
+          if (requireCheckoutState && result.results[0].checkout_state_mode !== 'table') throw unavailableCommerce();
+        },
+      }],
+      invalidResult: unavailableCommerceData,
+    });
   }
 }

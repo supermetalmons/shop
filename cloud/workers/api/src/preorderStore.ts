@@ -15,6 +15,8 @@ export type StoredPreorder = PreorderOrder & {
   revision: number;
 };
 
+type PreorderClaim = { id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string };
+
 const PUBLIC_PREORDER_COLUMNS = 'order_id, preorder_id, buyer, ethereum_address, card_ids_json, assets_json, status, signature, confirmed_slot, expires_at_ms';
 
 function decodePreorderOrder(row: Record<string, unknown>): PreorderOrder {
@@ -169,13 +171,24 @@ export class PreorderStore {
       .bind(nowMs, cluster, collection, nowMs).run();
   }
 
-  async claims(cluster: string, collection: string, cardIds?: readonly number[]): Promise<Array<{ id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string }>> {
+  claims(cluster: string, collection: string, cardIds?: readonly number[]): Promise<PreorderClaim[]> {
+    return this.readClaims(cluster, collection, { cardIds });
+  }
+
+  availabilityClaims(cluster: string, collection: string, nowMs: number): Promise<PreorderClaim[]> {
+    return this.readClaims(cluster, collection, { nowMs });
+  }
+
+  private async readClaims(
+    cluster: string, collection: string, { cardIds, nowMs }: { cardIds?: readonly number[]; nowMs?: number },
+  ): Promise<PreorderClaim[]> {
     if (cardIds?.length === 0) return [];
     const result = await this.db.prepare(`SELECT claims.card_id, claims.order_id, orders.status, orders.buyer, orders.confirmed_slot
       FROM commerce_preorder_claims AS claims JOIN commerce_preorder_orders AS orders ON orders.order_id = claims.order_id
       WHERE claims.cluster = ? AND claims.collection = ?
-        ${cardIds ? `AND claims.card_id IN (${cardIds.map(() => '?').join(', ')})` : ''}`)
-      .bind(cluster, collection, ...(cardIds ?? [])).all<Record<string, unknown>>();
+        ${cardIds ? `AND claims.card_id IN (${cardIds.map(() => '?').join(', ')})` : ''}
+        ${nowMs === undefined ? '' : "AND (orders.status <> 'prepared' OR orders.expires_at_ms > ?)"}`)
+      .bind(cluster, collection, ...(cardIds ?? []), ...(nowMs === undefined ? [] : [nowMs])).all<Record<string, unknown>>();
     return result.results.map((row) => ({ id: Number(row.card_id), orderId: String(row.order_id), buyer: String(row.buyer),
       status: row.status === 'succeeded' || row.status === 'submitted' && row.confirmed_slot != null ? 'preordered' : 'reserved' }));
   }

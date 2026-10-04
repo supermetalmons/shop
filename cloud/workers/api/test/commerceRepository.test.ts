@@ -2227,36 +2227,146 @@ test('Admin IRL Workflow status uses an indexed exact lookup and remains availab
   );
 });
 
-test('standalone read batch failures log and preserve the D1 cause', async () => {
-  const cause = new Error('D1 batch failed');
-  const logs: unknown[][] = [];
-  const originalConsoleError = console.error;
-  const harness = createCommerceD1Harness();
-  const db = new Proxy(harness.db, {
-    get(target, property, receiver) {
-      if (property === 'batch') return async () => { throw cause; };
-      return Reflect.get(target, property, receiver);
-    },
-  });
-
-  console.error = (...values: unknown[]) => { logs.push(values); };
-  try {
-    await assert.rejects(
-      new D1CommerceRepository(db).get(commerceKeys.claimCode('MISSING')),
-      (error: unknown) => {
-        assert.ok(error instanceof CommerceRepositoryError);
-        assert.equal(error.code, 'unavailable');
-        assert.equal(error.cause, cause);
-        return true;
-      },
-    );
-  } finally {
-    console.error = originalConsoleError;
+test('standalone read preparation and batch failures log once and preserve the D1 cause', async (context) => {
+  const reads: Array<[string, (repository: D1CommerceRepository) => Promise<unknown>]> = [
+    ['ordinary', (repository) => repository.get(commerceKeys.claimCode('MISSING'))],
+    ['recovery snapshot', (repository) => repository.getRecoverySnapshot(commerceKeys.deliveryOrder('drop', '1'))],
+    ['recovery summary', (repository) => repository.queryDeliveryRecoveryState({ owner: 'owner', nowMs: 1 })],
+    ['recovery page', (repository) => repository.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'processing', limit: 1 })],
+    ['ready recovery page', (repository) => repository.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'ready', limit: 1 })],
+    ['ready notification', (repository) => repository.queryDueReadyNotifications({ dueAtMs: 1, limit: 1 })],
+    ['Stripe notification', (repository) => repository.queryDueStripeTerminalNotifications(1)],
+  ];
+  for (const [name, read] of reads) {
+    for (const phase of ['prepare', 'batch']) {
+      await context.test(`${name}: ${phase}`, async (context) => {
+        const cause = new Error(`D1 ${phase} failed`);
+        const log = context.mock.method(console, 'error', () => {});
+        const harness = createCommerceD1Harness();
+        context.after(() => harness.database.close());
+        let preparations = 0;
+        const db = new Proxy(harness.db, {
+          get(target, property, receiver) {
+            if (property === 'batch') return async () => { throw cause; };
+            if (property === 'prepare') return (sql: string) => {
+              preparations += 1;
+              if (phase === 'prepare' && preparations === 2) throw cause;
+              return target.prepare(sql);
+            };
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        await assert.rejects(read(new D1CommerceRepository(db)), (error: unknown) => {
+          assert.ok(error instanceof CommerceRepositoryError);
+          assert.equal(error.code, 'unavailable');
+          assert.equal(error.cause, cause);
+          return true;
+        });
+        assert.deepEqual(log.mock.calls.map(({ arguments: args }) => args), [[{
+          event: 'commerce_d1_read_failed',
+          error: { name: 'Error', message: cause.message },
+        }]]);
+      });
+    }
   }
-  assert.deepEqual(logs, [[{
-    event: 'commerce_d1_read_failed',
-    error: { name: 'Error', message: 'D1 batch failed' },
-  }]]);
+});
+
+test('guarded read policies reject missing store modes before returning results', async (context) => {
+  const cases: Array<{
+    name: string;
+    read: (repository: D1CommerceRepository) => Promise<unknown>;
+    guardIndex: number;
+    column: string;
+    message: string;
+  }> = [
+    { name: 'Stripe checkout', read: (repository) => repository.get(commerceKeys.stripeCheckout('drop', 'session')),
+      guardIndex: 0, column: 'checkout_state_mode', message: 'Commerce is temporarily unavailable for maintenance.' },
+    { name: 'delivery recovery', read: (repository) => repository.getRecoverySnapshot(commerceKeys.deliveryOrder('drop', '1')),
+      guardIndex: 0, column: 'recovery_mode', message: 'Commerce is temporarily unavailable for maintenance.' },
+    { name: 'ready recovery state', read: (repository) => repository.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'ready', limit: 1 }),
+      guardIndex: 0, column: 'recovery_mode', message: 'Commerce is temporarily unavailable for maintenance.' },
+    { name: 'ready recovery notifications', read: (repository) => repository.queryDeliveryRecoveryPage({ owner: 'owner', phase: 'ready', limit: 1 }),
+      guardIndex: 2, column: 'storage_mode', message: 'Notification outbox is unavailable.' },
+    { name: 'ready notifications', read: (repository) => repository.queryDueReadyNotifications({ dueAtMs: 1, limit: 1 }),
+      guardIndex: 0, column: 'storage_mode', message: 'Notification outbox is unavailable.' },
+    { name: 'Stripe notification checkout', read: (repository) => repository.queryDueStripeTerminalNotifications(1),
+      guardIndex: 0, column: 'checkout_state_mode', message: 'Commerce is temporarily unavailable for maintenance.' },
+    { name: 'Stripe notification outbox', read: (repository) => repository.queryDueStripeTerminalNotifications(1),
+      guardIndex: 0, column: 'storage_mode', message: 'Notification outbox is unavailable.' },
+  ];
+  for (const entry of cases) {
+    for (const mode of [undefined, 'legacy']) {
+      await context.test(`${entry.name}: ${String(mode)}`, async (context) => {
+        const log = context.mock.method(console, 'error', () => {});
+        const harness = createCommerceD1Harness();
+        context.after(() => harness.database.close());
+        const batch = harness.db.batch.bind(harness.db);
+        context.mock.method(harness.db, 'batch', async (statements: D1PreparedStatement[]) => {
+          const results = await batch<Record<string, unknown>>(statements);
+          results[entry.guardIndex].results[0][entry.column] = mode;
+          return results;
+        });
+        await assert.rejects(entry.read(new D1CommerceRepository(harness.db)), (error: unknown) => {
+          assert.ok(error instanceof CommerceRepositoryError);
+          assert.equal(error.code, 'unavailable');
+          assert.equal(error.message, entry.message);
+          assert.equal(error.cause, undefined);
+          return true;
+        });
+        assert.equal(log.mock.callCount(), 0);
+      });
+    }
+  }
+});
+
+test('guarded reads preserve authority metadata policies and do not classify malformed results as execution failures', async (context) => {
+  const reads: Array<[string, boolean, (repository: D1CommerceRepository) => Promise<unknown>]> = [
+    ['ordinary', true, (repository) => repository.get(commerceKeys.claimCode('MISSING'))],
+    ['recovery', false, (repository) => repository.getRecoverySnapshot(commerceKeys.deliveryOrder('drop', '1'))],
+    ['notification', false, (repository) => repository.queryDueReadyNotifications({ dueAtMs: 1, limit: 1 })],
+  ];
+  for (const [name, requireMeta, read] of reads) {
+    for (const corruption of ['authority metadata', 'missing authority', 'incomplete batch', 'invalid document']) {
+      await context.test(`${name}: ${corruption}`, async (context) => {
+        const log = context.mock.method(console, 'error', () => {});
+        const harness = createCommerceD1Harness();
+        context.after(() => harness.database.close());
+        const batch = harness.db.batch.bind(harness.db);
+        context.mock.method(harness.db, 'batch', async (statements: D1PreparedStatement[]) => {
+          const results = await batch<Record<string, unknown>>(statements);
+          if (corruption === 'authority metadata') return [{ ...results[0], meta: undefined }, ...results.slice(1)];
+          if (corruption === 'missing authority') return [{ ...results[0], results: [] }, ...results.slice(1)];
+          if (corruption === 'incomplete batch') return results.slice(0, -1);
+          return [results[0], { ...results[1], results: [{}] }];
+        });
+        if (corruption === 'authority metadata' && !requireMeta) {
+          await read(new D1CommerceRepository(harness.db));
+        } else {
+          await assert.rejects(read(new D1CommerceRepository(harness.db)), (error: unknown) => {
+            assert.ok(error instanceof CommerceRepositoryError);
+            assert.equal(error.code, 'unavailable');
+            assert.equal(error.cause, undefined);
+            return true;
+          });
+        }
+        assert.equal(log.mock.callCount(), 0);
+      });
+    }
+  }
+});
+
+test('receipt claim Workflow lookup remains available while commerce is paused', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const key = commerceKeys.claimCode('CLAIM');
+  seedCommerceDocument(harness, { key, data: { receiptClaimWorkflowV1: { operationId: 'receipt-operation' } } });
+  const repository = new D1CommerceRepository(harness.db);
+  const found = await repository.getReceiptClaimWorkflowOperation('receipt-operation');
+  assert.equal(found?.key.path, key.path);
+  pauseCommerce(harness);
+  await assert.rejects(repository.get(key), isUnavailableCommerceError);
+  assert.deepEqual(await repository.getReceiptClaimWorkflowOperation('receipt-operation'), found);
+  assert.equal(await repository.getReceiptClaimWorkflowOperation('missing-operation'), null);
 });
 
 test('a pause committed after a read batch affects only the next read', async () => {

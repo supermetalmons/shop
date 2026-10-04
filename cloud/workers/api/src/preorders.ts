@@ -205,7 +205,9 @@ export async function handlePreorderRequest(
         if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
           throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable for maintenance.');
         }
-        if (config.enabled && !includeRecoveries) await store.expirePrepared(config.cluster, config.collection, deps.nowMs());
+        if (config.enabled && !availabilityRequest && !includeRecoveries) {
+          await store.expirePrepared(config.cluster, config.collection, deps.nowMs());
+        }
       };
       const eligibility = (address: string, buyer: string | null, fresh: boolean) => deps.eligibility({
         request, env, config, address, buyer, fresh, deadline, metrics,
@@ -240,8 +242,11 @@ export async function handlePreorderRequest(
           const session = sessionResult.value;
           const optionalBuyer = buyerResult.value;
           authenticated = true;
+          const availabilityNowMs = deps.nowMs();
           const ownershipRead = observeResult(() => eligibility(session.address, optionalBuyer, false));
-          const claimsRead = observeResult(() => raceWithSignal(store.claims(config.cluster, config.collection), readSignal));
+          const claimsRead = observeResult(() => raceWithSignal(config.enabled
+            ? store.availabilityClaims(config.cluster, config.collection, availabilityNowMs)
+            : store.claims(config.cluster, config.collection), readSignal));
           const ownershipResult = await ownershipRead;
           if (ownershipResult.status === 'rejected') throw ownershipResult.reason;
           const claimsResult = await claimsRead;

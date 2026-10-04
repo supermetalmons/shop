@@ -204,8 +204,9 @@ use the [Commerce bootstrap procedure](scripts/docs/commerce_operations.md#initi
 The existing `COSIGNER_SECRET` must
 match the collection authority; no additional signing secret is required.
 Preorder expiry atomically releases an unsigned reservation's claims when its
-order expires. Availability expires reservations in its selected collection
-before returning.
+order expires. Availability is a read-only view that ignores expired unsigned
+reservations in enabled collections. Preparation and scheduled reconciliation
+expire stored reservations and release their claims.
 Both existing collections are enabled in the shared configuration. Preparation,
 broadcasting, blockhash validation, and reconciliation verify the RPC genesis
 hash against the configured devnet or mainnet cluster.

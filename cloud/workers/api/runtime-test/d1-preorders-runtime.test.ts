@@ -160,6 +160,19 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
         { transactionBase64: 'signed-succeeded', signature: 'signature-succeeded' }, 2000), 'succeeded', 3000);
       const untouched = await Promise.all([fresh, otherCollection, otherCluster, submitted, confirmed, succeeded]
         .map(order => store.get(order.orderId)));
+      const claimsBefore = await store.claims(config.cluster, collection);
+
+      assert.deepEqual(await store.availabilityClaims(config.cluster, collection, 120_999), claimsBefore);
+      assert.deepEqual((await store.availabilityClaims(config.cluster, collection, 121_000))
+        .map(({ id, status }) => ({ id, status })).sort((a, b) => a.id - b.id), [
+        { id: 31, status: 'reserved' }, { id: 32, status: 'reserved' },
+        { id: 33, status: 'preordered' }, { id: 34, status: 'preordered' },
+      ]);
+      assert.deepEqual((await store.availabilityClaims(config.cluster, collection, 121_001))
+        .map(({ id }) => id).sort((a, b) => a - b), [32, 33, 34]);
+      assert.deepEqual(await store.claims(config.cluster, collection), claimsBefore);
+      assert.deepEqual(await store.get(expired.orderId), expired);
+      assert.deepEqual(await Promise.all(untouched.map(order => store.get(order!.orderId))), untouched);
 
       await store.expirePrepared(config.cluster, collection, 120_999);
       assert.deepEqual(await store.get(expired.orderId), expired);
