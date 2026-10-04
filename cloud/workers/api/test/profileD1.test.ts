@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  ensureD1Profile,
   loadD1Profile,
   runD1Write,
 } from '../src/profileD1.ts';
@@ -66,51 +65,6 @@ test('an in-flight transient D1 write retries after the request deadline', async
   setTimeout(() => controller.abort(new DOMException('timed out', 'TimeoutError')), 5);
   assert.equal(await result, 'saved');
   assert.equal(attempts, 2);
-});
-
-test('profile creation does not perform a post-write read', async () => {
-  let prepares = 0;
-  const statement: D1PreparedStatement = {
-    bind() {
-      return this;
-    },
-    async first() {
-      return assert.fail('profile creation performed a read');
-    },
-    async run() {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      return undefined as never;
-    },
-    async all() {
-      return assert.fail('profile creation listed rows');
-    },
-    async raw() {
-      return assert.fail('profile creation loaded raw rows');
-    },
-  };
-  const db: D1Database = {
-    prepare() {
-      prepares += 1;
-      return statement;
-    },
-    async batch() {
-      return assert.fail('profile creation used a batch');
-    },
-    async exec() {
-      return assert.fail('profile creation used exec');
-    },
-    withSession() {
-      return assert.fail('profile creation used a session');
-    },
-    async dump() {
-      return assert.fail('profile creation used dump');
-    },
-  };
-  const controller = new AbortController();
-  const result = ensureD1Profile(db, { wallet: WALLET, createdAtMs: 1, updatedAtMs: 1 }, controller.signal);
-  setTimeout(() => controller.abort(new DOMException('timed out', 'TimeoutError')), 5);
-  await result;
-  assert.equal(prepares, 1);
 });
 
 test('an in-flight D1 read is awaited after the request deadline', async () => {

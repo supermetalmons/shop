@@ -40,7 +40,6 @@ import {
 } from './commerceRepository.js';
 import { mergeAnonymousStripeOwnerBatch, STRIPE_OWNER_MERGE_BATCH_SIZE } from './profileCommerceStore.js';
 import { isProfileRequestOriginAllowed } from './profileReadSupport.js';
-import { ensureD1Profile } from './profileD1.js';
 import {
   AuthWalletBindingD1BusyError,
   AuthWalletBindingD1SupersededError,
@@ -102,11 +101,6 @@ type ProfileLifecycleDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  upsertProfile: (
-    db: D1Database | undefined,
-    profile: Parameters<typeof ensureD1Profile>[1],
-    signal: AbortSignal,
-  ) => Promise<void>;
   releaseAuthWalletBindingReconcileLease: typeof releaseAuthWalletBindingReconcileLease;
   resolveD1AuthWalletBinding: typeof resolveD1AuthWalletBinding;
   verifyIdentity: typeof verifyRequestIdentity;
@@ -284,10 +278,6 @@ const defaultDependencies: ProfileLifecycleDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: AUTH_TIMEOUT_MS,
-  upsertProfile: async (db, profile, signal) => {
-    if (!db) throw new Error('OPS_DB is unavailable');
-    await ensureD1Profile(db, profile, signal);
-  },
   releaseAuthWalletBindingReconcileLease,
   resolveD1AuthWalletBinding,
   verifyIdentity: verifyRequestIdentity,
@@ -384,20 +374,6 @@ export async function handleProfileLifecycleRequest(
             error instanceof ProfileReadError ||
             error instanceof WalletLifecycleValidationError
           ) throw error;
-          throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-        }
-        try {
-          await runCriticalRequestOperation(
-            () => dependencies.upsertProfile(
-              opsDb,
-              { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
-              deadline.signal,
-            ),
-            { deadline, defer: dependencies.defer },
-          );
-        } catch (error) {
-          rethrowDeferredWorkRegistrationError(error);
-          if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
           throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
         }
         return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };

@@ -1,12 +1,40 @@
 import {
   STRIPE_CHECKOUT_STATE_FIELD_COLUMNS,
+  STRIPE_CHECKOUT_STATE_FIELDS,
   parseStripeCheckoutStateRow,
+  stripeCheckoutStateFromDocument,
+  stripeCheckoutStateMetadata,
   stripeCheckoutStateRow,
   type StripeCheckoutState,
 } from '../../../../shared/stripeCheckoutState.js';
 import { unavailableCommerceData } from './commerceRepositorySupport.js';
+import { CommerceRepositoryError, type CommerceDocumentData, type CommerceUpdateValue } from './commerceRepositoryTypes.js';
 
 const STATE_COLUMNS = ['document_path', 'document_version', ...Object.values(STRIPE_CHECKOUT_STATE_FIELD_COLUMNS)];
+
+export function isStripeCheckoutStateOnlyUpdate(updates: Readonly<Record<string, CommerceUpdateValue>>): boolean {
+  return Object.keys(updates).every((field) =>
+    STRIPE_CHECKOUT_STATE_FIELDS.includes(field as typeof STRIPE_CHECKOUT_STATE_FIELDS[number]));
+}
+
+export function stripeCheckoutDocumentRawData(input: {
+  documentPath: string;
+  data: CommerceDocumentData;
+  documentVersion: number;
+  previousRawData?: CommerceDocumentData;
+  reuseRawData?: 'unchanged' | 'if-equal';
+}): CommerceDocumentData {
+  try {
+    stripeCheckoutStateFromDocument(input.documentPath, input.data, input.documentVersion);
+  } catch {
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout state.');
+  }
+  if (input.reuseRawData === 'unchanged' && input.previousRawData) return input.previousRawData;
+  const metadata = stripeCheckoutStateMetadata(input.data, input.previousRawData ?? {});
+  if (input.reuseRawData === 'if-equal' && input.previousRawData &&
+    JSON.stringify(metadata) === JSON.stringify(input.previousRawData)) return input.previousRawData;
+  return metadata;
+}
 
 export function stripeCheckoutStateSelectColumns(documentAlias = 'commerce_documents'): string {
   return [

@@ -23,6 +23,13 @@ function bindingDatabase(): DatabaseSync {
   return database;
 }
 
+
+async function seedBindingWithoutProfile(database: DatabaseSync) {
+  database.prepare(`INSERT INTO auth_wallet_bindings (auth_subject, wallet, updated_at_ms, revision)
+    VALUES (?, ?, ?, 1)`).run('canonical-subject', WALLET, NOW_MS);
+  return (await loadD1AuthWalletBinding(d1Database(database), 'canonical-subject'))!;
+}
+
 test('auth-wallet resolution never creates a wallet-shaped fallback binding', async () => {
   const database = bindingDatabase();
   const db = d1Database(database);
@@ -106,14 +113,12 @@ for (const operation of ['create', 'renew', 'rebind'] as const) {
     });
     const wallet = operation === 'rebind' ? OTHER_WALLET : WALLET;
     const calls: CommerceD1CallObservation[] = [];
-    const db = d1Database(database, ({ sql }) => {
-      if (/^(INSERT|UPDATE)/.test(sql)) {
-        database.prepare(`UPDATE auth_wallet_bindings
-          SET wallet = ?, revision = revision + 1, updated_at_ms = ?
-          WHERE auth_subject = ?`)
-          .run(wallet === WALLET ? OTHER_WALLET : WALLET, NOW_MS + 2, 'canonical-subject');
-      }
-    }, undefined, (call) => calls.push(call));
+    const db = d1Database(database, undefined, () => {
+      database.prepare(`UPDATE auth_wallet_bindings
+        SET wallet = ?, revision = revision + 1, updated_at_ms = ?
+        WHERE auth_subject = ?`)
+        .run(wallet === WALLET ? OTHER_WALLET : WALLET, NOW_MS + 2, 'canonical-subject');
+    }, (call) => calls.push(call));
     const committed = await establishD1AuthWalletBinding({
       baseline,
       db,
@@ -130,7 +135,13 @@ for (const operation of ['create', 'renew', 'rebind'] as const) {
       reconcileLeaseExpiresAtMs: null,
     });
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls.map((call) => call.method), ['first', 'first']);
+    assert.deepEqual(calls.map((call) => call.method), ['first', 'batch']);
+    assert.deepEqual({ ...database.prepare('SELECT * FROM profiles WHERE wallet = ?').get(wallet) }, {
+      wallet,
+      email: null,
+      created_at_ms: operation === 'renew' ? NOW_MS : NOW_MS + 1,
+      updated_at_ms: operation === 'renew' ? NOW_MS : NOW_MS + 1,
+    });
     const latest = await loadD1AuthWalletBinding(d1Database(database), 'canonical-subject');
     assert.notEqual(latest?.wallet, committed.wallet);
     assert.equal(latest?.revision, committed.revision + 1);
@@ -139,13 +150,7 @@ for (const operation of ['create', 'renew', 'rebind'] as const) {
   for (const cancelAfter of ['read', 'write'] as const) {
     test(`auth-wallet ${operation} respects cancellation after its ${cancelAfter}`, async () => {
       const database = bindingDatabase();
-      const baseline = operation === 'create' ? null : await establishD1AuthWalletBinding({
-        baseline: null,
-        db: d1Database(database),
-        authSubject: 'canonical-subject',
-        nowMs: NOW_MS,
-        wallet: WALLET,
-      });
+      const baseline = operation === 'create' ? null : await seedBindingWithoutProfile(database);
       const controller = new AbortController();
       const reason = new Error('cancelled');
       const calls: CommerceD1CallObservation[] = [];
@@ -165,6 +170,7 @@ for (const operation of ['create', 'renew', 'rebind'] as const) {
       assert.equal(calls.length, cancelAfter === 'read' ? 1 : 2);
       const stored = await loadD1AuthWalletBinding(d1Database(database), 'canonical-subject');
       assert.equal(stored?.revision ?? 0, (baseline?.revision ?? 0) + (cancelAfter === 'write' ? 1 : 0));
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM profiles').get()!.count, cancelAfter === 'write' ? 1 : 0);
     });
   }
 }
@@ -173,6 +179,7 @@ test('auth-wallet creation retries when another request inserts the same binding
   const database = bindingDatabase();
   const calls: CommerceD1CallObservation[] = [];
   let raced = false;
+  let committedBatches = 0;
   const db = d1Database(database, ({ sql }) => {
     if (!raced && sql.startsWith('SELECT')) {
       raced = true;
@@ -181,7 +188,10 @@ test('auth-wallet creation retries when another request inserts the same binding
         VALUES (?, ?, ?, 1)`)
         .run('canonical-subject', WALLET, NOW_MS);
     }
-  }, undefined, (call) => calls.push(call));
+  }, () => {
+    committedBatches += 1;
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM profiles').get()!.count, committedBatches === 1 ? 0 : 1);
+  }, (call) => calls.push(call));
   const binding = await establishD1AuthWalletBinding({
     baseline: null,
     db,
@@ -197,13 +207,7 @@ test('auth-wallet creation retries when another request inserts the same binding
 for (const operation of ['renew', 'rebind'] as const) {
   test(`auth-wallet ${operation} rejects a superseding write during its first attempt`, async () => {
     const database = bindingDatabase();
-    const baseline = await establishD1AuthWalletBinding({
-      baseline: null,
-      db: d1Database(database),
-      authSubject: 'canonical-subject',
-      nowMs: NOW_MS,
-      wallet: WALLET,
-    });
+    const baseline = await seedBindingWithoutProfile(database);
     let raced = false;
     const calls: CommerceD1CallObservation[] = [];
     const db = d1Database(database, ({ sql }) => {
@@ -223,6 +227,7 @@ for (const operation of ['renew', 'rebind'] as const) {
     }), AuthWalletBindingD1SupersededError);
     assert.equal(calls.length, 3);
     assert.equal((await loadD1AuthWalletBinding(d1Database(database), 'canonical-subject'))?.revision, 2);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM profiles').get()!.count, 0);
   });
 }
 
@@ -268,3 +273,85 @@ test('auth-wallet establishment performs no D1 calls when already cancelled', as
   }), (error) => error === reason);
   assert.equal(calls.length, 0);
 });
+
+for (const operation of ['create', 'renew', 'rebind'] as const) {
+  test(`auth-wallet ${operation} rolls back when profile creation fails`, async () => {
+    const database = bindingDatabase();
+    const db = d1Database(database);
+    const baseline = operation === 'create' ? null : await seedBindingWithoutProfile(database);
+    database.exec(`CREATE TRIGGER reject_profile BEFORE INSERT ON profiles
+      BEGIN SELECT RAISE(ABORT, 'profile creation failed'); END`);
+    await assert.rejects(establishD1AuthWalletBinding({
+      baseline, db, authSubject: 'canonical-subject', nowMs: NOW_MS + 1,
+      wallet: operation === 'rebind' ? OTHER_WALLET : WALLET,
+    }), /profile creation failed/);
+    assert.deepEqual(await loadD1AuthWalletBinding(db, 'canonical-subject'), baseline);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM profiles').get()!.count, 0);
+  });
+}
+
+test('auth-wallet renewal preserves existing profile email and timestamps', async () => {
+  const database = bindingDatabase();
+  const db = d1Database(database);
+  const baseline = await establishD1AuthWalletBinding({
+    baseline: null, db, authSubject: 'canonical-subject', nowMs: NOW_MS, wallet: WALLET,
+  });
+  database.prepare('UPDATE profiles SET email = ?, updated_at_ms = ? WHERE wallet = ?')
+    .run('owner@example.com', NOW_MS + 1, WALLET);
+  const profile = database.prepare('SELECT * FROM profiles WHERE wallet = ?').get(WALLET);
+  await establishD1AuthWalletBinding({
+    baseline, db, authSubject: 'canonical-subject', nowMs: NOW_MS + 2, wallet: WALLET,
+  });
+  assert.deepEqual(database.prepare('SELECT * FROM profiles WHERE wallet = ?').get(WALLET), profile);
+});
+
+test('auth-wallet establishment does not replay a committed batch after losing its response', async () => {
+  const database = bindingDatabase();
+  const db = d1Database(database);
+  const baseline = await seedBindingWithoutProfile(database);
+  let attempts = 0;
+  const failure = new Error('D1_ERROR: Network connection lost');
+  const ambiguousDb = {
+    prepare: db.prepare.bind(db),
+    async batch(statements: D1PreparedStatement[]) {
+      attempts += 1;
+      await db.batch(statements);
+      throw failure;
+    },
+  } as unknown as D1Database;
+  await assert.rejects(establishD1AuthWalletBinding({
+    baseline, db: ambiguousDb, authSubject: 'canonical-subject', nowMs: NOW_MS + 1, wallet: WALLET,
+  }), (error) => error === failure);
+  assert.equal(attempts, 1);
+  assert.equal((await loadD1AuthWalletBinding(db, 'canonical-subject'))?.revision, baseline.revision + 1);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM profiles WHERE wallet = ?').get(WALLET)!.count, 1);
+});
+
+for (const malformed of [
+  null,
+  [],
+  [{ success: true, results: [] }],
+  [{ success: false, results: [] }, { success: true, results: [] }],
+  [{ success: true, results: [] }, { success: false, results: [] }],
+  [{ success: true, results: null }, { success: true, results: [] }],
+  [{ success: true, results: [null] }, { success: true, results: [] }],
+  [{ success: true, results: [{}, {}] }, { success: true, results: [] }],
+  [{ success: true, results: [] }, { success: true, results: [{}] }],
+]) {
+  test(`auth-wallet establishment rejects malformed batch results: ${JSON.stringify(malformed)}`, async () => {
+    const database = bindingDatabase();
+    let attempts = 0;
+    const sourceDb = d1Database(database);
+    const db = {
+      prepare: sourceDb.prepare.bind(sourceDb),
+      async batch() {
+        attempts += 1;
+        return malformed;
+      },
+    } as unknown as D1Database;
+    await assert.rejects(establishD1AuthWalletBinding({
+      baseline: null, db, authSubject: 'canonical-subject', nowMs: NOW_MS, wallet: WALLET,
+    }), /Auth-wallet binding data is invalid/);
+    assert.equal(attempts, 1);
+  });
+}

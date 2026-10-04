@@ -19,6 +19,7 @@ import {
 import {
   AuthWalletBindingD1BusyError,
   AuthWalletBindingD1SupersededError,
+  type establishD1AuthWalletBinding,
 } from '../src/authWalletBindingD1.ts';
 import {
   CommerceWriteConflict,
@@ -267,7 +268,7 @@ function dependencies(
   harness: LegacyFirestoreCommerceHarness,
   timeoutMs = 500,
   overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[4]> = {},
-): Parameters<typeof handleProfileLifecycleRequest>[4] {
+): NonNullable<Parameters<typeof handleProfileLifecycleRequest>[4]> {
   const d1Session = () => harness.session
     ? {
         authSubject: UID,
@@ -303,7 +304,6 @@ function dependencies(
         : { wallet: null, reason: 'missing-binding' as const };
     },
     timeoutMs,
-    upsertProfile: async () => undefined,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     ...overrides,
   };
@@ -398,17 +398,19 @@ test('profile lifecycle preserves identity error responses and rejected authenti
   }
 });
 
-test('Solana auth validates origin-bound signatures and persists the D1 session and profile', async () => {
+test('Solana auth validates origin-bound signatures and persists the D1 session and profile together', async () => {
   const harness = new LegacyFirestoreCommerceHarness();
-  let profile: Record<string, unknown> | undefined;
+  let establishment: Parameters<typeof establishD1AuthWalletBinding>[0] | undefined;
+  const overrides = dependencies(harness);
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
     {},
     dependencies(harness, 500, {
-      upsertProfile: async (_db, input) => {
-        profile = input;
+      establishD1AuthWalletBinding: async (args) => {
+        establishment = args;
+        return overrides.establishD1AuthWalletBinding!(args);
       },
     }),
   );
@@ -417,11 +419,8 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
   assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
   assert.deepEqual(await result.response.json(), { wallet: OWNER });
   assert.equal(decodedFields(harness.session!).wallet, OWNER);
-  assert.deepEqual(profile, {
-    wallet: OWNER,
-    createdAtMs: NOW_MS,
-    updatedAtMs: NOW_MS,
-  });
+  assert.equal(establishment?.wallet, OWNER);
+  assert.equal(establishment?.nowMs, NOW_MS);
 
   for (const authRequest of [
     request(SOLANA_AUTH_PATH, signInBody({ domain: 'www.mons.shop' })),
@@ -433,15 +432,16 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
   }
 });
 
-test('Solana auth keeps its committed session retryable when D1 profile persistence fails', async () => {
+test('Solana auth returns unavailable when atomic session persistence fails', async () => {
   const harness = new LegacyFirestoreCommerceHarness();
+  harness.session = null;
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
     {},
     dependencies(harness, 500, {
-      upsertProfile: async () => {
+      establishD1AuthWalletBinding: async () => {
         throw new Error('private D1 failure');
       },
     }),
@@ -451,21 +451,26 @@ test('Solana auth keeps its committed session retryable when D1 profile persiste
     ok: false,
     error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
   });
-  assert.equal(decodedFields(harness.session!).wallet, OWNER);
+  assert.equal(harness.session, null);
 });
 
-test('Solana auth applies the request deadline to D1 profile persistence', async () => {
+test('Solana auth retains its atomic session persistence after the request deadline', async () => {
   const deferred = createDeferredWorkCollector();
   let release!: () => void;
   const persistence = new Promise<void>((resolve) => { release = resolve; });
+  const harness = new LegacyFirestoreCommerceHarness();
+  const overrides = dependencies(harness);
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
     {},
-    dependencies(new LegacyFirestoreCommerceHarness(), 5, {
+    dependencies(harness, 5, {
       defer: deferred.defer,
-      upsertProfile: async () => persistence,
+      establishD1AuthWalletBinding: async (args) => {
+        await persistence;
+        return overrides.establishD1AuthWalletBinding!(args);
+      },
     }),
   );
   assert.equal(result.response.status, 504);
@@ -473,6 +478,7 @@ test('Solana auth applies the request deadline to D1 profile persistence', async
   assert.equal(deferred.promises.length, 1);
   release();
   await deferred.drain();
+  assert.equal(decodedFields(harness.session!).wallet, OWNER);
 });
 
 test('D1 wallet-session mode persists without Commerce session access', async () => {

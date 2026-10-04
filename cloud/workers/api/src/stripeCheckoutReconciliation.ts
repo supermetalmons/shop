@@ -7,8 +7,9 @@ import {
 } from './commerceRepository.js';
 import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
 import { stripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCandidate } from './stripeCheckout/readModel.js';
+import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
-  emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
+  emptyReconciliationResult, reportReconciliationFailure,
   reportReconciliationResult, reconciliationLogger, reconciliationErrorSummary, type ReconciliationOptions, type ReconciliationResult,
 } from './reconciliationResult.js';
 
@@ -64,7 +65,7 @@ export async function reconcileStaleStripeFulfillments(
   signal: AbortSignal,
   overrides: ReconciliationDependencies = {},
 ): Promise<ReconciliationResult> {
-  const summary = emptyReconciliationResult();
+  let summary: ReconciliationResult = emptyReconciliationResult();
   try {
     const nowMs = Math.floor(overrides.nowMs?.() ?? Date.now());
     const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
@@ -81,67 +82,68 @@ export async function reconcileStaleStripeFulfillments(
       markStripeCheckoutReenqueued(commerce, candidate));
     const markInvalid = overrides.markInvalid || ((candidate: RequeueCandidate, error: unknown) =>
       recordStripeCheckoutReconciliationFailure(commerce, candidate, reconciliationError(error)));
-    let enqueued = 0;
-    let failed = 0;
-    for (const candidate of candidates) {
-      if (signal.aborted) throw signal.reason;
-      let job: ReturnType<typeof createStripeCheckoutFulfillmentJobV1>;
-      try {
-        job = createStripeCheckoutFulfillmentJobV1({
-          dropId: candidate.dropId,
-          sessionId: candidate.sessionId,
-          stripeEventId: candidate.stripeEventId,
-          stripeEventType: candidate.stripeEventType,
-          enqueuedAtMs: nowMs,
-        });
-      } catch (error) {
-        let loggedError = error;
+    await drainReconciliationCandidates({
+      signal,
+      checkAbortedBeforeLoad: false,
+      cancellationMode: 'throw',
+      loadCandidates: async () => candidates,
+      onResult: (result) => { summary = result; },
+      failureMessage: 'Stripe fulfillment reconciliation failed',
+      processCandidate: async (candidate) => {
+        let job: ReturnType<typeof createStripeCheckoutFulfillmentJobV1>;
         try {
-          await markInvalid(candidate, error);
-        } catch (markError) {
-          loggedError = new AggregateError([error, markError], 'Invalid reconciliation candidate could not be deferred');
+          job = createStripeCheckoutFulfillmentJobV1({
+            dropId: candidate.dropId,
+            sessionId: candidate.sessionId,
+            stripeEventId: candidate.stripeEventId,
+            stripeEventType: candidate.stripeEventType,
+            enqueuedAtMs: nowMs,
+          });
+        } catch (error) {
+          let loggedError = error;
+          try {
+            await markInvalid(candidate, error);
+          } catch (markError) {
+            loggedError = new AggregateError([error, markError], 'Invalid reconciliation candidate could not be deferred');
+          }
+          reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
+          errorLog({
+            event: 'stripe_fulfillment_job_reconciliation_failed',
+            dropId: candidate.dropId,
+            sessionId: candidate.sessionId,
+            error: reconciliationErrorSummary(loggedError),
+          });
+          return 'failed';
         }
-        failed += 1;
-        recordReconciliationOutcome(summary, 'failed');
-        reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
-        errorLog({
-          event: 'stripe_fulfillment_job_reconciliation_failed',
-          dropId: candidate.dropId,
-          sessionId: candidate.sessionId,
-          error: reconciliationErrorSummary(loggedError),
-        });
-        continue;
-      }
-      try {
-        await env.STRIPE_FULFILLMENT_QUEUE.send(job);
-        await markEnqueued(candidate);
-        enqueued += 1;
-        log({
-          event: 'stripe_fulfillment_job_reconciled',
-          dropId: candidate.dropId,
-          sessionId: candidate.sessionId,
-          stripeEventId: candidate.stripeEventId,
-        });
-        recordReconciliationOutcome(summary, 'completed');
-      } catch (error) {
-        failed += 1;
-        recordReconciliationOutcome(summary, 'failed');
-        reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
-        errorLog({
-          event: 'stripe_fulfillment_job_reconciliation_failed',
-          dropId: candidate.dropId,
-          sessionId: candidate.sessionId,
-          error: reconciliationErrorSummary(error),
-        });
-      }
-    }
+        try {
+          await env.STRIPE_FULFILLMENT_QUEUE.send(job);
+          await markEnqueued(candidate);
+          log({
+            event: 'stripe_fulfillment_job_reconciled',
+            dropId: candidate.dropId,
+            sessionId: candidate.sessionId,
+            stripeEventId: candidate.stripeEventId,
+          });
+          return 'completed';
+        } catch (error) {
+          reportReconciliationFailure('stripe', { dropId: candidate.dropId, sessionId: candidate.sessionId }, error);
+          errorLog({
+            event: 'stripe_fulfillment_job_reconciliation_failed',
+            dropId: candidate.dropId,
+            sessionId: candidate.sessionId,
+            error: reconciliationErrorSummary(error),
+          });
+          return 'failed';
+        }
+      },
+    });
     log({
       event: 'stripe_fulfillment_reconciliation_completed',
       candidates: candidates.length,
-      enqueued,
-      failed,
+      enqueued: summary.completed,
+      failed: summary.failed,
     });
-    if (failed) throw new Error(`Stripe fulfillment reconciliation failed for ${failed} checkout(s)`);
+    if (summary.failed) throw new Error(`Stripe fulfillment reconciliation failed for ${summary.failed} checkout(s)`);
     return summary;
   } finally {
     reportReconciliationResult(summary, overrides.onResult);

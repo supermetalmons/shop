@@ -14,7 +14,6 @@ import {
   receiptTransferCallerRateLimitBucket,
 } from '../src/receiptTransferRateLimit.ts';
 import {
-  ensureD1Profile,
   loadD1Profile,
   loadD1ProfileAddress,
   saveD1ProfileAddress,
@@ -72,6 +71,75 @@ function normalizeRuntimeRevealSubmission(
     reservationId: raw.reservationId,
     status: raw.status,
   };
+}
+
+async function assertAtomicWalletSessionPersistence(db: D1Database): Promise<void> {
+  const wallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const otherWallet = 'So11111111111111111111111111111111111111112';
+  await db.prepare(`CREATE TRIGGER reject_session_profile_creation BEFORE INSERT ON profiles
+    BEGIN SELECT RAISE(ABORT, 'profile creation failed'); END`).run();
+  try {
+    for (const operation of ['create', 'renew', 'rebind'] as const) {
+      const authSubject = `atomic-failure-${operation}`;
+      if (operation !== 'create') {
+        await db.prepare(`INSERT INTO auth_wallet_bindings (auth_subject, wallet, updated_at_ms, revision)
+          VALUES (?, ?, 1000, 1)`).bind(authSubject, operation === 'renew' ? wallet : otherWallet).run();
+      }
+      const baseline = await loadD1AuthWalletBinding(db, authSubject);
+      await assert.rejects(establishD1AuthWalletBinding({
+        baseline, db, authSubject, nowMs: 2000, wallet,
+      }), /profile creation failed/);
+      assert.deepEqual(await loadD1AuthWalletBinding(db, authSubject), baseline);
+      assert.equal(await loadD1Profile(db, wallet), null);
+    }
+  } finally {
+    await db.prepare('DROP TRIGGER reject_session_profile_creation').run();
+  }
+  for (const operation of ['create', 'renew', 'rebind'] as const) {
+    const authSubject = `atomic-no-op-${operation}`;
+    if (operation !== 'create') {
+      await db.prepare(`INSERT INTO auth_wallet_bindings (auth_subject, wallet, updated_at_ms, revision)
+        VALUES (?, ?, 1000, 1)`).bind(authSubject, operation === 'renew' ? wallet : otherWallet).run();
+    }
+    const baseline = await loadD1AuthWalletBinding(db, authSubject);
+    let batches = 0;
+    const racingDb = {
+      prepare: db.prepare.bind(db),
+      async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+        batches += 1;
+        assert.equal(batches, 1);
+        if (operation === 'create') {
+          await db.prepare(`INSERT INTO auth_wallet_bindings (auth_subject, wallet, updated_at_ms, revision)
+            VALUES (?, ?, 1000, 1)`).bind(authSubject, otherWallet).run();
+        } else {
+          await db.prepare('UPDATE auth_wallet_bindings SET wallet = ?, revision = revision + 1 WHERE auth_subject = ?')
+            .bind(otherWallet, authSubject).run();
+        }
+        const results = await db.batch<T>(statements);
+        assert.deepEqual(results[0].results, []);
+        assert.equal(await loadD1Profile(db, wallet), null);
+        return results;
+      },
+    } as D1Database;
+    await assert.rejects(establishD1AuthWalletBinding({
+      baseline, db: racingDb, authSubject, nowMs: 2000, wallet,
+    }), AuthWalletBindingD1SupersededError);
+    assert.equal(batches, 1);
+  }
+  const created = await establishD1AuthWalletBinding({
+    baseline: null, db, authSubject: 'atomic-success', nowMs: 3000, wallet,
+  });
+  assert.equal(created.revision, 1);
+  assert.deepEqual(await loadD1Profile(db, wallet), { wallet, createdAtMs: 3000, updatedAtMs: 3000 });
+  await db.prepare('UPDATE profiles SET email = ?, updated_at_ms = ? WHERE wallet = ?')
+    .bind('atomic@example.com', 3500, wallet).run();
+  const renewed = await establishD1AuthWalletBinding({
+    baseline: created, db, authSubject: 'atomic-success', nowMs: 4000, wallet,
+  });
+  assert.equal(renewed.revision, 2);
+  assert.deepEqual(await loadD1Profile(db, wallet), {
+    wallet, email: 'atomic@example.com', createdAtMs: 3000, updatedAtMs: 3500,
+  });
 }
 
 test('ops D1 migrations preserve historical controls and receipt-transfer limits', async () => {
@@ -678,10 +746,9 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       nowMs: 4_000,
       signal: new AbortController().signal,
     }, env.OPS_DB, missingWallet, 'XbCdEfGhIjKlMnOpQrSt'), /Address not found/);
-    await ensureD1Profile(env.OPS_DB, {
-      wallet: RACE_WALLET,
-      createdAtMs: 3_000,
-      updatedAtMs: 3_000,
+    const raceProfileSession = await establishD1AuthWalletBinding({
+      baseline: null, db: env.OPS_DB, authSubject: 'race-profile-session',
+      wallet: RACE_WALLET, nowMs: 3_000,
     });
     await saveD1ProfileAddress(env.OPS_DB, {
       wallet: RACE_WALLET,
@@ -699,10 +766,9 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       createdAtMs: 2_000,
       updatedAtMs: 2_000,
     });
-    await ensureD1Profile(env.OPS_DB, {
-      wallet: RACE_WALLET,
-      createdAtMs: 4_000,
-      updatedAtMs: 4_000,
+    await establishD1AuthWalletBinding({
+      baseline: raceProfileSession, db: env.OPS_DB, authSubject: 'race-profile-session',
+      wallet: RACE_WALLET, nowMs: 4_000,
     });
     assert.equal((await loadD1Profile(env.OPS_DB, RACE_WALLET))?.updatedAtMs, 2_000);
     await assert.rejects(
@@ -884,6 +950,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       limitReached: false,
       hasMore: false,
     });
+    await assertAtomicWalletSessionPersistence(env.OPS_DB);
     const quickCheck = await env.OPS_DB.prepare('PRAGMA quick_check').first<Record<string, unknown>>();
     assert.equal(quickCheck?.quick_check, 'ok');
   } finally {

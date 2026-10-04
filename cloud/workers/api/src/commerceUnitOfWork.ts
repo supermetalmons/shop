@@ -4,7 +4,6 @@ import { deliveryRecoveryWriteStatement, parseRecoveryState, recoverySnapshot, r
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
-  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
@@ -54,12 +53,12 @@ import {
   type NotificationOutboxRecord,
 } from '../../../../shared/notificationOutbox.js';
 import { NotificationOutboxRepository, notificationOutboxWriteStatement } from './notificationOutboxRepository.js';
+import { stripeCheckoutStateFromDocument } from '../../../../shared/stripeCheckoutState.js';
 import {
-  STRIPE_CHECKOUT_STATE_FIELDS,
-  stripeCheckoutStateFromDocument,
-  stripeCheckoutStateMetadata,
-} from '../../../../shared/stripeCheckoutState.js';
-import { stripeCheckoutStateWriteStatement } from './stripeCheckoutStateStore.js';
+  isStripeCheckoutStateOnlyUpdate,
+  stripeCheckoutDocumentRawData,
+  stripeCheckoutStateWriteStatement,
+} from './stripeCheckoutStateStore.js';
 import { parsePackStatusOutboxRecord, type PackStatusOutboxRecord } from '../../../../shared/packStatusOutbox.js';
 import { packStatusOutboxInsertStatement } from './packStatusOutboxRepository.js';
 import { commerceDocumentWriteStatement } from './commerceDocumentPersistence.js';
@@ -700,17 +699,18 @@ export class CommerceUnitOfWork {
     const now = this.commitTimestamp;
     const materialized = materializeDocument(data, now);
     const commitTime = timestampString(now);
-    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, materialized.data, this.nextDocumentVersion(key, null));
+    const version = this.nextDocumentVersion(key, null);
     return {
       createTime: commitTime,
       data: materialized.data,
       rawData: key.kind === 'stripe_checkout'
-        ? stripeCheckoutStateMetadata(materialized.data, this.original.get(key.path)?.rawData ?? {})
+        ? stripeCheckoutDocumentRawData({ documentPath: key.path, data: materialized.data, documentVersion: version,
+          previousRawData: this.original.get(key.path)?.rawData })
         : materialized.data,
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
-      version: this.nextDocumentVersion(key, null),
+      version,
     };
   }
 
@@ -723,12 +723,12 @@ export class CommerceUnitOfWork {
     const materialized = materializeDocument(data, now);
     const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
-    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, materialized.data, version);
     return {
       createTime: current?.createTime || commitTime,
       data: materialized.data,
       rawData: key.kind === 'stripe_checkout'
-        ? stripeCheckoutStateMetadata(materialized.data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {})
+        ? stripeCheckoutDocumentRawData({ documentPath: key.path, data: materialized.data, documentVersion: version,
+          previousRawData: current?.rawData ?? this.original.get(key.path)?.rawData })
         : materialized.data,
       key,
       processedAt: materialized.processedAt,
@@ -745,8 +745,7 @@ export class CommerceUnitOfWork {
   ): StoredDocument {
     if (requireExisting && !current) throw new CommerceWriteConflict('failed-precondition');
     const now = this.commitTimestamp;
-    const stateOnly = key.kind === 'stripe_checkout' && Object.keys(updates).every((field) =>
-      STRIPE_CHECKOUT_STATE_FIELDS.includes(field as typeof STRIPE_CHECKOUT_STATE_FIELDS[number]));
+    const stateOnly = key.kind === 'stripe_checkout' && isStripeCheckoutStateOnlyUpdate(updates);
     const data = current ? stateOnly ? { ...current.data } : cloneData(current.data) : {};
     let processedAt = current?.processedAt || null;
     for (const [fieldPath, update] of Object.entries(updates)) {
@@ -762,9 +761,10 @@ export class CommerceUnitOfWork {
     }
     const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
-    if (key.kind === 'stripe_checkout') this.validateCheckoutState(key, data, version);
     const rawData = key.kind === 'stripe_checkout'
-      ? stateOnly && current ? current.rawData : this.checkoutMetadata(key, data, current)
+      ? stripeCheckoutDocumentRawData({ documentPath: key.path, data, documentVersion: version,
+        previousRawData: current?.rawData ?? this.original.get(key.path)?.rawData,
+        reuseRawData: current ? stateOnly ? 'unchanged' : 'if-equal' : undefined })
       : data;
     return {
       createTime: current?.createTime || commitTime,
@@ -775,20 +775,6 @@ export class CommerceUnitOfWork {
       updateTime: commitTime,
       version,
     };
-  }
-
-  private checkoutMetadata(key: CommerceDocumentKey, data: CommerceDocumentData, current: StoredDocument | null): CommerceDocumentData {
-    const metadata = stripeCheckoutStateMetadata(data, current?.rawData ?? this.original.get(key.path)?.rawData ?? {});
-    if (current && JSON.stringify(metadata) === JSON.stringify(current.rawData)) return current.rawData;
-    return metadata;
-  }
-
-  private validateCheckoutState(key: CommerceDocumentKey, data: CommerceDocumentData, version: number): void {
-    try {
-      stripeCheckoutStateFromDocument(key.path, data, version);
-    } catch {
-      throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout state.');
-    }
   }
 
   private nextDocumentVersion(key: CommerceDocumentKey, current: StoredDocument | null): number {

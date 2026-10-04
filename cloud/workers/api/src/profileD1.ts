@@ -162,19 +162,3 @@ export async function saveD1ProfileAddress(
     ...(address.email ? { email: address.email } : {}),
   };
 }
-
-export async function ensureD1Profile(
-  db: D1Database,
-  profile: Pick<D1Profile, 'wallet' | 'createdAtMs' | 'updatedAtMs'>,
-  signal?: AbortSignal,
-): Promise<void> {
-  await runD1Write(signal, () => db.prepare(`INSERT INTO profiles (
-      wallet,
-      email,
-      created_at_ms,
-      updated_at_ms
-    ) VALUES (?, NULL, ?, ?)
-    ON CONFLICT (wallet) DO NOTHING`)
-    .bind(profile.wallet, profile.createdAtMs, profile.updatedAtMs)
-    .run());
-}

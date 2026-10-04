@@ -7,7 +7,7 @@ import {
   stripeCheckoutStateMetadata,
   stripeCheckoutStateRow,
 } from '../../../../shared/stripeCheckoutState.ts';
-import { CommerceWriteConflict, D1CommerceRepository, commerceFieldValue, commerceKeys } from '../src/commerceRepository.ts';
+import { CommerceWriteConflict, D1CommerceRepository, commerceFieldValue, commerceKeys, type CommerceDocumentWriteData } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1Harness } from './commerceD1Harness.ts';
 
 const key = commerceKeys.stripeCheckout('drop', 'cs_state');
@@ -108,6 +108,106 @@ test('checkout updates persist timestamp projections even when the metadata JSON
     const parentWrites = writes.filter((sql) => /(?:INSERT INTO|UPDATE) commerce_documents\b/.test(sql));
     assert.equal(parentWrites.length, 1);
     assert.doesNotMatch(parentWrites[0], /document_json/);
+  }
+});
+
+test('checkout mutations reject invalid state before changing either persisted row', async (context) => {
+  const invalidData: CommerceDocumentWriteData[] = [
+    { status: 'other' },
+    { status: 'processing', processingAttemptId: '' },
+    { status: 'processing', processingAttemptCount: -1 },
+    { status: 'processing', processingLeaseExpiresAt: 0.5 },
+    { status: 'created', updatedAt: '100' },
+  ];
+  for (const operation of ['create', 'replace', 'merge', 'update'] as const) {
+    const harness = createCommerceD1Harness();
+    context.after(() => harness.database.close());
+    if (operation !== 'create') seedCommerceDocument(harness, { key, data: { status: 'created', metadata: { kept: true } } });
+    const repository = new D1CommerceRepository(harness.db);
+    const parent = harness.database.prepare('SELECT * FROM commerce_documents WHERE document_path = ?').get(key.path);
+    const state = harness.database.prepare('SELECT * FROM commerce_stripe_checkout_state WHERE document_path = ?').get(key.path);
+    for (const data of invalidData) {
+      await assert.rejects(repository.run(Date.now(), async (unit) => {
+        if (operation === 'create') await unit.create(key, data);
+        else if (operation === 'update') await unit.update(key, data);
+        else await unit.set(key, data, { merge: operation === 'merge' });
+      }), { code: 'invalid-argument', message: 'Invalid Stripe checkout state.' });
+      assert.deepEqual(harness.database.prepare('SELECT * FROM commerce_documents WHERE document_path = ?').get(key.path), parent);
+      assert.deepEqual(harness.database.prepare('SELECT * FROM commerce_stripe_checkout_state WHERE document_path = ?').get(key.path), state);
+    }
+    if (operation === 'merge' || operation === 'update') {
+      await assert.rejects(repository.run(Date.now(), (unit) => operation === 'update'
+        ? unit.update(key, { 'status.nested': 'processing' })
+        : unit.set(key, { 'status.nested': 'processing' }, { merge: true })),
+      { code: 'invalid-argument', message: 'Invalid Stripe checkout state.' });
+    }
+  }
+});
+
+test('checkout version overflow is rejected even for state-only updates', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocument(harness, { key, data: { status: 'created' }, version: Number.MAX_SAFE_INTEGER });
+  const repository = new D1CommerceRepository(harness.db);
+  await assert.rejects(repository.run(Date.now(), (unit) => unit.update(key, { status: 'processing' })),
+    { code: 'invalid-argument', message: 'Invalid Stripe checkout state.' });
+  assert.equal((await repository.get(key))?.version, Number.MAX_SAFE_INTEGER);
+  assert.equal(harness.database.prepare('SELECT document_version FROM commerce_stripe_checkout_state WHERE document_path = ?')
+    .get(key.path)!.document_version, Number.MAX_SAFE_INTEGER);
+});
+
+test('checkout staged creation and metadata patches survive subsequent state-only updates', async (context) => {
+  for (const create of [true, false]) {
+    const harness = createCommerceD1Harness();
+    context.after(() => harness.database.close());
+    const initial = { status: 'created', metadata: { count: 1, tags: ['initial'], removed: true } };
+    if (!create) seedCommerceDocument(harness, { key, data: initial });
+    const repository = new D1CommerceRepository(harness.db);
+    await repository.run(Date.now(), async (unit) => {
+      const original = create ? await unit.create(key, initial) : (await unit.get(key))!;
+      await unit.update(key, { 'metadata.count': commerceFieldValue.increment(2),
+        'metadata.tags': commerceFieldValue.arrayUnion('initial', 'added'),
+        'metadata.removed': commerceFieldValue.delete(), status: 'fulfillment_pending' });
+      await unit.update(key, { status: 'processing', processingAttemptCount: commerceFieldValue.increment(1),
+        updatedAt: commerceFieldValue.serverTimestamp() });
+      assert.deepEqual(original.data, initial);
+    });
+    const record = (await repository.get(key))!;
+    const metadata = { count: 3, tags: ['initial', 'added'] };
+    assert.deepEqual(record.data.metadata, metadata);
+    assert.equal(record.data.status, 'processing');
+    assert.equal(record.data.processingAttemptCount, 1);
+    assert.equal(record.version, 3);
+    assert.deepEqual(JSON.parse(String(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+      .get(key.path)!.document_json)), { metadata });
+    assert.equal(harness.database.prepare('SELECT document_version FROM commerce_stripe_checkout_state WHERE document_path = ?')
+      .get(key.path)!.document_version, record.version);
+  }
+});
+
+test('checkout replacement and delete-recreate retain frozen state while replacing metadata', async (context) => {
+  for (const recreate of [false, true]) {
+    const harness = createCommerceD1Harness({ stripeCheckoutStateMode: 'legacy' });
+    context.after(() => harness.database.close());
+    seedCommerceDocument(harness, { key, data: { status: 'processing', processingAttemptId: 'historical',
+      updatedAt: 100, metadata: { old: true }, removed: true } });
+    activate(harness);
+    const repository = new D1CommerceRepository(harness.db);
+    const replacement = { status: 'fulfilled', updatedAt: 200, metadata: { replaced: true } };
+    await repository.run(Date.now(), async (unit) => {
+      if (recreate) {
+        await unit.delete(key);
+        await unit.create(key, replacement);
+      } else await unit.set(key, replacement);
+    });
+    const record = (await repository.get(key))!;
+    assert.deepEqual(record.data, replacement);
+    assert.equal(record.version, 2);
+    assert.deepEqual(JSON.parse(String(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+      .get(key.path)!.document_json)), { status: 'processing', processingAttemptId: 'historical',
+      updatedAt: 100, metadata: { replaced: true } });
+    assert.equal(harness.database.prepare('SELECT document_version FROM commerce_stripe_checkout_state WHERE document_path = ?')
+      .get(key.path)!.document_version, record.version);
   }
 });
 

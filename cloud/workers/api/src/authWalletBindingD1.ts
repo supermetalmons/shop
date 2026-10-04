@@ -127,14 +127,29 @@ function leaseActive(binding: D1AuthWalletBinding, nowMs: number): boolean {
     binding.reconcileLeaseExpiresAtMs > nowMs;
 }
 
-async function writeD1AuthWalletBinding(
-  statement: D1PreparedStatement,
-  signal?: AbortSignal,
-): Promise<D1AuthWalletBinding | null> {
-  throwIfAborted(signal);
-  const row = await statement.first<Record<string, unknown>>();
-  throwIfAborted(signal);
-  return bindingFromRow(row);
+async function writeD1WalletSession(args: {
+  db: D1Database;
+  statement: D1PreparedStatement;
+  wallet: string;
+  nowMs: number;
+  signal?: AbortSignal;
+}): Promise<D1AuthWalletBinding | null> {
+  throwIfAborted(args.signal);
+  const results = await args.db.batch<Record<string, unknown>>([
+    args.statement,
+    args.db.prepare(`INSERT INTO profiles (wallet, email, created_at_ms, updated_at_ms)
+      SELECT ?, NULL, ?, ? WHERE changes() = 1
+      ON CONFLICT (wallet) DO NOTHING`)
+      .bind(args.wallet, args.nowMs, args.nowMs),
+  ]);
+  throwIfAborted(args.signal);
+  if (!Array.isArray(results) || results.length !== 2 || results.some((result) =>
+    !result || result.success !== true || !Array.isArray(result.results)) ||
+    results[0].results.length > 1 || results[1].results.length !== 0 ||
+    results[0].results.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) {
+    throw new AuthWalletBindingD1InvalidDataError();
+  }
+  return bindingFromRow(results[0].results[0] ?? null);
 }
 
 export async function establishD1AuthWalletBinding(args: {
@@ -163,7 +178,7 @@ export async function establishD1AuthWalletBinding(args: {
     const current = await loadD1AuthWalletBinding(args.db, args.authSubject, args.signal);
     if (!current) {
       if (args.baseline) throw new AuthWalletBindingD1SupersededError();
-      const inserted = await writeD1AuthWalletBinding(args.db.prepare(`INSERT INTO auth_wallet_bindings (
+      const inserted = await writeD1WalletSession({ ...args, statement: args.db.prepare(`INSERT INTO auth_wallet_bindings (
           auth_subject,
           wallet,
           updated_at_ms,
@@ -177,12 +192,12 @@ export async function establishD1AuthWalletBinding(args: {
           args.authSubject,
           wallet,
           args.nowMs,
-        ), args.signal);
+        ) });
       if (inserted) return inserted;
       continue;
     }
     if (current.wallet === wallet) {
-      const renewed = await writeD1AuthWalletBinding(args.db.prepare(`UPDATE auth_wallet_bindings
+      const renewed = await writeD1WalletSession({ ...args, statement: args.db.prepare(`UPDATE auth_wallet_bindings
         SET
           updated_at_ms = MAX(updated_at_ms, ?),
           revision = revision + 1
@@ -192,7 +207,7 @@ export async function establishD1AuthWalletBinding(args: {
           args.nowMs,
           args.authSubject,
           wallet,
-        ), args.signal);
+        ) });
       if (renewed) return renewed;
       continue;
     }
@@ -204,7 +219,7 @@ export async function establishD1AuthWalletBinding(args: {
       throw new AuthWalletBindingD1SupersededError();
     }
     if (leaseActive(current, args.nowMs)) throw new AuthWalletBindingD1BusyError();
-    const rebound = await writeD1AuthWalletBinding(args.db.prepare(`UPDATE auth_wallet_bindings
+    const rebound = await writeD1WalletSession({ ...args, statement: args.db.prepare(`UPDATE auth_wallet_bindings
       SET
         wallet = ?,
         updated_at_ms = MAX(updated_at_ms, ?),
@@ -227,7 +242,7 @@ export async function establishD1AuthWalletBinding(args: {
         current.wallet,
         current.revision,
         args.nowMs,
-      ), args.signal);
+      ) });
     if (rebound) return rebound;
   }
   throw new AuthWalletBindingD1SupersededError();
