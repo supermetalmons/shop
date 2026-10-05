@@ -777,7 +777,7 @@ test('database guards require normalized Ethereum identity on new orders and for
   assert.equal((await h.store.get(order.orderId))!.ethereumAddress, ETHEREUM);
 });
 
-for (const cardIds of [[1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419]]) test(`mainnet prepares and submits verified owned cards ${cardIds.join(', ')}`, async () => {
+for (const cardIds of [[1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419], [1420, 1425, 1430]]) test(`mainnet prepares and submits verified owned cards ${cardIds.join(', ')}`, async () => {
   const h = harness();
   const mainnet = getPreorderConfig('mi_note_cards')!;
   h.holdings(cardIds);
@@ -846,7 +846,7 @@ test('anonymous checkout requires the existing signed wallet binding and uses it
 
 test('invalid selections and unknown collections fail before preparing or signing', async () => {
   const h = harness();
-  for (const ids of [[1, 1], [0], [1401], [1402], [1403], [1404], [1405], [1406], [1407], [1408], [1420], [1409.5], [1, 2, 3, 4]]) {
+  for (const ids of [[1, 1], [0], [1401], [1402], [1403], [1404], [1405], [1406], [1407], [1408], [1431], [1409.5], [1, 2, 3, 4]]) {
     assert.equal((await h.prepare(ids)).status, 400);
   }
   for (const path of ['status', 'prepare', 'submit', 'cancel']) {
@@ -1103,7 +1103,7 @@ test('an uncertain first broadcast retains its transaction for status retry', as
   assert.deepEqual(h.counts(), { prepares: 1, authorizations: 1, sends: 1 });
 });
 
-for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419]]) test(`finalized success consumes cards ${cardIds.join(', ')} and exposes recent assets for verified inventory recovery`, async () => {
+for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419], [1420, 1425, 1430]]) test(`finalized success consumes cards ${cardIds.join(', ')} and exposes recent assets for verified inventory recovery`, async () => {
   const h = harness();
   const prepared = await h.prepare(cardIds);
   assert.equal(prepared.status, 200);

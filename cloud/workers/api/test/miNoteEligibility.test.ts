@@ -70,6 +70,8 @@ for (const { tokenIds, cardIds, unownedId } of [
   { tokenIds: ['128', '129'], cardIds: [1399, 1400], unownedId: 1398 },
   { tokenIds: ['130', '131', '132', '133', '134'], cardIds: [1409, 1410, 1411, 1412, 1413], unownedId: 1408 },
   { tokenIds: ['135', '136', '137', '139', '140', '141'], cardIds: [1414, 1415, 1416, 1417, 1418, 1419], unownedId: 1413 },
+  { tokenIds: ['142', '143', '144', '145', '146', '147', '148', '149', '150', '151', '152'],
+    cardIds: [1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430], unownedId: 1419 },
 ]) {
   test(`Mi Note 3 tokens ${tokenIds.join(', ')} authorize only their corresponding card IDs`, async (context) => {
     const h = fixture();

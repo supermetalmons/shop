@@ -81,7 +81,8 @@ test('selection alone does not reserve; purchase signs once and submits exclusiv
   assert.equal(window.localStorage.length, 0);
 });
 
-for (const persisted of [false, true]) for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419]]) {
+for (const persisted of [false, true]) for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419],
+  [1420, 1421, 1422], [1423, 1424, 1425], [1426, 1427, 1428], [1429, 1430]]) {
   test(`${persisted ? 'persisted' : 'fresh'} checkout accepts cards ${cardIds.join(', ')}`, async () => {
     const { api, options, calls } = runtime();
     const prepared = { ...order(), cardIds, assets: cardIds.map((id) => ({ id, address: Keypair.generate().publicKey.toBase58() })) };
@@ -102,7 +103,7 @@ for (const persisted of [false, true]) for (const cardIds of [[1398, 1399, 1400]
   });
 }
 
-for (const id of [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1420]) test(`checkout rejects card ${id} in current selections and persisted recovery`, async () => {
+for (const id of [1401, 1402, 1403, 1404, 1405, 1406, 1407, 1408, 1431]) test(`checkout rejects card ${id} in current selections and persisted recovery`, async () => {
   const { api, options, calls } = runtime();
   window.localStorage.setItem(`mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`, JSON.stringify({
     requestId: 'out-of-range-request', cardIds: [id], ethereumAddress: ethereumSession.address,

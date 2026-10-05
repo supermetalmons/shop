@@ -175,7 +175,10 @@ cards 1409–1413 are published and verified on the CDN; see
 and deployment order. Metadata and images for cards 1414–1419 are also published
 and verified on the CDN; see
 [the new release notes](releases/mi-note-cards-1414-1419/README.md) for asset links
-and deployment order.
+and deployment order. Metadata and images for cards 1420–1430, mapped to Mi Note 3
+tokens 142–152, were verified on October 5, 2026. All 11 metadata JSONs match the
+prepared files, and all preorder images, originals, and thumbnails are available;
+see [their release notes](releases/mi-note-cards-1420-1430/README.md).
 
 Preorder artwork has rounded corners in inventory, its viewer, and the Mi Note
 gallery. Available and reserved gallery artwork keeps its original corners.
@@ -197,7 +200,7 @@ overlay is retired, preserving selections. Preorder and ordinary mint recovery
 share the bounded lookup budget; unresolved preorders do not depend on a fixed TTL.
 
 Deployment requires Ops migrations through `0007_mi_note_auth.sql` and commerce
-migrations through `0034_drop_obsolete_commerce_indexes.sql`, followed by the
+migrations through `0035_preorder_catalog.sql`, followed by the
 API release and then the frontend. The normal API deployment command applies
 migrations and validates the current schema and active storage. Fresh databases
 use the [Commerce bootstrap procedure](scripts/docs/commerce_operations.md#initialize-an-empty-database).
@@ -252,8 +255,8 @@ eligibility so the devnet test inventory appears only for the admin buyer.
 
 Its `specialCards` list reserves IDs 1401–1408 for a later public sale;
 these cards currently have no sale or preorder eligibility. The generated preorder
-IDs are 1–1400 and 1409–1419, totaling 1411 cards; the next
-unallocated card ID is 1420. Shared validation and the database exclude the
+IDs are 1–1400 and 1409–1430, totaling 1422 cards; the next
+unallocated card ID is 1431. Shared validation and the database exclude the
 reserved special IDs from preorder eligibility.
 
 For catalog additions, edit `mi_note_cards.json`, then run:
@@ -609,7 +612,7 @@ canonical fulfillment origin address.
 `mons-shop-commerce` is the authoritative commerce document database. Its
 immutable SQL history starts at
 `cloud/workers/api/commerce-migrations/0001_current_schema.sql` and currently ends
-at `0034_drop_obsolete_commerce_indexes.sql`. Append `0035_<description>.sql`
+at `0035_preorder_catalog.sql`. Append `0036_<description>.sql`
 for the next change and regenerate the schema manifest. The checker validates
 the exact current schema, semantic integrity, and selective query plans.
 

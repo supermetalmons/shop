@@ -356,7 +356,7 @@ test('Commerce D1 checker reads one schema catalog for the current schema', () =
 
 for (const [label, mutation] of [
   ['missing card', 'DELETE FROM commerce_preorder_cards WHERE card_id = 1419'],
-  ['extra card', 'INSERT INTO commerce_preorder_cards (card_id) VALUES (1420)'],
+  ['extra card', 'INSERT INTO commerce_preorder_cards (card_id) VALUES (1431)'],
   ['reserved card', 'INSERT INTO commerce_preorder_cards (card_id) VALUES (1401)'],
   ['reserved replacement', `DELETE FROM commerce_preorder_cards WHERE card_id = 1419;
     INSERT INTO commerce_preorder_cards (card_id) VALUES (1408)`],
