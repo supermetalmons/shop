@@ -1,5 +1,8 @@
 import { PONCHO_DRIFELLA_CDN_BASE_URL } from './config/dropMediaDefaults.ts';
 
+export const DRIF_GRAIN_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/misc/grain.webp`;
+export const DRIF_GLITTER_URL = `${PONCHO_DRIFELLA_CDN_BASE_URL}/misc/glitter.png`;
+
 type GlowType =
   | 'water'
   | 'fire'
@@ -369,6 +372,11 @@ export function getDrifCardAssetSources(card: DrifCardConfig | undefined): strin
         .filter((assetSrc) => assetSrc.length > 0),
     ),
   );
+}
+
+export function getDrifCardVisualAssetSources(card: DrifCardConfig | undefined): string[] {
+  if (!card) return [];
+  return [...new Set([...getDrifCardAssetSources(card), DRIF_GRAIN_URL, DRIF_GLITTER_URL])];
 }
 
 const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {

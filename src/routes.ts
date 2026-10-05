@@ -10,7 +10,7 @@ import { normalizePathname } from './navigation';
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
 type PackWipExperience = 'card_nft_2' | 'little_swag_boxes' | 'poncho_drifella';
-export type ShopWipExperience = PackWipExperience | 'clear_cards';
+export type ShopWipExperience = PackWipExperience | 'clear_cards' | 'mi_note_cards';
 
 type WipRouteDefinition = {
   path: string;
@@ -31,6 +31,7 @@ export const WIP_ROUTES: readonly WipRouteDefinition[] = [
     dropId: 'poncho_drifella',
   },
   { path: '/clear_cards/wip', experience: 'clear_cards' },
+  { path: '/mi_note_cards/wip', experience: 'mi_note_cards' },
 ];
 
 type RouteAlias = {

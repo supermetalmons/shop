@@ -141,7 +141,22 @@ test('the route resolver keeps the complete WIP table in one exported definition
       dropId: 'poncho_drifella',
     },
     { path: '/clear_cards/wip', experience: 'clear_cards' },
+    { path: '/mi_note_cards/wip', experience: 'mi_note_cards' },
   ]);
+});
+
+test('Mi Note Cards WIP stays separate from its preorder page', () => {
+  const route = resolveAppRoute({ pathname: '/mi_note_cards/wip/' });
+  assert.equal(route.kind, 'wip');
+  assert.equal(route.path, '/mi_note_cards/wip');
+  assert.equal(route.shopPath, '/');
+  assert.equal(route.wipExperience, 'mi_note_cards');
+  assert.equal(route.preorderId, null);
+  assert.equal(route.drop, null);
+  assert.equal(route.upcoming, null);
+  assert.equal(route.walletCluster, 'mainnet-beta');
+  assert.equal(route.replacementHref, null);
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId, 'mi_note_cards');
 });
 
 test('route aliases replace only the pathname and preserve search and hash bytes', () => {

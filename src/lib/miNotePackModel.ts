@@ -1,0 +1,328 @@
+import * as THREE from 'three';
+import { createMiNotePackSeal } from './miNotePackSeal';
+
+export const MI_NOTE_CARD_WIDTH = 1.1525;
+export const MI_NOTE_CARD_HEIGHT = 1.6135;
+export const MI_NOTE_LEAF_WIDTH = 1.29;
+
+const HEIGHT = 1.82;
+const THICKNESS = 0.0018;
+const POCKET_HEIGHT = 0.56;
+const POCKET_TOP = -HEIGHT / 2 + POCKET_HEIGHT;
+const SPINE = 0.0158;
+const HINGE_OFFSET = SPINE / 2;
+const SPINE_SEGMENTS = 8;
+const POCKET_BASE = 0.0069;
+const POCKET_BOW = 0.0038;
+const LINER_Z = THICKNESS / 2;
+
+function ease(value: number) {
+  return value * value * (3 - 2 * value);
+}
+
+function createCanvas(size: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('The paper texture canvas could not be created.');
+  return { canvas, context };
+}
+
+function createPaperTextures() {
+  const fiberCanvas = createCanvas(128);
+  const { canvas, context } = createCanvas(256);
+  const pixels = fiberCanvas.context.createImageData(128, 128);
+  let seed = 931;
+  for (let i = 0; i < pixels.data.length; i += 4) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const value = 118 + (seed >>> 27);
+    pixels.data.set([value, value, value, 255], i);
+  }
+  fiberCanvas.context.putImageData(pixels, 0, 0);
+  const fiber = new THREE.CanvasTexture(fiberCanvas.canvas);
+  fiber.wrapS = fiber.wrapT = THREE.RepeatWrapping;
+  fiber.repeat.set(5, 7);
+
+  const grainPixels = context.createImageData(256, 256);
+  let grainSeed = 1847;
+  const random = () => {
+    grainSeed = (Math.imul(grainSeed, 1664525) + 1013904223) >>> 0;
+    return grainSeed / 4294967296;
+  };
+  const mottling = Array.from({ length: 32 * 32 }, random);
+  const sample = (x: number, y: number) => mottling[(y % 32) * 32 + (x % 32)];
+  for (let y = 0; y < 256; y += 1) {
+    for (let x = 0; x < 256; x += 1) {
+      const gx = x / 8;
+      const gy = y / 8;
+      const ix = Math.floor(gx);
+      const iy = Math.floor(gy);
+      const u = ease(gx - ix);
+      const v = ease(gy - iy);
+      const cloud = THREE.MathUtils.lerp(
+        THREE.MathUtils.lerp(sample(ix, iy), sample(ix + 1, iy), u),
+        THREE.MathUtils.lerp(sample(ix, iy + 1), sample(ix + 1, iy + 1), u),
+        v,
+      );
+      const value = Math.round(239 + (random() - 0.5) * 18 + (cloud - 0.5) * 12);
+      grainPixels.data.set([value, value, value, 255], (y * 256 + x) * 4);
+    }
+  }
+  context.putImageData(grainPixels, 0, 0);
+  context.lineWidth = 0.55;
+  for (let i = 0; i < 1600; i += 1) {
+    const x = random() * 256;
+    const y = random() * 256;
+    const angle = random() * Math.PI * 2;
+    const length = 0.7 + random() * 2.4;
+    context.strokeStyle = random() > 0.5 ? 'rgba(255,255,255,.18)' : 'rgba(125,125,125,.10)';
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
+    context.stroke();
+  }
+  const grain = new THREE.CanvasTexture(canvas);
+  grain.wrapS = grain.wrapT = THREE.RepeatWrapping;
+  grain.repeat.set(2, 3);
+  grain.anisotropy = 8;
+  return { fiber, grain };
+}
+
+function faceGeometry(shape: THREE.Shape) {
+  const geometry = new THREE.ShapeGeometry(shape, 12);
+  const position = geometry.attributes.position;
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < position.count; i += 1) {
+    uv.setXY(i, position.getX(i) / MI_NOTE_LEAF_WIDTH + 0.5, position.getY(i) / HEIGHT + 0.5);
+  }
+  return geometry;
+}
+
+function sheetOutline(side: number) {
+  const shape = new THREE.Shape();
+  const radius = 0.016;
+  const outer = side * MI_NOTE_LEAF_WIDTH / 2;
+  const hinge = -outer;
+  shape.moveTo(hinge, -HEIGHT / 2);
+  shape.lineTo(outer - side * radius, -HEIGHT / 2);
+  shape.quadraticCurveTo(outer, -HEIGHT / 2, outer, -HEIGHT / 2 + radius);
+  shape.lineTo(outer, HEIGHT / 2 - radius);
+  shape.quadraticCurveTo(outer, HEIGHT / 2, outer - side * radius, HEIGHT / 2);
+  shape.lineTo(hinge, HEIGHT / 2);
+  shape.closePath();
+  return shape;
+}
+
+function innerSheetShapes() {
+  const edge = MI_NOTE_LEAF_WIDTH - 0.052;
+  const bottom = -HEIGHT / 2;
+  const top = HEIGHT / 2;
+  const radius = 0.016;
+  const tabY = POCKET_TOP + 0.012;
+  const tabHalfHeight = 0.0083;
+  const tabReach = 0.024;
+  const liner = new THREE.Shape();
+  liner.moveTo(0, bottom);
+  liner.lineTo(edge, bottom);
+  liner.lineTo(edge, tabY - tabHalfHeight);
+  liner.bezierCurveTo(edge + tabReach, tabY - tabHalfHeight, edge + tabReach, tabY + tabHalfHeight, edge, tabY + tabHalfHeight);
+  liner.lineTo(edge, top);
+  liner.lineTo(0, top);
+  liner.closePath();
+  const border = new THREE.Shape();
+  border.moveTo(edge, bottom);
+  border.lineTo(MI_NOTE_LEAF_WIDTH - radius, bottom);
+  border.quadraticCurveTo(MI_NOTE_LEAF_WIDTH, bottom, MI_NOTE_LEAF_WIDTH, bottom + radius);
+  border.lineTo(MI_NOTE_LEAF_WIDTH, top - radius);
+  border.quadraticCurveTo(MI_NOTE_LEAF_WIDTH, top, MI_NOTE_LEAF_WIDTH - radius, top);
+  border.lineTo(edge, top);
+  border.lineTo(edge, tabY + tabHalfHeight);
+  border.bezierCurveTo(edge + tabReach, tabY + tabHalfHeight, edge + tabReach, tabY - tabHalfHeight, edge, tabY - tabHalfHeight);
+  border.closePath();
+  return { liner, border };
+}
+
+function pocketInsideEdge(value: number) {
+  const bottom = -HEIGHT / 2;
+  const roundHeight = 0.045;
+  const inset = 0.095;
+  if (value < 0.8) return new THREE.Vector2(inset * value / 0.8, bottom + (POCKET_HEIGHT - roundHeight) * value / 0.8);
+  const progress = (value - 0.8) / 0.2;
+  const control = inset + roundHeight * inset / (POCKET_HEIGHT - roundHeight);
+  return new THREE.Vector2(
+    (1 - progress) ** 2 * inset + 2 * (1 - progress) * progress * control + progress * progress * 0.15,
+    POCKET_TOP - roundHeight * (1 - progress) ** 2,
+  );
+}
+
+function pocketDepth(x: number, y: number, bow: number) {
+  return POCKET_BASE + bow * Math.sin(Math.PI * THREE.MathUtils.clamp(x / MI_NOTE_LEAF_WIDTH + 0.5, 0, 1))
+    * THREE.MathUtils.clamp((y + HEIGHT / 2) / POCKET_HEIGHT, 0, 1);
+}
+
+export function createMiNotePackModel({ color, onInvalidate }: { color: string; onInvalidate?: () => void }) {
+  const { fiber, grain } = createPaperTextures();
+  const stock = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color).multiplyScalar(255 / 239),
+    map: grain,
+    roughness: 0.97,
+    bumpMap: grain,
+    bumpScale: 0.00055,
+  });
+  const paper = new THREE.MeshStandardMaterial({ color: 0xf1eedf, roughness: 1, bumpMap: fiber, bumpScale: 0.00045 });
+  const cutEdge = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(0xf1eedf), 0.35), roughness: 1 });
+  const foldedStock = stock.clone();
+  foldedStock.side = THREE.DoubleSide;
+  const geometries = new Set<THREE.BufferGeometry>();
+  const own = <T extends THREE.BufferGeometry>(geometry: T): T => {
+    geometries.add(geometry);
+    return geometry;
+  };
+  const group = new THREE.Group();
+  const book = new THREE.Group();
+  const left = new THREE.Group();
+  const right = new THREE.Group();
+  group.rotation.set(0.055, -0.12, -0.016);
+  group.add(book);
+  book.add(left, right);
+  const pockets: { geometry: THREE.PlaneGeometry; lip: THREE.TubeGeometry; lipBase: Float32Array; center: number }[] = [];
+
+  const sheet = (leaf: THREE.Group, side: number) => {
+    const center = side * MI_NOTE_LEAF_WIDTH / 2;
+    const coreGeometry = own(new THREE.ExtrudeGeometry(sheetOutline(side), { depth: THICKNESS, bevelEnabled: false, curveSegments: 12 }));
+    coreGeometry.translate(0, 0, -THICKNESS / 2);
+    const perimeter = coreGeometry.groups.find((entry) => entry.materialIndex === 1);
+    if (perimeter) coreGeometry.setDrawRange(perimeter.start, perimeter.count);
+    const core = new THREE.Mesh(coreGeometry, cutEdge);
+    core.position.x = center;
+    leaf.add(core);
+    const outer = new THREE.Mesh(own(faceGeometry(sheetOutline(-side))), stock);
+    outer.position.set(center, 0, -THICKNESS / 2);
+    outer.rotation.y = Math.PI;
+    leaf.add(outer);
+    const inside = innerSheetShapes();
+    const liner = new THREE.Mesh(own(faceGeometry(inside.liner)), paper);
+    liner.position.z = LINER_Z;
+    liner.scale.x = side;
+    leaf.add(liner);
+    const flap = new THREE.Mesh(own(faceGeometry(inside.border)), stock);
+    flap.position.z = LINER_Z;
+    flap.scale.x = side;
+    leaf.add(flap);
+
+    const pocketGeometry = own(new THREE.PlaneGeometry(MI_NOTE_LEAF_WIDTH, POCKET_HEIGHT, 28, 30));
+    const position = pocketGeometry.attributes.position;
+    const uv = pocketGeometry.attributes.uv;
+    for (let i = 0; i < position.count; i += 1) {
+      const edge = pocketInsideEdge(uv.getY(i));
+      const u = side > 0 ? uv.getX(i) : 1 - uv.getX(i);
+      const x = side * THREE.MathUtils.lerp(edge.x, MI_NOTE_LEAF_WIDTH, u) - center;
+      position.setXYZ(i, x, edge.y + HEIGHT / 2 - POCKET_HEIGHT / 2, pocketDepth(x, edge.y, POCKET_BOW));
+    }
+    pocketGeometry.computeVertexNormals();
+    const pocket = new THREE.Mesh(pocketGeometry, foldedStock);
+    pocket.position.set(center, -HEIGHT / 2 + POCKET_HEIGHT / 2, 0);
+    leaf.add(pocket);
+    const lipPoints: THREE.Vector3[] = [];
+    for (let i = 0; i <= 24; i += 1) {
+      const edge = pocketInsideEdge(i / 24);
+      const x = side * edge.x;
+      lipPoints.push(new THREE.Vector3(x, edge.y, pocketDepth(x - center, edge.y, POCKET_BOW)));
+    }
+    for (let i = 1; i <= 40; i += 1) {
+      const x = side * THREE.MathUtils.lerp(0.15, MI_NOTE_LEAF_WIDTH, i / 40);
+      lipPoints.push(new THREE.Vector3(x, POCKET_TOP, pocketDepth(x - center, POCKET_TOP, POCKET_BOW)));
+    }
+    const lip = own(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(lipPoints), 96, 0.00045, 4, false));
+    leaf.add(new THREE.Mesh(lip, stock));
+    pockets.push({ geometry: pocketGeometry, lip, lipBase: Float32Array.from(lip.attributes.position.array), center });
+    const bottom = new THREE.Mesh(own(new THREE.BoxGeometry(MI_NOTE_LEAF_WIDTH, 0.003, 0.004)), stock);
+    bottom.position.set(center, -HEIGHT / 2 + 0.0015, 0.0038);
+    leaf.add(bottom);
+    const seam = new THREE.Mesh(own(new THREE.BoxGeometry(0.004, POCKET_HEIGHT, 0.004)), stock);
+    seam.position.set(side * (MI_NOTE_LEAF_WIDTH - 0.005), -HEIGHT / 2 + POCKET_HEIGHT / 2, 0.0038);
+    leaf.add(seam);
+  };
+  sheet(left, -1);
+  sheet(right, 1);
+
+  const spineGeometry = own(new THREE.PlaneGeometry(1, HEIGHT, SPINE_SEGMENTS, 1));
+  const spinePositions = spineGeometry.attributes.position;
+  const spine = new THREE.Mesh(spineGeometry, foldedStock);
+  spine.frustumCulled = false;
+  book.add(spine);
+  const centerSeam = new THREE.Mesh(own(new THREE.PlaneGeometry(0.0015, HEIGHT)), paper);
+  centerSeam.position.z = LINER_Z + 0.0001;
+  book.add(centerSeam);
+  const releaseResources = () => {
+    for (const geometry of geometries) geometry.dispose();
+    for (const material of [stock, foldedStock, paper, cutEdge]) material.dispose();
+    fiber.dispose();
+    grain.dispose();
+  };
+  let seal: ReturnType<typeof createMiNotePackSeal>;
+  try {
+    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, onInvalidate });
+  } catch (error) {
+    releaseResources();
+    throw error;
+  }
+  let lastProgress = -1;
+  let disposed = false;
+
+  const setOpenProgress = (value: number) => {
+    const progress = THREE.MathUtils.clamp(value, 0, 1);
+    if (disposed || progress === lastProgress) return;
+    lastProgress = progress;
+    const angle = Math.PI * (1 - progress);
+    left.rotation.y = angle;
+    left.position.set(-HINGE_OFFSET * Math.sin(angle), 0, HINGE_OFFSET * (1 - Math.cos(angle)));
+    book.position.x = MI_NOTE_LEAF_WIDTH / 4 * (Math.cos(angle) - 1);
+    spine.visible = angle > 0.001;
+    centerSeam.visible = angle < 0.04;
+    const endX = -HINGE_OFFSET * Math.sin(angle);
+    const endZ = HINGE_OFFSET * (1 - Math.cos(angle));
+    for (let i = 0; i < spinePositions.count; i += 1) {
+      const t = (i % (SPINE_SEGMENTS + 1)) / SPINE_SEGMENTS;
+      const pinch = 0.0014 * Math.sin(angle / 2) ** 2 * Math.sin(Math.PI * t);
+      spinePositions.setXYZ(i, endX * t - pinch, i <= SPINE_SEGMENTS ? HEIGHT / 2 : -HEIGHT / 2, endZ * t);
+    }
+    spinePositions.needsUpdate = true;
+    spineGeometry.computeVertexNormals();
+    const bow = 0.0003 + (POCKET_BOW - 0.0003) * progress;
+    for (const pocket of pockets) {
+      const position = pocket.geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        position.setZ(i, pocketDepth(position.getX(i), position.getY(i) - HEIGHT / 2 + POCKET_HEIGHT / 2, bow));
+      }
+      position.needsUpdate = true;
+      pocket.geometry.computeVertexNormals();
+      const lip = pocket.lip.attributes.position;
+      for (let i = 0; i < lip.count; i += 1) {
+        const x = pocket.lipBase[i * 3] - pocket.center;
+        const y = pocket.lipBase[i * 3 + 1];
+        lip.setZ(i, pocket.lipBase[i * 3 + 2] + pocketDepth(x, y, bow) - pocketDepth(x, y, POCKET_BOW));
+      }
+      lip.needsUpdate = true;
+      pocket.lip.computeVertexNormals();
+    }
+  };
+  setOpenProgress(0);
+
+  return {
+    group,
+    left,
+    right,
+    ready: seal.ready,
+    setOpenProgress,
+    startSealFall: () => seal.start(),
+    updateSeal: (elapsedSeconds: number, reducedMotion: boolean) => seal.update(elapsedSeconds, reducedMotion),
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      seal.dispose();
+      releaseResources();
+      group.removeFromParent();
+    },
+  };
+}

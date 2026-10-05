@@ -9,6 +9,7 @@ import type { ResolvedAppRoute, ShopWipExperience } from './routes';
 
 const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
+const MiNoteCardsWipApp = React.lazy(() => import('./MiNoteCardsWipApp'));
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;
@@ -136,6 +137,8 @@ export default function ShopRoute({ route }: ShopRouteProps) {
       <React.Suspense fallback={<WipRouteShell experience={wipExperience} status="loading" />}>
         {wipExperience === 'clear_cards' ? (
           <ClearCardWipApp />
+        ) : wipExperience === 'mi_note_cards' ? (
+          <MiNoteCardsWipApp />
         ) : (
           <PackWipApp dropId={wipExperience} />
         )}

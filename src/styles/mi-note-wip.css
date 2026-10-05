@@ -1,0 +1,86 @@
+.mi-note-wip__stage {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+}
+
+.mi-note-wip__renderer,
+.mi-note-wip__css-scene,
+.mi-note-wip__canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mi-note-wip__css-scene {
+  z-index: 0;
+}
+
+.mi-note-wip__canvas {
+  z-index: 1;
+}
+
+.mi-note-wip__card {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.mi-note-wip__card .drif-effect-card {
+  height: 100%;
+}
+
+.mi-note-wip:not(.mi-note-wip--revealed) .mi-note-wip__card,
+.mi-note-wip:not(.mi-note-wip--revealed) .mi-note-wip__card * {
+  pointer-events: none !important;
+}
+
+.mi-note-wip:not(.mi-note-wip--revealed) .drif-effect-card__rotator {
+  box-shadow: none;
+}
+
+button.mi-note-wip__pack-button {
+  position: absolute;
+  z-index: 2;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+button.mi-note-wip__pack-button:hover,
+button.mi-note-wip__pack-button:active,
+button.mi-note-wip__pack-button:disabled {
+  background: transparent;
+  opacity: 1;
+}
+
+button.mi-note-wip__pack-button:disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+button.mi-note-wip__pack-button:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--fg) 40%, transparent);
+  outline-offset: 8px;
+}
+
+.mi-note-wip__status {
+  position: absolute;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 12px;
+  z-index: 3;
+}
+
+.mi-note-wip__status button {
+  font-size: inherit;
+}
