@@ -1,31 +1,46 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import MiNotePackViewer from './components/MiNotePackViewer';
+import MiNoteFoldControls from './components/MiNoteFoldControls';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
+import { useMiNoteStarFolds } from './hooks/useMiNoteStarFolds';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { getInteractiveCardPackCardsByFigureIds } from './lib/interactiveCardPackReveal';
 import { createMiNoteCardInput } from './lib/miNoteCardInput';
 import {
   createMiNoteRevealState,
+  MI_NOTE_PACK_VARIANTS,
   reduceMiNoteReveal,
   sampleMiNotePack,
+  type MiNotePack,
+  type MiNotePackVariant,
+  type MiNoteRevealStage,
 } from './lib/miNoteCardReveal';
+import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
+import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './lib/miNoteStarFolds';
 import { navigate } from './navigation';
 import './styles/mi-note-wip.css';
 
 function MiNotePackOpening({
   selection,
-  onReset,
+  star,
+  foldPosition,
+  rotationOffsetDegrees,
+  buttonRef,
   onRetry,
+  onStageChange,
 }: {
   selection: ReturnType<typeof sampleMiNotePack>;
-  onReset: () => void;
+  star: MiNotePackStar;
+  foldPosition: number;
+  rotationOffsetDegrees: number;
+  buttonRef: RefObject<HTMLButtonElement | null>;
   onRetry: () => void;
+  onStageChange: (stage: MiNoteRevealStage) => void;
 }) {
   const [state, dispatch] = useReducer(reduceMiNoteReveal, undefined, createMiNoteRevealState);
-  const [focused, setFocused] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<Error | null>(null);
   const [mountedError, setMountedError] = useState<Error | null>(null);
@@ -40,7 +55,6 @@ function MiNotePackOpening({
     };
     return [createElement(), createElement()];
   });
-  const buttonRef = useRef<HTMLButtonElement>(null);
   const cards = useMemo(
     () => getInteractiveCardPackCardsByFigureIds('card_nft_2', selection.cardIds),
     [selection.cardIds],
@@ -56,11 +70,12 @@ function MiNotePackOpening({
   const handleSecondImageReady = useCallback((value: boolean) => {
     setMountedReady((previous) => previous[1] === value ? previous : [previous[0], value]);
   }, []);
-  const handleClose = useCallback(() => navigate('/'), []);
   const handleActivate = useCallback(() => {
     if (viewerReady && !error) dispatch({ type: 'activate' });
   }, [error, viewerReady]);
   const packInput = useMemo(() => createMiNoteCardInput(handleActivate), [handleActivate]);
+
+  useLayoutEffect(() => onStageChange(state.stage), [onStageChange, state.stage]);
 
   useLayoutEffect(() => {
     cardElements.forEach((element) => {
@@ -84,21 +99,6 @@ function MiNotePackOpening({
     return () => window.clearTimeout(timer);
   }, [assets.ready, mountedCardsReady]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey || isKeyboardShortcutTarget(event.target)) return;
-      if (event.code === 'KeyR') {
-        event.preventDefault();
-        onReset();
-      } else if (event.code === 'Space') {
-        event.preventDefault();
-        buttonRef.current?.click();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onReset]);
-
   const openingLocked = state.openRequested || ['opening', 'pack-falling', 'revealed'].includes(state.stage);
   const note = error
     ? 'Unable to load this pack.'
@@ -109,22 +109,18 @@ function MiNotePackOpening({
         : '';
 
   return (
-    <ModalFocusScope
-      className={`wip-page mi-note-wip${revealed ? ' mi-note-wip--revealed' : ''}`}
-      ariaLabel="Mi Note Cards pack preview"
-      focusTarget="scope"
-      onEscape={handleClose}
+    <div
+      className={`mi-note-wip mi-note-wip__opening${revealed ? ' mi-note-wip--revealed' : ''}`}
       data-stage={state.stage}
       data-variant={selection.variant.id}
-      onPointerUp={(event) => {
-        if (event.isPrimary && event.button === 0 && event.target instanceof Element && event.target.classList.contains('mi-note-wip__stage')) {
-          setFocused((value) => !value);
-        }
-      }}
+      data-star={star.id}
     >
       <div className="mi-note-wip__stage">
         <MiNotePackViewer
           color={selection.variant.color}
+          star={star}
+          foldPosition={foldPosition}
+          rotationOffsetDegrees={rotationOffsetDegrees}
           cardElements={cardElements}
           stage={state.stage}
           onReadyChange={setViewerReady}
@@ -158,27 +154,160 @@ function MiNotePackOpening({
         cardElements[index],
         String(selection.cardIds[index]),
       ))}
-      <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
-        <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards preview">Close</button>
-        <button type="button" className="wip-reset-btn" onClick={onReset} aria-label="Reset opening">Reset</button>
-      </div>
       {note && (
         <div className="mi-note-wip__status" role={error ? 'alert' : 'status'}>
           {note}
           {error && <button type="button" className="link" onClick={onRetry}>Retry</button>}
         </div>
       )}
-    </ModalFocusScope>
+    </div>
   );
 }
 
 export default function MiNoteCardsWipApp() {
-  const [round, setRound] = useState(() => ({ generation: 0, selection: sampleMiNotePack() }));
+  const [round, setRound] = useState<{ generation: number; selection: MiNotePack; star: MiNotePackStar }>(() => ({
+    generation: 0,
+    selection: sampleMiNotePack(),
+    star: MI_NOTE_PACK_STARS[0],
+  }));
+  const [focused, setFocused] = useState(false);
+  const { foldPositions, rotationOffsetsDegrees, setFoldPosition, setRotationOffset, storageError } = useMiNoteStarFolds();
+  const foldPosition = foldPositions[round.star.id];
+  const rotationOffsetDegrees = rotationOffsetsDegrees[round.star.id];
+  const stageRef = useRef<MiNoteRevealStage>('sealed');
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const handleStageChange = useCallback((stage: MiNoteRevealStage) => { stageRef.current = stage; }, []);
+  const handleClose = useCallback(() => navigate('/'), []);
   const handleReset = useCallback(() => {
-    setRound((previous) => ({ generation: previous.generation + 1, selection: sampleMiNotePack() }));
+    setRound((previous) => ({
+      ...previous,
+      generation: previous.generation + 1,
+      selection: { ...sampleMiNotePack(), variant: previous.selection.variant },
+    }));
   }, []);
   const handleRetry = useCallback(() => {
     setRound((previous) => ({ ...previous, generation: previous.generation + 1 }));
   }, []);
-  return <MiNotePackOpening key={round.generation} selection={round.selection} onReset={handleReset} onRetry={handleRetry} />;
+  const handleStarChange = useCallback((star: MiNotePackStar) => {
+    setRound((previous) => previous.star.id === star.id ? previous : {
+      ...previous,
+      generation: previous.generation + 1,
+      star,
+    });
+  }, []);
+  const handleColorChange = useCallback((variant: MiNotePackVariant) => {
+    setRound((previous) => previous.selection.variant.id === variant.id ? previous : {
+      ...previous,
+      generation: previous.generation + 1,
+      selection: { ...previous.selection, variant },
+    });
+  }, []);
+  const resealForAdjustment = () => {
+    if (stageRef.current !== 'sealed') {
+      stageRef.current = 'sealed';
+      handleRetry();
+    }
+  };
+  const handleFoldChange = (value: number) => {
+    const next = normalizeMiNoteStarFoldPosition(value);
+    if (next === foldPosition) return;
+    resealForAdjustment();
+    setFoldPosition(round.star.id, next);
+  };
+  const handleRotationChange = (value: number) => {
+    const next = normalizeMiNoteStarRotationOffset(value);
+    if (next === rotationOffsetDegrees) return;
+    resealForAdjustment();
+    setRotationOffset(round.star.id, next);
+  };
+  const cycleStar = (direction: number) => {
+    const index = MI_NOTE_PACK_STARS.findIndex((star) => star.id === round.star.id);
+    handleStarChange(MI_NOTE_PACK_STARS[(index + direction + MI_NOTE_PACK_STARS.length) % MI_NOTE_PACK_STARS.length]);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey || isKeyboardShortcutTarget(event.target)) return;
+      if (event.code === 'KeyR') {
+        event.preventDefault();
+        handleReset();
+      } else if (event.code === 'Space') {
+        event.preventDefault();
+        buttonRef.current?.click();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleReset]);
+
+  return (
+    <ModalFocusScope
+      className="wip-page mi-note-wip-page"
+      ariaLabel="Mi Note Cards pack preview"
+      focusTarget="scope"
+      onEscape={handleClose}
+      onPointerUp={(event) => {
+        if (event.isPrimary && event.button === 0 && event.target instanceof Element && event.target.classList.contains('mi-note-wip__stage')) {
+          setFocused((value) => !value);
+        }
+      }}
+    >
+      <MiNotePackOpening
+        key={round.generation}
+        selection={round.selection}
+        star={round.star}
+        foldPosition={foldPosition}
+        rotationOffsetDegrees={rotationOffsetDegrees}
+        buttonRef={buttonRef}
+        onRetry={handleRetry}
+        onStageChange={handleStageChange}
+      />
+      <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
+        <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards preview">Close</button>
+        <div className="mi-note-wip__pickers" role="group" aria-label="Pack appearance">
+          <div className="mi-note-wip__appearance-row">
+            <div className="mi-note-wip__star-picker">
+              <button type="button" className="mi-note-wip__star-step" onClick={() => cycleStar(-1)} aria-label="Previous star">‹</button>
+              <select
+                aria-label="Star sticker"
+                value={round.star.id}
+                onChange={(event) => {
+                  const star = MI_NOTE_PACK_STARS.find((entry) => entry.id === event.target.value);
+                  if (star) handleStarChange(star);
+                }}
+              >
+                {MI_NOTE_PACK_STARS.map((star) => <option key={star.id} value={star.id}>{star.name}</option>)}
+              </select>
+              <button type="button" className="mi-note-wip__star-step" onClick={() => cycleStar(1)} aria-label="Next star">›</button>
+            </div>
+            <div className="mi-note-wip__colors" role="group" aria-label="Pack color">
+              {MI_NOTE_PACK_VARIANTS.map((variant) => (
+                <button
+                  key={variant.id}
+                  type="button"
+                  className="mi-note-wip__color"
+                  aria-label={variant.name}
+                  aria-pressed={round.selection.variant.id === variant.id}
+                  title={variant.name}
+                  onClick={() => handleColorChange(variant)}
+                >
+                  <span style={{ backgroundColor: variant.color }} />
+                </button>
+              ))}
+            </div>
+          </div>
+          <MiNoteFoldControls
+            foldPosition={foldPosition}
+            foldPositions={foldPositions}
+            rotationOffsetDegrees={rotationOffsetDegrees}
+            rotationOffsetsDegrees={rotationOffsetsDegrees}
+            storageError={storageError}
+            onChange={handleFoldChange}
+            onRotationChange={handleRotationChange}
+          />
+        </div>
+        <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>
+      </div>
+    </ModalFocusScope>
+  );
 }

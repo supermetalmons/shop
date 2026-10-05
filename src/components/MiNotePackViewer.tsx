@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
+import type { MiNotePackStar } from '../lib/miNotePackStars';
 import { CSS3DObject, CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 import {
   createMiNotePackModel,
@@ -15,6 +16,9 @@ import {
 
 type MiNotePackViewerProps = {
   color: string;
+  star: MiNotePackStar;
+  foldPosition: number;
+  rotationOffsetDegrees: number;
   cardElements: readonly [HTMLDivElement, HTMLDivElement];
   stage: MiNoteRevealStage;
   onReadyChange: (ready: boolean) => void;
@@ -91,7 +95,12 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     scene.add(keyLight, fillLight);
     let model: ReturnType<typeof createMiNotePackModel>;
     try {
-      model = createMiNotePackModel({ color: props.color });
+      model = createMiNotePackModel({
+        color: props.color,
+        star: props.star,
+        foldPosition: currentProps.current.foldPosition,
+        rotationOffsetDegrees: currentProps.current.rotationOffsetDegrees,
+      });
     } catch (error) {
       renderer.dispose();
       renderer.forceContextLoss();
@@ -182,6 +191,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       if (disposed || failed) return;
       const dt = Math.min((now - (lastTime || now)) / 1000, 0.05);
       lastTime = now;
+      model.setSealFoldPosition(currentProps.current.foldPosition);
+      model.setSealRotationOffsetDegrees(currentProps.current.rotationOffsetDegrees);
       const nextStage = currentProps.current.stage;
       if (nextStage !== stage) {
         stage = nextStage;
@@ -302,9 +313,9 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       renderer.domElement.remove();
       cssRenderer.domElement.remove();
     };
-  }, [props.color, props.cardElements]);
+  }, [props.color, props.star, props.cardElements]);
 
-  useEffect(() => invalidateRef.current(), [props.stage]);
+  useEffect(() => invalidateRef.current(), [props.stage, props.foldPosition, props.rotationOffsetDegrees]);
 
   return <div ref={hostRef} className="mi-note-wip__renderer" />;
 }

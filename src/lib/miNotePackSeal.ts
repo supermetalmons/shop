@@ -1,13 +1,17 @@
 import * as THREE from 'three';
+import type { MiNotePackStar } from './miNotePackStars';
+import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './miNoteStarFolds';
 
 const STICKER_SIZE = 512;
+const STICKER_WIDTH = 0.56;
 const FALL_DURATION = 1.15;
 const ARTWORK_TIMEOUT_MS = 30_000;
 
-function sealPoint(u: number, progress: number, width: number, spine: number) {
+function sealPoint(u: number, progress: number, width: number, spine: number, foldPosition: number) {
   const back = -0.0035;
   const radius = (spine + 0.007) / 2;
-  const distance = (0.605 - u) * 0.56;
+  const backTangent = foldPosition + Math.PI * radius / (2 * STICKER_WIDTH);
+  const distance = (backTangent - u) * STICKER_WIDTH;
   if (distance <= 0) return { x: width + distance, z: back };
   const angle = Math.PI * (1 - progress) + 0.85 * progress;
   const length = Math.PI * radius * (1 - progress) + 0.25 * progress;
@@ -30,53 +34,23 @@ function sealPoint(u: number, progress: number, width: number, spine: number) {
   };
 }
 
-function removeStickerBackground(context: CanvasRenderingContext2D) {
-  const image = context.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
-  const pixels = image.data;
-  const visited = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
-  const queue = new Uint32Array(STICKER_SIZE * STICKER_SIZE);
-  let head = 0;
-  let tail = 0;
-  const enqueue = (index: number) => {
-    if (visited[index]) return;
-    visited[index] = 1;
-    const pixel = index * 4;
-    const min = Math.min(pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]);
-    const max = Math.max(pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]);
-    if (min > 210 && max - min < 38) {
-      queue[tail++] = index;
-      pixels[pixel + 3] = 0;
-    }
-  };
-  for (let i = 0; i < STICKER_SIZE; i += 1) {
-    enqueue(i);
-    enqueue((STICKER_SIZE - 1) * STICKER_SIZE + i);
-    enqueue(i * STICKER_SIZE);
-    enqueue(i * STICKER_SIZE + STICKER_SIZE - 1);
-  }
-  while (head < tail) {
-    const index = queue[head++];
-    const x = index % STICKER_SIZE;
-    const y = Math.floor(index / STICKER_SIZE);
-    if (x) enqueue(index - 1);
-    if (x < STICKER_SIZE - 1) enqueue(index + 1);
-    if (y) enqueue(index - STICKER_SIZE);
-    if (y < STICKER_SIZE - 1) enqueue(index + STICKER_SIZE);
-  }
-  context.putImageData(image, 0, 0);
-}
-
 export function createMiNotePackSeal({
   parent,
   fallRoot,
   width,
   spine,
+  star,
+  foldPosition,
+  rotationOffsetDegrees,
   onInvalidate,
 }: {
   parent: THREE.Group;
   fallRoot: THREE.Group;
   width: number;
   spine: number;
+  star: MiNotePackStar;
+  foldPosition: number;
+  rotationOffsetDegrees: number;
   onInvalidate?: () => void;
 }) {
   const canvas = document.createElement('canvas');
@@ -88,23 +62,20 @@ export function createMiNotePackSeal({
   map.anisotropy = 4;
   const material = new THREE.MeshStandardMaterial({
     map,
-    roughness: 0.22,
-    metalness: 0.28,
+    roughness: 0.4,
+    metalness: 0.06,
     side: THREE.DoubleSide,
     alphaTest: 0.4,
+    alphaToCoverage: true,
   });
   material.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
-      float foil = smoothstep(0.12, 0.42, diffuseColor.b);
-      float angle = dot(normalize(vViewPosition), normal);
-      vec3 rainbow = 0.5 + 0.5 * cos(6.28318 * (vec3(0., .33, .67) + vMapUv.x * .8 + vMapUv.y * .65 + angle * 2.4));
-      if (gl_FrontFacing) outgoingLight = mix(outgoingLight, outgoingLight * .3 + rainbow * .95 + vec3(.04), .60 * foil + .07);
-      else outgoingLight = vec3(.78, .76, .68);
+      if (!gl_FrontFacing) outgoingLight = vec3(.78, .76, .68);
       #include <opaque_fragment>
     `);
   };
-  material.customProgramCacheKey = () => 'mi-note-holographic-seal-v1';
-  const geometry = new THREE.PlaneGeometry(0.56, 0.544, 160, 48);
+  material.customProgramCacheKey = () => 'mi-note-printed-star-seal-v1';
+  const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, 160, 48);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
   const pivot = new THREE.Group();
@@ -116,6 +87,8 @@ export function createMiNotePackSeal({
   let started = false;
   let finished = false;
   let lastProgress = -1;
+  let currentFoldPosition = normalizeMiNoteStarFoldPosition(foldPosition);
+  let currentRotationOffsetDegrees = normalizeMiNoteStarRotationOffset(rotationOffsetDegrees);
   const startPosition = new THREE.Vector3();
   const startQuaternion = new THREE.Quaternion();
   const tumble = new THREE.Quaternion();
@@ -127,17 +100,19 @@ export function createMiNotePackSeal({
     const position = geometry.attributes.position;
     const uv = geometry.attributes.uv;
     const eased = progress ** 3 * (10 - 15 * progress + 6 * progress * progress);
-    const angle = 5 * Math.PI / 180;
+    const angle = THREE.MathUtils.degToRad(5 - currentRotationOffsetDegrees);
     for (let i = 0; i < position.count; i += 1) {
-      const x = (uv.getX(i) - 0.5) * 0.56;
-      const y = (uv.getY(i) - 0.5) * 0.544;
+      const x = (uv.getX(i) - 0.5) * STICKER_WIDTH;
+      const y = (uv.getY(i) - 0.5) * STICKER_WIDTH;
       const rotatedX = x * Math.cos(angle) - y * Math.sin(angle);
       const rotatedY = x * Math.sin(angle) + y * Math.cos(angle);
-      const point = sealPoint(rotatedX / 0.56 + 0.5, eased, width, spine);
+      const point = sealPoint(rotatedX / STICKER_WIDTH + 0.5, eased, width, spine, currentFoldPosition);
       position.setXYZ(i, point.x - width, rotatedY, point.z - spine / 2);
     }
     position.needsUpdate = true;
     geometry.computeVertexNormals();
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
   };
   pose(0);
 
@@ -155,8 +130,11 @@ export function createMiNotePackSeal({
       clearLoadTimeout();
       if (disposed) return;
       try {
-        context.drawImage(artwork, 40, 150, 700, 680, 0, 0, STICKER_SIZE, STICKER_SIZE);
-        removeStickerBackground(context);
+        const scale = STICKER_SIZE / Math.max(artwork.naturalWidth, artwork.naturalHeight);
+        const artworkWidth = artwork.naturalWidth * scale;
+        const artworkHeight = artwork.naturalHeight * scale;
+        context.imageSmoothingQuality = 'high';
+        context.drawImage(artwork, (STICKER_SIZE - artworkWidth) / 2, (STICKER_SIZE - artworkHeight) / 2, artworkWidth, artworkHeight);
         map.needsUpdate = true;
         cancelReady = undefined;
         resolve();
@@ -179,11 +157,29 @@ export function createMiNotePackSeal({
       cancelReady = undefined;
       reject(new Error('The star sticker took too long to load.'));
     }, ARTWORK_TIMEOUT_MS);
-    artwork.src = '/mi-note-cards/star-sticker.png';
+    artwork.src = star.src;
   });
 
   return {
     ready,
+    setFoldPosition(value: number) {
+      const next = normalizeMiNoteStarFoldPosition(value);
+      if (disposed || next === currentFoldPosition) return;
+      currentFoldPosition = next;
+      const progress = lastProgress;
+      lastProgress = -1;
+      pose(progress);
+      onInvalidate?.();
+    },
+    setRotationOffsetDegrees(value: number) {
+      const next = normalizeMiNoteStarRotationOffset(value);
+      if (disposed || next === currentRotationOffsetDegrees) return;
+      currentRotationOffsetDegrees = next;
+      const progress = lastProgress;
+      lastProgress = -1;
+      pose(progress);
+      onInvalidate?.();
+    },
     start() {
       if (started || disposed) return;
       started = true;

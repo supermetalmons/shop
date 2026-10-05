@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createMiNotePackSeal } from './miNotePackSeal';
+import type { MiNotePackStar } from './miNotePackStars';
 
 export const MI_NOTE_CARD_WIDTH = 1.1525;
 export const MI_NOTE_CARD_HEIGHT = 1.6135;
@@ -160,7 +161,13 @@ function pocketDepth(x: number, y: number, bow: number) {
     * THREE.MathUtils.clamp((y + HEIGHT / 2) / POCKET_HEIGHT, 0, 1);
 }
 
-export function createMiNotePackModel({ color, onInvalidate }: { color: string; onInvalidate?: () => void }) {
+export function createMiNotePackModel({ color, star, foldPosition, rotationOffsetDegrees, onInvalidate }: {
+  color: string;
+  star: MiNotePackStar;
+  foldPosition: number;
+  rotationOffsetDegrees: number;
+  onInvalidate?: () => void;
+}) {
   const { fiber, grain } = createPaperTextures();
   const stock = new THREE.MeshStandardMaterial({
     color: new THREE.Color(color).multiplyScalar(255 / 239),
@@ -262,7 +269,7 @@ export function createMiNotePackModel({ color, onInvalidate }: { color: string; 
   };
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
-    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, onInvalidate });
+    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, star, foldPosition, rotationOffsetDegrees, onInvalidate });
   } catch (error) {
     releaseResources();
     throw error;
@@ -315,6 +322,8 @@ export function createMiNotePackModel({ color, onInvalidate }: { color: string; 
     right,
     ready: seal.ready,
     setOpenProgress,
+    setSealFoldPosition: (value: number) => seal.setFoldPosition(value),
+    setSealRotationOffsetDegrees: (value: number) => seal.setRotationOffsetDegrees(value),
     startSealFall: () => seal.start(),
     updateSeal: (elapsedSeconds: number, reducedMotion: boolean) => seal.update(elapsedSeconds, reducedMotion),
     dispose() {
