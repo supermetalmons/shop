@@ -158,7 +158,7 @@ test('star selection offers four fixed presets and ignores saved tuning', t => {
   const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
   const presets = [
     { id: 'yellow', name: 'Yellow Star', foldPosition: 0.532, rotationOffsetDegrees: 9.3 },
-    { id: 'blush', name: 'Blush Star', foldPosition: 0.556, rotationOffsetDegrees: 7.7 },
+    { id: 'blush', name: 'Blush Star', foldPosition: 0.578, rotationOffsetDegrees: 2.8 },
     { id: 'twinkle', name: 'Twinkle Star', foldPosition: 0.49, rotationOffsetDegrees: 3.2 },
     { id: 'zombie', name: 'Zombie Star', foldPosition: 0.487, rotationOffsetDegrees: 2.4 },
   ];
