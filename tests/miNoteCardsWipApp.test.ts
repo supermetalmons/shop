@@ -140,6 +140,61 @@ function card(index: 0 | 1) {
   return { element, content };
 }
 
+test('star selection offers four fixed presets and ignores saved tuning', t => {
+  const storageKey = 'mi-note-star-folds:v1';
+  window.localStorage.setItem(storageKey, JSON.stringify({
+    version: 1,
+    foldPositions: { yellow: 0.8, blush: 0.7, twinkle: 0.6, zombie: 0.5 },
+    rotationOffsetsDegrees: { yellow: -10, blush: -9, twinkle: -8, zombie: -7 },
+  }));
+  const getItem = t.mock.method(dom.window.Storage.prototype, 'getItem');
+  const setItem = t.mock.method(dom.window.Storage.prototype, 'setItem');
+  const view = render(createElement(MiNoteCardsWipApp));
+  const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
+  const presets = [
+    { id: 'yellow', name: 'Yellow Star', foldPosition: 0.532, rotationOffsetDegrees: 9.3 },
+    { id: 'blush', name: 'Blush Star', foldPosition: 0.556, rotationOffsetDegrees: 7.7 },
+    { id: 'twinkle', name: 'Twinkle Star', foldPosition: 0.49, rotationOffsetDegrees: 3.2 },
+    { id: 'zombie', name: 'Zombie Star', foldPosition: 0.487, rotationOffsetDegrees: 2.4 },
+  ];
+  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), presets.map(({ id, name }) => [id, name]));
+  assert.equal(picker.value, 'yellow');
+  for (const preset of presets) {
+    fireEvent.change(picker, { target: { value: preset.id } });
+    const { star, foldPosition, rotationOffsetDegrees } = viewer().props;
+    assert.deepEqual({ id: star.id, name: star.name, foldPosition, rotationOffsetDegrees }, preset);
+  }
+  assert.equal(view.queryByLabelText('Fold position'), null);
+  assert.equal(view.queryByLabelText('Rotation'), null);
+  assert.equal(view.queryByRole('button', { name: /copy/i }), null);
+  assert.equal(view.queryByLabelText('Star tuning JSON'), null);
+  assert.equal(getItem.mock.calls.some(call => call.arguments[0] === storageKey), false);
+  assert.equal(setItem.mock.calls.some(call => call.arguments[0] === storageKey), false);
+});
+
+test('star cycling wraps across the four presets and reset preserves the selected preset', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
+  for (const id of ['blush', 'twinkle', 'zombie', 'yellow']) {
+    fireEvent.click(view.getByRole('button', { name: 'Next star' }));
+    assert.equal(picker.value, id);
+    assert.equal(viewer().props.star.id, id);
+  }
+  fireEvent.click(view.getByRole('button', { name: 'Previous star' }));
+  assert.equal(picker.value, 'zombie');
+  const previous = viewer();
+  openPack(view);
+  assert.equal(viewer().props.state.stage, 'interactive');
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+  assert.notEqual(viewer(), previous);
+  assert.equal(picker.value, 'zombie');
+  assert.equal(viewer().props.star, previous.props.star);
+  assert.equal(viewer().props.foldPosition, previous.props.foldPosition);
+  assert.equal(viewer().props.rotationOffsetDegrees, previous.props.rotationOffsetDegrees);
+  assert.equal(viewer().props.state.stage, 'sealed');
+  assert.equal(viewer().props.state.taps, 0);
+});
+
 test('accessible folder actions expose one inspected portal and settle it before returning', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   assert.equal((view.getByRole('button', { name: /4 taps remaining/ }) as HTMLButtonElement).disabled, true);

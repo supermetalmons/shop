@@ -45,7 +45,7 @@ async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDe
     width: 1.29,
     spine: 0.0158,
     thickness,
-    star: { id: 'test', name: 'Test star', src: '/star.png' },
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition, rotationOffsetDegrees },
     foldPosition,
     rotationOffsetDegrees,
   });

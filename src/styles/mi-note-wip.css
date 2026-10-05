@@ -94,7 +94,7 @@
 .mi-note-wip__status {
   position: absolute;
   left: 50%;
-  bottom: 136px;
+  bottom: 56px;
   transform: translateX(-50%);
   display: flex;
   gap: 12px;
@@ -126,100 +126,6 @@
   justify-content: center;
   align-items: center;
   gap: 8px;
-}
-
-.mi-note-wip__fold-row {
-  display: grid;
-  grid-template-columns: 68px minmax(0, 1fr) 40px 70px;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  color: color-mix(in srgb, var(--fg) 62%, transparent);
-  font-size: 11px;
-}
-
-.mi-note-wip__fold-row label {
-  color: inherit;
-  font: inherit;
-  white-space: nowrap;
-}
-
-.mi-note-wip__fold-row input {
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  accent-color: color-mix(in srgb, var(--fg) 55%, var(--bg));
-  touch-action: pan-y;
-}
-
-.mi-note-wip__fold-row output {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-button.mi-note-wip__copy-folds {
-  min-height: 28px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: color-mix(in srgb, var(--fg) 62%, transparent);
-  box-shadow: none;
-  font-size: 11px;
-  font-weight: 400;
-  white-space: nowrap;
-  touch-action: manipulation;
-}
-
-.mi-note-wip__fold-feedback {
-  min-height: 14px;
-  color: color-mix(in srgb, var(--fg) 62%, transparent);
-  text-align: right;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.mi-note-wip__fold-export {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 5px 8px;
-  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
-  border-radius: 6px;
-  background: var(--bg);
-  color: color-mix(in srgb, var(--fg) 68%, transparent);
-  font-size: 11px;
-}
-
-.mi-note-wip__pickers:has(.mi-note-wip__fold-export) .mi-note-wip__appearance-row,
-.mi-note-wip__pickers:has(.mi-note-wip__fold-export) .mi-note-wip__fold-row,
-.mi-note-wip__pickers:has(.mi-note-wip__fold-export) .mi-note-wip__fold-feedback {
-  visibility: hidden;
-}
-
-.mi-note-wip__fold-export-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.mi-note-wip__fold-export textarea {
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  padding: 3px 5px;
-  border-radius: 3px;
-  font-family: monospace;
-  font-size: 10px;
-  line-height: 1.3;
-  resize: none;
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .mi-note-wip__star-picker,
@@ -280,15 +186,12 @@ button.mi-note-wip__color[aria-pressed='true'] span {
 
 button.mi-note-wip__star-step:hover:not(:disabled),
 button.mi-note-wip__color:hover:not(:disabled),
-button.mi-note-wip__copy-folds:hover:not(:disabled),
 .mi-note-wip__star-picker select:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
 }
 
 .mi-note-wip-page .wip-controls button:focus-visible,
-.mi-note-wip__fold-row input:focus-visible,
-.mi-note-wip__fold-export textarea:focus-visible,
 .mi-note-wip__star-picker select:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--fg) 48%, transparent) !important;
   outline-offset: 3px;
@@ -308,7 +211,7 @@ button.mi-note-wip__copy-folds:hover:not(:disabled),
   }
 
   .mi-note-wip__status {
-    bottom: max(168px, calc(env(safe-area-inset-bottom) + 158px));
+    bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px));
     white-space: nowrap;
   }
 }

@@ -2,10 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 import { createPortal } from 'react-dom';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePackViewer';
-import MiNoteFoldControls from './components/MiNoteFoldControls';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
-import { useMiNoteStarFolds } from './hooks/useMiNoteStarFolds';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { getInteractiveCardPackCardsByFigureIds } from './lib/interactiveCardPackReveal';
 import {
@@ -16,30 +14,22 @@ import {
   sampleMiNotePack,
   type MiNotePack,
   type MiNotePackVariant,
-  type MiNoteRevealStage,
 } from './lib/miNoteCardReveal';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
-import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './lib/miNoteStarFolds';
 import { navigate } from './navigation';
 import './styles/mi-note-wip.css';
 
 function MiNotePackOpening({
   selection,
   star,
-  foldPosition,
-  rotationOffsetDegrees,
   controlsRef,
   onRetry,
-  onStageChange,
   onBackgroundTap,
 }: {
   selection: ReturnType<typeof sampleMiNotePack>;
   star: MiNotePackStar;
-  foldPosition: number;
-  rotationOffsetDegrees: number;
   controlsRef: RefObject<MiNotePackControls | null>;
   onRetry: () => void;
-  onStageChange: (stage: MiNoteRevealStage) => void;
   onBackgroundTap: () => void;
 }) {
   const [state, dispatch] = useReducer(reduceMiNoteReveal, undefined, createMiNoteRevealState);
@@ -72,8 +62,6 @@ function MiNotePackOpening({
   const handleSecondImageReady = useCallback((value: boolean) => {
     setMountedReady((previous) => previous[1] === value ? previous : [previous[0], value]);
   }, []);
-
-  useLayoutEffect(() => onStageChange(state.stage), [onStageChange, state.stage]);
 
   useLayoutEffect(() => {
     cardElements.forEach((element, index) => {
@@ -123,8 +111,8 @@ function MiNotePackOpening({
         <MiNotePackViewer
           color={selection.variant.color}
           star={star}
-          foldPosition={foldPosition}
-          rotationOffsetDegrees={rotationOffsetDegrees}
+          foldPosition={star.foldPosition}
+          rotationOffsetDegrees={star.rotationOffsetDegrees}
           cardElements={cardElements}
           state={state}
           interactionEnabled={viewerReady && !error}
@@ -196,12 +184,7 @@ export default function MiNoteCardsWipApp() {
     star: MI_NOTE_PACK_STARS[0],
   }));
   const [focused, setFocused] = useState(false);
-  const { foldPositions, rotationOffsetsDegrees, setFoldPosition, setRotationOffset, storageError } = useMiNoteStarFolds();
-  const foldPosition = foldPositions[round.star.id];
-  const rotationOffsetDegrees = rotationOffsetsDegrees[round.star.id];
-  const stageRef = useRef<MiNoteRevealStage>('sealed');
   const controlsRef = useRef<MiNotePackControls | null>(null);
-  const handleStageChange = useCallback((stage: MiNoteRevealStage) => { stageRef.current = stage; }, []);
   const handleClose = useCallback(() => navigate('/'), []);
   const handleEscape = useCallback(() => {
     if (!controlsRef.current?.escape()) handleClose();
@@ -231,24 +214,6 @@ export default function MiNoteCardsWipApp() {
       selection: { ...previous.selection, variant },
     });
   }, []);
-  const resealForAdjustment = () => {
-    if (stageRef.current !== 'sealed') {
-      stageRef.current = 'sealed';
-      handleRetry();
-    }
-  };
-  const handleFoldChange = (value: number) => {
-    const next = normalizeMiNoteStarFoldPosition(value);
-    if (next === foldPosition) return;
-    resealForAdjustment();
-    setFoldPosition(round.star.id, next);
-  };
-  const handleRotationChange = (value: number) => {
-    const next = normalizeMiNoteStarRotationOffset(value);
-    if (next === rotationOffsetDegrees) return;
-    resealForAdjustment();
-    setRotationOffset(round.star.id, next);
-  };
   const cycleStar = (direction: number) => {
     const index = MI_NOTE_PACK_STARS.findIndex((star) => star.id === round.star.id);
     handleStarChange(MI_NOTE_PACK_STARS[(index + direction + MI_NOTE_PACK_STARS.length) % MI_NOTE_PACK_STARS.length]);
@@ -283,11 +248,8 @@ export default function MiNoteCardsWipApp() {
         key={round.generation}
         selection={round.selection}
         star={round.star}
-        foldPosition={foldPosition}
-        rotationOffsetDegrees={rotationOffsetDegrees}
         controlsRef={controlsRef}
         onRetry={handleRetry}
-        onStageChange={handleStageChange}
         onBackgroundTap={handleBackgroundTap}
       />
       <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
@@ -324,15 +286,6 @@ export default function MiNoteCardsWipApp() {
               ))}
             </div>
           </div>
-          <MiNoteFoldControls
-            foldPosition={foldPosition}
-            foldPositions={foldPositions}
-            rotationOffsetDegrees={rotationOffsetDegrees}
-            rotationOffsetsDegrees={rotationOffsetsDegrees}
-            storageError={storageError}
-            onChange={handleFoldChange}
-            onRotationChange={handleRotationChange}
-          />
         </div>
         <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>
       </div>

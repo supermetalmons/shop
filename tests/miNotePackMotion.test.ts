@@ -113,7 +113,7 @@ test('model retains the seal, pocket geometry, and picking metadata through both
   setupArtwork(t);
   const model = createMiNotePackModel({
     color: '#3559b7',
-    star: { id: 'test', name: 'Test star', src: '/star.png' },
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 },
     foldPosition: 0.573,
     rotationOffsetDegrees: 0,
   });

@@ -163,7 +163,7 @@ function harness(initialState = createMiNoteRevealState(), interactionEnabled = 
   const readyChanges: boolean[] = [];
   const errors: Error[] = [];
   const cardElements = [document.createElement('div'), document.createElement('div')] as const;
-  const star = { id: 'test', name: 'Test star', src: '/star.png' };
+  const star = { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 };
   let state = initialState;
   function Harness() {
     const [current, dispatch] = useReducer(reduceMiNoteReveal, initialState);
