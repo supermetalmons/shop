@@ -145,59 +145,118 @@ function card(index: 0 | 1) {
   return { element, content };
 }
 
-test('star selection offers four fixed presets and ignores saved tuning', t => {
+test('star selection removes Yellow, restores editable tuning, and locks Blush to its reference', t => {
   const storageKey = 'mi-note-star-folds:v1';
-  window.localStorage.setItem(storageKey, JSON.stringify({
+  const saved = JSON.stringify({
     version: 1,
     foldPositions: { yellow: 0.8, blush: 0.7, twinkle: 0.6, zombie: 0.5 },
     rotationOffsetsDegrees: { yellow: -10, blush: -9, twinkle: -8, zombie: -7 },
-  }));
-  const getItem = t.mock.method(dom.window.Storage.prototype, 'getItem');
+  });
+  window.localStorage.setItem(storageKey, saved);
   const setItem = t.mock.method(dom.window.Storage.prototype, 'setItem');
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
-  const presets = [
-    { id: 'yellow', name: 'Yellow Star', foldPosition: 0.532, rotationOffsetDegrees: 9.3 },
-    { id: 'blush', name: 'Blush Star', foldPosition: 0.578, rotationOffsetDegrees: 2.8 },
-    { id: 'twinkle', name: 'Twinkle Star', foldPosition: 0.49, rotationOffsetDegrees: 3.2 },
-    { id: 'zombie', name: 'Zombie Star', foldPosition: 0.487, rotationOffsetDegrees: 2.4 },
-  ];
-  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), presets.map(({ id, name }) => [id, name]));
-  assert.equal(picker.value, 'yellow');
-  for (const preset of presets) {
-    fireEvent.change(picker, { target: { value: preset.id } });
-    const { star, foldPosition, rotationOffsetDegrees } = viewer().props;
-    assert.deepEqual({ id: star.id, name: star.name, foldPosition, rotationOffsetDegrees }, preset);
+  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), [
+    ['blush', 'Blush Star'], ['twinkle', 'Twinkle Star'], ['zombie', 'Zombie Star'],
+  ]);
+  assert.equal(picker.value, 'blush');
+  const position = view.getByRole('slider', { name: 'Horizontal position' }) as HTMLInputElement;
+  const rotation = view.getByRole('slider', { name: 'Rotation' }) as HTMLInputElement;
+  assert.equal(position.disabled, true);
+  assert.equal(rotation.disabled, true);
+  assert.equal(position.value, '57.8');
+  assert.equal(rotation.value, '2.8');
+  fireEvent.change(position, { target: { value: '80' } });
+  fireEvent.change(rotation, { target: { value: '-10' } });
+  assert.equal(viewer().props.foldPosition, 0.578);
+  assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
+  assert.ok(view.getByRole('button', { name: 'Copy JSON' }));
+  assert.equal(setItem.mock.callCount(), 0);
+  assert.equal(window.localStorage.getItem(storageKey), saved);
+  for (const [id, foldPosition, rotationOffsetDegrees] of [['twinkle', 0.6, -8], ['zombie', 0.5, -7]] as const) {
+    fireEvent.change(picker, { target: { value: id } });
+    assert.equal(viewer().props.star.id, id);
+    assert.equal(viewer().props.foldPosition, foldPosition);
+    assert.equal(viewer().props.rotationOffsetDegrees, rotationOffsetDegrees);
+    assert.equal((view.getByRole('slider', { name: 'Horizontal position' }) as HTMLInputElement).disabled, false);
+    assert.equal((view.getByRole('slider', { name: 'Rotation' }) as HTMLInputElement).disabled, false);
   }
-  assert.equal(view.queryByLabelText('Fold position'), null);
-  assert.equal(view.queryByLabelText('Rotation'), null);
-  assert.equal(view.queryByRole('button', { name: /copy/i }), null);
-  assert.equal(view.queryByLabelText('Star tuning JSON'), null);
-  assert.equal(getItem.mock.calls.some(call => call.arguments[0] === storageKey), false);
-  assert.equal(setItem.mock.calls.some(call => call.arguments[0] === storageKey), false);
 });
 
-test('star cycling wraps across the four presets and reset preserves the selected preset', () => {
+test('star cycling wraps across three choices and reset preserves the selected tuning', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
-  for (const id of ['blush', 'twinkle', 'zombie', 'yellow']) {
+  for (const id of ['twinkle', 'zombie', 'blush']) {
     fireEvent.click(view.getByRole('button', { name: 'Next star' }));
     assert.equal(picker.value, id);
     assert.equal(viewer().props.star.id, id);
   }
   fireEvent.click(view.getByRole('button', { name: 'Previous star' }));
   assert.equal(picker.value, 'zombie');
+  fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '63.4' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '-3.1' } });
   const previous = viewer();
   openPack(view);
-  assert.equal(viewer().props.state.stage, 'interactive');
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.notEqual(viewer(), previous);
   assert.equal(picker.value, 'zombie');
   assert.equal(viewer().props.star, previous.props.star);
-  assert.equal(viewer().props.foldPosition, previous.props.foldPosition);
-  assert.equal(viewer().props.rotationOffsetDegrees, previous.props.rotationOffsetDegrees);
+  assert.equal(viewer().props.foldPosition, 0.634);
+  assert.equal(viewer().props.rotationOffsetDegrees, -3.1);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
+});
+
+test('tuning updates a sealed pack in place and stays independent across stars and reloads', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  const picker = view.getByRole('combobox', { name: 'Star sticker' });
+  fireEvent.change(picker, { target: { value: 'twinkle' } });
+  makeReady();
+  const previous = viewer();
+  fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '64.2' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '-4.1' } });
+  assert.equal(viewer(), previous);
+  assert.equal(viewer().props.interactionEnabled, true);
+  assert.equal(viewer().props.foldPosition, 0.642);
+  assert.equal(viewer().props.rotationOffsetDegrees, -4.1);
+  fireEvent.change(picker, { target: { value: 'zombie' } });
+  assert.equal(viewer().props.foldPosition, 0.487);
+  assert.equal(viewer().props.rotationOffsetDegrees, 2.4);
+  fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '44.3' } });
+  fireEvent.change(picker, { target: { value: 'blush' } });
+  assert.equal(viewer().props.foldPosition, 0.578);
+  assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
+  view.unmount();
+  const reloaded = render(createElement(MiNoteCardsWipApp));
+  const restoredPicker = reloaded.getByRole('combobox', { name: 'Star sticker' });
+  fireEvent.change(restoredPicker, { target: { value: 'twinkle' } });
+  assert.equal(viewer().props.foldPosition, 0.642);
+  assert.equal(viewer().props.rotationOffsetDegrees, -4.1);
+  fireEvent.change(restoredPicker, { target: { value: 'zombie' } });
+  assert.equal(viewer().props.foldPosition, 0.443);
+  assert.equal(viewer().props.rotationOffsetDegrees, 2.4);
+});
+
+test('adjusting a peeled star reseals the same pack once before live tuning continues', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'twinkle' } });
+  openPack(view);
+  const previous = viewer();
+  const images = previous.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
+  const mounts = instances.length;
+  fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '65' } });
+  assert.equal(instances.length, mounts + 1);
+  assert.equal(previous.mounted, false);
+  assert.equal(viewer().props.state.stage, 'sealed');
+  assert.equal(viewer().props.state.folderPose, 0);
+  assert.equal(viewer().props.state.taps, 0);
+  assert.equal(viewer().props.color, previous.props.color);
+  assert.deepEqual(viewer().props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image), images);
+  const resealed = viewer();
+  fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '6.4' } });
+  assert.equal(viewer(), resealed);
+  assert.equal(viewer().props.foldPosition, 0.65);
+  assert.equal(viewer().props.rotationOffsetDegrees, 6.4);
 });
 
 test('peeling leaves the ready pack closed until the next click opens it', () => {
@@ -339,7 +398,7 @@ test('keyboard shortcuts use current controls and leave focused form controls al
   fireEvent.keyDown(dialog, { key: 'ArrowLeft', code: 'ArrowLeft' });
   fireEvent.keyDown(dialog, { key: 'ArrowRight', code: 'ArrowRight' });
   assert.deepEqual(viewer().calls, ['activate', 'activate', 'navigate:-1', 'navigate:1']);
-  for (const target of [view.getByRole('combobox', { name: 'Star sticker' }), view.getByRole('button', { name: /2 taps remaining/ })]) {
+  for (const target of [view.getByRole('combobox', { name: 'Star sticker' }), view.getByRole('button', { name: /2 taps remaining/ }), ...view.getAllByRole('slider'), view.getByRole('button', { name: 'Copy JSON' })]) {
     fireEvent.keyDown(target, { key: 'Enter', code: 'Enter' });
     fireEvent.keyDown(target, { key: 'ArrowRight', code: 'ArrowRight' });
   }
