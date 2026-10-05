@@ -1,7 +1,6 @@
 import { CARD_NFT_2_MAX_CARD_ID } from '../../shared/cardNft2AssetCore.ts';
 
-export const MI_NOTE_PACK_DISCARD_DELAY_MS = 420;
-export const MI_NOTE_PACK_DISCARD_DURATION_MS = 380;
+export const MI_NOTE_OPEN_TAPS = 4;
 
 export const MI_NOTE_PACK_VARIANTS = [
   { id: 'cobalt-blue', name: 'Cobalt Blue', color: '#3559B7' },
@@ -16,26 +15,27 @@ export type MiNotePack = {
   readonly cardIds: readonly [number, number];
 };
 
-export type MiNoteRevealStage =
-  | 'sealed'
-  | 'seal-falling'
-  | 'unsealed'
-  | 'opening'
-  | 'pack-falling'
-  | 'revealed';
+export type MiNoteFolderPose = 0 | 1 | 2;
+export type MiNoteRevealStage = 'sealed' | 'seal-falling' | 'unsealed' | 'interactive';
 
 export type MiNoteRevealState = {
   readonly stage: MiNoteRevealStage;
   readonly ready: boolean;
-  readonly openRequested: boolean;
+  readonly taps: number;
+  readonly folderPose: MiNoteFolderPose;
+  readonly selectedCard: 0 | 1 | null;
+  readonly cardStage: 'pocket' | 'lifting' | 'inspecting' | 'returning';
 };
 
 export type MiNoteRevealEvent =
-  | { type: 'activate' }
+  | { type: 'activate'; leaf?: 0 | 2 }
   | { type: 'seal-finished' }
   | { type: 'ready'; ready: boolean }
-  | { type: 'opened' }
-  | { type: 'discarded' };
+  | { type: 'folder-pose'; pose: MiNoteFolderPose }
+  | { type: 'select-card'; index: 0 | 1 }
+  | { type: 'card-lifted' }
+  | { type: 'return-card' }
+  | { type: 'card-returned' };
 
 function sampleIndex(count: number, random: () => number): number {
   const value = random();
@@ -51,34 +51,46 @@ export function sampleMiNotePack(random: () => number = Math.random): MiNotePack
 }
 
 export function createMiNoteRevealState(): MiNoteRevealState {
-  return { stage: 'sealed', ready: false, openRequested: false };
+  return { stage: 'sealed', ready: false, taps: 0, folderPose: 0, selectedCard: null, cardStage: 'pocket' };
 }
 
 function openWhenReady(state: MiNoteRevealState): MiNoteRevealState {
-  return state.stage === 'unsealed' && state.ready && state.openRequested
-    ? { ...state, stage: 'opening' }
+  return state.stage === 'unsealed' && state.ready
+    ? { ...state, stage: 'interactive', folderPose: 1 }
     : state;
 }
 
 export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteRevealEvent): MiNoteRevealState {
   switch (event.type) {
     case 'activate':
-      if (state.stage === 'sealed') return { ...state, stage: 'seal-falling' };
-      if (state.openRequested || (state.stage !== 'seal-falling' && state.stage !== 'unsealed')) return state;
-      return openWhenReady({ ...state, openRequested: true });
+      if (state.stage === 'sealed') {
+        const taps = state.taps + 1;
+        return { ...state, taps, stage: taps === MI_NOTE_OPEN_TAPS ? 'seal-falling' : 'sealed' };
+      }
+      if (state.stage !== 'interactive' || state.selectedCard !== null) return state;
+      return { ...state, folderPose: state.folderPose === 1 ? event.leaf ?? 0 : 1 };
     case 'seal-finished':
       return state.stage === 'seal-falling' ? openWhenReady({ ...state, stage: 'unsealed' }) : state;
     case 'ready':
-      if (
-        state.ready === event.ready ||
-        state.stage === 'opening' ||
-        state.stage === 'pack-falling' ||
-        state.stage === 'revealed'
-      ) return state;
+      if (state.ready === event.ready) return state;
       return openWhenReady({ ...state, ready: event.ready });
-    case 'opened':
-      return state.stage === 'opening' ? { ...state, stage: 'pack-falling' } : state;
-    case 'discarded':
-      return state.stage === 'pack-falling' ? { ...state, stage: 'revealed' } : state;
+    case 'folder-pose':
+      if (
+        state.folderPose === event.pose ||
+        state.selectedCard !== null ||
+        (state.stage !== 'interactive' && (state.stage !== 'sealed' || event.pose === 1))
+      ) return state;
+      return { ...state, folderPose: event.pose };
+    case 'select-card':
+      if (state.stage !== 'interactive' || !state.ready || state.folderPose !== 1 || state.selectedCard !== null) {
+        return state;
+      }
+      return { ...state, selectedCard: event.index, cardStage: 'lifting' };
+    case 'card-lifted':
+      return state.cardStage === 'lifting' ? { ...state, cardStage: 'inspecting' } : state;
+    case 'return-card':
+      return state.cardStage === 'inspecting' ? { ...state, cardStage: 'returning' } : state;
+    case 'card-returned':
+      return state.cardStage === 'returning' ? { ...state, selectedCard: null, cardStage: 'pocket' } : state;
   }
 }

@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CARD_NFT_2_MAX_CARD_ID } from '../shared/cardNft2AssetCore.ts';
 import {
-  MI_NOTE_PACK_DISCARD_DELAY_MS,
-  MI_NOTE_PACK_DISCARD_DURATION_MS,
+  MI_NOTE_OPEN_TAPS,
   MI_NOTE_PACK_VARIANTS,
   createMiNoteRevealState,
   reduceMiNoteReveal,
@@ -55,104 +54,169 @@ test('mi note second-card sampling skips the selected first card without excludi
   }
 });
 
-test('mi note reveal needs two activations and automatically discards the opened pack', () => {
+const openingTaps: readonly MiNoteRevealEvent[] = Array.from({ length: 4 }, () => ({ type: 'activate' }));
+const openEvents: readonly MiNoteRevealEvent[] = [
+  ...openingTaps,
+  { type: 'seal-finished' },
+  { type: 'ready', ready: true },
+];
+
+test('mi note initial opening requires exactly four taps and removes the seal once', () => {
+  assert.equal(MI_NOTE_OPEN_TAPS, 4);
   let state = reduceMiNoteReveal(createMiNoteRevealState(), { type: 'ready', ready: true });
-  assert.equal(state.stage, 'sealed');
+  for (let tap = 1; tap <= 3; tap += 1) {
+    state = reduceMiNoteReveal(state, { type: 'activate' });
+    assert.equal(state.stage, 'sealed');
+    assert.equal(state.taps, tap);
+    assert.equal(state.folderPose, 0);
+  }
   state = reduceMiNoteReveal(state, { type: 'activate' });
   assert.equal(state.stage, 'seal-falling');
-  assert.equal(state.openRequested, false);
+  assert.equal(state.taps, 4);
+  assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });
-  assert.equal(state.stage, 'unsealed');
-  state = reduceMiNoteReveal(state, { type: 'activate' });
-  assert.equal(state.stage, 'opening');
-  state = reduceMiNoteReveal(state, { type: 'opened' });
-  assert.equal(state.stage, 'pack-falling');
-  state = reduceMiNoteReveal(state, { type: 'discarded' });
-  assert.equal(state.stage, 'revealed');
-  assert.equal(MI_NOTE_PACK_DISCARD_DELAY_MS, 420);
-  assert.equal(MI_NOTE_PACK_DISCARD_DURATION_MS, 380);
+  assert.equal(state.stage, 'interactive');
+  assert.equal(state.folderPose, 1);
+  assert.equal(reduceMiNoteReveal(state, { type: 'seal-finished' }), state);
 });
 
 test('mi note queued opening waits for seal clearance and readiness in either completion order', () => {
-  const queuedEvents: MiNoteRevealEvent[] = [{ type: 'activate' }, { type: 'activate' }];
   const completions: MiNoteRevealEvent[] = [{ type: 'seal-finished' }, { type: 'ready', ready: true }];
   for (const order of [completions, [...completions].reverse()]) {
-    let state = runEvents(queuedEvents);
-    assert.equal(state.stage, 'seal-falling');
-    assert.equal(state.openRequested, true);
+    let state = runEvents(openingTaps);
     state = reduceMiNoteReveal(state, order[0]);
-    assert.notEqual(state.stage, 'opening');
+    assert.notEqual(state.stage, 'interactive');
+    assert.equal(state.folderPose, 0);
+    assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+    assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
     state = reduceMiNoteReveal(state, order[1]);
-    assert.equal(state.stage, 'opening');
+    assert.equal(state.stage, 'interactive');
+    assert.equal(state.folderPose, 1);
   }
 });
 
 test('mi note opening stays queued during a preload error and resumes on retry readiness', () => {
   let state = runEvents([
     { type: 'ready', ready: true },
-    { type: 'activate' },
-    { type: 'activate' },
+    ...openingTaps,
     { type: 'ready', ready: false },
     { type: 'seal-finished' },
   ]);
   assert.equal(state.stage, 'unsealed');
-  assert.equal(state.openRequested, true);
+  assert.equal(state.taps, 4);
+  assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
   state = reduceMiNoteReveal(state, { type: 'ready', ready: true });
-  assert.equal(state.stage, 'opening');
+  assert.equal(state.stage, 'interactive');
+  assert.equal(state.folderPose, 1);
 });
 
-test('mi note repeated activations and obsolete completion events cannot restart or skip stages', () => {
-  let state = createMiNoteRevealState();
-  for (const event of [{ type: 'seal-finished' }, { type: 'opened' }, { type: 'discarded' }] as const) {
-    assert.equal(reduceMiNoteReveal(state, event), state);
-  }
-  state = runEvents([{ type: 'activate' }, { type: 'activate' }]);
-  for (let index = 0; index < 10; index += 1) {
-    assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
-  }
-  assert.equal(reduceMiNoteReveal(state, { type: 'opened' }), state);
-  assert.equal(reduceMiNoteReveal(state, { type: 'discarded' }), state);
-  state = reduceMiNoteReveal(state, { type: 'seal-finished' });
-  assert.equal(reduceMiNoteReveal(state, { type: 'seal-finished' }), state);
-  state = reduceMiNoteReveal(state, { type: 'ready', ready: true });
-  for (const event of [
-    { type: 'activate' },
-    { type: 'seal-finished' },
-    { type: 'ready', ready: false },
-    { type: 'discarded' },
-  ] as const) {
-    assert.equal(reduceMiNoteReveal(state, event), state);
-  }
-  state = reduceMiNoteReveal(state, { type: 'opened' });
-  assert.equal(reduceMiNoteReveal(state, { type: 'opened' }), state);
-  state = reduceMiNoteReveal(state, { type: 'discarded' });
-  for (const event of [
-    { type: 'activate' },
-    { type: 'seal-finished' },
-    { type: 'ready', ready: false },
-    { type: 'opened' },
-    { type: 'discarded' },
-  ] as const) {
-    assert.equal(reduceMiNoteReveal(state, event), state);
+test('mi note sealed rotation changes only closed poses and preserves tap progress', () => {
+  let state = runEvents([{ type: 'activate' }, { type: 'activate' }]);
+  assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
+  for (const pose of [2, 0] as const) {
+    state = reduceMiNoteReveal(state, { type: 'folder-pose', pose });
+    assert.equal(state.stage, 'sealed');
+    assert.equal(state.folderPose, pose);
+    assert.equal(state.taps, 2);
   }
 });
 
-test('mi note transitions do not mutate state and reset starts fresh during loading or animation', () => {
+test('mi note folder can close toward either leaf and reopen without restoring the seal', () => {
+  let state = runEvents(openEvents);
+  for (const leaf of [0, 2, 0, 2] as const) {
+    state = reduceMiNoteReveal(state, { type: 'activate', leaf });
+    assert.equal(state.folderPose, leaf);
+    assert.equal(state.stage, 'interactive');
+    assert.equal(state.taps, 4);
+    state = reduceMiNoteReveal(state, { type: 'activate' });
+    assert.equal(state.folderPose, 1);
+    assert.equal(state.stage, 'interactive');
+  }
+  state = reduceMiNoteReveal(state, { type: 'activate' });
+  assert.equal(state.folderPose, 0);
+  state = reduceMiNoteReveal(state, { type: 'folder-pose', pose: 2 });
+  assert.equal(state.folderPose, 2);
+  state = reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 });
+  assert.equal(state.folderPose, 1);
+});
+
+test('mi note selection requires visible ready cards and locks the folder until return finishes', () => {
+  for (const state of [
+    createMiNoteRevealState(),
+    runEvents(openingTaps),
+    runEvents([...openingTaps, { type: 'seal-finished' }]),
+    runEvents([...openEvents, { type: 'folder-pose', pose: 0 }]),
+    runEvents([...openEvents, { type: 'folder-pose', pose: 2 }]),
+    runEvents([...openEvents, { type: 'ready', ready: false }]),
+  ]) {
+    assert.equal(reduceMiNoteReveal(state, { type: 'select-card', index: 0 }), state);
+  }
+  for (const index of [0, 1] as const) {
+    let state = reduceMiNoteReveal(runEvents(openEvents), { type: 'select-card', index });
+    assert.equal(state.selectedCard, index);
+    assert.equal(state.cardStage, 'lifting');
+    assert.equal(reduceMiNoteReveal(state, { type: 'return-card' }), state);
+    assert.equal(reduceMiNoteReveal(state, { type: 'card-returned' }), state);
+    for (const transition of [null, 'card-lifted', 'return-card'] as const) {
+      if (transition) state = reduceMiNoteReveal(state, { type: transition });
+      for (const event of [
+        { type: 'activate' },
+        { type: 'folder-pose', pose: 0 },
+        { type: 'select-card', index: 0 },
+        { type: 'select-card', index: 1 },
+      ] as const) {
+        assert.equal(reduceMiNoteReveal(state, event), state);
+      }
+      assert.equal(state.folderPose, 1);
+      assert.equal(state.selectedCard, index);
+    }
+    assert.equal(state.cardStage, 'returning');
+    state = reduceMiNoteReveal(state, { type: 'card-returned' });
+    assert.equal(state.selectedCard, null);
+    assert.equal(state.cardStage, 'pocket');
+    state = reduceMiNoteReveal(state, { type: 'select-card', index: index === 0 ? 1 : 0 });
+    assert.equal(state.cardStage, 'lifting');
+    assert.notEqual(state.selectedCard, index);
+  }
+});
+
+test('mi note stale completion events do not skip card transitions', () => {
+  let state = runEvents(openEvents);
+  for (const event of [{ type: 'card-lifted' }, { type: 'return-card' }, { type: 'card-returned' }] as const) {
+    assert.equal(reduceMiNoteReveal(state, event), state);
+  }
+  state = reduceMiNoteReveal(state, { type: 'select-card', index: 0 });
+  state = reduceMiNoteReveal(state, { type: 'card-lifted' });
+  assert.equal(state.cardStage, 'inspecting');
+  assert.equal(reduceMiNoteReveal(state, { type: 'card-lifted' }), state);
+  assert.equal(reduceMiNoteReveal(state, { type: 'card-returned' }), state);
+  state = reduceMiNoteReveal(state, { type: 'return-card' });
+  assert.equal(reduceMiNoteReveal(state, { type: 'card-lifted' }), state);
+  assert.equal(reduceMiNoteReveal(state, { type: 'return-card' }), state);
+});
+
+test('mi note transitions do not mutate state and reset starts fresh during every transition', () => {
   const initial = Object.freeze(createMiNoteRevealState());
-  const falling = reduceMiNoteReveal(initial, { type: 'activate' });
-  assert.notEqual(falling, initial);
-  assert.equal(initial.stage, 'sealed');
-  const opening = runEvents([
-    { type: 'activate' },
-    { type: 'activate' },
-    { type: 'seal-finished' },
-    { type: 'ready', ready: true },
-  ]);
-  for (const previous of [falling, opening]) {
+  const tapped = reduceMiNoteReveal(initial, { type: 'activate' });
+  assert.notEqual(tapped, initial);
+  assert.equal(initial.taps, 0);
+  const transitions: readonly MiNoteRevealEvent[] = [
+    ...openEvents,
+    { type: 'select-card', index: 1 },
+    { type: 'card-lifted' },
+    { type: 'return-card' },
+    { type: 'card-returned' },
+  ];
+  let previous = initial;
+  for (const event of transitions) {
+    previous = reduceMiNoteReveal(previous, event);
     const reset = createMiNoteRevealState();
     assert.notEqual(reset, previous);
-    assert.deepEqual(reset, { stage: 'sealed', ready: false, openRequested: false });
-    assert.equal(reduceMiNoteReveal(reset, { type: 'opened' }), reset);
-    assert.equal(reduceMiNoteReveal(reset, { type: 'discarded' }), reset);
+    assert.deepEqual(reset, {
+      stage: 'sealed', ready: false, taps: 0, folderPose: 0, selectedCard: null, cardStage: 'pocket',
+    });
+    for (const completion of [{ type: 'seal-finished' }, { type: 'card-lifted' }, { type: 'card-returned' }] as const) {
+      assert.equal(reduceMiNoteReveal(reset, completion), reset);
+    }
   }
 });

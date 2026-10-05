@@ -17,6 +17,17 @@
   pointer-events: none;
 }
 
+.mi-note-wip__renderer {
+  pointer-events: auto;
+  touch-action: none;
+  outline: none;
+}
+
+.mi-note-wip__renderer:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+  outline-offset: -12px;
+}
+
 .mi-note-wip__css-scene {
   z-index: 0;
 }
@@ -25,52 +36,59 @@
   z-index: 1;
 }
 
+.mi-note-wip__css-scene--foreground {
+  z-index: 2;
+}
+
 .mi-note-wip__card {
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;
 }
 
+.mi-note-wip__card-content,
 .mi-note-wip__card .drif-effect-card {
   height: 100%;
 }
 
-.mi-note-wip:not(.mi-note-wip--revealed) .mi-note-wip__card,
-.mi-note-wip:not(.mi-note-wip--revealed) .mi-note-wip__card * {
+.mi-note-wip__card:not([data-active='true']),
+.mi-note-wip__card:not([data-active='true']) * {
   pointer-events: none !important;
 }
 
-.mi-note-wip:not(.mi-note-wip--revealed) .drif-effect-card__rotator {
+.mi-note-wip__card:not([data-active='true']) .drif-effect-card__rotator {
   box-shadow: none;
 }
 
-button.mi-note-wip__pack-button {
+.mi-note-wip[data-card-stage='returning'] .drif-effect-card__rotator {
+  transform: rotateY(0deg) rotateX(0deg);
+  -webkit-transform: rotateY(0deg) rotateX(0deg);
+  transition: transform 100ms ease, box-shadow 100ms ease;
+}
+
+.mi-note-wip__actions {
   position: absolute;
-  z-index: 2;
-  padding: 0;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
-  box-shadow: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
+  z-index: 3;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
-button.mi-note-wip__pack-button:hover,
-button.mi-note-wip__pack-button:active,
-button.mi-note-wip__pack-button:disabled {
-  background: transparent;
-  opacity: 1;
+.mi-note-wip__actions:focus-within {
+  top: 16px;
+  left: 50%;
+  display: flex;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 100px);
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  transform: translateX(-50%);
 }
 
-button.mi-note-wip__pack-button:disabled {
-  cursor: default;
-  pointer-events: none;
-}
-
-button.mi-note-wip__pack-button:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--fg) 40%, transparent);
-  outline-offset: 8px;
+.mi-note-wip__actions button {
+  font-size: 12px;
 }
 
 .mi-note-wip__status {
@@ -302,7 +320,8 @@ button.mi-note-wip__copy-folds:hover:not(:disabled),
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mi-note-wip__pickers {
+  .mi-note-wip__pickers,
+  .mi-note-wip[data-card-stage='returning'] .drif-effect-card__rotator {
     transition-duration: 1ms;
   }
 }

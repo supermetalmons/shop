@@ -214,6 +214,7 @@ const productionExportBaseline = [
   ["src/lib/interactiveCardPackRevealSounds.ts","exports","CARD_NFT_2_CARD_SOUND_SWIPE_URL"],
   ["src/lib/interactiveCardPackRevealSounds.ts","exports","PONCHO_DRIFELLA_BOX_SOUND_CLICK_URLS"],
   ["src/lib/interactiveCardPackRevealSounds.ts","exports","PONCHO_DRIFELLA_BOX_SOUND_REVEAL_URL"],
+  ["src/lib/miNotePackModel.ts","exports","sampleMiNoteFolderPose"],
   ["src/lib/mobileInteractionGuards.ts","exports","getTouchstartGuardResult"],
   ["src/lib/mobileInteractionGuards.ts","exports","isEditableMobileInteractionTarget"],
   ["src/lib/mobileInteractionGuards.ts","exports","isMobileUserAgent"],

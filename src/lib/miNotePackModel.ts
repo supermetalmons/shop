@@ -9,13 +9,31 @@ export const MI_NOTE_LEAF_WIDTH = 1.29;
 const HEIGHT = 1.82;
 const THICKNESS = 0.0018;
 const POCKET_HEIGHT = 0.56;
-const POCKET_TOP = -HEIGHT / 2 + POCKET_HEIGHT;
+export const MI_NOTE_POCKET_TOP = -HEIGHT / 2 + POCKET_HEIGHT;
+const POCKET_TOP = MI_NOTE_POCKET_TOP;
 const SPINE = 0.0158;
 const HINGE_OFFSET = SPINE / 2;
 const SPINE_SEGMENTS = 8;
 const POCKET_BASE = 0.0069;
 const POCKET_BOW = 0.0038;
 const LINER_Z = THICKNESS / 2;
+
+export function sampleMiNoteFolderPose(value: number) {
+  const phase = THREE.MathUtils.clamp(value, 0, 2);
+  const frontAngle = Math.PI * (1 - Math.min(phase, 1));
+  const backAngle = Math.PI * Math.max(phase - 1, 0);
+  return {
+    phase,
+    frontAngle,
+    backAngle,
+    leftPosition: new THREE.Vector3(-HINGE_OFFSET * Math.sin(frontAngle), 0, HINGE_OFFSET * (1 - Math.cos(frontAngle))),
+    rightPosition: new THREE.Vector3(HINGE_OFFSET * Math.sin(backAngle), 0, HINGE_OFFSET * (1 - Math.cos(backAngle))),
+    bookX: MI_NOTE_LEAF_WIDTH / 4 * (Math.cos(frontAngle) - Math.cos(backAngle)),
+    spread: 1 - Math.abs(phase - 1),
+    spineAngle: Math.max(frontAngle, backAngle),
+    spineSide: phase > 1 ? 1 : -1,
+  };
+}
 
 function ease(value: number) {
   return value * value * (3 - 2 * value);
@@ -186,11 +204,13 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     return geometry;
   };
   const group = new THREE.Group();
+  const flipRoot = new THREE.Group();
   const book = new THREE.Group();
   const left = new THREE.Group();
   const right = new THREE.Group();
   group.rotation.set(0.055, -0.12, -0.016);
-  group.add(book);
+  group.add(flipRoot);
+  flipRoot.add(book);
   book.add(left, right);
   const pockets: { geometry: THREE.PlaneGeometry; lip: THREE.TubeGeometry; lipBase: Float32Array; center: number }[] = [];
 
@@ -249,6 +269,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     const seam = new THREE.Mesh(own(new THREE.BoxGeometry(0.004, POCKET_HEIGHT, 0.004)), stock);
     seam.position.set(side * (MI_NOTE_LEAF_WIDTH - 0.005), -HEIGHT / 2 + POCKET_HEIGHT / 2, 0.0038);
     leaf.add(seam);
+    leaf.traverse((object) => { object.userData.leaf = side < 0 ? 0 : 2; });
   };
   sheet(left, -1);
   sheet(right, 1);
@@ -270,33 +291,37 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
     seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, star, foldPosition, rotationOffsetDegrees, onInvalidate });
+    right.traverse((object) => { object.userData.leaf = 2; });
   } catch (error) {
     releaseResources();
     throw error;
   }
-  let lastProgress = -1;
+  let lastPhase = -1;
   let disposed = false;
 
-  const setOpenProgress = (value: number) => {
-    const progress = THREE.MathUtils.clamp(value, 0, 1);
-    if (disposed || progress === lastProgress) return;
-    lastProgress = progress;
-    const angle = Math.PI * (1 - progress);
-    left.rotation.y = angle;
-    left.position.set(-HINGE_OFFSET * Math.sin(angle), 0, HINGE_OFFSET * (1 - Math.cos(angle)));
-    book.position.x = MI_NOTE_LEAF_WIDTH / 4 * (Math.cos(angle) - 1);
+  const setFolderPhase = (value: number) => {
+    const phase = THREE.MathUtils.clamp(value, 0, 2);
+    if (disposed || phase === lastPhase) return;
+    lastPhase = phase;
+    const pose = sampleMiNoteFolderPose(phase);
+    left.rotation.y = pose.frontAngle;
+    left.position.copy(pose.leftPosition);
+    right.rotation.y = -pose.backAngle;
+    right.position.copy(pose.rightPosition);
+    book.position.x = pose.bookX;
+    const angle = pose.spineAngle;
     spine.visible = angle > 0.001;
     centerSeam.visible = angle < 0.04;
-    const endX = -HINGE_OFFSET * Math.sin(angle);
+    const endX = pose.spineSide * HINGE_OFFSET * Math.sin(angle);
     const endZ = HINGE_OFFSET * (1 - Math.cos(angle));
     for (let i = 0; i < spinePositions.count; i += 1) {
       const t = (i % (SPINE_SEGMENTS + 1)) / SPINE_SEGMENTS;
       const pinch = 0.0014 * Math.sin(angle / 2) ** 2 * Math.sin(Math.PI * t);
-      spinePositions.setXYZ(i, endX * t - pinch, i <= SPINE_SEGMENTS ? HEIGHT / 2 : -HEIGHT / 2, endZ * t);
+      spinePositions.setXYZ(i, endX * t + pose.spineSide * pinch, i <= SPINE_SEGMENTS ? HEIGHT / 2 : -HEIGHT / 2, endZ * t);
     }
     spinePositions.needsUpdate = true;
     spineGeometry.computeVertexNormals();
-    const bow = 0.0003 + (POCKET_BOW - 0.0003) * progress;
+    const bow = 0.0003 + (POCKET_BOW - 0.0003) * pose.spread;
     for (const pocket of pockets) {
       const position = pocket.geometry.attributes.position;
       for (let i = 0; i < position.count; i += 1) {
@@ -314,14 +339,15 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
       pocket.lip.computeVertexNormals();
     }
   };
-  setOpenProgress(0);
+  setFolderPhase(0);
 
   return {
     group,
+    flipRoot,
     left,
     right,
     ready: seal.ready,
-    setOpenProgress,
+    setFolderPhase,
     setSealFoldPosition: (value: number) => seal.setFoldPosition(value),
     setSealRotationOffsetDegrees: (value: number) => seal.setRotationOffsetDegrees(value),
     startSealFall: () => seal.start(),
