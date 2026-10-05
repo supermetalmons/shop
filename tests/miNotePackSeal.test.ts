@@ -3,11 +3,20 @@ import test, { type TestContext } from 'node:test';
 import * as THREE from 'three';
 import { createMiNotePackSeal } from '../src/lib/miNotePackSeal.ts';
 
-function setupArtwork(t: TestContext, pixels = new Uint8ClampedArray(512 * 512 * 4).fill(255)) {
+function setupArtwork(
+  t: TestContext,
+  pixels = new Uint8ClampedArray(512 * 512 * 4).fill(255),
+  onWrite: (pixels: Uint8ClampedArray) => void = () => undefined,
+) {
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   const requests: string[] = [];
-  const context = { drawImage() {}, getImageData: () => ({ data: pixels }), imageSmoothingQuality: 'low' };
+  const context = {
+    drawImage() {},
+    getImageData: () => ({ data: pixels }),
+    putImageData(image: { data: Uint8ClampedArray }) { onWrite(image.data); },
+    imageSmoothingQuality: 'low',
+  };
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
     value: { createElement: () => ({ width: 0, height: 0, getContext: () => context }) },
@@ -451,7 +460,7 @@ test('pack motion changes the free flap while the adhesive section remains fixed
   assertBoundsMatchVertices(moving.mesh.geometry);
 });
 
-test('peeled sticker picking respects texture alpha and preserves objects behind transparent areas', async (t) => {
+test('peeled sticker picking includes the backing under translucent art and preserves transparent areas', async (t) => {
   const pixels = new Uint8ClampedArray(512 * 512 * 4);
   const alphaBands = [0, 101, 102, 255];
   for (let y = 0; y < 512; y += 1) {
@@ -489,10 +498,59 @@ test('peeled sticker picking respects texture alpha and preserves objects behind
     backing.position.copy(point).addScaledVector(normal, -0.01);
     backing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
     backing.updateMatrixWorld(true);
-    const opaque = alpha >= 102;
+    const opaque = alpha > 0;
     assert.equal(raycaster.intersectObject(parent, true).length > 0, opaque);
     assert.equal(raycaster.intersectObjects([backing, parent], true)[0]?.object, opaque ? mesh : backing);
     backing.geometry.dispose();
     backing.material.dispose();
   }
+});
+
+test('the cut rim is rendered and pickable while pixels outside it preserve the background', async (t) => {
+  const pixels = new Uint8ClampedArray(512 * 512 * 4);
+  for (let y = 220; y < 290; y += 1) {
+    for (let x = 330; x < 390; x += 1) pixels.set([250, 70, 25, 255], (y * 512 + x) * 4);
+  }
+  let renderedPixels: Uint8ClampedArray | undefined;
+  setupArtwork(t, pixels, (image) => { renderedPixels = image; });
+  const { seal, parent, mesh } = await createSeal(t, 0.532, 9.3);
+  assert.ok(renderedPixels);
+  assert.deepEqual(Array.from(renderedPixels.slice((255 * 512 + 350) * 4, (255 * 512 + 350) * 4 + 4)), [250, 70, 25, 255]);
+  parent.updateMatrixWorld(true);
+  const position = mesh.geometry.attributes.position;
+  const uv = mesh.geometry.attributes.uv;
+  const indices = mesh.geometry.index!;
+  for (const [x, opaque] of [[318.5, true], [300.5, false]] as const) {
+    assert.equal(renderedPixels[(255 * 512 + Math.floor(x)) * 4 + 3] >= 102, opaque);
+    const target = new THREE.Vector3(x / 512, 1 - 255.5 / 512, 0);
+    const triangle = new THREE.Triangle();
+    const barycentric = new THREE.Vector3();
+    let found = false;
+    for (let index = 0; index < indices.count; index += 3) {
+      const vertices = [indices.getX(index), indices.getX(index + 1), indices.getX(index + 2)];
+      [triangle.a, triangle.b, triangle.c].forEach((point, corner) => point.set(uv.getX(vertices[corner]), uv.getY(vertices[corner]), 0));
+      if (!triangle.getBarycoord(target, barycentric) || Math.min(barycentric.x, barycentric.y, barycentric.z) < 0) continue;
+      [triangle.a, triangle.b, triangle.c].forEach((point, corner) => point.fromBufferAttribute(position, vertices[corner]).applyMatrix4(mesh.matrixWorld));
+      const point = triangle.a.clone().multiplyScalar(barycentric.x).addScaledVector(triangle.b, barycentric.y).addScaledVector(triangle.c, barycentric.z);
+      const normal = triangle.getNormal(new THREE.Vector3());
+      const raycaster = new THREE.Raycaster(point.clone().addScaledVector(normal, 0.01), normal.clone().negate(), 0, 0.04);
+      const backing = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.05), new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+      backing.position.copy(point).addScaledVector(normal, -0.01);
+      backing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      backing.updateMatrixWorld(true);
+      assert.equal(raycaster.intersectObjects([backing, parent], true)[0]?.object, opaque ? mesh : backing);
+      backing.geometry.dispose();
+      backing.material.dispose();
+      found = true;
+      break;
+    }
+    assert.ok(found);
+  }
+  assert.ok(mesh.material.bumpMap instanceof THREE.DataTexture);
+  let finishDisposals = 0;
+  mesh.material.bumpMap.addEventListener('dispose', () => { finishDisposals += 1; });
+  seal.dispose();
+  seal.dispose();
+  assert.equal(finishDisposals, 1);
+  assert.equal(parent.children.length, 0);
 });

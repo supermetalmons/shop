@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import type { MiNotePackStar } from './miNotePackStars';
 import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './miNoteStarFolds';
+import { createMiNoteStickerFinish } from './miNoteStickerFinish';
 
 const STICKER_SIZE = 512;
+const ARTWORK_PADDING = 32;
 const STICKER_WIDTH = 0.56;
 const SURFACE_CLEARANCE = 0.0015;
 const PROFILE_SEGMENTS = [56, 64, 40];
@@ -55,35 +57,78 @@ export function createMiNotePackSeal({
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
+  const finishPixels = new Uint8Array(STICKER_SIZE * STICKER_SIZE * 4);
+  const finishMap = new THREE.DataTexture(finishPixels, STICKER_SIZE, STICKER_SIZE);
+  finishMap.flipY = true;
+  finishMap.minFilter = THREE.LinearFilter;
+  finishMap.magFilter = THREE.LinearFilter;
   const material = new THREE.MeshPhysicalMaterial({
     map,
-    roughness: 0.36,
-    metalness: 0.06,
-    clearcoat: 0.65,
-    clearcoatRoughness: 0.24,
+    roughness: 0.34,
+    metalness: 0.08,
+    clearcoat: 1,
+    clearcoatRoughness: 0.16,
+    bumpMap: finishMap,
+    bumpScale: 0.004,
     side: THREE.DoubleSide,
     alphaTest: 0.4,
     alphaToCoverage: true,
   });
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.stickerFinishMap = { value: finishMap };
     shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `
+        #include <common>
+        uniform sampler2D stickerFinishMap;
+      `)
       .replace('#include <color_fragment>', `
         #include <color_fragment>
+        float stickerFoil = texture2D(stickerFinishMap, vMapUv).g;
         if (!gl_FrontFacing) diffuseColor.rgb = vec3(.57, .53, .43);
       `)
       .replace('#include <metalnessmap_fragment>', `
         #include <metalnessmap_fragment>
-        if (!gl_FrontFacing) {
+        if (gl_FrontFacing) {
+          metalnessFactor = mix(.08, .78, stickerFoil);
+          roughnessFactor = mix(.34, .26, stickerFoil);
+        } else {
           metalnessFactor = 0.0;
           roughnessFactor = .94;
         }
       `)
+      .replace('#include <normal_fragment_maps>', `
+        if (gl_FrontFacing) {
+          #include <normal_fragment_maps>
+        }
+      `)
+      .replace('#include <clearcoat_normal_fragment_maps>', `
+        #include <clearcoat_normal_fragment_maps>
+        clearcoatNormal = normal;
+      `)
       .replace('#include <lights_physical_fragment>', `
         #include <lights_physical_fragment>
         if (!gl_FrontFacing) material.clearcoat = 0.0;
+      `)
+      .replace('#include <opaque_fragment>', `
+        if (gl_FrontFacing) {
+          vec3 stickerView = normalize(vViewPosition);
+          float filmAngle = 1.0 - clamp(dot(stickerView, normal), 0.0, 1.0);
+          float diffraction = dot(vMapUv, vec2(1.9, 2.45)) + filmAngle * 3.8
+            + dot(stickerView.xy, vec2(.85, -.65));
+          float flash = pow(.5 + .5 * cos(diffraction * 6.28318), 12.0);
+          vec3 spectrum = .5 + .5 * cos(6.28318 * (vec3(0.0, .333, .667)
+            + diffraction * .65 + filmAngle * .9));
+          float silverSweep = pow(.5 + .5 * cos(6.28318 * (
+            vMapUv.x * .75 - vMapUv.y * .4 + stickerView.x)), 24.0);
+          vec3 reflectedFoil = vec3(.025, .035, .06) + spectrum * flash * 1.25
+            + vec3(.7, .82, .94) * silverSweep * .7;
+          outgoingLight = mix(outgoingLight, outgoingLight * .28 + reflectedFoil, stickerFoil * .88);
+          outgoingLight += spectrum * flash * (1.0 - stickerFoil) * .075;
+        }
+        #include <opaque_fragment>
       `);
   };
-  material.customProgramCacheKey = () => 'mi-note-printed-star-seal-v2';
+  material.customProgramCacheKey = () => 'mi-note-holographic-star-seal-v1';
   const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
   (geometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
   (geometry.attributes.normal as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
@@ -233,12 +278,18 @@ export function createMiNotePackSeal({
       clearLoadTimeout();
       if (disposed) return;
       try {
-        const scale = STICKER_SIZE / Math.max(artwork.naturalWidth, artwork.naturalHeight);
+        const scale = (STICKER_SIZE - 2 * ARTWORK_PADDING) / Math.max(artwork.naturalWidth, artwork.naturalHeight);
         const artworkWidth = artwork.naturalWidth * scale;
         const artworkHeight = artwork.naturalHeight * scale;
         context.imageSmoothingQuality = 'high';
         context.drawImage(artwork, (STICKER_SIZE - artworkWidth) / 2, (STICKER_SIZE - artworkHeight) / 2, artworkWidth, artworkHeight);
-        pixels = context.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE).data;
+        const artworkPixels = context.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
+        const finished = createMiNoteStickerFinish(artworkPixels.data, STICKER_SIZE, STICKER_SIZE);
+        artworkPixels.data.set(finished.pixels);
+        context.putImageData(artworkPixels, 0, 0);
+        pixels = artworkPixels.data;
+        finishPixels.set(finished.finish);
+        finishMap.needsUpdate = true;
         map.needsUpdate = true;
         cancelReady = undefined;
         resolve();
@@ -320,6 +371,7 @@ export function createMiNotePackSeal({
       shadowMaterial.dispose();
       material.dispose();
       map.dispose();
+      finishMap.dispose();
     },
   };
 }
