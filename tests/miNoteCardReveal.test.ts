@@ -59,9 +59,10 @@ const openEvents: readonly MiNoteRevealEvent[] = [
   ...openingTaps,
   { type: 'seal-finished' },
   { type: 'ready', ready: true },
+  { type: 'activate' },
 ];
 
-test('mi note initial opening requires exactly four taps and peels the seal once', () => {
+test('four taps peel the seal and a separate activation opens the folder', () => {
   assert.equal(MI_NOTE_OPEN_TAPS, 4);
   let state = reduceMiNoteReveal(createMiNoteRevealState(), { type: 'ready', ready: true });
   for (let tap = 1; tap <= 3; tap += 1) {
@@ -76,26 +77,33 @@ test('mi note initial opening requires exactly four taps and peels the seal once
   assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });
   assert.equal(state.stage, 'interactive');
-  assert.equal(state.folderPose, 1);
+  assert.equal(state.folderPose, 0);
   assert.equal(reduceMiNoteReveal(state, { type: 'seal-finished' }), state);
+  state = reduceMiNoteReveal(state, { type: 'activate' });
+  assert.equal(state.folderPose, 1);
+  assert.equal(state.taps, 4);
 });
 
-test('mi note queued opening waits for seal peeling and readiness in either completion order', () => {
+test('peeling and readiness unlock either closed cover without opening it in either completion order', () => {
   const completions: MiNoteRevealEvent[] = [{ type: 'seal-finished' }, { type: 'ready', ready: true }];
-  for (const order of [completions, [...completions].reverse()]) {
-    let state = runEvents(openingTaps);
-    state = reduceMiNoteReveal(state, order[0]);
-    assert.notEqual(state.stage, 'interactive');
-    assert.equal(state.folderPose, 0);
-    assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
-    assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
-    state = reduceMiNoteReveal(state, order[1]);
-    assert.equal(state.stage, 'interactive');
-    assert.equal(state.folderPose, 1);
+  for (const pose of [0, 2] as const) {
+    for (const order of [completions, [...completions].reverse()]) {
+      let state = runEvents([{ type: 'folder-pose', pose }, ...openingTaps]);
+      state = reduceMiNoteReveal(state, order[0]);
+      assert.notEqual(state.stage, 'interactive');
+      assert.equal(state.folderPose, pose);
+      assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
+      state = reduceMiNoteReveal(state, order[1]);
+      assert.equal(state.stage, 'interactive');
+      assert.equal(state.folderPose, pose);
+      state = reduceMiNoteReveal(state, { type: 'activate' });
+      assert.equal(state.folderPose, 1);
+    }
   }
 });
 
-test('mi note opening stays queued during a preload error and resumes on retry readiness', () => {
+test('recovering readiness after peeling still requires a separate activation to open', () => {
   let state = runEvents([
     { type: 'ready', ready: true },
     ...openingTaps,
@@ -107,6 +115,8 @@ test('mi note opening stays queued during a preload error and resumes on retry r
   assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
   state = reduceMiNoteReveal(state, { type: 'ready', ready: true });
   assert.equal(state.stage, 'interactive');
+  assert.equal(state.folderPose, 0);
+  state = reduceMiNoteReveal(state, { type: 'activate' });
   assert.equal(state.folderPose, 1);
 });
 

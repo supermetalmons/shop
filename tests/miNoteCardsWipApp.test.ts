@@ -125,12 +125,17 @@ function setAssets(ready: boolean) {
   });
 }
 
-function openPack(view: ReturnType<typeof render>) {
+function peelSeal(view: ReturnType<typeof render>) {
   makeReady();
   for (let remaining = 4; remaining > 0; remaining -= 1) {
     fireEvent.click(view.getByRole('button', { name: new RegExp(`${remaining} taps? remaining`) }));
   }
   emit({ type: 'seal-finished' });
+}
+
+function openPack(view: ReturnType<typeof render>) {
+  peelSeal(view);
+  fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
 }
 
 function card(index: 0 | 1) {
@@ -193,6 +198,22 @@ test('star cycling wraps across the four presets and reset preserves the selecte
   assert.equal(viewer().props.rotationOffsetDegrees, previous.props.rotationOffsetDegrees);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
+});
+
+test('peeling leaves the ready pack closed until the next click opens it', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  peelSeal(view);
+  assert.equal(viewer().props.state.stage, 'interactive');
+  assert.equal(viewer().props.state.folderPose, 0);
+  const open = view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement;
+  assert.equal(open.disabled, false);
+  assert.equal(open.getAttribute('aria-expanded'), 'false');
+  assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
+  fireEvent.click(open);
+  assert.equal(viewer().props.state.folderPose, 1);
+  assert.equal(viewer().calls.filter(call => call === 'activate').length, 5);
+  assert.equal(view.getByRole('button', { name: 'Close Mi Note Cards folder' }).getAttribute('aria-expanded'), 'true');
+  assert.ok(view.getByRole('button', { name: 'View left card' }));
 });
 
 test('accessible folder actions expose one inspected portal and settle it before returning', () => {
@@ -267,13 +288,19 @@ test('card loading gates actions and retry preserves appearance while resetting 
   setAssets(false);
   const view = render(createElement(MiNoteCardsWipApp));
   fireEvent.click(view.getByRole('button', { name: 'Marigold' }));
-  openPack(view);
+  peelSeal(view);
   assert.equal(viewer().props.state.stage, 'unsealed');
+  assert.equal(viewer().props.state.folderPose, 0);
+  assert.equal((view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByText('Loading cards…').getAttribute('role'), 'status');
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   setAssets(true);
   assert.equal(viewer().props.state.stage, 'interactive');
+  assert.equal(viewer().props.state.folderPose, 0);
   assert.equal(view.queryByText('Loading cards…'), null);
+  assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
+  fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
+  assert.equal(viewer().props.state.folderPose, 1);
   const failed = viewer();
   const images = failed.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
   act(() => failed.props.onError(new Error('Lost renderer')));

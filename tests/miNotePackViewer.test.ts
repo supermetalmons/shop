@@ -225,12 +225,15 @@ test('reduced motion unseals once and returns a selected card to its original po
   act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
   settle();
   assert.equal(run.state.stage, 'interactive');
-  assert.equal(model.phase, 1);
+  assert.equal(model.phase, 0);
   assert.equal(model.sealStarts, 1);
   assert.ok(model.sealUpdates.length > 0);
   assert.ok(model.sealUpdates.every(update => update.reduced));
   assert.equal(run.count('seal-finished'), 1);
 
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(model.phase, 1);
   act(() => run.controls.current!.navigate(1));
   settle();
   assert.equal(model.phase, 2);
@@ -264,7 +267,7 @@ test('reduced motion unseals once and returns a selected card to its original po
   assert.deepEqual(run.errors, []);
 });
 
-test('peeled stickers keep receiving animation frames without completing the opening twice', async () => {
+test('peeled stickers keep fluttering on the closed pack until the next activation opens it', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness();
   const model = models[0];
@@ -273,15 +276,19 @@ test('peeled stickers keep receiving animation frames without completing the ope
   for (let count = 0; run.state.stage !== 'interactive' && count < 40; count += 1) advanceFrame();
   assert.equal(run.state.stage, 'interactive');
   assert.equal(model.sealStarts, 1);
-  const updatesAtOpening = model.sealUpdates.length;
+  const updatesAtPeel = model.sealUpdates.length;
   for (let count = 0; count < 100; count += 1) advanceFrame();
-  assert.equal(model.phase, 1);
-  assert.equal(model.sealUpdates.length, updatesAtOpening + 100);
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(model.phase, 0);
+  assert.equal(model.sealUpdates.length, updatesAtPeel + 100);
   assert.ok(model.sealUpdates.at(-1)!.elapsed > 5);
   assert.ok(model.sealUpdates.some(update => Math.abs(update.motion) > 0.01));
   assert.equal(run.count('seal-finished'), 1);
   assert.equal(frames.size, 1);
 
+  act(() => run.controls.current!.activate());
+  for (let count = 0; count < 60; count += 1) advanceFrame();
+  assert.equal(model.phase, 1);
   act(() => run.controls.current!.navigate(1));
   for (let count = 0; count < 60; count += 1) advanceFrame();
   assert.equal(model.phase, 2);
@@ -292,6 +299,24 @@ test('peeled stickers keep receiving animation frames without completing the ope
   assert.ok(model.sealUpdates.slice(updatesBeforeFlip).some(update => Math.abs(update.motion) > 0.01));
   assert.equal(run.count('seal-finished'), 1);
   assert.equal(model.sealStarts, 1);
+});
+
+test('late readiness keeps the peeled pack closed on its back until the next activation', async () => {
+  const run = harness({ ...createMiNoteRevealState(), folderPose: 2 });
+  const model = models[0];
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  settle();
+  assert.equal(run.state.stage, 'unsealed');
+  assert.equal(model.phase, 2);
+  await makeReady();
+  assert.equal(run.state.stage, 'interactive');
+  assert.equal(run.state.folderPose, 2);
+  assert.equal(model.phase, 2);
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(model.phase, 1);
+  assert.equal(model.sealStarts, 1);
+  assert.equal(run.count('seal-finished'), 1);
 });
 
 test('sticker flutter pauses while hidden and settles when reduced motion is enabled', async () => {
@@ -345,6 +370,8 @@ test('narrow viewports leave room for the attached sticker beyond the open pack 
   const run = harness();
   await makeReady();
   act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  settle();
+  act(() => run.controls.current!.activate());
   settle();
   assert.equal(models[0].phase, 1);
   const camera = renderers[0].camera!;

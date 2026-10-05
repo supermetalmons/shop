@@ -34,7 +34,12 @@ test('four rapid mobile taps unseal even when synthetic clicks are suppressed gl
   state = reduceMiNoteReveal(state, { type: 'ready', ready: true });
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });
   assert.equal(state.stage, 'interactive');
+  assert.equal(state.folderPose, 0);
+  const openingTap = pointer();
+  input.onPointerDown(openingTap);
+  input.onPointerUp(openingTap);
   assert.equal(state.folderPose, 1);
+  assert.equal(state.taps, 4);
 });
 
 test('mouse, touch and pen activate on release exactly once with the release event', () => {

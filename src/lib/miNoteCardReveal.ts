@@ -54,9 +54,9 @@ export function createMiNoteRevealState(): MiNoteRevealState {
   return { stage: 'sealed', ready: false, taps: 0, folderPose: 0, selectedCard: null, cardStage: 'pocket' };
 }
 
-function openWhenReady(state: MiNoteRevealState): MiNoteRevealState {
+function unlockWhenReady(state: MiNoteRevealState): MiNoteRevealState {
   return state.stage === 'unsealed' && state.ready
-    ? { ...state, stage: 'interactive', folderPose: 1 }
+    ? { ...state, stage: 'interactive' }
     : state;
 }
 
@@ -70,10 +70,10 @@ export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteReveal
       if (state.stage !== 'interactive' || state.selectedCard !== null) return state;
       return { ...state, folderPose: state.folderPose === 1 ? event.leaf ?? 0 : 1 };
     case 'seal-finished':
-      return state.stage === 'seal-peeling' ? openWhenReady({ ...state, stage: 'unsealed' }) : state;
+      return state.stage === 'seal-peeling' ? unlockWhenReady({ ...state, stage: 'unsealed' }) : state;
     case 'ready':
       if (state.ready === event.ready) return state;
-      return openWhenReady({ ...state, ready: event.ready });
+      return unlockWhenReady({ ...state, ready: event.ready });
     case 'folder-pose':
       if (
         state.folderPose === event.pose ||
