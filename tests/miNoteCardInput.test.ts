@@ -29,7 +29,7 @@ test('four rapid mobile taps unseal even when synthetic clicks are suppressed gl
     input.onPointerUp(event);
     if (!guard.shouldPrevent) input.onClick({ detail: 1, preventDefault() {} });
     assert.equal(state.taps, index + 1);
-    assert.equal(state.stage, index === 3 ? 'seal-falling' : 'sealed');
+    assert.equal(state.stage, index === 3 ? 'seal-peeling' : 'sealed');
   }
   state = reduceMiNoteReveal(state, { type: 'ready', ready: true });
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });

@@ -290,7 +290,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   };
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
-    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, onInvalidate });
+    seal = createMiNotePackSeal({ parent: right, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, onInvalidate });
     right.traverse((object) => { object.userData.leaf = 2; });
   } catch (error) {
     releaseResources();
@@ -350,8 +350,8 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     setFolderPhase,
     setSealFoldPosition: (value: number) => seal.setFoldPosition(value),
     setSealRotationOffsetDegrees: (value: number) => seal.setRotationOffsetDegrees(value),
-    startSealFall: () => seal.start(),
-    updateSeal: (elapsedSeconds: number, reducedMotion: boolean) => seal.update(elapsedSeconds, reducedMotion),
+    startSealPeel: () => seal.start(),
+    updateSeal: (elapsedSeconds: number, reducedMotion: boolean, motion = 0) => seal.update(elapsedSeconds, reducedMotion, motion),
     dispose() {
       if (disposed) return;
       disposed = true;

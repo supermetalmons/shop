@@ -79,6 +79,7 @@ function setupArtwork(t: TestContext) {
   const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   const context = {
     createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4) }),
+    getImageData: (_x: number, _y: number, width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4).fill(255) }),
     putImageData() {},
     drawImage() {},
     beginPath() {},

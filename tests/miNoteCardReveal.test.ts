@@ -61,7 +61,7 @@ const openEvents: readonly MiNoteRevealEvent[] = [
   { type: 'ready', ready: true },
 ];
 
-test('mi note initial opening requires exactly four taps and removes the seal once', () => {
+test('mi note initial opening requires exactly four taps and peels the seal once', () => {
   assert.equal(MI_NOTE_OPEN_TAPS, 4);
   let state = reduceMiNoteReveal(createMiNoteRevealState(), { type: 'ready', ready: true });
   for (let tap = 1; tap <= 3; tap += 1) {
@@ -71,7 +71,7 @@ test('mi note initial opening requires exactly four taps and removes the seal on
     assert.equal(state.folderPose, 0);
   }
   state = reduceMiNoteReveal(state, { type: 'activate' });
-  assert.equal(state.stage, 'seal-falling');
+  assert.equal(state.stage, 'seal-peeling');
   assert.equal(state.taps, 4);
   assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });
@@ -80,7 +80,7 @@ test('mi note initial opening requires exactly four taps and removes the seal on
   assert.equal(reduceMiNoteReveal(state, { type: 'seal-finished' }), state);
 });
 
-test('mi note queued opening waits for seal clearance and readiness in either completion order', () => {
+test('mi note queued opening waits for seal peeling and readiness in either completion order', () => {
   const completions: MiNoteRevealEvent[] = [{ type: 'seal-finished' }, { type: 'ready', ready: true }];
   for (const order of [completions, [...completions].reverse()]) {
     let state = runEvents(openingTaps);

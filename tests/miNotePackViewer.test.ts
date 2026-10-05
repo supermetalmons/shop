@@ -5,6 +5,7 @@ import { createElement, useReducer } from 'react';
 import * as THREE from 'three';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
+import { MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
@@ -12,6 +13,7 @@ const { act, cleanup, render } = await import('@testing-library/react');
 const frames = new Map<number, FrameRequestCallback>();
 let nextFrameId = 0;
 let time = 1000;
+let viewportWidth = 900;
 const requestFrame = (callback: FrameRequestCallback) => {
   frames.set(++nextFrameId, callback);
   return nextFrameId;
@@ -21,7 +23,7 @@ for (const target of [globalThis, window]) {
   Object.defineProperty(target, 'requestAnimationFrame', { configurable: true, value: requestFrame });
   Object.defineProperty(target, 'cancelAnimationFrame', { configurable: true, value: cancelFrame });
 }
-Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 900 });
+Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => viewportWidth });
 Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 700 });
 const observers = new Set<object>();
 Object.defineProperty(globalThis, 'ResizeObserver', {
@@ -35,14 +37,16 @@ Object.defineProperty(globalThis, 'ResizeObserver', {
 class FakeWebGLRenderer {
   domElement = document.createElement('canvas');
   scene: THREE.Scene | null = null;
+  camera: THREE.PerspectiveCamera | null = null;
   disposed = false;
   setClearColor() {}
   setPixelRatio() {}
   setSize() {}
   compile() { assert.equal(this.disposed, false); }
-  render(scene: THREE.Scene) {
+  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     assert.equal(this.disposed, false);
     this.scene = scene;
+    this.camera = camera;
   }
   dispose() { this.disposed = true; }
   forceContextLoss() {}
@@ -59,13 +63,13 @@ type TestModel = {
   resolveReady: () => void;
   phase: number;
   sealStarts: number;
-  reducedSealUpdates: boolean[];
+  sealUpdates: { elapsed: number; reduced: boolean; motion: number }[];
   disposed: boolean;
   setFolderPhase: (phase: number) => void;
   setSealFoldPosition: () => void;
   setSealRotationOffsetDegrees: () => void;
-  startSealFall: () => void;
-  updateSeal: (elapsed: number, reduced: boolean) => boolean;
+  startSealPeel: () => void;
+  updateSeal: (elapsed: number, reduced: boolean, motion: number) => boolean;
   dispose: () => void;
 };
 
@@ -82,14 +86,14 @@ function createTestModel(): TestModel {
     group, flipRoot, left, right, ready, resolveReady,
     phase: 0,
     sealStarts: 0,
-    reducedSealUpdates: [] as boolean[],
+    sealUpdates: [] as TestModel['sealUpdates'],
     disposed: false,
     setFolderPhase(phase: number) { model.phase = phase; },
     setSealFoldPosition() {},
     setSealRotationOffsetDegrees() {},
-    startSealFall() { model.sealStarts += 1; },
-    updateSeal(elapsed: number, reduced: boolean) {
-      model.reducedSealUpdates.push(reduced);
+    startSealPeel() { model.sealStarts += 1; },
+    updateSeal(elapsed: number, reduced: boolean, motion: number) {
+      model.sealUpdates.push({ elapsed, reduced, motion });
       return reduced || elapsed >= 0.2;
     },
     dispose() { model.disposed = true; group.removeFromParent(); },
@@ -131,6 +135,8 @@ beforeEach(() => {
   models.length = 0;
   renderers.length = 0;
   time = 1000;
+  viewportWidth = 900;
+  Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
 });
 afterEach(() => {
@@ -142,10 +148,10 @@ afterEach(() => {
 });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
-function advanceFrame() {
+function advanceFrame(elapsed = 50) {
   assert.ok(frames.size, 'The viewer must schedule work until its transition completes');
   act(() => {
-    time += 50;
+    time += elapsed;
     const pending = [...frames.values()];
     frames.clear();
     pending.forEach(callback => callback(time));
@@ -221,7 +227,8 @@ test('reduced motion unseals once and returns a selected card to its original po
   assert.equal(run.state.stage, 'interactive');
   assert.equal(model.phase, 1);
   assert.equal(model.sealStarts, 1);
-  assert.deepEqual(model.reducedSealUpdates, [true]);
+  assert.ok(model.sealUpdates.length > 0);
+  assert.ok(model.sealUpdates.every(update => update.reduced));
   assert.equal(run.count('seal-finished'), 1);
 
   act(() => run.controls.current!.navigate(1));
@@ -255,6 +262,94 @@ test('reduced motion unseals once and returns a selected card to its original po
   assert.equal(run.count('card-lifted'), 1);
   assert.equal(run.count('card-returned'), 1);
   assert.deepEqual(run.errors, []);
+});
+
+test('peeled stickers keep receiving animation frames without completing the opening twice', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  const model = models[0];
+  await makeReady();
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  for (let count = 0; run.state.stage !== 'interactive' && count < 40; count += 1) advanceFrame();
+  assert.equal(run.state.stage, 'interactive');
+  assert.equal(model.sealStarts, 1);
+  const updatesAtOpening = model.sealUpdates.length;
+  for (let count = 0; count < 100; count += 1) advanceFrame();
+  assert.equal(model.phase, 1);
+  assert.equal(model.sealUpdates.length, updatesAtOpening + 100);
+  assert.ok(model.sealUpdates.at(-1)!.elapsed > 5);
+  assert.ok(model.sealUpdates.some(update => Math.abs(update.motion) > 0.01));
+  assert.equal(run.count('seal-finished'), 1);
+  assert.equal(frames.size, 1);
+
+  act(() => run.controls.current!.navigate(1));
+  for (let count = 0; count < 60; count += 1) advanceFrame();
+  assert.equal(model.phase, 2);
+  const updatesBeforeFlip = model.sealUpdates.length;
+  act(() => run.controls.current!.navigate(1));
+  for (let count = 0; count < 60; count += 1) advanceFrame();
+  assert.equal(model.phase, 0);
+  assert.ok(model.sealUpdates.slice(updatesBeforeFlip).some(update => Math.abs(update.motion) > 0.01));
+  assert.equal(run.count('seal-finished'), 1);
+  assert.equal(model.sealStarts, 1);
+});
+
+test('sticker flutter pauses while hidden and settles when reduced motion is enabled', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  const model = models[0];
+  await makeReady();
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  for (let count = 0; count < 60; count += 1) advanceFrame();
+  const beforeHidden = model.sealUpdates.at(-1)!;
+  const updatesBeforeHidden = model.sealUpdates.length;
+  const staleFrames = [...frames.values()];
+  act(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+    time += 10_000;
+    staleFrames.forEach(callback => callback(time));
+  });
+  assert.equal(frames.size, 0);
+  assert.equal(model.sealUpdates.length, updatesBeforeHidden);
+  act(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  advanceFrame();
+  assert.ok(model.sealUpdates.at(-1)!.elapsed - beforeHidden.elapsed < 0.05);
+
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
+  settle();
+  assert.equal(model.sealUpdates.at(-1)!.reduced, true);
+  assert.equal(run.count('seal-finished'), 1);
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  advanceFrame();
+  assert.equal(model.sealUpdates.at(-1)!.reduced, false);
+  assert.equal(frames.size, 1);
+  assert.equal(run.count('seal-finished'), 1);
+});
+
+test('sticker motion remains finite when animation frames share a timestamp', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  advanceFrame();
+  advanceFrame(0);
+  assert.ok(models[0].sealUpdates.every(update => Number.isFinite(update.motion)));
+});
+
+test('narrow viewports leave room for the attached sticker beyond the open pack edge', async () => {
+  viewportWidth = 319;
+  const run = harness();
+  await makeReady();
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  settle();
+  assert.equal(models[0].phase, 1);
+  const camera = renderers[0].camera!;
+  const halfViewWidth = camera.position.z * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
+  assert.ok(halfViewWidth > MI_NOTE_LEAF_WIDTH + 0.32);
 });
 
 test('normal motion finishes unfolding before extraction and cleanup cancels a later transition', async () => {

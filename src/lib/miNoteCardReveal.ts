@@ -16,7 +16,7 @@ export type MiNotePack = {
 };
 
 export type MiNoteFolderPose = 0 | 1 | 2;
-export type MiNoteRevealStage = 'sealed' | 'seal-falling' | 'unsealed' | 'interactive';
+export type MiNoteRevealStage = 'sealed' | 'seal-peeling' | 'unsealed' | 'interactive';
 
 export type MiNoteRevealState = {
   readonly stage: MiNoteRevealStage;
@@ -65,12 +65,12 @@ export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteReveal
     case 'activate':
       if (state.stage === 'sealed') {
         const taps = state.taps + 1;
-        return { ...state, taps, stage: taps === MI_NOTE_OPEN_TAPS ? 'seal-falling' : 'sealed' };
+        return { ...state, taps, stage: taps === MI_NOTE_OPEN_TAPS ? 'seal-peeling' : 'sealed' };
       }
       if (state.stage !== 'interactive' || state.selectedCard !== null) return state;
       return { ...state, folderPose: state.folderPose === 1 ? event.leaf ?? 0 : 1 };
     case 'seal-finished':
-      return state.stage === 'seal-falling' ? openWhenReady({ ...state, stage: 'unsealed' }) : state;
+      return state.stage === 'seal-peeling' ? openWhenReady({ ...state, stage: 'unsealed' }) : state;
     case 'ready':
       if (state.ready === event.ready) return state;
       return openWhenReady({ ...state, ready: event.ready });

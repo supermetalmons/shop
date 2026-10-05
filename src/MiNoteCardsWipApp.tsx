@@ -84,7 +84,7 @@ function MiNotePackOpening({
     return () => window.clearTimeout(timer);
   }, [assets.ready, mountedCardsReady]);
 
-  const openingLocked = state.stage === 'seal-falling' || state.stage === 'unsealed';
+  const openingLocked = state.stage === 'seal-peeling' || state.stage === 'unsealed';
   const note = error
     ? 'Unable to load this pack.'
     : !viewerReady

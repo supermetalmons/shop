@@ -86,9 +86,9 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let width = 1;
     let height = 1;
     let lastTime = 0;
-    let stage = props.state.stage;
     let taps = 0;
     let sealTime = 0;
+    let sealStarted = false;
     let sealFinished = false;
     const fold: Motion = { value: props.state.folderPose, velocity: 0 };
     const recoil: Motion = { value: 0, velocity: 0 };
@@ -148,6 +148,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       return;
     }
     scene.add(model.group);
+    let lastSealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
     const apertureGeometry = cardApertureGeometry();
     const apertureMaterial = new THREE.MeshBasicMaterial({
       color: 0x000000,
@@ -231,7 +232,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           returnCard();
           return true;
         }
-        if (drag || outerFlip || state.stage === 'seal-falling' || state.stage === 'unsealed') return true;
+        if (drag || outerFlip || state.stage === 'seal-peeling' || state.stage === 'unsealed') return true;
         if (state.stage === 'interactive' && (state.folderPose === 1 || Math.abs(fold.value - state.folderPose) > 0.015)) {
           setPose(0);
           return true;
@@ -277,7 +278,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         if (state.cardStage === 'lifting' || state.cardStage === 'returning') return false;
         tapHit = hit(event);
         if (state.selectedCard !== null && tapHit) return false;
-        if (state.stage === 'seal-falling' || state.stage === 'unsealed') return false;
+        if (state.stage === 'seal-peeling' || state.stage === 'unsealed') return false;
         host.focus({ preventScroll: true });
         host.setPointerCapture(event.pointerId);
         if (outerFlip) {
@@ -342,7 +343,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
 
     function render(now: number) {
       frameId = 0;
-      if (disposed || failed) return;
+      if (disposed || failed || document.hidden) return;
       const dt = Math.min((now - (lastTime || now - 16.67)) / 1000, 0.05);
       lastTime = now;
       let moving = false;
@@ -353,18 +354,9 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         for (let count = taps + 1; count <= state.taps; count += 1) recoil.velocity += 1.6 + count * 0.65;
         taps = state.taps;
       }
-      if (state.stage !== stage) {
-        stage = state.stage;
-        if (stage === 'seal-falling') {
-          sealTime = 0;
-          model.startSealFall();
-        }
-      }
-      if (stage === 'seal-falling' && !sealFinished) {
-        sealTime += dt;
-        sealFinished = model.updateSeal(sealTime, reducedMotion.matches);
-        if (sealFinished) dispatch({ type: 'seal-finished' });
-        else moving = true;
+      if (state.stage === 'seal-peeling' && !sealStarted) {
+        sealStarted = true;
+        model.startSealPeel();
       }
       if (outerFlip) {
         const flip = outerFlip;
@@ -395,6 +387,20 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       }
       model.group.scale.setScalar(1 - recoil.value * 0.08);
       model.group.rotation.z = -0.016 + recoil.value * 0.08;
+      const sealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
+      const angleDelta = Math.atan2(Math.sin(sealAngle - lastSealAngle), Math.cos(sealAngle - lastSealAngle));
+      lastSealAngle = sealAngle;
+      if (sealStarted) {
+        sealTime += dt;
+        const angularVelocity = dt > 0 ? angleDelta / dt : 0;
+        const motion = THREE.MathUtils.clamp(angularVelocity * 0.08 + recoil.velocity * 0.04, -1, 1);
+        const finished = model.updateSeal(sealTime, reducedMotion.matches, motion);
+        if (finished && !sealFinished) {
+          sealFinished = true;
+          dispatch({ type: 'seal-finished' });
+        }
+        moving = !reducedMotion.matches || !finished || moving;
+      }
 
       if (state.cardStage === 'lifting' && state.selectedCard !== null && selected === null && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015) {
         fold.value = 1;
@@ -447,7 +453,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       }
       const aspect = width / height;
       const closedHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH / (aspect * 0.68));
-      const openHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH * 2 / (aspect * 0.86));
+      const openHeight = Math.max(1.82 / 0.52, (MI_NOTE_LEAF_WIDTH * 2 + 0.32) / (aspect * 0.86));
       const selectedHeight = Math.max(MI_NOTE_CARD_HEIGHT * 1.28 / 0.66, MI_NOTE_CARD_WIDTH * 1.28 / (aspect * 0.72));
       const viewHeight = state.selectedCard !== null ? selectedHeight : THREE.MathUtils.lerp(closedHeight, openHeight, 1 - Math.abs(fold.value - 1));
       const cameraTarget = viewHeight / (2 * Math.tan(THREE.MathUtils.degToRad(17))) + (state.selectedCard !== null ? 1.4 : 0);
@@ -494,6 +500,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
     const handleVisibility = () => {
       input.cancel();
+      if (document.hidden) {
+        cancelAnimationFrame(frameId);
+        frameId = 0;
+      }
       lastTime = 0;
       invalidate();
     };

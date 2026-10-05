@@ -4,21 +4,17 @@ import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } fr
 
 const STICKER_SIZE = 512;
 const STICKER_WIDTH = 0.56;
-const SURFACE_CLEARANCE = 0.0003;
-const PROFILE_SEGMENTS = [48, 16, 32, 16, 48];
+const SURFACE_CLEARANCE = 0.0015;
+const PROFILE_SEGMENTS = [56, 64, 40];
 const WIDTH_SEGMENTS = PROFILE_SEGMENTS.reduce((total, count) => total + count, 0);
 const HEIGHT_SEGMENTS = 48;
-const FALL_DURATION = 1.15;
+const PEEL_DURATION = 1.2;
 const ARTWORK_TIMEOUT_MS = 30_000;
 
-function sealPoint(distance: number, bendAngle: number, radius: number, edgeLength: number, curvature: number) {
+function sealPoint(distance: number, angle: number, radius: number, curvature: number) {
   if (distance <= 0) return { x: distance, z: 0 };
-  const arcLength = radius * bendAngle;
-  const firstAngle = Math.min(distance / radius, bendAngle);
-  const edge = THREE.MathUtils.clamp(distance - arcLength, 0, edgeLength);
-  const secondAngle = THREE.MathUtils.clamp((distance - arcLength - edgeLength) / radius, 0, bendAngle);
-  const angle = 2 * bendAngle;
-  const tail = Math.max(0, distance - 2 * arcLength - edgeLength);
+  const theta = Math.min(distance / radius, angle);
+  const tail = Math.max(0, distance - radius * angle);
   const tipLength = Math.max(0, tail - 0.012);
   const straight = Math.min(tail, 0.012);
   let tipX = tipLength * Math.cos(angle);
@@ -28,16 +24,13 @@ function sealPoint(distance: number, bendAngle: number, radius: number, edgeLeng
     tipZ = (Math.cos(angle) - Math.cos(angle + curvature * tipLength)) / curvature;
   }
   return {
-    x: radius * (Math.sin(firstAngle) + Math.sin(bendAngle + secondAngle) - Math.sin(bendAngle))
-      + edge * Math.cos(bendAngle) + straight * Math.cos(angle) + tipX,
-    z: radius * (1 - Math.cos(firstAngle) + Math.cos(bendAngle) - Math.cos(bendAngle + secondAngle))
-      + edge * Math.sin(bendAngle) + straight * Math.sin(angle) + tipZ,
+    x: radius * Math.sin(theta) + straight * Math.cos(angle) + tipX,
+    z: radius * (1 - Math.cos(theta)) + straight * Math.sin(angle) + tipZ,
   };
 }
 
 export function createMiNotePackSeal({
   parent,
-  fallRoot,
   width,
   spine,
   thickness,
@@ -47,7 +40,6 @@ export function createMiNotePackSeal({
   onInvalidate,
 }: {
   parent: THREE.Group;
-  fallRoot: THREE.Group;
   width: number;
   spine: number;
   thickness: number;
@@ -63,43 +55,92 @@ export function createMiNotePackSeal({
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshPhysicalMaterial({
     map,
-    roughness: 0.4,
+    roughness: 0.36,
     metalness: 0.06,
+    clearcoat: 0.65,
+    clearcoatRoughness: 0.24,
     side: THREE.DoubleSide,
     alphaTest: 0.4,
     alphaToCoverage: true,
   });
   material.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <opaque_fragment>', `
-      if (!gl_FrontFacing) outgoingLight = vec3(.78, .76, .68);
-      #include <opaque_fragment>
-    `);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <color_fragment>', `
+        #include <color_fragment>
+        if (!gl_FrontFacing) diffuseColor.rgb = vec3(.57, .53, .43);
+      `)
+      .replace('#include <metalnessmap_fragment>', `
+        #include <metalnessmap_fragment>
+        if (!gl_FrontFacing) {
+          metalnessFactor = 0.0;
+          roughnessFactor = .94;
+        }
+      `)
+      .replace('#include <lights_physical_fragment>', `
+        #include <lights_physical_fragment>
+        if (!gl_FrontFacing) material.clearcoat = 0.0;
+      `);
   };
-  material.customProgramCacheKey = () => 'mi-note-printed-star-seal-v1';
+  material.customProgramCacheKey = () => 'mi-note-printed-star-seal-v2';
   const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
+  (geometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+  (geometry.attributes.normal as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+  (geometry.attributes.uv as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
+  let pixels: Uint8ClampedArray | undefined;
+  mesh.raycast = (raycaster, intersections) => {
+    if (!pixels) return;
+    const hits: THREE.Intersection[] = [];
+    THREE.Mesh.prototype.raycast.call(mesh, raycaster, hits);
+    for (const hit of hits) {
+      if (!hit.uv) continue;
+      const x = THREE.MathUtils.clamp(Math.floor(hit.uv.x * STICKER_SIZE), 0, STICKER_SIZE - 1);
+      const y = THREE.MathUtils.clamp(Math.floor((1 - hit.uv.y) * STICKER_SIZE), 0, STICKER_SIZE - 1);
+      if (pixels[(y * STICKER_SIZE + x) * 4 + 3] / 255 >= material.alphaTest) intersections.push(hit);
+    }
+  };
   const pivot = new THREE.Group();
   pivot.position.set(width, 0, spine / 2);
   pivot.add(mesh);
   parent.add(pivot);
+  const shadowMaterial = new THREE.MeshBasicMaterial({
+    map,
+    color: 0x000000,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+  const shadows = [-1, 1].map((side) => {
+    const shadowGeometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
+    shadowGeometry.setAttribute('uv', geometry.attributes.uv);
+    shadowGeometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(geometry.attributes.position.count * 4), 4).setUsage(THREE.DynamicDrawUsage));
+    (shadowGeometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+    const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+    shadow.frustumCulled = false;
+    shadow.raycast = () => undefined;
+    pivot.add(shadow);
+    return { geometry: shadowGeometry, side };
+  });
 
   let disposed = false;
   let started = false;
   let finished = false;
   let lastProgress = -1;
+  let lastFlutter = 0;
+  let lastTwist = 0;
   let currentFoldPosition = normalizeMiNoteStarFoldPosition(foldPosition);
   let currentRotationOffsetDegrees = normalizeMiNoteStarRotationOffset(rotationOffsetDegrees);
-  const startPosition = new THREE.Vector3();
-  const startQuaternion = new THREE.Quaternion();
-  const tumble = new THREE.Quaternion();
-  const tumbleEuler = new THREE.Euler();
-  const fallOffset = new THREE.Vector3();
-  const pose = (progress: number) => {
-    if (progress === lastProgress) return;
+  const pose = (progress: number, flutter = 0, twist = 0) => {
+    if (progress === lastProgress && flutter === lastFlutter && twist === lastTwist) return;
     lastProgress = progress;
+    lastFlutter = flutter;
+    lastTwist = twist;
     const position = geometry.attributes.position;
     const uv = geometry.attributes.uv;
     const eased = progress ** 3 * (10 - 15 * progress + 6 * progress * progress);
@@ -107,15 +148,15 @@ export function createMiNotePackSeal({
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     const back = -thickness / 2 - SURFACE_CLEARANCE;
-    const wrapLength = Math.PI * SURFACE_CLEARANCE + spine + thickness;
+    const closedRadius = (spine + thickness + 2 * SURFACE_CLEARANCE) / 2;
+    const wrapLength = Math.PI * closedRadius;
     const backTangent = currentFoldPosition + wrapLength / (2 * STICKER_WIDTH);
-    const bendAngle = THREE.MathUtils.lerp(Math.PI / 2, 0.425, eased);
-    const arcLength = THREE.MathUtils.lerp(Math.PI * SURFACE_CLEARANCE / 2, 0.125, eased);
-    const edgeLength = (spine + thickness) * (1 - eased);
-    const radius = arcLength / bendAngle;
+    const bendAngle = THREE.MathUtils.lerp(Math.PI, 0.85, eased) + flutter;
+    const peeledArcLength = Math.max(wrapLength, Math.min(0.25, backTangent * STICKER_WIDTH * 0.66));
+    const arcLength = THREE.MathUtils.lerp(wrapLength, peeledArcLength, eased);
     const curl = THREE.MathUtils.clamp((eased - 0.65) / 0.35, 0, 1);
     const curvature = -24 * curl * curl * (3 - 2 * curl);
-    const distances = [2 * arcLength + edgeLength, arcLength + edgeLength, arcLength, 0];
+    const distances = [arcLength, 0];
     const uniformRows = HEIGHT_SEGMENTS - 2 * distances.length;
     const rows = Array.from({ length: uniformRows + 1 }, (_, row) => 1 - row / uniformRows);
     for (const distance of distances) {
@@ -136,6 +177,8 @@ export function createMiNotePackSeal({
         0,
         1,
       )), 1];
+      const rowAngle = bendAngle + twist * y / STICKER_WIDTH;
+      const radius = arcLength / rowAngle;
       let column = 0;
       for (let section = 0; section < PROFILE_SEGMENTS.length; section += 1) {
         const segments = PROFILE_SEGMENTS[section];
@@ -145,10 +188,21 @@ export function createMiNotePackSeal({
           const rotatedX = x * cos - y * sin;
           const rotatedY = x * sin + y * cos;
           const distance = (backTangent - 0.5) * STICKER_WIDTH - rotatedX;
-          const point = sealPoint(distance, bendAngle, radius, edgeLength, curvature);
+          const point = sealPoint(distance, rowAngle, radius, curvature + flutter * 8);
           const index = row * (WIDTH_SEGMENTS + 1) + column;
           position.setXYZ(index, point.x, rotatedY, back + point.z - spine / 2);
           uv.setXY(index, u, v);
+          for (const shadow of shadows) {
+            const surface = shadow.side < 0 ? -thickness / 2 : spine + thickness / 2;
+            const lift = shadow.side * (back + point.z - surface);
+            const opacity = lift > 0 ? Math.exp(-lift * 65) : 0;
+            shadow.geometry.attributes.position.setXYZ(index,
+              Math.min(0, point.x + Math.max(0, lift) * 0.4),
+              rotatedY - Math.max(0, lift) * 0.6,
+              surface + shadow.side * 0.0001 - spine / 2,
+            );
+            shadow.geometry.attributes.color.setXYZW(index, 1, 1, 1, opacity);
+          }
           column += 1;
         }
       }
@@ -158,6 +212,10 @@ export function createMiNotePackSeal({
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();
+    for (const shadow of shadows) {
+      shadow.geometry.attributes.position.needsUpdate = true;
+      shadow.geometry.attributes.color.needsUpdate = true;
+    }
   };
   pose(0);
 
@@ -180,6 +238,7 @@ export function createMiNotePackSeal({
         const artworkHeight = artwork.naturalHeight * scale;
         context.imageSmoothingQuality = 'high';
         context.drawImage(artwork, (STICKER_SIZE - artworkWidth) / 2, (STICKER_SIZE - artworkHeight) / 2, artworkWidth, artworkHeight);
+        pixels = context.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE).data;
         map.needsUpdate = true;
         cancelReady = undefined;
         resolve();
@@ -213,7 +272,7 @@ export function createMiNotePackSeal({
       currentFoldPosition = next;
       const progress = lastProgress;
       lastProgress = -1;
-      pose(progress);
+      pose(progress, lastFlutter, lastTwist);
       onInvalidate?.();
     },
     setRotationOffsetDegrees(value: number) {
@@ -222,37 +281,28 @@ export function createMiNotePackSeal({
       currentRotationOffsetDegrees = next;
       const progress = lastProgress;
       lastProgress = -1;
-      pose(progress);
+      pose(progress, lastFlutter, lastTwist);
       onInvalidate?.();
     },
     start() {
       if (started || disposed) return;
       started = true;
-      fallRoot.updateWorldMatrix(true, true);
-      fallRoot.attach(pivot);
-      startPosition.copy(pivot.position);
-      startQuaternion.copy(pivot.quaternion);
       onInvalidate?.();
     },
-    update(elapsedSeconds: number, reducedMotion: boolean) {
-      if (finished || disposed) return true;
+    update(elapsedSeconds: number, reducedMotion: boolean, motion = 0) {
+      if (disposed) return true;
       if (!started) return false;
       const elapsed = Math.max(0, elapsedSeconds);
-      if (reducedMotion || elapsed >= FALL_DURATION) {
-        finished = true;
-        pivot.visible = false;
-        return true;
-      }
-      pose(THREE.MathUtils.clamp(elapsed / 0.62, 0, 1));
-      const fallTime = Math.max(0, elapsed - 0.12);
-      pivot.position.copy(startPosition).add(fallOffset.set(
-        0.42 * fallTime,
-        0.16 * fallTime - 4.6 * fallTime * fallTime,
-        Math.min(0.42, fallTime * 0.6),
-      ));
-      tumble.setFromEuler(tumbleEuler.set(fallTime * 4.2, fallTime * -2.3, fallTime * -2.7));
-      pivot.quaternion.copy(startQuaternion).multiply(tumble);
-      return false;
+      finished ||= reducedMotion || elapsed >= PEEL_DURATION;
+      const progress = finished ? 1 : Math.min(1, elapsed / PEEL_DURATION);
+      const release = THREE.MathUtils.smoothstep(progress, 0.65, 1);
+      const flutter = reducedMotion ? 0 : release * (
+        Math.sin(elapsed * 4.2) * 0.11 + Math.sin(elapsed * 7.1 + 0.8) * 0.035
+        + THREE.MathUtils.clamp(motion, -1, 1) * 0.24
+      );
+      const twist = reducedMotion ? 0 : release * Math.sin(elapsed * 5.3 + 1.2) * 0.12;
+      pose(progress, flutter, twist);
+      return finished;
     },
     dispose() {
       if (disposed) return;
@@ -263,8 +313,11 @@ export function createMiNotePackSeal({
       clearLoadTimeout();
       cancelReady?.();
       cancelReady = undefined;
+      pixels = undefined;
       pivot.removeFromParent();
       geometry.dispose();
+      shadows.forEach((shadow) => shadow.geometry.dispose());
+      shadowMaterial.dispose();
       material.dispose();
       map.dispose();
     },
