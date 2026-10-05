@@ -35,7 +35,7 @@ function setupArtwork(t: TestContext) {
   return requests;
 }
 
-async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDegrees = 0) {
+async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDegrees = 0, thickness = 0.0018) {
   const parent = new THREE.Group();
   const fallRoot = new THREE.Group();
   fallRoot.add(parent);
@@ -44,6 +44,7 @@ async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDe
     fallRoot,
     width: 1.29,
     spine: 0.0158,
+    thickness,
     star: { id: 'test', name: 'Test star', src: '/star.png' },
     foldPosition,
     rotationOffsetDegrees,
@@ -56,13 +57,22 @@ async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDe
   return { seal, parent, pivot, mesh };
 }
 
-function frontVertices(geometry: THREE.BufferGeometry) {
+function frontMaterialArea(geometry: THREE.BufferGeometry) {
   const positions = geometry.attributes.position;
-  let count = 0;
-  for (let index = 0; index < positions.count; index += 1) {
-    if (positions.getZ(index) > 0) count += 1;
+  const uv = geometry.attributes.uv;
+  const indices = geometry.index!;
+  let area = 0;
+  for (let index = 0; index < indices.count; index += 3) {
+    const a = indices.getX(index);
+    const b = indices.getX(index + 1);
+    const c = indices.getX(index + 2);
+    if (positions.getZ(a) <= 0 || positions.getZ(b) <= 0 || positions.getZ(c) <= 0) continue;
+    area += Math.abs(
+      (uv.getX(b) - uv.getX(a)) * (uv.getY(c) - uv.getY(a))
+      - (uv.getY(b) - uv.getY(a)) * (uv.getX(c) - uv.getX(a)),
+    ) / 2;
   }
-  return count;
+  return area;
 }
 
 function assertBoundsMatchVertices(geometry: THREE.BufferGeometry) {
@@ -86,9 +96,10 @@ test('fold adjustment updates a stationary seal and hit bounds without replacing
   const texture = material.map;
   const positions = geometry.attributes.position;
   const normals = geometry.attributes.normal;
+  const uv = geometry.attributes.uv;
   const originalPositions = Array.from(positions.array);
-  const originalNormals = Array.from(normals.array);
-  const originalFront = frontVertices(geometry);
+  const originalUv = Array.from(uv.array);
+  const originalFront = frontMaterialArea(geometry);
   const originalBounds = new THREE.Box3().setFromObject(parent);
   const originalSphere = geometry.boundingSphere!.clone();
 
@@ -100,9 +111,10 @@ test('fold adjustment updates a stationary seal and hit bounds without replacing
   assert.equal(mesh.material.map, texture);
   assert.equal(geometry.attributes.position, positions);
   assert.equal(geometry.attributes.normal, normals);
+  assert.equal(geometry.attributes.uv, uv);
   assert.notDeepEqual(Array.from(positions.array), originalPositions);
-  assert.notDeepEqual(Array.from(normals.array), originalNormals);
-  assert.ok(frontVertices(geometry) > originalFront);
+  assert.notDeepEqual(Array.from(uv.array), originalUv);
+  assert.ok(frontMaterialArea(geometry) > originalFront);
   assert.ok(!new THREE.Box3().setFromObject(parent).equals(originalBounds));
   assert.ok(!geometry.boundingSphere!.equals(originalSphere));
   assertBoundsMatchVertices(geometry);
@@ -116,10 +128,10 @@ test('fold adjustment updates a stationary seal and hit bounds without replacing
 test('fold endpoints maintain valid geometry and moving right increases the front portion', async (t) => {
   setupArtwork(t);
   const { seal, mesh } = await createSeal(t, 0.1);
-  let previousFront = frontVertices(mesh.geometry);
+  let previousFront = frontMaterialArea(mesh.geometry);
   for (const value of [0.3, 0.573, 0.7, 0.9]) {
     seal.setFoldPosition(value);
-    const nextFront = frontVertices(mesh.geometry);
+    const nextFront = frontMaterialArea(mesh.geometry);
     assert.ok(nextFront > previousFront);
     previousFront = nextFront;
     for (const attribute of [mesh.geometry.attributes.position, mesh.geometry.attributes.normal]) {
@@ -138,8 +150,10 @@ test('rotation updates a stationary seal in place and returning to zero preserve
   const texture = material.map;
   const positions = geometry.attributes.position;
   const normals = geometry.attributes.normal;
+  const uv = geometry.attributes.uv;
   const originalPositions = Array.from(positions.array);
   const originalNormals = Array.from(normals.array);
+  const originalUv = Array.from(uv.array);
   const originalBounds = new THREE.Box3().setFromObject(parent);
   const originalSphere = geometry.boundingSphere!.clone();
 
@@ -151,8 +165,9 @@ test('rotation updates a stationary seal in place and returning to zero preserve
   assert.equal(mesh.material.map, texture);
   assert.equal(geometry.attributes.position, positions);
   assert.equal(geometry.attributes.normal, normals);
+  assert.equal(geometry.attributes.uv, uv);
   assert.notDeepEqual(Array.from(positions.array), originalPositions);
-  assert.notDeepEqual(Array.from(normals.array), originalNormals);
+  assert.notDeepEqual(Array.from(uv.array), originalUv);
   assert.ok(!new THREE.Box3().setFromObject(parent).equals(originalBounds));
   assert.ok(!geometry.boundingSphere!.equals(originalSphere));
   assertBoundsMatchVertices(geometry);
@@ -170,6 +185,7 @@ test('rotation updates a stationary seal in place and returning to zero preserve
   seal.setRotationOffsetDegrees(0);
   assert.deepEqual(Array.from(positions.array), originalPositions);
   assert.deepEqual(Array.from(normals.array), originalNormals);
+  assert.deepEqual(Array.from(uv.array), originalUv);
   assertBoundsMatchVertices(geometry);
   assert.deepEqual(requests, ['/star.png']);
 });
@@ -192,6 +208,80 @@ test('rotation endpoints keep finite geometry and positive offsets rotate artwor
       assert.ok(Math.abs(geometry.attributes.position.getY(0) - (x * Math.sin(angle) + y * Math.cos(angle))) < 1e-7);
       assertBoundsMatchVertices(geometry);
     }
+  }
+});
+
+test('sealed sticker follows both cover surfaces and the pack edge without penetrating the pack', async (t) => {
+  setupArtwork(t);
+  const width = 1.29;
+  const spine = 0.0158;
+  const clearance = 0.0003;
+  const tolerance = 1e-7;
+  for (const thickness of [0.0018, 0.0036]) {
+    const { seal, pivot, mesh } = await createSeal(t, 0.573, 0, thickness);
+    const backCover = -thickness / 2;
+    const frontCover = spine + thickness / 2;
+    for (const foldPosition of [0.1, 0.573, 0.9]) {
+      seal.setFoldPosition(foldPosition);
+      for (const rotation of [-15, 0, 5, 15]) {
+        seal.setRotationOffsetDegrees(rotation);
+        const geometry = mesh.geometry;
+        const positions = geometry.attributes.position;
+        const uv = geometry.attributes.uv;
+        let minZ = Infinity;
+        let maxZ = -Infinity;
+        let maxX = -Infinity;
+        let sideVertices = 0;
+        for (let index = 0; index < positions.count; index += 1) {
+          const x = positions.getX(index) + pivot.position.x;
+          const z = positions.getZ(index) + pivot.position.z;
+          minZ = Math.min(minZ, z);
+          maxZ = Math.max(maxZ, z);
+          maxX = Math.max(maxX, x);
+          assert.ok(x <= width + clearance + tolerance);
+          assert.ok(z >= backCover - clearance - tolerance);
+          assert.ok(z <= frontCover + clearance + tolerance);
+          assert.ok(uv.getX(index) >= 0 && uv.getX(index) <= 1);
+          assert.ok(uv.getY(index) >= 0 && uv.getY(index) <= 1);
+          if (z > backCover + tolerance && z < frontCover - tolerance) {
+            assert.ok(Math.abs(x - width - clearance) < tolerance);
+            sideVertices += 1;
+          }
+        }
+        assert.ok(sideVertices > 0);
+        assert.ok(Math.abs(minZ - backCover + clearance) < tolerance);
+        assert.ok(Math.abs(maxZ - frontCover - clearance) < tolerance);
+        assert.ok(Math.abs(maxX - width - clearance) < tolerance);
+        const indices = geometry.index!;
+        for (let index = 0; index < indices.count; index += 3) {
+          const vertices = [indices.getX(index), indices.getX(index + 1), indices.getX(index + 2)];
+          const beyondEdge = vertices.every((vertex) => positions.getX(vertex) + pivot.position.x >= width - tolerance);
+          const behindCover = vertices.every((vertex) => positions.getZ(vertex) + pivot.position.z <= backCover + tolerance);
+          const aboveCover = vertices.every((vertex) => positions.getZ(vertex) + pivot.position.z >= frontCover - tolerance);
+          assert.ok(beyondEdge || behindCover || aboveCover, `Triangle ${index / 3} crosses the pack at fold ${foldPosition}, rotation ${rotation}`);
+        }
+        assertBoundsMatchVertices(geometry);
+      }
+    }
+  }
+});
+
+test('peeling starts continuously and keeps valid geometry through the completed peel', async (t) => {
+  setupArtwork(t);
+  const { seal, mesh } = await createSeal(t, 0.573, -15);
+  const geometry = mesh.geometry;
+  const originalPositions = Array.from(geometry.attributes.position.array);
+  seal.start();
+  seal.update(0.001, false);
+  for (let index = 0; index < originalPositions.length; index += 1) {
+    assert.ok(Math.abs(geometry.attributes.position.array[index] - originalPositions[index]) < 1e-6);
+  }
+  for (const elapsed of [0.12, 0.35, 0.619, 0.62, 0.9, 1.149]) {
+    assert.equal(seal.update(elapsed, false), false);
+    for (const attribute of [geometry.attributes.position, geometry.attributes.normal, geometry.attributes.uv]) {
+      assert.ok(Array.from(attribute.array).every(Number.isFinite));
+    }
+    assertBoundsMatchVertices(geometry);
   }
 });
 

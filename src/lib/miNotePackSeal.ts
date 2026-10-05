@@ -4,24 +4,23 @@ import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } fr
 
 const STICKER_SIZE = 512;
 const STICKER_WIDTH = 0.56;
+const SURFACE_CLEARANCE = 0.0003;
+const PROFILE_SEGMENTS = [48, 16, 32, 16, 48];
+const WIDTH_SEGMENTS = PROFILE_SEGMENTS.reduce((total, count) => total + count, 0);
+const HEIGHT_SEGMENTS = 48;
 const FALL_DURATION = 1.15;
 const ARTWORK_TIMEOUT_MS = 30_000;
 
-function sealPoint(u: number, progress: number, width: number, spine: number, foldPosition: number) {
-  const back = -0.0035;
-  const radius = (spine + 0.007) / 2;
-  const backTangent = foldPosition + Math.PI * radius / (2 * STICKER_WIDTH);
-  const distance = (backTangent - u) * STICKER_WIDTH;
-  if (distance <= 0) return { x: width + distance, z: back };
-  const angle = Math.PI * (1 - progress) + 0.85 * progress;
-  const length = Math.PI * radius * (1 - progress) + 0.25 * progress;
-  const bendRadius = length / angle;
-  const theta = Math.min(distance / bendRadius, angle);
-  const tail = Math.max(0, distance - length);
+function sealPoint(distance: number, bendAngle: number, radius: number, edgeLength: number, curvature: number) {
+  if (distance <= 0) return { x: distance, z: 0 };
+  const arcLength = radius * bendAngle;
+  const firstAngle = Math.min(distance / radius, bendAngle);
+  const edge = THREE.MathUtils.clamp(distance - arcLength, 0, edgeLength);
+  const secondAngle = THREE.MathUtils.clamp((distance - arcLength - edgeLength) / radius, 0, bendAngle);
+  const angle = 2 * bendAngle;
+  const tail = Math.max(0, distance - 2 * arcLength - edgeLength);
   const tipLength = Math.max(0, tail - 0.012);
   const straight = Math.min(tail, 0.012);
-  const curl = THREE.MathUtils.clamp((progress - 0.65) / 0.35, 0, 1);
-  const curvature = -24 * curl * curl * (3 - 2 * curl);
   let tipX = tipLength * Math.cos(angle);
   let tipZ = tipLength * Math.sin(angle);
   if (Math.abs(curvature) > 0.00001) {
@@ -29,8 +28,10 @@ function sealPoint(u: number, progress: number, width: number, spine: number, fo
     tipZ = (Math.cos(angle) - Math.cos(angle + curvature * tipLength)) / curvature;
   }
   return {
-    x: width + bendRadius * Math.sin(theta) + straight * Math.cos(angle) + tipX,
-    z: back + bendRadius * (1 - Math.cos(theta)) + straight * Math.sin(angle) + tipZ,
+    x: radius * (Math.sin(firstAngle) + Math.sin(bendAngle + secondAngle) - Math.sin(bendAngle))
+      + edge * Math.cos(bendAngle) + straight * Math.cos(angle) + tipX,
+    z: radius * (1 - Math.cos(firstAngle) + Math.cos(bendAngle) - Math.cos(bendAngle + secondAngle))
+      + edge * Math.sin(bendAngle) + straight * Math.sin(angle) + tipZ,
   };
 }
 
@@ -39,6 +40,7 @@ export function createMiNotePackSeal({
   fallRoot,
   width,
   spine,
+  thickness,
   star,
   foldPosition,
   rotationOffsetDegrees,
@@ -48,6 +50,7 @@ export function createMiNotePackSeal({
   fallRoot: THREE.Group;
   width: number;
   spine: number;
+  thickness: number;
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
@@ -75,7 +78,7 @@ export function createMiNotePackSeal({
     `);
   };
   material.customProgramCacheKey = () => 'mi-note-printed-star-seal-v1';
-  const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, 160, 48);
+  const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false;
   const pivot = new THREE.Group();
@@ -101,15 +104,57 @@ export function createMiNotePackSeal({
     const uv = geometry.attributes.uv;
     const eased = progress ** 3 * (10 - 15 * progress + 6 * progress * progress);
     const angle = THREE.MathUtils.degToRad(5 - currentRotationOffsetDegrees);
-    for (let i = 0; i < position.count; i += 1) {
-      const x = (uv.getX(i) - 0.5) * STICKER_WIDTH;
-      const y = (uv.getY(i) - 0.5) * STICKER_WIDTH;
-      const rotatedX = x * Math.cos(angle) - y * Math.sin(angle);
-      const rotatedY = x * Math.sin(angle) + y * Math.cos(angle);
-      const point = sealPoint(rotatedX / STICKER_WIDTH + 0.5, eased, width, spine, currentFoldPosition);
-      position.setXYZ(i, point.x - width, rotatedY, point.z - spine / 2);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const back = -thickness / 2 - SURFACE_CLEARANCE;
+    const wrapLength = Math.PI * SURFACE_CLEARANCE + spine + thickness;
+    const backTangent = currentFoldPosition + wrapLength / (2 * STICKER_WIDTH);
+    const bendAngle = THREE.MathUtils.lerp(Math.PI / 2, 0.425, eased);
+    const arcLength = THREE.MathUtils.lerp(Math.PI * SURFACE_CLEARANCE / 2, 0.125, eased);
+    const edgeLength = (spine + thickness) * (1 - eased);
+    const radius = arcLength / bendAngle;
+    const curl = THREE.MathUtils.clamp((eased - 0.65) / 0.35, 0, 1);
+    const curvature = -24 * curl * curl * (3 - 2 * curl);
+    const distances = [2 * arcLength + edgeLength, arcLength + edgeLength, arcLength, 0];
+    const uniformRows = HEIGHT_SEGMENTS - 2 * distances.length;
+    const rows = Array.from({ length: uniformRows + 1 }, (_, row) => 1 - row / uniformRows);
+    for (const distance of distances) {
+      for (const u of [0, 1]) {
+        rows.push(Math.abs(sin) < 1e-8 ? 0 : THREE.MathUtils.clamp(
+          0.5 + (distance - (backTangent - 0.5) * STICKER_WIDTH + (u - 0.5) * STICKER_WIDTH * cos) / (STICKER_WIDTH * sin),
+          0,
+          1,
+        ));
+      }
+    }
+    rows.sort((a, b) => b - a);
+    for (let row = 0; row <= HEIGHT_SEGMENTS; row += 1) {
+      const v = rows[row];
+      const y = (v - 0.5) * STICKER_WIDTH;
+      const boundaries = [0, ...distances.map((distance) => THREE.MathUtils.clamp(
+        0.5 + ((backTangent - 0.5) * STICKER_WIDTH - distance + y * sin) / (STICKER_WIDTH * cos),
+        0,
+        1,
+      )), 1];
+      let column = 0;
+      for (let section = 0; section < PROFILE_SEGMENTS.length; section += 1) {
+        const segments = PROFILE_SEGMENTS[section];
+        for (let step = section === 0 ? 0 : 1; step <= segments; step += 1) {
+          const u = THREE.MathUtils.lerp(boundaries[section], boundaries[section + 1], step / segments);
+          const x = (u - 0.5) * STICKER_WIDTH;
+          const rotatedX = x * cos - y * sin;
+          const rotatedY = x * sin + y * cos;
+          const distance = (backTangent - 0.5) * STICKER_WIDTH - rotatedX;
+          const point = sealPoint(distance, bendAngle, radius, edgeLength, curvature);
+          const index = row * (WIDTH_SEGMENTS + 1) + column;
+          position.setXYZ(index, point.x, rotatedY, back + point.z - spine / 2);
+          uv.setXY(index, u, v);
+          column += 1;
+        }
+      }
     }
     position.needsUpdate = true;
+    uv.needsUpdate = true;
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
     geometry.computeBoundingSphere();

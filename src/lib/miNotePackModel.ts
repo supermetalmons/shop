@@ -290,7 +290,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   };
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
-    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, star, foldPosition, rotationOffsetDegrees, onInvalidate });
+    seal = createMiNotePackSeal({ parent: right, fallRoot: group, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, onInvalidate });
     right.traverse((object) => { object.userData.leaf = 2; });
   } catch (error) {
     releaseResources();
