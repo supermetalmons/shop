@@ -19,19 +19,19 @@ const CARD_NFT_BINDER_FLAT_IMAGE_DIMENSIONS = { width: 1298, height: 1242 };
 const showsTbaOnMain = false;
 const miNotePreviews = [
   {
-    name: 'Mi Note☆Hamster☆',
-    image: '/images/mi-note-preorders/1266-420.webp',
-    imageDimensions: { width: 420, height: 631 },
+    name: 'Cobalt Blue with Blush Star',
+    image: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    imageDimensions: { width: 1050, height: 1400 },
   },
   {
-    name: 'Niqab Angel',
-    image: '/images/mi-note-preorders/879-420.webp',
-    imageDimensions: { width: 420, height: 618 },
+    name: 'Emerald with Supermetal Star',
+    image: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/9.webp',
+    imageDimensions: { width: 1050, height: 1400 },
   },
   {
-    name: 'Mi Note☆Unicorn #4',
-    image: '/images/mi-note-preorders/1236-420.webp',
-    imageDimensions: { width: 420, height: 634 },
+    name: 'Marigold with Zombie Star',
+    image: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/5.webp',
+    imageDimensions: { width: 1050, height: 1400 },
   },
 ];
 
@@ -183,7 +183,7 @@ function MiNoteCardsTile() {
           <span key={preview.image} className="drops-panel__mi-note-frame" style={dropPanelImageFrameStyle(preview.imageDimensions)}>
             <img
               src={preview.image}
-              alt={`${preview.name}, Mi Note Preorder`}
+              alt={`${preview.name}, Mi Note Cards pack`}
               width={preview.imageDimensions.width}
               height={preview.imageDimensions.height}
               decoding="async"
