@@ -9,11 +9,15 @@ const config = {
   compilers: {
     json: () => 'export default null;',
   },
+  ignoreIssues: {
+    'src/lib/miNotePackRenderSetup.ts': ['exports', 'types'],
+  },
   workspaces: {
     '.': {
       entry: [
         'src/renderer/main.tsx!',
         'src/static-render/clearCards.tsx!',
+        'src/lib/miNotePackRenderSetup.ts!',
         'cloud/workers/api/src/index.ts!',
         'cloud/workers/api/test/*.test.ts',
         'cloud/workers/api/runtime-test/*.test.ts',

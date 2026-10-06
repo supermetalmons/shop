@@ -9,12 +9,13 @@ function setupArtwork(
   t: TestContext,
   pixels = new Uint8ClampedArray(512 * 512 * 4).fill(255),
   onWrite: (pixels: Uint8ClampedArray) => void = () => undefined,
+  onDraw: (rect: number[]) => void = () => undefined,
 ) {
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   const requests: string[] = [];
   const context = {
-    drawImage() {},
+    drawImage(_image: unknown, x: number, y: number, width: number, height: number) { onDraw([x, y, width, height]); },
     getImageData: () => ({ data: pixels }),
     putImageData(image: { data: Uint8ClampedArray }) { onWrite(image.data); },
     imageSmoothingQuality: 'low',
@@ -51,7 +52,7 @@ async function createSeal(
   foldPosition: number,
   rotationOffsetDegrees = 0,
   thickness = 0.0018,
-  layout: Partial<Pick<Parameters<typeof createMiNotePackSeal>[0], 'star' | 'verticalPosition' | 'sizeScale' | 'onInvalidate'>> = {},
+  layout: Partial<Pick<Parameters<typeof createMiNotePackSeal>[0], 'star' | 'verticalPosition' | 'sizeScale' | 'stickerTextureSize' | 'onInvalidate'>> = {},
 ) {
   const parent = new THREE.Group();
   const seal = createMiNotePackSeal({
@@ -74,6 +75,60 @@ async function createSeal(
   assert.ok(mesh instanceof THREE.Mesh);
   return { seal, parent, pivot, mesh };
 }
+
+test('sticker quality scales texture support and float shader constants without changing physical geometry', async (t) => {
+  const cacheKeys = new Set<string>();
+  const shadowCacheKeys = new Set<string>();
+  let baselinePositions: ArrayLike<number> | undefined;
+  for (const size of [512, 1024, 2048] as const) {
+    await t.test(`${size}px`, async (t) => {
+      const source = new Uint8ClampedArray(size * size * 4).fill(255);
+      let artworkRect: number[] | undefined;
+      setupArtwork(t, source, undefined, rect => { artworkRect = rect; });
+      const { mesh } = await createSeal(t, 0.573, 0, 0.0018, { stickerTextureSize: size === 512 ? undefined : size });
+      const material = mesh.material;
+      const artworkCanvas = material.map!.image as HTMLCanvasElement;
+      const finishMap = material.bumpMap as THREE.DataTexture;
+      const scale = size / 512;
+      assert.deepEqual(artworkRect, [32 * scale, 32 * scale, 448 * scale, 448 * scale]);
+      assert.equal(artworkCanvas.width, size);
+      assert.equal(artworkCanvas.height, size);
+      assert.equal(finishMap.image.width, size);
+      assert.equal(finishMap.image.height, size);
+      if (!baselinePositions) baselinePositions = mesh.geometry.attributes.position.array.slice();
+      else assert.deepEqual(mesh.geometry.attributes.position.array, baselinePositions);
+      const shader = {
+        ...THREE.ShaderLib.physical,
+        uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.physical.uniforms),
+      } as THREE.WebGLProgramParametersWithUniforms;
+      material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+      const shadowMaterial = (mesh.parent!.children[1] as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>).material;
+      const shadowShader = {
+        ...THREE.ShaderLib.basic,
+        uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.basic.uniforms),
+      } as THREE.WebGLProgramParametersWithUniforms;
+      shadowMaterial.onBeforeCompile(shadowShader, {} as THREE.WebGLRenderer);
+      for (const fragment of [shader.fragmentShader, shadowShader.fragmentShader]) {
+        const distance = fragment.match(/float stickerDistance = .* \* (\d+\.\d+);/);
+        const antialias = fragment.match(/float stickerAntialias = max\((\d+\.\d+),/);
+        assert.ok(distance, 'distance range must be a GLSL float');
+        assert.ok(antialias, 'antialias threshold must be a GLSL float');
+        assert.equal(Number(distance[1]) / size, 48 / 512);
+        assert.equal(Number(antialias[1]) / size, 0.75 / 512);
+      }
+      const edgeBlend = shader.fragmentShader.match(/float edgeBlend = max\((\d+\.\d+),/);
+      assert.ok(edgeBlend, 'edge blend threshold must be a GLSL float');
+      assert.equal(Number(edgeBlend[1]) / size, 0.75 / 512);
+      const settings = DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS;
+      assert.equal(shader.uniforms.stickerEdgeShape.value.x / size, settings.width);
+      assert.equal(shader.uniforms.stickerEdgeBounds.value.y / size, settings.width * settings.outerness);
+      cacheKeys.add(material.customProgramCacheKey());
+      shadowCacheKeys.add(shadowMaterial.customProgramCacheKey());
+    });
+  }
+  assert.equal(cacheKeys.size, 3);
+  assert.equal(shadowCacheKeys.size, 3);
+});
 
 function frontMaterialArea(geometry: THREE.BufferGeometry) {
   const positions = geometry.attributes.position;
@@ -835,8 +890,9 @@ test('outward tuning grows and trims picking before and after peeling without up
   const mapVersion = map.version;
   const finishVersion = finishMap.version;
   const materialVersion = material.version;
-  assert.equal(map.image.width, 512);
-  assert.equal(map.image.height, 512);
+  const artworkCanvas = map.image as HTMLCanvasElement;
+  assert.equal(artworkCanvas.width, 512);
+  assert.equal(artworkCanvas.height, 512);
   const position = geometry.attributes.position;
   const uv = geometry.attributes.uv;
   const indices = geometry.index!;

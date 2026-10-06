@@ -4,8 +4,8 @@ import { MI_NOTE_STAR_VERTICAL_DEFAULT, normalizeMiNoteStarFoldPosition, normali
 import { createMiNoteStickerFinish, MI_NOTE_STICKER_EDGE_DISTANCE, MI_NOTE_STICKER_OUTLINE_SUPPORT } from './miNoteStickerFinish';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, normalizeMiNoteStickerEffectSettings, type MiNoteStickerEffectSettings } from './miNoteStickerEffects';
 
-const STICKER_SIZE = 512;
-const ARTWORK_PADDING = 32;
+export type MiNoteStickerTextureSize = 512 | 1024 | 2048;
+
 const STICKER_WIDTH = 0.56;
 const SURFACE_CLEARANCE = 0.0015;
 const PROFILE_SEGMENTS = [56, 64, 40];
@@ -13,17 +13,6 @@ const WIDTH_SEGMENTS = PROFILE_SEGMENTS.reduce((total, count) => total + count, 
 const HEIGHT_SEGMENTS = 48;
 const PEEL_DURATION = 1.2;
 const ARTWORK_TIMEOUT_MS = 30_000;
-const OUTLINE_ANTIALIAS = 0.75;
-const stickerCoverageFragment = `
-  vec4 stickerFinish = texture2D(stickerFinishMap, vMapUv);
-  float stickerDistance = (stickerFinish.b * 2.0 - 1.0) * ${MI_NOTE_STICKER_EDGE_DISTANCE.toFixed(1)};
-  float stickerAntialias = max(${OUTLINE_ANTIALIAS}, .75 * fwidth(stickerDistance));
-  float stickerBacking = 1.0 - smoothstep(stickerEdgeBounds.y - stickerAntialias,
-    stickerEdgeBounds.y + stickerAntialias, -stickerDistance);
-  float stickerCoverage = stickerFinish.a + (1.0 - stickerFinish.a) * stickerBacking;
-  float stickerFoil = (stickerCoverage - stickerFinish.a) / max(stickerCoverage, .0001);
-  diffuseColor.a = opacity * stickerCoverage;
-`;
 
 function sealPoint(distance: number, angle: number, radius: number, curvature: number) {
   if (distance <= 0) return { x: distance, z: 0 };
@@ -55,6 +44,7 @@ export function createMiNotePackSeal({
   verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAULT,
   sizeScale = star.sizeScale,
   effectSettings = DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS,
+  stickerTextureSize = 512,
   onInvalidate,
 }: {
   parent: THREE.Group;
@@ -68,17 +58,33 @@ export function createMiNotePackSeal({
   verticalPosition?: number;
   sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
+  stickerTextureSize?: MiNoteStickerTextureSize;
   onInvalidate?: () => void;
 }) {
+  if (![512, 1024, 2048].includes(stickerTextureSize)) throw new RangeError('Sticker texture size must be 512, 1024, or 2048.');
+  const resolutionScale = stickerTextureSize / 512;
+  const artworkPadding = 32 * resolutionScale;
+  const edgeDistanceRange = MI_NOTE_STICKER_EDGE_DISTANCE * resolutionScale;
+  const outlineAntialias = 0.75 * resolutionScale;
+  const stickerCoverageFragment = `
+    vec4 stickerFinish = texture2D(stickerFinishMap, vMapUv);
+    float stickerDistance = (stickerFinish.b * 2.0 - 1.0) * ${edgeDistanceRange.toFixed(1)};
+    float stickerAntialias = max(${outlineAntialias.toFixed(2)}, .75 * fwidth(stickerDistance));
+    float stickerBacking = 1.0 - smoothstep(stickerEdgeBounds.y - stickerAntialias,
+      stickerEdgeBounds.y + stickerAntialias, -stickerDistance);
+    float stickerCoverage = stickerFinish.a + (1.0 - stickerFinish.a) * stickerBacking;
+    float stickerFoil = (stickerCoverage - stickerFinish.a) / max(stickerCoverage, .0001);
+    diffuseColor.a = opacity * stickerCoverage;
+  `;
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = STICKER_SIZE;
+  canvas.width = canvas.height = stickerTextureSize;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('The star sticker canvas could not be created.');
   const map = new THREE.CanvasTexture(canvas);
   map.colorSpace = THREE.SRGBColorSpace;
   map.anisotropy = 4;
-  const finishPixels = new Uint8Array(STICKER_SIZE * STICKER_SIZE * 4);
-  const finishMap = new THREE.DataTexture(finishPixels, STICKER_SIZE, STICKER_SIZE);
+  const finishPixels = new Uint8Array(stickerTextureSize * stickerTextureSize * 4);
+  const finishMap = new THREE.DataTexture(finishPixels, stickerTextureSize, stickerTextureSize);
   finishMap.flipY = true;
   finishMap.minFilter = THREE.LinearFilter;
   finishMap.magFilter = THREE.LinearFilter;
@@ -90,9 +96,9 @@ export function createMiNotePackSeal({
   };
   const updateEffectUniforms = () => {
     const effect = currentEffectSettings;
-    effectUniforms.stickerEdgeShape.value.set(effect.width * STICKER_SIZE, effect.softness, effect.strength, effect.scale);
+    effectUniforms.stickerEdgeShape.value.set(effect.width * stickerTextureSize, effect.softness, effect.strength, effect.scale);
     effectUniforms.stickerEdgeColor.value.set(effect.hue, effect.variation, effect.motion, effect.shine);
-    const bandWidth = effect.width * STICKER_SIZE;
+    const bandWidth = effect.width * stickerTextureSize;
     effectUniforms.stickerEdgeBounds.value.set(
       bandWidth * (1 - effect.outerness),
       bandWidth * effect.outerness,
@@ -179,7 +185,7 @@ export function createMiNotePackSeal({
           vec3 reflectedFilm = outgoingLight * .3 + rainbow * .95 + vec3(.06);
           outgoingLight = mix(outgoingLight, reflectedFilm, filmStrength);
           if (stickerEdgeShape.z > 0.0) {
-            float edgeBlend = max(${OUTLINE_ANTIALIAS}, stickerEdgeShape.x * stickerEdgeShape.y * .5);
+            float edgeBlend = max(${outlineAntialias.toFixed(2)}, stickerEdgeShape.x * stickerEdgeShape.y * .5);
             float edgeMask = 1.0 - smoothstep(stickerEdgeBounds.x - edgeBlend,
               stickerEdgeBounds.x, stickerDistance);
             vec2 foilUv = (vMapUv - .5) * stickerEdgeShape.w;
@@ -202,7 +208,7 @@ export function createMiNotePackSeal({
         #include <opaque_fragment>
       `);
   };
-  material.customProgramCacheKey = () => 'mi-note-holographic-star-seal-v10';
+  material.customProgramCacheKey = () => `mi-note-holographic-star-seal-v11-${stickerTextureSize}`;
   const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
   (geometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
   (geometry.attributes.normal as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
@@ -216,13 +222,13 @@ export function createMiNotePackSeal({
     THREE.Mesh.prototype.raycast.call(mesh, raycaster, hits);
     for (const hit of hits) {
       if (!hit.uv) continue;
-      const x = THREE.MathUtils.clamp(Math.floor(hit.uv.x * STICKER_SIZE), 0, STICKER_SIZE - 1);
-      const y = THREE.MathUtils.clamp(Math.floor((1 - hit.uv.y) * STICKER_SIZE), 0, STICKER_SIZE - 1);
-      const offset = (y * STICKER_SIZE + x) * 4;
+      const x = THREE.MathUtils.clamp(Math.floor(hit.uv.x * stickerTextureSize), 0, stickerTextureSize - 1);
+      const y = THREE.MathUtils.clamp(Math.floor((1 - hit.uv.y) * stickerTextureSize), 0, stickerTextureSize - 1);
+      const offset = (y * stickerTextureSize + x) * 4;
       const artworkAlpha = finishPixels[offset + 3] / 255;
-      const distance = (finishPixels[offset + 2] / 255 * 2 - 1) * MI_NOTE_STICKER_EDGE_DISTANCE;
+      const distance = (finishPixels[offset + 2] / 255 * 2 - 1) * edgeDistanceRange;
       const radius = effectUniforms.stickerEdgeBounds.value.y;
-      const backingAlpha = 1 - THREE.MathUtils.smoothstep(-distance, radius - OUTLINE_ANTIALIAS, radius + OUTLINE_ANTIALIAS);
+      const backingAlpha = 1 - THREE.MathUtils.smoothstep(-distance, radius - outlineAntialias, radius + outlineAntialias);
       if (artworkAlpha + (1 - artworkAlpha) * backingAlpha >= material.alphaTest) intersections.push(hit);
     }
   };
@@ -252,7 +258,7 @@ export function createMiNotePackSeal({
       `)
       .replace('#include <map_fragment>', stickerCoverageFragment);
   };
-  shadowMaterial.customProgramCacheKey = () => 'mi-note-star-seal-shadow-v4';
+  shadowMaterial.customProgramCacheKey = () => `mi-note-star-seal-shadow-v5-${stickerTextureSize}`;
   const shadows = [-1, 1].map((side) => {
     const shadowGeometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
     shadowGeometry.setAttribute('uv', geometry.attributes.uv);
@@ -372,13 +378,13 @@ export function createMiNotePackSeal({
       clearLoadTimeout();
       if (disposed) return;
       try {
-        const scale = (STICKER_SIZE - 2 * ARTWORK_PADDING) / Math.max(artwork.naturalWidth, artwork.naturalHeight);
+        const scale = (stickerTextureSize - 2 * artworkPadding) / Math.max(artwork.naturalWidth, artwork.naturalHeight);
         const artworkWidth = artwork.naturalWidth * scale;
         const artworkHeight = artwork.naturalHeight * scale;
         context.imageSmoothingQuality = 'high';
-        context.drawImage(artwork, (STICKER_SIZE - artworkWidth) / 2, (STICKER_SIZE - artworkHeight) / 2, artworkWidth, artworkHeight);
-        const artworkPixels = context.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
-        const finished = createMiNoteStickerFinish(artworkPixels.data, STICKER_SIZE, STICKER_SIZE, MI_NOTE_STICKER_OUTLINE_SUPPORT);
+        context.drawImage(artwork, (stickerTextureSize - artworkWidth) / 2, (stickerTextureSize - artworkHeight) / 2, artworkWidth, artworkHeight);
+        const artworkPixels = context.getImageData(0, 0, stickerTextureSize, stickerTextureSize);
+        const finished = createMiNoteStickerFinish(artworkPixels.data, stickerTextureSize, stickerTextureSize, MI_NOTE_STICKER_OUTLINE_SUPPORT * resolutionScale, resolutionScale);
         artworkPixels.data.set(finished.pixels);
         context.putImageData(artworkPixels, 0, 0);
         pixels = artworkPixels.data;

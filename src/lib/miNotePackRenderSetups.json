@@ -1,0 +1,727 @@
+{
+  "schemaVersion": 1,
+  "modelVersion": "mi-note-pack-v1",
+  "shared": {
+    "output": {
+      "width": 1800,
+      "height": 2400
+    },
+    "renderer": {
+      "outputColorSpace": "srgb",
+      "toneMapping": "ACESFilmic",
+      "exposure": 1.05,
+      "clearColor": "#000000",
+      "clearAlpha": 0,
+      "antialias": true
+    },
+    "lighting": {
+      "hemisphere": {
+        "skyColor": "#ffffff",
+        "groundColor": "#b1b9ac",
+        "intensity": 2.2
+      },
+      "directional": [
+        {
+          "color": "#ffffff",
+          "intensity": 2.6,
+          "position": [
+            -3,
+            5,
+            7
+          ],
+          "target": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "color": "#e7f0ff",
+          "intensity": 0.8,
+          "position": [
+            4,
+            0,
+            4
+          ],
+          "target": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    "quality": {
+      "stickerTextureSize": 2048,
+      "anisotropy": 16
+    }
+  },
+  "setups": {
+    "cobalt-blue--blush": {
+      "id": "cobalt-blue--blush",
+      "packId": 1,
+      "variantId": "cobalt-blue",
+      "color": "#3559B7",
+      "sticker": {
+        "id": "blush",
+        "source": "stars/Blush Star.PNG",
+        "foldPosition": 0.574,
+        "rotationOffsetDegrees": 2.8,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.13,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "1.png"
+    },
+    "cobalt-blue--zombie": {
+      "id": "cobalt-blue--zombie",
+      "packId": 2,
+      "variantId": "cobalt-blue",
+      "color": "#3559B7",
+      "sticker": {
+        "id": "zombie",
+        "source": "stars/Zombie Star.PNG",
+        "foldPosition": 0.513,
+        "rotationOffsetDegrees": 2.4,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.22,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "2.png"
+    },
+    "cobalt-blue--supermetal": {
+      "id": "cobalt-blue--supermetal",
+      "packId": 3,
+      "variantId": "cobalt-blue",
+      "color": "#3559B7",
+      "sticker": {
+        "id": "supermetal",
+        "source": "stars/Supermetal Star.PNG",
+        "foldPosition": 0.58,
+        "rotationOffsetDegrees": 5.1,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.18,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "3.png"
+    },
+    "marigold--blush": {
+      "id": "marigold--blush",
+      "packId": 4,
+      "variantId": "marigold",
+      "color": "#E7A62C",
+      "sticker": {
+        "id": "blush",
+        "source": "stars/Blush Star.PNG",
+        "foldPosition": 0.574,
+        "rotationOffsetDegrees": 2.8,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.13,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "4.png"
+    },
+    "marigold--zombie": {
+      "id": "marigold--zombie",
+      "packId": 5,
+      "variantId": "marigold",
+      "color": "#E7A62C",
+      "sticker": {
+        "id": "zombie",
+        "source": "stars/Zombie Star.PNG",
+        "foldPosition": 0.513,
+        "rotationOffsetDegrees": 2.4,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.22,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "5.png"
+    },
+    "marigold--supermetal": {
+      "id": "marigold--supermetal",
+      "packId": 6,
+      "variantId": "marigold",
+      "color": "#E7A62C",
+      "sticker": {
+        "id": "supermetal",
+        "source": "stars/Supermetal Star.PNG",
+        "foldPosition": 0.58,
+        "rotationOffsetDegrees": 5.1,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.18,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "6.png"
+    },
+    "emerald--blush": {
+      "id": "emerald--blush",
+      "packId": 7,
+      "variantId": "emerald",
+      "color": "#20866C",
+      "sticker": {
+        "id": "blush",
+        "source": "stars/Blush Star.PNG",
+        "foldPosition": 0.574,
+        "rotationOffsetDegrees": 2.8,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.13,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "7.png"
+    },
+    "emerald--zombie": {
+      "id": "emerald--zombie",
+      "packId": 8,
+      "variantId": "emerald",
+      "color": "#20866C",
+      "sticker": {
+        "id": "zombie",
+        "source": "stars/Zombie Star.PNG",
+        "foldPosition": 0.513,
+        "rotationOffsetDegrees": 2.4,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.22,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "8.png"
+    },
+    "emerald--supermetal": {
+      "id": "emerald--supermetal",
+      "packId": 9,
+      "variantId": "emerald",
+      "color": "#20866C",
+      "sticker": {
+        "id": "supermetal",
+        "source": "stars/Supermetal Star.PNG",
+        "foldPosition": 0.58,
+        "rotationOffsetDegrees": 5.1,
+        "verticalPosition": 0.485,
+        "sizeScale": 1.18,
+        "effectSettings": {
+          "mode": "prism",
+          "width": 0.055,
+          "outerness": 0.13,
+          "softness": 1,
+          "strength": 0.66,
+          "scale": 1.5,
+          "hue": 0,
+          "variation": 0,
+          "motion": 0.9,
+          "shine": 0
+        }
+      },
+      "model": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotationDegrees": [
+          3.151267873219528,
+          -6.875493541569878,
+          -0.9167324722093171
+        ],
+        "rotationOrder": "XYZ",
+        "scale": [
+          1,
+          1,
+          1
+        ],
+        "folderPhase": 0,
+        "flipRotationY": 0,
+        "sealState": "sealed"
+      },
+      "camera": {
+        "position": [
+          0.023097026527591314,
+          -0.00008755014969043478,
+          3.334233057851239
+        ],
+        "quaternion": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fov": 34,
+        "aspect": 0.75,
+        "near": 0.1,
+        "far": 40,
+        "zoom": 1
+      },
+      "framing": {
+        "alphaBounds": {
+          "left": 123,
+          "top": 99,
+          "width": 1554,
+          "height": 2204
+        }
+      },
+      "imageFilename": "9.png"
+    }
+  }
+}

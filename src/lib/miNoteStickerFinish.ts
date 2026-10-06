@@ -62,11 +62,14 @@ function squaredDistances(source: Uint8ClampedArray, width: number, height: numb
   return distances;
 }
 
-export function createMiNoteStickerFinish(source: Uint8ClampedArray, width: number, height: number, radius = MI_NOTE_STICKER_BASE_RADIUS) {
+export function createMiNoteStickerFinish(source: Uint8ClampedArray, width: number, height: number, radius = MI_NOTE_STICKER_BASE_RADIUS, resolutionScale = 1) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || source.length !== width * height * 4) {
     throw new RangeError('Sticker artwork dimensions must match its pixels.');
   }
   if (!Number.isFinite(radius) || radius < 0) throw new RangeError('Sticker rim radius must be finite and nonnegative.');
+  if (!Number.isFinite(resolutionScale) || resolutionScale <= 0) throw new RangeError('Sticker resolution scale must be finite and positive.');
+  const edgeDistanceRange = MI_NOTE_STICKER_EDGE_DISTANCE * resolutionScale;
+  const bevelTaper = 1.5 * resolutionScale;
   const pixels = new Uint8ClampedArray(source.length);
   const finish = new Uint8ClampedArray(source.length);
   const distances = radius > 0 ? squaredDistances(source, width, height) : undefined;
@@ -83,8 +86,8 @@ export function createMiNoteStickerFinish(source: Uint8ClampedArray, width: numb
     const alpha = artworkAlpha + metalAlpha;
     const inside = artworkAlpha >= 0.5;
     const edgeDistance = Math.max(0, Math.sqrt(inside ? inwardDistances[index] : outwardDistances[index]) - 0.5);
-    const signedDistance = Math.min(MI_NOTE_STICKER_EDGE_DISTANCE, edgeDistance) * (inside ? 1 : -1);
-    finish[offset + 2] = (0.5 + signedDistance / (2 * MI_NOTE_STICKER_EDGE_DISTANCE)) * 255;
+    const signedDistance = Math.min(edgeDistanceRange, edgeDistance) * (inside ? 1 : -1);
+    finish[offset + 2] = (0.5 + signedDistance / (2 * edgeDistanceRange)) * 255;
     finish[offset + 3] = source[offset + 3];
     if (alpha === 0) continue;
     const t = radius > 0 ? Math.min(1, distance / radius) : 0;
@@ -95,7 +98,7 @@ export function createMiNoteStickerFinish(source: Uint8ClampedArray, width: numb
       pixels[offset + channel] = (source[offset + channel] * artworkAlpha + metal * metalAlpha) / alpha;
     }
     pixels[offset + 3] = alpha * 255;
-    const taper = 1 - smoothstep((distance - radius + 1.5) / 1.5);
+    const taper = 1 - smoothstep((distance - radius + bevelTaper) / bevelTaper);
     const bevelHeight = artworkAlpha * 0.3 + metalAlpha * (0.3 + crown * 0.06) * taper;
     finish[offset] = bevelHeight * 255;
     finish[offset + 1] = metalAlpha * 255;

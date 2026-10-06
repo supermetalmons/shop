@@ -177,6 +177,39 @@ test('outside distance reaches the negative cap beyond supported backing without
   }
 });
 
+test('higher resolution preserves normalized outline support, signed distance, and bevel width', () => {
+  const size = 512;
+  const source = new Uint8ClampedArray(size * size * 4);
+  for (let y = 128; y < 384; y += 1) {
+    for (let x = 128; x < 384; x += 1) source.set([100, 160, 220, 255], (y * size + x) * 4);
+  }
+  const base = createMiNoteStickerFinish(source, size, size, MI_NOTE_STICKER_OUTLINE_SUPPORT);
+  for (const scale of [2, 4]) {
+    const width = size * scale;
+    const highResolution = new Uint8ClampedArray(width * width * 4);
+    for (let y = 128 * scale; y < 384 * scale; y += 1) {
+      for (let x = 128 * scale; x < 384 * scale; x += 1) highResolution.set([100, 160, 220, 255], (y * width + x) * 4);
+    }
+    const scaled = createMiNoteStickerFinish(highResolution, width, width, MI_NOTE_STICKER_OUTLINE_SUPPORT * scale, scale);
+    const sample = (x: number, channel: number) => scaled.finish[(256 * scale * width + x) * 4 + channel];
+    const alpha = (x: number) => scaled.pixels[(256 * scale * width + x) * 4 + 3];
+    assert.equal(alpha(98 * scale), 255);
+    assert.equal(alpha(98 * scale - 1), 0);
+    assert.equal(sample(80 * scale - 1, 2), 0);
+    assert.equal(sample(176 * scale, 2), 255);
+    for (const x of [90, 98, 99, 100, 110, 127, 128, 150, 176]) {
+      const offset = (256 * size + x) * 4;
+      assert.ok(Math.abs(sample(Math.floor(x * scale + (scale - 1) / 2), 2) - base.finish[offset + 2]) <= 1);
+    }
+    const taperStart = sample(100 * scale, 0);
+    const taperMiddle = sample(99 * scale, 0);
+    const taperEdge = sample(98 * scale, 0);
+    assert.ok(taperStart > 70);
+    assert.ok(taperStart > taperMiddle && taperMiddle > taperEdge);
+    assert.ok(taperEdge <= 6);
+  }
+});
+
 test('translucent pixels retain their backing without becoming outside-distance seeds', () => {
   const { source, set, pixel } = artwork(41, 17);
   set(20, 8, [240, 80, 20, 255]);
@@ -242,4 +275,7 @@ test('invalid artwork dimensions and rim radii are rejected', () => {
   assert.throws(() => createMiNoteStickerFinish(new Uint8ClampedArray(4), 2, 1), RangeError);
   assert.throws(() => createMiNoteStickerFinish(new Uint8ClampedArray(4), 1, 1, -1), RangeError);
   assert.throws(() => createMiNoteStickerFinish(new Uint8ClampedArray(4), 1, 1, Infinity), RangeError);
+  for (const scale of [0, -1, Infinity, NaN]) {
+    assert.throws(() => createMiNoteStickerFinish(new Uint8ClampedArray(4), 1, 1, 0, scale), RangeError);
+  }
 });

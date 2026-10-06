@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createMiNotePackSeal } from './miNotePackSeal';
+import { createMiNotePackSeal, type MiNoteStickerTextureSize } from './miNotePackSeal';
 import type { MiNotePackStar } from './miNotePackStars';
 import type { MiNoteStickerEffectSettings } from './miNoteStickerEffects';
 
@@ -180,7 +180,7 @@ function pocketDepth(x: number, y: number, bow: number) {
     * THREE.MathUtils.clamp((y + HEIGHT / 2) / POCKET_HEIGHT, 0, 1);
 }
 
-export function createMiNotePackModel({ color, star, foldPosition, rotationOffsetDegrees, verticalPosition, sizeScale, effectSettings, onInvalidate }: {
+export function createMiNotePackModel({ color, star, foldPosition, rotationOffsetDegrees, verticalPosition, sizeScale, effectSettings, stickerTextureSize, onInvalidate }: {
   color: string;
   star: MiNotePackStar;
   foldPosition: number;
@@ -188,6 +188,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   verticalPosition?: number;
   sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
+  stickerTextureSize?: MiNoteStickerTextureSize;
   onInvalidate?: () => void;
 }) {
   const { fiber, grain } = createPaperTextures();
@@ -294,7 +295,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   };
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
-    seal = createMiNotePackSeal({ parent: right, width: MI_NOTE_LEAF_WIDTH, height: HEIGHT, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, verticalPosition, sizeScale, effectSettings, onInvalidate });
+    seal = createMiNotePackSeal({ parent: right, width: MI_NOTE_LEAF_WIDTH, height: HEIGHT, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, verticalPosition, sizeScale, effectSettings, stickerTextureSize, onInvalidate });
     right.traverse((object) => { object.userData.leaf = 2; });
   } catch (error) {
     releaseResources();
