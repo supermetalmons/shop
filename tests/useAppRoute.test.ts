@@ -75,7 +75,9 @@ test('pageshow restores the current route while irrelevant URL changes retain it
     window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true }));
   });
   const current = view.result.current;
-  assert.equal(current.preorderId, 'mi_note_cards_devnet');
+  assert.equal(current.kind, 'upcoming');
+  assert.equal(current.preorderId, null);
+  assert.equal(current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(current.walletCluster, 'devnet');
 
   act(() => {
@@ -85,13 +87,15 @@ test('pageshow restores the current route while irrelevant URL changes retain it
   assert.equal(view.result.current, current);
 });
 
-test('custom navigation and browser back/forward update the route', async () => {
+test('custom navigation and browser history switch between the Mi Note preorder and upcoming drop', async () => {
   const view = renderHook(useAppRoute);
   act(() => navigate('/mi_note_cards'));
   assert.equal(view.result.current.preorderId, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
   act(() => navigate('/mi_note_cards_devnet'));
-  assert.equal(view.result.current.preorderId, 'mi_note_cards_devnet');
+  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.preorderId, null);
+  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'devnet');
 
   await act(async () => {
@@ -107,7 +111,9 @@ test('custom navigation and browser back/forward update the route', async () => 
     window.history.forward();
     await navigated;
   });
-  assert.equal(view.result.current.preorderId, 'mi_note_cards_devnet');
+  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.preorderId, null);
+  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'devnet');
 });
 

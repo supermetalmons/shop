@@ -15,6 +15,7 @@ export type DropFamily =
   | 'little_swag_hoodies'
   | 'card_nft_2'
   | 'clear_cards'
+  | 'mi_note_cards'
   | 'tbd';
 
 export type DropSalesMode = 'standard' | 'stripe_receipt_only';
@@ -270,6 +271,8 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   drifella_binder: 'drifella_binder',
   drifella_shirt: 'drifella_shirt',
   little_swag_boxes: 'little_swag_boxes',
+  mi_note_cards: 'mi_note_cards',
+  mi_note_cards_devnet: 'mi_note_cards',
   poncho_drifella: 'poncho_drifella',
   tbd: 'tbd',
 };
@@ -295,6 +298,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'drifella_shirt' ||
     normalized === 'card_nft_2' ||
     normalized === 'clear_cards' ||
+    normalized === 'mi_note_cards' ||
     normalized === 'tbd' ||
     normalized === 'default'
   ) {

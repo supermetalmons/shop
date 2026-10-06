@@ -49,6 +49,7 @@ function order(id: number, preorderId = mainnet.preorderId, status: PreorderOrde
 function server(t: TestContext, orders: PreorderOrder[] = []) {
   const statusChecks: string[] = [];
   const availabilityChecks: string[] = [];
+  const challengeChecks: string[] = [];
   let challengedPreorder = mainnet.preorderId;
   t.mock.method(globalThis, 'fetch', async (input: unknown, init?: RequestInit) => {
     const url = new URL(String(input), 'https://mons.shop');
@@ -71,6 +72,7 @@ function server(t: TestContext, orders: PreorderOrder[] = []) {
     }
     if (url.pathname.endsWith('/auth/challenge')) {
       challengedPreorder = body.preorderId;
+      challengeChecks.push(body.preorderId);
       return Response.json({ challengeId: 'challenge', message: 'Verify ownership', expiresAtMs: Date.now() + 60_000 });
     }
     if (url.pathname.endsWith('/auth/verify')) return Response.json({
@@ -79,7 +81,7 @@ function server(t: TestContext, orders: PreorderOrder[] = []) {
     });
     assert.fail(`Unexpected request: ${url.pathname}`);
   });
-  return { statusChecks, availabilityChecks };
+  return { statusChecks, availabilityChecks, challengeChecks };
 }
 
 function harness(overrides: Partial<Options> = {}, client = new QueryClient({
@@ -102,7 +104,7 @@ function harness(overrides: Partial<Options> = {}, client = new QueryClient({
   return { ...view, options, client, toasts, successes, get refreshes() { return refreshes; } };
 }
 
-test('routes select the matching checkout and keep Ethereum verification scoped to its collection', async t => {
+test('the devnet upcoming route disables preorders while mainnet verification remains available', async t => {
   const calls = server(t);
   const providerListeners = new Set<unknown>();
   Object.defineProperty(window, 'ethereum', { configurable: true, value: {
@@ -119,18 +121,25 @@ test('routes select the matching checkout and keep Ethereum verification scoped 
   assert.equal(view.result.current.miNoteCardsPage, true);
 
   view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId });
+  assert.equal(view.result.current.miNoteCardsPage, false);
   assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);
   assert.equal(view.result.current.ethereumVerification.session, null);
   assert.equal(view.result.current.preorderCheckout.availability, null);
   assert.deepEqual(calls.availabilityChecks, [mainnet.preorderId]);
-  await act(async () => { await view.result.current.ethereumVerification.verify(); });
-  await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, devnet.preorderId));
+  await act(async () => {
+    await view.result.current.ethereumVerification.verify();
+    window.dispatchEvent(new dom.window.Event('focus'));
+  });
+  assert.equal(view.result.current.ethereumVerification.session, null);
+  assert.equal(view.result.current.preorderCheckout.availability, null);
+  assert.deepEqual(calls.challengeChecks, [mainnet.preorderId]);
+  assert.deepEqual(calls.availabilityChecks, [mainnet.preorderId]);
 
-  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId, commerceUiSuspended: true });
-  const checks = calls.availabilityChecks.length;
-  await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId });
   assert.equal(view.result.current.miNoteCardsPage, true);
-  assert.equal(calls.availabilityChecks.length, checks);
+  assert.equal(view.result.current.preorderCheckout.config.preorderId, mainnet.preorderId);
+  await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, mainnet.preorderId));
+  assert.ok(calls.availabilityChecks.every(preorderId => preorderId === mainnet.preorderId));
   view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/' }).preorderId });
   assert.equal(view.result.current.miNoteCardsPage, false);
   assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);

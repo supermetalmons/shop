@@ -22,18 +22,21 @@ import {
 } from '../src/lib/dropConfig.ts';
 import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
-test('Mi Note preorder route uses devnet while the public gallery stays on mainnet', () => {
+test('Mi Note devnet previews the upcoming drop while the public gallery stays on mainnet', () => {
   const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet/' });
-  assert.equal(route.kind, 'mi-note-cards');
+  assert.equal(route.kind, 'upcoming');
   assert.equal(route.path, '/mi_note_cards_devnet');
   assert.equal(route.shopPath, '/mi_note_cards_devnet');
-  assert.equal(route.preorderId, 'mi_note_cards_devnet');
+  assert.equal(route.preorderId, null);
   assert.equal(route.walletCluster, 'devnet');
   assert.equal(route.drop, null);
+  assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
   const mainnetRoute = resolveAppRoute({ pathname: '/mi_note_cards' });
+  assert.equal(mainnetRoute.kind, 'mi-note-cards');
   assert.equal(mainnetRoute.walletCluster, 'mainnet-beta');
   assert.equal(mainnetRoute.shopPath, '/mi_note_cards');
   assert.equal(mainnetRoute.preorderId, 'mi_note_cards');
+  assert.equal(mainnetRoute.upcoming, null);
 });
 
 const UPCOMING_ROUTES = [
@@ -77,6 +80,16 @@ const UPCOMING_ROUTES = [
     previewImageUrl: 'https://cdn.lil.org/nft/drifella_shirt/images/clean.webp',
     previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
+  },
+  {
+    path: '/mi_note_cards_devnet',
+    dropFamily: 'mi_note_cards',
+    solanaCluster: 'devnet',
+    label: 'Mi Note Cards',
+    title: 'Mi Note Cards',
+    previewImageUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    previewAspectRatio: 1050 / 1400,
+    boxNamePrefix: 'pack',
   },
 ] as const;
 
@@ -334,10 +347,12 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
 });
 
 test('drop family names normalize and default from IDs', () => {
-  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd'] as const) {
+  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd', 'mi_note_cards'] as const) {
     assert.equal(defaultDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(undefined, ` ${family.toUpperCase()} `), family);
     assert.equal(requireDropFamily(` ${family.toUpperCase()} `, 'dropFamily'), family);
   }
+  assert.equal(defaultDropFamilyForDropId('mi_note_cards_devnet'), 'mi_note_cards');
+  assert.equal(normalizeDropFamily(undefined, 'mi_note_cards_devnet'), 'mi_note_cards');
 });

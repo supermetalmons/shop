@@ -96,6 +96,21 @@ test('drop, upcoming, and home transitions discard the previous route configurat
   assert.equal(window.location.pathname, '/clear_cards');
 });
 
+test('Mi Note devnet uses the pack 1 image without activating purchases', () => {
+  const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet' });
+  const { result } = renderHook(() => useShopDrop(route));
+
+  assert.equal(result.current.upcomingDropRoute?.title, 'Mi Note Cards');
+  assert.deepEqual(result.current.upcomingMintPreviewMedia, {
+    imageSrc: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    aspectRatio: 1050 / 1400,
+  });
+  assert.equal(result.current.routeDrop, null);
+  assert.equal(result.current.routeConnection, null);
+  assert.equal(result.current.routeStripePaymentVisible, false);
+  assert.throws(() => result.current.requireRouteDrop('purchase'), /requires an explicit drop route/);
+});
+
 test('WIP routes keep home scroll semantics while their URL points at a preview', (t) => {
   const viewport = controlledViewport(t, 480);
   const home = resolveAppRoute({ pathname: '/' });

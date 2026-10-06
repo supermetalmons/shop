@@ -73,6 +73,7 @@ const familyNotes: Record<DropFamily, ShippingNoteCase> = {
   },
   card_nft_2: { ...cardNotes, itemsPerBox: 3 },
   clear_cards: { ...cardNotes, itemsPerBox: 1 },
+  mi_note_cards: defaultNotes,
   tbd: defaultNotes,
 };
 
