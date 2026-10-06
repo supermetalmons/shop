@@ -22,7 +22,7 @@ export type MiNoteStarRotationOffsets = Readonly<Record<string, number>>;
 export type MiNoteStarSizeScales = Readonly<Record<string, number>>;
 
 export function isMiNoteStarTunable(id: string): boolean {
-  return id === 'twinkle' || id === 'zombie';
+  return id !== 'blush' && MI_NOTE_PACK_STARS.some((star) => star.id === id);
 }
 
 export function normalizeMiNoteStarFoldPosition(value: number): number {

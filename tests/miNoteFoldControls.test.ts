@@ -62,7 +62,7 @@ test('horizontal slider emits normalized values and retains focus when the value
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     foldPosition: 0.621,
-    foldPositions: { ...initial.foldPositions, twinkle: 0.621 },
+    foldPositions: { ...initial.foldPositions, boy: 0.621 },
   }));
   assert.equal(view.getByRole('slider', { name: 'Horizontal position' }), slider);
   assert.equal(document.activeElement, slider);
@@ -88,7 +88,7 @@ test('rotation slider centers on the original orientation and preserves focus du
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     rotationOffsetDegrees: -2.5,
-    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, twinkle: -2.5 },
+    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, boy: -2.5 },
   }));
   assert.equal(view.getByRole('slider', { name: 'Rotation' }), slider);
   assert.equal(document.activeElement, slider);
@@ -116,7 +116,7 @@ test('size slider emits a scale and preserves focus during adjustment', () => {
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     sizeScale: 1.23,
-    sizeScales: { ...initial.sizeScales, twinkle: 1.23 },
+    sizeScales: { ...initial.sizeScales, boy: 1.23 },
   }));
   assert.equal(view.getByRole('slider', { name: 'Star size' }), size);
   assert.equal(document.activeElement, size);
@@ -152,7 +152,7 @@ test('the fixed Blush reference blocks tuning but still exports every star', asy
   assert.equal(isKeyboardShortcutTarget(copy), true);
   await act(async () => fireEvent.click(copy));
   const exported = JSON.parse(writeText.mock.calls[0].arguments[0] as string);
-  assert.deepEqual(Object.keys(exported.foldPositions), MI_NOTE_PACK_STARS.map(({ id }) => id));
+  assert.deepEqual(new Set(Object.keys(exported.foldPositions)), new Set(MI_NOTE_PACK_STARS.map(({ id }) => id)));
   assert.equal(exported.foldPositions.blush, 0.574);
   assert.equal(exported.rotationOffsetsDegrees.blush, 2.8);
   assert.equal(exported.sizeScales.blush, 1.13);
@@ -164,9 +164,9 @@ test('copy waits for clipboard success and exports every star including unchange
   const writeText = mock.fn(() => request.promise);
   setClipboard(writeText);
   const initial = props({
-    foldPositions: { ...parseMiNoteStarFolds(null), twinkle: 0.621 },
-    rotationOffsetsDegrees: { ...props().rotationOffsetsDegrees, twinkle: -2.5 },
-    sizeScales: { blush: 1.13, twinkle: 0.75, zombie: 1 },
+    foldPositions: { ...parseMiNoteStarFolds(null), boy: 0.621 },
+    rotationOffsetsDegrees: { ...props().rotationOffsetsDegrees, boy: -2.5 },
+    sizeScales: { ...parseMiNoteStarSizeScales(null), boy: 0.75 },
   });
   const view = render(createElement(MiNoteFoldControls, initial), { reactStrictMode: true });
   fireEvent.click(view.getByRole('button', { name: 'Copy JSON' }));
@@ -179,10 +179,10 @@ test('copy waits for clipboard success and exports every star including unchange
   const exported = JSON.parse(json);
   assert.equal(exported.version, 1);
   assert.equal(Object.keys(exported.foldPositions).length, MI_NOTE_PACK_STARS.length);
-  assert.equal(exported.foldPositions.twinkle, 0.621);
+  assert.equal(exported.foldPositions.boy, 0.621);
   assert.equal(exported.foldPositions.blush, 0.574);
   assert.equal(Object.keys(exported.rotationOffsetsDegrees).length, MI_NOTE_PACK_STARS.length);
-  assert.equal(exported.rotationOffsetsDegrees.twinkle, -2.5);
+  assert.equal(exported.rotationOffsetsDegrees.boy, -2.5);
   assert.equal(exported.rotationOffsetsDegrees.blush, 2.8);
   assert.equal(exported.verticalPosition, 0.485);
   assert.deepEqual(exported.sizeScales, initial.sizeScales);
@@ -224,16 +224,16 @@ test('missing clipboard support offers a manual export with the latest values', 
   await act(async () => fireEvent.click(view.getByRole('button', { name: 'Copy JSON' })));
   const latest = {
     ...initial,
-    foldPositions: { ...initial.foldPositions, twinkle: 0.45 },
-    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, twinkle: 3 },
-    sizeScales: { ...initial.sizeScales, twinkle: 1.2 },
+    foldPositions: { ...initial.foldPositions, boy: 0.45 },
+    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, boy: 3 },
+    sizeScales: { ...initial.sizeScales, boy: 1.2 },
   };
   view.rerender(createElement(MiNoteFoldControls, latest));
   const textarea = view.getByRole('textbox', { name: 'Star tuning JSON' }) as HTMLTextAreaElement;
-  assert.equal(JSON.parse(textarea.value).foldPositions.twinkle, 0.45);
-  assert.equal(JSON.parse(textarea.value).rotationOffsetsDegrees.twinkle, 3);
+  assert.equal(JSON.parse(textarea.value).foldPositions.boy, 0.45);
+  assert.equal(JSON.parse(textarea.value).rotationOffsetsDegrees.boy, 3);
   assert.equal(JSON.parse(textarea.value).verticalPosition, 0.485);
-  assert.equal(JSON.parse(textarea.value).sizeScales.twinkle, 1.2);
+  assert.equal(JSON.parse(textarea.value).sizeScales.boy, 1.2);
 });
 
 test('changing folds during clipboard permission does not claim stale values were copied', async () => {
@@ -243,7 +243,7 @@ test('changing folds during clipboard permission does not claim stale values wer
   const initial = props();
   const view = render(createElement(MiNoteFoldControls, initial));
   fireEvent.click(view.getByRole('button', { name: 'Copy JSON' }));
-  const latest = { ...initial, foldPosition: 0.7, foldPositions: { ...initial.foldPositions, twinkle: 0.7 } };
+  const latest = { ...initial, foldPosition: 0.7, foldPositions: { ...initial.foldPositions, boy: 0.7 } };
   view.rerender(createElement(MiNoteFoldControls, latest));
   fireEvent.click(view.getByRole('button', { name: 'Copying…' }));
   assert.equal(writeText.mock.callCount(), 1);
@@ -252,7 +252,7 @@ test('changing folds during clipboard permission does not claim stale values wer
   assert.equal(view.queryByRole('button', { name: 'Copied' }), null);
   await act(async () => fireEvent.click(view.getByRole('button', { name: 'Copy JSON' })));
   assert.equal(writeText.mock.callCount(), 2);
-  assert.equal(JSON.parse(writeText.mock.calls[1].arguments[0] as string).foldPositions.twinkle, 0.7);
+  assert.equal(JSON.parse(writeText.mock.calls[1].arguments[0] as string).foldPositions.boy, 0.7);
   assert.ok(view.getByRole('button', { name: 'Copied' }));
 });
 
@@ -266,14 +266,14 @@ test('changing rotation during clipboard permission does not claim stale values 
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     rotationOffsetDegrees: 4.1,
-    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, twinkle: 4.1 },
+    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, boy: 4.1 },
   }));
 
   await act(async () => request.resolve());
   assert.equal(view.queryByRole('button', { name: 'Copied' }), null);
   await act(async () => fireEvent.click(view.getByRole('button', { name: 'Copy JSON' })));
   assert.equal(writeText.mock.callCount(), 2);
-  assert.equal(JSON.parse(writeText.mock.calls[1].arguments[0] as string).rotationOffsetsDegrees.twinkle, 4.1);
+  assert.equal(JSON.parse(writeText.mock.calls[1].arguments[0] as string).rotationOffsetsDegrees.boy, 4.1);
   assert.ok(view.getByRole('button', { name: 'Copied' }));
 });
 
@@ -284,7 +284,7 @@ test('changing star size during clipboard permission invalidates the pending cop
   const initial = props();
   const view = render(createElement(MiNoteFoldControls, initial));
   fireEvent.click(view.getByRole('button', { name: 'Copy JSON' }));
-  const latest = { ...initial, sizeScale: 1.2, sizeScales: { ...initial.sizeScales, twinkle: 1.2 } };
+  const latest = { ...initial, sizeScale: 1.2, sizeScales: { ...initial.sizeScales, boy: 1.2 } };
   view.rerender(createElement(MiNoteFoldControls, latest));
   await act(async () => request.resolve());
   assert.equal(view.queryByRole('button', { name: 'Copied' }), null);
@@ -304,7 +304,7 @@ test('changing tuning clears an earlier clipboard success message', async () => 
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     foldPosition: 0.64,
-    foldPositions: { ...initial.foldPositions, twinkle: 0.64 },
+    foldPositions: { ...initial.foldPositions, boy: 0.64 },
   }));
   assert.ok(view.getByRole('button', { name: 'Copy JSON' }));
   assert.equal(view.queryByText('Copied to clipboard'), null);
@@ -331,7 +331,7 @@ test('storage failures briefly report the problem while tuning remains usable', 
   view.rerender(createElement(MiNoteFoldControls, {
     ...initial,
     rotationOffsetDegrees: 5,
-    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, twinkle: 5 },
+    rotationOffsetsDegrees: { ...initial.rotationOffsetsDegrees, boy: 5 },
   }));
   assert.ok(view.getByText('Not saved locally'));
 });

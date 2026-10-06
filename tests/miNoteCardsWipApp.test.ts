@@ -6,11 +6,8 @@ import type MiNotePackViewer from '../src/components/MiNotePackViewer.tsx';
 import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import type { MiNoteRevealEvent } from '../src/lib/miNoteCardReveal.ts';
-import {
-  DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS,
-  MI_NOTE_STICKER_EFFECTS_STORAGE_KEY,
-  parseMiNoteStickerEffect,
-} from '../src/lib/miNoteStickerEffects.ts';
+import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
+import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type ViewerProps = Parameters<typeof MiNotePackViewer>[0];
@@ -150,154 +147,58 @@ function card(index: 0 | 1) {
   return { element, content };
 }
 
-test('finish controls update sealed and peeled packs without remounting or resealing them', () => {
+test('all stars use the chosen finish without controls or saved finish overrides', t => {
+  const finishKeys = ['mi-note-sticker-effects:v1', 'mi-note-sticker-effects:prism-v1'];
+  const saved = JSON.stringify({ version: 2, effect: {
+    ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.02, outerness: 0.7, variation: 0.8,
+  } });
+  for (const key of finishKeys) window.localStorage.setItem(key, saved);
+  const getItem = t.mock.method(dom.window.Storage.prototype, 'getItem');
   const view = render(createElement(MiNoteCardsWipApp));
-  makeReady();
-  const original = viewer();
-  const sealedState = original.props.state;
-  assert.deepEqual(original.props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
-  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
-  assert.equal(view.queryByRole('combobox', { name: 'Finish approach' }), null);
-  assert.ok(view.getByText('Prismatic foil'));
-  fireEvent.change(view.getByRole('slider', { name: 'Band width' }), { target: { value: '0.05' } });
-  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.65' } });
-  fireEvent.change(view.getByRole('slider', { name: 'Hue' }), { target: { value: '0.42' } });
-  assert.equal(viewer(), original);
-  assert.equal(instances.length, 1);
-  assert.equal(original.props.state, sealedState);
-  assert.equal(original.props.effectSettings?.mode, 'prism');
-  assert.equal(original.props.effectSettings?.width, 0.05);
-  assert.equal(original.props.effectSettings?.outerness, 0.65);
-  assert.equal(original.props.effectSettings?.hue, 0.42);
-  assert.equal(original.props.interactionEnabled, true);
-
-  peelSeal(view);
-  const peeledState = original.props.state;
-  const cardElements = original.props.cardElements;
-  const calls = [...original.calls];
-  fireEvent.change(view.getByRole('slider', { name: 'Strength' }), { target: { value: '0.7' } });
-  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.15' } });
-  assert.equal(viewer(), original);
-  assert.equal(instances.length, 1);
-  assert.equal(original.props.state, peeledState);
-  assert.equal(original.props.state.stage, 'interactive');
-  assert.equal(original.props.state.taps, 4);
-  assert.equal(original.props.cardElements, cardElements);
-  assert.deepEqual(original.calls, calls);
-  assert.equal(original.props.effectSettings?.mode, 'prism');
-  assert.equal(original.props.effectSettings?.strength, 0.7);
-  assert.equal(original.props.effectSettings?.outerness, 0.15);
-  assert.deepEqual(parseMiNoteStickerEffect(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), original.props.effectSettings);
-});
-
-test('the sticker close-up button toggles framing without resetting sealed or peeled packs', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  makeReady();
-  const original = viewer();
-  const settings = original.props.effectSettings;
-  const sealedState = original.props.state;
-  assert.equal(original.props.inspectSticker, false);
-  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
-  const closeUp = view.getByRole('button', { name: 'Close-up' });
-  assert.equal(closeUp.getAttribute('aria-pressed'), 'false');
-
-  fireEvent.click(closeUp);
-
-  assert.equal(closeUp.getAttribute('aria-pressed'), 'true');
-  assert.equal(viewer(), original);
-  assert.equal(original.props.inspectSticker, true);
-  assert.equal(original.props.state, sealedState);
-  assert.equal(original.props.effectSettings, settings);
-  peelSeal(view);
-  const peeledState = original.props.state;
-  const calls = [...original.calls];
-
-  fireEvent.click(closeUp);
-
-  assert.equal(closeUp.getAttribute('aria-pressed'), 'false');
-  assert.equal(viewer(), original);
-  assert.equal(original.props.inspectSticker, false);
-  assert.equal(original.props.state, peeledState);
-  assert.equal(original.props.state.stage, 'interactive');
-  assert.equal(original.props.state.taps, 4);
-  assert.deepEqual(original.calls, calls);
-  assert.equal(instances.length, 1);
-});
-
-test('shared finish tuning survives star changes, opening resets, and app reloads', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
-  fireEvent.change(view.getByRole('slider', { name: 'Band width' }), { target: { value: '0.0475' } });
-  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.85' } });
-  fireEvent.change(view.getByRole('slider', { name: 'Hue' }), { target: { value: '0.2' } });
-  const settings = viewer().props.effectSettings;
+  assert.equal(view.queryByRole('button', { name: 'Sticker finish' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Close-up' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Import sticker finish JSON' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Copy sticker finish JSON' }), null);
+  assert.equal(view.queryByRole('slider', { name: 'Outerness' }), null);
+  assert.ok(view.getByRole('slider', { name: 'Horizontal position' }));
+  assert.ok(view.getByRole('slider', { name: 'Star size' }));
+  assert.deepEqual(viewer().props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
   const picker = view.getByRole('combobox', { name: 'Star sticker' });
-  fireEvent.change(picker, { target: { value: 'twinkle' } });
-  assert.equal(viewer().props.star.id, 'twinkle');
-  assert.deepEqual(viewer().props.effectSettings, settings);
-  openPack(view);
-  const previous = viewer();
-  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
-  assert.notEqual(viewer(), previous);
-  assert.equal(viewer().props.state.stage, 'sealed');
-  assert.deepEqual(viewer().props.effectSettings, settings);
-  fireEvent.change(picker, { target: { value: 'zombie' } });
-  assert.equal(viewer().props.star.id, 'zombie');
-  assert.deepEqual(viewer().props.effectSettings, settings);
-  assert.deepEqual(parseMiNoteStickerEffect(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), settings);
+  for (const id of ['boy', 'zombie', 'blush']) {
+    fireEvent.change(picker, { target: { value: id } });
+    assert.deepEqual(viewer().props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+    openPack(view);
+    assert.equal(viewer().props.state.stage, 'interactive');
+    assert.deepEqual(viewer().props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+    fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+    assert.equal(viewer().props.state.stage, 'sealed');
+    assert.deepEqual(viewer().props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+  }
   view.unmount();
-  const reloaded = render(createElement(MiNoteCardsWipApp));
-  assert.equal(viewer().props.star.id, 'blush');
-  assert.deepEqual(viewer().props.effectSettings, settings);
-  fireEvent.click(reloaded.getByRole('button', { name: 'Sticker finish' }));
-  assert.equal(reloaded.queryByRole('combobox', { name: 'Finish approach' }), null);
-  assert.equal(viewer().props.effectSettings?.mode, 'prism');
-  assert.equal((reloaded.getByRole('slider', { name: 'Band width' }) as HTMLInputElement).value, '0.0475');
-  assert.equal((reloaded.getByRole('slider', { name: 'Outerness' }) as HTMLInputElement).value, '0.85');
-  assert.equal((reloaded.getByRole('slider', { name: 'Hue' }) as HTMLInputElement).value, '0.2');
+  render(createElement(MiNoteCardsWipApp));
+  assert.deepEqual(viewer().props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+  assert.ok(getItem.mock.calls.every(call => !finishKeys.includes(call.arguments[0])));
+  for (const key of finishKeys) assert.equal(window.localStorage.getItem(key), saved);
 });
 
-test('legacy finish JSON migrates width and outerness without resealing the opened pack', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  openPack(view);
-  const original = viewer();
-  const state = original.props.state;
-  const cardElements = original.props.cardElements;
-  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
-  fireEvent.click(view.getByRole('button', { name: 'Import sticker finish JSON' }));
-  fireEvent.change(view.getByRole('textbox', { name: 'Sticker finish JSON' }), {
-    target: { value: JSON.stringify({ version: 1, effect: { mode: 'prism', width: 0.08, strength: 0.64, hue: 0.2 } }) },
-  });
-  fireEvent.click(view.getByRole('button', { name: 'Apply finish' }));
-  const expected = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.04, strength: 0.64, hue: 0.2 };
-  assert.equal(viewer(), original);
-  assert.equal(instances.length, 1);
-  assert.equal(original.props.state, state);
-  assert.equal(original.props.state.stage, 'interactive');
-  assert.equal(original.props.state.folderPose, 1);
-  assert.equal(original.props.cardElements, cardElements);
-  assert.deepEqual(original.props.effectSettings, expected);
-  assert.equal((view.getByRole('slider', { name: 'Band width' }) as HTMLInputElement).value, '0.04');
-  assert.equal((view.getByRole('slider', { name: 'Outerness' }) as HTMLInputElement).value, String(DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS.outerness));
-  assert.deepEqual(JSON.parse(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), { version: 2, effect: expected });
-});
-
-test('star selection removes Yellow, restores editable tuning, and keeps Blush fixed', t => {
+test('star selection pins Blush and Zombie, excludes Twinkle, and restores candidate tuning', t => {
   const storageKey = 'mi-note-star-folds:v1';
   const saved = JSON.stringify({
     version: 1,
-    foldPositions: { yellow: 0.8, blush: 0.7, twinkle: 0.6, zombie: 0.5 },
-    rotationOffsetsDegrees: { yellow: -10, blush: -9, twinkle: -8, zombie: -7 },
+    foldPositions: { twinkle: 0.8, yellow: 0.72, blush: 0.7, boy: 0.6, zombie: 0.5 },
+    rotationOffsetsDegrees: { twinkle: -10, yellow: 6, blush: -9, boy: -8, zombie: -7 },
     verticalPosition: 0.7,
-    sizeScales: { blush: 1.4, twinkle: 1.2, zombie: 0.85 },
+    sizeScales: { twinkle: 1.4, yellow: 1.05, blush: 1.4, boy: 1.2, zombie: 0.85 },
   });
   window.localStorage.setItem(storageKey, saved);
   const setItem = t.mock.method(dom.window.Storage.prototype, 'setItem');
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
-  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), [
-    ['blush', 'Blush Star'], ['twinkle', 'Twinkle Star'], ['zombie', 'Zombie Star'],
-  ]);
+  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]),
+    MI_NOTE_PACK_STARS.map(star => [star.id, star.name]));
+  assert.deepEqual(Array.from(picker.options).slice(0, 2).map(option => option.value), ['blush', 'zombie']);
+  assert.equal(picker.options.length, 16);
+  assert.equal(view.queryByRole('option', { name: 'Twinkle Star' }), null);
   assert.equal(picker.value, 'blush');
   const position = view.getByRole('slider', { name: 'Horizontal position' }) as HTMLInputElement;
   const rotation = view.getByRole('slider', { name: 'Rotation' }) as HTMLInputElement;
@@ -319,7 +220,7 @@ test('star selection removes Yellow, restores editable tuning, and keeps Blush f
   assert.ok(view.getByRole('button', { name: 'Copy JSON' }));
   assert.equal(setItem.mock.callCount(), 0);
   assert.equal(window.localStorage.getItem(storageKey), saved);
-  for (const [id, foldPosition, rotationOffsetDegrees, sizeScale] of [['twinkle', 0.6, -8, 1.2], ['zombie', 0.5, -7, 0.85]] as const) {
+  for (const [id, foldPosition, rotationOffsetDegrees, sizeScale] of [['zombie', 0.5, -7, 0.85], ['boy', 0.6, -8, 1.2], ['yellow', 0.72, 6, 1.05], ['83', 0.573, 0, 1]] as const) {
     fireEvent.change(picker, { target: { value: id } });
     assert.equal(viewer().props.star.id, id);
     assert.equal(viewer().props.foldPosition, foldPosition);
@@ -332,16 +233,16 @@ test('star selection removes Yellow, restores editable tuning, and keeps Blush f
   }
 });
 
-test('star cycling wraps across three choices and reset preserves the selected tuning', () => {
+test('star cycling wraps across the full picker and reset preserves the selected tuning', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' }) as HTMLSelectElement;
-  for (const id of ['twinkle', 'zombie', 'blush']) {
+  for (const id of [...MI_NOTE_PACK_STARS.slice(1).map(star => star.id), 'blush']) {
     fireEvent.click(view.getByRole('button', { name: 'Next star' }));
     assert.equal(picker.value, id);
     assert.equal(viewer().props.star.id, id);
   }
   fireEvent.click(view.getByRole('button', { name: 'Previous star' }));
-  assert.equal(picker.value, 'zombie');
+  assert.equal(picker.value, 'yellow');
   fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '63.4' } });
   fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '-3.1' } });
   fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '125' } });
@@ -349,7 +250,7 @@ test('star cycling wraps across three choices and reset preserves the selected t
   openPack(view);
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.notEqual(viewer(), previous);
-  assert.equal(picker.value, 'zombie');
+  assert.equal(picker.value, 'yellow');
   assert.equal(viewer().props.star, previous.props.star);
   assert.equal(viewer().props.foldPosition, 0.634);
   assert.equal(viewer().props.rotationOffsetDegrees, -3.1);
@@ -362,7 +263,7 @@ test('star cycling wraps across three choices and reset preserves the selected t
 test('tuning updates a sealed pack in place and retains separate sizes across reloads', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' });
-  fireEvent.change(picker, { target: { value: 'twinkle' } });
+  fireEvent.change(picker, { target: { value: 'boy' } });
   makeReady();
   const previous = viewer();
   const mounts = instances.length;
@@ -395,7 +296,7 @@ test('tuning updates a sealed pack in place and retains separate sizes across re
   const restoredPicker = reloaded.getByRole('combobox', { name: 'Star sticker' });
   assert.equal(viewer().props.verticalPosition, 0.485);
   assert.equal(viewer().props.sizeScale, 1.13);
-  fireEvent.change(restoredPicker, { target: { value: 'twinkle' } });
+  fireEvent.change(restoredPicker, { target: { value: 'boy' } });
   assert.equal(viewer().props.foldPosition, 0.642);
   assert.equal(viewer().props.rotationOffsetDegrees, -4.1);
   assert.equal(viewer().props.verticalPosition, 0.485);
@@ -410,7 +311,7 @@ test('tuning updates a sealed pack in place and retains separate sizes across re
 for (const control of ['Horizontal position', 'Star size']) {
   test(`adjusting ${control.toLowerCase()} on a peeled star reseals once before live tuning continues`, () => {
     const view = render(createElement(MiNoteCardsWipApp));
-    fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'twinkle' } });
+    fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'boy' } });
     openPack(view);
     const previous = viewer();
     const images = previous.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
@@ -426,7 +327,7 @@ for (const control of ['Horizontal position', 'Star size']) {
     const resealed = viewer();
     fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '6.4' } });
     assert.equal(viewer(), resealed);
-    assert.equal(viewer().props.foldPosition, control === 'Horizontal position' ? 0.65 : 0.49);
+    assert.equal(viewer().props.foldPosition, control === 'Horizontal position' ? 0.65 : 0.573);
     assert.equal(viewer().props.verticalPosition, 0.485);
     assert.equal(viewer().props.sizeScale, control === 'Star size' ? 1.25 : 1);
     assert.equal(viewer().props.rotationOffsetDegrees, 6.4);
