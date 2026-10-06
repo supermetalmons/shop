@@ -144,7 +144,7 @@ test('omitted layout uses the raised pack position and each star preset size', a
       star, verticalPosition: undefined, sizeScale: undefined,
     });
     const explicit = await createSeal(t, star.foldPosition, star.rotationOffsetDegrees, 0.0018, {
-      star, verticalPosition: 0.485, sizeScale: star.id === 'blush' ? 1.13 : 1,
+      star, verticalPosition: 0.485, sizeScale: star.sizeScale,
     });
     assert.ok(Math.abs(preset.pivot.position.y - 0.015 * 1.82) < 1e-10);
     assert.deepEqual(preset.mesh.geometry.attributes.position.array, explicit.mesh.geometry.attributes.position.array);
