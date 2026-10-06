@@ -129,7 +129,7 @@ test('the fixed Blush reference blocks tuning but still exports every star', asy
   const onSizeChange = mock.fn();
   const writeText = mock.fn(async () => undefined);
   setClipboard(writeText);
-  const initial = props({ disabled: true, foldPosition: 0.578, rotationOffsetDegrees: 2.8, sizeScale: 1.13, onChange, onRotationChange, onSizeChange });
+  const initial = props({ disabled: true, foldPosition: 0.574, rotationOffsetDegrees: 2.8, sizeScale: 1.13, onChange, onRotationChange, onSizeChange });
   const view = render(createElement(MiNoteFoldControls, initial));
   assert.ok(view.getByText('Blush is the fixed reference.'));
   const horizontal = view.getByRole('slider', { name: 'Horizontal position' }) as HTMLInputElement;
@@ -153,7 +153,7 @@ test('the fixed Blush reference blocks tuning but still exports every star', asy
   await act(async () => fireEvent.click(copy));
   const exported = JSON.parse(writeText.mock.calls[0].arguments[0] as string);
   assert.deepEqual(Object.keys(exported.foldPositions), MI_NOTE_PACK_STARS.map(({ id }) => id));
-  assert.equal(exported.foldPositions.blush, 0.578);
+  assert.equal(exported.foldPositions.blush, 0.574);
   assert.equal(exported.rotationOffsetsDegrees.blush, 2.8);
   assert.equal(exported.sizeScales.blush, 1.13);
   assert.equal(exported.verticalPosition, 0.485);
@@ -180,7 +180,7 @@ test('copy waits for clipboard success and exports every star including unchange
   assert.equal(exported.version, 1);
   assert.equal(Object.keys(exported.foldPositions).length, MI_NOTE_PACK_STARS.length);
   assert.equal(exported.foldPositions.twinkle, 0.621);
-  assert.equal(exported.foldPositions.blush, 0.578);
+  assert.equal(exported.foldPositions.blush, 0.574);
   assert.equal(Object.keys(exported.rotationOffsetsDegrees).length, MI_NOTE_PACK_STARS.length);
   assert.equal(exported.rotationOffsetsDegrees.twinkle, -2.5);
   assert.equal(exported.rotationOffsetsDegrees.blush, 2.8);

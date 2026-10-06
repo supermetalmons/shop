@@ -303,7 +303,8 @@ test('star selection removes Yellow, restores editable tuning, and keeps Blush f
   const rotation = view.getByRole('slider', { name: 'Rotation' }) as HTMLInputElement;
   assert.equal(position.disabled, true);
   assert.equal(rotation.disabled, true);
-  assert.equal(position.value, '57.8');
+  assert.ok(Math.abs(position.valueAsNumber - 57.4) < 1e-10);
+  assert.equal(position.getAttribute('aria-valuetext'), '57.4%');
   assert.equal(rotation.value, '2.8');
   assert.equal(viewer().props.verticalPosition, 0.485);
   assert.equal(viewer().props.sizeScale, 1.13);
@@ -313,7 +314,7 @@ test('star selection removes Yellow, restores editable tuning, and keeps Blush f
   fireEvent.change(rotation, { target: { value: '-10' } });
   fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '140' } });
   assert.equal(viewer().props.sizeScale, 1.13);
-  assert.equal(viewer().props.foldPosition, 0.578);
+  assert.equal(viewer().props.foldPosition, 0.574);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
   assert.ok(view.getByRole('button', { name: 'Copy JSON' }));
   assert.equal(setItem.mock.callCount(), 0);
@@ -385,7 +386,7 @@ test('tuning updates a sealed pack in place and retains separate sizes across re
   fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '44.3' } });
   fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '78' } });
   fireEvent.change(picker, { target: { value: 'blush' } });
-  assert.equal(viewer().props.foldPosition, 0.578);
+  assert.equal(viewer().props.foldPosition, 0.574);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
   assert.equal(viewer().props.verticalPosition, 0.485);
   assert.equal(viewer().props.sizeScale, 1.13);

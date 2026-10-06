@@ -19,7 +19,7 @@ const { act, cleanup, renderHook } = await import('@testing-library/react');
 const { useMiNoteStarFolds } = await import('../src/hooks/useMiNoteStarFolds.ts');
 const storage = window.localStorage;
 const storageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage')!;
-const defaultFolds = { blush: 0.578, twinkle: 0.49, zombie: 0.487 };
+const defaultFolds = { blush: 0.574, twinkle: 0.49, zombie: 0.487 };
 const defaultRotations = { blush: 2.8, twinkle: 3.2, zombie: 2.4 };
 const defaultSizes = { blush: 1.13, twinkle: 1, zombie: 1 };
 
@@ -89,7 +89,7 @@ test('legacy settings recover tunable stars while ignoring fixed, removed, and u
     foldPositions: { blush: 0.3, twinkle: 0.73145, zombie: 0.1, yellow: 0.8, unknown: 0.6 },
     rotationOffsetsDegrees: { blush: -10, twinkle: 7.64, zombie: -15, yellow: 12, unknown: 3 },
   });
-  assert.deepEqual(parseMiNoteStarFolds(raw), { blush: 0.578, twinkle: 0.731, zombie: 0.1 });
+  assert.deepEqual(parseMiNoteStarFolds(raw), { blush: 0.574, twinkle: 0.731, zombie: 0.1 });
   assert.deepEqual(parseMiNoteStarRotationOffsets(raw), { blush: 2.8, twinkle: 7.6, zombie: -15 });
   assert.deepEqual(parseMiNoteStarSizeScales(raw), defaultSizes);
   const partiallyInvalid = JSON.stringify({
@@ -124,7 +124,7 @@ test('serialization exports fixed vertical position and Blush presets with norma
   const payload = JSON.parse(serialized);
   assert.deepEqual(payload, {
     version: 1,
-    foldPositions: { blush: 0.578, twinkle: 0.612, zombie: 0.1 },
+    foldPositions: { blush: 0.574, twinkle: 0.612, zombie: 0.1 },
     rotationOffsetsDegrees: { blush: 2.8, twinkle: -3.7, zombie: 15 },
     verticalPosition: 0.485,
     sizeScales: { blush: 1.13, twinkle: 0.5, zombie: 1.5 },
@@ -160,7 +160,7 @@ test('adding size to a legacy fold-only payload preserves recovered tuning', () 
     version: 1, foldPositions: { blush: 0.42, twinkle: 0.731, zombie: 0.62, yellow: 0.8 },
   }));
   const view = renderHook(useMiNoteStarFolds);
-  assert.deepEqual(view.result.current.foldPositions, { blush: 0.578, twinkle: 0.731, zombie: 0.62 });
+  assert.deepEqual(view.result.current.foldPositions, { blush: 0.574, twinkle: 0.731, zombie: 0.62 });
   assert.deepEqual(view.result.current.rotationOffsetsDegrees, defaultRotations);
   act(() => {
     view.result.current.setRotationOffset('twinkle', -5.2);
@@ -216,7 +216,7 @@ test('batched edits retain both tunable stars, ignore fixed and removed IDs, and
       view.result.current.setRotationOffset(id, 10);
     }
   });
-  const expectedFolds = { blush: 0.578, twinkle: 0.68, zombie: 0.424 };
+  const expectedFolds = { blush: 0.574, twinkle: 0.68, zombie: 0.424 };
   const expectedRotations = { blush: 2.8, twinkle: -4.1, zombie: 5.5 };
   assert.deepEqual(view.result.current.foldPositions, expectedFolds);
   assert.deepEqual(view.result.current.rotationOffsetsDegrees, expectedRotations);
@@ -269,7 +269,7 @@ test('failed writes preserve edits and the next successful write persists all tu
     view.result.current.setRotationOffset('zombie', 4.8);
   });
   assert.equal(view.result.current.storageError, false);
-  assert.deepEqual(view.result.current.foldPositions, { blush: 0.578, twinkle: 0.65, zombie: 0.45 });
+  assert.deepEqual(view.result.current.foldPositions, { blush: 0.574, twinkle: 0.65, zombie: 0.45 });
   assert.deepEqual(view.result.current.rotationOffsetsDegrees, { blush: 2.8, twinkle: -7.3, zombie: 4.8 });
   const saved = storage.getItem(MI_NOTE_STAR_FOLDS_STORAGE_KEY);
   assert.deepEqual(parseMiNoteStarFolds(saved), view.result.current.foldPositions);
