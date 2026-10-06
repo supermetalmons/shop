@@ -185,7 +185,7 @@ test('star selection uses the final presets without tuning controls or saved ove
   const storageKey = 'mi-note-star-folds:v1';
   const saved = JSON.stringify({
     version: 1,
-    foldPositions: { blush: 0.7, zombie: 0.2, supermetal: 0.3, twinkle: 0.8 },
+    foldPositions: { blush: 0.7, zombie: 0.2, supermetal: 0.3 },
     rotationOffsetsDegrees: { blush: -9, zombie: -8, supermetal: -7 },
     verticalPosition: 0.7,
     sizeScales: { blush: 1.4, zombie: 0.85, supermetal: 0.5 },
