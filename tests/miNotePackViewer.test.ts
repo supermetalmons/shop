@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
 import { MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
+import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
+import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -66,10 +68,14 @@ type TestModel = {
   sealStarts: number;
   sealUpdates: { elapsed: number; reduced: boolean; motion: number }[];
   sealEffectSettings: MiNoteStickerEffectSettings[];
+  sealVerticalPosition: number;
+  sealSizeScale: number;
   disposed: boolean;
   setFolderPhase: (phase: number) => void;
   setSealFoldPosition: () => void;
   setSealRotationOffsetDegrees: () => void;
+  setSealVerticalPosition: (value: number) => void;
+  setSealSizeScale: (value: number) => void;
   setSealEffectSettings: (settings: MiNoteStickerEffectSettings) => void;
   getSealFocus: (target: THREE.Vector3) => THREE.Vector3;
   startSealPeel: () => void;
@@ -77,7 +83,7 @@ type TestModel = {
   dispose: () => void;
 };
 
-function createTestModel(): TestModel {
+function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAULT, sizeScale = star.sizeScale }: { star: MiNotePackStar; verticalPosition?: number; sizeScale?: number }): TestModel {
   const group = new THREE.Group();
   const flipRoot = new THREE.Group();
   const left = new THREE.Group();
@@ -92,12 +98,16 @@ function createTestModel(): TestModel {
     sealStarts: 0,
     sealUpdates: [] as TestModel['sealUpdates'],
     sealEffectSettings: [] as MiNoteStickerEffectSettings[],
+    sealVerticalPosition: verticalPosition,
+    sealSizeScale: sizeScale,
     disposed: false,
     setFolderPhase(phase: number) { model.phase = phase; },
     setSealFoldPosition() {},
     setSealRotationOffsetDegrees() {},
+    setSealVerticalPosition(value: number) { model.sealVerticalPosition = value; },
+    setSealSizeScale(value: number) { model.sealSizeScale = value; },
     setSealEffectSettings(settings: MiNoteStickerEffectSettings) { model.sealEffectSettings.push({ ...settings }); },
-    getSealFocus(target: THREE.Vector3) { return target.set(0.6, 0.05, 0.03); },
+    getSealFocus(target: THREE.Vector3) { return target.set(0.6, 0.05 + (0.5 - model.sealVerticalPosition) * 1.82, 0.03); },
     startSealPeel() { model.sealStarts += 1; },
     updateSeal(elapsed: number, reduced: boolean, motion: number) {
       model.sealUpdates.push({ elapsed, reduced, motion });
@@ -170,22 +180,28 @@ function settle() {
   assert.equal(frames.size, 0, 'The viewer should become idle after its animations finish');
 }
 
-function harness(initialState = createMiNoteRevealState(), interactionEnabled = true) {
+function harness(
+  initialState = createMiNoteRevealState(),
+  interactionEnabled = true,
+  initialLayout: { star?: MiNotePackStar; verticalPosition?: number; sizeScale?: number } = { verticalPosition: 0.5, sizeScale: 1 },
+) {
   const controls = { current: null as MiNotePackControls | null };
   const events: MiNoteRevealEvent[] = [];
   const readyChanges: boolean[] = [];
   const errors: Error[] = [];
   const cardElements = [document.createElement('div'), document.createElement('div')] as const;
-  const star = { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 };
+  const star = initialLayout.star ?? { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0, sizeScale: 1 };
   let state = initialState;
   let generation = 0;
   let effectSettings = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS };
   let inspectSticker = false;
+  let verticalPosition = initialLayout.verticalPosition;
+  let sizeScale = initialLayout.sizeScale;
   function Harness({ effectSettings, inspectSticker }: { effectSettings: MiNoteStickerEffectSettings; inspectSticker: boolean }) {
     const [current, dispatch] = useReducer(reduceMiNoteReveal, initialState);
     state = current;
     return createElement(MiNotePackViewer, {
-      color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, effectSettings, inspectSticker,
+      color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
       cardElements, state: current, interactionEnabled, controlsRef: controls,
       onEvent(event) { events.push(event); dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready }); },
@@ -204,6 +220,14 @@ function harness(initialState = createMiNoteRevealState(), interactionEnabled = 
     },
     setInspectSticker(value: boolean) {
       inspectSticker = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
+    setVerticalPosition(value: number) {
+      verticalPosition = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
+    setSizeScale(value: number) {
+      sizeScale = value;
       view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
     },
     reset() { view.rerender(createElement(Harness, { key: ++generation, effectSettings, inspectSticker })); },
@@ -263,6 +287,58 @@ test('live finish tuning renders a sealed pack once and returns to sleep without
   assert.equal(frames.size, 0);
   assert.equal(model.sealStarts, 0);
   assert.equal(model.sealUpdates.length, 0);
+});
+
+test('omitted layout props retain the raised position and Blush size through rendering', async () => {
+  const run = harness(undefined, true, { star: MI_NOTE_PACK_STARS[0] });
+  const model = models[0];
+  assert.equal(model.sealVerticalPosition, 0.485);
+  assert.equal(model.sealSizeScale, 1.13);
+  await makeReady();
+  assert.equal(model.sealVerticalPosition, 0.485);
+  assert.equal(model.sealSizeScale, 1.13);
+  run.setInspectSticker(true);
+  settle();
+  assert.equal(model.sealVerticalPosition, 0.485);
+  assert.equal(model.sealSizeScale, 1.13);
+  assert.equal(models.length, 1);
+});
+
+test('live star layout changes wake an idle viewer once and preserve its resources and state', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const renderer = renderers[0];
+  const state = run.state;
+  const readyChanges = [...run.readyChanges];
+  assert.equal(model.sealVerticalPosition, 0.5);
+  assert.equal(model.sealSizeScale, 1);
+
+  run.setVerticalPosition(0.3);
+  assert.equal(frames.size, 1);
+  advanceFrame();
+  assert.equal(frames.size, 0);
+  assert.equal(model.sealVerticalPosition, 0.3);
+  assert.equal(model.sealSizeScale, 1);
+
+  run.setSizeScale(1.4);
+  assert.equal(frames.size, 1);
+  advanceFrame();
+  assert.equal(frames.size, 0);
+  assert.equal(model.sealVerticalPosition, 0.3);
+  assert.equal(model.sealSizeScale, 1.4);
+  assert.deepEqual(models, [model]);
+  assert.deepEqual(renderers, [renderer]);
+  assert.equal(run.state, state);
+  assert.deepEqual(run.readyChanges, readyChanges);
+  assert.equal(model.sealStarts, 0);
+  assert.equal(model.sealUpdates.length, 0);
+
+  run.reset();
+  assert.equal(models[1].sealVerticalPosition, 0.3);
+  assert.equal(models[1].sealSizeScale, 1.4);
+  await makeReady();
 });
 
 test('live finish tuning preserves the peeled state and ongoing flutter in the same viewer', async () => {

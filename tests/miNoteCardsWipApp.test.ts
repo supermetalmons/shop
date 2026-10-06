@@ -282,12 +282,14 @@ test('legacy finish JSON migrates width and outerness without resealing the open
   assert.deepEqual(JSON.parse(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), { version: 2, effect: expected });
 });
 
-test('star selection removes Yellow, restores editable tuning, and locks Blush to its reference', t => {
+test('star selection removes Yellow, restores editable tuning, and keeps Blush fixed', t => {
   const storageKey = 'mi-note-star-folds:v1';
   const saved = JSON.stringify({
     version: 1,
     foldPositions: { yellow: 0.8, blush: 0.7, twinkle: 0.6, zombie: 0.5 },
     rotationOffsetsDegrees: { yellow: -10, blush: -9, twinkle: -8, zombie: -7 },
+    verticalPosition: 0.7,
+    sizeScales: { blush: 1.4, twinkle: 1.2, zombie: 0.85 },
   });
   window.localStorage.setItem(storageKey, saved);
   const setItem = t.mock.method(dom.window.Storage.prototype, 'setItem');
@@ -303,18 +305,27 @@ test('star selection removes Yellow, restores editable tuning, and locks Blush t
   assert.equal(rotation.disabled, true);
   assert.equal(position.value, '57.8');
   assert.equal(rotation.value, '2.8');
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.13);
+  assert.equal(view.queryByRole('slider', { name: 'Vertical position' }), null);
+  assert.equal((view.getByRole('slider', { name: 'Star size' }) as HTMLInputElement).disabled, true);
   fireEvent.change(position, { target: { value: '80' } });
   fireEvent.change(rotation, { target: { value: '-10' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '140' } });
+  assert.equal(viewer().props.sizeScale, 1.13);
   assert.equal(viewer().props.foldPosition, 0.578);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
   assert.ok(view.getByRole('button', { name: 'Copy JSON' }));
   assert.equal(setItem.mock.callCount(), 0);
   assert.equal(window.localStorage.getItem(storageKey), saved);
-  for (const [id, foldPosition, rotationOffsetDegrees] of [['twinkle', 0.6, -8], ['zombie', 0.5, -7]] as const) {
+  for (const [id, foldPosition, rotationOffsetDegrees, sizeScale] of [['twinkle', 0.6, -8, 1.2], ['zombie', 0.5, -7, 0.85]] as const) {
     fireEvent.change(picker, { target: { value: id } });
     assert.equal(viewer().props.star.id, id);
     assert.equal(viewer().props.foldPosition, foldPosition);
     assert.equal(viewer().props.rotationOffsetDegrees, rotationOffsetDegrees);
+    assert.equal(viewer().props.sizeScale, sizeScale);
+    assert.equal(viewer().props.verticalPosition, 0.485);
+    assert.equal((view.getByRole('slider', { name: 'Star size' }) as HTMLInputElement).disabled, false);
     assert.equal((view.getByRole('slider', { name: 'Horizontal position' }) as HTMLInputElement).disabled, false);
     assert.equal((view.getByRole('slider', { name: 'Rotation' }) as HTMLInputElement).disabled, false);
   }
@@ -332,6 +343,7 @@ test('star cycling wraps across three choices and reset preserves the selected t
   assert.equal(picker.value, 'zombie');
   fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '63.4' } });
   fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '-3.1' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '125' } });
   const previous = viewer();
   openPack(view);
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
@@ -340,61 +352,85 @@ test('star cycling wraps across three choices and reset preserves the selected t
   assert.equal(viewer().props.star, previous.props.star);
   assert.equal(viewer().props.foldPosition, 0.634);
   assert.equal(viewer().props.rotationOffsetDegrees, -3.1);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.25);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
 });
 
-test('tuning updates a sealed pack in place and stays independent across stars and reloads', () => {
+test('tuning updates a sealed pack in place and retains separate sizes across reloads', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   const picker = view.getByRole('combobox', { name: 'Star sticker' });
   fireEvent.change(picker, { target: { value: 'twinkle' } });
   makeReady();
   const previous = viewer();
+  const mounts = instances.length;
+  const state = previous.props.state;
   fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '64.2' } });
   fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '-4.1' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '123' } });
   assert.equal(viewer(), previous);
+  assert.equal(instances.length, mounts);
+  assert.equal(viewer().props.state, state);
   assert.equal(viewer().props.interactionEnabled, true);
   assert.equal(viewer().props.foldPosition, 0.642);
   assert.equal(viewer().props.rotationOffsetDegrees, -4.1);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.23);
   fireEvent.change(picker, { target: { value: 'zombie' } });
   assert.equal(viewer().props.foldPosition, 0.487);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.4);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1);
   fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '44.3' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Star size' }), { target: { value: '78' } });
   fireEvent.change(picker, { target: { value: 'blush' } });
   assert.equal(viewer().props.foldPosition, 0.578);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.8);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.13);
   view.unmount();
   const reloaded = render(createElement(MiNoteCardsWipApp));
   const restoredPicker = reloaded.getByRole('combobox', { name: 'Star sticker' });
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.13);
   fireEvent.change(restoredPicker, { target: { value: 'twinkle' } });
   assert.equal(viewer().props.foldPosition, 0.642);
   assert.equal(viewer().props.rotationOffsetDegrees, -4.1);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 1.23);
   fireEvent.change(restoredPicker, { target: { value: 'zombie' } });
   assert.equal(viewer().props.foldPosition, 0.443);
   assert.equal(viewer().props.rotationOffsetDegrees, 2.4);
+  assert.equal(viewer().props.verticalPosition, 0.485);
+  assert.equal(viewer().props.sizeScale, 0.78);
 });
 
-test('adjusting a peeled star reseals the same pack once before live tuning continues', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'twinkle' } });
-  openPack(view);
-  const previous = viewer();
-  const images = previous.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
-  const mounts = instances.length;
-  fireEvent.change(view.getByRole('slider', { name: 'Horizontal position' }), { target: { value: '65' } });
-  assert.equal(instances.length, mounts + 1);
-  assert.equal(previous.mounted, false);
-  assert.equal(viewer().props.state.stage, 'sealed');
-  assert.equal(viewer().props.state.folderPose, 0);
-  assert.equal(viewer().props.state.taps, 0);
-  assert.equal(viewer().props.color, previous.props.color);
-  assert.deepEqual(viewer().props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image), images);
-  const resealed = viewer();
-  fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '6.4' } });
-  assert.equal(viewer(), resealed);
-  assert.equal(viewer().props.foldPosition, 0.65);
-  assert.equal(viewer().props.rotationOffsetDegrees, 6.4);
-});
+for (const control of ['Horizontal position', 'Star size']) {
+  test(`adjusting ${control.toLowerCase()} on a peeled star reseals once before live tuning continues`, () => {
+    const view = render(createElement(MiNoteCardsWipApp));
+    fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'twinkle' } });
+    openPack(view);
+    const previous = viewer();
+    const images = previous.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
+    const mounts = instances.length;
+    fireEvent.change(view.getByRole('slider', { name: control }), { target: { value: control === 'Star size' ? '125' : '65' } });
+    assert.equal(instances.length, mounts + 1);
+    assert.equal(previous.mounted, false);
+    assert.equal(viewer().props.state.stage, 'sealed');
+    assert.equal(viewer().props.state.folderPose, 0);
+    assert.equal(viewer().props.state.taps, 0);
+    assert.equal(viewer().props.color, previous.props.color);
+    assert.deepEqual(viewer().props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image), images);
+    const resealed = viewer();
+    fireEvent.change(view.getByRole('slider', { name: 'Rotation' }), { target: { value: '6.4' } });
+    assert.equal(viewer(), resealed);
+    assert.equal(viewer().props.foldPosition, control === 'Horizontal position' ? 0.65 : 0.49);
+    assert.equal(viewer().props.verticalPosition, 0.485);
+    assert.equal(viewer().props.sizeScale, control === 'Star size' ? 1.25 : 1);
+    assert.equal(viewer().props.rotationOffsetDegrees, 6.4);
+  });
+}
 
 test('peeling leaves the ready pack closed until the next click opens it', () => {
   const view = render(createElement(MiNoteCardsWipApp));

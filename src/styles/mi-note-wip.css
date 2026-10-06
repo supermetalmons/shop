@@ -94,7 +94,7 @@
 .mi-note-wip__status {
   position: absolute;
   left: 50%;
-  bottom: 152px;
+  bottom: 184px;
   transform: translateX(-50%);
   display: flex;
   gap: 12px;
@@ -158,6 +158,11 @@
 .mi-note-wip__fold-row output {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.mi-note-wip__fold-scope {
+  text-align: center;
+  font-size: 10px;
 }
 
 button.mi-note-wip__copy-folds {
@@ -320,14 +325,20 @@ button.mi-note-wip__copy-folds:hover:not(:disabled),
   }
 
   .mi-note-wip__status {
-    bottom: max(184px, calc(env(safe-area-inset-bottom) + 174px));
+    bottom: max(216px, calc(env(safe-area-inset-bottom) + 206px));
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .mi-note-wip__stage {
+    bottom: 128px;
   }
 }
 
 @media (max-height: 700px) {
   .mi-note-wip__stage {
-    bottom: 128px;
+    bottom: 160px;
   }
 }
 

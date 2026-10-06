@@ -22,7 +22,7 @@ import {
 } from './lib/miNoteCardReveal';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
 import type { MiNoteStickerEffectSettings } from './lib/miNoteStickerEffects';
-import { isMiNoteStarTunable, normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './lib/miNoteStarFolds';
+import { isMiNoteStarTunable, normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset, normalizeMiNoteStarSizeScale } from './lib/miNoteStarFolds';
 import { navigate } from './navigation';
 import './styles/mi-note-wip.css';
 
@@ -31,6 +31,8 @@ function MiNotePackOpening({
   star,
   foldPosition,
   rotationOffsetDegrees,
+  verticalPosition,
+  sizeScale,
   effectSettings,
   inspectSticker,
   controlsRef,
@@ -42,6 +44,8 @@ function MiNotePackOpening({
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  verticalPosition: number;
+  sizeScale: number;
   effectSettings: MiNoteStickerEffectSettings;
   inspectSticker: boolean;
   controlsRef: RefObject<MiNotePackControls | null>;
@@ -132,6 +136,8 @@ function MiNotePackOpening({
           star={star}
           foldPosition={foldPosition}
           rotationOffsetDegrees={rotationOffsetDegrees}
+          verticalPosition={verticalPosition}
+          sizeScale={sizeScale}
           effectSettings={effectSettings}
           inspectSticker={inspectSticker}
           cardElements={cardElements}
@@ -206,11 +212,15 @@ export default function MiNoteCardsWipApp() {
   }));
   const [focused, setFocused] = useState(false);
   const [inspectSticker, setInspectSticker] = useState(false);
-  const { foldPositions, rotationOffsetsDegrees, setFoldPosition, setRotationOffset, storageError } = useMiNoteStarFolds();
+  const {
+    foldPositions, rotationOffsetsDegrees, verticalPosition, sizeScales,
+    setFoldPosition, setRotationOffset, setSizeScale, storageError,
+  } = useMiNoteStarFolds();
   const stickerEffects = useMiNoteStickerEffects();
   const tunable = isMiNoteStarTunable(round.star.id);
   const foldPosition = tunable ? foldPositions[round.star.id] : round.star.foldPosition;
   const rotationOffsetDegrees = tunable ? rotationOffsetsDegrees[round.star.id] : round.star.rotationOffsetDegrees;
+  const sizeScale = tunable ? sizeScales[round.star.id] : round.star.sizeScale;
   const stageRef = useRef<MiNoteRevealStage>('sealed');
   const controlsRef = useRef<MiNotePackControls | null>(null);
   const handleStageChange = useCallback((stage: MiNoteRevealStage) => { stageRef.current = stage; }, []);
@@ -263,6 +273,13 @@ export default function MiNoteCardsWipApp() {
     resealForAdjustment();
     setRotationOffset(round.star.id, next);
   };
+  const handleSizeChange = (value: number) => {
+    if (!tunable || !Number.isFinite(value)) return;
+    const next = normalizeMiNoteStarSizeScale(value);
+    if (next === sizeScale) return;
+    resealForAdjustment();
+    setSizeScale(round.star.id, next);
+  };
   const cycleStar = (direction: number) => {
     const index = MI_NOTE_PACK_STARS.findIndex((star) => star.id === round.star.id);
     handleStarChange(MI_NOTE_PACK_STARS[(index + direction + MI_NOTE_PACK_STARS.length) % MI_NOTE_PACK_STARS.length]);
@@ -299,6 +316,8 @@ export default function MiNoteCardsWipApp() {
         star={round.star}
         foldPosition={foldPosition}
         rotationOffsetDegrees={rotationOffsetDegrees}
+        verticalPosition={verticalPosition}
+        sizeScale={sizeScale}
         effectSettings={stickerEffects.settings}
         inspectSticker={inspectSticker}
         controlsRef={controlsRef}
@@ -354,9 +373,12 @@ export default function MiNoteCardsWipApp() {
             foldPositions={foldPositions}
             rotationOffsetDegrees={rotationOffsetDegrees}
             rotationOffsetsDegrees={rotationOffsetsDegrees}
+            sizeScale={sizeScale}
+            sizeScales={sizeScales}
             storageError={storageError}
             onChange={handleFoldChange}
             onRotationChange={handleRotationChange}
+            onSizeChange={handleSizeChange}
           />
         </div>
         <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>

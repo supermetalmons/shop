@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { MiNotePackStar } from './miNotePackStars';
-import { normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './miNoteStarFolds';
+import { MI_NOTE_STAR_VERTICAL_DEFAULT, normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset, normalizeMiNoteStarSizeScale, normalizeMiNoteStarVerticalPosition } from './miNoteStarFolds';
 import { createMiNoteStickerFinish, MI_NOTE_STICKER_EDGE_DISTANCE, MI_NOTE_STICKER_OUTLINE_SUPPORT } from './miNoteStickerFinish';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, normalizeMiNoteStickerEffectSettings, type MiNoteStickerEffectSettings } from './miNoteStickerEffects';
 
@@ -46,21 +46,27 @@ function sealPoint(distance: number, angle: number, radius: number, curvature: n
 export function createMiNotePackSeal({
   parent,
   width,
+  height,
   spine,
   thickness,
   star,
   foldPosition,
   rotationOffsetDegrees,
+  verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAULT,
+  sizeScale = star.sizeScale,
   effectSettings = DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS,
   onInvalidate,
 }: {
   parent: THREE.Group;
   width: number;
+  height: number;
   spine: number;
   thickness: number;
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  verticalPosition?: number;
+  sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
   onInvalidate?: () => void;
 }) {
@@ -220,8 +226,9 @@ export function createMiNotePackSeal({
       if (artworkAlpha + (1 - artworkAlpha) * backingAlpha >= material.alphaTest) intersections.push(hit);
     }
   };
+  let currentVerticalPosition = normalizeMiNoteStarVerticalPosition(verticalPosition);
   const pivot = new THREE.Group();
-  pivot.position.set(width, 0, spine / 2);
+  pivot.position.set(width, (0.5 - currentVerticalPosition) * height, spine / 2);
   pivot.add(mesh);
   parent.add(pivot);
   const shadowMaterial = new THREE.MeshBasicMaterial({
@@ -266,6 +273,7 @@ export function createMiNotePackSeal({
   let lastTwist = 0;
   let currentFoldPosition = normalizeMiNoteStarFoldPosition(foldPosition);
   let currentRotationOffsetDegrees = normalizeMiNoteStarRotationOffset(rotationOffsetDegrees);
+  let currentSizeScale = normalizeMiNoteStarSizeScale(sizeScale);
   const pose = (progress: number, flutter = 0, twist = 0) => {
     if (progress === lastProgress && flutter === lastFlutter && twist === lastTwist) return;
     lastProgress = progress;
@@ -273,6 +281,7 @@ export function createMiNotePackSeal({
     lastTwist = twist;
     const position = geometry.attributes.position;
     const uv = geometry.attributes.uv;
+    const stickerWidth = STICKER_WIDTH * currentSizeScale;
     const eased = progress ** 3 * (10 - 15 * progress + 6 * progress * progress);
     const angle = THREE.MathUtils.degToRad(5 - currentRotationOffsetDegrees);
     const cos = Math.cos(angle);
@@ -280,9 +289,9 @@ export function createMiNotePackSeal({
     const back = -thickness / 2 - SURFACE_CLEARANCE;
     const closedRadius = (spine + thickness + 2 * SURFACE_CLEARANCE) / 2;
     const wrapLength = Math.PI * closedRadius;
-    const backTangent = currentFoldPosition + wrapLength / (2 * STICKER_WIDTH);
+    const backTangent = currentFoldPosition + wrapLength / (2 * stickerWidth);
     const bendAngle = THREE.MathUtils.lerp(Math.PI, 0.85, eased) + flutter;
-    const peeledArcLength = Math.max(wrapLength, Math.min(0.25, backTangent * STICKER_WIDTH * 0.66));
+    const peeledArcLength = Math.max(wrapLength, Math.min(0.25, backTangent * stickerWidth * 0.66));
     const arcLength = THREE.MathUtils.lerp(wrapLength, peeledArcLength, eased);
     const curl = THREE.MathUtils.clamp((eased - 0.65) / 0.35, 0, 1);
     const curvature = -24 * curl * curl * (3 - 2 * curl);
@@ -292,7 +301,7 @@ export function createMiNotePackSeal({
     for (const distance of distances) {
       for (const u of [0, 1]) {
         rows.push(Math.abs(sin) < 1e-8 ? 0 : THREE.MathUtils.clamp(
-          0.5 + (distance - (backTangent - 0.5) * STICKER_WIDTH + (u - 0.5) * STICKER_WIDTH * cos) / (STICKER_WIDTH * sin),
+          0.5 + (distance - (backTangent - 0.5) * stickerWidth + (u - 0.5) * stickerWidth * cos) / (stickerWidth * sin),
           0,
           1,
         ));
@@ -301,23 +310,23 @@ export function createMiNotePackSeal({
     rows.sort((a, b) => b - a);
     for (let row = 0; row <= HEIGHT_SEGMENTS; row += 1) {
       const v = rows[row];
-      const y = (v - 0.5) * STICKER_WIDTH;
+      const y = (v - 0.5) * stickerWidth;
       const boundaries = [0, ...distances.map((distance) => THREE.MathUtils.clamp(
-        0.5 + ((backTangent - 0.5) * STICKER_WIDTH - distance + y * sin) / (STICKER_WIDTH * cos),
+        0.5 + ((backTangent - 0.5) * stickerWidth - distance + y * sin) / (stickerWidth * cos),
         0,
         1,
       )), 1];
-      const rowAngle = bendAngle + twist * y / STICKER_WIDTH;
+      const rowAngle = bendAngle + twist * y / stickerWidth;
       const radius = arcLength / rowAngle;
       let column = 0;
       for (let section = 0; section < PROFILE_SEGMENTS.length; section += 1) {
         const segments = PROFILE_SEGMENTS[section];
         for (let step = section === 0 ? 0 : 1; step <= segments; step += 1) {
           const u = THREE.MathUtils.lerp(boundaries[section], boundaries[section + 1], step / segments);
-          const x = (u - 0.5) * STICKER_WIDTH;
+          const x = (u - 0.5) * stickerWidth;
           const rotatedX = x * cos - y * sin;
           const rotatedY = x * sin + y * cos;
-          const distance = (backTangent - 0.5) * STICKER_WIDTH - rotatedX;
+          const distance = (backTangent - 0.5) * stickerWidth - rotatedX;
           const point = sealPoint(distance, rowAngle, radius, curvature + flutter * 8);
           const index = row * (WIDTH_SEGMENTS + 1) + column;
           position.setXYZ(index, point.x, rotatedY, back + point.z - spine / 2);
@@ -426,6 +435,22 @@ export function createMiNotePackSeal({
       const next = normalizeMiNoteStarRotationOffset(value);
       if (disposed || next === currentRotationOffsetDegrees) return;
       currentRotationOffsetDegrees = next;
+      const progress = lastProgress;
+      lastProgress = -1;
+      pose(progress, lastFlutter, lastTwist);
+      onInvalidate?.();
+    },
+    setVerticalPosition(value: number) {
+      const next = normalizeMiNoteStarVerticalPosition(value);
+      if (disposed || next === currentVerticalPosition) return;
+      currentVerticalPosition = next;
+      pivot.position.y = (0.5 - next) * height;
+      onInvalidate?.();
+    },
+    setSizeScale(value: number) {
+      const next = normalizeMiNoteStarSizeScale(value);
+      if (disposed || next === currentSizeScale) return;
+      currentSizeScale = next;
       const progress = lastProgress;
       lastProgress = -1;
       pose(progress, lastFlutter, lastTwist);

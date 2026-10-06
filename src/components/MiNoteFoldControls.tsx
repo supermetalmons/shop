@@ -6,9 +6,13 @@ import {
   MI_NOTE_STAR_ROTATION_MAX,
   MI_NOTE_STAR_ROTATION_MIN,
   MI_NOTE_STAR_ROTATION_STEP,
+  MI_NOTE_STAR_SIZE_MAX,
+  MI_NOTE_STAR_SIZE_MIN,
+  MI_NOTE_STAR_SIZE_STEP,
   serializeMiNoteStarFolds,
   type MiNoteStarFoldPositions,
   type MiNoteStarRotationOffsets,
+  type MiNoteStarSizeScales,
 } from '../lib/miNoteStarFolds';
 
 type MiNoteFoldControlsProps = {
@@ -16,10 +20,13 @@ type MiNoteFoldControlsProps = {
   foldPositions: MiNoteStarFoldPositions;
   rotationOffsetDegrees: number;
   rotationOffsetsDegrees: MiNoteStarRotationOffsets;
+  sizeScale: number;
+  sizeScales: MiNoteStarSizeScales;
   storageError: boolean;
   disabled: boolean;
   onChange: (value: number) => void;
   onRotationChange: (value: number) => void;
+  onSizeChange: (value: number) => void;
 };
 
 type CopyState = 'idle' | 'copying' | 'copied' | 'manual';
@@ -29,18 +36,22 @@ export default function MiNoteFoldControls({
   foldPositions,
   rotationOffsetDegrees,
   rotationOffsetsDegrees,
+  sizeScale,
+  sizeScales,
   storageError,
   disabled,
   onChange,
   onRotationChange,
+  onSizeChange,
 }: MiNoteFoldControlsProps) {
   const rangeId = useId();
   const rotationId = useId();
+  const sizeId = useId();
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const [showStorageError, setShowStorageError] = useState(storageError);
   const json = useMemo(
-    () => serializeMiNoteStarFolds(foldPositions, rotationOffsetsDegrees),
-    [foldPositions, rotationOffsetsDegrees],
+    () => serializeMiNoteStarFolds(foldPositions, rotationOffsetsDegrees, sizeScales),
+    [foldPositions, rotationOffsetsDegrees, sizeScales],
   );
   const rotationLabel = `${rotationOffsetDegrees > 0 ? '+' : ''}${rotationOffsetDegrees.toFixed(1)}°`;
   const latestJsonRef = useRef(json);
@@ -70,7 +81,7 @@ export default function MiNoteFoldControls({
     if (!storageError) return;
     const timer = window.setTimeout(() => setShowStorageError(false), 4000);
     return () => window.clearTimeout(timer);
-  }, [storageError, foldPositions, rotationOffsetsDegrees]);
+  }, [storageError, foldPositions, rotationOffsetsDegrees, sizeScales]);
 
   useLayoutEffect(() => {
     if (copyState === 'manual') {
@@ -144,6 +155,23 @@ export default function MiNoteFoldControls({
           onChange={(event) => { if (!disabled) onRotationChange(Number(event.target.value)); }}
         />
         <output htmlFor={rotationId}>{rotationLabel}</output>
+      </div>
+      <div className="mi-note-wip__fold-row">
+        <label htmlFor={sizeId}>Star size</label>
+        <input
+          id={sizeId}
+          type="range"
+          min={MI_NOTE_STAR_SIZE_MIN * 100}
+          max={MI_NOTE_STAR_SIZE_MAX * 100}
+          step={MI_NOTE_STAR_SIZE_STEP * 100}
+          value={sizeScale * 100}
+          disabled={disabled}
+          aria-valuetext={`${Math.round(sizeScale * 100)}% of original size`}
+          aria-describedby={`${sizeId}-scope`}
+          onChange={(event) => { if (!disabled) onSizeChange(Number(event.target.value) / 100); }}
+        />
+        <output htmlFor={sizeId}>{Math.round(sizeScale * 100)}%</output>
+        <span id={`${sizeId}-scope`} className="mi-note-wip__fold-scope">Selected star</span>
       </div>
       {disabled && <div className="mi-note-wip__fold-reference">Blush is the fixed reference.</div>}
       <div className="mi-note-wip__fold-feedback" role="status">

@@ -199,12 +199,12 @@ button.mi-note-sticker-effects__inspect[aria-pressed='true'] {
 @media (max-width: 760px) {
   .mi-note-sticker-effects {
     right: 12px;
-    bottom: max(180px, calc(env(safe-area-inset-bottom) + 170px));
+    bottom: max(212px, calc(env(safe-area-inset-bottom) + 202px));
     width: 340px;
   }
 
   .mi-note-sticker-effects__panel {
-    max-height: calc(100dvh - 242px);
+    max-height: calc(100dvh - 274px);
   }
 
   .mi-note-sticker-effects__sliders {

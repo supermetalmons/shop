@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import type { MiNotePackStar } from '../lib/miNotePackStars';
+import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../lib/miNoteStarFolds';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../lib/miNoteStickerEffects';
 import { CSS3DObject, CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 import {
@@ -27,6 +28,8 @@ type MiNotePackViewerProps = {
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  verticalPosition?: number;
+  sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
   inspectSticker?: boolean;
   cardElements: readonly [HTMLDivElement, HTMLDivElement];
@@ -144,6 +147,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         star: props.star,
         foldPosition: currentProps.current.foldPosition,
         rotationOffsetDegrees: currentProps.current.rotationOffsetDegrees,
+        verticalPosition: currentProps.current.verticalPosition,
+        sizeScale: currentProps.current.sizeScale,
         effectSettings: currentProps.current.effectSettings,
       });
     } catch (error) {
@@ -359,6 +364,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const state = currentProps.current.state;
       model.setSealFoldPosition(currentProps.current.foldPosition);
       model.setSealRotationOffsetDegrees(currentProps.current.rotationOffsetDegrees);
+      model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
+      model.setSealSizeScale(currentProps.current.sizeScale ?? currentProps.current.star.sizeScale);
       if (state.taps !== taps) {
         for (let count = taps + 1; count <= state.taps; count += 1) recoil.velocity += 1.6 + count * 0.65;
         taps = state.taps;
@@ -577,7 +584,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
   }, [props.color, props.star, props.cardElements, props.controlsRef]);
 
-  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.inspectSticker]);
+  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker]);
   useEffect(() => {
     effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
     invalidateRef.current();

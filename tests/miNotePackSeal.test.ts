@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import * as THREE from 'three';
 import { createMiNotePackSeal } from '../src/lib/miNotePackSeal.ts';
+import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 
 function setupArtwork(
@@ -45,16 +46,26 @@ function setupArtwork(
   return requests;
 }
 
-async function createSeal(t: TestContext, foldPosition: number, rotationOffsetDegrees = 0, thickness = 0.0018) {
+async function createSeal(
+  t: TestContext,
+  foldPosition: number,
+  rotationOffsetDegrees = 0,
+  thickness = 0.0018,
+  layout: Partial<Pick<Parameters<typeof createMiNotePackSeal>[0], 'star' | 'verticalPosition' | 'sizeScale' | 'onInvalidate'>> = {},
+) {
   const parent = new THREE.Group();
   const seal = createMiNotePackSeal({
     parent,
     width: 1.29,
+    height: 1.82,
     spine: 0.0158,
     thickness,
-    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition, rotationOffsetDegrees },
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition, rotationOffsetDegrees, sizeScale: 1 },
     foldPosition,
     rotationOffsetDegrees,
+    verticalPosition: 0.5,
+    sizeScale: 1,
+    ...layout,
   });
   t.after(() => seal.dispose());
   await seal.ready;
@@ -100,8 +111,9 @@ function assertAdhesiveRemainsAttached(
   pivot: THREE.Object3D,
   foldPosition: number,
   rotationOffsetDegrees: number,
+  sizeScale = 1,
 ) {
-  const width = 0.56;
+  const width = 0.56 * sizeScale;
   const thickness = 0.0018;
   const spine = 0.0158;
   const clearance = 0.0015;
@@ -124,6 +136,21 @@ function assertAdhesiveRemainsAttached(
   }
   assert.ok(attachedVertices > 0);
 }
+
+test('omitted layout uses the raised pack position and each star preset size', async (t) => {
+  setupArtwork(t);
+  for (const star of MI_NOTE_PACK_STARS) {
+    const preset = await createSeal(t, star.foldPosition, star.rotationOffsetDegrees, 0.0018, {
+      star, verticalPosition: undefined, sizeScale: undefined,
+    });
+    const explicit = await createSeal(t, star.foldPosition, star.rotationOffsetDegrees, 0.0018, {
+      star, verticalPosition: 0.485, sizeScale: star.id === 'blush' ? 1.13 : 1,
+    });
+    assert.ok(Math.abs(preset.pivot.position.y - 0.015 * 1.82) < 1e-10);
+    assert.deepEqual(preset.mesh.geometry.attributes.position.array, explicit.mesh.geometry.attributes.position.array);
+    assertBoundsMatchVertices(preset.mesh.geometry);
+  }
+});
 
 test('fold adjustment updates a stationary seal and hit bounds without replacing or reloading assets', async (t) => {
   const requests = setupArtwork(t);
@@ -194,6 +221,8 @@ test('peeling, flutter, and live tuning reuse the existing sticker resources wit
     seal.update(elapsed, false, index % 2 === 0 ? 1 : -1);
     seal.setFoldPosition(0.4 + index * 0.1);
     seal.setRotationOffsetDegrees(-8 + index * 4);
+    seal.setVerticalPosition(0.3 + index * 0.1);
+    seal.setSizeScale(0.6 + index * 0.2);
     assert.equal(parent.children.length, 1);
     assert.equal(parent.children[0], pivot);
     assert.equal(pivot.children.length, children.length);
@@ -212,6 +241,89 @@ test('peeling, flutter, and live tuning reuse the existing sticker resources wit
   assert.deepEqual(requests, ['/star.png']);
 });
 
+test('vertical positioning moves sticker, shadows, focus, and picking together without changing geometry', async (t) => {
+  setupArtwork(t);
+  let invalidations = 0;
+  const { seal, parent, pivot, mesh } = await createSeal(t, 0.573, 0, 0.0018, {
+    onInvalidate: () => { invalidations += 1; },
+  });
+  const meshes = pivot.children as THREE.Mesh<THREE.PlaneGeometry>[];
+  const versions = meshes.map(child => (child.geometry.attributes.position as THREE.BufferAttribute).version);
+  const originalFocus = seal.getFocus(new THREE.Vector3());
+  const ray = new THREE.Raycaster(new THREE.Vector3(1.2, 0, 1), new THREE.Vector3(0, 0, -1));
+  parent.updateMatrixWorld(true);
+  const originalHits = ray.intersectObject(mesh);
+  assert.ok(originalHits.length > 0);
+  const before = invalidations;
+
+  seal.setVerticalPosition(0.2);
+  parent.updateMatrixWorld(true);
+
+  const offset = 0.3 * 1.82;
+  assert.equal(pivot.position.y, offset);
+  assert.equal(invalidations, before + 1);
+  const movedFocus = seal.getFocus(new THREE.Vector3());
+  assert.ok(movedFocus.distanceTo(originalFocus.clone().add(new THREE.Vector3(0, offset, 0))) < 1e-10);
+  assert.equal(ray.intersectObject(mesh).length, 0);
+  ray.ray.origin.y += offset;
+  const movedHits = ray.intersectObject(mesh);
+  assert.ok(movedHits.length > 0);
+  assert.ok(movedHits[0].point.distanceTo(originalHits[0].point.clone().add(new THREE.Vector3(0, offset, 0))) < 1e-7);
+  meshes.forEach((child, index) => {
+    assert.equal(child.parent, pivot);
+    assert.equal((child.geometry.attributes.position as THREE.BufferAttribute).version, versions[index]);
+  });
+  seal.setVerticalPosition(0.2001);
+  assert.equal(invalidations, before + 1);
+  seal.dispose();
+  seal.setVerticalPosition(0.7);
+  assert.equal(pivot.position.y, offset);
+  assert.equal(invalidations, before + 1);
+});
+
+test('size tuning changes sticker dimensions while preserving the fixed pack wrap and current peel pose', async (t) => {
+  setupArtwork(t);
+  let invalidations = 0;
+  const adjusted = await createSeal(t, 0.573, -15, 0.0018, {
+    onInvalidate: () => { invalidations += 1; },
+  });
+  const baselineSize = adjusted.mesh.geometry.boundingBox!.getSize(new THREE.Vector3());
+  for (const sizeScale of [0.5, 1.25, 1.5]) {
+    const before = invalidations;
+    adjusted.seal.setSizeScale(sizeScale);
+    const size = adjusted.mesh.geometry.boundingBox!.getSize(new THREE.Vector3());
+    assert.ok(Math.abs(size.y - baselineSize.y * sizeScale) < 1e-7);
+    assert.ok(Math.abs(size.z - baselineSize.z) < 1e-7);
+    assert.ok(adjusted.pivot.scale.equals(new THREE.Vector3(1, 1, 1)));
+    assertAdhesiveRemainsAttached(adjusted.mesh, adjusted.pivot, 0.573, -15, sizeScale);
+    assertBoundsMatchVertices(adjusted.mesh.geometry);
+    assert.equal(invalidations, before + 1);
+    const version = (adjusted.mesh.geometry.attributes.position as THREE.BufferAttribute).version;
+    adjusted.seal.setSizeScale(sizeScale + 0.001);
+    assert.equal((adjusted.mesh.geometry.attributes.position as THREE.BufferAttribute).version, version);
+    assert.equal(invalidations, before + 1);
+  }
+
+  adjusted.seal.start();
+  for (const [elapsed, sizeScale] of [[1.1, 0.65], [3.6, 1.35]]) {
+    adjusted.seal.update(elapsed, false, 0.8);
+    adjusted.seal.setSizeScale(sizeScale);
+    const reference = await createSeal(t, 0.573, -15, 0.0018, { verticalPosition: 0.3, sizeScale });
+    reference.seal.start();
+    reference.seal.update(elapsed, false, 0.8);
+    assert.equal(reference.pivot.position.y, 0.2 * 1.82);
+    assert.deepEqual(adjusted.mesh.geometry.attributes.position.array, reference.mesh.geometry.attributes.position.array);
+    assertAdhesiveRemainsAttached(adjusted.mesh, adjusted.pivot, 0.573, -15, sizeScale);
+    assertBoundsMatchVertices(adjusted.mesh.geometry);
+  }
+  const version = (adjusted.mesh.geometry.attributes.position as THREE.BufferAttribute).version;
+  const before = invalidations;
+  adjusted.seal.dispose();
+  adjusted.seal.setSizeScale(1);
+  assert.equal((adjusted.mesh.geometry.attributes.position as THREE.BufferAttribute).version, version);
+  assert.equal(invalidations, before);
+});
+
 test('effect tuning updates existing uniforms without recompiling or replacing sticker resources', async (t) => {
   let artworkWrites = 0;
   let invalidations = 0;
@@ -221,9 +333,10 @@ test('effect tuning updates existing uniforms without recompiling or replacing s
   const seal = createMiNotePackSeal({
     parent,
     width: 1.29,
+    height: 1.82,
     spine: 0.0158,
     thickness: 0.0018,
-    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 },
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0, sizeScale: 1 },
     foldPosition: 0.573,
     rotationOffsetDegrees: 0,
     effectSettings: initial,

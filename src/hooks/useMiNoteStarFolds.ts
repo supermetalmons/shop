@@ -1,19 +1,24 @@
 import { useCallback, useRef, useState } from 'react';
 import {
   MI_NOTE_STAR_FOLDS_STORAGE_KEY,
+  MI_NOTE_STAR_VERTICAL_DEFAULT,
   isMiNoteStarTunable,
   normalizeMiNoteStarFoldPosition,
   normalizeMiNoteStarRotationOffset,
+  normalizeMiNoteStarSizeScale,
   parseMiNoteStarFolds,
   parseMiNoteStarRotationOffsets,
+  parseMiNoteStarSizeScales,
   serializeMiNoteStarFolds,
   type MiNoteStarFoldPositions,
   type MiNoteStarRotationOffsets,
+  type MiNoteStarSizeScales,
 } from '../lib/miNoteStarFolds';
 
 type StarTuning = {
   foldPositions: MiNoteStarFoldPositions;
   rotationOffsetsDegrees: MiNoteStarRotationOffsets;
+  sizeScales: MiNoteStarSizeScales;
 };
 
 function readStarFolds(): StarTuning & { storageError: boolean } {
@@ -22,12 +27,14 @@ function readStarFolds(): StarTuning & { storageError: boolean } {
     return {
       foldPositions: parseMiNoteStarFolds(serialized),
       rotationOffsetsDegrees: parseMiNoteStarRotationOffsets(serialized),
+      sizeScales: parseMiNoteStarSizeScales(serialized),
       storageError: false,
     };
   } catch {
     return {
       foldPositions: parseMiNoteStarFolds(null),
       rotationOffsetsDegrees: parseMiNoteStarRotationOffsets(null),
+      sizeScales: parseMiNoteStarSizeScales(null),
       storageError: true,
     };
   }
@@ -43,7 +50,7 @@ export function useMiNoteStarFolds() {
     try {
       window.localStorage.setItem(
         MI_NOTE_STAR_FOLDS_STORAGE_KEY,
-        serializeMiNoteStarFolds(tuning.foldPositions, tuning.rotationOffsetsDegrees),
+        serializeMiNoteStarFolds(tuning.foldPositions, tuning.rotationOffsetsDegrees, tuning.sizeScales),
       );
     } catch {
       storageError = true;
@@ -67,5 +74,13 @@ export function useMiNoteStarFolds() {
     saveTuning({ ...current, rotationOffsetsDegrees: { ...current.rotationOffsetsDegrees, [starId]: rotation } });
   }, [saveTuning]);
 
-  return { ...state, setFoldPosition, setRotationOffset };
+  const setSizeScale = useCallback((starId: string, value: number) => {
+    const current = tuningRef.current;
+    if (!isMiNoteStarTunable(starId) || !Object.hasOwn(current.sizeScales, starId)) return;
+    const sizeScale = normalizeMiNoteStarSizeScale(value);
+    if (current.sizeScales[starId] === sizeScale) return;
+    saveTuning({ ...current, sizeScales: { ...current.sizeScales, [starId]: sizeScale } });
+  }, [saveTuning]);
+
+  return { ...state, verticalPosition: MI_NOTE_STAR_VERTICAL_DEFAULT, setFoldPosition, setRotationOffset, setSizeScale };
 }
