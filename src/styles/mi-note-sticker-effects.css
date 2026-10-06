@@ -1,0 +1,276 @@
+.mi-note-sticker-effects {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(66px, calc(env(safe-area-inset-bottom) + 56px));
+  z-index: 1121;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: 8px;
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  color: color-mix(in srgb, var(--fg) 80%, var(--bg));
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.mi-note-sticker-effects button,
+.mi-note-sticker-effects textarea {
+  min-height: 30px;
+  margin: 0;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 13%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  color: inherit;
+  box-shadow: none;
+  font: inherit;
+  font-weight: 400;
+}
+
+.mi-note-sticker-effects button {
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mi-note-sticker-effects button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 7%, var(--bg));
+  color: var(--fg);
+}
+
+.mi-note-sticker-effects button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mi-note-sticker-effects :is(button, input, textarea):focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--fg) 55%, transparent);
+  outline-offset: 3px;
+}
+
+button.mi-note-sticker-effects__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 18px;
+  pointer-events: auto;
+}
+
+.mi-note-sticker-effects__swatch {
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 50%;
+  background: conic-gradient(from 30deg, #e7bbef, #c6c5f1, #aff1e0, #f7edae, #f3bbd3, #e7bbef);
+}
+
+.mi-note-sticker-effects__panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: min(620px, calc(100dvh - 132px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  box-shadow: 0 5px 22px rgb(0 0 0 / 6%);
+  pointer-events: auto;
+}
+
+.mi-note-sticker-effects__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.mi-note-sticker-effects__inspect {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 10px;
+}
+
+button.mi-note-sticker-effects__inspect[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg));
+  color: var(--fg);
+}
+
+.mi-note-sticker-effects__band-hint,
+.mi-note-sticker-effects__hint,
+.mi-note-sticker-effects__status,
+.mi-note-sticker-effects__error {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.mi-note-sticker-effects__band-hint,
+.mi-note-sticker-effects__hint,
+.mi-note-sticker-effects__status {
+  color: color-mix(in srgb, var(--fg) 60%, var(--bg));
+}
+
+.mi-note-sticker-effects__sliders {
+  display: grid;
+  gap: 3px;
+  margin: 11px 0;
+}
+
+.mi-note-sticker-effects__slider {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 37px;
+  align-items: center;
+  gap: 7px;
+  min-height: 29px;
+}
+
+.mi-note-sticker-effects__slider label {
+  font: inherit;
+  white-space: nowrap;
+}
+
+.mi-note-sticker-effects__slider input {
+  width: 100%;
+  min-width: 0;
+  height: 27px;
+  margin: 0;
+  padding: 0;
+  accent-color: color-mix(in srgb, var(--fg) 62%, var(--bg));
+  touch-action: pan-y;
+}
+
+.mi-note-sticker-effects__slider output {
+  text-align: right;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mi-note-sticker-effects__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.mi-note-sticker-effects__actions button {
+  flex: 1;
+  padding-inline: 6px;
+  font-size: 10px;
+}
+
+.mi-note-sticker-effects__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+
+.mi-note-sticker-effects__editor textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 190px;
+  margin-bottom: 9px;
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  resize: vertical;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.mi-note-sticker-effects__error {
+  margin-bottom: 9px;
+  color: light-dark(#a42d40, #ffa9b7);
+}
+
+.mi-note-wip-page--sticker-inspection .mi-note-wip__pickers {
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+}
+
+@media (max-width: 760px) {
+  .mi-note-sticker-effects {
+    right: 12px;
+    bottom: max(180px, calc(env(safe-area-inset-bottom) + 170px));
+    width: 340px;
+  }
+
+  .mi-note-sticker-effects__panel {
+    max-height: calc(100dvh - 242px);
+  }
+
+  .mi-note-sticker-effects__sliders {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 16px;
+  }
+
+  .mi-note-sticker-effects__slider {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1px 6px;
+  }
+
+  .mi-note-sticker-effects__slider input {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .mi-note-sticker-effects__editor textarea {
+    min-height: 130px;
+  }
+}
+
+@media (max-width: 540px) {
+  .mi-note-sticker-effects:has(.mi-note-sticker-effects__panel) {
+    bottom: max(42px, calc(env(safe-area-inset-bottom) + 32px));
+    width: calc(100vw - 24px);
+  }
+
+  .mi-note-sticker-effects__panel {
+    max-height: min(360px, calc(60dvh - 84px));
+    padding: 12px;
+  }
+
+  .mi-note-sticker-effects__sliders {
+    gap: 4px 14px;
+    margin: 8px 0;
+  }
+
+  .mi-note-sticker-effects__slider {
+    gap: 0 6px;
+  }
+
+  .mi-note-sticker-effects__slider input {
+    height: 22px;
+  }
+
+  .mi-note-sticker-effects__hint {
+    display: none;
+  }
+
+  .mi-note-sticker-effects__actions {
+    margin-top: 8px;
+  }
+
+  .mi-note-wip-page:has(.wip-controls:not(.wip-controls--hidden) .mi-note-sticker-effects__panel) .mi-note-wip__pickers {
+    display: none;
+  }
+
+  .mi-note-wip-page:has(.wip-controls:not(.wip-controls--hidden) .mi-note-sticker-effects__panel) .mi-note-wip__stage {
+    bottom: calc(var(--mi-note-sticker-controls-height, min(402px, calc(60dvh - 42px))) + max(42px, calc(env(safe-area-inset-bottom) + 32px)) + 8px);
+  }
+}
+
+@media (min-width: 380px) and (max-width: 540px) {
+  .mi-note-sticker-effects__sliders {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    column-gap: 12px;
+  }
+}

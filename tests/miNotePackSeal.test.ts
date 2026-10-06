@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import * as THREE from 'three';
 import { createMiNotePackSeal } from '../src/lib/miNotePackSeal.ts';
+import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 
 function setupArtwork(
   t: TestContext,
@@ -159,6 +160,168 @@ test('fold adjustment updates a stationary seal and hit bounds without replacing
   const version = (positions as THREE.BufferAttribute).version;
   seal.setFoldPosition(0.7);
   assert.equal((positions as THREE.BufferAttribute).version, version);
+});
+
+test('peeling, flutter, and live tuning reuse the existing sticker resources without texture uploads', async (t) => {
+  let artworkWrites = 0;
+  const requests = setupArtwork(t, undefined, () => { artworkWrites += 1; });
+  const { seal, parent, pivot, mesh } = await createSeal(t, 0.573);
+  const children = [...pivot.children];
+  assert.equal(children.length, 3);
+  const meshes = children.map((child) => {
+    assert.ok(child instanceof THREE.Mesh);
+    return child as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial | THREE.MeshBasicMaterial>;
+  });
+  const materials = meshes.map((child) => child.material);
+  const geometries = meshes.map((child) => child.geometry);
+  const map = mesh.material.map;
+  const finishMap = mesh.material.bumpMap;
+  assert.ok(map instanceof THREE.CanvasTexture);
+  assert.ok(finishMap instanceof THREE.DataTexture);
+  assert.equal(new Set(materials).size, 2);
+  assert.equal(new Set(geometries).size, 3);
+  for (const shadow of meshes.slice(1)) {
+    assert.ok(shadow.material instanceof THREE.MeshBasicMaterial);
+    assert.equal(shadow.material.map, map);
+  }
+  const mapVersion = map.version;
+  const finishVersion = finishMap.version;
+  const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
+  const positionVersion = positions.version;
+
+  seal.start();
+  for (const [index, elapsed] of [0.1, 0.7, 1.2, 3.6, 8].entries()) {
+    seal.update(elapsed, false, index % 2 === 0 ? 1 : -1);
+    seal.setFoldPosition(0.4 + index * 0.1);
+    seal.setRotationOffsetDegrees(-8 + index * 4);
+    assert.equal(parent.children.length, 1);
+    assert.equal(parent.children[0], pivot);
+    assert.equal(pivot.children.length, children.length);
+    meshes.forEach((child, meshIndex) => {
+      assert.equal(pivot.children[meshIndex], child);
+      assert.equal(child.geometry, geometries[meshIndex]);
+      assert.equal(child.material, materials[meshIndex]);
+      assert.equal(child.material.map, map);
+    });
+    assert.equal(mesh.material.bumpMap, finishMap);
+    assert.equal(map.version, mapVersion);
+    assert.equal(finishMap.version, finishVersion);
+  }
+  assert.ok(positions.version > positionVersion);
+  assert.equal(artworkWrites, 1);
+  assert.deepEqual(requests, ['/star.png']);
+});
+
+test('effect tuning updates existing uniforms without recompiling or replacing sticker resources', async (t) => {
+  let artworkWrites = 0;
+  let invalidations = 0;
+  const requests = setupArtwork(t, undefined, () => { artworkWrites += 1; });
+  const parent = new THREE.Group();
+  const initial: MiNoteStickerEffectSettings = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS };
+  const seal = createMiNotePackSeal({
+    parent,
+    width: 1.29,
+    spine: 0.0158,
+    thickness: 0.0018,
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 },
+    foldPosition: 0.573,
+    rotationOffsetDegrees: 0,
+    effectSettings: initial,
+    onInvalidate: () => { invalidations += 1; },
+  });
+  t.after(() => seal.dispose());
+  await seal.ready;
+  const mesh = parent.children[0].children[0] as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
+  const geometry = mesh.geometry;
+  const material = mesh.material;
+  const map = material.map!;
+  const finishMap = material.bumpMap!;
+  const materialVersion = material.version;
+  const mapVersion = map.version;
+  const finishVersion = finishMap.version;
+  const shader = {
+    ...THREE.ShaderLib.physical,
+    uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.physical.uniforms),
+  } as THREE.WebGLProgramParametersWithUniforms;
+  material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+  const shadowMeshes = mesh.parent!.children.slice(1) as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[];
+  const shadowMaterial = shadowMeshes[0].material;
+  assert.ok(shadowMaterial instanceof THREE.MeshBasicMaterial);
+  assert.ok(shadowMeshes.every(shadow => shadow.material === shadowMaterial));
+  const shadowMaterialVersion = shadowMaterial.version;
+  const shadowShader = {
+    ...THREE.ShaderLib.basic,
+    uniforms: THREE.UniformsUtils.clone(THREE.ShaderLib.basic.uniforms),
+  } as THREE.WebGLProgramParametersWithUniforms;
+  shadowMaterial.onBeforeCompile(shadowShader, {} as THREE.WebGLRenderer);
+  const shape = shader.uniforms.stickerEdgeShape;
+  const color = shader.uniforms.stickerEdgeColor;
+  const bounds = shader.uniforms.stickerEdgeBounds;
+  const shapeValue = shape.value;
+  const colorValue = color.value;
+  const boundsValue = bounds.value;
+  assert.ok(shapeValue instanceof THREE.Vector4);
+  assert.ok(colorValue instanceof THREE.Vector4);
+  assert.ok(boundsValue instanceof THREE.Vector2);
+  const assertEffect = (settings: MiNoteStickerEffectSettings) => {
+    assert.equal(shader.uniforms.stickerEdgeShape, shape);
+    assert.equal(shader.uniforms.stickerEdgeColor, color);
+    assert.equal(shader.uniforms.stickerEdgeBounds, bounds);
+    assert.equal(shape.value, shapeValue);
+    assert.equal(color.value, colorValue);
+    assert.equal(bounds.value, boundsValue);
+    assert.deepEqual(shapeValue.toArray(), [settings.width * 512, settings.softness, settings.strength, settings.scale]);
+    assert.deepEqual(colorValue.toArray(), [settings.hue, settings.variation, settings.motion, settings.shine]);
+    assert.deepEqual(boundsValue.toArray(), [
+      settings.width * 512 * (1 - settings.outerness),
+      settings.width * 512 * settings.outerness,
+    ]);
+    assert.equal(mesh.geometry, geometry);
+    assert.equal(mesh.material, material);
+    assert.equal(material.map, map);
+    assert.equal(material.bumpMap, finishMap);
+    assert.equal(shader.uniforms.stickerFinishMap.value, finishMap);
+    assert.equal(shadowShader.uniforms.stickerFinishMap.value, finishMap);
+    assert.equal(shadowShader.uniforms.stickerEdgeBounds, bounds);
+    assert.equal(shadowMaterial.version, shadowMaterialVersion);
+    assert.equal(material.version, materialVersion);
+    assert.equal(map.version, mapVersion);
+    assert.equal(finishMap.version, finishVersion);
+  };
+  const tune = (settings: MiNoteStickerEffectSettings) => {
+    const versions = ['position', 'normal', 'uv'].map(name => (geometry.attributes[name] as THREE.BufferAttribute).version);
+    const before = invalidations;
+    seal.setEffectSettings(settings);
+    assert.equal(invalidations, before + 1);
+    assertEffect(settings);
+    assert.deepEqual(['position', 'normal', 'uv'].map(name => (geometry.attributes[name] as THREE.BufferAttribute).version), versions);
+    seal.setEffectSettings(settings);
+    seal.setEffectSettings({ ...settings });
+    assert.equal(invalidations, before + 1);
+  };
+  assertEffect(initial);
+  const readyInvalidations = invalidations;
+  seal.setEffectSettings({ ...initial });
+  assert.equal(invalidations, readyInvalidations);
+  const prism: MiNoteStickerEffectSettings = {
+    mode: 'prism', width: 0.045, outerness: 0.9, softness: 0.6, strength: 0.8, scale: 2.4,
+    hue: 0.35, variation: 0.55, motion: 1.5, shine: 0.7,
+  };
+  tune(prism);
+  tune({ ...prism, width: 0.025, outerness: 0.4, hue: 0.8 });
+  tune({ ...prism, outerness: 0 });
+  seal.start();
+  assert.equal(seal.update(1.2, false), true);
+  tune({ ...prism, softness: 0.9, scale: 0.8, motion: 0.5 });
+  tune({ ...prism, strength: 0.4, variation: 0.1, shine: 0 });
+  tune(initial);
+  seal.dispose();
+  const disposedInvalidations = invalidations;
+  seal.setEffectSettings(prism);
+  assert.equal(invalidations, disposedInvalidations);
+  assertEffect(initial);
+  assert.equal(artworkWrites, 1);
+  assert.deepEqual(requests, ['/star.png']);
 });
 
 test('fold endpoints maintain valid geometry and moving right increases the front portion', async (t) => {
@@ -428,6 +591,34 @@ test('attached sticker follows parent translation and rotation after peeling', a
   assertAdhesiveRemainsAttached(mesh, pivot, 0.532, 9.3);
 });
 
+test('the reusable focus target follows the deformed seal through world transforms and peeling', async (t) => {
+  setupArtwork(t);
+  const { seal, parent, mesh } = await createSeal(t, 0.573);
+  const ancestor = new THREE.Group();
+  ancestor.position.set(-0.4, 0.6, 0.9);
+  ancestor.rotation.set(0.2, -0.5, 0.3);
+  ancestor.add(parent);
+  const target = new THREE.Vector3();
+  const expected = new THREE.Vector3();
+  seal.start();
+  for (const [index, elapsed] of [0, 0.35, 1.2, 2.4].entries()) {
+    seal.setFoldPosition(0.4 + index * 0.1);
+    seal.setRotationOffsetDegrees(-9 + index * 6);
+    seal.update(elapsed, false, 0.7);
+    parent.position.set(index * 0.2, -index * 0.1, index * 0.3);
+    parent.rotation.set(index * 0.1, index * 0.4, -index * 0.15);
+    const positions = mesh.geometry.attributes.position as THREE.BufferAttribute;
+    const version = positions.version;
+    const localCenter = mesh.geometry.boundingSphere!.center.clone();
+    assert.equal(seal.getFocus(target), target);
+    mesh.updateWorldMatrix(true, false);
+    new THREE.Box3().setFromBufferAttribute(positions).getCenter(expected).applyMatrix4(mesh.matrixWorld);
+    assert.ok(target.distanceTo(expected) < 1e-10);
+    assert.ok(mesh.geometry.boundingSphere!.center.equals(localCenter));
+    assert.equal(positions.version, version);
+  }
+});
+
 test('reduced motion leaves the peeled sticker attached without ongoing flutter', async (t) => {
   setupArtwork(t);
   const { seal, parent, pivot, mesh } = await createSeal(t, 0.49, 3.2);
@@ -460,7 +651,7 @@ test('pack motion changes the free flap while the adhesive section remains fixed
   assertBoundsMatchVertices(moving.mesh.geometry);
 });
 
-test('peeled sticker picking includes the backing under translucent art and preserves transparent areas', async (t) => {
+test('peeled sticker picking respects original alpha away from the outline and preserves transparent areas', async (t) => {
   const pixels = new Uint8ClampedArray(512 * 512 * 4);
   const alphaBands = [0, 101, 102, 255];
   for (let y = 0; y < 512; y += 1) {
@@ -498,7 +689,7 @@ test('peeled sticker picking includes the backing under translucent art and pres
     backing.position.copy(point).addScaledVector(normal, -0.01);
     backing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
     backing.updateMatrixWorld(true);
-    const opaque = alpha > 0;
+    const opaque = alpha >= 102;
     assert.equal(raycaster.intersectObject(parent, true).length > 0, opaque);
     assert.equal(raycaster.intersectObjects([backing, parent], true)[0]?.object, opaque ? mesh : backing);
     backing.geometry.dispose();
@@ -506,22 +697,37 @@ test('peeled sticker picking includes the backing under translucent art and pres
   }
 });
 
-test('the cut rim is rendered and pickable while pixels outside it preserve the background', async (t) => {
+test('outward tuning grows and trims picking before and after peeling without uploading resources', async (t) => {
   const pixels = new Uint8ClampedArray(512 * 512 * 4);
   for (let y = 220; y < 290; y += 1) {
     for (let x = 330; x < 390; x += 1) pixels.set([250, 70, 25, 255], (y * 512 + x) * 4);
   }
   let renderedPixels: Uint8ClampedArray | undefined;
-  setupArtwork(t, pixels, (image) => { renderedPixels = image; });
+  let artworkWrites = 0;
+  const requests = setupArtwork(t, pixels, (image) => { renderedPixels = image; artworkWrites += 1; });
   const { seal, parent, mesh } = await createSeal(t, 0.532, 9.3);
   assert.ok(renderedPixels);
   assert.deepEqual(Array.from(renderedPixels.slice((255 * 512 + 350) * 4, (255 * 512 + 350) * 4 + 4)), [250, 70, 25, 255]);
-  parent.updateMatrixWorld(true);
-  const position = mesh.geometry.attributes.position;
-  const uv = mesh.geometry.attributes.uv;
-  const indices = mesh.geometry.index!;
-  for (const [x, opaque] of [[318.5, true], [300.5, false]] as const) {
-    assert.equal(renderedPixels[(255 * 512 + Math.floor(x)) * 4 + 3] >= 102, opaque);
+  assert.equal(renderedPixels[(255 * 512 + 300) * 4 + 3], 255);
+  assert.equal(renderedPixels[(255 * 512 + 299) * 4 + 3], 0);
+  for (let coordinate = 0; coordinate < 512; coordinate += 1) {
+    for (const [x, y] of [[coordinate, 0], [coordinate, 511], [0, coordinate], [511, coordinate]]) {
+      assert.equal(renderedPixels[(y * 512 + x) * 4 + 3], 0);
+    }
+  }
+  const geometry = mesh.geometry;
+  const material = mesh.material;
+  const map = material.map!;
+  const finishMap = material.bumpMap!;
+  const mapVersion = map.version;
+  const finishVersion = finishMap.version;
+  const materialVersion = material.version;
+  assert.equal(map.image.width, 512);
+  assert.equal(map.image.height, 512);
+  const position = geometry.attributes.position;
+  const uv = geometry.attributes.uv;
+  const indices = geometry.index!;
+  const assertPicked = (x: number, opaque: boolean) => {
     const target = new THREE.Vector3(x / 512, 1 - 255.5 / 512, 0);
     const triangle = new THREE.Triangle();
     const barycentric = new THREE.Vector3();
@@ -538,17 +744,53 @@ test('the cut rim is rendered and pickable while pixels outside it preserve the 
       backing.position.copy(point).addScaledVector(normal, -0.01);
       backing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
       backing.updateMatrixWorld(true);
-      assert.equal(raycaster.intersectObjects([backing, parent], true)[0]?.object, opaque ? mesh : backing);
+      assert.equal(raycaster.intersectObjects([backing, parent], true)[0]?.object, opaque ? mesh : backing, `Picking at artwork x=${x}`);
       backing.geometry.dispose();
       backing.material.dispose();
       found = true;
       break;
     }
     assert.ok(found);
+  };
+  const base = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.055, outerness: 1 };
+  const scenarios: { settings: MiNoteStickerEffectSettings; hits: boolean[] }[] = [
+    { settings: { ...base, width: 0.01 }, hits: [true, false, false, false] },
+    { settings: { ...base, width: 0.04, outerness: 0.9 }, hits: [true, true, true, false] },
+    { settings: { ...base, width: 0.02, outerness: 0.9 }, hits: [true, true, false, false] },
+    { settings: base, hits: [true, true, true, true] },
+    { settings: { ...base, outerness: 0 }, hits: [false, false, false, false] },
+    { settings: { ...base, width: 0.04, outerness: 0.1 }, hits: [false, false, false, false] },
+    { settings: { ...base, strength: 0 }, hits: [true, true, true, true] },
+    { settings: { ...base, width: 0.01 }, hits: [true, false, false, false] },
+  ];
+  for (const peeled of [false, true]) {
+    if (peeled) {
+      seal.start();
+      assert.equal(seal.update(2, true), true);
+    }
+    parent.updateMatrixWorld(true);
+    for (const { settings, hits } of scenarios) {
+      seal.setEffectSettings(settings);
+      assertPicked(350.5, true);
+      assertPicked(330.5, true);
+      assertPicked(329.5, settings.outerness > 0);
+      [325.5, 324.5, 315.5, 302.5].forEach((x, index) => assertPicked(x, hits[index]));
+      assertPicked(300.5, false);
+      assertPicked(480.5, false);
+      assert.equal(mesh.geometry, geometry);
+      assert.equal(mesh.material, material);
+      assert.equal(material.map, map);
+      assert.equal(material.bumpMap, finishMap);
+      assert.equal(map.version, mapVersion);
+      assert.equal(finishMap.version, finishVersion);
+      assert.equal(material.version, materialVersion);
+    }
   }
-  assert.ok(mesh.material.bumpMap instanceof THREE.DataTexture);
+  assert.equal(artworkWrites, 1);
+  assert.deepEqual(requests, ['/star.png']);
+  assert.ok(finishMap instanceof THREE.DataTexture);
   let finishDisposals = 0;
-  mesh.material.bumpMap.addEventListener('dispose', () => { finishDisposals += 1; });
+  finishMap.addEventListener('dispose', () => { finishDisposals += 1; });
   seal.dispose();
   seal.dispose();
   assert.equal(finishDisposals, 1);

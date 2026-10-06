@@ -3,9 +3,11 @@ import { createPortal } from 'react-dom';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePackViewer';
 import MiNoteFoldControls from './components/MiNoteFoldControls';
+import MiNoteStickerEffectControls from './components/MiNoteStickerEffectControls';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
 import { useMiNoteStarFolds } from './hooks/useMiNoteStarFolds';
+import { useMiNoteStickerEffects } from './hooks/useMiNoteStickerEffects';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { getInteractiveCardPackCardsByFigureIds } from './lib/interactiveCardPackReveal';
 import {
@@ -19,6 +21,7 @@ import {
   type MiNoteRevealStage,
 } from './lib/miNoteCardReveal';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
+import type { MiNoteStickerEffectSettings } from './lib/miNoteStickerEffects';
 import { isMiNoteStarTunable, normalizeMiNoteStarFoldPosition, normalizeMiNoteStarRotationOffset } from './lib/miNoteStarFolds';
 import { navigate } from './navigation';
 import './styles/mi-note-wip.css';
@@ -28,6 +31,8 @@ function MiNotePackOpening({
   star,
   foldPosition,
   rotationOffsetDegrees,
+  effectSettings,
+  inspectSticker,
   controlsRef,
   onRetry,
   onStageChange,
@@ -37,6 +42,8 @@ function MiNotePackOpening({
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  effectSettings: MiNoteStickerEffectSettings;
+  inspectSticker: boolean;
   controlsRef: RefObject<MiNotePackControls | null>;
   onRetry: () => void;
   onStageChange: (stage: MiNoteRevealStage) => void;
@@ -125,6 +132,8 @@ function MiNotePackOpening({
           star={star}
           foldPosition={foldPosition}
           rotationOffsetDegrees={rotationOffsetDegrees}
+          effectSettings={effectSettings}
+          inspectSticker={inspectSticker}
           cardElements={cardElements}
           state={state}
           interactionEnabled={viewerReady && !error}
@@ -196,7 +205,9 @@ export default function MiNoteCardsWipApp() {
     star: MI_NOTE_PACK_STARS[0],
   }));
   const [focused, setFocused] = useState(false);
+  const [inspectSticker, setInspectSticker] = useState(false);
   const { foldPositions, rotationOffsetsDegrees, setFoldPosition, setRotationOffset, storageError } = useMiNoteStarFolds();
+  const stickerEffects = useMiNoteStickerEffects();
   const tunable = isMiNoteStarTunable(round.star.id);
   const foldPosition = tunable ? foldPositions[round.star.id] : round.star.foldPosition;
   const rotationOffsetDegrees = tunable ? rotationOffsetsDegrees[round.star.id] : round.star.rotationOffsetDegrees;
@@ -277,7 +288,7 @@ export default function MiNoteCardsWipApp() {
 
   return (
     <ModalFocusScope
-      className="wip-page mi-note-wip-page"
+      className={`wip-page mi-note-wip-page${inspectSticker ? ' mi-note-wip-page--sticker-inspection' : ''}`}
       ariaLabel="Mi Note Cards pack preview"
       focusTarget="scope"
       onEscape={handleEscape}
@@ -288,12 +299,21 @@ export default function MiNoteCardsWipApp() {
         star={round.star}
         foldPosition={foldPosition}
         rotationOffsetDegrees={rotationOffsetDegrees}
+        effectSettings={stickerEffects.settings}
+        inspectSticker={inspectSticker}
         controlsRef={controlsRef}
         onRetry={handleRetry}
         onStageChange={handleStageChange}
         onBackgroundTap={handleBackgroundTap}
       />
       <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
+        <MiNoteStickerEffectControls
+          settings={stickerEffects.settings}
+          onChange={stickerEffects.setSettings}
+          storageError={stickerEffects.storageError}
+          inspectSticker={inspectSticker}
+          onInspectChange={setInspectSticker}
+        />
         <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards preview">Close</button>
         <div className="mi-note-wip__pickers" role="group" aria-label="Pack appearance">
           <div className="mi-note-wip__appearance-row">

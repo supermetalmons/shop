@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
 import { MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
+import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
@@ -64,10 +65,13 @@ type TestModel = {
   phase: number;
   sealStarts: number;
   sealUpdates: { elapsed: number; reduced: boolean; motion: number }[];
+  sealEffectSettings: MiNoteStickerEffectSettings[];
   disposed: boolean;
   setFolderPhase: (phase: number) => void;
   setSealFoldPosition: () => void;
   setSealRotationOffsetDegrees: () => void;
+  setSealEffectSettings: (settings: MiNoteStickerEffectSettings) => void;
+  getSealFocus: (target: THREE.Vector3) => THREE.Vector3;
   startSealPeel: () => void;
   updateSeal: (elapsed: number, reduced: boolean, motion: number) => boolean;
   dispose: () => void;
@@ -87,10 +91,13 @@ function createTestModel(): TestModel {
     phase: 0,
     sealStarts: 0,
     sealUpdates: [] as TestModel['sealUpdates'],
+    sealEffectSettings: [] as MiNoteStickerEffectSettings[],
     disposed: false,
     setFolderPhase(phase: number) { model.phase = phase; },
     setSealFoldPosition() {},
     setSealRotationOffsetDegrees() {},
+    setSealEffectSettings(settings: MiNoteStickerEffectSettings) { model.sealEffectSettings.push({ ...settings }); },
+    getSealFocus(target: THREE.Vector3) { return target.set(0.6, 0.05, 0.03); },
     startSealPeel() { model.sealStarts += 1; },
     updateSeal(elapsed: number, reduced: boolean, motion: number) {
       model.sealUpdates.push({ elapsed, reduced, motion });
@@ -171,11 +178,14 @@ function harness(initialState = createMiNoteRevealState(), interactionEnabled = 
   const cardElements = [document.createElement('div'), document.createElement('div')] as const;
   const star = { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0 };
   let state = initialState;
-  function Harness() {
+  let generation = 0;
+  let effectSettings = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS };
+  let inspectSticker = false;
+  function Harness({ effectSettings, inspectSticker }: { effectSettings: MiNoteStickerEffectSettings; inspectSticker: boolean }) {
     const [current, dispatch] = useReducer(reduceMiNoteReveal, initialState);
     state = current;
     return createElement(MiNotePackViewer, {
-      color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0,
+      color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, effectSettings, inspectSticker,
       cardElements, state: current, interactionEnabled, controlsRef: controls,
       onEvent(event) { events.push(event); dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready }); },
@@ -183,12 +193,20 @@ function harness(initialState = createMiNoteRevealState(), interactionEnabled = 
       onBackgroundTap() {},
     });
   }
-  const view = render(createElement(Harness, { key: 0 }));
+  const view = render(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
   return {
     view, controls, events, readyChanges, errors,
     get state() { return state; },
     count(type: MiNoteRevealEvent['type']) { return events.filter(event => event.type === type).length; },
-    reset() { view.rerender(createElement(Harness, { key: 1 })); },
+    setEffectSettings(settings: MiNoteStickerEffectSettings) {
+      effectSettings = settings;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
+    setInspectSticker(value: boolean) {
+      inspectSticker = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
+    reset() { view.rerender(createElement(Harness, { key: ++generation, effectSettings, inspectSticker })); },
   };
 }
 
@@ -216,6 +234,134 @@ function assertHome(home: ReturnType<typeof homeFor>) {
   assert.ok(home.anchor.scale.equals(home.scale));
   assert.equal(home.anchor.children.length, 2);
 }
+
+test('live finish tuning renders a sealed pack once and returns to sleep without rebuilding it', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const renderer = renderers[0];
+  const state = run.state;
+  const readyChanges = [...run.readyChanges];
+  const updatesBefore = model.sealEffectSettings.length;
+  const settings: MiNoteStickerEffectSettings = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.045, outerness: 0.6, strength: 0.85 };
+
+  run.setEffectSettings(settings);
+
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  assert.equal(models[0], model);
+  assert.equal(renderers[0], renderer);
+  assert.equal(model.disposed, false);
+  assert.equal(renderer.disposed, false);
+  assert.equal(run.state, state);
+  assert.deepEqual(run.readyChanges, readyChanges);
+  assert.equal(model.sealEffectSettings.length, updatesBefore + 1);
+  assert.deepEqual(model.sealEffectSettings.at(-1), settings);
+  assert.equal(frames.size, 1);
+  advanceFrame();
+  assert.equal(frames.size, 0);
+  assert.equal(model.sealStarts, 0);
+  assert.equal(model.sealUpdates.length, 0);
+});
+
+test('live finish tuning preserves the peeled state and ongoing flutter in the same viewer', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const renderer = renderers[0];
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  for (let count = 0; run.state.stage !== 'interactive' && count < 40; count += 1) advanceFrame();
+  assert.equal(run.state.stage, 'interactive');
+  const state = run.state;
+  const before = model.sealUpdates.at(-1)!;
+  const readyChanges = [...run.readyChanges];
+  const settings: MiNoteStickerEffectSettings = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.025, outerness: 0.35, hue: 0.4, shine: 0.5 };
+
+  run.setEffectSettings(settings);
+  advanceFrame();
+
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  assert.equal(models[0], model);
+  assert.equal(renderers[0], renderer);
+  assert.equal(run.state, state);
+  assert.deepEqual(run.readyChanges, readyChanges);
+  assert.deepEqual(model.sealEffectSettings.at(-1), settings);
+  assert.equal(model.sealStarts, 1);
+  assert.equal(run.count('seal-finished'), 1);
+  assert.ok(model.sealUpdates.at(-1)!.elapsed > before.elapsed);
+  assert.equal(model.sealUpdates.at(-1)!.reduced, false);
+  assert.equal(frames.size, 1);
+});
+
+test('sticker close-up smoothly focuses the existing camera and restores the normal framing', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const renderer = renderers[0];
+  const camera = renderer.camera!;
+  const originalPosition = camera.position.clone();
+  const state = run.state;
+  const closeZ = 0.03 + 0.9 / (2 * Math.tan(THREE.MathUtils.degToRad(17)));
+
+  run.setInspectSticker(true);
+  advanceFrame();
+
+  assert.ok(camera.position.x > 0 && camera.position.x < 0.6);
+  assert.ok(camera.position.z < originalPosition.z && camera.position.z > closeZ);
+  settle();
+  assert.equal(camera.position.x, 0.6);
+  assert.equal(camera.position.y, 0.05);
+  assert.ok(Math.abs(camera.position.z - closeZ) < 1e-8);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  assert.equal(models[0], model);
+  assert.equal(renderers[0], renderer);
+  assert.equal(run.state, state);
+  assert.equal(model.sealStarts, 0);
+
+  run.setInspectSticker(false);
+  settle();
+
+  assert.ok(camera.position.equals(originalPosition));
+  assert.equal(run.state, state);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+});
+
+test('narrow sticker close-up yields to card inspection and resumes after the card returns', async () => {
+  viewportWidth = 319;
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const camera = renderers[0].camera!;
+  const closeZ = 0.03 + (0.72 / (319 / 700)) / (2 * Math.tan(THREE.MathUtils.degToRad(17)));
+  run.setInspectSticker(true);
+  settle();
+  assert.equal(camera.position.x, 0.6);
+  assert.equal(camera.position.y, 0.05);
+  assert.ok(Math.abs(camera.position.z - closeZ) < 1e-8);
+
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(camera.position.x, 0);
+  assert.equal(camera.position.y, 0);
+  assert.ok(camera.position.z > closeZ);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+
+  act(() => run.controls.current!.returnCard());
+  settle();
+  assert.equal(run.state.selectedCard, null);
+  assert.equal(camera.position.x, 0.6);
+  assert.equal(camera.position.y, 0.05);
+  assert.ok(Math.abs(camera.position.z - closeZ) < 1e-8);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+});
 
 test('reduced motion unseals once and returns a selected card to its original pocket once', async () => {
   const run = harness();

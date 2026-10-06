@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { createMiNotePackSeal } from './miNotePackSeal';
 import type { MiNotePackStar } from './miNotePackStars';
+import type { MiNoteStickerEffectSettings } from './miNoteStickerEffects';
 
 export const MI_NOTE_CARD_WIDTH = 1.1525;
 export const MI_NOTE_CARD_HEIGHT = 1.6135;
@@ -179,11 +180,12 @@ function pocketDepth(x: number, y: number, bow: number) {
     * THREE.MathUtils.clamp((y + HEIGHT / 2) / POCKET_HEIGHT, 0, 1);
 }
 
-export function createMiNotePackModel({ color, star, foldPosition, rotationOffsetDegrees, onInvalidate }: {
+export function createMiNotePackModel({ color, star, foldPosition, rotationOffsetDegrees, effectSettings, onInvalidate }: {
   color: string;
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  effectSettings?: MiNoteStickerEffectSettings;
   onInvalidate?: () => void;
 }) {
   const { fiber, grain } = createPaperTextures();
@@ -290,7 +292,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   };
   let seal: ReturnType<typeof createMiNotePackSeal>;
   try {
-    seal = createMiNotePackSeal({ parent: right, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, onInvalidate });
+    seal = createMiNotePackSeal({ parent: right, width: MI_NOTE_LEAF_WIDTH, spine: SPINE, thickness: THICKNESS, star, foldPosition, rotationOffsetDegrees, effectSettings, onInvalidate });
     right.traverse((object) => { object.userData.leaf = 2; });
   } catch (error) {
     releaseResources();
@@ -348,8 +350,10 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     right,
     ready: seal.ready,
     setFolderPhase,
+    getSealFocus: (target: THREE.Vector3) => seal.getFocus(target),
     setSealFoldPosition: (value: number) => seal.setFoldPosition(value),
     setSealRotationOffsetDegrees: (value: number) => seal.setRotationOffsetDegrees(value),
+    setSealEffectSettings: (value: MiNoteStickerEffectSettings) => seal.setEffectSettings(value),
     startSealPeel: () => seal.start(),
     updateSeal: (elapsedSeconds: number, reducedMotion: boolean, motion = 0) => seal.update(elapsedSeconds, reducedMotion, motion),
     dispose() {

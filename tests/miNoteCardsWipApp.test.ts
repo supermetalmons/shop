@@ -6,6 +6,11 @@ import type MiNotePackViewer from '../src/components/MiNotePackViewer.tsx';
 import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import type { MiNoteRevealEvent } from '../src/lib/miNoteCardReveal.ts';
+import {
+  DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS,
+  MI_NOTE_STICKER_EFFECTS_STORAGE_KEY,
+  parseMiNoteStickerEffect,
+} from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type ViewerProps = Parameters<typeof MiNotePackViewer>[0];
@@ -144,6 +149,138 @@ function card(index: 0 | 1) {
   assert.ok(content);
   return { element, content };
 }
+
+test('finish controls update sealed and peeled packs without remounting or resealing them', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  makeReady();
+  const original = viewer();
+  const sealedState = original.props.state;
+  assert.deepEqual(original.props.effectSettings, DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
+  assert.equal(view.queryByRole('combobox', { name: 'Finish approach' }), null);
+  assert.ok(view.getByText('Prismatic foil'));
+  fireEvent.change(view.getByRole('slider', { name: 'Band width' }), { target: { value: '0.05' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.65' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Hue' }), { target: { value: '0.42' } });
+  assert.equal(viewer(), original);
+  assert.equal(instances.length, 1);
+  assert.equal(original.props.state, sealedState);
+  assert.equal(original.props.effectSettings?.mode, 'prism');
+  assert.equal(original.props.effectSettings?.width, 0.05);
+  assert.equal(original.props.effectSettings?.outerness, 0.65);
+  assert.equal(original.props.effectSettings?.hue, 0.42);
+  assert.equal(original.props.interactionEnabled, true);
+
+  peelSeal(view);
+  const peeledState = original.props.state;
+  const cardElements = original.props.cardElements;
+  const calls = [...original.calls];
+  fireEvent.change(view.getByRole('slider', { name: 'Strength' }), { target: { value: '0.7' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.15' } });
+  assert.equal(viewer(), original);
+  assert.equal(instances.length, 1);
+  assert.equal(original.props.state, peeledState);
+  assert.equal(original.props.state.stage, 'interactive');
+  assert.equal(original.props.state.taps, 4);
+  assert.equal(original.props.cardElements, cardElements);
+  assert.deepEqual(original.calls, calls);
+  assert.equal(original.props.effectSettings?.mode, 'prism');
+  assert.equal(original.props.effectSettings?.strength, 0.7);
+  assert.equal(original.props.effectSettings?.outerness, 0.15);
+  assert.deepEqual(parseMiNoteStickerEffect(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), original.props.effectSettings);
+});
+
+test('the sticker close-up button toggles framing without resetting sealed or peeled packs', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  makeReady();
+  const original = viewer();
+  const settings = original.props.effectSettings;
+  const sealedState = original.props.state;
+  assert.equal(original.props.inspectSticker, false);
+  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
+  const closeUp = view.getByRole('button', { name: 'Close-up' });
+  assert.equal(closeUp.getAttribute('aria-pressed'), 'false');
+
+  fireEvent.click(closeUp);
+
+  assert.equal(closeUp.getAttribute('aria-pressed'), 'true');
+  assert.equal(viewer(), original);
+  assert.equal(original.props.inspectSticker, true);
+  assert.equal(original.props.state, sealedState);
+  assert.equal(original.props.effectSettings, settings);
+  peelSeal(view);
+  const peeledState = original.props.state;
+  const calls = [...original.calls];
+
+  fireEvent.click(closeUp);
+
+  assert.equal(closeUp.getAttribute('aria-pressed'), 'false');
+  assert.equal(viewer(), original);
+  assert.equal(original.props.inspectSticker, false);
+  assert.equal(original.props.state, peeledState);
+  assert.equal(original.props.state.stage, 'interactive');
+  assert.equal(original.props.state.taps, 4);
+  assert.deepEqual(original.calls, calls);
+  assert.equal(instances.length, 1);
+});
+
+test('shared finish tuning survives star changes, opening resets, and app reloads', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
+  fireEvent.change(view.getByRole('slider', { name: 'Band width' }), { target: { value: '0.0475' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Outerness' }), { target: { value: '0.85' } });
+  fireEvent.change(view.getByRole('slider', { name: 'Hue' }), { target: { value: '0.2' } });
+  const settings = viewer().props.effectSettings;
+  const picker = view.getByRole('combobox', { name: 'Star sticker' });
+  fireEvent.change(picker, { target: { value: 'twinkle' } });
+  assert.equal(viewer().props.star.id, 'twinkle');
+  assert.deepEqual(viewer().props.effectSettings, settings);
+  openPack(view);
+  const previous = viewer();
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+  assert.notEqual(viewer(), previous);
+  assert.equal(viewer().props.state.stage, 'sealed');
+  assert.deepEqual(viewer().props.effectSettings, settings);
+  fireEvent.change(picker, { target: { value: 'zombie' } });
+  assert.equal(viewer().props.star.id, 'zombie');
+  assert.deepEqual(viewer().props.effectSettings, settings);
+  assert.deepEqual(parseMiNoteStickerEffect(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), settings);
+  view.unmount();
+  const reloaded = render(createElement(MiNoteCardsWipApp));
+  assert.equal(viewer().props.star.id, 'blush');
+  assert.deepEqual(viewer().props.effectSettings, settings);
+  fireEvent.click(reloaded.getByRole('button', { name: 'Sticker finish' }));
+  assert.equal(reloaded.queryByRole('combobox', { name: 'Finish approach' }), null);
+  assert.equal(viewer().props.effectSettings?.mode, 'prism');
+  assert.equal((reloaded.getByRole('slider', { name: 'Band width' }) as HTMLInputElement).value, '0.0475');
+  assert.equal((reloaded.getByRole('slider', { name: 'Outerness' }) as HTMLInputElement).value, '0.85');
+  assert.equal((reloaded.getByRole('slider', { name: 'Hue' }) as HTMLInputElement).value, '0.2');
+});
+
+test('legacy finish JSON migrates width and outerness without resealing the opened pack', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  const original = viewer();
+  const state = original.props.state;
+  const cardElements = original.props.cardElements;
+  fireEvent.click(view.getByRole('button', { name: 'Sticker finish' }));
+  fireEvent.click(view.getByRole('button', { name: 'Import sticker finish JSON' }));
+  fireEvent.change(view.getByRole('textbox', { name: 'Sticker finish JSON' }), {
+    target: { value: JSON.stringify({ version: 1, effect: { mode: 'prism', width: 0.08, strength: 0.64, hue: 0.2 } }) },
+  });
+  fireEvent.click(view.getByRole('button', { name: 'Apply finish' }));
+  const expected = { ...DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, width: 0.04, strength: 0.64, hue: 0.2 };
+  assert.equal(viewer(), original);
+  assert.equal(instances.length, 1);
+  assert.equal(original.props.state, state);
+  assert.equal(original.props.state.stage, 'interactive');
+  assert.equal(original.props.state.folderPose, 1);
+  assert.equal(original.props.cardElements, cardElements);
+  assert.deepEqual(original.props.effectSettings, expected);
+  assert.equal((view.getByRole('slider', { name: 'Band width' }) as HTMLInputElement).value, '0.04');
+  assert.equal((view.getByRole('slider', { name: 'Outerness' }) as HTMLInputElement).value, String(DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS.outerness));
+  assert.deepEqual(JSON.parse(window.localStorage.getItem(MI_NOTE_STICKER_EFFECTS_STORAGE_KEY)!), { version: 2, effect: expected });
+});
 
 test('star selection removes Yellow, restores editable tuning, and locks Blush to its reference', t => {
   const storageKey = 'mi-note-star-folds:v1';

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import * as THREE from 'three';
 import type { MiNotePackStar } from '../lib/miNotePackStars';
+import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../lib/miNoteStickerEffects';
 import { CSS3DObject, CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 import {
   createMiNotePackModel,
@@ -26,6 +27,8 @@ type MiNotePackViewerProps = {
   star: MiNotePackStar;
   foldPosition: number;
   rotationOffsetDegrees: number;
+  effectSettings?: MiNoteStickerEffectSettings;
+  inspectSticker?: boolean;
   cardElements: readonly [HTMLDivElement, HTMLDivElement];
   state: MiNoteRevealState;
   interactionEnabled: boolean;
@@ -76,6 +79,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
   const currentProps = useRef(props);
   currentProps.current = props;
   const invalidateRef = useRef<() => void>(() => undefined);
+  const effectSettingsRef = useRef<(value: MiNoteStickerEffectSettings) => void>(() => undefined);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -93,6 +97,9 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const fold: Motion = { value: props.state.folderPose, velocity: 0 };
     const recoil: Motion = { value: 0, velocity: 0 };
     const cameraMotion: Motion = { value: 0, velocity: 0 };
+    const cameraFocusX: Motion = { value: 0, velocity: 0 };
+    const cameraFocusY: Motion = { value: 0, velocity: 0 };
+    const stickerFocus = new THREE.Vector3();
     let outerFlip: OuterFlip | null = null;
     let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip' } | null = null;
     let tapHit: THREE.Intersection | null = null;
@@ -137,6 +144,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         star: props.star,
         foldPosition: currentProps.current.foldPosition,
         rotationOffsetDegrees: currentProps.current.rotationOffsetDegrees,
+        effectSettings: currentProps.current.effectSettings,
       });
     } catch (error) {
       renderer.dispose();
@@ -148,6 +156,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       return;
     }
     scene.add(model.group);
+    effectSettingsRef.current = model.setSealEffectSettings;
     let lastSealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
     const apertureGeometry = cardApertureGeometry();
     const apertureMaterial = new THREE.MeshBasicMaterial({
@@ -455,11 +464,22 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const closedHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH / (aspect * 0.68));
       const openHeight = Math.max(1.82 / 0.52, (MI_NOTE_LEAF_WIDTH * 2 + 0.32) / (aspect * 0.86));
       const selectedHeight = Math.max(MI_NOTE_CARD_HEIGHT * 1.28 / 0.66, MI_NOTE_CARD_WIDTH * 1.28 / (aspect * 0.72));
-      const viewHeight = state.selectedCard !== null ? selectedHeight : THREE.MathUtils.lerp(closedHeight, openHeight, 1 - Math.abs(fold.value - 1));
-      const cameraTarget = viewHeight / (2 * Math.tan(THREE.MathUtils.degToRad(17))) + (state.selectedCard !== null ? 1.4 : 0);
-      if (cameraMotion.value === 0) cameraMotion.value = cameraTarget;
+      const inspectSticker = currentProps.current.inspectSticker && state.selectedCard === null;
+      stickerFocus.set(0, 0, 0);
+      if (inspectSticker) model.getSealFocus(stickerFocus);
+      const viewHeight = inspectSticker ? Math.max(.9, .72 / aspect)
+        : state.selectedCard !== null ? selectedHeight : THREE.MathUtils.lerp(closedHeight, openHeight, 1 - Math.abs(fold.value - 1));
+      const cameraTarget = viewHeight / (2 * Math.tan(THREE.MathUtils.degToRad(17)))
+        + stickerFocus.z + (state.selectedCard !== null ? 1.4 : 0);
+      if (cameraMotion.value === 0) {
+        cameraMotion.value = cameraTarget;
+        cameraFocusX.value = stickerFocus.x;
+        cameraFocusY.value = stickerFocus.y;
+      }
       moving = spring(cameraMotion, cameraTarget, 12, dt, reducedMotion.matches) || moving;
-      camera.position.z = cameraMotion.value;
+      moving = spring(cameraFocusX, stickerFocus.x, 12, dt, reducedMotion.matches) || moving;
+      moving = spring(cameraFocusY, stickerFocus.y, 12, dt, reducedMotion.matches) || moving;
+      camera.position.set(cameraFocusX.value, cameraFocusY.value, cameraMotion.value);
       camera.aspect = aspect;
       camera.updateProjectionMatrix();
       scene.updateMatrixWorld(true);
@@ -530,6 +550,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       input.cancel();
       cancelAnimationFrame(frameId);
       invalidateRef.current = () => undefined;
+      effectSettingsRef.current = () => undefined;
       if (currentProps.current.controlsRef.current === controls) currentProps.current.controlsRef.current = null;
       observer.disconnect();
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -556,7 +577,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
   }, [props.color, props.star, props.cardElements, props.controlsRef]);
 
-  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees]);
+  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.inspectSticker]);
+  useEffect(() => {
+    effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
+    invalidateRef.current();
+  }, [props.effectSettings]);
 
   return <div ref={hostRef} className="mi-note-wip__renderer" tabIndex={0} role="group" aria-label="Interactive Mi Note Cards folder" />;
 }
