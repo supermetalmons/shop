@@ -3,9 +3,10 @@ import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement, useReducer } from 'react';
 import * as THREE from 'three';
+import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
-import { MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
+import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
@@ -17,6 +18,7 @@ const frames = new Map<number, FrameRequestCallback>();
 let nextFrameId = 0;
 let time = 1000;
 let viewportWidth = 900;
+let viewportHeight = 700;
 const requestFrame = (callback: FrameRequestCallback) => {
   frames.set(++nextFrameId, callback);
   return nextFrameId;
@@ -27,14 +29,16 @@ for (const target of [globalThis, window]) {
   Object.defineProperty(target, 'cancelAnimationFrame', { configurable: true, value: cancelFrame });
 }
 Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => viewportWidth });
-Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 700 });
-const observers = new Set<object>();
+Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => viewportHeight });
+class FakeResizeObserver {
+  constructor(readonly callback: () => void) {}
+  observe() { observers.add(this); }
+  disconnect() { observers.delete(this); }
+}
+const observers = new Set<FakeResizeObserver>();
 Object.defineProperty(globalThis, 'ResizeObserver', {
   configurable: true,
-  value: class {
-    observe() { observers.add(this); }
-    disconnect() { observers.delete(this); }
-  },
+  value: FakeResizeObserver,
 });
 
 class FakeWebGLRenderer {
@@ -42,9 +46,13 @@ class FakeWebGLRenderer {
   scene: THREE.Scene | null = null;
   camera: THREE.PerspectiveCamera | null = null;
   disposed = false;
+  pixelRatio = 1;
+  sizeChanges: { width: number; height: number; pixelRatio: number }[] = [];
   setClearColor() {}
-  setPixelRatio() {}
-  setSize() {}
+  setDrawingBufferSize(width: number, height: number, pixelRatio: number) {
+    this.pixelRatio = pixelRatio;
+    this.sizeChanges.push({ width, height, pixelRatio });
+  }
   compile() { assert.equal(this.disposed, false); }
   render(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     assert.equal(this.disposed, false);
@@ -153,6 +161,8 @@ beforeEach(() => {
   renderers.length = 0;
   time = 1000;
   viewportWidth = 900;
+  viewportHeight = 700;
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1 });
   Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
 });
@@ -178,6 +188,15 @@ function advanceFrame(elapsed = 50) {
 function settle() {
   for (let count = 0; frames.size && count < 160; count += 1) advanceFrame();
   assert.equal(frames.size, 0, 'The viewer should become idle after its animations finish');
+}
+
+function resizeViewport(width: number, height: number) {
+  act(() => {
+    viewportWidth = width;
+    viewportHeight = height;
+    observers.forEach(observer => observer.callback());
+  });
+  settle();
 }
 
 function harness(
@@ -258,6 +277,133 @@ function assertHome(home: ReturnType<typeof homeFor>) {
   assert.ok(home.anchor.scale.equals(home.scale));
   assert.equal(home.anchor.children.length, 2);
 }
+
+function cardLayout(home: ReturnType<typeof homeFor>) {
+  const cssObject = home.anchor.children.find(child => child instanceof CSS3DObject);
+  const aperture = home.anchor.children.find(child => child instanceof THREE.Mesh);
+  assert.ok(cssObject instanceof CSS3DObject);
+  assert.ok(aperture instanceof THREE.Mesh);
+  return {
+    cssObject,
+    aperture,
+    width: cssObject.element.style.width,
+    height: cssObject.element.style.height,
+  };
+}
+
+function assertCardAlignment(card: ReturnType<typeof cardLayout>, camera: THREE.PerspectiveCamera) {
+  assert.equal(card.cssObject.element.style.width, card.width);
+  assert.equal(card.cssObject.element.style.height, card.height);
+  assert.ok(Number.parseFloat(card.width) > 0);
+  for (const x of [-0.5, 0.5]) {
+    for (const y of [-0.5, 0.5]) {
+      const domCorner = new THREE.Vector3(x * Number.parseFloat(card.width), y * Number.parseFloat(card.height), 0)
+        .applyMatrix4(card.cssObject.matrixWorld).project(camera);
+      const apertureCorner = new THREE.Vector3(x * MI_NOTE_CARD_WIDTH, y * MI_NOTE_CARD_HEIGHT, 0)
+        .applyMatrix4(card.aperture.matrixWorld).project(camera);
+      assert.ok(domCorner.distanceTo(apertureCorner) < 1e-8, 'DOM card and WebGL aperture must project to the same corners');
+    }
+  }
+}
+
+function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeWebGLRenderer) {
+  assert.deepEqual(renderer.sizeChanges.at(-1), {
+    width: viewportWidth,
+    height: viewportHeight,
+    pixelRatio: Math.min(window.devicePixelRatio, 2),
+  });
+  assert.equal(renderer.camera!.aspect, viewportWidth / viewportHeight);
+  const projection = renderer.camera!.projectionMatrix.elements;
+  assert.ok(Math.abs(projection[0] - projection[5] / renderer.camera!.aspect) < 1e-8);
+  const layers = run.view.container.querySelectorAll<HTMLElement>('.mi-note-wip__css-scene');
+  assert.equal(layers.length, 2);
+  layers.forEach(layer => {
+    assert.equal(layer.style.width, `${viewportWidth}px`);
+    assert.equal(layer.style.height, `${viewportHeight}px`);
+  });
+}
+
+test('viewport changes preserve card layout and projection in the folder and after inspection', async () => {
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const renderer = renderers[0];
+  const homes = [homeFor(model, 0), homeFor(model, 1)];
+  const cards = homes.map(cardLayout);
+  const sizes = [[574, 831], [319, 700], [1440, 420], [900, 700]] as const;
+  const assertLayout = () => {
+    assertRendererViewport(run, renderer);
+    cards.forEach(card => assertCardAlignment(card, renderer.camera!));
+    assert.deepEqual(models, [model]);
+    assert.deepEqual(renderers, [renderer]);
+  };
+
+  for (const [width, height] of sizes) {
+    resizeViewport(width, height);
+    assertLayout();
+    homes.forEach(assertHome);
+  }
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  settle();
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(model.phase, 1);
+  for (const [width, height] of sizes) {
+    resizeViewport(width, height);
+    assertLayout();
+    homes.forEach(assertHome);
+  }
+
+  for (const index of [0, 1] as const) {
+    act(() => run.controls.current!.selectCard(index));
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.notEqual(cards[index].cssObject.parent, homes[index].anchor);
+    for (const [width, height] of sizes) {
+      resizeViewport(width, height);
+      assertLayout();
+    }
+    act(() => run.controls.current!.returnCard());
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    homes.forEach(assertHome);
+    assertLayout();
+  }
+  assert.deepEqual(run.errors, []);
+});
+
+test('unchanged resize notifications preserve an idle viewer without redundant renderer updates', async () => {
+  const run = harness();
+  await makeReady();
+  const renderer = renderers[0];
+  const state = run.state;
+  const originalSizes = [...renderer.sizeChanges];
+
+  act(() => observers.forEach(observer => observer.callback()));
+  assert.equal(frames.size, 0);
+  assert.deepEqual(renderer.sizeChanges, originalSizes);
+
+  resizeViewport(574, 831);
+  assert.equal(renderer.sizeChanges.length, originalSizes.length + 1);
+  assertRendererViewport(run, renderer);
+
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+  resizeViewport(574, 831);
+  assert.equal(renderer.pixelRatio, 2);
+  assert.equal(renderer.sizeChanges.length, originalSizes.length + 2);
+  assertRendererViewport(run, renderer);
+  const resizedSizes = [...renderer.sizeChanges];
+  act(() => observers.forEach(observer => observer.callback()));
+  assert.equal(frames.size, 0);
+  assert.deepEqual(renderer.sizeChanges, resizedSizes);
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 3 });
+  act(() => observers.forEach(observer => observer.callback()));
+  assert.equal(frames.size, 0);
+  assert.deepEqual(renderer.sizeChanges, resizedSizes);
+  assert.equal(run.state, state);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+});
 
 test('live finish tuning renders a sealed pack once and returns to sleep without rebuilding it', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);

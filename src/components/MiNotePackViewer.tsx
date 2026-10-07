@@ -45,6 +45,8 @@ type MiNotePackViewerProps = {
 type Motion = { value: number; velocity: number };
 type OuterFlip = Motion & { from: 0 | 2; to: 0 | 2; direction: number; target: number; dragging: boolean };
 
+const CARD_LAYOUT_WIDTH = 480;
+
 function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
   const offset = motion.value - target;
   const impulse = motion.velocity + frequency * offset;
@@ -92,6 +94,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let failed = false;
     let width = 1;
     let height = 1;
+    let pixelRatio = 0;
     let lastTime = 0;
     let taps = 0;
     let sealTime = 0;
@@ -178,7 +181,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const anchor = new THREE.Group();
       const home = new THREE.Vector3((index === 0 ? -1 : 1) * MI_NOTE_LEAF_WIDTH / 2, -0.005, 0.0057);
       anchor.position.copy(home);
+      element.style.width = `${CARD_LAYOUT_WIDTH}px`;
+      element.style.height = `${CARD_LAYOUT_WIDTH * MI_NOTE_CARD_HEIGHT / MI_NOTE_CARD_WIDTH}px`;
       const cssObject = new CSS3DObject(element);
+      cssObject.scale.setScalar(MI_NOTE_CARD_WIDTH / CARD_LAYOUT_WIDTH);
       const aperture = new THREE.Mesh(apertureGeometry, apertureMaterial);
       aperture.userData.card = index;
       anchor.add(cssObject, aperture);
@@ -487,8 +493,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       moving = spring(cameraFocusX, stickerFocus.x, 12, dt, reducedMotion.matches) || moving;
       moving = spring(cameraFocusY, stickerFocus.y, 12, dt, reducedMotion.matches) || moving;
       camera.position.set(cameraFocusX.value, cameraFocusY.value, cameraMotion.value);
-      camera.aspect = aspect;
-      camera.updateProjectionMatrix();
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
       if (foregroundCard !== null) {
@@ -505,18 +509,18 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     }
 
     const resize = () => {
-      width = Math.max(1, host.clientWidth);
-      height = Math.max(1, host.clientHeight);
-      const cardWidth = Math.min(width * 0.72, height * 0.7 / 1.4, 480);
-      cards.forEach(({ cssObject }) => {
-        cssObject.element.style.width = `${cardWidth}px`;
-        cssObject.element.style.height = `${cardWidth * 1.4}px`;
-        cssObject.scale.setScalar(MI_NOTE_CARD_WIDTH / cardWidth);
-      });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      renderer.setSize(width, height);
+      const nextWidth = Math.max(1, host.clientWidth);
+      const nextHeight = Math.max(1, host.clientHeight);
+      const nextPixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      if (width === nextWidth && height === nextHeight && pixelRatio === nextPixelRatio) return;
+      width = nextWidth;
+      height = nextHeight;
+      pixelRatio = nextPixelRatio;
+      renderer.setDrawingBufferSize(width, height, pixelRatio);
       cssRenderer.setSize(width, height);
       foregroundRenderer.setSize(width, height);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
       invalidate();
     };
     const handleContextLost = (event: Event) => {
