@@ -258,6 +258,41 @@ async function makeReady(model = models.at(-1)!) {
   settle();
 }
 
+function pointerControls(run: ReturnType<typeof harness>) {
+  const host = run.view.getByRole('group', { name: 'Interactive Mi Note Cards folder' });
+  const captured = new Set<number>();
+  Object.assign(host, {
+    setPointerCapture(id: number) { captured.add(id); },
+    hasPointerCapture(id: number) { return captured.has(id); },
+    releasePointerCapture(id: number) { captured.delete(id); },
+  });
+  const surface = new THREE.Mesh(new THREE.PlaneGeometry(1.29, 1.82), new THREE.MeshBasicMaterial());
+  surface.position.z = 0.03;
+  models.at(-1)!.group.add(surface);
+  const dispatch = (type: string, x = viewportWidth / 2, y = viewportHeight / 2, pointerType = 'mouse') => {
+    const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+    Object.defineProperties(event, {
+      pointerId: { value: 1 },
+      pointerType: { value: pointerType },
+      isPrimary: { value: true },
+    });
+    act(() => host.dispatchEvent(event));
+  };
+  return {
+    dispatch,
+    tap(pointerType = 'mouse', x = viewportWidth / 2, y = viewportHeight / 2) {
+      dispatch('pointerdown', x, y, pointerType);
+      dispatch('pointerup', x, y, pointerType);
+    },
+  };
+}
+
+function tapSparkles() {
+  const points = renderers.at(-1)!.scene!.getObjectByName('mi-note-tap-sparkles');
+  assert.ok(points instanceof THREE.Points);
+  return points;
+}
+
 function homeFor(model: ReturnType<typeof createTestModel>, index: 0 | 1) {
   const parent = index === 0 ? model.left : model.right;
   const anchor = parent.children[0];
@@ -403,6 +438,117 @@ test('unchanged resize notifications preserve an idle viewer without redundant r
   assert.equal(run.state, state);
   assert.equal(models.length, 1);
   assert.equal(renderers.length, 1);
+});
+
+test('sealed pack sparkles appear only for accepted pointer taps and return to idle after fading', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const pointer = pointerControls(run);
+  const sparkles = tapSparkles();
+  assert.equal(sparkles.visible, false);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(run.state.taps, 1);
+  assert.equal(sparkles.visible, false);
+  pointer.tap('mouse', 0, 0);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', viewportWidth / 2, viewportHeight / 2 + 30);
+  pointer.dispatch('pointerup', viewportWidth / 2, viewportHeight / 2 + 30);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointercancel');
+  settle();
+  assert.equal(run.state.taps, 1);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  pointer.tap();
+  advanceFrame();
+  assert.equal(run.state.taps, 2);
+  assert.equal(sparkles.visible, true);
+  assert.ok(sparkles.geometry.drawRange.count > 0);
+  settle();
+  assert.equal(sparkles.visible, false);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  pointer.tap('touch');
+  advanceFrame();
+  assert.equal(run.state.taps, 3);
+  assert.equal(sparkles.visible, true);
+  assert.equal(tapSparkles(), sparkles);
+  settle();
+  assert.equal(sparkles.visible, false);
+});
+
+test('the final sealed tap sparkles stop when peeling finishes and later folder taps stay clear', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), taps: 3 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const sparkles = tapSparkles();
+  pointer.tap();
+  advanceFrame();
+  assert.equal(run.state.stage, 'seal-peeling');
+  assert.equal(sparkles.visible, true);
+
+  for (let count = 0; run.state.stage !== 'interactive' && count < 40; count += 1) advanceFrame();
+  assert.equal(run.state.stage, 'interactive');
+  assert.equal(sparkles.visible, false);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  pointer.tap();
+  advanceFrame();
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(sparkles.visible, false);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+});
+
+test('sparkles honor reduced motion, clear while hidden, and dispose their resources on unmount', async () => {
+  const run = harness();
+  await makeReady();
+  const pointer = pointerControls(run);
+  const sparkles = tapSparkles();
+  pointer.tap();
+  settle();
+  assert.equal(run.state.taps, 1);
+  assert.equal(sparkles.visible, false);
+
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  pointer.tap();
+  advanceFrame();
+  assert.equal(sparkles.visible, true);
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
+  settle();
+  assert.equal(sparkles.visible, false);
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  pointer.tap('touch');
+  advanceFrame();
+  assert.equal(sparkles.visible, true);
+  act(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  assert.equal(frames.size, 0);
+  assert.equal(sparkles.visible, false);
+  act(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new window.Event('visibilitychange'));
+  });
+  settle();
+  assert.equal(sparkles.geometry.drawRange.count, 0);
+
+  let geometryDisposals = 0;
+  let materialDisposals = 0;
+  sparkles.geometry.addEventListener('dispose', () => { geometryDisposals += 1; });
+  const materials = Array.isArray(sparkles.material) ? sparkles.material : [sparkles.material];
+  materials.forEach(material => material.addEventListener('dispose', () => { materialDisposals += 1; }));
+  run.view.unmount();
+  assert.equal(geometryDisposals, 1);
+  assert.equal(materialDisposals, materials.length);
+  assert.equal(frames.size, 0);
 });
 
 test('live finish tuning renders a sealed pack once and returns to sleep without rebuilding it', async () => {

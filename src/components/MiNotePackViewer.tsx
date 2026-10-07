@@ -14,6 +14,7 @@ import {
 import { createMiNoteCardPath, poseMiNoteCardPath } from '../lib/miNotePackMotion';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
 import type { MiNoteFolderPose, MiNoteRevealEvent, MiNoteRevealState } from '../lib/miNoteCardReveal';
+import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
 
 export type MiNotePackControls = {
   activate: () => void;
@@ -164,6 +165,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       return;
     }
     scene.add(model.group);
+    const tapSparkles = createMiNoteTapSparkles();
+    scene.add(tapSparkles.points);
     effectSettingsRef.current = model.setSealEffectSettings;
     let lastSealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
     const apertureGeometry = cardApertureGeometry();
@@ -226,8 +229,12 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       dispatch({ type: 'return-card' });
       invalidate();
     };
-    const activate = (leaf?: 0 | 2) => {
+    const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
       if (!canNavigate() || drag || outerFlip) return;
+      if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
+        const worldPerPixel = 2 * Math.abs(camera.position.z - point.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / height;
+        tapSparkles.burst(point, worldPerPixel);
+      }
       dispatch({ type: 'activate', leaf });
       invalidate();
     };
@@ -290,7 +297,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       }
       const index = tapHit.object.userData.card;
       if (index === 0 || index === 1) selectCard(index);
-      else activate(tapHit.object.userData.leaf);
+      else activate(tapHit.object.userData.leaf, tapHit.point);
     }, {
       onStart(event) {
         if (!currentProps.current.interactionEnabled) return false;
@@ -423,6 +430,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         }
         moving = !reducedMotion.matches || !finished || moving;
       }
+      if (reducedMotion.matches || sealFinished) tapSparkles.clear();
+      else moving = tapSparkles.update(dt, pixelRatio) || moving;
 
       if (state.cardStage === 'lifting' && state.selectedCard !== null && selected === null && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015) {
         fold.value = 1;
@@ -532,6 +541,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const handleVisibility = () => {
       input.cancel();
       if (document.hidden) {
+        tapSparkles.clear();
         cancelAnimationFrame(frameId);
         frameId = 0;
       }
@@ -579,6 +589,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       });
       apertureGeometry.dispose();
       apertureMaterial.dispose();
+      tapSparkles.dispose();
       model.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
