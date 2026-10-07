@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { Connection, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import type { MintStats } from '../../types';
@@ -11,8 +11,8 @@ import {
 } from '../../api/commerce';
 import { recoverAlreadyProcessedAccounts } from '../../lib/solana';
 import { classifyStripeCheckoutKind, stripeCheckoutModeForDrop } from '../../../shared/stripeCheckoutCore';
-import { loadDiscountUsedCount, persistDiscountUsedCount } from '../persistedState';
 import { runMintWorkflow, type MintMode } from '../mint';
+import { useMintDiscount } from './useMintDiscount';
 
 export type ShopPurchaseRuntime = {
   createStripeCheckoutSession: typeof import('../../api/commerce')['createStripeCheckoutSession'];
@@ -68,87 +68,25 @@ export function useShopPurchaseActionsWithRuntime({
     createStripeCheckoutSession,
     buildMintBoxesTxWithAccounts, buildMintDiscountedBoxTxWithAccounts,
     buildMintDiscountedVariantBoxTxWithAccounts, buildMintVariantBoxTxWithAccounts,
-    fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount, getDiscountProof, isDiscountListed,
+    fetchBoxMinterConfig, fetchDiscountMintRecordUsedCount, getDiscountProof,
     registerRecentExpectedInventoryAssets,
   } = runtime;
-  const routeStripeOnly = routeDrop?.salesMode === 'stripe_receipt_only';
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
   const [stripePaymentLoading, setStripePaymentLoading] = useState(false);
   const [successfulMintToken, setSuccessfulMintToken] = useState(0);
-  const [discountEligible, setDiscountEligible] = useState(false);
-  const [discountRemainingCount, setDiscountRemainingCount] = useState(0);
-  const [discountChecking, setDiscountChecking] = useState(false);
   const mintActionLockRef = useRef<MintMode | null>(null);
   const stripeCheckoutOperationRef = useRef<StripeCheckoutOperationState | null>(null);
-  useEffect(() => {
-    const usedCount = loadDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet);
-    setDiscountRemainingCount(Math.max(0, activeDiscountAllowance - usedCount));
-    setDiscountEligible(false);
-    setDiscountChecking(false);
-  }, [activeDiscountAllowance, activeDiscountScope, activeDiscountVersion, connectedWallet]);
   const mintedOut = useMemo(() => {
     return !effectiveMintStats || effectiveMintStats.remaining <= 0;
   }, [effectiveMintStats]);
 
-  const discountAvailable =
-    Boolean(connectedWallet && publicKey) &&
-    !mintedOut &&
-    !walletBusy &&
-    !discountChecking &&
-    discountEligible &&
-    discountRemainingCount > 0;
-
-  useEffect(() => {
-    if (!routeDrop || routeStripeOnly || !routeConnection || !connectedWallet || !publicKey || mintedOut) {
-      setDiscountEligible(false);
-      setDiscountRemainingCount(0);
-      setDiscountChecking(false);
-      return;
-    }
-    let cancelled = false;
-    setDiscountChecking(true);
-    (async () => {
-      const address = publicKey.toBase58();
-      try {
-        const listed = await isDiscountListed(routeDrop.dropId, address);
-        if (cancelled) return;
-        if (!listed) {
-          setDiscountEligible(false);
-          setDiscountRemainingCount(0);
-          persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, 0);
-          return;
-        }
-        const usedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, routeDrop);
-        if (cancelled) return;
-        const remainingCount = Math.max(0, activeDiscountAllowance - usedCount);
-        setDiscountRemainingCount(remainingCount);
-        setDiscountEligible(remainingCount > 0);
-        persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, address, usedCount);
-      } catch (err) {
-        if (cancelled) return;
-        console.warn('[mons] failed to check discount eligibility', err);
-        setDiscountEligible(false);
-        setDiscountRemainingCount(0);
-      } finally {
-        if (!cancelled) setDiscountChecking(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeDiscountAllowance,
-    activeDiscountScope,
-    activeDiscountVersion,
-    connectedWallet,
-    mintedOut,
-    publicKey,
-    routeConnection,
-    routeDrop,
-    routeStripeOnly,
-  ]);
+  const {
+    discountEligible, discountRemainingCount, discountChecking, discountAvailable, captureDiscountUpdate,
+  } = useMintDiscount({
+    routeDrop, routeConnection, connectedWallet, publicKey, walletBusy, mintedOut,
+    activeDiscountAllowance, activeDiscountScope, activeDiscountVersion,
+  }, runtime);
   const handleSolanaMint = async (mode: MintMode, quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
     const action = mode === 'discount' ? 'discount mint' : 'mint';
@@ -197,13 +135,7 @@ export function useShopPurchaseActionsWithRuntime({
         addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, assetIds);
         setSuccessfulMintToken((prev) => prev + 1);
       },
-      updateDiscount: (remainingCount, usedCount) => {
-        setDiscountRemainingCount(remainingCount);
-        setDiscountEligible(remainingCount > 0);
-        if (usedCount !== undefined) {
-          persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, usedCount);
-        }
-      },
+      updateDiscount: captureDiscountUpdate(),
       refresh: (confirmed) => Promise.all([
         shouldFetchMintStats ? refetchStats() : Promise.resolve(),
         confirmed ? refreshInventoryAfterMint() : refetchInventory(),

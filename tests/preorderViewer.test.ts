@@ -89,6 +89,22 @@ test('a missing preorder image keeps the selection and shows the existing unavai
   assert.deepEqual(calls.toasts, ['Preorder image unavailable']);
 });
 
+test('suspended preorder viewing reports failure and keeps selection until presentation resumes', () => {
+  const { options, calls } = fixture();
+  const { result, rerender } = renderHook(useShopReveal, { initialProps: { ...options, suspended: true } });
+  act(() => {
+    assert.equal(result.current.openImageViewer(item), false);
+    result.current.viewItem(item);
+  });
+  assert.equal(result.current.revealOverlay, null);
+  assert.equal(calls.cleared, 0);
+  assert.deepEqual(calls.toasts, []);
+  rerender(options);
+  act(() => result.current.viewItem(item));
+  assert.equal(result.current.revealOverlay?.imageViewerSize, 'preorder');
+  assert.equal(calls.cleared, 1);
+});
+
 test('the preorder image overlay retains failure fallback and click dismissal without receipt controls', () => {
   let dismissed = 0;
   const view = render(createElement(ReceiptImageViewerOverlay, {

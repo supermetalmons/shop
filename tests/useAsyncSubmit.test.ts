@@ -52,11 +52,15 @@ test('Strict Mode effect replay ignores an earlier submission without settling t
 });
 
 test('synchronous submission errors release the guard, and retry clears the error', async () => {
+  const errors: string[] = [];
   const { result, unmount } = renderHook(() => useAsyncSubmit({
     formatError: (error) => error instanceof Error ? error.message : 'Unable to submit',
+    onError: (message) => errors.push(message),
   }));
   await act(async () => {
-    await result.current.run(() => { throw new Error('Wallet unavailable'); });
+    const completion = result.current.run(() => { throw new Error('Wallet unavailable'); });
+    assert.deepEqual(errors, ['Wallet unavailable']);
+    await completion;
   });
   assert.equal(result.current.pending, false);
   assert.equal(result.current.isPending(), false);
@@ -80,7 +84,75 @@ test('synchronous submission errors release the guard, and retry clears the erro
   assert.deepEqual(successes, ['confirmed']);
   assert.equal(result.current.pending, false);
 
+  await act(async () => {
+    await result.current.run(() => 'synchronous', (value) => successes.push(value));
+  });
+  assert.deepEqual(successes, ['confirmed', 'synchronous']);
+  assert.deepEqual(errors, ['Wallet unavailable']);
+
   const { run } = result.current;
   unmount();
   await run(async () => assert.fail('Unmounted form must not start another request'));
+});
+
+test('submission errors use the latest callback and are suppressed after unmount', async () => {
+  const errors: string[] = [];
+  const { result, rerender, unmount } = renderHook(({ prefix }) => useAsyncSubmit({
+    formatError: () => 'Unable to submit',
+    onError: (message) => errors.push(`${prefix}: ${message}`),
+  }), { initialProps: { prefix: 'old' } });
+  let reject!: (reason: unknown) => void;
+  let completion!: Promise<void>;
+  const start = () => {
+    completion = result.current.run(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  };
+  act(start);
+  rerender({ prefix: 'current' });
+  await act(async () => {
+    reject(new Error('Request failed'));
+    await completion;
+  });
+  assert.deepEqual(errors, ['current: Unable to submit']);
+
+  act(start);
+  unmount();
+  await act(async () => {
+    reject(new Error('Late failure'));
+    await completion;
+  });
+  assert.deepEqual(errors, ['current: Unable to submit']);
+});
+
+test('Strict Mode replay suppresses stale failures without notifying or unlocking the current submission', async () => {
+  const submissions: Array<{ reject: (reason: unknown) => void; completion: Promise<void> }> = [];
+  const errors: string[] = [];
+  const { result } = renderHook(() => {
+    const submission = useAsyncSubmit({
+      formatError: (error) => error instanceof Error ? error.message : 'Unable to submit',
+      onError: (message) => errors.push(message),
+    });
+    const { run } = submission;
+    useEffect(() => {
+      let reject!: (reason: unknown) => void;
+      const completion = run(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+      submissions.push({ reject, completion });
+    }, [run]);
+    return submission;
+  }, { reactStrictMode: true });
+
+  assert.equal(submissions.length, 2);
+  await act(async () => {
+    submissions[0].reject(new Error('Old failure'));
+    await submissions[0].completion;
+  });
+  assert.deepEqual(errors, []);
+  assert.equal(result.current.error, null);
+  assert.equal(result.current.isPending(), true);
+  await act(async () => {
+    submissions[1].reject(new Error('Current failure'));
+    await submissions[1].completion;
+  });
+  assert.deepEqual(errors, ['Current failure']);
+  assert.equal(result.current.error, 'Current failure');
+  assert.equal(result.current.isPending(), false);
 });

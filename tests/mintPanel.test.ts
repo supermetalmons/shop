@@ -285,6 +285,41 @@ test('Stripe displays quantity totals from cents and falls back to the supplied 
   assert.equal(view.queryByRole('button', { name: /Checkout/ }), null);
 });
 
+test('regular mint loading presentation continues to follow the parent busy prop', async () => {
+  let finishMint!: () => void;
+  const pendingMint = new Promise<void>((resolve) => { finishMint = resolve; });
+  const props = panelProps({
+    onMint: () => pendingMint,
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 1000,
+    onStripePaymentClick: () => undefined,
+  });
+  const view = render(createElement(MintPanel, props));
+  const mint = view.getByRole('button', { name: /Mint/ }) as HTMLButtonElement;
+  const checkout = view.getByRole('button', { name: /Checkout/ }) as HTMLButtonElement;
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
+  fireEvent.click(mint);
+  assert.match(mint.textContent!, /Mint.*1 pack.*1 SOL/);
+  assert.equal(mint.disabled, false);
+  assert.equal(checkout.disabled, false);
+  assert.equal(quantity.disabled, false);
+
+  view.rerender(createElement(MintPanel, { ...props, busy: true }));
+  assert.equal(mint.textContent, 'Minting…');
+  assert.equal(mint.disabled, true);
+  assert.equal(checkout.disabled, true);
+  assert.equal(quantity.disabled, true);
+  await act(async () => finishMint());
+  assert.equal(mint.textContent, 'Minting…');
+  assert.equal(mint.disabled, true);
+
+  view.rerender(createElement(MintPanel, props));
+  assert.match(mint.textContent!, /Mint.*1 pack.*1 SOL/);
+  assert.equal(mint.disabled, false);
+  assert.equal(checkout.disabled, false);
+  assert.equal(quantity.disabled, false);
+});
+
 test('pending discount mint blocks both payment methods and releases controls after an error', async () => {
   const errors: string[] = [];
   let discountCalls = 0;

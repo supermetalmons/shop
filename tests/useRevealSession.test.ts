@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach, mock } from 'node:test';
 import type { InventoryItem, PendingOpenBox } from '../src/types.ts';
-import type { RevealOverlayState } from '../src/shop/reveal/types.ts';
+import type { RevealOverlayState, ViewerOverlayInput } from '../src/shop/reveal/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 setupFrontendDom();
@@ -52,6 +52,17 @@ function overlay(overrides: Partial<RevealOverlayState> = {}): RevealOverlayStat
     frame: 1,
     advanceClicks: 0,
     ...overrides,
+  };
+}
+
+function viewerInput(): ViewerOverlayInput {
+  return {
+    id: 'receipt-a',
+    dropId: 'drop-a',
+    name: 'Receipt A',
+    originRect: { left: 10, top: 20, width: 30, height: 40 },
+    targetRect: { left: 100, top: 100, width: 200, height: 200 },
+    viewerMode: 'receipt-image',
   };
 }
 
@@ -133,6 +144,72 @@ test('a reveal holds both inventory snapshots until dismissal and flushes queued
   assert.deepEqual(calls, ['reconcile', 'presentation']);
   act(() => result.current.closeRevealOverlay());
   assert.deepEqual(calls, ['reconcile', 'presentation']);
+});
+
+for (const override of [undefined, [item('claimed')], []]) {
+  test(`a viewer preserves ${override === undefined ? 'current' : override.length ? 'overridden' : 'empty'} inventory until animated dismissal`, () => {
+    const clock = scheduler();
+    const initial = options({ inventory: [item('old')], pendingOpenBoxes: [pending('old')] });
+    const { result, rerender } = renderHook(useRevealSession, { initialProps: initial });
+    act(() => {
+      result.current.updateAssetGatedRevealComplete(true);
+      result.current.updatePonchoDismissReady(true);
+      assert.equal(result.current.presentViewerOverlay(viewerInput(), { inventorySnapshot: override }), true);
+    });
+    assert.equal(result.current.canDismissAssetGatedRevealOverlay({ revealedIds: [1] }), false);
+    assert.equal(result.current.revealDismissLockedUntilRef.current, 0);
+    act(() => clock.flushFrame());
+    assert.equal(result.current.revealOverlayActive, false);
+    act(() => clock.flushFrame());
+    assert.equal(result.current.revealOverlayActive, true);
+    const next = { ...initial, inventory: [item('new')], pendingOpenBoxes: [pending('new')] };
+    rerender(next);
+    assert.equal(result.current.inventoryView, override ?? initial.inventory);
+    assert.equal(result.current.pendingOpenBoxesView, initial.pendingOpenBoxes);
+    let reconciled = 0;
+    act(() => {
+      result.current.queueOverlayAction(() => { reconciled += 1; });
+      result.current.closeRevealOverlay();
+    });
+    assert.equal(result.current.inventoryView, override ?? initial.inventory);
+    assert.equal(reconciled, 0);
+    act(() => clock.fireTimer(380));
+    assert.equal(result.current.revealOverlay, null);
+    assert.equal(result.current.inventoryView, next.inventory);
+    assert.equal(result.current.pendingOpenBoxesView, next.pendingOpenBoxes);
+    assert.equal(reconciled, 1);
+    act(() => result.current.closeRevealOverlay());
+    assert.equal(reconciled, 1);
+  });
+}
+
+test('a suspended viewer attempt returns false without changing dismissal readiness or scheduling presentation', () => {
+  const clock = scheduler();
+  const initial = options({ suspended: true, inventory: [item('old')], pendingOpenBoxes: [pending('old')] });
+  const { result } = renderHook(useRevealSession, { initialProps: initial });
+  act(() => {
+    result.current.updateAssetGatedRevealComplete(true);
+    result.current.updateClearCardDismissReady(true);
+    assert.equal(result.current.presentViewerOverlay(viewerInput(), { inventorySnapshot: [] }), false);
+  });
+  assert.equal(result.current.revealOverlay, null);
+  assert.equal(result.current.canDismissAssetGatedRevealOverlay({ revealedIds: [1] }), true);
+  assert.equal(result.current.inventoryView, initial.inventory);
+  assert.equal(result.current.pendingOpenBoxesView, initial.pendingOpenBoxes);
+  assert.equal(clock.frames().size, 0);
+  assert.equal(clock.timers.size, 0);
+});
+
+test('transactional presentation preserves its preparing state during the opening request', () => {
+  scheduler();
+  const { result } = renderHook(useRevealSession, { initialProps: options() });
+  const preparing = overlay({ phase: 'preparing', hasRevealAttempted: false });
+  act(() => {
+    result.current.setStartOpenLoading(preparing.id);
+    result.current.presentRevealOverlay(preparing);
+  });
+  assert.equal(result.current.startOpenLoading, preparing.id);
+  assert.equal(result.current.revealOverlay, preparing);
 });
 
 test('suspension reconciles data immediately and defers presentation until the feature resumes', () => {

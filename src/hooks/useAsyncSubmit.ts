@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 type AsyncSubmitOptions = {
   formatError: (error: unknown) => string;
   onPendingChange?: (pending: boolean) => void;
+  onError?: (message: string) => void;
 };
 
 export function useAsyncSubmit(options: AsyncSubmitOptions) {
@@ -24,7 +25,7 @@ export function useAsyncSubmit(options: AsyncSubmitOptions) {
   }, []);
 
   const isPending = useCallback(() => pendingRunRef.current !== null, []);
-  const run = useCallback(async <T,>(task: () => Promise<T>, onSuccess?: (result: T) => void): Promise<void> => {
+  const run = useCallback(async <T,>(task: () => T | Promise<T>, onSuccess?: (result: T) => void): Promise<void> => {
     if (!mountedRef.current || pendingRunRef.current) return;
     const submission = {};
     pendingRunRef.current = submission;
@@ -36,7 +37,11 @@ export function useAsyncSubmit(options: AsyncSubmitOptions) {
       const result = await task();
       if (isCurrent()) onSuccess?.(result);
     } catch (submitError) {
-      if (isCurrent()) setError(optionsRef.current.formatError(submitError));
+      if (isCurrent()) {
+        const message = optionsRef.current.formatError(submitError);
+        setError(message);
+        optionsRef.current.onError?.(message);
+      }
     } finally {
       if (isCurrent()) {
         pendingRunRef.current = null;

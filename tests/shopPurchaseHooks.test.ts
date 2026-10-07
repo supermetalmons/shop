@@ -9,6 +9,7 @@ const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { useShopPurchaseActionsWithRuntime: useShopPurchaseActions } = await import('../src/shop/purchase/useShopPurchaseActionsWithRuntime.ts');
 const { useEffectiveMintStats } = await import('../src/shop/purchase/useShopPurchaseState.ts');
+const { discountUsedKey } = await import('../src/shop/persistedState.ts');
 type Options = Parameters<typeof useShopPurchaseActions>[0];
 type Runtime = NonNullable<Parameters<typeof useShopPurchaseActions>[1]>;
 
@@ -90,6 +91,24 @@ function harness() {
   return { options, runtime, events, drop };
 }
 
+function discountHarness() {
+  const h = harness();
+  h.options.activeDiscountScope = 'monsDiscountUsed:regression';
+  h.options.activeDiscountVersion = 'regression:v1';
+  h.options.addLocalMintedBoxes = (quantity) => {
+    assert.equal(quantity, 1);
+    h.events.push('local-boxes');
+  };
+  h.runtime.isDiscountListed = async () => true;
+  h.runtime.fetchDiscountMintRecordUsedCount = async () => 0;
+  h.runtime.getDiscountProof = async () => [new Uint8Array(32)];
+  h.runtime.buildMintDiscountedBoxTxWithAccounts = (connection, config, payer, quantity, proof, drop) => {
+    assert.equal(proof.length, 1);
+    return h.runtime.buildMintBoxesTxWithAccounts(connection, config, payer, quantity, drop);
+  };
+  return h;
+}
+
 test('confirmed mint resets controls and registers expected assets before a slow refresh finishes', async () => {
   const { options, runtime, events } = harness();
   const refresh = deferred<void>();
@@ -162,6 +181,98 @@ test('viewer mode stops both payment paths before any wallet or network work', a
   assert.deepEqual(events, []);
   assert.equal(result.current.successfulMintToken, 0);
 });
+
+test('a confirmed discount mint cannot apply its allowance to a different wallet', async () => {
+  const { options, runtime, events } = discountHarness();
+  const nextKey = new PublicKey(new Uint8Array(32).fill(3));
+  const confirmation = deferred<boolean>();
+  let confirming = false;
+  runtime.isDiscountListed = async (_drop, wallet) => wallet === options.connectedWallet;
+  options.sendAndConfirmMintViaConnection = () => { confirming = true; return confirmation.promise; };
+  const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
+  await waitFor(() => assert.equal(result.current.discountAvailable, true));
+  let mint!: Promise<void>;
+  act(() => { mint = result.current.handleDiscountMint(1); });
+  await waitFor(() => assert.equal(confirming, true));
+  rerender({ ...options, connectedWallet: nextKey.toBase58(), publicKey: nextKey });
+  await waitFor(() => assert.equal(result.current.discountChecking, false));
+  await act(async () => { confirmation.resolve(false); await mint; });
+  assert.equal(result.current.discountRemainingCount, 0);
+  assert.equal(result.current.discountEligible, false);
+  assert.equal(result.current.discountAvailable, false);
+  assert.equal(result.current.successfulMintToken, 1);
+  assert.equal(result.current.discountMinting, false);
+  assert.ok(events.includes('expected-assets'));
+  assert.ok(events.includes('inventory-after-mint'));
+  assert.equal(dom.window.localStorage.getItem(discountUsedKey(options.activeDiscountVersion, options.connectedWallet)), null);
+});
+
+test('a confirmed discount mint cannot overwrite a newer discount version in storage', async () => {
+  const { options, runtime } = discountHarness();
+  const confirmation = deferred<boolean>();
+  let confirming = false;
+  options.sendAndConfirmMintViaConnection = () => { confirming = true; return confirmation.promise; };
+  const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
+  await waitFor(() => assert.equal(result.current.discountAvailable, true));
+  let mint!: Promise<void>;
+  act(() => { mint = result.current.handleDiscountMint(1); });
+  await waitFor(() => assert.equal(confirming, true));
+  runtime.fetchDiscountMintRecordUsedCount = async () => 1;
+  const nextVersion = 'regression:v2';
+  const nextCacheKey = discountUsedKey(nextVersion, options.connectedWallet);
+  rerender({ ...options, activeDiscountVersion: nextVersion });
+  await waitFor(() => assert.equal(result.current.discountChecking, false));
+  assert.equal(dom.window.localStorage.getItem(nextCacheKey), '1');
+  await act(async () => { confirmation.resolve(false); await mint; });
+  assert.equal(result.current.discountRemainingCount, 1);
+  assert.equal(result.current.successfulMintToken, 1);
+  assert.equal(dom.window.localStorage.getItem(nextCacheKey), '1');
+  assert.equal(dom.window.localStorage.getItem(discountUsedKey(options.activeDiscountVersion, options.connectedWallet)), null);
+});
+
+for (const contextChange of ['wallet', 'route'] as const) {
+  test(`a discount mint refreshes allowance after switching ${contextChange} away and back before confirmation`, async () => {
+    const { options, runtime, events } = discountHarness();
+    const nextKey = new PublicKey(new Uint8Array(32).fill(3));
+    const confirmation = deferred<boolean>();
+    let confirming = false;
+    let usedCount = 0;
+    let usedReads = 0;
+    runtime.fetchDiscountMintRecordUsedCount = async () => { usedReads += 1; return usedCount; };
+    options.sendAndConfirmMintViaConnection = () => { confirming = true; return confirmation.promise; };
+    options.refetchStats = async () => {
+      events.push('stats');
+      rerender({ ...options, effectiveMintStats: { minted: 6, total: 100, remaining: 94, maxPerTx: 5 } });
+    };
+    const { result, rerender } = renderHook((props: Options) => useShopPurchaseActions(props, runtime), { initialProps: options });
+    await waitFor(() => assert.equal(result.current.discountAvailable, true));
+    let mint!: Promise<void>;
+    act(() => { mint = result.current.handleDiscountMint(1); });
+    await waitFor(() => assert.equal(confirming, true));
+    rerender(contextChange === 'wallet'
+      ? { ...options, connectedWallet: nextKey.toBase58(), publicKey: nextKey }
+      : {
+        ...options, routeDrop: null, routeConnection: null, effectiveMintStats: undefined,
+        activeDiscountAllowance: 0, activeDiscountScope: 'monsDiscountUsed:none', activeDiscountVersion: 'none',
+      });
+    await waitFor(() => assert.equal(result.current.discountChecking, false));
+    rerender(options);
+    await waitFor(() => assert.equal(result.current.discountAvailable, true));
+    assert.equal(result.current.discountRemainingCount, 2);
+    const readsBeforeConfirmation = usedReads;
+    usedCount = 1;
+    await act(async () => { confirmation.resolve(false); await mint; });
+    await waitFor(() => assert.equal(result.current.discountRemainingCount, 1));
+    assert.equal(result.current.discountChecking, false);
+    assert.equal(result.current.discountAvailable, true);
+    assert.equal(result.current.discountMinting, false);
+    assert.equal(result.current.successfulMintToken, 1);
+    assert.ok(usedReads > readsBeforeConfirmation);
+    assert.ok(events.includes('stats'));
+    assert.ok(events.includes('inventory-after-mint'));
+    assert.equal(dom.window.localStorage.getItem(discountUsedKey(options.activeDiscountVersion, options.connectedWallet)), '1');
+  });
+}
 
 test('effective supply retains forced sold-out and route-scoped Stripe adjustments', () => {
   const { drop } = harness();

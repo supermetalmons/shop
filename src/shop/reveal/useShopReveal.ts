@@ -81,7 +81,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     queueOverlayAction, clearRevealOverlayCloseTimeout, resetAssetGatedRevealDismissState,
     abortRevealSubmissionReconciliation, finalizeRevealOverlayDismissal,
     closeRevealOverlay, dismissRevealOverlay,
-    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay,
+    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay, presentViewerOverlay,
   } = session;
   const openRevealOverlay = (
     item: InventoryItem,
@@ -586,10 +586,6 @@ export function useShopReveal(options: ShopRevealOptions) {
     if (!card) return false;
 
     preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
-    resetAssetGatedRevealDismissState();
-    clearRevealOverlayCloseTimeout();
-    setInventorySnapshot(inventory);
-    setPendingOpenSnapshot(pendingOpenBoxes);
 
     const targetRect = calcPonchoDrifellaAbsoluteCardRect(
       calcPonchoDrifellaRevealTargetRectInViewport(),
@@ -602,35 +598,23 @@ export function useShopReveal(options: ShopRevealOptions) {
           targetRect.width,
           targetRect.height,
         );
-    presentRevealOverlay({
+    const opened = presentViewerOverlay({
       id: overlayId,
       dropId,
       name,
       image,
       originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
-      phase: 'revealed',
-      frame: 1,
-      advanceClicks: 0,
-      revealedIds: undefined,
-      packMediaId: undefined,
-      interactiveRevealCardId: undefined,
       viewerMode: 'poncho-card',
       viewerFigureId: figureId,
-      hasRevealAttempted: true,
-      autoOpening: false,
-      autoMode: undefined,
     });
-    if (clearSelection) {
+    if (opened && clearSelection) {
       clearInventorySelection();
     }
-    return true;
+    return opened;
   }, [
-    clearRevealOverlayCloseTimeout,
-    inventory,
-    pendingOpenBoxes,
-    presentRevealOverlay,
-    resetAssetGatedRevealDismissState,
+    clearInventorySelection,
+    presentViewerOverlay,
     revealLoading,
     startOpenLoading,
     usesInteractiveCardPackRevealForDropId,
@@ -663,11 +647,6 @@ export function useShopReveal(options: ShopRevealOptions) {
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
 
-    resetAssetGatedRevealDismissState();
-    clearRevealOverlayCloseTimeout();
-    setInventorySnapshot(inventory);
-    setPendingOpenSnapshot(pendingOpenBoxes);
-
     const viewport = getOverlayViewport();
     const targetRect = offsetRevealOverlayRectForViewport(
       calcClearCardRevealTargetRect(viewport.width, viewport.height),
@@ -687,38 +666,27 @@ export function useShopReveal(options: ShopRevealOptions) {
           targetRect.width,
           targetRect.height,
         );
-    presentRevealOverlay({
+    const opened = presentViewerOverlay({
       id: overlayId,
       dropId,
       name,
       image,
       originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
-      phase: 'revealed',
-      frame: 1,
-      advanceClicks: 0,
       revealedIds: viewerMode === 'clear-card' && typeof figureId === 'number'
         ? [figureId]
         : undefined,
-      packMediaId: undefined,
-      interactiveRevealCardId: undefined,
       viewerMode,
       viewerFigureId: viewerMode === 'clear-card' ? figureId : undefined,
-      hasRevealAttempted: true,
-      autoOpening: false,
-      autoMode: undefined,
     });
-    if (clearSelection) {
+    if (opened && clearSelection) {
       clearInventorySelection();
     }
-    return true;
+    return opened;
   }, [
     boxAspectRatioForDropId,
-    clearRevealOverlayCloseTimeout,
-    inventory,
-    pendingOpenBoxes,
-    presentRevealOverlay,
-    resetAssetGatedRevealDismissState,
+    clearInventorySelection,
+    presentViewerOverlay,
     revealLoading,
     startOpenLoading,
     usesClearCard3dRevealForDropId,
@@ -760,39 +728,20 @@ export function useShopReveal(options: ShopRevealOptions) {
       ? calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
 
-    resetAssetGatedRevealDismissState();
-    clearRevealOverlayCloseTimeout();
-    setInventorySnapshot(options?.inventorySnapshot ?? inventory);
-    setPendingOpenSnapshot(pendingOpenBoxes);
-    presentRevealOverlay({
+    return presentViewerOverlay({
       id: options?.overlayId || item.id,
       dropId: item.dropId,
       name: options?.overlayName || item.name,
       image: item.image,
       originRect: toRevealOverlayRect(resolvedOriginRect),
       targetRect,
-      phase: 'revealed',
-      frame: 1,
-      advanceClicks: 0,
-      revealedIds: undefined,
-      packMediaId: undefined,
-      interactiveRevealCardId: undefined,
       viewerMode: 'receipt-image',
       imageViewerSize: options?.size || 'receipt',
       receiptImages: options?.receiptImages,
       adminIrlRedeemReceipt: options?.adminIrlRedeemReceipt,
-      viewerFigureId: undefined,
-      hasRevealAttempted: true,
-      autoOpening: false,
-      autoMode: undefined,
-    });
-    return true;
+    }, { inventorySnapshot: options?.inventorySnapshot });
   }, [
-    clearRevealOverlayCloseTimeout,
-    inventory,
-    pendingOpenBoxes,
-    presentRevealOverlay,
-    resetAssetGatedRevealDismissState,
+    presentViewerOverlay,
     showToast,
   ]);
 

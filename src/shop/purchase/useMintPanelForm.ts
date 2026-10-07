@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { MintStats } from '../../types';
 import type { MintSelectionConfig } from '../../config/deployment';
+import { useAsyncSubmit } from '../../hooks/useAsyncSubmit';
 import { deriveMintSelectionAvailabilityFromConfig } from '../../lib/boxMinter';
 import { dropAssetCount } from '../../../shared/dropLabels.ts';
 
@@ -96,9 +97,17 @@ export function useMintPanelForm({
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [sizeBlinkToken, setSizeBlinkToken] = useState(0);
   const [isBlinking, setIsBlinking] = useState(false);
-  const [discountSubmitPending, setDiscountSubmitPending] = useState(false);
-  const [stripePaymentSubmitPending, setStripePaymentSubmitPending] = useState(false);
-  const stripePaymentPending = Boolean(stripePaymentBusy) || stripePaymentSubmitPending;
+  const mintSubmitOptions = {
+    formatError: (error: unknown) => error instanceof Error ? error.message : 'Failed to mint',
+    onError,
+  };
+  const mintSubmit = useAsyncSubmit(mintSubmitOptions);
+  const discountSubmit = useAsyncSubmit(mintSubmitOptions);
+  const stripeSubmit = useAsyncSubmit({
+    formatError: (error) => error instanceof Error ? error.message : 'Failed to start Stripe payment',
+    onError,
+  });
+  const stripePaymentPending = Boolean(stripePaymentBusy) || stripeSubmit.pending;
   useEffect(() => {
     if (showSizeSelector) setQuantity(1);
   }, [showSizeSelector]);
@@ -168,56 +177,31 @@ export function useMintPanelForm({
     hasDiscountAllowance &&
     !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick && stripePaymentDisplayPriceLabel) && !soldOut;
-  const submitBusy = busy || discountSubmitPending || (useDiscountMint && Boolean(discountBusy));
+  const submitBusy = busy || discountSubmit.pending || (useDiscountMint && Boolean(discountBusy));
   const controlsBusy = submitBusy || stripePaymentPending;
 
-  const handleMint = async () => {
-    if (!showSolanaMintButton) return;
-    if (controlsBusy) return;
+  const canSubmit = () => {
+    if (controlsBusy || mintSubmit.isPending() || discountSubmit.isPending() || stripeSubmit.isPending()) return false;
     if (showSizeSelector && !selectedSize) {
       setSizeBlinkToken((prev) => prev + 1);
-      return;
+      return false;
     }
-    if (quantity < 1 || quantity > maxSelectable) return;
+    return quantity >= 1 && quantity <= maxSelectable;
+  };
 
+  const handleMint = async () => {
+    if (!showSolanaMintButton || !canSubmit()) return;
     if (useDiscountMint) {
       if (!onDiscountMint) return;
-      setDiscountSubmitPending(true);
-      try {
-        await onDiscountMint(quantity, selectedSize || undefined);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to mint';
-        if (onError) onError(message);
-      } finally {
-        setDiscountSubmitPending(false);
-      }
+      await discountSubmit.run(() => onDiscountMint(quantity, selectedSize || undefined));
       return;
     }
-
-    try {
-      await onMint(quantity, selectedSize || undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to mint';
-      if (onError) onError(message);
-    }
+    await mintSubmit.run(() => onMint(quantity, selectedSize || undefined));
   };
 
   const handleStripePaymentClick = async () => {
-    if (!onStripePaymentClick || stripePaymentPending) return;
-    if (showSizeSelector && !selectedSize) {
-      setSizeBlinkToken((prev) => prev + 1);
-      return;
-    }
-    if (quantity < 1 || quantity > maxSelectable) return;
-    setStripePaymentSubmitPending(true);
-    try {
-      await onStripePaymentClick(quantity, selectedSize || undefined);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to start Stripe payment';
-      if (onError) onError(message);
-    } finally {
-      setStripePaymentSubmitPending(false);
-    }
+    if (!onStripePaymentClick || !canSubmit()) return;
+    await stripeSubmit.run(() => onStripePaymentClick(quantity, selectedSize || undefined));
   };
 
   const toggleSize = (key: string) => {

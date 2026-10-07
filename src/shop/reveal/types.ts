@@ -46,6 +46,13 @@ export type RevealOverlayState = {
   autoMode?: 'normal' | 'fast';
 };
 
+export type ViewerOverlayInput = Pick<RevealOverlayState,
+  'id' | 'dropId' | 'name' | 'image' | 'originRect' | 'targetRect' |
+  'revealedIds' | 'viewerFigureId' | 'imageViewerSize' | 'receiptImages' | 'adminIrlRedeemReceipt'
+> & {
+  viewerMode: NonNullable<RevealOverlayState['viewerMode']>;
+};
+
 export type EarlyClearCardRevealGate = {
   boxAssetId: string;
   dropId: string;

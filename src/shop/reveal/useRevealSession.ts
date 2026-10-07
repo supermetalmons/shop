@@ -15,7 +15,7 @@ import {
 import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
 import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS } from './sounds';
 import type { PonchoRevealDismissReadySource } from '../../components/PonchoRevealOverlay';
-import type { EarlyClearCardRevealGate, RevealOverlayState } from './types';
+import type { EarlyClearCardRevealGate, RevealOverlayState, ViewerOverlayInput } from './types';
 import type { ShopRevealOptions } from './contracts';
 import type { RevealAssets } from './useRevealAssets';
 
@@ -336,6 +336,31 @@ export function useRevealSession({
     [cancelRevealOverlayAnimationFrame],
   );
 
+  const presentViewerOverlay = useCallback(
+    (input: ViewerOverlayInput, options?: { inventorySnapshot?: InventoryItem[] }): boolean => {
+      if (suspendedRef.current) return false;
+      resetAssetGatedRevealDismissState();
+      clearRevealOverlayCloseTimeout();
+      setInventorySnapshot(options?.inventorySnapshot ?? inventory);
+      setPendingOpenSnapshot(pendingOpenBoxes);
+      presentRevealOverlay({
+        phase: 'revealed',
+        frame: 1,
+        advanceClicks: 0,
+        revealedIds: undefined,
+        packMediaId: undefined,
+        interactiveRevealCardId: undefined,
+        viewerFigureId: undefined,
+        hasRevealAttempted: true,
+        autoOpening: false,
+        autoMode: undefined,
+        ...input,
+      });
+      return true;
+    },
+    [clearRevealOverlayCloseTimeout, inventory, pendingOpenBoxes, presentRevealOverlay, resetAssetGatedRevealDismissState],
+  );
+
 
   useEffect(() => {
     const walletChanged = previousConnectedWalletForOwnerRef.current !== connectedWallet;
@@ -499,7 +524,7 @@ export function useRevealSession({
     updateAssetGatedRevealComplete, updatePonchoDismissReady, updateClearCardDismissReady,
     abortRevealSubmissionReconciliation, finalizeRevealOverlayDismissal,
     closeRevealOverlay, dismissRevealOverlay, discardRevealOverlay,
-    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay,
+    canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay, presentViewerOverlay,
     getCurrentOverlay, isClosing,
   };
 }
