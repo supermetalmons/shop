@@ -330,9 +330,9 @@ function assertSquareOpen(model: TestModel) {
 
 function assertGentleFloat(model: TestModel) {
   const [pitch, yaw, roll, height] = packPose(model);
-  assert.ok(pitch >= 0.031 && pitch <= 0.079);
-  assert.ok(yaw >= -0.172 && yaw <= -0.068);
-  assert.ok(roll >= -0.032 && roll <= 0);
+  assert.ok(Math.abs(pitch) <= 0.055);
+  assert.ok(Math.abs(yaw) <= 0.12);
+  assert.ok(Math.abs(roll) <= 0.016);
   assert.ok(Math.abs(height) <= 0.037);
   assert.equal(model.group.position.x, 0);
   assert.equal(model.group.position.z, 0);
@@ -408,6 +408,63 @@ test('a sealed pack gently floats on both covers while outer flips still finish'
   assert.equal(run.state.taps, 0);
 });
 
+test('idle rotation drifts to both sides of neutral instead of leaning toward the initial render pose', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  const minimum = [Infinity, Infinity, Infinity];
+  const maximum = [-Infinity, -Infinity, -Infinity];
+  for (let frame = 0; frame < 360; frame += 1) {
+    advanceFrame();
+    assertGentleFloat(model);
+    packPose(model).slice(0, 3).forEach((value, index) => {
+      minimum[index] = Math.min(minimum[index], value);
+      maximum[index] = Math.max(maximum[index], value);
+    });
+  }
+  for (let axis = 0; axis < 3; axis += 1) {
+    assert.ok(minimum[axis] < -0.01);
+    assert.ok(maximum[axis] > 0.01);
+  }
+  assert.equal(run.state.taps, 0);
+});
+
+test('hover begins at the static render angle without quickly steering toward neutral', () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  harness();
+  const model = models[0];
+  advanceFrame(16.67);
+  const start = packPose(model);
+  for (const [axis, angle] of [0.055, -0.12, -0.016].entries()) {
+    assert.ok(Math.abs(start[axis] - angle) < 0.00001);
+  }
+  advanceFrames(4);
+  packPose(model).slice(0, 3).forEach((angle, axis) => {
+    assert.ok(Math.abs(angle - start[axis]) < 0.0005);
+  });
+});
+
+test('closing before opening finishes continues gently from the visible pose', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  const model = models[0];
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  advanceFrames();
+  act(() => run.controls.current!.activate());
+  advanceFrames(10);
+  assert.ok(model.phase > 0.99 && model.phase < 1);
+  const before = packPose(model);
+  act(() => run.controls.current!.activate());
+  advanceFrames(4);
+  assert.ok(model.phase < 0.2);
+  packPose(model).forEach((value, axis) => assert.ok(Math.abs(value - before[axis]) < 0.002));
+  advanceFrames();
+  assert.equal(model.phase, 0);
+  assertGentleFloat(model);
+});
+
 test('opening removes the full floating pose while stickers flutter and either cover restores it', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness();
@@ -435,7 +492,12 @@ test('opening removes the full floating pose while stickers flutter and either c
     act(() => run.controls.current!.navigate(direction));
     advanceFrame();
     assert.ok(packPose(model).some(value => value !== 0));
-    assert.ok(Math.abs(model.group.rotation.y) < 0.068);
+    advanceFrames(3);
+    assert.ok(Math.abs(model.phase - 1) > 0.8);
+    assert.ok(Math.abs(model.group.rotation.x) < 0.024 * 0.15);
+    assert.ok(Math.abs(model.group.rotation.y) < 0.052 * 0.15);
+    assert.ok(Math.abs(model.group.rotation.z) < 0.016 * 0.15);
+    assert.ok(Math.abs(model.group.position.y) < 0.037 * 0.15);
     advanceFrames();
     assert.equal(model.phase, direction === 1 ? 2 : 0);
     assertGentleFloat(model);
@@ -529,14 +591,14 @@ test('hidden tabs pause floating without advancing its phase and unmount cancels
   assert.deepEqual(packPose(model), unmountedPose);
 });
 
-test('live reduced motion changes keep a static closed pose and a square open pose', async () => {
+test('live reduced motion changes keep both closed and open poses neutral', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4 });
   await makeReady();
   const model = models[0];
   act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
   settle();
-  assert.ok(new THREE.Vector4(...packPose(model)).equals(new THREE.Vector4(0.055, -0.12, -0.016, 0)));
+  assert.ok(packPose(model).every(value => value === 0));
   act(() => run.controls.current!.activate());
   settle();
   assertSquareOpen(model);
@@ -550,7 +612,7 @@ test('live reduced motion changes keep a static closed pose and a square open po
   act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
   settle();
   assert.equal(model.phase, 2);
-  assert.ok(new THREE.Vector4(...packPose(model)).equals(new THREE.Vector4(0.055, -0.12, -0.016, 0)));
+  assert.ok(packPose(model).every(value => value === 0));
 });
 
 test('viewport changes preserve card layout and projection in the folder and after inspection', async () => {

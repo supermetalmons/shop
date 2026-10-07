@@ -101,11 +101,13 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let sealTime = 0;
     let sealStarted = false;
     let sealFinished = false;
-    let idleTime = 0;
-    const idlePitch: Motion = { value: 0.055, velocity: 0 };
-    const idleYaw: Motion = { value: -0.12, velocity: 0 };
-    const idleRoll: Motion = { value: -0.016, velocity: 0 };
-    const idleHeight: Motion = { value: 0, velocity: 0 };
+    const idlePitch = { value: 0.055, phase: Math.PI / 2, amplitude: 0.055, frequency: 0.45 };
+    const idleYaw = { value: -0.12, phase: -Math.PI / 2, amplitude: 0.12, frequency: 0.32 };
+    const idleRoll = { value: -0.016, phase: -Math.PI / 2, amplitude: 0.016, frequency: 0.55 };
+    const idleHeight = { value: 0, phase: 0, amplitude: 0.037, frequency: 0.75 };
+    const idleMotions = [idlePitch, idleYaw, idleRoll, idleHeight];
+    const idleSpeed: Motion = { value: 1, velocity: 0 };
+    let previousClosed = Math.abs(props.state.folderPose - 1);
     const fold: Motion = { value: props.state.folderPose, velocity: 0 };
     const recoil: Motion = { value: 0, velocity: 0 };
     const cameraMotion: Motion = { value: 0, velocity: 0 };
@@ -376,11 +378,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const applyPackPose = () => {
       const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
       model.group.rotation.set(
-        idlePitch.value * closed,
-        idleYaw.value * closed,
-        (idleRoll.value + recoil.value * 0.08) * closed,
+        idlePitch.value,
+        idleYaw.value,
+        idleRoll.value + recoil.value * 0.08 * closed,
       );
-      model.group.position.y = idleHeight.value * closed;
+      model.group.position.y = idleHeight.value;
       model.group.scale.setScalar(1 - recoil.value * 0.08 * closed);
     };
 
@@ -430,16 +432,26 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         if (Math.abs(recoil.value) < 0.0001 && Math.abs(recoil.velocity) < 0.0008) recoil.value = recoil.velocity = 0;
         else moving = true;
       }
-      const floating = !reducedMotion.matches && !drag && state.selectedCard === null && fold.value !== 1;
-      if (floating || reducedMotion.matches) {
-        if (floating) idleTime += dt;
-        const wave = reducedMotion.matches ? 0 : 1;
-        spring(idlePitch, 0.055 + Math.sin(idleTime * 0.81) * 0.024 * wave, 7, dt, reducedMotion.matches);
-        spring(idleYaw, -0.12 + Math.sin(idleTime * 0.59) * 0.052 * wave, 7, dt, reducedMotion.matches);
-        spring(idleRoll, -0.016 + Math.sin(idleTime * 0.73 + 0.6) * 0.016 * wave, 7, dt, reducedMotion.matches);
-        spring(idleHeight, (Math.sin(idleTime * 0.94) * 0.025 + Math.sin(idleTime * 0.43) * 0.012) * wave, 6, dt, reducedMotion.matches);
+      const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
+      const opening = closed < previousClosed || (state.folderPose === 1 && !drag);
+      const idleAdvancing = !reducedMotion.matches && !drag && state.selectedCard === null && !opening && closed > 0;
+      if (opening || closed === 0 || reducedMotion.matches) {
+        const amount = reducedMotion.matches || previousClosed === 0 ? 0 : Math.min(1, closed / previousClosed);
+        for (const motion of idleMotions) {
+          motion.value *= amount;
+          const phase = Math.asin(THREE.MathUtils.clamp(motion.value / motion.amplitude, -1, 1));
+          motion.phase = Math.cos(motion.phase) < 0 ? Math.PI - phase : phase;
+        }
+        idleSpeed.value = idleSpeed.velocity = 0;
+      } else if (idleAdvancing) {
+        spring(idleSpeed, 1, 3, dt, false);
+        for (const motion of idleMotions) {
+          motion.phase += motion.frequency * idleSpeed.value * dt;
+          motion.value = Math.sin(motion.phase) * motion.amplitude;
+        }
       }
-      moving = floating || moving;
+      previousClosed = closed;
+      moving = idleAdvancing || moving;
       applyPackPose();
       const sealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
       const angleDelta = Math.atan2(Math.sin(sealAngle - lastSealAngle), Math.cos(sealAngle - lastSealAngle));
@@ -462,6 +474,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         fold.value = 1;
         fold.velocity = 0;
         model.setFolderPhase(1);
+        for (const motion of idleMotions) motion.value = 0;
         applyPackPose();
         scene.updateMatrixWorld(true);
         selected = state.selectedCard;
