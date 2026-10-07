@@ -101,6 +101,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let sealTime = 0;
     let sealStarted = false;
     let sealFinished = false;
+    let idleTime = 0;
+    const idlePitch: Motion = { value: 0.055, velocity: 0 };
+    const idleYaw: Motion = { value: -0.12, velocity: 0 };
+    const idleRoll: Motion = { value: -0.016, velocity: 0 };
+    const idleHeight: Motion = { value: 0, velocity: 0 };
     const fold: Motion = { value: props.state.folderPose, velocity: 0 };
     const recoil: Motion = { value: 0, velocity: 0 };
     const cameraMotion: Motion = { value: 0, velocity: 0 };
@@ -368,6 +373,17 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     host.addEventListener('lostpointercapture', input.onLostPointerCapture);
     window.addEventListener('blur', handleBlur);
 
+    const applyPackPose = () => {
+      const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
+      model.group.rotation.set(
+        idlePitch.value * closed,
+        idleYaw.value * closed,
+        (idleRoll.value + recoil.value * 0.08) * closed,
+      );
+      model.group.position.y = idleHeight.value * closed;
+      model.group.scale.setScalar(1 - recoil.value * 0.08 * closed);
+    };
+
     function render(now: number) {
       frameId = 0;
       if (disposed || failed || document.hidden) return;
@@ -414,8 +430,17 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         if (Math.abs(recoil.value) < 0.0001 && Math.abs(recoil.velocity) < 0.0008) recoil.value = recoil.velocity = 0;
         else moving = true;
       }
-      model.group.scale.setScalar(1 - recoil.value * 0.08);
-      model.group.rotation.z = -0.016 + recoil.value * 0.08;
+      const floating = !reducedMotion.matches && !drag && state.selectedCard === null && fold.value !== 1;
+      if (floating || reducedMotion.matches) {
+        if (floating) idleTime += dt;
+        const wave = reducedMotion.matches ? 0 : 1;
+        spring(idlePitch, 0.055 + Math.sin(idleTime * 0.81) * 0.024 * wave, 7, dt, reducedMotion.matches);
+        spring(idleYaw, -0.12 + Math.sin(idleTime * 0.59) * 0.052 * wave, 7, dt, reducedMotion.matches);
+        spring(idleRoll, -0.016 + Math.sin(idleTime * 0.73 + 0.6) * 0.016 * wave, 7, dt, reducedMotion.matches);
+        spring(idleHeight, (Math.sin(idleTime * 0.94) * 0.025 + Math.sin(idleTime * 0.43) * 0.012) * wave, 6, dt, reducedMotion.matches);
+      }
+      moving = floating || moving;
+      applyPackPose();
       const sealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
       const angleDelta = Math.atan2(Math.sin(sealAngle - lastSealAngle), Math.cos(sealAngle - lastSealAngle));
       lastSealAngle = sealAngle;
@@ -437,6 +462,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         fold.value = 1;
         fold.velocity = 0;
         model.setFolderPhase(1);
+        applyPackPose();
         scene.updateMatrixWorld(true);
         selected = state.selectedCard;
         const card = cards[selected];
