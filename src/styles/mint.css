@@ -173,6 +173,29 @@
   opacity: 0;
 }
 
+.mint-panel__box--showcase {
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 550ms ease;
+}
+
+.mint-panel__box--showcase[data-visible='true'] {
+  opacity: 1;
+}
+
+.mint-panel__box--showcase > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mint-panel__box--showcase {
+    transition: none;
+  }
+}
+
 .mint-panel__footer {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

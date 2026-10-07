@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { PreviewVideoSource } from '../types';
 import { isDropFamily } from '../config/deployment';
 import { MediaWithFallback, type PrimaryMediaControls } from './MediaWithFallback';
@@ -18,11 +18,15 @@ export type MintPanelBoxMedia = {
   aspectRatio?: number;
 };
 
+export type MintPreviewPrimaryRenderer = (media: PrimaryMediaControls) => ReactNode;
+
 type MintPreviewProps = {
   boxMedia?: MintPanelBoxMedia;
   dropId?: string;
   quantity: number;
   quantityLabel: string;
+  renderPreviewPrimary?: MintPreviewPrimaryRenderer;
+  previewPrimaryKey?: string;
 };
 
 type BoxPreviewLayout = { width: number; height: number; gapX: number; gapY: number; cols: number };
@@ -252,7 +256,7 @@ function MintPanelBoxVideo({
   );
 }
 
-export function MintPreview({ boxMedia, dropId, quantity, quantityLabel }: MintPreviewProps) {
+export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderPreviewPrimary, previewPrimaryKey }: MintPreviewProps) {
   const previewRef = useRef<HTMLDivElement | null>(null);
   const mintBoxVideosRef = useRef<Set<HTMLVideoElement>>(new Set());
   const mintBoxVideoPlaybackActiveRef = useRef(false);
@@ -266,7 +270,7 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel }: MintP
   const mintBoxImageSrc = boxMedia?.imageSrc;
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
   const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
-  const previewQuantity = mintPanelPreviewQuantity(dropId, quantity, hasMintBoxVideoSources);
+  const previewQuantity = renderPreviewPrimary ? 1 : mintPanelPreviewQuantity(dropId, quantity, hasMintBoxVideoSources);
   const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
   const mintBoxVideoFallbackImageSrcs = uniqueMediaSrcs(mintBoxVideoPosterSrc, mintBoxImageSrc);
 
@@ -466,6 +470,7 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel }: MintP
           ) : mintBoxImageSrc ? (
             <div key={idx} className="mint-panel__box mint-panel__box-stack">
               <MediaWithFallback
+                key={previewPrimaryKey}
                 imageSources={[mintBoxImageSrc]}
                 imageProps={{
                   className: 'mint-panel__box',
@@ -475,6 +480,8 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel }: MintP
                   onDragStart: (evt) => evt.preventDefault(),
                 }}
                 showPlaceholderWhileLoading
+                primaryKey={previewPrimaryKey}
+                renderPrimary={renderPreviewPrimary}
                 renderPlaceholder={(hidden) => (
                   <div
                     className="mint-panel__box mint-panel__box--fallback"

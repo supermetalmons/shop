@@ -144,6 +144,65 @@ test('model retains the seal, pocket geometry, and picking metadata through both
   }
 });
 
+test('model recolors every stock surface without replacing resources or changing paper and stickers', async (t) => {
+  setupArtwork(t);
+  let invalidations = 0;
+  const model = createMiNotePackModel({
+    color: '#3559b7',
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0, sizeScale: 1 },
+    foldPosition: 0.573,
+    rotationOffsetDegrees: 0,
+    onInvalidate: () => { invalidations += 1; },
+  });
+  t.after(() => model.dispose());
+  await model.ready;
+  const surfaces: {
+    mesh: THREE.Mesh;
+    geometry: THREE.BufferGeometry;
+    material: THREE.MeshStandardMaterial;
+    color: THREE.Color;
+    map: THREE.Texture | null;
+    bumpMap: THREE.Texture | null;
+  }[] = [];
+  model.group.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    assert.ok(!Array.isArray(object.material));
+    const material = object.material as THREE.MeshStandardMaterial;
+    surfaces.push({ mesh: object, geometry: object.geometry, material, color: material.color.clone(), map: material.map, bumpMap: material.bumpMap });
+  });
+  const paperMaterials = [...new Set(surfaces.map(surface => surface.material))]
+    .filter(material => material instanceof THREE.MeshStandardMaterial && !(material instanceof THREE.MeshPhysicalMaterial));
+  const stock = paperMaterials.filter(material => material.map !== null);
+  const cutEdge = paperMaterials.find(material => material.map === null && material.bumpMap === null)!;
+  assert.equal(stock.length, 2);
+  assert.ok(stock.some(material => material.side === THREE.FrontSide));
+  assert.ok(stock.some(material => material.side === THREE.DoubleSide));
+  assert.ok(cutEdge);
+  const initialInvalidations = invalidations;
+  for (const color of ['#E7A62C', '#20866C', '#3559b7']) {
+    model.setColor(color);
+    for (const surface of surfaces) {
+      const expected = stock.includes(surface.material)
+        ? new THREE.Color(color).multiplyScalar(255 / 239)
+        : surface.material === cutEdge
+          ? new THREE.Color(color).lerp(new THREE.Color(0xf1eedf), 0.35)
+          : surface.color;
+      assert.deepEqual(surface.material.color, expected);
+      assert.equal(surface.mesh.geometry, surface.geometry);
+      assert.equal(surface.mesh.material, surface.material);
+      assert.equal(surface.material.map, surface.map);
+      assert.equal(surface.material.bumpMap, surface.bumpMap);
+    }
+  }
+  assert.equal(invalidations, initialInvalidations + 3);
+  model.setColor('#3559b7');
+  assert.equal(invalidations, initialInvalidations + 3);
+  model.dispose();
+  model.setColor('#E7A62C');
+  assert.equal(invalidations, initialInvalidations + 3);
+  for (const surface of surfaces) assert.deepEqual(surface.material.color, surface.color);
+});
+
 function tiltedPath(side: number) {
   const parent = new THREE.Group();
   parent.position.set(0.13, -0.07, 0.11);

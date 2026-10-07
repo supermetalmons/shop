@@ -1,6 +1,6 @@
 import test, { after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createElement } from 'react';
+import { createElement, useEffect } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -87,6 +87,44 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('clear_cards_devnet_v2', 8, false), 1);
   assert.equal(mintPanelPreviewQuantity('little_swag_boxes', 3, false), 3);
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
+});
+
+test('returning from a live drop with quantity 15 mounts only one showcase', () => {
+  let mounts = 0;
+  let unmounts = 0;
+  function PrimaryPreview() {
+    useEffect(() => {
+      mounts += 1;
+      return () => { unmounts += 1; };
+    }, []);
+    return createElement('canvas');
+  }
+  const view = render(createElement(MintPanel, panelProps({
+    dropId: 'clear_cards_devnet_v2',
+    stats: { minted: 0, total: 192, remaining: 192, maxPerTx: 15 },
+    maxSupply: 192,
+    maxPerTx: 15,
+    boxMedia: { imageSrc: '/clear-card.webp' },
+  })));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' });
+  fireEvent.change(quantity, { target: { value: '15' } });
+  assert.equal((quantity as HTMLInputElement).value, '15');
+
+  view.rerender(createElement(MintPanel, panelProps({
+    dropId: 'mi_note_cards',
+    stats: undefined,
+    maxSupply: 1,
+    maxPerTx: 1,
+    boxMedia: { imageSrc: '/pack-1.webp', aspectRatio: 1050 / 1400 },
+    renderPreviewPrimary: () => createElement(PrimaryPreview),
+    previewPrimaryKey: 'mi-note-cards-devnet-showcase',
+    terminalAction: { statusText: 'Soon', buttonText: 'Notify Me', onClick: () => undefined },
+  })));
+  assert.equal(view.container.querySelectorAll('canvas').length, 1);
+  assert.equal(mounts, 1);
+  assert.equal(unmounts, 0);
+  view.unmount();
+  assert.equal(unmounts, 1);
 });
 
 test('quantity changes update the mint label, price, and submitted quantity', async () => {

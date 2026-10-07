@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { createElement } from 'react';
+import { createElement, useEffect } from 'react';
+import type { PrimaryMediaControls } from '../src/components/MediaWithFallback.tsx';
 
 const dom = new JSDOM('<!doctype html><html><head><style>.mint-panel__preview { padding: 0px; }</style></head><body></body></html>', {
   url: 'https://mons.shop/',
@@ -187,6 +188,83 @@ test('image previews retain their quantity, accessible label, and empty fallback
   view.rerender(createElement(MintPreview, { ...initial, boxMedia: undefined }));
   assert.equal(boxes.querySelectorAll('img, video').length, 0);
   assert.equal(boxes.querySelectorAll('.mint-panel__box--fallback').length, 3);
+});
+
+test('an optional primary preview preserves layout and retries after leaving a failed showcase', () => {
+  let mediaControls!: PrimaryMediaControls;
+  let unmounts = 0;
+  function PrimaryPreview({ media }: { media: PrimaryMediaControls }) {
+    useEffect(() => () => { unmounts += 1; }, []);
+    return createElement('canvas', { hidden: media.hidden, 'data-ready': media.ready });
+  }
+  const renderPreviewPrimary = (media: PrimaryMediaControls) => {
+    mediaControls = media;
+    return createElement(PrimaryPreview, { media });
+  };
+  const initial = props({ boxMedia: { imageSrc: '/pack-1.webp', aspectRatio: 1050 / 1400 } });
+  const view = render(createElement(MintPreview, initial));
+  const boxes = requiredElement<HTMLElement>(view.container, '.mint-panel__boxes');
+  let image = requiredElement<HTMLImageElement>(boxes, 'img');
+  imageComplete(image, 1050);
+  fireEvent.load(image);
+  const layout = boxes.style.cssText;
+
+  const withPrimary = { ...initial, renderPreviewPrimary, previewPrimaryKey: 'showcase' };
+  view.rerender(createElement(MintPreview, withPrimary));
+  image = requiredElement<HTMLImageElement>(boxes, 'img');
+  imageComplete(image, 1050);
+  fireEvent.load(image);
+  let canvas = requiredElement<HTMLCanvasElement>(boxes, 'canvas');
+  assert.equal(canvas.parentElement, image.parentElement);
+  assert.equal(image.hidden, false);
+  assert.equal(canvas.dataset.ready, 'false');
+  assert.equal(boxes.style.cssText, layout);
+  assert.equal(boxes.children.length, 1);
+
+  act(() => mediaControls.onReady());
+  assert.equal(image.hidden, true);
+  assert.equal(canvas.dataset.ready, 'true');
+  assert.equal(boxes.style.cssText, layout);
+
+  view.rerender(createElement(MintPreview, withPrimary));
+  assert.equal(requiredElement(boxes, 'img'), image);
+  assert.equal(requiredElement(boxes, 'canvas'), canvas);
+  assert.equal(image.hidden, true);
+  assert.equal(unmounts, 0);
+
+  const previousCanvas = canvas;
+  const previousImage = image;
+  view.rerender(createElement(MintPreview, { ...withPrimary, previewPrimaryKey: 'replacement' }));
+  image = requiredElement<HTMLImageElement>(boxes, 'img');
+  canvas = requiredElement<HTMLCanvasElement>(boxes, 'canvas');
+  assert.notEqual(image, previousImage);
+  assert.notEqual(canvas, previousCanvas);
+  assert.equal(unmounts, 1);
+  assert.equal(image.hidden, false);
+  assert.equal(canvas.dataset.ready, 'false');
+  act(() => mediaControls.onReady());
+  assert.equal(image.hidden, true);
+  act(() => mediaControls.onError());
+  assert.equal(canvas.hidden, true);
+  assert.equal(image.hidden, false);
+
+  view.rerender(createElement(MintPreview, initial));
+  assert.equal(boxes.querySelector('canvas'), null);
+  assert.equal(unmounts, 2);
+  image = requiredElement<HTMLImageElement>(boxes, 'img');
+  assert.equal(image.hidden, false);
+  assert.equal(boxes.style.cssText, layout);
+
+  view.rerender(createElement(MintPreview, withPrimary));
+  image = requiredElement<HTMLImageElement>(boxes, 'img');
+  canvas = requiredElement<HTMLCanvasElement>(boxes, 'canvas');
+  assert.equal(canvas.hidden, false);
+  assert.equal(mediaControls.hidden, false);
+  assert.equal(mediaControls.ready, false);
+  assert.equal(image.hidden, false);
+  assert.equal(boxes.style.cssText, layout);
+  act(() => mediaControls.onReady());
+  assert.equal(image.hidden, true);
 });
 
 test('unchanged source URLs keep playback stable while replacements reload and removed previews stop', () => {

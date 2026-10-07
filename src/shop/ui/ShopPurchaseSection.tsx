@@ -1,6 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 import { DropsPanel } from '../../components/DropsPanel';
 import { MintPanel, type MintPanelBoxMedia } from '../../components/MintPanel';
+import { MiNotePackShowcasePreview } from '../../components/MiNotePackShowcasePreview';
+import type { PrimaryMediaControls } from '../../components/MediaWithFallback';
 import {
   type FrontendDeploymentConfig
 } from '../../config/deployment';
@@ -8,6 +10,10 @@ import type { UpcomingDropRouteConfig } from '../../lib/dropConfig';
 import type { MintStats } from '../../types';
 import type { useShopPurchaseActions } from '../purchase/useShopPurchaseActions';
 import type { useShopPurchaseState } from '../purchase/useShopPurchaseState';
+
+function renderMiNotePackShowcase(media: PrimaryMediaControls) {
+  return <MiNotePackShowcasePreview media={media} />;
+}
 
 type ShopPurchaseSectionProps = Pick<ReturnType<typeof useShopPurchaseActions>,
   'minting'
@@ -69,12 +75,15 @@ export function ShopPurchaseSection({
   routeStripePaymentPriceLabel,
   routeStripePaymentUnitAmountCents,
 }: ShopPurchaseSectionProps) {
+  const showMiNotePackShowcase = upcomingDropRoute?.path === '/mi_note_cards_devnet';
   return (!routeDrop && upcomingDropRoute ? (
     <MintPanel
       onMint={() => undefined}
       busy={false}
       title={upcomingDropRoute.title}
       boxMedia={upcomingMintPreviewMedia}
+      renderPreviewPrimary={showMiNotePackShowcase ? renderMiNotePackShowcase : undefined}
+      previewPrimaryKey={showMiNotePackShowcase ? 'mi-note-cards-devnet-showcase' : undefined}
       boxNamePrefix={upcomingDropRoute.boxNamePrefix}
       dropId={upcomingDropRoute.dropFamily}
       priceSol={0}

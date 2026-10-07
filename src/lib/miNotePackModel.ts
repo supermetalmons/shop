@@ -303,6 +303,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   }
   let lastPhase = -1;
   let disposed = false;
+  let currentColor = color;
 
   const setFolderPhase = (value: number) => {
     const phase = THREE.MathUtils.clamp(value, 0, 2);
@@ -352,6 +353,14 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     left,
     right,
     ready: seal.ready,
+    setColor(value: string) {
+      if (disposed || value === currentColor) return;
+      currentColor = value;
+      stock.color.set(value).multiplyScalar(255 / 239);
+      foldedStock.color.copy(stock.color);
+      cutEdge.color.set(value).lerp(paper.color, 0.35);
+      onInvalidate?.();
+    },
     setFolderPhase,
     getSealFocus: (target: THREE.Vector3) => seal.getFocus(target),
     setSealFoldPosition: (value: number) => seal.setFoldPosition(value),

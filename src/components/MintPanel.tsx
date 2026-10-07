@@ -7,7 +7,7 @@ import { resolveDropXProfile } from '../lib/dropSocialLinks';
 import { secondaryMarketplaceLinksForDropId } from '../config/deployment';
 import { useMintPanelForm, type MintPanelFormOptions } from '../shop/purchase/useMintPanelForm';
 import { MintPanelActions } from './MintPanelActions';
-import { MintPreview, type MintPanelBoxMedia } from './MintPreview';
+import { MintPreview, type MintPanelBoxMedia, type MintPreviewPrimaryRenderer } from './MintPreview';
 
 export type { MintPanelBoxMedia } from './MintPreview';
 
@@ -30,6 +30,8 @@ interface MintPanelProps extends MintPanelFormOptions {
   walletActionBusy?: boolean;
   title?: string;
   boxMedia?: MintPanelBoxMedia;
+  renderPreviewPrimary?: MintPreviewPrimaryRenderer;
+  previewPrimaryKey?: string;
   dropId?: string;
   receiptPoolId?: string;
   terminalAction?: MintPanelTerminalAction;
@@ -121,7 +123,7 @@ function MintPanelPackStatusPopover({
 }
 
 export function MintPanel({
-  title, boxMedia, dropId, receiptPoolId, terminalAction, onNotifyNextDrops,
+  title, boxMedia, renderPreviewPrimary, previewPrimaryKey, dropId, receiptPoolId, terminalAction, onNotifyNextDrops,
   showPackStatusInfo, packStatusBreakdown, walletActionBusy = false,
   packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
   ...formOptions
@@ -221,7 +223,14 @@ export function MintPanel({
 
   return (
     <section className="mint-panel">
-      <MintPreview boxMedia={boxMedia} dropId={dropId} quantity={quantity} quantityLabel={quantityLabel} />
+      <MintPreview
+        boxMedia={boxMedia}
+        dropId={dropId}
+        quantity={quantity}
+        quantityLabel={quantityLabel}
+        renderPreviewPrimary={renderPreviewPrimary}
+        previewPrimaryKey={previewPrimaryKey}
+      />
       {terminalState ? (
         <div className={terminalFooterClassName}>
           <div className="mint-panel__info">
