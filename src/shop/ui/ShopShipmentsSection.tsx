@@ -85,6 +85,19 @@ export function ShopShipmentsSection({
             const previewId = `shipment:${order.dropId}:${order.deliveryId}:${item.kind}:${item.refId}:${index}`;
             if (item.kind === 'box') {
               const boxImage = normalizeBoxDisplayImage({ dropId: order.dropId, boxId: item.refId });
+              const openPreview = (element: HTMLDivElement) => {
+                const originRect = getInventoryRevealRect(element);
+                const previewImage = getRenderedImagePreview(element, boxImage);
+                openImageViewer(
+                  { id: previewId, dropId: order.dropId, name: label, image: previewImage.src },
+                  originRect,
+                  {
+                    aspectRatio: previewImage.aspectRatio,
+                    size: 'shipment',
+                    unavailableMessage: 'Shipment image unavailable',
+                  },
+                );
+              };
               return (
                 <div
                   key={previewId}
@@ -94,33 +107,11 @@ export function ShopShipmentsSection({
                   aria-label={`View ${label}`}
                   draggable={false}
                   onDragStart={(evt) => evt.preventDefault()}
-                  onClick={(evt) => {
-                    const originRect = getInventoryRevealRect(evt.currentTarget);
-                    const previewImage = getRenderedImagePreview(evt.currentTarget, boxImage);
-                    openImageViewer(
-                      { id: previewId, dropId: order.dropId, name: label, image: previewImage.src },
-                      originRect,
-                      {
-                        aspectRatio: previewImage.aspectRatio,
-                        size: 'shipment',
-                        unavailableMessage: 'Shipment image unavailable',
-                      },
-                    );
-                  }}
+                  onClick={(evt) => openPreview(evt.currentTarget)}
                   onKeyDown={(evt) => {
                     if (evt.key !== 'Enter' && evt.key !== ' ') return;
                     evt.preventDefault();
-                    const originRect = getInventoryRevealRect(evt.currentTarget);
-                    const previewImage = getRenderedImagePreview(evt.currentTarget, boxImage);
-                    openImageViewer(
-                      { id: previewId, dropId: order.dropId, name: label, image: previewImage.src },
-                      originRect,
-                      {
-                        aspectRatio: previewImage.aspectRatio,
-                        size: 'shipment',
-                        unavailableMessage: 'Shipment image unavailable',
-                      },
-                    );
+                    openPreview(evt.currentTarget);
                   }}
                 >
                   {boxImage ? (
@@ -153,6 +144,42 @@ export function ShopShipmentsSection({
               usesClearCard3dRevealForDropId(order.dropId) &&
               Boolean(clearCardModelUrl(item.refId));
             const previewImage = primarySrc || fallbackSrc;
+            const openPreview = (element: HTMLDivElement) => {
+              const originRect = getInventoryRevealRect(element);
+              const renderedPreviewImage = getRenderedImagePreview(element, previewImage);
+              if (canViewClearCardModel) {
+                openClearCardModelViewer({
+                  overlayId: previewId,
+                  dropId: order.dropId,
+                  name: label,
+                  image: renderedPreviewImage.src,
+                  figureId: item.refId,
+                  viewerMode: 'clear-card',
+                  originRect,
+                });
+                return;
+              }
+              if (canViewInteractiveCard) {
+                openInteractiveCardViewer({
+                  overlayId: previewId,
+                  dropId: order.dropId,
+                  name: label,
+                  image: renderedPreviewImage.src,
+                  figureId: item.refId,
+                  originRect,
+                });
+                return;
+              }
+              openImageViewer(
+                { id: previewId, dropId: order.dropId, name: label, image: renderedPreviewImage.src },
+                originRect,
+                {
+                  aspectRatio: renderedPreviewImage.aspectRatio,
+                  size: 'shipment-figure',
+                  unavailableMessage: 'Shipment image unavailable',
+                },
+              );
+            };
 
             return (
               <div
@@ -163,79 +190,11 @@ export function ShopShipmentsSection({
                 aria-label={`View ${label}`}
                 draggable={false}
                 onDragStart={(evt) => evt.preventDefault()}
-                onClick={(evt) => {
-                  const originRect = getInventoryRevealRect(evt.currentTarget);
-                  const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
-                  if (canViewClearCardModel) {
-                    openClearCardModelViewer({
-                      overlayId: previewId,
-                      dropId: order.dropId,
-                      name: label,
-                      image: renderedPreviewImage.src,
-                      figureId: item.refId,
-                      viewerMode: 'clear-card',
-                      originRect,
-                    });
-                    return;
-                  }
-                  if (canViewInteractiveCard) {
-                    openInteractiveCardViewer({
-                      overlayId: previewId,
-                      dropId: order.dropId,
-                      name: label,
-                      image: renderedPreviewImage.src,
-                      figureId: item.refId,
-                      originRect,
-                    });
-                    return;
-                  }
-                  openImageViewer(
-                    { id: previewId, dropId: order.dropId, name: label, image: renderedPreviewImage.src },
-                    originRect,
-                    {
-                      aspectRatio: renderedPreviewImage.aspectRatio,
-                      size: 'shipment-figure',
-                      unavailableMessage: 'Shipment image unavailable',
-                    },
-                  );
-                }}
+                onClick={(evt) => openPreview(evt.currentTarget)}
                 onKeyDown={(evt) => {
                   if (evt.key !== 'Enter' && evt.key !== ' ') return;
                   evt.preventDefault();
-                  const originRect = getInventoryRevealRect(evt.currentTarget);
-                  const renderedPreviewImage = getRenderedImagePreview(evt.currentTarget, previewImage);
-                  if (canViewClearCardModel) {
-                    openClearCardModelViewer({
-                      overlayId: previewId,
-                      dropId: order.dropId,
-                      name: label,
-                      image: renderedPreviewImage.src,
-                      figureId: item.refId,
-                      viewerMode: 'clear-card',
-                      originRect,
-                    });
-                    return;
-                  }
-                  if (canViewInteractiveCard) {
-                    openInteractiveCardViewer({
-                      overlayId: previewId,
-                      dropId: order.dropId,
-                      name: label,
-                      image: renderedPreviewImage.src,
-                      figureId: item.refId,
-                      originRect,
-                    });
-                    return;
-                  }
-                  openImageViewer(
-                    { id: previewId, dropId: order.dropId, name: label, image: renderedPreviewImage.src },
-                    originRect,
-                    {
-                      aspectRatio: renderedPreviewImage.aspectRatio,
-                      size: 'shipment-figure',
-                      unavailableMessage: 'Shipment image unavailable',
-                    },
-                  );
+                  openPreview(evt.currentTarget);
                 }}
               >
                 <FigureTileImage
