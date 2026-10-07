@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
 import { FaCircleQuestion } from 'react-icons/fa6';
 import { LuInfo } from 'react-icons/lu';
 import type { PackStatusBreakdown, PackStatusDisplayLabels } from '../types';
@@ -8,6 +8,7 @@ import { secondaryMarketplaceLinksForDropId } from '../config/deployment';
 import { useMintPanelForm, type MintPanelFormOptions } from '../shop/purchase/useMintPanelForm';
 import { MintPanelActions } from './MintPanelActions';
 import { MintPreview, type MintPanelBoxMedia, type MintPreviewPrimaryRenderer } from './MintPreview';
+import { dropAssetCount } from '../../shared/dropLabels.ts';
 
 export type { MintPanelBoxMedia } from './MintPreview';
 
@@ -26,20 +27,31 @@ type MintPanelTerminalAction = {
   buttons?: MintPanelTerminalButton[];
 };
 
-interface MintPanelProps extends MintPanelFormOptions {
-  walletActionBusy?: boolean;
+type MintPanelPresentationProps = {
   title?: string;
   boxMedia?: MintPanelBoxMedia;
   renderPreviewPrimary?: MintPreviewPrimaryRenderer;
   previewPrimaryKey?: string;
   dropId?: string;
-  receiptPoolId?: string;
-  terminalAction?: MintPanelTerminalAction;
-  onNotifyNextDrops?: () => void;
+  boxNamePrefix?: string;
   showPackStatusInfo?: boolean;
   packStatusBreakdown?: PackStatusBreakdown;
   packStatusDisplayLabels?: PackStatusDisplayLabels;
-}
+};
+
+type PurchaseMintPanelProps = MintPanelPresentationProps & MintPanelFormOptions & {
+  mode: 'purchase';
+  walletActionBusy?: boolean;
+  receiptPoolId?: string;
+  onNotifyNextDrops?: () => void;
+};
+
+type AnnouncementMintPanelProps = MintPanelPresentationProps & {
+  mode: 'announcement';
+  terminalAction: MintPanelTerminalAction;
+};
+
+type MintPanelProps = PurchaseMintPanelProps | AnnouncementMintPanelProps;
 
 const MONS_SHOP_RECEIPTS_POOL_ID = 'mons_shop_receipts';
 const PACK_STATUS_NUMBER_FORMATTER = new Intl.NumberFormat('en-US', { useGrouping: false });
@@ -122,38 +134,16 @@ function MintPanelPackStatusPopover({
   );
 }
 
-export function MintPanel({
-  title, boxMedia, renderPreviewPrimary, previewPrimaryKey, dropId, receiptPoolId, terminalAction, onNotifyNextDrops,
-  showPackStatusInfo, packStatusBreakdown, walletActionBusy = false,
-  packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
-  ...formOptions
-}: MintPanelProps) {
-  const form = useMintPanelForm(formOptions);
-  const {
-    total, remaining, remainingReady, soldOut, quantity, setQuantity, quantityLabel,
-    maxSelectable, sizeOptions, sizeAvailability, selectedSize, toggleSize,
-    sizeBlinkToken, isBlinking, showSizeSelector, showQuantitySlider, showFormControls,
-    controlsBusy,
-  } = form;
-  const formId = 'mint-form';
-  const sizeGuide = showSizeSelector ? resolveDropSizeGuide(dropId) : null;
-  const showPackStatusControl = Boolean(showPackStatusInfo || packStatusBreakdown);
-  const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
-  const [packStatusInfoOpen, setPackStatusInfoOpen] = useState(false);
-  const sizeInfoRef = useRef<HTMLDivElement | null>(null);
-  const packStatusInfoRef = useRef<HTMLDivElement | null>(null);
+function MintPanelFrame({ children, ...preview }: ComponentProps<typeof MintPreview> & { children: ReactNode }) {
+  return (
+    <section className="mint-panel">
+      <MintPreview {...preview} />
+      {children}
+    </section>
+  );
+}
 
-  useEffect(() => {
-    if (!showSizeSelector && sizeInfoOpen) setSizeInfoOpen(false);
-  }, [showSizeSelector, sizeInfoOpen]);
-
-  useEffect(() => {
-    if (!showPackStatusControl && packStatusInfoOpen) setPackStatusInfoOpen(false);
-  }, [showPackStatusControl, packStatusInfoOpen]);
-
-  useDismissiblePopover(sizeInfoOpen, sizeInfoRef, setSizeInfoOpen);
-  useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
-
+function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProps, 'title' | 'dropId'>) {
   const mintTitle = title || 'Little Swag Boxes';
   const dropXProfile = resolveDropXProfile(dropId);
   const dropXProfileLink = dropXProfile ? (
@@ -167,51 +157,35 @@ export function MintPanel({
       <XProfileLogo />
     </a>
   ) : null;
-  const dropTitle = (
+  return (
     <div className="mint-panel__price">
       <span className="mint-panel__drop-name">{mintTitle}</span>
       {dropXProfileLink}
     </div>
   );
-  const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
-    return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
-      key: link.key,
-      buttonText: link.label,
-      href: link.href,
-    }));
-  }, [dropId]);
-  const isSharedReceiptPoolSoldOut = soldOut && receiptPoolId === MONS_SHOP_RECEIPTS_POOL_ID;
-  const isDefaultSoldOutState = soldOut && !terminalAction && !isSharedReceiptPoolSoldOut;
-  const terminalState =
-    terminalAction ||
-    (soldOut
-      ? isSharedReceiptPoolSoldOut
-        ? {
-            statusText: 'Sold Out',
-            buttonText: 'Notify me',
-            onClick: onNotifyNextDrops,
-          }
-        : {
-            statusText: 'Minted Out',
-            buttons: soldOutButtons,
-          }
-      : null);
+}
+
+function MintPanelTerminalFooter({
+  title, dropId, terminalAction, marketplaces = false, showPackStatusInfo, packStatusBreakdown,
+  packStatusDisplayLabels = DEFAULT_PACK_STATUS_DISPLAY_LABELS,
+}: MintPanelPresentationProps & { terminalAction: MintPanelTerminalAction; marketplaces?: boolean }) {
+  const showPackStatusControl = Boolean(showPackStatusInfo || packStatusBreakdown);
+  const [packStatusInfoOpen, setPackStatusInfoOpen] = useState(false);
+  const packStatusInfoRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showPackStatusControl && packStatusInfoOpen) setPackStatusInfoOpen(false);
+  }, [showPackStatusControl, packStatusInfoOpen]);
+
+  useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
+
   const terminalButtons = (
-    terminalState
-      ? terminalState.buttons ||
-        (terminalState.buttonText && (terminalState.href || terminalState.onClick)
-          ? [
-              {
-                key: 'primary',
-                buttonText: terminalState.buttonText,
-                href: terminalState.href,
-                onClick: terminalState.onClick,
-              },
-            ]
-          : [])
-      : []
+    terminalAction.buttons ||
+    (terminalAction.buttonText && (terminalAction.href || terminalAction.onClick)
+      ? [{ key: 'primary', buttonText: terminalAction.buttonText, href: terminalAction.href, onClick: terminalAction.onClick }]
+      : [])
   ).filter((button) => button.href || button.onClick);
-  const terminalFooterClassName = isDefaultSoldOutState
+  const terminalFooterClassName = marketplaces
     ? 'mint-panel__footer mint-panel__footer--soldout mint-panel__footer--marketplaces'
     : 'mint-panel__footer mint-panel__footer--soldout';
   const splitTerminalButtons = terminalButtons.length > 1;
@@ -222,69 +196,118 @@ export function MintPanel({
     : 'mint-panel__terminal-buttons';
 
   return (
-    <section className="mint-panel">
-      <MintPreview
-        boxMedia={boxMedia}
-        dropId={dropId}
-        quantity={quantity}
-        quantityLabel={quantityLabel}
-        renderPreviewPrimary={renderPreviewPrimary}
-        previewPrimaryKey={previewPrimaryKey}
-      />
-      {terminalState ? (
-        <div className={terminalFooterClassName}>
-          <div className="mint-panel__info">
-            {dropTitle}
-            <div className="mint-panel__remaining mint-panel__remaining--with-info">
-              <span>{terminalState.statusText}</span>
-              {showPackStatusControl ? (
-                <span className="mint-panel__pack-status-info-wrap" ref={packStatusInfoRef}>
-                  <button
-                    type="button"
-                    className="mint-panel__pack-status-info"
-                    aria-label={packStatusDisplayLabels.ariaLabel}
-                    aria-expanded={packStatusInfoOpen}
-                    aria-haspopup="dialog"
-                    onClick={() => setPackStatusInfoOpen((prev) => !prev)}
-                  >
-                    <LuInfo aria-hidden="true" focusable="false" size={16} strokeWidth={2} />
-                  </button>
-                  {packStatusInfoOpen ? (
-                    <MintPanelPackStatusPopover breakdown={packStatusBreakdown} displayLabels={packStatusDisplayLabels} />
-                  ) : null}
-                </span>
-              ) : null}
-            </div>
-          </div>
-          {terminalButtons.length ? (
-            <div className="mint-panel__cta">
-              <div
-                className={terminalButtonsClassName}
+    <div className={terminalFooterClassName}>
+      <div className="mint-panel__info">
+        <MintPanelTitle title={title} dropId={dropId} />
+        <div className="mint-panel__remaining mint-panel__remaining--with-info">
+          <span>{terminalAction.statusText}</span>
+          {showPackStatusControl ? (
+            <span className="mint-panel__pack-status-info-wrap" ref={packStatusInfoRef}>
+              <button
+                type="button"
+                className="mint-panel__pack-status-info"
+                aria-label={packStatusDisplayLabels.ariaLabel}
+                aria-expanded={packStatusInfoOpen}
+                aria-haspopup="dialog"
+                onClick={() => setPackStatusInfoOpen((prev) => !prev)}
               >
-                {terminalButtons.map((button, index) => {
-                  const key = button.key || `${button.buttonText}-${index}`;
-                  if (button.href) {
-                    return (
-                      <a key={key} className="mint-panel__secondary" href={button.href} target="_blank" rel="noreferrer">
-                        <span className="mint-panel__secondary-text">{button.buttonText}</span>
-                      </a>
-                    );
-                  }
-                  if (!button.onClick) return null;
-                  return (
-                    <button key={key} type="button" className="mint-panel__secondary" onClick={button.onClick}>
-                      <span className="mint-panel__secondary-text">{button.buttonText}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+                <LuInfo aria-hidden="true" focusable="false" size={16} strokeWidth={2} />
+              </button>
+              {packStatusInfoOpen ? (
+                <MintPanelPackStatusPopover breakdown={packStatusBreakdown} displayLabels={packStatusDisplayLabels} />
+              ) : null}
+            </span>
           ) : null}
         </div>
+      </div>
+      {terminalButtons.length ? (
+        <div className="mint-panel__cta">
+          <div
+            className={terminalButtonsClassName}
+          >
+            {terminalButtons.map((button, index) => {
+              const key = button.key || `${button.buttonText}-${index}`;
+              if (button.href) {
+                return (
+                  <a key={key} className="mint-panel__secondary" href={button.href} target="_blank" rel="noreferrer">
+                    <span className="mint-panel__secondary-text">{button.buttonText}</span>
+                  </a>
+                );
+              }
+              if (!button.onClick) return null;
+              return (
+                <button key={key} type="button" className="mint-panel__secondary" onClick={button.onClick}>
+                  <span className="mint-panel__secondary-text">{button.buttonText}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PurchaseMintPanel({
+  title, boxMedia, renderPreviewPrimary, previewPrimaryKey, dropId, receiptPoolId, onNotifyNextDrops,
+  showPackStatusInfo, packStatusBreakdown, walletActionBusy = false, packStatusDisplayLabels,
+  ...formOptions
+}: PurchaseMintPanelProps) {
+  const form = useMintPanelForm(formOptions);
+  const {
+    total, remaining, remainingReady, soldOut, quantity, setQuantity, quantityLabel,
+    maxSelectable, sizeOptions, sizeAvailability, selectedSize, toggleSize,
+    sizeBlinkToken, isBlinking, showSizeSelector, showQuantitySlider, showFormControls,
+    controlsBusy,
+  } = form;
+  const formId = 'mint-form';
+  const sizeGuide = showSizeSelector ? resolveDropSizeGuide(dropId) : null;
+  const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
+  const sizeInfoRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!showSizeSelector && sizeInfoOpen) setSizeInfoOpen(false);
+  }, [showSizeSelector, sizeInfoOpen]);
+
+  useDismissiblePopover(sizeInfoOpen, sizeInfoRef, setSizeInfoOpen);
+
+  const soldOutButtons = useMemo<MintPanelTerminalButton[]>(() => {
+    return secondaryMarketplaceLinksForDropId(dropId || '').map((link) => ({
+      key: link.key,
+      buttonText: link.label,
+      href: link.href,
+    }));
+  }, [dropId]);
+  const isSharedReceiptPoolSoldOut = soldOut && receiptPoolId === MONS_SHOP_RECEIPTS_POOL_ID;
+  const terminalAction = soldOut
+    ? isSharedReceiptPoolSoldOut
+      ? { statusText: 'Sold Out', buttonText: 'Notify me', onClick: onNotifyNextDrops }
+      : { statusText: 'Minted Out', buttons: soldOutButtons }
+    : null;
+
+  return (
+    <MintPanelFrame
+      boxMedia={boxMedia}
+      dropId={dropId}
+      quantity={quantity}
+      quantityLabel={quantityLabel}
+      renderPreviewPrimary={renderPreviewPrimary}
+      previewPrimaryKey={previewPrimaryKey}
+    >
+      {terminalAction ? (
+        <MintPanelTerminalFooter
+          title={title}
+          dropId={dropId}
+          terminalAction={terminalAction}
+          marketplaces={!isSharedReceiptPoolSoldOut}
+          showPackStatusInfo={showPackStatusInfo}
+          packStatusBreakdown={packStatusBreakdown}
+          packStatusDisplayLabels={packStatusDisplayLabels}
+        />
       ) : (
         <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
-            {dropTitle}
+            <MintPanelTitle title={title} dropId={dropId} />
             <div
               className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
               aria-hidden={!remainingReady}
@@ -414,6 +437,26 @@ export function MintPanel({
           />
         </div>
       )}
-    </section>
+    </MintPanelFrame>
   );
+}
+
+function AnnouncementMintPanel(props: AnnouncementMintPanelProps) {
+  const quantityLabel = dropAssetCount({ namePrefix: props.boxNamePrefix, figureNamePrefix: undefined }, 'box', 1);
+  return (
+    <MintPanelFrame
+      boxMedia={props.boxMedia}
+      dropId={props.dropId}
+      quantity={1}
+      quantityLabel={quantityLabel}
+      renderPreviewPrimary={props.renderPreviewPrimary}
+      previewPrimaryKey={props.previewPrimaryKey}
+    >
+      <MintPanelTerminalFooter {...props} />
+    </MintPanelFrame>
+  );
+}
+
+export function MintPanel(props: MintPanelProps) {
+  return props.mode === 'announcement' ? <AnnouncementMintPanel {...props} /> : <PurchaseMintPanel {...props} />;
 }

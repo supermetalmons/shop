@@ -9,13 +9,14 @@ const { MintPanel } = await import('../src/components/MintPanel.tsx');
 const { mintPanelPreviewQuantity } = await import('../src/components/MintPreview.tsx');
 const { shouldFetchMintProgress } = await import('../src/hooks/useMintProgress.ts');
 const { resolveDropXProfile } = await import('../src/lib/dropSocialLinks.ts');
-type Props = Parameters<typeof MintPanel>[0];
+type Props = Extract<Parameters<typeof MintPanel>[0], { mode: 'purchase' }>;
 
 afterEach(cleanup);
 after(() => dom.window.close());
 
 function panelProps(overrides: Partial<Props> = {}): Props {
   return {
+    mode: 'purchase',
     stats: { minted: 0, total: 15, remaining: 15, maxPerTx: 5 },
     onMint: () => undefined,
     busy: false,
@@ -89,7 +90,7 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });
 
-test('returning from a live drop with quantity 15 mounts only one showcase', () => {
+test('switching purchase to announcement and back mounts one showcase and resets purchase quantity', () => {
   let mounts = 0;
   let unmounts = 0;
   function PrimaryPreview() {
@@ -99,30 +100,36 @@ test('returning from a live drop with quantity 15 mounts only one showcase', () 
     }, []);
     return createElement('canvas');
   }
-  const view = render(createElement(MintPanel, panelProps({
+  const purchaseProps = panelProps({
     dropId: 'clear_cards_devnet_v2',
     stats: { minted: 0, total: 192, remaining: 192, maxPerTx: 15 },
     maxSupply: 192,
     maxPerTx: 15,
     boxMedia: { imageSrc: '/clear-card.webp' },
-  })));
+  });
+  const view = render(createElement(MintPanel, purchaseProps));
   const quantity = view.getByRole('slider', { name: 'Mint quantity' });
   fireEvent.change(quantity, { target: { value: '15' } });
   assert.equal((quantity as HTMLInputElement).value, '15');
 
-  view.rerender(createElement(MintPanel, panelProps({
+  view.rerender(createElement(MintPanel, {
+    mode: 'announcement',
     dropId: 'mi_note_cards',
-    stats: undefined,
-    maxSupply: 1,
-    maxPerTx: 1,
     boxMedia: { imageSrc: '/pack-1.webp', aspectRatio: 1050 / 1400 },
     renderPreviewPrimary: () => createElement(PrimaryPreview),
     previewPrimaryKey: 'mi-note-cards-devnet-showcase',
     terminalAction: { statusText: 'Soon', buttonText: 'Notify Me', onClick: () => undefined },
-  })));
+  }));
+  assert.equal(view.queryByRole('slider'), null);
+  assert.equal(view.container.querySelector('form'), null);
   assert.equal(view.container.querySelectorAll('canvas').length, 1);
   assert.equal(mounts, 1);
   assert.equal(unmounts, 0);
+  view.rerender(createElement(MintPanel, purchaseProps));
+  assert.equal((view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement).value, '1');
+  assert.equal(view.queryByRole('button', { name: 'Notify Me' }), null);
+  assert.equal(mounts, 1);
+  assert.equal(unmounts, 1);
   view.unmount();
   assert.equal(unmounts, 1);
 });
@@ -399,10 +406,10 @@ test('drop title and accessible X profile stay grouped separately from availabil
   assert.equal(titleGroup.contains(view.getByText('15 / 15 left')), false);
 });
 
-test('upcoming drops expose their profile and notification action', () => {
+test('announcements expose their profile and notification action without purchase props or controls', () => {
   let notifications = 0;
-  const view = render(createElement(MintPanel, panelProps({
-    stats: undefined,
+  const view = render(createElement(MintPanel, {
+    mode: 'announcement',
     title: 'Clear Cards',
     dropId: 'clear_cards',
     terminalAction: {
@@ -410,10 +417,13 @@ test('upcoming drops expose their profile and notification action', () => {
       buttonText: 'Notify Me',
       onClick: () => { notifications += 1; },
     },
-  })));
+  }));
   assert.ok(view.getByText('Clear Cards'));
   assert.equal(view.getByRole('link', { name: 'Open @gucci4mycat on X' }).getAttribute('href'), 'https://x.com/gucci4mycat');
   assert.ok(view.getByText('Soon'));
+  assert.equal(view.container.querySelector('form'), null);
+  assert.equal(view.queryByRole('slider'), null);
+  assert.equal(view.queryByRole('button', { name: /Mint|Checkout/ }), null);
   fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
   assert.equal(notifications, 1);
 });

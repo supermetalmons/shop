@@ -95,6 +95,23 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
   const recoveryRecords = usePreorderRecoveryRecords(buyer);
   const invalidatedRollbacks = useRef(new Set<string>());
   const ethereumAddress = options.ethereumSession?.address;
+  const commitPending = useCallback((value: PendingPreorder | null) => {
+    pendingRef.current = value;
+    setPending(value);
+  }, []);
+  const commitPhase = useCallback((value: CheckoutPhase) => {
+    phaseRef.current = value;
+    setPhase(value);
+  }, []);
+  const releaseOperation = useCallback(() => {
+    activeOperation.current = null;
+    commitPhase('idle');
+  }, [commitPhase]);
+  const invalidateOperation = useCallback(() => {
+    recoveryGeneration.current += 1;
+    releaseOperation();
+  }, [releaseOperation]);
+
   useEffect(() => {
     if (!buyer || !ethereumAddress) return;
     const cardIds: number[] = [];
@@ -120,27 +137,22 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
 
   useEffect(() => {
     if (active) return;
-    recoveryGeneration.current += 1;
-    activeOperation.current = null;
-    phaseRef.current = 'idle';
-    setPhase('idle');
-  }, [active]);
+    invalidateOperation();
+  }, [active, invalidateOperation]);
 
   const keepPending = useCallback((value: PendingPreorder | null, key: string) => {
     writePending(key, value);
     if (currentScope.current !== key) return;
-    pendingRef.current = value;
-    setPending(value);
-  }, []);
+    commitPending(value);
+  }, [commitPending]);
 
   const adoptPending = useCallback((value: PendingPreorder) => {
     recoveryGeneration.current += 1;
-    pendingRef.current = value;
-    setPending(value);
+    commitPending(value);
     setOrder(null);
     setError(null);
     setRecoveryReady(false);
-  }, []);
+  }, [commitPending]);
 
   const announceSuccess = useCallback((next: PreorderOrder) => {
     if ((next.status === 'succeeded' || next.status === 'submitted' && next.confirmedSlot != null) && !completed.current.has(next.orderId)) {
@@ -223,31 +235,24 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       setRecoveryRevision(value => value + 1);
       announceSuccess(recovered);
     } else if (!acceptOrder(recovered, scope)) return;
-    recoveryGeneration.current += 1;
-    activeOperation.current = null;
-    phaseRef.current = 'idle';
-    setPhase('idle');
+    invalidateOperation();
     if (!replacement) setRecoveryReady(true);
     if (waiting?.submittedOrder?.orderId === recovered.orderId) {
       waiting.complete();
       activeCompletion.current = null;
     }
-  }, [acceptOrder, adoptPending, announceSuccess, buyer, checkoutScope, config.preorderId, order, pending, phase, recoveryRecords, scope, scopeId]);
+  }, [acceptOrder, adoptPending, announceSuccess, buyer, checkoutScope, config.preorderId, invalidateOperation, order, pending, phase, recoveryRecords, scope, scopeId]);
 
   useEffect(() => {
-    recoveryGeneration.current += 1;
-    activeOperation.current = null;
+    invalidateOperation();
     setOrder(null);
     setError(null);
-    setPhase('idle');
-    phaseRef.current = 'idle';
     setRecoveryReady(false);
     const saved = config.enabled && scope ? readPending(scope) : null;
-    pendingRef.current = saved;
-    setPending(saved);
+    commitPending(saved);
     setCheckoutScope(scopeId);
     return () => { activeOperation.current = null; };
-  }, [scope, scopeId, config.enabled]);
+  }, [scope, scopeId, config.enabled, commitPending, invalidateOperation]);
 
   useEffect(() => {
     if (!buyer || !signedIn || !config.enabled || (!active && !readPending(scope))) return;
@@ -312,8 +317,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       const saved = readPending(scope);
       recoveryGeneration.current += 1;
       const next = saved ?? (pendingRef.current?.orderId ? pendingRef.current : null);
-      pendingRef.current = next;
-      setPending(next);
+      commitPending(next);
       lookedUp = false;
       void recover(true);
     };
@@ -325,7 +329,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       unsubscribeRefreshEvents();
       window.removeEventListener('storage', storage);
     };
-  }, [acceptPersistedOrder, active, adoptPending, api, buyer, config.enabled, config.preorderId, keepPending, recoveryRevision, scope, signedIn]);
+  }, [acceptPersistedOrder, active, adoptPending, api, buyer, commitPending, config.enabled, config.preorderId, keepPending, recoveryRevision, scope, signedIn]);
 
   const beginOperation = (key: string, initialPhase: CheckoutPhase) => {
     const generation = ++recoveryGeneration.current;
@@ -337,16 +341,13 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       recoveryGeneration.current === generation;
     const setCurrentPhase = (value: CheckoutPhase) => {
       if (!isCurrent()) return;
-      phaseRef.current = value;
-      setPhase(value);
+      commitPhase(value);
     };
     setCurrentPhase(initialPhase);
     return { isCurrent, setCurrentPhase, completion, finish: () => {
       if (activeCompletion.current?.generation === generation) activeCompletion.current = null;
       if (currentScope.current !== key || activeOperation.current !== generation) return;
-      activeOperation.current = null;
-      phaseRef.current = 'idle';
-      setPhase('idle');
+      releaseOperation();
     } };
   };
 

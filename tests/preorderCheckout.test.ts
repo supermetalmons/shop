@@ -81,6 +81,38 @@ test('selection alone does not reserve; purchase signs once and submits exclusiv
   assert.equal(window.localStorage.length, 0);
 });
 
+test('two purchases in the same tick authenticate and submit only the first selection', async () => {
+  const { api, options, calls } = runtime();
+  let finishSignIn!: (value: boolean) => void;
+  const signIn = new Promise<boolean>((resolve) => { finishSignIn = resolve; });
+  let signInCalls = 0;
+  options.ensureSignedIn = async () => {
+    signInCalls += 1;
+    return signIn;
+  };
+  const { result } = renderHook(() => usePreorderCheckout(options, api));
+  await waitFor(() => assert.equal(result.current.recoveryReady, true));
+  let firstPurchase!: Promise<void>;
+  let secondPurchase!: Promise<void>;
+  act(() => {
+    firstPurchase = result.current.purchase([1]);
+    secondPurchase = result.current.purchase([2]);
+  });
+  assert.equal(result.current.phase, 'authenticating');
+  assert.equal(signInCalls, 1);
+  assert.equal(calls.prepare.length, 0);
+  await act(async () => {
+    finishSignIn(true);
+    await Promise.all([firstPurchase, secondPurchase]);
+  });
+  assert.equal(signInCalls, 1);
+  assert.equal(calls.prepare.length, 1);
+  assert.deepEqual(calls.prepare[0].cardIds, [1]);
+  assert.equal(calls.signed, 1);
+  assert.equal(calls.submit.length, 1);
+  assert.equal(result.current.phase, 'idle');
+});
+
 for (const persisted of [false, true]) for (const cardIds of [[1398, 1399, 1400], [1400, 1409, 1410], [1411, 1412, 1413], [1414, 1415, 1416], [1417, 1418, 1419],
   [1420, 1421, 1422], [1423, 1424, 1425], [1426, 1427, 1428], [1429, 1430]]) {
   test(`${persisted ? 'persisted' : 'fresh'} checkout accepts cards ${cardIds.join(', ')}`, async () => {
@@ -978,6 +1010,8 @@ for (const action of ['prepare', 'submit', 'cancel', 'rejection cleanup'] as con
     let operation!: Promise<void>;
     act(() => { operation = action === 'cancel' ? result.current.cancel() : result.current.purchase([1]); });
     await waitFor(() => assert.equal(waiting, true));
+    const pendingPhase = result.current.phase;
+    assert.notEqual(pendingPhase, 'idle');
     const key = window.localStorage.key(0)!;
     const saved = JSON.stringify({ requestId: 'request-2', orderId: next.orderId, cardIds: next.cardIds, submittedAttempt: true });
     api.status = async (_id, orderId) => { assert.equal(orderId, next.orderId); return { order: next }; };
@@ -985,6 +1019,8 @@ for (const action of ['prepare', 'submit', 'cancel', 'rejection cleanup'] as con
       window.localStorage.setItem(key, saved);
       window.dispatchEvent(new dom.window.StorageEvent('storage', { key, newValue: saved }));
     });
+    assert.equal(result.current.phase, pendingPhase);
+    assert.equal(result.current.busy, true);
     await act(async () => {
       finish({ order: { ...previous, status: action === 'prepare' ? 'prepared' : action === 'submit' ? 'succeeded' : 'cancelled' }, transactionBase64 });
       await operation;

@@ -78,18 +78,13 @@ export function ShopPurchaseSection({
   const showMiNotePackShowcase = upcomingDropRoute?.path === '/mi_note_cards_devnet';
   return (!routeDrop && upcomingDropRoute ? (
     <MintPanel
-      onMint={() => undefined}
-      busy={false}
+      mode="announcement"
       title={upcomingDropRoute.title}
       boxMedia={upcomingMintPreviewMedia}
       renderPreviewPrimary={showMiNotePackShowcase ? renderMiNotePackShowcase : undefined}
       previewPrimaryKey={showMiNotePackShowcase ? 'mi-note-cards-devnet-showcase' : undefined}
       boxNamePrefix={upcomingDropRoute.boxNamePrefix}
       dropId={upcomingDropRoute.dropFamily}
-      priceSol={0}
-      discountPriceSol={0}
-      maxSupply={1}
-      maxPerTx={1}
       terminalAction={{
         statusText: upcomingDropRoute.statusText || 'Soon',
         buttonText: 'Notify Me',
@@ -100,6 +95,7 @@ export function ShopPurchaseSection({
     <DropsPanel />
   ) : (
     <MintPanel
+      mode="purchase"
       stats={effectiveMintStats}
       onMint={handleMint}
       walletActionBusy={walletActionBusy}
