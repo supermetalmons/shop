@@ -14,9 +14,13 @@ function setupArtwork(
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
   const previousImage = Object.getOwnPropertyDescriptor(globalThis, 'Image');
   const requests: string[] = [];
+  let originClean = true;
   const context = {
     drawImage(_image: unknown, x: number, y: number, width: number, height: number) { onDraw([x, y, width, height]); },
-    getImageData: () => ({ data: pixels }),
+    getImageData: () => {
+      if (!originClean) throw new DOMException('The canvas has been tainted by cross-origin data.', 'SecurityError');
+      return { data: pixels };
+    },
     putImageData(image: { data: Uint8ClampedArray }) { onWrite(image.data); },
     imageSmoothingQuality: 'low',
   };
@@ -27,11 +31,13 @@ function setupArtwork(
   Object.defineProperty(globalThis, 'Image', {
     configurable: true,
     value: class {
+      crossOrigin: string | null = null;
       naturalWidth = 2048;
       naturalHeight = 2048;
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
       set src(value: string) {
+        originClean = !value.startsWith('https://') || this.crossOrigin === 'anonymous';
         requests.push(value);
         queueMicrotask(() => this.onload?.());
       }

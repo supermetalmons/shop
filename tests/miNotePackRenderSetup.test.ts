@@ -25,6 +25,7 @@ test('all nine combinations share the standard consistent pose and camera', () =
       assert.equal(setup.id, `${variant.id}--${sticker.id}`);
       assert.equal(setup.variantId, variant.id);
       assert.equal(setup.sticker.id, sticker.id);
+      assert.equal(setup.sticker.source, sticker.src);
       assert.equal(setup.color, variant.color);
       assert.equal(setup.imageFilename, `${setup.packId}.png`);
       assert.equal(setup.model.rotationOrder, 'XYZ');

@@ -365,6 +365,7 @@ export function createMiNotePackSeal({
   pose(0);
 
   const artwork = new Image();
+  artwork.crossOrigin = 'anonymous';
   let cancelReady: (() => void) | undefined;
   let loadTimeout: ReturnType<typeof setTimeout> | undefined;
   const clearLoadTimeout = () => {

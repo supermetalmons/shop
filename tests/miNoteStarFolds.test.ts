@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
 import {
@@ -14,7 +12,11 @@ test('the picker contains the three shortlisted stars with Blush and Zombie firs
   assert.deepEqual(MI_NOTE_PACK_STARS.map(star => star.id), [
     'blush', 'zombie', 'supermetal',
   ]);
-  for (const star of MI_NOTE_PACK_STARS) assert.ok(existsSync(fileURLToPath(star.src)), star.name);
+  assert.deepEqual(MI_NOTE_PACK_STARS.map(star => star.src), [
+    'https://cdn.lil.org/nft/mi_note_cards/packs/stars/blush.webp',
+    'https://cdn.lil.org/nft/mi_note_cards/packs/stars/zombie.webp',
+    'https://cdn.lil.org/nft/mi_note_cards/packs/stars/supermetal.webp',
+  ]);
   assert.deepEqual(MI_NOTE_PACK_STARS.map(star => [star.foldPosition, star.rotationOffsetDegrees, star.sizeScale]), [
     [0.574, 2.8, 1.13], [0.513, 2.4, 1.22], [0.58, 5.1, 1.18],
   ]);

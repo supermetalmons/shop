@@ -64,7 +64,7 @@
       "color": "#3559B7",
       "sticker": {
         "id": "blush",
-        "source": "stars/Blush Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/blush.webp",
         "foldPosition": 0.574,
         "rotationOffsetDegrees": 2.8,
         "verticalPosition": 0.485,
@@ -138,7 +138,7 @@
       "color": "#3559B7",
       "sticker": {
         "id": "zombie",
-        "source": "stars/Zombie Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/zombie.webp",
         "foldPosition": 0.513,
         "rotationOffsetDegrees": 2.4,
         "verticalPosition": 0.485,
@@ -212,7 +212,7 @@
       "color": "#3559B7",
       "sticker": {
         "id": "supermetal",
-        "source": "stars/Supermetal Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/supermetal.webp",
         "foldPosition": 0.58,
         "rotationOffsetDegrees": 5.1,
         "verticalPosition": 0.485,
@@ -286,7 +286,7 @@
       "color": "#E7A62C",
       "sticker": {
         "id": "blush",
-        "source": "stars/Blush Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/blush.webp",
         "foldPosition": 0.574,
         "rotationOffsetDegrees": 2.8,
         "verticalPosition": 0.485,
@@ -360,7 +360,7 @@
       "color": "#E7A62C",
       "sticker": {
         "id": "zombie",
-        "source": "stars/Zombie Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/zombie.webp",
         "foldPosition": 0.513,
         "rotationOffsetDegrees": 2.4,
         "verticalPosition": 0.485,
@@ -434,7 +434,7 @@
       "color": "#E7A62C",
       "sticker": {
         "id": "supermetal",
-        "source": "stars/Supermetal Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/supermetal.webp",
         "foldPosition": 0.58,
         "rotationOffsetDegrees": 5.1,
         "verticalPosition": 0.485,
@@ -508,7 +508,7 @@
       "color": "#20866C",
       "sticker": {
         "id": "blush",
-        "source": "stars/Blush Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/blush.webp",
         "foldPosition": 0.574,
         "rotationOffsetDegrees": 2.8,
         "verticalPosition": 0.485,
@@ -582,7 +582,7 @@
       "color": "#20866C",
       "sticker": {
         "id": "zombie",
-        "source": "stars/Zombie Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/zombie.webp",
         "foldPosition": 0.513,
         "rotationOffsetDegrees": 2.4,
         "verticalPosition": 0.485,
@@ -656,7 +656,7 @@
       "color": "#20866C",
       "sticker": {
         "id": "supermetal",
-        "source": "stars/Supermetal Star.PNG",
+        "source": "https://cdn.lil.org/nft/mi_note_cards/packs/stars/supermetal.webp",
         "foldPosition": 0.58,
         "rotationOffsetDegrees": 5.1,
         "verticalPosition": 0.485,
