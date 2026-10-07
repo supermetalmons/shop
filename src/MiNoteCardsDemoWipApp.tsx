@@ -1,25 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import WipInteractiveCard from './components/WipInteractiveCard';
-import { CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS, DRIF_EFFECT_KEYS, type DrifCardConfig } from './drifCards';
+import { CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS, type DrifCardConfig } from './drifCards';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
+import { createMiNoteDemoCard, MI_NOTE_DEMO_CARDS } from './lib/miNoteDemoCards';
 import { navigate } from './navigation';
-import front1302 from '../mi_note_cards_demo/front/1302.webp';
-import front1325 from '../mi_note_cards_demo/front/1325.webp';
-import front1327 from '../mi_note_cards_demo/front/1327.webp';
-import foil1302 from '../mi_note_cards_demo/foil/1302.webp';
-import foil1325 from '../mi_note_cards_demo/foil/1325.webp';
-import foil1327 from '../mi_note_cards_demo/foil/1327.webp';
-import mask1302 from '../mi_note_cards_demo/mask/1302.webp';
-import mask1325 from '../mi_note_cards_demo/mask/1325.webp';
-import mask1327 from '../mi_note_cards_demo/mask/1327.webp';
 import './styles/mi-note-cards-demo-wip.css';
 
-const DEMO_CARDS = [
-  { id: 1302, name: 'Emo★Purple Drifella', imageSrc: front1302, foilSrc: foil1302, textureSrc: mask1302 },
-  { id: 1325, name: 'The Dratini Player', imageSrc: front1325, foilSrc: foil1325, textureSrc: mask1325 },
-  { id: 1327, name: 'Strawberry Saint', imageSrc: front1327, foilSrc: foil1327, textureSrc: mask1327 },
-];
+const DEMO_CARDS = Object.values(MI_NOTE_DEMO_CARDS);
 
 const DEMO_EFFECTS = [
   { name: 'V Regular', effect: DRIF_EFFECTS['swshp-SWSH179'] },
@@ -84,18 +72,10 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
 export default function MiNoteCardsDemoWipApp() {
   const [selection, setSelection] = useState(DEMO_CARDS[0]);
   const [selectedEffect, setSelectedEffect] = useState(DEMO_EFFECTS[0]);
-  const card = useMemo<DrifCardConfig>(() => {
-    const base: DrifCardConfig = {
-      imageSrc: selection.imageSrc,
-      effect: selectedEffect.effect,
-      glowType: 'metal',
-    };
-    return selectedEffect.effect.effectKey === DRIF_EFFECT_KEYS.lightingOnly ? base : {
-      ...base,
-      foilSrc: selection.foilSrc,
-      textureSrc: selection.textureSrc,
-    };
-  }, [selection, selectedEffect]);
+  const card = useMemo(
+    () => createMiNoteDemoCard(selection.id, selectedEffect.effect),
+    [selection, selectedEffect],
+  );
   const handleClose = () => navigate('/');
 
   return (

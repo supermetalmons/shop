@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CARD_NFT_2_MAX_CARD_ID } from '../shared/cardNft2AssetCore.ts';
 import {
+  MI_NOTE_DEMO_CARD_IDS,
   MI_NOTE_OPEN_TAPS,
   MI_NOTE_PACK_VARIANTS,
   createMiNoteRevealState,
@@ -26,8 +26,9 @@ test('mi note packs have only the three requested source colors', () => {
   }
 });
 
-test('mi note sampling always produces two distinct valid cards with exactly three draws', () => {
-  for (const value of [0, 0.1, 0.5, 0.999999, 1, -1, NaN, Infinity]) {
+test('mi note sampling always produces two distinct demo cards with exactly three draws', () => {
+  assert.deepEqual(MI_NOTE_DEMO_CARD_IDS, [1302, 1325, 1327]);
+  for (const value of [0, 0.1, 0.5, 0.999999, 1, -1, NaN, Infinity, -Infinity]) {
     let calls = 0;
     const pack = sampleMiNotePack(() => {
       calls += 1;
@@ -36,18 +37,19 @@ test('mi note sampling always produces two distinct valid cards with exactly thr
     assert.equal(calls, 3);
     assert.notEqual(pack.cardIds[0], pack.cardIds[1]);
     for (const cardId of pack.cardIds) {
-      assert.ok(Number.isInteger(cardId));
-      assert.ok(cardId >= 1 && cardId <= CARD_NFT_2_MAX_CARD_ID);
+      assert.ok(MI_NOTE_DEMO_CARD_IDS.includes(cardId));
     }
   }
 });
 
-test('mi note second-card sampling skips the selected first card without excluding either endpoint', () => {
+test('mi note sampling reaches all six ordered demo-card pairs without duplicates', () => {
   for (const [values, expected] of [
-    [[0, 0, 0], [1, 2]],
-    [[0, 0, 0.999999], [1, CARD_NFT_2_MAX_CARD_ID]],
-    [[0, 0.999999, 0], [CARD_NFT_2_MAX_CARD_ID, 1]],
-    [[0, 0.999999, 0.999999], [CARD_NFT_2_MAX_CARD_ID, CARD_NFT_2_MAX_CARD_ID - 1]],
+    [[0, 0, 0], [1302, 1325]],
+    [[0, 0, 0.999999], [1302, 1327]],
+    [[0, 0.5, 0], [1325, 1302]],
+    [[0, 0.5, 0.999999], [1325, 1327]],
+    [[0, 0.999999, 0], [1327, 1302]],
+    [[0, 0.999999, 0.999999], [1327, 1325]],
   ] as const) {
     let index = 0;
     assert.deepEqual(sampleMiNotePack(() => values[index++]).cardIds, expected);

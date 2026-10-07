@@ -5,7 +5,7 @@ import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePa
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
-import { getInteractiveCardPackCardsByFigureIds } from './lib/interactiveCardPackReveal';
+import { createMiNoteDemoCard, MI_NOTE_DEMO_CARDS } from './lib/miNoteDemoCards';
 import {
   createMiNoteRevealState,
   MI_NOTE_PACK_VARIANTS,
@@ -51,7 +51,7 @@ function MiNotePackOpening({
     return [createElement(), createElement()];
   });
   const cards = useMemo(
-    () => getInteractiveCardPackCardsByFigureIds('card_nft_2', selection.cardIds),
+    () => selection.cardIds.map((id) => createMiNoteDemoCard(id)),
     [selection.cardIds],
   );
   const assets = useMiNoteCardAssets(cards);
@@ -165,8 +165,8 @@ function MiNotePackOpening({
             interactionMode={state.cardStage === 'returning' || touchResting ? 'settling' : 'normal'}
             wakeOnInteractiveUnlock={false}
             onImageReadyChange={index === 0 ? handleFirstImageReady : handleSecondImageReady}
-            ariaLabel={`Card NFT 2 card ${selection.cardIds[index]}`}
-            imageAlt={`Card NFT 2 #${selection.cardIds[index]}`}
+            ariaLabel={`Mi Note card ${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
+            imageAlt={`${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
           />
         </div>,
         cardElements[index],

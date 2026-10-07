@@ -62,6 +62,11 @@ function FakeCard(props: CardProps) {
   return createElement('div', {
     'data-testid': 'card',
     'data-image': props.imageAlt,
+    'data-aria-label': props.ariaLabel,
+    'data-image-src': props.card.imageSrc,
+    'data-foil-src': props.card.foilSrc,
+    'data-texture-src': props.card.textureSrc,
+    'data-effect': props.card.effect.effectKey,
     'data-interactive': String(props.interactive),
     'data-interaction-mode': props.interactionMode,
   });
@@ -86,6 +91,7 @@ const imports = registerHooks({
     else if (url.endsWith('/components/WipInteractiveCard.tsx')) source = `export default globalThis.${bridgeKey}.FakeCard;`;
     else if (url.endsWith('/hooks/useMiNoteCardAssets.ts')) source = `export const useMiNoteCardAssets = globalThis.${bridgeKey}.useFakeAssets;`;
     else if (url.endsWith('.css')) source = '';
+    else if (url.endsWith('.webp')) source = `export default ${JSON.stringify(url)};`;
     return source === undefined ? nextLoad(url, context) : { format: 'module', source, shortCircuit: true };
   },
 });
@@ -145,6 +151,31 @@ function card(index: 0 | 1) {
   const content = element.querySelector<HTMLElement>('[data-testid="card"]');
   assert.ok(content);
   return { element, content };
+}
+
+function renderedMiNoteCards() {
+  const names: Record<string, string> = {
+    1302: 'Emo★Purple Drifella',
+    1325: 'The Dratini Player',
+    1327: 'Strawberry Saint',
+  };
+  const cards = ([0, 1] as const).map((index) => {
+    const { image, ariaLabel, imageSrc, foilSrc, textureSrc, effect } = card(index).content.dataset;
+    const id = imageSrc?.match(/\/mi_note_cards_demo\/front\/(1302|1325|1327)\.webp$/)?.[1];
+    assert.ok(id);
+    assert.equal(imageSrc, new URL(`../mi_note_cards_demo/front/${id}.webp`, import.meta.url).href);
+    assert.equal(foilSrc, new URL(`../mi_note_cards_demo/foil/${id}.webp`, import.meta.url).href);
+    assert.equal(textureSrc, new URL(`../mi_note_cards_demo/mask/${id}.webp`, import.meta.url).href);
+    assert.equal(effect, 'v-regular');
+    for (const label of [image, ariaLabel]) {
+      assert.ok(label?.includes(id));
+      assert.ok(label.includes(names[id]));
+      assert.doesNotMatch(label, /Card NFT 2/);
+    }
+    return { id, image, ariaLabel, imageSrc, foilSrc, textureSrc, effect };
+  });
+  assert.notEqual(cards[0].id, cards[1].id);
+  return cards;
 }
 
 test('all stars use the chosen finish without controls or saved finish overrides', t => {
@@ -329,12 +360,17 @@ test('modal Escape delegates to the active viewer before navigating away', () =>
   assert.equal(viewer().calls.filter(call => call === 'escape').length, 5);
 });
 
-test('card loading gates actions and retry preserves appearance while resetting the opening', t => {
+test('Mi Note demo cards keep their assets and appearance through picker changes and retry, while reset resamples', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   setAssets(false);
   const view = render(createElement(MiNoteCardsWipApp));
+  const initialCards = renderedMiNoteCards();
+  random = 0.8;
   fireEvent.click(view.getByRole('button', { name: 'Marigold' }));
+  assert.deepEqual(renderedMiNoteCards(), initialCards);
+  fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'zombie' } });
+  assert.deepEqual(renderedMiNoteCards(), initialCards);
   peelSeal(view);
   assert.equal(viewer().props.state.stage, 'unsealed');
   assert.equal(viewer().props.state.folderPose, 0);
@@ -349,7 +385,6 @@ test('card loading gates actions and retry preserves appearance while resetting 
   fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
   assert.equal(viewer().props.state.folderPose, 1);
   const failed = viewer();
-  const images = failed.props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image);
   act(() => failed.props.onError(new Error('Lost renderer')));
   assert.equal(viewer().props.interactionEnabled, false);
   assert.match(view.getByRole('alert').textContent!, /Unable to load this pack/);
@@ -358,7 +393,7 @@ test('card loading gates actions and retry preserves appearance while resetting 
   assert.equal(failed.mounted, false);
   assert.equal(viewer().props.color, failed.props.color);
   assert.equal(viewer().props.star.id, failed.props.star.id);
-  assert.deepEqual(viewer().props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image), images);
+  assert.deepEqual(renderedMiNoteCards(), initialCards);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
   assert.equal(view.queryByRole('alert'), null);
@@ -370,10 +405,12 @@ test('card loading gates actions and retry preserves appearance while resetting 
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(viewer().props.interactionEnabled, false);
   makeReady();
-  random = 0.8;
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.equal(viewer().props.color, failed.props.color);
-  assert.notDeepEqual(viewer().props.cardElements.map(element => element.querySelector<HTMLElement>('[data-image]')!.dataset.image), images);
+  assert.equal(viewer().props.star.id, failed.props.star.id);
+  const resetCards = renderedMiNoteCards();
+  assert.notDeepEqual(resetCards, initialCards);
+  assert.deepEqual([...new Set([...initialCards, ...resetCards].map(({ id }) => id))].sort(), ['1302', '1325', '1327']);
   assert.equal(viewer().props.state.taps, 0);
 });
 

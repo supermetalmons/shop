@@ -1,6 +1,7 @@
-import { CARD_NFT_2_MAX_CARD_ID } from '../../shared/cardNft2AssetCore.ts';
-
 export const MI_NOTE_OPEN_TAPS = 4;
+export const MI_NOTE_DEMO_CARD_IDS = [1302, 1325, 1327] as const;
+
+export type MiNoteDemoCardId = (typeof MI_NOTE_DEMO_CARD_IDS)[number];
 
 export const MI_NOTE_PACK_VARIANTS = [
   { id: 'cobalt-blue', name: 'Cobalt Blue', color: '#3559B7' },
@@ -12,7 +13,7 @@ export type MiNotePackVariant = (typeof MI_NOTE_PACK_VARIANTS)[number];
 
 export type MiNotePack = {
   readonly variant: MiNotePackVariant;
-  readonly cardIds: readonly [number, number];
+  readonly cardIds: readonly [MiNoteDemoCardId, MiNoteDemoCardId];
 };
 
 export type MiNoteFolderPose = 0 | 1 | 2;
@@ -44,10 +45,10 @@ function sampleIndex(count: number, random: () => number): number {
 
 export function sampleMiNotePack(random: () => number = Math.random): MiNotePack {
   const variant = MI_NOTE_PACK_VARIANTS[sampleIndex(MI_NOTE_PACK_VARIANTS.length, random)];
-  const firstCardId = sampleIndex(CARD_NFT_2_MAX_CARD_ID, random) + 1;
-  const secondCardCandidate = sampleIndex(CARD_NFT_2_MAX_CARD_ID - 1, random) + 1;
-  const secondCardId = secondCardCandidate >= firstCardId ? secondCardCandidate + 1 : secondCardCandidate;
-  return { variant, cardIds: [firstCardId, secondCardId] };
+  const firstCardIndex = sampleIndex(MI_NOTE_DEMO_CARD_IDS.length, random);
+  const secondCardCandidate = sampleIndex(MI_NOTE_DEMO_CARD_IDS.length - 1, random);
+  const secondCardIndex = secondCardCandidate >= firstCardIndex ? secondCardCandidate + 1 : secondCardCandidate;
+  return { variant, cardIds: [MI_NOTE_DEMO_CARD_IDS[firstCardIndex], MI_NOTE_DEMO_CARD_IDS[secondCardIndex]] };
 }
 
 export function createMiNoteRevealState(): MiNoteRevealState {
