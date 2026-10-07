@@ -94,7 +94,8 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
       else if (rendered) fadeElapsed += dt;
       const motion = sampleMiNotePackShowcase(reducedMotion.matches ? 0 : elapsed, baseRotation[1]);
       if (motion.variantId !== currentSetup.variantId) {
-        const star = MI_NOTE_PACK_STARS[Math.floor(Math.random() * MI_NOTE_PACK_STARS.length)];
+        const candidates = MI_NOTE_PACK_STARS.filter(star => star.id !== currentSetup.sticker.id);
+        const star = candidates[Math.floor(Math.random() * candidates.length)];
         currentSetup = getMiNotePackRenderSetup(motion.variantId, star.id)!;
       }
       const model = models.get(currentSetup.sticker.id)!;

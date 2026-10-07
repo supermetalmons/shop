@@ -265,7 +265,7 @@ test('the image stays active until all stickers load and the first rendered pack
   finishHandoff(run);
 });
 
-test('colors cycle blue, green, yellow with random stickers using one renderer and the same three models', async (t) => {
+test('colors cycle blue, green, yellow with random stickers that change every turn using the same models', async (t) => {
   const run = harness();
   await makeReady();
   finishHandoff(run);
@@ -273,6 +273,7 @@ test('colors cycle blue, green, yellow with random stickers using one renderer a
   const originalMaterials = models.map(model => model.material);
   const seen = new Map<number, RenderedFrame>();
   const variants = [getMiNotePackRenderSetupByPackId(Number(run.host.dataset.packId))!.variantId];
+  let previousStickerId = getMiNotePackRenderSetupByPackId(Number(run.host.dataset.packId))!.sticker.id;
   let random = 0;
   t.mock.method(Math, 'random', () => random);
   for (let index = 0; index < 1200; index += 1) {
@@ -282,7 +283,10 @@ test('colors cycle blue, green, yellow with random stickers using one renderer a
     const setup = getMiNotePackRenderSetupByPackId(packId)!;
     if (variants.at(-1) !== setup.variantId) {
       variants.push(setup.variantId);
-      assert.equal(setup.sticker.id, ['blush', 'zombie', 'supermetal'][Math.floor(random * 3)]);
+      assert.notEqual(setup.sticker.id, previousStickerId);
+      previousStickerId = setup.sticker.id;
+    } else {
+      assert.equal(setup.sticker.id, previousStickerId);
     }
     seen.set(packId, renderers[0].rendered.at(-1)!);
   }
