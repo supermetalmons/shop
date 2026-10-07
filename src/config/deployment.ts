@@ -77,6 +77,7 @@ export function resolveDropAssetUrl(url: string): string {
 const MAGIC_EDEN_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
   drifella_shirt: 'https://magiceden.io/marketplace/BKcqopLrCYefribMaHhKL46jzsTGkzKpem4pAEWac8dE',
   little_swag_boxes: 'https://magiceden.io/marketplace/little_swag_boxes',
+  mi_note_cards: 'https://magiceden.io/marketplace/BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG',
   poncho_drifella: 'https://magiceden.io/marketplace/poncho_drifella',
 };
 
@@ -84,6 +85,7 @@ const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
   card_nft_2: 'https://www.tensor.trade/trade/card_nft_2',
   drifella_shirt: 'https://www.tensor.trade/trade/BKcqopLrCYefribMaHhKL46jzsTGkzKpem4pAEWac8dE',
   little_swag_boxes: 'https://www.tensor.trade/trade/little_swag_boxes',
+  mi_note_cards: 'https://www.tensor.trade/trade/22af56d5-8cba-498c-8624-f42dd7677126',
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
