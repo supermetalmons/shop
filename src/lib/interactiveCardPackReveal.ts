@@ -1,4 +1,4 @@
-import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards.ts';
+import { CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS, getDrifCardByFigureId, type DrifCardConfig } from '../drifCards.ts';
 import {
   CARD_NFT_2_PACK_BASE_URL,
   PONCHO_DRIFELLA_PACK_BASE_URL,
@@ -11,17 +11,6 @@ const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_1_1_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_1_2_FRAME_COUNT = 3;
 const INTERACTIVE_CARD_PACK_SEGMENT_AUTOPLAY_FRAME_COUNT = 10;
-const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
-  id: 'card-nft-2-neutral',
-  effectKey: DRIF_EFFECT_KEYS.lightingOnly,
-  source: 'card_nft_2',
-  setId: 'cardnft2',
-  number: 'card',
-  rarity: 'card',
-  supertype: 'card',
-  subtypes: 'card',
-  trainerGallery: false,
-});
 const CARD_NFT_2_HOLO_EFFECT_IDS_BY_REMAINDER = Object.freeze([
   'swshp-SWSH179',
   'pgo-24',

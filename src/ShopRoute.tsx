@@ -10,6 +10,7 @@ import type { ResolvedAppRoute, ShopWipExperience } from './routes';
 const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
 const MiNoteCardsWipApp = React.lazy(() => import('./MiNoteCardsWipApp'));
+const MiNoteCardsDemoWipApp = React.lazy(() => import('./MiNoteCardsDemoWipApp'));
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;
@@ -18,11 +19,12 @@ type WipRouteShellProps = {
 
 function WipRouteShell({ experience, status }: WipRouteShellProps) {
   const clearCard = experience === 'clear_cards';
+  const miNoteCardsDemo = experience === 'mi_note_cards_demo';
   const handleClose = () => navigate('/');
 
   return (
     <ModalFocusScope
-      ariaLabel={clearCard ? 'Clear card sample' : 'Card pack preview'}
+      ariaLabel={clearCard ? 'Clear card sample' : miNoteCardsDemo ? 'Mi Note Cards demo' : 'Card pack preview'}
       onEscape={handleClose}
       style={{
         position: 'fixed',
@@ -54,7 +56,7 @@ function WipRouteShell({ experience, status }: WipRouteShellProps) {
         type="button"
         className="wip-close-btn"
         onClick={handleClose}
-        aria-label={clearCard ? 'Close clear card viewer' : 'Close card pack preview'}
+        aria-label={clearCard ? 'Close clear card viewer' : miNoteCardsDemo ? 'Close Mi Note Cards demo' : 'Close card pack preview'}
       >
         Close
       </button>
@@ -139,6 +141,8 @@ export default function ShopRoute({ route }: ShopRouteProps) {
           <ClearCardWipApp />
         ) : wipExperience === 'mi_note_cards' ? (
           <MiNoteCardsWipApp />
+        ) : wipExperience === 'mi_note_cards_demo' ? (
+          <MiNoteCardsDemoWipApp />
         ) : (
           <PackWipApp dropId={wipExperience} />
         )}

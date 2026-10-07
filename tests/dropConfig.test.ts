@@ -155,6 +155,7 @@ test('the route resolver keeps the complete WIP table in one exported definition
     },
     { path: '/clear_cards/wip', experience: 'clear_cards' },
     { path: '/mi_note_cards/wip', experience: 'mi_note_cards' },
+    { path: '/mi_note_cards_devnet/wip', experience: 'mi_note_cards_demo' },
   ]);
 });
 
@@ -170,6 +171,28 @@ test('Mi Note Cards WIP stays separate from its preorder page', () => {
   assert.equal(route.walletCluster, 'mainnet-beta');
   assert.equal(route.replacementHref, null);
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId, 'mi_note_cards');
+});
+
+test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi Note pages', () => {
+  for (const pathname of ['/mi_note_cards_devnet/wip', '/mi_note_cards_devnet/wip/']) {
+    const route = resolveAppRoute({ pathname });
+    assert.equal(route.kind, 'wip');
+    assert.equal(route.path, '/mi_note_cards_devnet/wip');
+    assert.equal(route.shopPath, '/');
+    assert.equal(route.wipExperience, 'mi_note_cards_demo');
+    assert.equal(route.preorderId, null);
+    assert.equal(route.drop, null);
+    assert.equal(route.upcoming, null);
+    assert.equal(route.walletCluster, 'mainnet-beta');
+    assert.equal(route.replacementHref, null);
+  }
+
+  assert.equal(resolveUpcomingDropRouteByPath('/mi_note_cards_devnet/wip'), null);
+  assert.equal(resolveFrontendDropByPath('/mi_note_cards_devnet/wip'), null);
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'upcoming');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).walletCluster, 'devnet');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId, 'mi_note_cards');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards/wip' }).wipExperience, 'mi_note_cards');
 });
 
 test('route aliases replace only the pathname and preserve search and hash bytes', () => {

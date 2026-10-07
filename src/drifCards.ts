@@ -23,6 +23,18 @@ export const DRIF_EFFECT_KEYS = Object.freeze({
   lightingOnly: 'lighting-only',
 } as const);
 
+export const CARD_NFT_2_NEUTRAL_CARD_EFFECT = Object.freeze({
+  id: 'card-nft-2-neutral',
+  effectKey: DRIF_EFFECT_KEYS.lightingOnly,
+  source: 'card_nft_2',
+  setId: 'cardnft2',
+  number: 'card',
+  rarity: 'card',
+  supertype: 'card',
+  subtypes: 'card',
+  trainerGallery: false,
+});
+
 type DrifEffectKey = (typeof DRIF_EFFECT_KEYS)[keyof typeof DRIF_EFFECT_KEYS];
 
 type EffectConfig = {

@@ -1,0 +1,97 @@
+.mi-note-demo__content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  box-sizing: border-box;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(56px, calc(env(safe-area-inset-bottom) + 40px));
+}
+
+.mi-note-demo__preview {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(360px, calc(100vw - 64px), calc((100dvh - 200px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 5 / 7));
+  aspect-ratio: 5 / 7;
+}
+
+.mi-note-demo__card,
+.mi-note-demo__card .drif-effect-card {
+  width: 100%;
+  height: 100%;
+}
+
+.mi-note-demo__status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  align-content: center;
+  gap: 8px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  font-size: 12px;
+  text-align: center;
+}
+
+.mi-note-demo__status button {
+  font-size: inherit;
+}
+
+.mi-note-demo__controls {
+  position: fixed;
+  z-index: 1120;
+  right: 18px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  left: 18px;
+  display: grid;
+  grid-template-columns: minmax(44px, 1fr) minmax(0, 440px) minmax(44px, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.mi-note-demo__controls .wip-close-btn {
+  position: static;
+  justify-self: start;
+}
+
+.mi-note-demo__pickers {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+.mi-note-demo__pickers select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg) 78%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mi-note-demo__pickers select:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg);
+}
+
+@media (max-width: 540px) {
+  .mi-note-demo__controls {
+    right: 12px;
+    bottom: max(2px, env(safe-area-inset-bottom));
+    left: 12px;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .mi-note-demo__pickers {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+}
