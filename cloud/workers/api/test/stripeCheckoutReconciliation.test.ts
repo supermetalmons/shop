@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1 } from './commerceD1Harness.ts';
+import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument, seedCommerceDocuments } from './commerceD1Harness.ts';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.ts';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
 import {
   STRIPE_FULFILLMENT_REQUEUE_AFTER_MS,
-  parseRequeueCandidates,
   reconcileStaleStripeFulfillments,
 } from '../src/stripeCheckoutReconciliation.ts';
-import { commerceKeys, type CommerceDocumentRecord } from '../src/commerceRepository.ts';
-import type { StripeCheckoutRequeueCandidate } from '../src/stripeCheckout/readModel.ts';
+import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { parseStripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCandidate } from '../src/commerceDiscoveryCandidates.ts';
+import { staleStripeFulfillmentsQuery } from '../src/commerceQueries.ts';
 
 function queue(send: Queue['send']): Queue {
   return {
@@ -159,62 +159,127 @@ test('Stripe fulfillment reconciliation defers invalid candidates behind the bac
   assert.deepEqual((marked[0] as { value: unknown }).value, invalidCandidate);
 });
 
-function checkoutRecord(
-  dropId: string,
-  sessionId: string,
-  data: Record<string, unknown>,
-): CommerceDocumentRecord {
-  return {
-    createTime: '2026-08-23T00:00:00.000000000Z',
-    data: data as CommerceDocumentRecord['data'],
-    key: commerceKeys.stripeCheckout(dropId, sessionId),
-    processedAt: null,
-    updateTime: '2026-08-23T00:00:00.000000001Z',
-    version: 1,
-  };
-}
+test('Stripe reconciliation projects only candidate metadata and preserves eligibility and event defaults', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const fixtures: Array<{ sessionId: string } & CommerceDocumentData> = [
+    { sessionId: 'cs_recent', updatedAt: 21 },
+    { sessionId: 'cs_unmarked', lastStripeWebhookEventId: null },
+    { sessionId: 'cs_wrong_processor', fulfillmentProcessor: 'legacy' },
+    { sessionId: 'cs_fulfilled', status: STRIPE_CHECKOUT_STATUS.FULFILLED },
+    { sessionId: 'cs_no_timestamp', updatedAt: null },
+    { sessionId: 'cs_nonstring_event', lastStripeWebhookEventId: true },
+    { sessionId: 'cs_async', updatedAt: 5, status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+      lastStripeWebhookEventType: 'checkout.session.async_payment_succeeded' },
+    { sessionId: 'cs_completed', updatedAt: 10, lastStripeWebhookEventType: 'checkout.session.completed' },
+    { sessionId: 'cs_default' },
+    { sessionId: 'cs_empty_event', lastStripeWebhookEventId: '' },
+    { sessionId: 'cs_unknown', lastStripeWebhookEventType: { unexpected: true } },
+  ];
+  seedCommerceDocuments(harness, fixtures.map(({ sessionId, ...fields }) => ({
+    key: commerceKeys.stripeCheckout('drop', sessionId),
+    data: {
+      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: `evt_${sessionId}`,
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+      updatedAt: 20,
+      stripeSessionSummary: { privatePayload: 'x'.repeat(64 * 1024) },
+      ...fields,
+    },
+  })));
+  const query = staleStripeFulfillmentsQuery(20);
+  const rows = harness.database.prepare(query.sql).all(...query.bindings);
+  for (const row of rows) {
+    const metadata = JSON.parse(String(row.document_json));
+    assert.deepEqual(Object.keys(metadata).sort(), [
+      'fulfillmentProcessor', 'lastStripeWebhookEventId', 'lastStripeWebhookEventType',
+    ]);
+    assert.equal(String(row.document_json).length < 300, true);
+    assert.equal(Object.hasOwn(row, 'stripeSessionSummary'), false);
+  }
+  assert.deepEqual(await new D1CommerceRepository(harness.db).queryStaleStripeFulfillments(20),
+    ['cs_async', 'cs_completed', 'cs_default', 'cs_empty_event', 'cs_unknown'].map((sessionId) => ({
+      checkoutPath: commerceKeys.stripeCheckout('drop', sessionId).path,
+      dropId: 'drop', sessionId, stripeEventId: sessionId === 'cs_empty_event' ? '' : `evt_${sessionId}`,
+      stripeEventType: sessionId === 'cs_async' ? 'checkout.session.async_payment_succeeded' : 'checkout.session.completed',
+    })));
+});
 
-test('Stripe fulfillment reconciliation decoder selects only stale marked D1 checkouts', () => {
-  const cutoffMs = Date.parse('2026-08-23T00:15:00.000Z');
-  const candidates = parseRequeueCandidates([
-    checkoutRecord('card_nft_binder_devnet', 'cs_test_recent', {
-      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-      lastStripeWebhookEventId: 'evt_test_recent',
-      lastStripeWebhookEventType: 'checkout.session.completed',
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      updatedAt: Date.parse('2026-08-23T00:30:00.000Z'),
+test('Stripe reconciliation candidates keep the due index, chronological path order, and 100-row cap', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const sessionIds = Array.from({ length: 102 }, (_, index) => `cs_${String(index).padStart(3, '0')}`);
+  seedCommerceDocuments(harness, [...sessionIds].reverse().map((sessionId) => ({
+    key: commerceKeys.stripeCheckout('drop', sessionId),
+    data: { fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: `evt_${sessionId}`, status: STRIPE_CHECKOUT_STATUS.PROCESSING, updatedAt: 20 },
+  })));
+  const repository = new D1CommerceRepository(harness.db);
+  assert.deepEqual(await repository.queryStaleStripeFulfillments(19), []);
+  assert.deepEqual((await repository.queryStaleStripeFulfillments(20)).map((value) => value.sessionId), sessionIds.slice(0, 100));
+  const query = staleStripeFulfillmentsQuery(20);
+  const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings)
+    .map((row) => row.detail).join('\n');
+  assert.match(plan, /commerce_stripe_checkout_state_reconciliation_due/);
+  assert.doesNotMatch(plan, /USE TEMP B-TREE/);
+});
+
+test('Stripe reconciliation candidates retain document and complete checkout-state validation', (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocument(harness, {
+    key: commerceKeys.stripeCheckout('drop', 'cs_valid'),
+    data: { fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: 'evt_valid', status: STRIPE_CHECKOUT_STATUS.PROCESSING, updatedAt: 20 },
+  });
+  const query = staleStripeFulfillmentsQuery(20);
+  const row = harness.database.prepare(query.sql).get(...query.bindings)!;
+  const state = JSON.parse(String(row.checkout_state_json));
+  const invalid = [
+    { document_path: 'drops/other/stripeCheckouts/cs_valid' },
+    { document_kind: 'delivery_order' },
+    { document_id: 'cs_wrong' },
+    { drop_id: null },
+    { version: 0 },
+    { create_time: null },
+    { update_time: null },
+    { processed_at_seconds: 1, processed_at_nanos: null },
+    { document_json: 'not-json' },
+    { checkout_state_mode: 'legacy' },
+    { checkout_state_json: null },
+    { checkout_state_json: JSON.stringify({ ...state, document_version: 2 }) },
+    { checkout_state_json: JSON.stringify({ ...state, processing_attempt_count: -1 }) },
+    { checkout_state_json: JSON.stringify({ ...state, next_fulfillment_retry_at_ms: '20' }) },
+  ];
+  for (const changes of invalid) {
+    assert.throws(() => parseStripeCheckoutRequeueCandidate({ ...row, ...changes }, 20), { code: 'unavailable' });
+  }
+  assert.equal(parseStripeCheckoutRequeueCandidate(row, 19), null);
+});
+
+test('Stripe reconciliation uses the projected repository candidates through its default loader', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocument(harness, {
+    key: commerceKeys.stripeCheckout(candidate.dropId, candidate.sessionId),
+    data: { fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: candidate.stripeEventId, status: STRIPE_CHECKOUT_STATUS.PROCESSING, updatedAt: 20 },
+  });
+  const jobs: unknown[] = [];
+  const marked: StripeCheckoutRequeueCandidate[] = [];
+  const result = await reconcileStaleStripeFulfillments({
+    COMMERCE_DB: harness.db,
+    STRIPE_FULFILLMENT_QUEUE: queue(async (job) => {
+      jobs.push(job);
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     }),
-    checkoutRecord('card_nft_binder_devnet', 'cs_test_processing', {
-      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-      lastStripeWebhookEventId: 'evt_test_processing',
-      lastStripeWebhookEventType: 'checkout.session.async_payment_succeeded',
-      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      updatedAt: Date.parse('2026-08-23T00:05:00.000Z'),
-    }),
-    checkoutRecord('card_nft_binder_devnet', 'cs_test_stale', {
-      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-      lastStripeWebhookEventId: 'evt_test_stale',
-      lastStripeWebhookEventType: 'checkout.session.completed',
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      updatedAt: Date.parse('2026-08-23T00:00:00.000Z'),
-    }),
-  ], cutoffMs);
-  assert.deepEqual(candidates, [
-    {
-      checkoutPath: 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_processing',
-      dropId: 'card_nft_binder_devnet',
-      sessionId: 'cs_test_processing',
-      stripeEventId: 'evt_test_processing',
-      stripeEventType: 'checkout.session.async_payment_succeeded',
-    },
-    {
-      checkoutPath: 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_stale',
-      dropId: 'card_nft_binder_devnet',
-      sessionId: 'cs_test_stale',
-      stripeEventId: 'evt_test_stale',
-      stripeEventType: 'checkout.session.completed',
-    },
-  ]);
+  }, new AbortController().signal, {
+    nowMs: () => STRIPE_FULFILLMENT_REQUEUE_AFTER_MS + 20,
+    markEnqueued: async (value) => { marked.push(value); }, log: () => {},
+  });
+  assert.equal(result.completed, 1);
+  assert.deepEqual(marked, [candidate]);
+  assert.equal(jobs.length, 1);
 });
 
 test('throwing Stripe loggers do not change queue outcomes, progress or the failure summary', async (context) => {

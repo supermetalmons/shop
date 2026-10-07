@@ -4,9 +4,14 @@ export type ReconciliationResult = Readonly<{
   deferred: number;
   skipped: number;
   failed: number;
+  inspected?: number;
+  pages?: number;
+  stopReason?: 'drained' | 'item-limit' | 'time-limit' | 'stopped' | 'cancelled' | 'failed';
+  hasMore?: boolean | null;
+  oldestDueAgeMs?: number | null;
 }>;
 
-export type ReconciliationOutcome = Exclude<keyof ReconciliationResult, 'attempted'>;
+export type ReconciliationOutcome = 'completed' | 'deferred' | 'skipped' | 'failed';
 export type ReconciliationOptions = {
   onResult?: (result: ReconciliationResult) => void;
 };

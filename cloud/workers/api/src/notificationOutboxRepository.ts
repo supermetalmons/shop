@@ -8,7 +8,7 @@ import {
 import { CommerceRepositoryError } from './commerceRepositoryTypes.js';
 import { NOTIFICATION_OUTBOX_COLUMNS, notificationOutboxDueQuery } from './commerceQueries.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
-import { parseNotificationOutboxCandidate, type NotificationOutboxCandidate } from './commerceDiscoveryCandidates.js';
+import { parseNotificationOutboxCandidate, validateNotificationDueCursor, type NotificationDueCursor, type NotificationOutboxCandidate } from './commerceDiscoveryCandidates.js';
 
 export function notificationOutboxAuthorityStatement(db: D1Database, includeCheckoutState = false): D1PreparedStatement {
   return db.prepare(`SELECT authority_state,
@@ -69,8 +69,9 @@ export class NotificationOutboxRepository {
     return this.readBatch(statements, parseNotificationOutboxRow);
   }
 
-  async queryDue(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): Promise<NotificationOutboxCandidate[]> {
+  async queryDue(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number; startAfter?: NotificationDueCursor }): Promise<NotificationOutboxCandidate[]> {
     limitValue(args.limit);
+    validateNotificationDueCursor(args.startAfter, args.family);
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid notification outbox cutoff.');
     }

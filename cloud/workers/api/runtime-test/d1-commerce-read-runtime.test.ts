@@ -16,6 +16,7 @@ import {
   manualReviewCheckoutsQuery,
   shipmentHistoryPageQuery,
   shipmentPresenceQuery,
+  staleStripeFulfillmentsQuery,
   stripeChargebackLinkedSessionsQuery,
   stripeChargebackMatchedDocumentsQuery,
 } from '../src/commerceQueries.ts';
@@ -368,6 +369,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
         lastStripeWebhookEventId: 'evt_runtime',
         status: 'fulfillment_pending',
         updatedAt: 10,
+        stripeSessionSummary: { privatePayload: 'x'.repeat(64 * 1024) },
       }),
       insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), {
         status: 'fulfilled',
@@ -556,13 +558,29 @@ test('commerce repository reads and transaction guards run through the real D1 r
       ['1'],
     );
     assert.deepEqual(await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }), [
-      { key: deliveryKey, identityFields: {} },
-      { key: commerceKeys.deliveryOrder('runtime', 'notification-10'), identityFields: { deliveryId: null, dropId: 'runtime' } },
+      { key: deliveryKey, identityFields: {}, nextAttemptAtMs: 0 },
+      { key: commerceKeys.deliveryOrder('runtime', 'notification-10'), identityFields: { deliveryId: null, dropId: 'runtime' }, nextAttemptAtMs: 10 },
     ]);
-    assert.deepEqual(
-      (await repository.queryStaleStripeFulfillments(10)).map((record) => record.key.documentId),
-      ['cs_runtime'],
-    );
+    const firstReadyPage = await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 1 });
+    assert.deepEqual(await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 1,
+      startAfter: { parentPath: firstReadyPage[0].key.path, family: 'ready', nextAttemptAtMs: firstReadyPage[0].nextAttemptAtMs },
+    }), [{ key: commerceKeys.deliveryOrder('runtime', 'notification-10'),
+      identityFields: { deliveryId: null, dropId: 'runtime' }, nextAttemptAtMs: 10 }]);
+    assert.deepEqual(await repository.queryStaleStripeFulfillments(10), [{
+      checkoutPath: checkoutKey.path, dropId: 'runtime', sessionId: 'cs_runtime',
+      stripeEventId: 'evt_runtime', stripeEventType: 'checkout.session.completed',
+    }]);
+    const staleStripeQuery = staleStripeFulfillmentsQuery(10);
+    const staleStripeRows = await env.COMMERCE_DB.prepare(staleStripeQuery.sql).bind(...staleStripeQuery.bindings)
+      .all<{ document_json: string }>();
+    assert.deepEqual(staleStripeRows.results.map((row) => JSON.parse(row.document_json)), [{
+      fulfillmentProcessor: 'cloudflare_queue_v1', lastStripeWebhookEventId: 'evt_runtime', lastStripeWebhookEventType: null,
+    }]);
+    const staleStripePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${staleStripeQuery.sql}`)
+      .bind(...staleStripeQuery.bindings).all<{ detail: string }>();
+    const staleStripePlanDetails = staleStripePlan.results.map((row) => row.detail).join('\n');
+    assert.match(staleStripePlanDetails, /commerce_stripe_checkout_state_reconciliation_due/);
+    assert.doesNotMatch(staleStripePlanDetails, /USE TEMP B-TREE/);
     assert.deepEqual(await repository.queryDueStripeTerminalNotifications(10), [
       { key: commerceKeys.stripeCheckout('runtime', 'cs_terminal') },
     ]);
@@ -883,7 +901,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const dueReadyRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.deepEqual(latestObservedBatchResults()?.[1]?.results.map((row) => Object.keys(row).sort()),
       Array.from({ length: 2 }, () => [
-        'delivery_id_json', 'document_id', 'document_kind', 'document_path', 'drop_id', 'drop_id_json',
+        'delivery_id_json', 'document_id', 'document_kind', 'document_path', 'drop_id', 'drop_id_json', 'next_attempt_at_ms',
       ]));
     assert.equal(Number.isSafeInteger(dueReadyRowsRead), true);
     assert.equal(dueReadyRowsRead <= 10, true, `Due notification query read ${dueReadyRowsRead} rows: ${observedPreparedSql.join("\n")}`);
@@ -1124,8 +1142,8 @@ test('commerce repository reads and transaction guards run through the real D1 r
     }).run();
     observedPreparedSql.length = 0;
     assert.deepEqual(await observedRepository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: 0, limit: 8 }),
-      [{ parentPath: deliveryKey.path, family: 'shipped' }]);
-    assert.deepEqual(latestObservedBatchResults()?.[1]?.results, [{ parent_path: deliveryKey.path, family: 'shipped' }]);
+      [{ parentPath: deliveryKey.path, family: 'shipped', nextAttemptAtMs: 0 }]);
+    assert.deepEqual(latestObservedBatchResults()?.[1]?.results, [{ parent_path: deliveryKey.path, family: 'shipped', next_attempt_at_ms: 0 }]);
     const shippedDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_family_due'));
     assert.ok(shippedDueSql);
     const shippedDuePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${shippedDueSql}`)

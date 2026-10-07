@@ -703,8 +703,12 @@ provider messages or notification payloads.
 Ready-to-ship, Stripe terminal, and shipped email publication state lives in
 `COMMERCE_DB.commerce_notification_outbox` after its one-way activation. Publication
 claims and retries update outbox rows without changing order/check-out versions.
-Ready and shipped reconciliation each inspect at most eight due rows and publish
-at most four; existing Stripe limits remain unchanged. Publication keeps ten-minute
+Ready and shipped reconciliation each page through eight due rows at a time,
+stopping before new work after 32 inspected rows or 20 seconds per family.
+Each run uses a fixed due cutoff and reports inspected rows, pages, stop reason,
+remaining due work, and its oldest due age. In-flight publication and finalization
+finish under the scheduled handler's existing deadline. Stripe limits remain
+unchanged. Publication keeps ten-minute
 claims, four attempts, six-hour retry windows, and stable job IDs/idempotency keys.
 Rendered payloads are persisted before sending and reused exactly across retries;
 Queue acceptance or cancellation removes payloads. Failed entries remain available

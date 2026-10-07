@@ -8,6 +8,7 @@ import type { ShipmentHistoryCursor } from '../../../../shared/shipmentHistory.j
 import { stripeCheckoutStateSelectColumns } from './stripeCheckoutStateStore.js';
 import { DELIVERY_RECOVERY_CURSOR_MAX_PATH_LENGTH } from '../../../../shared/deliveryRecoveryPagination.js';
 import { PACK_STATUS_OUTBOX_FIELD_COLUMNS } from '../../../../shared/packStatusOutbox.js';
+import type { NotificationDueCursor } from './commerceDiscoveryCandidates.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
@@ -62,21 +63,25 @@ const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
     AND control.singleton = 1 AND control.storage_mode = 'table'
 )`;
 
-export function notificationOutboxDueQuery(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number }): CommerceSqlQuery {
+export function notificationOutboxDueQuery(args: { family?: NotificationOutboxFamily; dueAtMs: number; limit: number; startAfter?: NotificationDueCursor }): CommerceSqlQuery {
+  const cursor = args.startAfter;
   return {
-    sql: `SELECT outbox.parent_path, outbox.family
+    sql: `SELECT outbox.parent_path, outbox.family, outbox.next_attempt_at_ms
       FROM commerce_notification_outbox AS outbox
         INDEXED BY ${args.family ? 'commerce_notification_outbox_family_due' : 'commerce_notification_outbox_due'}
       WHERE outbox.state = 'pending' AND outbox.next_attempt_at_ms <= ?${args.family ? ' AND outbox.family = ?' : ''}
+        ${cursor ? args.family
+          ? 'AND (outbox.next_attempt_at_ms, outbox.parent_path) > (?, ?)'
+          : 'AND (outbox.next_attempt_at_ms, outbox.parent_path, outbox.family) > (?, ?, ?)' : ''}
       ORDER BY outbox.next_attempt_at_ms, outbox.parent_path, outbox.family
       LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
-    bindings: [args.dueAtMs, ...(args.family ? [args.family] : []), args.limit],
+    bindings: [args.dueAtMs, ...(args.family ? [args.family] : []),
+      ...(cursor ? [cursor.nextAttemptAtMs, cursor.parentPath, ...(args.family ? [] : [cursor.family])] : []), args.limit],
   };
 }
 
-function qualifiedDocumentColumns(alias: string, checkoutState = false): string {
-  const columns = DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
-  return checkoutState ? `${columns}, ${stripeCheckoutStateSelectColumns(alias)}` : columns;
+function qualifiedDocumentColumns(alias: string): string {
+  return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
 }
 
 export function stripeChargebackLinkedSessionsQuery(paymentIntentId: string): CommerceSqlQuery {
@@ -356,19 +361,21 @@ export function pendingReadyNotificationsQuery(args: Readonly<{
 export function dueReadyNotificationsQuery(args: Readonly<{
   dueAtMs: number;
   limit: number;
+  startAfter?: NotificationDueCursor;
 }>): CommerceSqlQuery {
   return {
     sql: `SELECT document.document_path, document.document_kind, document.drop_id, document.document_id,
         document.document_json -> '$.deliveryId' AS delivery_id_json,
-        document.document_json -> '$.dropId' AS drop_id_json
+        document.document_json -> '$.dropId' AS drop_id_json, outbox.next_attempt_at_ms
       FROM commerce_notification_outbox AS outbox INDEXED BY commerce_notification_outbox_family_due
       CROSS JOIN commerce_documents AS document
       WHERE document.document_path = outbox.parent_path
         AND outbox.family = 'ready' AND outbox.state = 'pending' AND outbox.next_attempt_at_ms <= ?
         AND document.document_kind = 'delivery_order' AND document.status = 'ready_to_ship'
+        ${args.startAfter ? 'AND (outbox.next_attempt_at_ms, outbox.parent_path) > (?, ?)' : ''}
       ORDER BY outbox.next_attempt_at_ms, outbox.parent_path
       LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
-    bindings: [args.dueAtMs, args.limit],
+    bindings: [args.dueAtMs, ...(args.startAfter ? [args.startAfter.nextAttemptAtMs, args.startAfter.parentPath] : []), args.limit],
   };
 }
 
@@ -382,8 +389,12 @@ export function packStatusOutboxDueQuery(args: { dropId: string; dueAtMs: number
 }
 
 export function staleStripeFulfillmentsQuery(cutoffMs: number): CommerceSqlQuery {
+  const fields = ['fulfillmentProcessor', 'lastStripeWebhookEventId', 'lastStripeWebhookEventType'];
+  const columns = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_json'
+    ? `json_object(${fields.map((field) => `'${field}', document.document_json -> '$.${field}'`).join(', ')}) AS document_json`
+    : `document.${name}`).join(', ');
   return {
-    sql: `SELECT ${qualifiedDocumentColumns('document', true)}
+    sql: `SELECT ${columns}, ${stripeCheckoutStateSelectColumns('document')}
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_stripe_checkout_state AS checkout_state INDEXED BY commerce_stripe_checkout_state_reconciliation_due
       CROSS JOIN commerce_documents AS document

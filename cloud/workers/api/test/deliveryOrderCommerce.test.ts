@@ -6,6 +6,7 @@ import { publishBuyerOrderShippedNotification, publishBuyerOrderShippedNotificat
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { claimNotificationOutbox, markClaimedNotificationQueued } from '../src/notificationOutboxStore.ts';
+import type { ReconciliationResult } from '../src/reconciliationResult.ts';
 
 const DROP_ID = 'card_nft_2';
 const NOW_MS = 1_800_000_000_000;
@@ -13,6 +14,14 @@ const JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 const NEXT_JOB_ID = '123e4567-e89b-42d3-a456-426614174001';
 const TRACKING_URL = 'https://carrier.example/track?id=AB123';
 const key = commerceKeys.deliveryOrder(DROP_ID, '7');
+
+function reconciliationResult(attempted: number, changes: Partial<ReconciliationResult> = {}): ReconciliationResult {
+  return {
+    attempted, completed: attempted, deferred: 0, skipped: 0, failed: 0,
+    inspected: attempted, pages: 1, stopReason: 'drained', hasMore: false, oldestDueAgeMs: null,
+    ...changes,
+  };
+}
 
 function fixture(context: { after: (run: () => void) => void }) {
   const harness = createCommerceD1Harness();
@@ -159,26 +168,29 @@ test('scheduled shipment recovery reuses the exact saved email after an uncertai
     COMMERCE_DB: harness.db,
     NOTIFICATION_EMAIL_QUEUE: queue(async (batch) => { jobs.push(...batch); }) as Queue,
   }, new AbortController().signal, { nowMs: () => NOW_MS + 10 * 60_000 });
-  assert.deepEqual(retried, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(retried, reconciliationResult(1));
   assert.deepEqual(jobs[1], jobs[0]);
 });
 
-test('shipment recovery processes four candidates including ineligible orders without refilling', async (context) => {
-  const state = await reconciliationFixture(context, [100, 101, 102, 103, 104, 105]);
+test('shipment recovery pages through thirty-two candidates including ineligible orders', async (context) => {
+  const ids = Array.from({ length: 36 }, (_, index) => 100 + index);
+  const state = await reconciliationFixture(context, ids);
   await state.repository.run(NOW_MS, (unit) => unit.update(commerceKeys.deliveryOrder(DROP_ID, '100'), {
     fulfillmentStatus: 'Preparing',
   }));
   const jobs: NotificationEmailJobV1[] = [];
   const send = async (batch: NotificationEmailJobV1[]) => { jobs.push(...batch); };
-  assert.deepEqual(await state.run(send), { attempted: 4, completed: 3, deferred: 0, skipped: 1, failed: 0 });
-  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103]);
+  assert.deepEqual(await state.run(send), reconciliationResult(32, {
+    completed: 31, skipped: 1, pages: 4, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 0,
+  }));
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), ids.slice(1, 32));
   assert.equal((await state.load(100))?.state, 'cancelled');
-  for (const id of [104, 105]) assert.equal((await state.load(id))?.attemptCount, 0);
-  assert.deepEqual(await state.run(send), { attempted: 2, completed: 2, deferred: 0, skipped: 0, failed: 0 });
-  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [101, 102, 103, 104, 105]);
+  for (const id of ids.slice(32)) assert.equal((await state.load(id))?.attemptCount, 0);
+  assert.deepEqual(await state.run(send), reconciliationResult(4));
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), ids.slice(1));
 });
 
-test('shipment recovery continues after failure while retaining the four-candidate cap and error log', async (context) => {
+test('shipment recovery continues after failure and retains its error log', async (context) => {
   const state = await reconciliationFixture(context, [100, 101, 102, 103, 104]);
   const logs = context.mock.method(console, 'error', () => undefined);
   const failure = new Error('queue unavailable');
@@ -192,7 +204,7 @@ test('shipment recovery continues after failure while retaining the four-candida
     assert.deepEqual(error.errors, [failure]);
     return true;
   });
-  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103]);
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103, 104]);
   assert.deepEqual(logs.mock.calls.map((call) => call.arguments[0]).filter((entry) => entry.event !== 'scheduled_reconciliation_item_failed'), [{
     event: 'buyer_order_shipped_notification_enqueue_failed',
     parentPath: commerceKeys.deliveryOrder(DROP_ID, '100').path,
@@ -200,9 +212,8 @@ test('shipment recovery continues after failure while retaining the four-candida
   }]);
   assert.equal((await state.load(100))?.state, 'pending');
   assert.equal((await state.load(100))?.attemptCount, 1);
-  for (const id of [101, 102, 103]) assert.equal((await state.load(id))?.state, 'queued');
-  assert.equal((await state.load(104))?.attemptCount, 0);
-  assert.deepEqual(await state.run(async (batch) => { jobs.push(...batch); }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  for (const id of [101, 102, 103, 104]) assert.equal((await state.load(id))?.state, 'queued');
+  assert.deepEqual(await state.run(async (batch) => { jobs.push(...batch); }), reconciliationResult(0));
   assert.deepEqual(jobs.map((job) => job.context.deliveryId), [100, 101, 102, 103, 104]);
 });
 
@@ -225,6 +236,26 @@ test('shipment recovery finalizes an accepted enqueue before cancellation stops 
     assert.equal((await state.load(id))?.attemptCount, 0);
     assert.equal((await state.load(id))?.state, 'pending');
   }
+});
+
+test('shipment backlog probing finds skipped due rows behind the final page cursor', async (context) => {
+  const ids = Array.from({ length: 9 }, (_, index) => 100 + index);
+  const state = await reconciliationFixture(context, ids);
+  const skippedPath = commerceKeys.deliveryOrder(DROP_ID, '100').path;
+  const get = D1CommerceRepository.prototype.get;
+  context.mock.method(D1CommerceRepository.prototype, 'get', async function (
+    this: D1CommerceRepository,
+    orderKey: Parameters<typeof get>[0],
+  ) {
+    if (orderKey.path === skippedPath) return null;
+    return get.call(this, orderKey);
+  });
+  const jobs: NotificationEmailJobV1[] = [];
+  assert.deepEqual(await state.run(async (batch) => { jobs.push(...batch); }), reconciliationResult(9, {
+    completed: 8, skipped: 1, pages: 2, hasMore: true, oldestDueAgeMs: 0,
+  }));
+  assert.deepEqual(jobs.map((job) => job.context.deliveryId), ids.slice(1));
+  assert.equal((await state.load(100))?.state, 'pending');
 });
 
 test('explicit shipment resend supersedes an old lease and creates a fresh idempotency key', async (context) => {

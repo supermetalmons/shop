@@ -5,6 +5,7 @@ import {
   isBuyerOrderShippedNotificationEligible,
 } from './buyerOrderShipped.js';
 import { D1CommerceRepository, commerceKeyFromPath } from './commerceRepository.js';
+import type { NotificationOutboxCandidate } from './commerceDiscoveryCandidates.js';
 import {
   claimNotificationOutbox,
   markClaimedNotificationQueued,
@@ -150,16 +151,24 @@ export async function publishBuyerOrderShippedNotification(
 export async function reconcilePendingShippedNotifications(
   env: Pick<Env, 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE'>,
   signal: AbortSignal,
-  overrides: { nowMs?: () => number } & ReconciliationOptions = {},
+  overrides: { nowMs?: () => number; monotonicNowMs?: () => number } & ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
+  const dueAtMs = nowMs();
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  return drainReconciliationCandidates({
+  return drainReconciliationCandidates<NotificationOutboxCandidate>({
     signal,
     onResult: overrides.onResult,
-    loadCandidates: async () => {
-      const candidates = await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: nowMs(), limit: 8 });
-      return candidates.slice(0, 4);
+    paging: {
+      monotonicNowMs: overrides.monotonicNowMs,
+      loadPage: (startAfter, limit) => repository.notificationOutbox.queryDue({
+        family: 'shipped', dueAtMs, limit, ...(startAfter ? { startAfter } : {}),
+      }),
+      candidateKey: (candidate) => `${candidate.family}:${candidate.parentPath}`,
+      probeBacklog: async () => {
+        const [oldest] = await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs, limit: 1 });
+        return { hasMore: Boolean(oldest), oldestDueAgeMs: oldest ? Math.max(0, nowMs() - oldest.nextAttemptAtMs) : null };
+      },
     },
     failureMessage: 'Shipped notification reconciliation failed',
     processCandidate: async (candidate) => {

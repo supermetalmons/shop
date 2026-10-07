@@ -33,8 +33,9 @@ import {
 } from './commerceQueries.js';
 import { commerceKeys, isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import {
-  parseReadyNotificationCandidate, parseStripeTerminalNotificationCandidate,
-  type ReadyNotificationCandidate, type StripeTerminalNotificationCandidate,
+  parseReadyNotificationCandidate, parseStripeCheckoutRequeueCandidate, parseStripeTerminalNotificationCandidate,
+  validateNotificationDueCursor, type NotificationDueCursor,
+  type ReadyNotificationCandidate, type StripeCheckoutRequeueCandidate, type StripeTerminalNotificationCandidate,
 } from './commerceDiscoveryCandidates.js';
 import { deliveryOrderSummaryFromDocument } from './deliveryOrderSummaries.js';
 import type { WalletDeliveryRecoveryState } from '../../../../shared/contracts.js';
@@ -340,8 +341,10 @@ export class D1CommerceRepository {
   async queryDueReadyNotifications(args: {
     dueAtMs: number;
     limit: number;
+    startAfter?: NotificationDueCursor;
   }): Promise<ReadyNotificationCandidate[]> {
     const limit = positiveQueryLimit(args.limit);
+    validateNotificationDueCursor(args.startAfter, 'ready');
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid ready-notification cutoff.');
     }
@@ -353,7 +356,7 @@ export class D1CommerceRepository {
     return result.results.map(parseReadyNotificationCandidate);
   }
 
-  async queryStaleStripeFulfillments(cutoffMs: number): Promise<CommerceDocumentRecord[]> {
+  async queryStaleStripeFulfillments(cutoffMs: number): Promise<StripeCheckoutRequeueCandidate[]> {
     if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
     }
@@ -364,7 +367,10 @@ export class D1CommerceRepository {
       true,
     );
     reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
-    return result.results.map(parseRow).map((document) => publicRecord(document));
+    return result.results.flatMap((row) => {
+      const candidate = parseStripeCheckoutRequeueCandidate(row, cutoffMs);
+      return candidate ? [candidate] : [];
+    });
   }
 
   async queryDueStripeTerminalNotifications(dueAtMs: number, limit = 20): Promise<StripeTerminalNotificationCandidate[]> {

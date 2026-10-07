@@ -78,7 +78,6 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/stripeCheckoutFulfillment.ts","exports","packStatusEventQuantity"],
   ["cloud/workers/api/src/stripeCheckoutFulfillment.ts","exports","validateOnchainConfig"],
   ["cloud/workers/api/src/stripeCheckoutFulfillment.ts","exports","workerFulfillmentCompletionFields"],
-  ["cloud/workers/api/src/stripeCheckoutReconciliation.ts","exports","parseRequeueCandidates"],
   ["cloud/workers/api/src/stripeCheckoutReconciliation.ts","exports","STRIPE_FULFILLMENT_REQUEUE_AFTER_MS"],
   ["cloud/workers/api/src/stripeReceiptClaimWorkflow.ts","exports","runStripeReceiptClaimWorkflow"],
   ["cloud/workers/api/src/stripeReceiptClaimWorkflow.ts","exports","StripeReceiptClaimWorkflowV1"],

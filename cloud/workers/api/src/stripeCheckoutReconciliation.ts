@@ -1,12 +1,9 @@
 import {
   createStripeCheckoutFulfillmentJobV1,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import {
-  D1CommerceRepository,
-  type CommerceDocumentRecord,
-} from './commerceRepository.js';
+import { D1CommerceRepository } from './commerceRepository.js';
 import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
-import { stripeCheckoutRequeueCandidate, type StripeCheckoutRequeueCandidate } from './stripeCheckout/readModel.js';
+import type { StripeCheckoutRequeueCandidate } from './commerceDiscoveryCandidates.js';
 import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
   emptyReconciliationResult, reportReconciliationFailure,
@@ -36,18 +33,6 @@ function reconciliationError(error: unknown): { name: string; message?: string }
     : { name: 'UnknownError' };
 }
 
-export function parseRequeueCandidates(
-  value: readonly CommerceDocumentRecord[],
-  cutoffMs: number,
-): RequeueCandidate[] {
-  const candidates: RequeueCandidate[] = [];
-  for (const document of value) {
-    const candidate = stripeCheckoutRequeueCandidate(document, cutoffMs);
-    if (candidate) candidates.push(candidate);
-  }
-  return candidates;
-}
-
 async function loadCandidates(
   env: ReconciliationEnv,
   cutoffMs: number,
@@ -57,7 +42,7 @@ async function loadCandidates(
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const value = await repository.queryStaleStripeFulfillments(cutoffMs);
   signal.throwIfAborted();
-  return parseRequeueCandidates(value, cutoffMs);
+  return value;
 }
 
 export async function reconcileStaleStripeFulfillments(

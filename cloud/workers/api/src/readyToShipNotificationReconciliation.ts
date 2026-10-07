@@ -3,6 +3,7 @@ import {
   resolveDeliveryOrderIdentity,
 } from './deliveryOrderSummaries.js';
 import { D1CommerceRepository } from './commerceRepository.js';
+import type { ReadyNotificationCandidate } from './commerceDiscoveryCandidates.js';
 import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import { drainReconciliationCandidates } from './reconciliationPass.js';
 import {
@@ -14,15 +15,13 @@ import {
   reportReconciliationFailure, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
 } from './reconciliationResult.js';
 
-const READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE = 8;
-const READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT = 4;
-
 export async function reconcilePendingReadyToShipNotifications(
   env: Pick<Env, 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE'>,
   signal: AbortSignal,
   overrides: {
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
+    monotonicNowMs?: () => number;
   } & ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
@@ -33,14 +32,23 @@ export async function reconcilePendingReadyToShipNotifications(
     signal,
   };
   const log = reconciliationLogger(overrides.log || ((entry) => console.log(entry)));
-  let publicationAttempts = 0;
-  return drainReconciliationCandidates({
+  return drainReconciliationCandidates<ReadyNotificationCandidate>({
     signal,
     onResult: overrides.onResult,
-    loadCandidates: () => repository.queryDueReadyNotifications({
-      dueAtMs: context.nowMs,
-      limit: READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
-    }),
+    paging: {
+      monotonicNowMs: overrides.monotonicNowMs,
+      loadPage: (startAfter, limit) => repository.queryDueReadyNotifications({
+        dueAtMs: context.nowMs, limit,
+        ...(startAfter ? { startAfter: {
+          nextAttemptAtMs: startAfter.nextAttemptAtMs, parentPath: startAfter.key.path, family: 'ready',
+        } } : {}),
+      }),
+      candidateKey: (candidate) => candidate.key.path,
+      probeBacklog: async () => {
+        const [oldest] = await repository.queryDueReadyNotifications({ dueAtMs: context.nowMs, limit: 1 });
+        return { hasMore: Boolean(oldest), oldestDueAgeMs: oldest ? Math.max(0, nowMs() - oldest.nextAttemptAtMs) : null };
+      },
+    },
     failureMessage: 'Ready-notification reconciliation failed',
     processCandidate: async (candidate) => {
       const resolution = resolveDeliveryOrderIdentity(candidate.key.documentId, candidate.identityFields, candidate.key.path);
@@ -59,8 +67,6 @@ export async function reconcilePendingReadyToShipNotifications(
           undefined, 'invalid-order-identity');
         return changed.length ? 'failed' : 'skipped';
       }
-      if (publicationAttempts >= READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT) return 'stop';
-      publicationAttempts += 1;
       const published = await publishReadyToShipNotificationsDetailed({
         context,
         deliveryId: resolution.identity.deliveryId,

@@ -6,11 +6,6 @@ import {
   isManualReviewCheckout,
   manualReviewCheckoutFromRecord,
 } from '../../../../../shared/fulfillmentReadModel.js';
-import {
-  STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-  type StripeCheckoutFulfillmentEventType,
-} from '../../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import type { CommerceDocumentRecord } from '../commerceRepository.js';
 import { isRecord } from '../dataAccess.js';
 import { toMillisMaybe } from '../time.js';
@@ -59,36 +54,6 @@ export function stripeCheckoutNotificationView(value: unknown): StripeCheckoutNo
     get fulfillmentRequestedAtMs() { return toMillisMaybe(fields.fulfillmentRequestedAt); },
     get processingStartedAtMs() { return toMillisMaybe(fields.processingStartedAt); },
     get failedAtMs() { return toMillisMaybe(fields.failedAt); },
-  };
-}
-
-export type StripeCheckoutRequeueCandidate = {
-  checkoutPath: string;
-  dropId: string;
-  sessionId: string;
-  stripeEventId: string;
-  stripeEventType: StripeCheckoutFulfillmentEventType;
-};
-
-export function stripeCheckoutRequeueCandidate(
-  document: CommerceDocumentRecord,
-  cutoffMs: number,
-): StripeCheckoutRequeueCandidate | null {
-  if (document.key.kind !== 'stripe_checkout' || !document.key.dropId) return null;
-  const fields = document.data;
-  if (
-    (fields.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING && fields.status !== STRIPE_CHECKOUT_STATUS.PROCESSING) ||
-    fields.fulfillmentProcessor !== STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR ||
-    typeof fields.updatedAt !== 'number' || fields.updatedAt > cutoffMs ||
-    typeof fields.lastStripeWebhookEventId !== 'string'
-  ) return null;
-  return {
-    checkoutPath: `drops/${document.key.dropId}/stripeCheckouts/${document.key.documentId}`,
-    dropId: document.key.dropId,
-    sessionId: document.key.documentId,
-    stripeEventId: fields.lastStripeWebhookEventId,
-    stripeEventType: fields.lastStripeWebhookEventType === 'checkout.session.async_payment_succeeded'
-      ? fields.lastStripeWebhookEventType : 'checkout.session.completed',
   };
 }
 

@@ -549,7 +549,10 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   const due = await repository.packStatusOutbox.queryDue({ dropId: 'drop', dueAtMs: 25, limit: 4 });
   assert.deepEqual(due.map((record) => record.parentPath), ['drops/drop/deliveryOrders/2', 'drops/drop/deliveryOrders/3']);
   const stale = await repository.queryStaleStripeFulfillments(20);
-  assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
+  assert.deepEqual(stale, [{
+    checkoutPath: commerceKeys.stripeCheckout('drop', 'old').path,
+    dropId: 'drop', sessionId: 'old', stripeEventId: 'evt_old', stripeEventType: 'checkout.session.completed',
+  }]);
 });
 
 test('ready-notification recovery selects unclaimed and expired leases in due order', async (context) => {
@@ -728,7 +731,7 @@ test('notification discovery projects only keys and preserves ready identity JSO
   seedCommerceDocuments(harness, documents);
   for (const document of documents) seedQueryNotification(harness, document.key);
   assert.deepEqual(await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 8 }),
-    documents.map((document, index) => ({ key: document.key, identityFields: identityFields[index] })));
+    documents.map((document, index) => ({ key: document.key, identityFields: identityFields[index], nextAttemptAtMs: 0 })));
 
   const checkoutKey = commerceKeys.stripeCheckout('drop', 'cs_projection');
   seedCommerceDocument(harness, {

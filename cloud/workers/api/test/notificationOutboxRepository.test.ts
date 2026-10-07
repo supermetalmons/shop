@@ -240,12 +240,12 @@ test('due queries read only active rows and use the due index', async (context) 
   const original = await repository.run(100, (unit) => unit.enqueueNotificationOutbox(input()));
   assert.deepEqual(await repository.notificationOutbox.getMany([key.path, key.path], 'shipped'), [original]);
   assert.deepEqual(await repository.notificationOutbox.queryDue({ family: 'shipped', dueAtMs: original.nextAttemptAtMs!, limit: 1 }),
-    [{ parentPath: original.parentPath, family: original.family }]);
+    [{ parentPath: original.parentPath, family: original.family, nextAttemptAtMs: original.nextAttemptAtMs }]);
   assert.deepEqual(await repository.notificationOutbox.queryDue({ dueAtMs: original.nextAttemptAtMs!, limit: 1 }),
-    [{ parentPath: original.parentPath, family: original.family }]);
+    [{ parentPath: original.parentPath, family: original.family, nextAttemptAtMs: original.nextAttemptAtMs }]);
   const query = notificationOutboxDueQuery({ family: 'shipped', dueAtMs: original.nextAttemptAtMs!, limit: 1 });
   assert.deepEqual(harness.database.prepare(query.sql).all(...query.bindings).map((row) => Object.keys(row).sort()),
-    [['family', 'parent_path']]);
+    [['family', 'next_attempt_at_ms', 'parent_path']]);
   const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings);
   assert.match(JSON.stringify(plan), /commerce_notification_outbox_family_due/);
   assert.throws(() => seedNotificationOutbox(harness, parseNotificationOutboxRecord({ ...original, entries: [] })), /Invalid/);
