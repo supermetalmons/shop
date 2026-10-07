@@ -369,7 +369,7 @@ function App({ route, suspended = false }: AppProps) {
     : account.canReadOwnProfile && auth.profileError
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
-  const showHeaderWalletButton = !walletActionBusy && signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
+  const showHeaderWalletButton = !walletActionBusy && signIn.authReady && !auth.loading && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
@@ -491,7 +491,7 @@ function App({ route, suspended = false }: AppProps) {
             shipmentsEmptyContent={<ShopShipmentsEmptyState
               {...shipments.emptyState}
               handleSignInForShipments={actionHandlers.handleShipmentsSignIn}
-              pendingShipmentsSignIn={shipments.emptyState.pendingShipmentsSignIn || walletActionBusy}
+              pendingShipmentsSignIn={walletActionBusy}
             />}
           />
           <ShopReceiptsSection

@@ -13,6 +13,7 @@ import { ProfileApiError } from '../src/api/transport.ts';
 const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
+const { usePreorderReconciliation } = await import('../src/hooks/usePreorderReconciliation.ts');
 const config = getPreorderConfig('mi_note_cards_devnet')!;
 const payer = Keypair.generate();
 const buyer = payer.publicKey.toBase58();
@@ -535,6 +536,55 @@ test('paginated discovery restores multiple orders without local storage and rep
   await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
   await waitFor(() => assert.equal(cursors.length, initialRequests + 2));
 });
+
+for (const initialResult of ['complete', 'failed'] as const) {
+  test(`hidden visibility changes reset ${initialResult} discovery before the next visible polling tick`, async t => {
+    const { api } = runtime();
+    let requests = 0;
+    api.recoveries = async () => {
+      requests++;
+      if (initialResult === 'failed' && requests === 1) throw new Error('Unavailable');
+      return { order: null, recoveries: [], nextRecoveryCursor: null };
+    };
+    let tick: (() => void) | undefined;
+    const setInterval = globalThis.setInterval;
+    t.mock.method(globalThis, 'setInterval', (callback: () => void, delay: number) => {
+      assert.equal(delay, 1_000);
+      tick = callback;
+      return setInterval(callback, delay);
+    });
+    const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    t.after(() => {
+      if (visibility) Object.defineProperty(document, 'visibilityState', visibility);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const view = renderHook(() => usePreorderReconciliation({
+      buyer, signedIn: true, preorderId: config.preorderId, enabled: true, api, onTerminal: () => {},
+    }));
+    await act(async () => {});
+    assert.equal(requests, 1);
+    const poll = tick;
+    assert.ok(poll);
+    await act(async () => { poll(); });
+    assert.equal(requests, 1);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => { document.dispatchEvent(new dom.window.Event('visibilitychange')); });
+    assert.equal(requests, 1);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => { poll(); });
+    assert.equal(requests, 2);
+    await act(async () => { window.dispatchEvent(new dom.window.Event('online')); });
+    assert.equal(requests, 2);
+    view.unmount();
+    await act(async () => {
+      window.dispatchEvent(new dom.window.Event('focus'));
+      document.dispatchEvent(new dom.window.Event('visibilitychange'));
+      poll();
+    });
+    assert.equal(requests, 2);
+  });
+}
 
 test('a hidden older failure cannot replace or unlock a newer signing operation', async () => {
   const { api, options, orders, succeeded } = runtime();

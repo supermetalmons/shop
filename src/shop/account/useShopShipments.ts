@@ -55,7 +55,7 @@ export function useShopShipments({
   const { profileRecoveryPending: stripeCheckoutProfileRecoveryPending, anonymousHistory: { orders: anonymousStripeDeliveryOrders, visible: anonymousStripeHistoryVisible, initialLoading: anonymousStripeHistoryInitialLoading, waitingForFulfillment: anonymousStripeHistoryWaitingForFulfillment, error: anonymousStripeHistoryError } } = stripeRecovery;
   const { figureMetadataByKey } = source;
   const { inventoryInitialResponseReady, receiptItems, inventoryEmptyStateVisibility } = view;
-  const { authReady, walletIdleReady, pendingShipmentsSignIn, handleSignInForShipments } = signIn;
+  const { authReady, walletIdleReady } = signIn;
   const isOwnProfileView = canReadOwnProfile;
 
   const profileLoadingForView = isViewerMode && viewedProfileLoading;
@@ -142,6 +142,6 @@ export function useShopShipments({
 
   const receiptsContentVisible = profileSectionsReady.receipts;
   useFigureMetadataTargets(shipmentFigureTargetsNeedingMetadata);
-  return { deliveryOrders, shipmentsRetainedError, shipmentHistory: history, shipmentsEmptyStateVisibility: shipmentsEmptyStateVisibility as 'visible' | 'hidden', shipmentsSectionReady, receiptsContentVisible, emptyState: { isOwnProfileView, ownShipmentsEmptyState, isViewerMode, viewedProfileError, profileLoadingForView, anonymousStripeHistoryVisible, anonymousStripeHistoryInitialLoading, anonymousStripeHistoryError, anonymousStripeHistoryWaitingForFulfillment, handleSignInForShipments, authLoading, pendingShipmentsSignIn } };
+  return { deliveryOrders, shipmentsRetainedError, shipmentHistory: history, shipmentsEmptyStateVisibility: shipmentsEmptyStateVisibility as 'visible' | 'hidden', shipmentsSectionReady, receiptsContentVisible, emptyState: { isOwnProfileView, ownShipmentsEmptyState, isViewerMode, viewedProfileError, profileLoadingForView, anonymousStripeHistoryVisible, anonymousStripeHistoryInitialLoading, anonymousStripeHistoryError, anonymousStripeHistoryWaitingForFulfillment, authLoading } };
 }
 export type ShopShipments = ReturnType<typeof useShopShipments>;

@@ -3,6 +3,7 @@ import type { PreorderAvailabilityResponse, PreorderConfig } from '../../shared/
 import type { createPreorderApi } from '../lib/preorderApi';
 import type { MiNoteEthereumSession } from '../../shared/miNoteAuth';
 import { ProfileApiError } from '../api/transport';
+import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 
 export function usePreorderAvailability(config: PreorderConfig, active: boolean, api: Pick<ReturnType<typeof createPreorderApi>, 'availability'>,
   session: MiNoteEthereumSession | null, signedInBuyer: string | undefined, onSessionInvalid?: () => void) {
@@ -57,14 +58,12 @@ export function usePreorderAvailability(config: PreorderConfig, active: boolean,
     const refresh = () => { if (document.visibilityState !== 'hidden') void refreshAvailability(); };
     refresh();
     const interval = setInterval(refresh, 10_000);
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
+    const unsubscribeRefreshEvents = subscribeBrowserRefreshEvents(refresh);
     return () => {
       request.current += 1;
       inFlight.current = null;
       clearInterval(interval);
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      unsubscribeRefreshEvents();
     };
   }, [active, refreshAvailability, session]);
 

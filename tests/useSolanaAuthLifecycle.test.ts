@@ -3,9 +3,11 @@ import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { createElement, StrictMode, useLayoutEffect, type ReactNode } from 'react';
 import { PublicKey } from '@solana/web3.js';
+import { WalletContext } from '@solana/wallet-adapter-react';
 import type { DeliveryOrderSummary, GetProfileStateResponse, ReconcileProfileStateResponse } from '../src/types.ts';
 import {
   useSolanaAuthWithRuntime,
+  useSolanaAuth,
   type SolanaAuthRuntime,
   type SolanaAuthWalletState,
 } from '../src/hooks/useSolanaAuth.ts';
@@ -319,6 +321,62 @@ test('steady polling pauses while hidden and resumes from a visibility event', a
   harness.visible = true;
   await act(async () => harness.emitRefresh());
   await waitFor(() => assert.equal(harness.loadCalls, baseline + 1));
+});
+
+test('default auth browser events refresh only while visible and unsubscribe on unmount', async t => {
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  anonymousSessionTestHooks.resetValidation();
+  const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+  t.after(() => {
+    if (visibility) Object.defineProperty(document, 'visibilityState', visibility);
+    else Reflect.deleteProperty(document, 'visibilityState');
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    anonymousSessionTestHooks.resetValidation();
+  });
+  let loads = 0;
+  t.mock.method(globalThis, 'fetch', async (input: unknown) => {
+    const pathname = new URL(String(input), 'https://mons.shop').pathname;
+    if (pathname === '/api/auth/anonymous/session') return Response.json({
+      subject: 'anon:123e4567-e89b-42d3-a456-426614174000',
+      refreshedAt: Date.now(), expiresAt: Date.now() + 3_600_000,
+    });
+    assert.equal(pathname, '/api/profile/state');
+    loads++;
+    return Response.json(emptyState());
+  });
+  const wallet = {
+    autoConnect: false, wallets: [], wallet: null, publicKey: null,
+    connecting: false, connected: false, disconnecting: false,
+    select: () => undefined, connect: async () => undefined, disconnect: async () => undefined,
+    sendTransaction: async () => '', signTransaction: undefined, signAllTransactions: undefined,
+    signMessage: undefined, signIn: undefined,
+  };
+  const wrapper = ({ children }: { children: ReactNode }) => createElement(WalletContext.Provider, { value: wallet }, children);
+  const view = renderHook(() => useSolanaAuth(), { wrapper });
+  await waitFor(() => assert.equal(view.result.current.sessionResolution, 'settled'));
+  await act(async () => { await view.result.current.refreshProfileState(); });
+  for (const [target, event] of [
+    [window, 'focus'], [window, 'online'], [document, 'visibilitychange'],
+  ] as const) {
+    const baseline = loads;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    await act(async () => { target.dispatchEvent(new dom.window.Event(event)); });
+    assert.equal(loads, baseline);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => { target.dispatchEvent(new dom.window.Event(event)); });
+    assert.equal(loads, baseline + 1);
+  }
+  view.unmount();
+  const baseline = loads;
+  await act(async () => {
+    window.dispatchEvent(new dom.window.Event('focus'));
+    window.dispatchEvent(new dom.window.Event('online'));
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  });
+  assert.equal(loads, baseline);
 });
 
 test('transient failures use the bounded retry schedule', async () => {

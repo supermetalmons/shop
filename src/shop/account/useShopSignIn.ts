@@ -46,11 +46,7 @@ export function useShopSignIn(options: ShopSignInOptions) {
   const authReady = sessionResolution === 'settled';
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [walletIdleReady, setWalletIdleReady] = useState(false);
-  const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
-  const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
   const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
-  const headerRequestRef = useRef<Promise<void> | null>(null);
-  const shipmentsRequestRef = useRef<Promise<void> | null>(null);
 
   const isCurrentWallet = useCallback((attempt: SignInAttempt, expectedWallet: string) => {
     const current = latestRef.current;
@@ -202,37 +198,13 @@ export function useShopSignIn(options: ShopSignInOptions) {
     };
   }, []);
 
-  const handleSignInForShipments = useCallback(() => {
-    if (shipmentsRequestRef.current) return shipmentsRequestRef.current;
-    setPendingShipmentsSignIn(true);
-    const request = ensureSignedIn().then(() => undefined).finally(() => {
-      if (shipmentsRequestRef.current !== request) return;
-      shipmentsRequestRef.current = null;
-      if (mountedRef.current) setPendingShipmentsSignIn(false);
-    });
-    shipmentsRequestRef.current = request;
-    return request;
-  }, [ensureSignedIn]);
-
-  const handleHeaderWalletSignIn = useCallback(() => {
-    if (headerRequestRef.current) return headerRequestRef.current;
-    setPendingHeaderWalletSignIn(true);
-    const request = ensureSignedIn().then(() => undefined).finally(() => {
-      if (headerRequestRef.current !== request) return;
-      headerRequestRef.current = null;
-      if (mountedRef.current) setPendingHeaderWalletSignIn(false);
-    });
-    headerRequestRef.current = request;
-    return request;
-  }, [ensureSignedIn]);
-
   useEffect(() => {
-    if (isSignedInWallet || hasAuthenticatedAccount || !authReady || authLoading || pendingHeaderWalletSignIn) {
+    if (isSignedInWallet || hasAuthenticatedAccount || !authReady || authLoading) {
       setHeaderWalletButtonRevealed(false);
       return;
     }
     if (connectedWallet || (walletIdleReady && !walletBusy)) setHeaderWalletButtonRevealed(true);
-  }, [authLoading, authReady, connectedWallet, hasAuthenticatedAccount, isSignedInWallet, pendingHeaderWalletSignIn, walletBusy, walletIdleReady]);
+  }, [authLoading, authReady, connectedWallet, hasAuthenticatedAccount, isSignedInWallet, walletBusy, walletIdleReady]);
   useEffect(() => {
     if (connectedWallet || walletBusy) {
       setWalletIdleReady(false);
@@ -243,8 +215,7 @@ export function useShopSignIn(options: ShopSignInOptions) {
   }, [connectedWallet, walletBusy]);
 
   return {
-    authReady, walletBusy, walletIdleReady,
-    pendingShipmentsSignIn, pendingHeaderWalletSignIn, headerWalletButtonRevealed,
-    ensureSignedIn, ensureWalletConnected, handleSignInForShipments, handleHeaderWalletSignIn,
+    authReady, walletBusy, walletIdleReady, headerWalletButtonRevealed,
+    ensureSignedIn, ensureWalletConnected,
   };
 }

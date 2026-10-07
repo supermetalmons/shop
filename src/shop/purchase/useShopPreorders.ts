@@ -8,6 +8,7 @@ import { usePreorderCheckout } from '../../hooks/usePreorderCheckout';
 import { usePreorderRecoveryRecords } from '../../hooks/usePreorderRecoveryRecords';
 import { revokePreorderInventoryAssets } from '../../lib/inventoryQuery';
 import { acknowledgePreorderFailure, listPreorderRecoveries } from '../../lib/preorderRecovery';
+import { subscribeBrowserRefreshEvents } from '../../lib/browserRefreshEvents';
 import type { ResolvedAppRoute } from '../../routes';
 
 const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
@@ -102,11 +103,9 @@ export function useShopPreorders({
       for (const { order } of failures) void acknowledgePreorderFailure(order.buyer, order.preorderId, order.orderId).catch(() => {});
     };
     notify();
-    window.addEventListener('focus', notify);
-    document.addEventListener('visibilitychange', notify);
+    const unsubscribeRefreshEvents = subscribeBrowserRefreshEvents(notify);
     return () => {
-      window.removeEventListener('focus', notify);
-      document.removeEventListener('visibilitychange', notify);
+      unsubscribeRefreshEvents();
     };
   }, [connectedWallet, isSignedInWallet, statusUiSuspended, isViewerMode, preorderRecoveries, showToast]);
 

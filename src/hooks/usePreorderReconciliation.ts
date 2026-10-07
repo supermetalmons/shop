@@ -3,6 +3,7 @@ import type { PreorderOrder } from '../../shared/preorders.ts';
 import type { createPreorderApi } from '../lib/preorderApi';
 import { listPreorderRecoveries, subscribePreorderRecoveries, upsertPreorderRecovery } from '../lib/preorderRecovery';
 import { runPreorderStatus } from '../lib/preorderStatusQueue';
+import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 
 export type PreorderCheckoutApi = Omit<ReturnType<typeof createPreorderApi>, 'recoveries'> & Partial<Pick<ReturnType<typeof createPreorderApi>, 'recoveries'>>;
 
@@ -98,14 +99,12 @@ export function usePreorderReconciliation(options: {
     };
     const unsubscribe = subscribePreorderRecoveries(tick);
     const interval = setInterval(tick, 1_000);
-    window.addEventListener('focus', focused);
-    document.addEventListener('visibilitychange', focused);
+    const unsubscribeRefreshEvents = subscribeBrowserRefreshEvents(focused);
     return () => {
       stopped = true;
       unsubscribe();
       clearInterval(interval);
-      window.removeEventListener('focus', focused);
-      document.removeEventListener('visibilitychange', focused);
+      unsubscribeRefreshEvents();
     };
   }, [options.api, options.buyer, options.enabled, options.preorderId, options.signedIn]);
 }

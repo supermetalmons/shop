@@ -9,6 +9,7 @@ import { EMPTY_INVENTORY, EMPTY_PENDING_OPEN } from './stateSupport';
 import { usePreorderRecoveryRecords } from '../../hooks/usePreorderRecoveryRecords';
 import { mergePreorderInventory, unresolvedPreorderInventoryAssets } from '../../lib/preorderInventory';
 import { startPostActionInventoryPolling } from '../postActionPolling';
+import { subscribeBrowserRefreshEvents } from '../../lib/browserRefreshEvents';
 
 export function useShopInventoryQueries(owner: string | undefined, includeDevnetInventory: boolean, isViewerMode: boolean) {
   const queryClient = useQueryClient();
@@ -50,12 +51,10 @@ export function useShopInventoryQueries(owner: string | undefined, includeDevnet
       setInterval: (run, delayMs) => window.setInterval(run, delayMs),
       clearInterval: (timer) => window.clearInterval(timer as number),
     });
-    window.addEventListener('focus', refresh);
-    document.addEventListener('visibilitychange', refresh);
+    const unsubscribeRefreshEvents = subscribeBrowserRefreshEvents(refresh);
     return () => {
       stop();
-      window.removeEventListener('focus', refresh);
-      document.removeEventListener('visibilitychange', refresh);
+      unsubscribeRefreshEvents();
     };
   }, [preorderRecoveryPending, refetchInventory]);
   const pendingOpenBoxes = pendingOpenBoxesData ?? EMPTY_PENDING_OPEN;

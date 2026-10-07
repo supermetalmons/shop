@@ -9,6 +9,7 @@ const { dom } = setupFrontendDom();
 const { cleanup, fireEvent, render } = await import('@testing-library/react');
 const { ShopHeaderActions } = await import('../src/shop/ui/ShopHeaderActions.tsx');
 const { ShopShipmentsSection } = await import('../src/shop/ui/ShopShipmentsSection.tsx');
+const { ShopShipmentsEmptyState } = await import('../src/shop/ui/ShopShipmentsEmptyState.tsx');
 
 afterEach(cleanup);
 after(() => dom.window.close());
@@ -96,4 +97,39 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   const hiddenPlaceholder = view.container.querySelector('.empty-state--hidden');
   assert.equal(hiddenPlaceholder?.getAttribute('aria-hidden'), 'true');
   assert.equal(hiddenPlaceholder?.textContent, 'Loading shipments…');
+});
+
+test('shipment sign-in stays disabled during authentication or any pending wallet action', () => {
+  let signIns = 0;
+  const props: Parameters<typeof ShopShipmentsEmptyState>[0] = {
+    isOwnProfileView: false,
+    ownShipmentsEmptyState: 'empty',
+    isViewerMode: false,
+    viewedProfileError: null,
+    profileLoadingForView: false,
+    anonymousStripeHistoryVisible: false,
+    anonymousStripeHistoryInitialLoading: false,
+    anonymousStripeHistoryError: null,
+    anonymousStripeHistoryWaitingForFulfillment: false,
+    authLoading: false,
+    pendingShipmentsSignIn: false,
+    handleSignInForShipments: async () => { signIns += 1; },
+  };
+  const view = render(createElement(ShopShipmentsEmptyState, props));
+  for (const busy of [
+    { authLoading: true, pendingShipmentsSignIn: false },
+    { authLoading: false, pendingShipmentsSignIn: true },
+    { authLoading: true, pendingShipmentsSignIn: true },
+  ]) {
+    view.rerender(createElement(ShopShipmentsEmptyState, { ...props, ...busy }));
+    const button = view.getByRole('button', { name: 'Sign in' }) as HTMLButtonElement;
+    assert.equal(button.disabled, true);
+    fireEvent.click(button);
+    assert.equal(signIns, 0);
+  }
+  view.rerender(createElement(ShopShipmentsEmptyState, props));
+  const button = view.getByRole('button', { name: 'Sign in' }) as HTMLButtonElement;
+  assert.equal(button.disabled, false);
+  fireEvent.click(button);
+  assert.equal(signIns, 1);
 });

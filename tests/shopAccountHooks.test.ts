@@ -118,7 +118,7 @@ function signInOptions(overrides: Partial<Parameters<typeof useShopSignIn>[0]> =
   };
 }
 
-test('header and shipments wait for shared restoration without a toast or a signature', async () => {
+test('concurrent sign-in callers wait for shared restoration without a toast or a signature', async () => {
   const restoration = deferred<'restored'>();
   let restores = 0;
   let signatures = 0;
@@ -130,27 +130,26 @@ test('header and shipments wait for shared restoration without a toast or a sign
   initial.auth.hasAuthenticatedWalletSession = () => restored;
   initial.auth.signIn = async () => { signatures += 1; return { wallet: initial.connectedWallet! }; };
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
-  let header!: Promise<void>;
-  let shipments!: Promise<void>;
-  let action!: Promise<boolean>;
+  let first!: Promise<boolean>;
+  let second!: Promise<boolean>;
+  let third!: Promise<boolean>;
+  const outcomes: boolean[] = [];
   act(() => {
-    header = result.current.handleHeaderWalletSignIn();
-    shipments = result.current.handleSignInForShipments();
-    action = result.current.ensureSignedIn();
+    first = result.current.ensureSignedIn();
+    second = result.current.ensureSignedIn();
+    third = result.current.ensureSignedIn();
+    for (const request of [first, second, third]) void request.then((outcome) => { outcomes.push(outcome); });
   });
   await waitFor(() => assert.equal(restores, 1));
-  assert.equal(result.current.pendingHeaderWalletSignIn, true);
-  assert.equal(result.current.pendingShipmentsSignIn, true);
+  assert.deepEqual(outcomes, []);
   assert.equal(signatures, 0);
   assert.deepEqual(messages, []);
   await act(async () => {
     restored = true;
     restoration.resolve('restored');
-    await Promise.all([header, shipments]);
-    assert.equal(await action, true);
+    assert.deepEqual(await Promise.all([first, second, third]), [true, true, true]);
   });
-  assert.equal(result.current.pendingHeaderWalletSignIn, false);
-  assert.equal(result.current.pendingShipmentsSignIn, false);
+  assert.deepEqual(outcomes, [true, true, true]);
   assert.equal(signatures, 0);
   assert.deepEqual(messages, []);
 });
@@ -166,18 +165,18 @@ test('an unsuccessful restoration requests one shared signature and resumes ever
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let first!: Promise<boolean>;
   let second!: Promise<boolean>;
+  let third!: Promise<boolean>;
   act(() => {
     first = result.current.ensureSignedIn();
     second = result.current.ensureSignedIn();
-    void result.current.handleHeaderWalletSignIn();
+    third = result.current.ensureSignedIn();
   });
   await act(async () => { restoration.resolve('sign-in-required'); });
   assert.equal(calls, 1);
   await act(async () => {
     signature.resolve();
-    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    assert.deepEqual(await Promise.all([first, second, third]), [true, true, true]);
   });
-  assert.equal(result.current.pendingHeaderWalletSignIn, false);
   assert.equal(calls, 1);
 });
 
@@ -218,24 +217,24 @@ test('closing the wallet picker cancels all pending sign-ins once connection is 
   connected.auth.signIn = async () => { signatures += 1; return { wallet: connected.connectedWallet! }; };
   const initial = { ...connected, connectedWallet: undefined, publicKey: null, walletModalVisible: true };
   const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial as typeof connected });
-  let header!: Promise<void>;
-  let shipments!: Promise<void>;
-  let action!: Promise<boolean>;
+  let first!: Promise<boolean>;
+  let second!: Promise<boolean>;
+  let third!: Promise<boolean>;
+  const outcomes: boolean[] = [];
   act(() => {
-    header = result.current.handleHeaderWalletSignIn();
-    shipments = result.current.handleSignInForShipments();
-    action = result.current.ensureSignedIn();
+    first = result.current.ensureSignedIn();
+    second = result.current.ensureSignedIn();
+    third = result.current.ensureSignedIn();
+    for (const request of [first, second, third]) void request.then((outcome) => { outcomes.push(outcome); });
   });
   rerender({ ...initial, walletModalVisible: false, wallet: { connecting: true, disconnecting: false } });
-  assert.equal(result.current.pendingShipmentsSignIn, true);
-  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  await act(async () => undefined);
+  assert.deepEqual(outcomes, []);
   rerender({ ...initial, walletModalVisible: false });
   await act(async () => {
-    await Promise.all([header, shipments]);
-    assert.equal(await action, false);
+    assert.deepEqual(await Promise.all([first, second, third]), [false, false, false]);
   });
-  assert.equal(result.current.pendingShipmentsSignIn, false);
-  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+  assert.deepEqual(outcomes, [false, false, false]);
   rerender(connected);
   await act(async () => undefined);
   assert.equal(signatures, 0);
@@ -269,22 +268,24 @@ test('a cancelled caller does not cancel another caller sharing the same prerequ
   initial.auth.awaitWalletSessionRestoration = () => restoration.promise;
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let action!: Promise<boolean>;
-  let header!: Promise<void>;
+  let otherCaller!: Promise<boolean>;
+  let otherCallerSettled = false;
   act(() => {
     action = result.current.ensureSignedIn({ signal: controller.signal });
-    header = result.current.handleHeaderWalletSignIn();
+    otherCaller = result.current.ensureSignedIn();
+    void otherCaller.then(() => { otherCallerSettled = true; });
   });
   await act(async () => {
     controller.abort();
     assert.equal(await action, false);
   });
-  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  assert.equal(otherCallerSettled, false);
   await act(async () => {
     restoration.resolve('sign-in-required');
-    await header;
+    assert.equal(await otherCaller, true);
   });
   assert.equal(initial.auth.hasAuthenticatedWalletSession(initial.connectedWallet!), true);
-  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+  assert.equal(otherCallerSettled, true);
 });
 
 test('an aborted signature retains the prompt lock until it settles and cannot restart itself', async () => {
@@ -424,19 +425,17 @@ test('a rejected shared signature cancels quietly or shows one actionable error'
       });
       initial.auth.signIn = () => { signatures += 1; return signature.promise; };
       const { result, unmount } = renderHook(useShopSignIn, { initialProps: initial });
-      let header!: Promise<void>;
-      let shipments!: Promise<void>;
+      let first!: Promise<boolean>;
+      let second!: Promise<boolean>;
       act(() => {
-        header = result.current.handleHeaderWalletSignIn();
-        shipments = result.current.handleSignInForShipments();
+        first = result.current.ensureSignedIn();
+        second = result.current.ensureSignedIn();
       });
       await waitFor(() => assert.equal(signatures, 1));
       await act(async () => {
         signature.reject(new Error('Sign-in failed. Please try again.'));
-        await Promise.all([header, shipments]);
+        assert.deepEqual(await Promise.all([first, second]), [false, false]);
       });
-      assert.equal(result.current.pendingHeaderWalletSignIn, false);
-      assert.equal(result.current.pendingShipmentsSignIn, false);
       assert.deepEqual(messages, userRejected ? [] : ['Sign-in failed. Please try again.']);
       unmount();
     });

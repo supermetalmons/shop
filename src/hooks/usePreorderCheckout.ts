@@ -9,6 +9,7 @@ import { usePreorderAvailability } from './usePreorderAvailability';
 import type { MiNoteEthereumSession } from '../../shared/miNoteAuth';
 import { listPreorderRecoveries, upsertPreorderRecovery } from '../lib/preorderRecovery';
 import { runPreorderStatus } from '../lib/preorderStatusQueue';
+import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 import { usePreorderRecoveryRecords } from './usePreorderRecoveryRecords';
 import { usePreorderReconciliation, type PreorderCheckoutApi } from './usePreorderReconciliation';
 
@@ -316,15 +317,13 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       lookedUp = false;
       void recover(true);
     };
-    window.addEventListener('focus', focus);
+    const unsubscribeRefreshEvents = subscribeBrowserRefreshEvents(focus);
     window.addEventListener('storage', storage);
-    document.addEventListener('visibilitychange', focus);
     return () => {
       stopped = true;
       clearInterval(interval);
-      window.removeEventListener('focus', focus);
+      unsubscribeRefreshEvents();
       window.removeEventListener('storage', storage);
-      document.removeEventListener('visibilitychange', focus);
     };
   }, [acceptPersistedOrder, active, adoptPending, api, buyer, config.enabled, config.preorderId, keepPending, recoveryRevision, scope, signedIn]);
 

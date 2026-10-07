@@ -7,6 +7,7 @@ import {
   solanaAuth,
 } from '../api/profile';
 import { isRetryableApiError, retryWithBackoff } from '../lib/apiErrors';
+import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 import type {
   GetProfileStateResponse,
   ReconcileProfileStateRequest,
@@ -123,21 +124,6 @@ const EMPTY_AUTH_STATE: SolanaAuthState = {
   deliveryRecoveryNextCheckAt: null,
 };
 
-function subscribeBrowserRefreshEvents(listener: () => void): () => void {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
-  const onVisible = () => {
-    if (document.visibilityState !== 'hidden') listener();
-  };
-  window.addEventListener('focus', onVisible);
-  window.addEventListener('online', onVisible);
-  document.addEventListener('visibilitychange', onVisible);
-  return () => {
-    window.removeEventListener('focus', onVisible);
-    window.removeEventListener('online', onVisible);
-    document.removeEventListener('visibilitychange', onVisible);
-  };
-}
-
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   currentAuthSubject: () => readStaffWalletSession()?.wallet || currentAnonymousSubject(),
   subscribeAuthSubject: (listener) => {
@@ -162,7 +148,9 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
       await logoutAnonymousSession();
     }
   },
-  subscribeRefreshEvents: subscribeBrowserRefreshEvents,
+  subscribeRefreshEvents: (listener) => subscribeBrowserRefreshEvents(() => {
+    if (document.visibilityState !== 'hidden') listener();
+  }, { online: true }),
   isPageVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
   now: () => Date.now(),
   setTimer: (callback, delay) => setTimeout(callback, delay),

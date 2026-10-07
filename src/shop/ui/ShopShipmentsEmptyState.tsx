@@ -1,5 +1,10 @@
 import type { ShopShipments } from '../account/useShopShipments';
 
+type ShopShipmentsEmptyStateProps = ShopShipments['emptyState'] & {
+  handleSignInForShipments: () => Promise<void>;
+  pendingShipmentsSignIn: boolean;
+};
+
 export function ShopShipmentsEmptyState({
   isOwnProfileView,
   ownShipmentsEmptyState,
@@ -13,7 +18,7 @@ export function ShopShipmentsEmptyState({
   handleSignInForShipments,
   authLoading,
   pendingShipmentsSignIn,
-}: ShopShipments['emptyState']) {
+}: ShopShipmentsEmptyStateProps) {
   if (isOwnProfileView) {
     if (ownShipmentsEmptyState === 'error') return 'Unable to load shipments.';
     if (ownShipmentsEmptyState === 'preparing') return 'Preparing shipment…';
