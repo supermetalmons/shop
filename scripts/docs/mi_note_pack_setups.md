@@ -24,6 +24,8 @@ The existing WIP viewer keeps its original behavior. These saved presets do not 
 
 Use `MI_NOTE_PACK_STARS` to resolve the sticker's bundled asset URL. Pass the saved placement and finish explicitly. The optional `stickerTextureSize` defaults to `512`; supplying `shared.quality.stickerTextureSize` opts into the saved `2048` quality without changing other callers.
 
+The bundled stars are 1280 × 1280 WebPs encoded at quality 77 with lossless alpha. The original 1996 × 1996 PNGs remain at each setup's `sticker.source` path. For full-resolution exports, resolve that original source to an asset URL and override the selected star's `src`; increasing `stickerTextureSize` alone does not restore the source detail removed by resizing.
+
 ```ts
 import * as THREE from 'three';
 import { createMiNotePackModel } from './src/lib/miNotePackModel';
