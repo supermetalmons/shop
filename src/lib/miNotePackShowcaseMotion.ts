@@ -1,4 +1,4 @@
-export const MI_NOTE_PACK_SHOWCASE_ORDER = [1, 5, 9, 4, 8, 3, 7, 2, 6] as const;
+export const MI_NOTE_PACK_SHOWCASE_COLORS = ['cobalt-blue', 'emerald', 'marigold'] as const;
 export const MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS = 2.65;
 
 const HOLD_SECONDS = 0.45;
@@ -21,17 +21,17 @@ export function sampleMiNotePackShowcase(elapsedSeconds: number, baseRotationY =
   const cycles = time / MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS;
   const cycleIndex = Math.floor(cycles);
   const elapsed = (cycles - cycleIndex) * MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS;
-  const index = cycleIndex % MI_NOTE_PACK_SHOWCASE_ORDER.length;
-  const outgoingPackId = MI_NOTE_PACK_SHOWCASE_ORDER[index];
-  const nextPackId = MI_NOTE_PACK_SHOWCASE_ORDER[(index + 1) % MI_NOTE_PACK_SHOWCASE_ORDER.length];
+  const index = cycleIndex % MI_NOTE_PACK_SHOWCASE_COLORS.length;
+  const outgoingVariantId = MI_NOTE_PACK_SHOWCASE_COLORS[index];
+  const nextVariantId = MI_NOTE_PACK_SHOWCASE_COLORS[(index + 1) % MI_NOTE_PACK_SHOWCASE_COLORS.length];
 
   if (elapsed < HOLD_SECONDS) {
     const progress = elapsed / HOLD_SECONDS;
     const envelope = motionEnvelope(progress);
     const sway = Math.sin(TAU * progress);
     return {
-      packId: outgoingPackId,
-      nextPackId,
+      variantId: outgoingVariantId,
+      nextVariantId,
       rotationX: 0.022 * envelope,
       rotationY: 0,
       rotationZ: 0.012 * envelope * sway,
@@ -47,8 +47,8 @@ export function sampleMiNotePackShowcase(elapsedSeconds: number, baseRotationY =
   const returnEdge = ((Math.PI * 1.5 + baseYaw) % TAU + TAU) % TAU / TAU;
 
   return {
-    packId: turn < returnEdge ? outgoingPackId : nextPackId,
-    nextPackId,
+    variantId: turn < returnEdge ? outgoingVariantId : nextVariantId,
+    nextVariantId,
     rotationX: 0.065 * envelope * Math.sin(TAU * turn + Math.PI / 5),
     rotationY: -TAU * turn,
     rotationZ: 0.033 * envelope * Math.sin(Math.PI * turn),

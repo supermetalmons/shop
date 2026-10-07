@@ -265,17 +265,29 @@ test('the image stays active until all stickers load and the first rendered pack
   finishHandoff(run);
 });
 
-test('all nine color and sticker combinations cycle using one renderer and the same three models', async () => {
+test('colors cycle blue, green, yellow with random stickers using one renderer and the same three models', async (t) => {
   const run = harness();
   await makeReady();
   finishHandoff(run);
   const originalModels = [...models];
   const originalMaterials = models.map(model => model.material);
   const seen = new Map<number, RenderedFrame>();
+  const variants = [getMiNotePackRenderSetupByPackId(Number(run.host.dataset.packId))!.variantId];
+  let random = 0;
+  t.mock.method(Math, 'random', () => random);
   for (let index = 0; index < 1200; index += 1) {
+    random = (Math.floor(index / 159) % 3 + 0.5) / 3;
     advanceFrame();
-    seen.set(Number(run.host.dataset.packId), renderers[0].rendered.at(-1)!);
+    const packId = Number(run.host.dataset.packId);
+    const setup = getMiNotePackRenderSetupByPackId(packId)!;
+    if (variants.at(-1) !== setup.variantId) {
+      variants.push(setup.variantId);
+      assert.equal(setup.sticker.id, ['blush', 'zombie', 'supermetal'][Math.floor(random * 3)]);
+    }
+    seen.set(packId, renderers[0].rendered.at(-1)!);
   }
+  assert.ok(variants.length > 9);
+  assert.deepEqual(variants, variants.map((_, index) => ['cobalt-blue', 'emerald', 'marigold'][index % 3]));
   assert.deepEqual([...seen.keys()].sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   for (const [packId, frame] of seen) {
     const setup = getMiNotePackRenderSetupByPackId(packId)!;
@@ -343,7 +355,7 @@ test('enabling reduced motion during a later pack returns to static pack 1 and c
   const run = harness();
   await makeReady();
   finishHandoff(run);
-  for (let index = 0; index < 140; index += 1) advanceFrame();
+  for (let index = 0; index < 90; index += 1) advanceFrame();
   assert.notEqual(run.host.dataset.packId, '1');
   act(() => setMediaQueryMatches(motionQuery, true));
   advanceFrame();

@@ -47,6 +47,7 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
     let rendered = false;
     let handoffComplete = false;
     let currentPackId = 0;
+    let currentSetup = setup;
     let width = 0;
     let height = 0;
     const baseRotation = setup.model.rotationDegrees.map(THREE.MathUtils.degToRad);
@@ -92,14 +93,17 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
       if (handoffComplete && !reducedMotion.matches) elapsed += dt;
       else if (rendered) fadeElapsed += dt;
       const motion = sampleMiNotePackShowcase(reducedMotion.matches ? 0 : elapsed, baseRotation[1]);
-      const currentSetup = getMiNotePackRenderSetupByPackId(motion.packId)!;
+      if (motion.variantId !== currentSetup.variantId) {
+        const star = MI_NOTE_PACK_STARS[Math.floor(Math.random() * MI_NOTE_PACK_STARS.length)];
+        currentSetup = getMiNotePackRenderSetup(motion.variantId, star.id)!;
+      }
       const model = models.get(currentSetup.sticker.id)!;
       try {
-        if (motion.packId !== currentPackId) {
+        if (currentSetup.packId !== currentPackId) {
           for (const candidate of models.values()) candidate.group.visible = candidate === model;
           model.setColor(currentSetup.color);
           applyMiNotePackRenderPose(model, currentSetup);
-          currentPackId = motion.packId;
+          currentPackId = currentSetup.packId;
           host!.dataset.packId = String(currentPackId);
         }
         model.group.rotation.set(
@@ -167,6 +171,7 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
     }
     function handleMotionPreference() {
       elapsed = 0;
+      currentSetup = setup;
       pause();
       schedule();
     }

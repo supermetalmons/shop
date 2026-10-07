@@ -8,7 +8,7 @@ import {
 } from '../src/lib/miNotePackRenderSetup.ts';
 import {
   MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS,
-  MI_NOTE_PACK_SHOWCASE_ORDER,
+  MI_NOTE_PACK_SHOWCASE_COLORS,
   sampleMiNotePackShowcase,
 } from '../src/lib/miNotePackShowcaseMotion.ts';
 
@@ -26,7 +26,7 @@ function angleDifference(a: number, b: number): number {
 
 test('showcase starts in the saved pose and clamps invalid elapsed time', () => {
   const initial = {
-    packId: 1, nextPackId: 5,
+    variantId: 'cobalt-blue', nextVariantId: 'emerald',
     rotationX: 0, rotationY: 0, rotationZ: 0, offsetY: 0, scale: 1,
   };
   for (const time of [0, -1, -Number.MAX_VALUE, NaN, Infinity, -Infinity]) {
@@ -34,20 +34,20 @@ test('showcase starts in the saved pose and clamps invalid elapsed time', () => 
   }
 });
 
-test('the loop visits all nine packs with a brief hold and negative-yaw turns that settle gently', () => {
-  assert.deepEqual(MI_NOTE_PACK_SHOWCASE_ORDER, [1, 5, 9, 4, 8, 3, 7, 2, 6]);
+test('the loop repeats blue, green, and yellow with a brief hold and negative-yaw turns that settle gently', () => {
+  assert.deepEqual(MI_NOTE_PACK_SHOWCASE_COLORS, ['cobalt-blue', 'emerald', 'marigold']);
   assert.equal(CYCLE, 2.65);
-  for (let cycle = 0; cycle < MI_NOTE_PACK_SHOWCASE_ORDER.length * 2; cycle++) {
-    const index = cycle % MI_NOTE_PACK_SHOWCASE_ORDER.length;
+  for (let cycle = 0; cycle < MI_NOTE_PACK_SHOWCASE_COLORS.length * 2; cycle++) {
+    const index = cycle % MI_NOTE_PACK_SHOWCASE_COLORS.length;
     const hold = sampleMiNotePackShowcase(cycle * CYCLE + 0.225);
-    assert.equal(hold.packId, MI_NOTE_PACK_SHOWCASE_ORDER[index]);
-    assert.equal(hold.nextPackId, MI_NOTE_PACK_SHOWCASE_ORDER[(index + 1) % MI_NOTE_PACK_SHOWCASE_ORDER.length]);
+    assert.equal(hold.variantId, MI_NOTE_PACK_SHOWCASE_COLORS[index]);
+    assert.equal(hold.nextVariantId, MI_NOTE_PACK_SHOWCASE_COLORS[(index + 1) % MI_NOTE_PACK_SHOWCASE_COLORS.length]);
     assert.equal(hold.rotationY, 0);
     near(sampleMiNotePackShowcase(cycle * CYCLE + 0.45).rotationY, 0);
     assert.ok(sampleMiNotePackShowcase(cycle * CYCLE + 1.55).rotationY < -Math.PI);
     const end = sampleMiNotePackShowcase((cycle + 1) * CYCLE - 1e-5);
     near(end.rotationY, -TAU);
-    assert.equal(end.packId, hold.nextPackId);
+    assert.equal(end.variantId, hold.nextVariantId);
   }
   const angularSpeed = (turnProgress: number) => {
     const time = 0.45 + 2.2 * turnProgress;
@@ -71,9 +71,9 @@ test('each pack changes once at the return edge with the saved yaw included', ()
       let changes = 0;
       for (let step = 1; step <= CYCLE * 2000; step++) {
         const pose = sampleMiNotePackShowcase(cycle * CYCLE + step / 2000, baseYaw);
-        if (pose.packId !== previous.packId) {
+        if (pose.variantId !== previous.variantId) {
           changes++;
-          assert.equal(pose.packId, previous.nextPackId);
+          assert.equal(pose.variantId, previous.nextVariantId);
           near(baseYaw + pose.rotationY, -Math.PI * 1.5, 0.004);
           near(baseYaw + previous.rotationY, -Math.PI * 1.5, 0.004);
         }
@@ -126,7 +126,7 @@ test('every pack remains inside the saved camera framing throughout successive t
     for (const corner of corners) {
       projected.copy(corner).applyMatrix4(model.matrixWorld).project(camera);
       assert.ok(Math.abs(projected.x) < 0.99 && Math.abs(projected.y) < 0.99,
-        `Pack ${pose.packId} leaves framing at ${time}s: ${projected.x}, ${projected.y}`);
+        `Pack ${pose.variantId} leaves framing at ${time}s: ${projected.x}, ${projected.y}`);
     }
   }
 });
@@ -138,8 +138,8 @@ test('pose and velocity stay continuous at the hold, turn, and cycle boundaries'
       const before = sampleMiNotePackShowcase(boundary - epsilon);
       const middle = sampleMiNotePackShowcase(boundary);
       const after = sampleMiNotePackShowcase(boundary + epsilon);
-      assert.equal(before.packId, middle.packId);
-      assert.equal(after.packId, middle.packId);
+      assert.equal(before.variantId, middle.variantId);
+      assert.equal(after.variantId, middle.variantId);
       for (const key of transformKeys) {
         const difference = key === 'rotationY' ? angleDifference : (a: number, b: number) => a - b;
         near(difference(before[key], middle[key]), 0, 1e-7);
@@ -154,8 +154,8 @@ test('large finite times and nonfinite base yaw keep every transform finite', ()
   for (const time of [5, 1e6 + 5, 1e12 + 5, 1e20, Number.MAX_VALUE]) {
     for (const baseYaw of [-0.12, NaN, Infinity, Number.MAX_VALUE]) {
       const pose = sampleMiNotePackShowcase(time, baseYaw);
-      assert.ok(MI_NOTE_PACK_SHOWCASE_ORDER.includes(pose.packId));
-      assert.ok(MI_NOTE_PACK_SHOWCASE_ORDER.includes(pose.nextPackId));
+      assert.ok(MI_NOTE_PACK_SHOWCASE_COLORS.includes(pose.variantId));
+      assert.ok(MI_NOTE_PACK_SHOWCASE_COLORS.includes(pose.nextVariantId));
       for (const key of transformKeys) assert.ok(Number.isFinite(pose[key]));
     }
   }
