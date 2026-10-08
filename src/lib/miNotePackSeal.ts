@@ -145,8 +145,6 @@ export function createMiNotePackSeal({
           vividInk *= mix(vec3(1.0), vec3(1.12, .98, .9), yellowInk);
           diffuseColor.rgb = mix(ink, clamp(vividInk, 0.0, 1.0), gradeStrength);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.4, .43, .47), stickerFoil);
-        } else {
-          diffuseColor.rgb = vec3(.57, .53, .43);
         }
       `)
       .replace('#include <alphatest_fragment>', `
@@ -165,6 +163,11 @@ export function createMiNotePackSeal({
       .replace('#include <normal_fragment_maps>', `
         if (gl_FrontFacing) {
           #include <normal_fragment_maps>
+        } else {
+          float backView = clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0);
+          vec3 backingInk = mix(vec3(inkLuminance), diffuseColor.rgb, .65);
+          float inkThrough = (.04 + .06 * backView * backView) * (1.0 - stickerFoil);
+          diffuseColor.rgb = mix(vec3(.57, .53, .43), backingInk, inkThrough);
         }
       `)
       .replace('#include <clearcoat_normal_fragment_maps>', `
@@ -208,7 +211,7 @@ export function createMiNotePackSeal({
         #include <opaque_fragment>
       `);
   };
-  material.customProgramCacheKey = () => `mi-note-holographic-star-seal-v11-${stickerTextureSize}`;
+  material.customProgramCacheKey = () => `mi-note-holographic-star-seal-v12-${stickerTextureSize}`;
   const geometry = new THREE.PlaneGeometry(STICKER_WIDTH, STICKER_WIDTH, WIDTH_SEGMENTS, HEIGHT_SEGMENTS);
   (geometry.attributes.position as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
   (geometry.attributes.normal as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
