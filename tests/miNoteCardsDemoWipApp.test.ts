@@ -5,6 +5,11 @@ import { createElement, useLayoutEffect, useRef, useState } from 'react';
 import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { DrifCardConfig } from '../src/drifCards.ts';
 import { MI_NOTE_CARDS_DEFAULT } from '../src/lib/miNoteCardEffects.ts';
+import {
+  DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS,
+  miNoteCardCssEffectStyle,
+  normalizeMiNoteCardCssEffectSettings,
+} from '../src/lib/miNoteCardCssEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type CardProps = Parameters<typeof WipInteractiveCard>[0];
@@ -17,7 +22,7 @@ type AssetInstance = {
   setState: (state: AssetState) => void;
 };
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const cardInstances: CardInstance[] = [];
 const assetInstances: AssetInstance[] = [];
@@ -73,6 +78,8 @@ const { default: MiNoteCardsDemoWipApp } = await import('../src/MiNoteCardsDemoW
 imports.deregister();
 
 beforeEach(() => {
+  window.localStorage.clear();
+  setMediaQueryMatches('(max-width: 760px)', false);
   cardInstances.length = 0;
   assetInstances.length = 0;
   window.history.replaceState(null, '', '/mi_note_cards_devnet/wip');
@@ -120,7 +127,7 @@ test('devnet starts with a random card and a fixed default effect without a pick
     assert.equal(input.max, '1430');
     assert.equal(input.step, '1');
     assert.equal(input.value, String(id));
-    assert.equal(view.queryByRole('combobox'), null);
+    assert.equal(view.queryByRole('combobox', { name: 'Effect', exact: true }), null);
     assertCard(id);
     random = 0.25;
     view.rerender(createElement(MiNoteCardsDemoWipApp));
@@ -180,4 +187,67 @@ test('loading waits for the card image and Retry retains the chosen ID and defau
   act(() => card().props.onImageReadyChange?.(true));
   assert.equal(view.queryByRole('status'), null);
   assert.equal(card().props.interactive, true);
+});
+
+test('CSS tuning and Hold changes preserve the loaded card and keep settings through ID edits and Retry', t => {
+  t.mock.method(Math, 'random', () => 0);
+  const view = render(createElement(MiNoteCardsDemoWipApp));
+  act(() => assets().setState({ ready: true, error: null }));
+  act(() => card().props.onImageReadyChange?.(true));
+  const initialCard = card();
+  const initialAssets = assets();
+  const style = (view.container.querySelector('.mi-note-demo__content') as HTMLElement).style;
+  const tuned = normalizeMiNoteCardCssEffectSettings({
+    ...DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS,
+    glare: { ...DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS.glare, strength: 0.25 },
+  });
+  const assertStyle = (settings = tuned) => {
+    for (const [key, value] of Object.entries(miNoteCardCssEffectStyle(settings))) {
+      assert.equal(style.getPropertyValue(key), String(value));
+    }
+  };
+  fireEvent.change(view.getByRole('slider', { name: 'Glare strength', exact: true }), { target: { value: '0.25' } });
+  assertStyle();
+  assert.equal(card(), initialCard);
+  assert.equal(assets(), initialAssets);
+  assert.equal(card().props.interactive, true);
+  assert.equal(card().props.holdPoseOnLeave, true);
+  fireEvent.click(view.getByRole('checkbox', { name: 'Hold last pose', exact: true }));
+  assert.equal(card().props.holdPoseOnLeave, false);
+  assert.equal(card(), initialCard);
+  assert.equal(assets(), initialAssets);
+  assert.equal(card().props.interactive, true);
+  fireEvent.change(view.getByRole('spinbutton', { name: 'Card ID', exact: true }), { target: { value: '2' } });
+  assert.equal(initialCard.mounted, false);
+  assertCard(2);
+  assertStyle();
+  act(() => assets().setState({ ready: false, error: new Error('Missing card') }));
+  fireEvent.click(view.getByRole('button', { name: 'Retry', exact: true }));
+  assertCard(2);
+  assertStyle();
+  const retriedCard = card();
+  fireEvent.click(view.getByRole('button', { name: 'Reset', exact: true }));
+  assertStyle(DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS);
+  assert.equal(card(), retriedCard);
+});
+
+test('the narrow-screen panel starts collapsed and preserves edits when reopened', () => {
+  setMediaQueryMatches('(max-width: 760px)', true);
+  const view = render(createElement(MiNoteCardsDemoWipApp));
+  const toggle = view.getByRole('button', { name: /^CSS effect/ });
+  const root = view.getByRole('dialog', { name: 'Mi Note Cards demo' });
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(root.classList.contains('mi-note-demo--panel-open'), false);
+  assert.equal(view.queryByRole('slider', { name: 'Glare strength', exact: true }), null);
+  const initialCard = card();
+  fireEvent.click(toggle);
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(root.classList.contains('mi-note-demo--panel-open'), true);
+  fireEvent.change(view.getByRole('slider', { name: 'Glare strength', exact: true }), { target: { value: '0.31' } });
+  fireEvent.click(toggle);
+  fireEvent.click(toggle);
+  assert.equal((view.getByRole('slider', { name: 'Glare strength', exact: true }) as HTMLInputElement).value, '0.31');
+  assert.equal(card(), initialCard);
+  assert.ok(view.getByRole('spinbutton', { name: 'Card ID', exact: true }));
+  assert.ok(view.getByRole('button', { name: 'Close Mi Note Cards demo' }));
 });

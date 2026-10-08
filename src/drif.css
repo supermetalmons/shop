@@ -592,12 +592,12 @@ button.drif-effect-card__rotator:disabled {
 }
 
 .drif-effect-card[data-effect='mi-note-cards-default'] {
-  --sunpillar-1: hsl(2, 100%, 73%);
-  --sunpillar-2: hsl(53, 100%, 69%);
-  --sunpillar-3: hsl(93, 100%, 69%);
-  --sunpillar-4: hsl(176, 100%, 76%);
-  --sunpillar-5: hsl(228, 100%, 74%);
-  --sunpillar-6: hsl(283, 100%, 73%);
+  --sunpillar-1: var(--mi-note-css-rainbow-1, hsl(2, 100%, 73%));
+  --sunpillar-2: var(--mi-note-css-rainbow-2, hsl(53, 100%, 69%));
+  --sunpillar-3: var(--mi-note-css-rainbow-3, hsl(93, 100%, 69%));
+  --sunpillar-4: var(--mi-note-css-rainbow-4, hsl(176, 100%, 76%));
+  --sunpillar-5: var(--mi-note-css-rainbow-5, hsl(228, 100%, 74%));
+  --sunpillar-6: var(--mi-note-css-rainbow-6, hsl(283, 100%, 73%));
   --sunpillar-clr-1: var(--sunpillar-1);
   --sunpillar-clr-2: var(--sunpillar-2);
   --sunpillar-clr-3: var(--sunpillar-3);
@@ -616,10 +616,6 @@ button.drif-effect-card__rotator:disabled {
   transform-style: preserve-3d;
 }
 
-.drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__shine {
-  filter: brightness(0.85) contrast(2.75) saturate(0.65);
-}
-
 .drif-effect-card[data-effect='mi-note-cards-default'].masked .drif-effect-card__shine,
 .drif-effect-card[data-effect='mi-note-cards-default'].masked .drif-effect-card__shine:before,
 .drif-effect-card[data-effect='mi-note-cards-default'].masked .drif-effect-card__shine:after {
@@ -628,16 +624,17 @@ button.drif-effect-card__rotator:disabled {
 }
 
 .drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__shine {
-  filter: brightness(0.7) contrast(2) saturate(0.5);
+  opacity: calc(var(--card-opacity) * var(--mi-note-css-shine-strength, 1));
+  mix-blend-mode: var(--mi-note-css-shine-blend-mode, color-dodge);
 }
 
 .drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__shine,
 .drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__shine:after {
-  --space: 5%;
-  --angle: 133deg;
-  --imgsize: 500px;
+  --space: var(--mi-note-css-rainbow-spacing, 5%);
+  --angle: var(--mi-note-css-stripe-angle, 133deg);
+  --imgsize: var(--mi-note-css-grain-size, 500px);
   background-image:
-    var(--grain),
+    var(--mi-note-css-grain, var(--grain)),
     repeating-linear-gradient(
       0deg,
       var(--sunpillar-clr-1) calc(var(--space) * 1),
@@ -663,30 +660,31 @@ button.drif-effect-card__rotator:disabled {
       hsla(0, 0%, 0%, 0.15) 20%,
       hsla(0, 0%, 0%, 0.25) 120%
     );
-  background-blend-mode: screen, hue, hard-light;
+  background-blend-mode: var(--mi-note-css-pattern-blend-1, screen), var(--mi-note-css-pattern-blend-2, hue), var(--mi-note-css-pattern-blend-3, hard-light);
   background-size: var(--imgsize) 100%, 200% 700%, 300% 100%, 200% 100%;
   background-position: center, 0% var(--background-y), var(--background-x) var(--background-y), var(--background-x) var(--background-y);
-  filter: brightness(0.8) contrast(2.95) saturate(0.65);
+  filter: brightness(var(--mi-note-css-shine-brightness, 0.8)) contrast(var(--mi-note-css-shine-contrast, 2.95)) saturate(var(--mi-note-css-shine-saturation, 0.65));
 }
 
 .drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__shine:after {
   content: '';
   background-position: center, 0% var(--background-y), calc(var(--background-x) * -1) calc(var(--background-y) * -1), var(--background-x) var(--background-y);
   background-size: var(--imgsize) 100%, 200% 400%, 195% 100%, 200% 100%;
-  filter: brightness(1) contrast(2.5) saturate(1.75);
-  mix-blend-mode: soft-light;
+  opacity: var(--mi-note-css-secondary-strength, 0.99);
+  filter: brightness(var(--mi-note-css-secondary-brightness, 1)) contrast(var(--mi-note-css-secondary-contrast, 2.5)) saturate(var(--mi-note-css-secondary-saturation, 1.75));
+  mix-blend-mode: var(--mi-note-css-secondary-blend-mode, soft-light);
 }
 
 .drif-effect-card[data-effect='mi-note-cards-default'] .drif-effect-card__glare {
   background-image: radial-gradient(
-    farthest-corner circle at var(--pointer-x) var(--pointer-y),
-    hsl(0, 0%, 100%) 0%,
-    hsla(210, 3%, 54%, 0.33) 45%,
-    hsla(0, 0%, 20%, 0.9) 130%
+    farthest-corner circle at calc(var(--pointer-x) + var(--mi-note-css-glare-offset-x, 0%)) calc(var(--pointer-y) + var(--mi-note-css-glare-offset-y, 0%)),
+    var(--mi-note-css-glare-color-1, hsl(0, 0%, 100%)) calc(var(--mi-note-css-glare-stop-1, 0%) * var(--mi-note-css-glare-size, 1)),
+    var(--mi-note-css-glare-color-2, hsla(210, 3%, 54%, 0.33)) calc(var(--mi-note-css-glare-stop-2, 45%) * var(--mi-note-css-glare-size, 1)),
+    var(--mi-note-css-glare-color-3, hsla(0, 0%, 20%, 0.9)) calc(var(--mi-note-css-glare-stop-3, 130%) * var(--mi-note-css-glare-size, 1))
   );
-  opacity: calc(var(--card-opacity) * 0.5);
-  mix-blend-mode: hard-light;
-  filter: brightness(0.9) contrast(1.75);
+  opacity: calc(var(--card-opacity) * var(--mi-note-css-glare-strength, 0.5));
+  mix-blend-mode: var(--mi-note-css-glare-blend-mode, hard-light);
+  filter: brightness(var(--mi-note-css-glare-brightness, 0.9)) contrast(var(--mi-note-css-glare-contrast, 1.75)) saturate(var(--mi-note-css-glare-saturation, 1));
 }
 
 .drif-effect-card[data-source='swsh'][data-rarity='rare holo'] .drif-effect-card__shine {

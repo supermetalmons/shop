@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ModalFocusScope } from './components/ModalFocusScope';
+import MiNoteCardCssEffectPanel from './components/MiNoteCardCssEffectPanel';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import type { DrifCardConfig } from './drifCards';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
+import { useMiNoteCardCssDraft } from './hooks/useMiNoteCardCssDraft';
 import { MI_NOTE_CARDS_DEFAULT } from './lib/miNoteCardEffects';
+import { miNoteCardCssEffectStyle } from './lib/miNoteCardCssEffects';
 import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteCardId } from './lib/miNoteCards';
 import { navigate } from './navigation';
 import './styles/mi-note-cards-demo-wip.css';
 
-function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string }) {
+function DemoCardPreview({ card, name, holdPose }: { card: DrifCardConfig; name: string; holdPose: boolean }) {
   const assets = useMiNoteCardAssets([card]);
   const [imageReady, setImageReady] = useState(false);
   const [displayFailed, setDisplayFailed] = useState(false);
@@ -16,6 +19,10 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
   const [attempt, setAttempt] = useState(0);
   const failed = Boolean(assets.error) || displayFailed;
   const ready = assets.ready && imageReady && !failed;
+
+  useEffect(() => {
+    if (holdPose) setTouchResting(false);
+  }, [holdPose]);
 
   useEffect(() => {
     if (!assets.ready || imageReady || displayFailed) return;
@@ -30,7 +37,7 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
         style={{ visibility: ready ? 'visible' : 'hidden' }}
         onPointerDownCapture={() => setTouchResting(false)}
         onPointerEnter={(event) => { if (event.pointerType === 'mouse') setTouchResting(false); }}
-        onPointerUpCapture={(event) => { if (event.pointerType !== 'mouse') setTouchResting(true); }}
+        onPointerUpCapture={(event) => { if (event.pointerType !== 'mouse' && !holdPose) setTouchResting(true); }}
         onPointerCancel={() => setTouchResting(true)}
       >
         <WipInteractiveCard
@@ -39,6 +46,7 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
           interactive={ready}
           onImageReadyChange={setImageReady}
           interactionMode={touchResting ? 'settling' : 'normal'}
+          holdPoseOnLeave={holdPose}
           ariaLabel={`Inspect ${name}`}
           imageAlt={name}
         />
@@ -65,6 +73,10 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
 export default function MiNoteCardsDemoWipApp() {
   const [selectedCardId, setSelectedCardId] = useState(() => sampleMiNoteCardId());
   const [cardIdInput, setCardIdInput] = useState(() => String(selectedCardId));
+  const [panelOpen, setPanelOpen] = useState(() => !window.matchMedia('(max-width: 760px)').matches);
+  const [holdPose, setHoldPose] = useState(true);
+  const draft = useMiNoteCardCssDraft();
+  const effectStyle = useMemo(() => miNoteCardCssEffectStyle(draft.settings), [draft.settings]);
   const card = useMemo(
     () => createMiNoteCard(selectedCardId, MI_NOTE_CARDS_DEFAULT),
     [selectedCardId],
@@ -73,16 +85,17 @@ export default function MiNoteCardsDemoWipApp() {
 
   return (
     <ModalFocusScope
-      className="wip-page mi-note-demo"
+      className={`wip-page mi-note-demo${panelOpen ? ' mi-note-demo--panel-open' : ''}`}
       ariaLabel="Mi Note Cards demo"
       focusTarget="scope"
       onEscape={handleClose}
     >
-      <div className="mi-note-demo__content">
+      <div className="mi-note-demo__content" style={effectStyle}>
         <DemoCardPreview
           key={selectedCardId}
           card={card}
           name={`Mi Note Card #${selectedCardId}`}
+          holdPose={holdPose}
         />
       </div>
       <div className="mi-note-demo__controls">
@@ -104,6 +117,15 @@ export default function MiNoteCardsDemoWipApp() {
           />
         </div>
       </div>
+      <MiNoteCardCssEffectPanel
+        settings={draft.settings}
+        onChange={draft.setSettings}
+        onReset={draft.reset}
+        holdPose={holdPose}
+        onHoldPoseChange={setHoldPose}
+        open={panelOpen}
+        onOpenChange={setPanelOpen}
+      />
     </ModalFocusScope>
   );
 }

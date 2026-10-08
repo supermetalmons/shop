@@ -1,3 +1,7 @@
+.wip-page.mi-note-demo {
+  touch-action: pan-y;
+}
+
 .mi-note-demo__content {
   display: flex;
   align-items: center;
@@ -5,6 +9,7 @@
   height: 100%;
   box-sizing: border-box;
   padding: max(24px, env(safe-area-inset-top)) 24px max(56px, calc(env(safe-area-inset-bottom) + 40px));
+  touch-action: none;
 }
 
 .mi-note-demo__preview {
@@ -76,6 +81,27 @@
 .mi-note-demo__card-controls input:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
+}
+
+@media (min-width: 761px) and (max-width: 1120px) {
+  .mi-note-demo--panel-open .mi-note-demo__content {
+    padding-right: 384px;
+  }
+
+  .mi-note-demo--panel-open .mi-note-demo__preview {
+    max-width: calc(100vw - 432px);
+  }
+}
+
+@media (max-width: 760px) {
+  .mi-note-demo--panel-open .mi-note-demo__content {
+    height: calc(55dvh - max(56px, calc(env(safe-area-inset-bottom) + 48px)));
+    padding: max(16px, env(safe-area-inset-top)) 24px 16px;
+  }
+
+  .mi-note-demo--panel-open .mi-note-demo__preview {
+    max-width: calc((55dvh - max(56px, calc(env(safe-area-inset-bottom) + 48px)) - max(16px, env(safe-area-inset-top)) - 16px) * 5 / 7);
+  }
 }
 
 @media (max-width: 540px) {
