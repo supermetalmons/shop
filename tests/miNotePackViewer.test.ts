@@ -3,10 +3,11 @@ import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement, useReducer } from 'react';
 import * as THREE from 'three';
-import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
+import { DRIF_EFFECTS, CARD_NFT_2_NEUTRAL_CARD_EFFECT, type DrifCardConfig } from '../src/drifCards.ts';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
+import { createMiNoteCardMaterial } from '../src/lib/miNoteCardMaterial.ts';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
-import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH, MI_NOTE_POCKET_TOP } from '../src/lib/miNotePackModel.ts';
+import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
@@ -127,17 +128,44 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
   return model;
 }
 const models: TestModel[] = [];
+const surfaces: ReturnType<typeof createTestSurface>[] = [];
+let deferSurfaceReady = false;
+function createTestSurface(card: DrifCardConfig) {
+  const actual = createMiNoteCardMaterial(card, { loadTexture: async () => new THREE.Texture() });
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  if (!deferSurfaceReady) resolveReady();
+  const surface = {
+    material: actual.material,
+    ready, resolveReady, rejectReady,
+    effectReadiness: new Map<string, Promise<void>>(),
+    effects: [] as DrifCardConfig['effect'][],
+    updates: 0,
+    disposed: false,
+    setEffect(effect: DrifCardConfig['effect']) {
+      surface.effects.push(effect);
+      return (surface.effectReadiness.get(effect.effectKey) ?? ready).then(() => actual.setEffect(effect));
+    },
+    update(mesh: THREE.Object3D, camera: THREE.Camera) { surface.updates += 1; actual.update(mesh, camera); },
+    dispose() { surface.disposed = true; actual.dispose(); },
+  };
+  surfaces.push(surface);
+  return surface;
+}
 const bridgeKey = '__miNotePackViewerTest';
-Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { FakeWebGLRenderer, createTestModel } });
+Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { FakeWebGLRenderer, createTestModel, createTestSurface } });
 const imports = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL?.endsWith('/components/MiNotePackViewer.tsx')) {
       if (specifier === 'three') return { url: 'test:mi-note-viewer-three', shortCircuit: true };
+      if (specifier.endsWith('/miNoteCardMaterial')) return { url: 'test:mi-note-card-material', shortCircuit: true };
       if (specifier.endsWith('/miNotePackModel')) return { url: 'test:mi-note-viewer-model', shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    if (url === 'test:mi-note-card-material') return { format: 'module', shortCircuit: true, source: `export const createMiNoteCardMaterial = globalThis.${bridgeKey}.createTestSurface;` };
     if (url === 'test:mi-note-viewer-three') {
       return {
         format: 'module', shortCircuit: true,
@@ -157,6 +185,8 @@ const { default: MiNotePackViewer } = await import('../src/components/MiNotePack
 imports.deregister();
 
 beforeEach(() => {
+  deferSurfaceReady = false;
+  surfaces.length = 0;
   models.length = 0;
   renderers.length = 0;
   time = 1000;
@@ -171,6 +201,7 @@ afterEach(() => {
   assert.equal(frames.size, 0);
   assert.equal(observers.size, 0);
   assert.ok(models.every(model => model.disposed));
+  assert.ok(surfaces.every(surface => surface.disposed));
   assert.ok(renderers.every(renderer => renderer.disposed));
 });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
@@ -211,8 +242,14 @@ function harness(
   const controls = { current: null as MiNotePackControls | null };
   const events: MiNoteRevealEvent[] = [];
   const readyChanges: boolean[] = [];
+  const cardReadyChanges: boolean[] = [];
+  const cardErrors: (Error | null)[] = [];
   const errors: Error[] = [];
-  const cardElements = [document.createElement('div'), document.createElement('div')] as const;
+  const cards = [
+    { imageSrc: '/card-a.png', textureSrc: '/mask-a.png', foilSrc: '/foil-a.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
+    { imageSrc: '/card-b.png', textureSrc: '/mask-b.png', foilSrc: '/foil-b.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
+  ] as const;
+  let cardEffect: DrifCardConfig['effect'] = DRIF_EFFECTS['swshp-SWSH179'];
   const star = initialLayout.star ?? { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0, sizeScale: 1 };
   let state = initialState;
   let generation = 0;
@@ -225,18 +262,23 @@ function harness(
     state = current;
     return createElement(MiNotePackViewer, {
       color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
-      cardElements, state: current, interactionEnabled, controlsRef: controls,
+      cards, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); }, state: current, interactionEnabled, controlsRef: controls,
       onEvent(event) { events.push(event); dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready }); },
       onError(error) { errors.push(error); },
+      onCardsError(error) { cardErrors.push(error); },
       onBackgroundTap() {},
     });
   }
   const view = render(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
   return {
-    view, controls, events, readyChanges, errors,
+    view, controls, events, readyChanges, cardReadyChanges, cardErrors, errors,
     get state() { return state; },
     count(type: MiNoteRevealEvent['type']) { return events.filter(event => event.type === type).length; },
+    setCardEffect(effect: DrifCardConfig['effect']) {
+      cardEffect = effect;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
     setEffectSettings(settings: MiNoteStickerEffectSettings) {
       effectSettings = settings;
       view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
@@ -274,17 +316,17 @@ function pointerControls(run: ReturnType<typeof harness>) {
   const surface = new THREE.Mesh(new THREE.PlaneGeometry(1.29, 1.82), new THREE.MeshBasicMaterial());
   surface.position.z = 0.03;
   models.at(-1)!.group.add(surface);
-  const dispatch = (type: string, x = viewportWidth / 2, y = viewportHeight / 2, pointerType = 'mouse') => {
-    const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+  const dispatch = (type: string, x = viewportWidth / 2, y = viewportHeight / 2, pointerType = 'mouse', overrides: Partial<PointerEvent> = {}) => {
+    const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, button: overrides.button ?? 0, clientX: x, clientY: y });
     Object.defineProperties(event, {
-      pointerId: { value: 1 },
+      pointerId: { value: overrides.pointerId ?? 1 },
       pointerType: { value: pointerType },
-      isPrimary: { value: true },
+      isPrimary: { value: overrides.isPrimary ?? true },
     });
     act(() => host.dispatchEvent(event));
   };
   return {
-    dispatch,
+    dispatch, host, captured,
     tap(pointerType = 'mouse', x = viewportWidth / 2, y = viewportHeight / 2) {
       dispatch('pointerdown', x, y, pointerType);
       dispatch('pointerup', x, y, pointerType);
@@ -315,7 +357,7 @@ function assertHome(home: ReturnType<typeof homeFor>) {
   assert.ok(home.anchor.position.equals(home.position));
   assert.ok(home.anchor.quaternion.equals(home.quaternion));
   assert.ok(home.anchor.scale.equals(home.scale));
-  assert.equal(home.anchor.children.length, 2);
+  assert.equal(home.anchor.children.length, 1);
 }
 
 function packPose(model: TestModel) {
@@ -363,31 +405,23 @@ function advanceSmoothly(model: TestModel, count = 80) {
 }
 
 function cardLayout(home: ReturnType<typeof homeFor>) {
-  const cssObject = home.anchor.children.find(child => child instanceof CSS3DObject);
-  const aperture = home.anchor.children.find(child => child instanceof THREE.Mesh);
-  assert.ok(cssObject instanceof CSS3DObject);
-  assert.ok(aperture instanceof THREE.Mesh);
-  return {
-    cssObject,
-    aperture,
-    width: cssObject.element.style.width,
-    height: cssObject.element.style.height,
-  };
+  const mesh = home.anchor.children.find(child => child instanceof THREE.Mesh);
+  assert.ok(mesh instanceof THREE.Mesh);
+  return { mesh, geometry: mesh.geometry, material: mesh.material };
 }
 
-function assertCardAlignment(card: ReturnType<typeof cardLayout>, camera: THREE.PerspectiveCamera) {
-  assert.equal(card.cssObject.element.style.width, card.width);
-  assert.equal(card.cssObject.element.style.height, card.height);
-  assert.ok(Number.parseFloat(card.width) > 0);
-  for (const x of [-0.5, 0.5]) {
-    for (const y of [-0.5, 0.5]) {
-      const domCorner = new THREE.Vector3(x * Number.parseFloat(card.width), y * Number.parseFloat(card.height), 0)
-        .applyMatrix4(card.cssObject.matrixWorld).project(camera);
-      const apertureCorner = new THREE.Vector3(x * MI_NOTE_CARD_WIDTH, y * MI_NOTE_CARD_HEIGHT, 0)
-        .applyMatrix4(card.aperture.matrixWorld).project(camera);
-      assert.ok(domCorner.distanceTo(apertureCorner) < 1e-8, 'DOM card and WebGL aperture must project to the same corners');
-    }
+function assertCardAlignment(card: ReturnType<typeof cardLayout>, _camera: THREE.PerspectiveCamera) {
+  assert.equal(card.mesh.geometry, card.geometry);
+  assert.equal(card.mesh.material, card.material);
+  const positions = card.geometry.attributes.position;
+  const uvs = card.geometry.attributes.uv;
+  for (let index = 0; index < positions.count; index += 1) {
+    assert.ok(Math.abs(uvs.getX(index) - (positions.getX(index) / MI_NOTE_CARD_WIDTH + 0.5)) < 1e-6);
+    assert.ok(Math.abs(uvs.getY(index) - (positions.getY(index) / MI_NOTE_CARD_HEIGHT + 0.5)) < 1e-6);
   }
+  assert.equal(card.mesh.visible, true);
+  assert.equal(card.material.depthTest, true);
+  assert.equal(card.material.depthWrite, true);
 }
 
 function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeWebGLRenderer) {
@@ -399,12 +433,8 @@ function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeW
   assert.equal(renderer.camera!.aspect, viewportWidth / viewportHeight);
   const projection = renderer.camera!.projectionMatrix.elements;
   assert.ok(Math.abs(projection[0] - projection[5] / renderer.camera!.aspect) < 1e-8);
-  const layers = run.view.container.querySelectorAll<HTMLElement>('.mi-note-wip__css-scene');
-  assert.equal(layers.length, 2);
-  layers.forEach(layer => {
-    assert.equal(layer.style.width, `${viewportWidth}px`);
-    assert.equal(layer.style.height, `${viewportHeight}px`);
-  });
+  assert.equal(run.view.container.querySelectorAll('canvas').length, 1);
+  assert.equal(run.view.container.querySelectorAll('.mi-note-wip__css-scene').length, 0);
 }
 
 function assertInspectionFits(anchor: THREE.Object3D, camera: THREE.PerspectiveCamera) {
@@ -720,7 +750,7 @@ test('viewport changes preserve card layout and projection in the folder and aft
     act(() => run.controls.current!.selectCard(index));
     settle();
     assert.equal(run.state.cardStage, 'inspecting');
-    assert.notEqual(cards[index].cssObject.parent, homes[index].anchor);
+    assert.equal(cards[index].mesh.parent, homes[index].anchor);
     for (const [width, height] of sizes) {
       resizeViewport(width, height);
       assertLayout();
@@ -793,22 +823,11 @@ for (const reducedMotion of [false, true]) {
       await makeReady();
       const homes = [homeFor(models[0], 0), homeFor(models[0], 1)];
       const cards = homes.map(cardLayout);
-      const mainLayer = run.view.container.querySelector('.mi-note-wip__css-scene:not(.mi-note-wip__css-scene--foreground)');
-      const foregroundLayer = run.view.container.querySelector('.mi-note-wip__css-scene--foreground');
-      assert.ok(mainLayer && foregroundLayer);
       const camera = renderers[0].camera!;
       const assertLayers = (index: 0 | 1) => {
-        const selectedHome = homes[index];
-        const movingAcrossFolder = selectedHome.anchor.parent !== selectedHome.parent
-          && (Math.abs(selectedHome.anchor.position.x - selectedHome.position.x) > 1e-10 || selectedHome.anchor.scale.x > 1 + 1e-10);
-        const insidePocket = selectedHome.anchor.parent === selectedHome.parent
-          || (!movingAcrossFolder && selectedHome.anchor.position.y - MI_NOTE_CARD_HEIGHT * selectedHome.anchor.scale.y / 2 <= MI_NOTE_POCKET_TOP);
         cards.forEach((card, cardIndex) => {
-          const foreground = foregroundLayer.contains(card.cssObject.element);
-          if (cardIndex !== index || insidePocket) assert.equal(foreground, false);
-          else if (movingAcrossFolder) assert.equal(foreground, true);
-          assert.equal(mainLayer.contains(card.cssObject.element), !foreground);
-          assert.equal(card.aperture.visible, !foreground);
+          assert.equal(card.mesh.parent, homes[cardIndex].anchor);
+          assert.equal(card.mesh.material.depthTest, true);
           assertCardAlignment(card, camera);
         });
         assertHome(homes[index === 0 ? 1 : 0]);
@@ -1468,4 +1487,318 @@ test('Escape exits when an asset failure disables interaction while opening is q
   assert.equal(run.state.stage, 'unsealed');
   act(() => { assert.equal(run.controls.current!.escape(), false); });
   assert.deepEqual(run.events, []);
+});
+
+test('all three effects update the same GPU surfaces in the pocket, close-up and return', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const homes = [homeFor(models[0], 0), homeFor(models[0], 1)];
+  const original = [...surfaces];
+  const beforeUpdates = surfaces.map(surface => surface.updates);
+  for (const effect of [DRIF_EFFECTS['swsh6-196'], CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS['swshp-SWSH179']]) {
+    await act(async () => run.setCardEffect(effect));
+    settle();
+    assert.deepEqual(surfaces, original);
+    assert.equal(renderers.length, 1);
+    surfaces.forEach(surface => assert.equal(surface.effects.at(-1), effect));
+    homes.forEach(assertHome);
+  }
+  surfaces.forEach((surface, index) => assert.ok(surface.updates > beforeUpdates[index]));
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  run.setCardEffect(DRIF_EFFECTS['swsh6-196']);
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.deepEqual(surfaces, original);
+  act(() => run.controls.current!.returnCard());
+  settle();
+  homes.forEach(assertHome);
+  surfaces.forEach(surface => assert.equal(surface.effects.at(-1), DRIF_EFFECTS['swsh6-196']));
+});
+
+test('GPU close-up drives the real material highlights toward the pointer for every effect', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  const uniforms = surfaces[0].material.uniforms;
+  for (const effect of [DRIF_EFFECTS['swshp-SWSH179'], DRIF_EFFECTS['swsh6-196'], CARD_NFT_2_NEUTRAL_CARD_EFFECT]) {
+    await act(async () => run.setCardEffect(effect));
+    settle();
+    for (const [x, y] of [[550, 350], [350, 350], [450, 250], [450, 450]]) {
+      pointer.dispatch('pointermove', x, y);
+      settle();
+      const signX = Math.sign(x - viewportWidth / 2);
+      const signY = Math.sign(y - viewportHeight / 2);
+      if (signX) {
+        assert.equal(Math.sign(uniforms.uPointer.value.x - 0.5), signX, `${effect.effectKey}: horizontal highlight`);
+        assert.equal(Math.sign(uniforms.uBackground.value.x - 0.5), signX, `${effect.effectKey}: horizontal foil`);
+      }
+      if (signY) {
+        assert.equal(Math.sign(uniforms.uPointer.value.y - 0.5), signY, `${effect.effectKey}: vertical highlight`);
+        assert.equal(Math.sign(uniforms.uBackground.value.y - 0.5), signY, `${effect.effectKey}: vertical foil`);
+      }
+    }
+  }
+});
+
+test('GPU close-up tilts with the pointer, ignores drags as taps, and settles after touch', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const card = cardLayout(home);
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  pointer.dispatch('pointermove', 490, 300);
+  settle();
+  assert.notEqual(card.mesh.rotation.x, 0);
+  assert.notEqual(card.mesh.rotation.y, 0);
+  pointer.dispatch('pointerdown', 490, 300, 'touch');
+  pointer.dispatch('pointermove', 530, 340, 'touch');
+  advanceFrame();
+  pointer.dispatch('pointerup', 530, 340, 'touch');
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(card.mesh.rotation.x, 0);
+  assert.equal(card.mesh.rotation.y, 0);
+  pointer.tap('touch');
+  advanceFrames();
+  assert.equal(run.state.cardStage, 'pocket');
+  assertHome(home);
+});
+
+for (const [position, x] of [['outside', 870], ['inside', 530]] as const) {
+  test(`releasing an inspection mouse drag ${position} the card preserves the matching hover tilt`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const card = cardLayout(homeFor(models[0], 0));
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    pointer.dispatch('pointerdown', 490, 300);
+    pointer.dispatch('pointermove', x, 340);
+    settle();
+    assert.notEqual(card.mesh.rotation.x, 0);
+    assert.notEqual(card.mesh.rotation.y, 0);
+    const heldTilt = card.mesh.rotation.clone();
+    pointer.dispatch('pointerup', x, 340);
+    settle();
+    assert.equal(pointer.captured.size, 0);
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('return-card'), 0);
+    if (position === 'outside') {
+      assert.equal(card.mesh.rotation.x, 0);
+      assert.equal(card.mesh.rotation.y, 0);
+    } else assert.ok(card.mesh.rotation.equals(heldTilt));
+  });
+}
+
+test('returning a card cancels a held pointer so release cannot select it again', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  pointer.dispatch('pointerdown');
+  act(() => run.controls.current!.escape());
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  pointer.dispatch('pointerup');
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(run.count('select-card'), 1);
+});
+
+
+test('both GPU surfaces must finish loading before cards become visible or report ready', async () => {
+  deferSurfaceReady = true;
+  const run = harness();
+  const meshes = [0, 1].map(index => cardLayout(homeFor(models[0], index as 0 | 1)).mesh);
+  await makeReady();
+  assert.deepEqual(run.cardReadyChanges, [false]);
+  meshes.forEach(mesh => assert.equal(mesh.visible, false));
+  await act(async () => { surfaces[0].resolveReady(); await surfaces[0].ready; });
+  assert.deepEqual(run.cardReadyChanges, [false]);
+  meshes.forEach(mesh => assert.equal(mesh.visible, false));
+  run.setCardEffect(DRIF_EFFECTS['swsh6-196']);
+  await act(async () => { surfaces[1].resolveReady(); await surfaces[1].ready; });
+  settle();
+  assert.deepEqual(run.cardReadyChanges, [false, false, true]);
+  meshes.forEach(mesh => assert.equal(mesh.visible, true));
+  surfaces.forEach(surface => assert.equal(surface.effects.at(-1), DRIF_EFFECTS['swsh6-196']));
+  assert.deepEqual(run.errors, []);
+});
+
+for (const outcome of ['ready', 'failure'] as const) {
+  test(`reset ignores late GPU texture ${outcome} from the disposed viewer`, async () => {
+    deferSurfaceReady = true;
+    const run = harness();
+    const previousSurfaces = [...surfaces];
+    const previousModel = models[0];
+    run.reset();
+    const callbacksBefore = [run.events.length, run.readyChanges.length, run.cardReadyChanges.length, run.errors.length];
+    await act(async () => {
+      previousModel.resolveReady();
+      for (const surface of previousSurfaces) {
+        if (outcome === 'ready') surface.resolveReady();
+        else surface.rejectReady(new Error('Obsolete card failure'));
+      }
+      await Promise.allSettled([previousModel.ready, ...previousSurfaces.map(surface => surface.ready)]);
+    });
+    assert.deepEqual([run.events.length, run.readyChanges.length, run.cardReadyChanges.length, run.errors.length], callbacksBefore);
+    assert.ok(previousSurfaces.every(surface => surface.disposed));
+    assert.equal(run.cardReadyChanges.includes(true), false);
+    await act(async () => {
+      surfaces.slice(2).forEach(surface => surface.resolveReady());
+      await Promise.all(surfaces.slice(2).map(surface => surface.ready));
+    });
+    await makeReady();
+    assert.equal(run.cardReadyChanges.filter(Boolean).length, 1);
+    assert.deepEqual(run.errors, []);
+  });
+}
+
+test('a failed effect can recover to lighting without recreating the pack', async () => {
+  deferSurfaceReady = true;
+  const run = harness();
+  const error = new Error('Card texture unavailable');
+  await act(async () => {
+    surfaces[0].rejectReady(error);
+    await surfaces[0].ready.catch(() => undefined);
+  });
+  settle();
+  assert.deepEqual(run.errors, []);
+  assert.deepEqual(run.cardErrors, [null, error]);
+  assert.deepEqual(run.cardReadyChanges, [false]);
+  await act(async () => {
+    surfaces[1].resolveReady();
+    models[0].resolveReady();
+    await Promise.all([surfaces[1].ready, models[0].ready]);
+  });
+  settle();
+  assert.equal(run.readyChanges.includes(true), true);
+  assert.equal(run.cardReadyChanges.includes(true), false);
+  surfaces.forEach(surface => surface.effectReadiness.set('lighting-only', Promise.resolve()));
+  await act(async () => run.setCardEffect(CARD_NFT_2_NEUTRAL_CARD_EFFECT));
+  settle();
+  assert.equal(renderers.length, 1);
+  assert.equal(models.length, 1);
+  assert.equal(run.cardErrors.at(-1), null);
+  assert.equal(run.cardReadyChanges.at(-1), true);
+  assert.equal(frames.size, 0);
+  run.view.unmount();
+  assert.ok(surfaces.every(surface => surface.disposed));
+  assert.ok(renderers.every(renderer => renderer.disposed));
+});
+
+test('a stale effect failure does not override a newer ready effect', async () => {
+  deferSurfaceReady = true;
+  const run = harness();
+  await makeReady();
+  surfaces.forEach(surface => surface.effectReadiness.set('lighting-only', Promise.resolve()));
+  await act(async () => run.setCardEffect(CARD_NFT_2_NEUTRAL_CARD_EFFECT));
+  settle();
+  const errors = [...run.cardErrors];
+  const readiness = [...run.cardReadyChanges];
+  await act(async () => {
+    surfaces.forEach(surface => surface.rejectReady(new Error('Old effect failed')));
+    await Promise.allSettled(surfaces.map(surface => surface.ready));
+  });
+  assert.deepEqual(run.cardErrors, errors);
+  assert.deepEqual(run.cardReadyChanges, readiness);
+  assert.equal(run.cardReadyChanges.at(-1), true);
+});
+
+test('context loss blocks late GPU texture readiness until a fresh viewer is mounted', async () => {
+  deferSurfaceReady = true;
+  const run = harness();
+  act(() => renderers[0].domElement.dispatchEvent(new window.Event('webglcontextlost', { cancelable: true })));
+  await act(async () => {
+    surfaces.forEach(surface => surface.resolveReady());
+    models[0].resolveReady();
+    await Promise.all([models[0].ready, ...surfaces.map(surface => surface.ready)]);
+  });
+  settle();
+  assert.equal(run.errors.length, 1);
+  assert.equal(run.readyChanges.includes(true), false);
+  assert.equal(run.cardReadyChanges.includes(true), false);
+});
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidden'] as const) {
+  test(`an inspection press interrupted by ${cancellation} settles and accepts a fresh tap`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const card = cardLayout(home);
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    pointer.dispatch('pointerdown', 490, 300, 'touch');
+    settle();
+    assert.equal(document.activeElement, pointer.host);
+    assert.ok(pointer.captured.has(1));
+    assert.notEqual(card.mesh.rotation.y, 0);
+    if (cancellation === 'blur') {
+      act(() => window.dispatchEvent(new window.Event('blur')));
+    } else if (cancellation === 'hidden') {
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+      assert.equal(frames.size, 0);
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+    } else pointer.dispatch(cancellation, 490, 300, 'touch');
+    pointer.dispatch('pointerup', 490, 300, 'touch');
+    act(() => pointer.host.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 })));
+    settle();
+    assert.equal(pointer.captured.size, 0);
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('return-card'), 0);
+    assert.equal(card.mesh.rotation.x, 0);
+    assert.equal(card.mesh.rotation.y, 0);
+    pointer.tap('touch');
+    act(() => pointer.host.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 })));
+    advanceFrames();
+    assert.equal(run.count('return-card'), 1);
+    assert.equal(run.state.cardStage, 'pocket');
+    assertHome(home);
+  });
+}
+
+test('secondary and non-left inspection pointers cannot replace or finish the active press', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  act(() => run.controls.current!.selectCard(1));
+  settle();
+  for (const overrides of [{ isPrimary: false }, { button: 2 }]) {
+    pointer.dispatch('pointerdown', 450, 350, 'touch', overrides);
+    pointer.dispatch('pointerup', 450, 350, 'touch', overrides);
+    assert.equal(pointer.captured.size, 0);
+  }
+  pointer.dispatch('pointerdown', 450, 350, 'touch');
+  for (const overrides of [{ pointerId: 2, isPrimary: false }, { pointerId: 3 }]) {
+    pointer.dispatch('pointerdown', 450, 350, 'touch', overrides);
+    pointer.dispatch('pointermove', 530, 350, 'touch', overrides);
+    pointer.dispatch('pointerup', 530, 350, 'touch', overrides);
+    pointer.dispatch('pointercancel', 530, 350, 'touch', overrides);
+    assert.deepEqual([...pointer.captured], [1]);
+  }
+  assert.equal(run.count('return-card'), 0);
+  assert.equal(run.state.cardStage, 'inspecting');
+  pointer.dispatch('pointerup', 450, 350, 'touch');
+  settle();
+  assert.equal(pointer.captured.size, 0);
+  assert.equal(run.count('return-card'), 1);
+  assert.equal(run.state.cardStage, 'pocket');
 });

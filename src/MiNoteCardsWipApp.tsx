@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type RefObject } from 'react';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePackViewer';
-import WipInteractiveCard from './components/WipInteractiveCard';
-import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
+import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
-import { createMiNoteCardInput } from './lib/miNoteCardInput';
+import { MI_NOTE_CARD_EFFECTS } from './lib/miNoteCardEffects';
 import { createMiNoteDemoCard, MI_NOTE_DEMO_CARDS } from './lib/miNoteDemoCards';
 import {
   createMiNoteRevealState,
@@ -25,12 +23,14 @@ import './styles/mi-note-wip.css';
 function MiNotePackOpening({
   selection,
   star,
+  cardEffect,
   controlsRef,
   onRetry,
   onBackgroundTap,
 }: {
   selection: ReturnType<typeof sampleMiNotePack>;
   star: MiNotePackStar;
+  cardEffect: DrifCardConfig['effect'];
   controlsRef: RefObject<MiNotePackControls | null>;
   onRetry: () => void;
   onBackgroundTap: () => void;
@@ -38,72 +38,17 @@ function MiNotePackOpening({
   const [state, dispatch] = useReducer(reduceMiNoteReveal, undefined, createMiNoteRevealState);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<Error | null>(null);
-  const [mountedError, setMountedError] = useState<Error | null>(null);
-  const [mountedReady, setMountedReady] = useState<readonly [boolean, boolean]>([false, false]);
-  const [touchResting, setTouchResting] = useState(false);
-  const [cardElements] = useState<readonly [HTMLDivElement, HTMLDivElement]>(() => {
-    const createElement = () => {
-      const element = document.createElement('div');
-      element.className = 'mi-note-wip__card';
-      element.setAttribute('aria-hidden', 'true');
-      element.setAttribute('inert', '');
-      return element;
-    };
-    return [createElement(), createElement()];
-  });
-  const cards = useMemo(
-    () => selection.cardIds.map((id) => createMiNoteDemoCard(id)),
+  const [cardsReady, setCardsReady] = useState(false);
+  const [cardsError, setCardsError] = useState<Error | null>(null);
+  const selectedCardDescriptionId = useId();
+  const cards = useMemo<readonly [DrifCardConfig, DrifCardConfig]>(
+    () => [createMiNoteDemoCard(selection.cardIds[0]), createMiNoteDemoCard(selection.cardIds[1])],
     [selection.cardIds],
   );
-  const assets = useMiNoteCardAssets(cards);
-  const error = viewerError || assets.error || mountedError;
-  const mountedCardsReady = mountedReady.every(Boolean);
-  const ready = viewerReady && assets.ready && mountedCardsReady && !error;
-  const handleFirstImageReady = useCallback((value: boolean) => {
-    setMountedReady((previous) => previous[0] === value ? previous : [value, previous[1]]);
-  }, []);
-  const handleSecondImageReady = useCallback((value: boolean) => {
-    setMountedReady((previous) => previous[1] === value ? previous : [previous[0], value]);
-  }, []);
-  const cardInputs = useMemo(() => cardElements.map((_, index) => {
-    const active = state.selectedCard === index && state.cardStage === 'inspecting';
-    return createMiNoteCardInput(() => {
-      if (active) controlsRef.current?.returnCard();
-    }, { onStart: () => active });
-  }), [cardElements, controlsRef, state.selectedCard, state.cardStage]);
-
-  useEffect(() => {
-    const cancel = () => cardInputs.forEach(input => input.cancel());
-    const handleVisibilityChange = () => { if (document.hidden) cancel(); };
-    window.addEventListener('blur', cancel);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      window.removeEventListener('blur', cancel);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      cancel();
-    };
-  }, [cardInputs]);
-
-  useLayoutEffect(() => {
-    cardElements.forEach((element, index) => {
-      const active = index === state.selectedCard && state.cardStage === 'inspecting';
-      element.dataset.active = String(active);
-      element.toggleAttribute('inert', !active);
-      if (active) element.removeAttribute('aria-hidden');
-      else element.setAttribute('aria-hidden', 'true');
-    });
-  }, [cardElements, state.selectedCard, state.cardStage]);
+  const error = viewerError || cardsError;
+  const ready = viewerReady && cardsReady && !error;
 
   useEffect(() => dispatch({ type: 'ready', ready }), [ready]);
-  useEffect(() => setTouchResting(false), [state.selectedCard]);
-
-  useEffect(() => {
-    if (!assets.ready || mountedCardsReady) return;
-    const timer = window.setTimeout(() => {
-      setMountedError(new Error('The card images could not be displayed. Please retry.'));
-    }, 10_000);
-    return () => window.clearTimeout(timer);
-  }, [assets.ready, mountedCardsReady]);
 
   const openingLocked = state.stage === 'seal-peeling' || state.stage === 'unsealed';
   const note = error
@@ -137,10 +82,13 @@ function MiNotePackOpening({
           verticalPosition={MI_NOTE_STAR_VERTICAL_DEFAULT}
           sizeScale={star.sizeScale}
           effectSettings={DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS}
-          cardElements={cardElements}
+          cards={cards}
+          cardEffect={cardEffect}
           state={state}
           interactionEnabled={viewerReady && !error}
           onReadyChange={setViewerReady}
+          onCardsReadyChange={setCardsReady}
+          onCardsError={setCardsError}
           onError={setViewerError}
           onEvent={dispatch}
           onBackgroundTap={onBackgroundTap}
@@ -159,51 +107,30 @@ function MiNotePackOpening({
               onClick={() => controlsRef.current?.activate()}
             >{packLabel}</button>
             {state.stage === 'interactive' && state.folderPose === 1 && ready && cards.map((_, index) => (
-              <button key={index} type="button" onClick={() => controlsRef.current?.selectCard(index as 0 | 1)}>
+              <button
+                key={index}
+                type="button"
+                aria-description={`${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
+                onClick={() => controlsRef.current?.selectCard(index as 0 | 1)}
+              >
                 View {index === 0 ? 'left' : 'right'} card
               </button>
             ))}
           </>
         ) : (
-          <button type="button" disabled={state.cardStage !== 'inspecting'} onClick={() => controlsRef.current?.returnCard()}>
+          <button
+            type="button"
+            aria-describedby={selectedCardDescriptionId}
+            disabled={state.cardStage !== 'inspecting'}
+            onClick={() => controlsRef.current?.returnCard()}
+          >
             Return card to pocket
+            <span id={selectedCardDescriptionId} hidden>
+              {selection.cardIds[state.selectedCard]} — {MI_NOTE_DEMO_CARDS[selection.cardIds[state.selectedCard]].name}
+            </span>
           </button>
         )}
       </div>
-      {cards.map((card, index) => createPortal(
-        <div
-          className="mi-note-wip__card-content"
-          onPointerDownCapture={(event) => {
-            setTouchResting(false);
-            cardInputs[index].onPointerDown(event);
-          }}
-          onPointerMoveCapture={cardInputs[index].onPointerMove}
-          onPointerEnter={(event) => { if (event.pointerType === 'mouse') setTouchResting(false); }}
-          onPointerLeave={cardInputs[index].cancel}
-          onPointerUpCapture={(event) => {
-            if (event.pointerType !== 'mouse') setTouchResting(true);
-            cardInputs[index].onPointerUp(event);
-          }}
-          onPointerCancelCapture={(event) => {
-            setTouchResting(true);
-            cardInputs[index].onPointerCancel(event);
-          }}
-          onLostPointerCaptureCapture={cardInputs[index].onLostPointerCapture}
-          onClickCapture={cardInputs[index].onClick}
-        >
-          <WipInteractiveCard
-            card={card}
-            interactive={state.selectedCard === index && (state.cardStage === 'inspecting' || state.cardStage === 'returning')}
-            interactionMode={state.cardStage === 'returning' || touchResting ? 'settling' : 'normal'}
-            wakeOnInteractiveUnlock={false}
-            onImageReadyChange={index === 0 ? handleFirstImageReady : handleSecondImageReady}
-            ariaLabel={`Mi Note card ${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
-            imageAlt={`${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
-          />
-        </div>,
-        cardElements[index],
-        String(selection.cardIds[index]),
-      ))}
       {note && (
         <div className="mi-note-wip__status" role={error ? 'alert' : 'status'}>
           {note}
@@ -221,6 +148,7 @@ export default function MiNoteCardsWipApp() {
     star: MI_NOTE_PACK_STARS[0],
   }));
   const [focused, setFocused] = useState(false);
+  const [selectedEffect, setSelectedEffect] = useState<(typeof MI_NOTE_CARD_EFFECTS)[number]>(MI_NOTE_CARD_EFFECTS[0]);
   const controlsRef = useRef<MiNotePackControls | null>(null);
   const handleClose = useCallback(() => navigate('/'), []);
   const handleEscape = useCallback(() => {
@@ -285,6 +213,7 @@ export default function MiNoteCardsWipApp() {
         key={round.generation}
         selection={round.selection}
         star={round.star}
+        cardEffect={selectedEffect.effect}
         controlsRef={controlsRef}
         onRetry={handleRetry}
         onBackgroundTap={handleBackgroundTap}
@@ -323,6 +252,17 @@ export default function MiNoteCardsWipApp() {
               ))}
             </div>
           </div>
+          <select
+            className="mi-note-wip__effect-picker"
+            aria-label="Effect"
+            value={selectedEffect.effect.effectKey}
+            onChange={(event) => {
+              const effect = MI_NOTE_CARD_EFFECTS.find((entry) => entry.effect.effectKey === event.target.value);
+              if (effect) setSelectedEffect(effect);
+            }}
+          >
+            {MI_NOTE_CARD_EFFECTS.map(({ name, effect }) => <option key={effect.effectKey} value={effect.effectKey}>{name}</option>)}
+          </select>
         </div>
         <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>
       </div>

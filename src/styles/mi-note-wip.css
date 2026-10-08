@@ -10,7 +10,6 @@
 }
 
 .mi-note-wip__renderer,
-.mi-note-wip__css-scene,
 .mi-note-wip__canvas {
   position: absolute;
   inset: 0;
@@ -28,43 +27,10 @@
   outline-offset: -12px;
 }
 
-.mi-note-wip__css-scene {
-  z-index: 0;
-}
-
 .mi-note-wip__canvas {
   z-index: 1;
   width: 100%;
   height: 100%;
-}
-
-.mi-note-wip__css-scene--foreground {
-  z-index: 2;
-}
-
-.mi-note-wip__card {
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.mi-note-wip__card-content,
-.mi-note-wip__card .drif-effect-card {
-  height: 100%;
-}
-
-.mi-note-wip__card:not([data-active='true']),
-.mi-note-wip__card:not([data-active='true']) * {
-  pointer-events: none !important;
-}
-
-.mi-note-wip__card:not([data-active='true']) .drif-effect-card__rotator {
-  box-shadow: none;
-}
-
-.mi-note-wip[data-card-stage='returning'] .drif-effect-card__rotator {
-  transform: rotateY(0deg) rotateX(0deg);
-  -webkit-transform: rotateY(0deg) rotateX(0deg);
-  transition: transform 100ms ease, box-shadow 100ms ease;
 }
 
 .mi-note-wip__actions {
@@ -96,7 +62,7 @@
 .mi-note-wip__status {
   position: absolute;
   left: 50%;
-  bottom: 56px;
+  bottom: 88px;
   transform: translateX(-50%);
   display: flex;
   gap: 12px;
@@ -136,7 +102,8 @@
   align-items: center;
 }
 
-.mi-note-wip__star-picker select {
+.mi-note-wip__star-picker select,
+.mi-note-wip__effect-picker {
   width: 143px;
   min-width: 0;
   height: 32px;
@@ -146,6 +113,11 @@
   color: color-mix(in srgb, var(--fg) 68%, transparent);
   font-size: 12px;
   cursor: pointer;
+}
+
+.mi-note-wip__effect-picker {
+  justify-self: center;
+  width: 183px;
 }
 
 .mi-note-wip__colors {
@@ -188,13 +160,15 @@ button.mi-note-wip__color[aria-pressed='true'] span {
 
 button.mi-note-wip__star-step:hover:not(:disabled),
 button.mi-note-wip__color:hover:not(:disabled),
-.mi-note-wip__star-picker select:hover {
+.mi-note-wip__star-picker select:hover,
+.mi-note-wip__effect-picker:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
 }
 
 .mi-note-wip-page .wip-controls button:focus-visible,
-.mi-note-wip__star-picker select:focus-visible {
+.mi-note-wip__star-picker select:focus-visible,
+.mi-note-wip__effect-picker:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--fg) 48%, transparent) !important;
   outline-offset: 3px;
 }
@@ -213,20 +187,19 @@ button.mi-note-wip__color:hover:not(:disabled),
   }
 
   .mi-note-wip__status {
-    bottom: max(88px, calc(env(safe-area-inset-bottom) + 78px));
+    bottom: max(120px, calc(env(safe-area-inset-bottom) + 110px));
     white-space: nowrap;
   }
 }
 
 @media (max-height: 700px) {
   .mi-note-wip__stage {
-    bottom: 64px;
+    bottom: 96px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mi-note-wip__pickers,
-  .mi-note-wip[data-card-stage='returning'] .drif-effect-card__rotator {
+  .mi-note-wip__pickers {
     transition-duration: 1ms;
   }
 }

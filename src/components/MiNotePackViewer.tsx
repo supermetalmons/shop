@@ -3,7 +3,9 @@ import * as THREE from 'three';
 import type { MiNotePackStar } from '../lib/miNotePackStars';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../lib/miNoteStarFolds';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../lib/miNoteStickerEffects';
-import { CSS3DObject, CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
+import type { DrifCardConfig } from '../drifCards';
+import { createMiNoteCardGeometry } from '../lib/miNoteCardGeometry';
+import { createMiNoteCardMaterial } from '../lib/miNoteCardMaterial';
 import {
   createMiNotePackModel,
   MI_NOTE_CARD_HEIGHT,
@@ -11,7 +13,7 @@ import {
   MI_NOTE_LEAF_WIDTH,
   MI_NOTE_POCKET_TOP,
 } from '../lib/miNotePackModel';
-import { createMiNoteCardPath, MI_NOTE_CARD_LIFT_FRACTION, poseMiNoteCardPath } from '../lib/miNotePackMotion';
+import { createMiNoteCardPath, poseMiNoteCardPath } from '../lib/miNotePackMotion';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
 import type { MiNoteFolderPose, MiNoteRevealEvent, MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
@@ -33,7 +35,10 @@ type MiNotePackViewerProps = {
   sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
   inspectSticker?: boolean;
-  cardElements: readonly [HTMLDivElement, HTMLDivElement];
+  cards: readonly [DrifCardConfig, DrifCardConfig];
+  cardEffect: DrifCardConfig['effect'];
+  onCardsReadyChange: (ready: boolean) => void;
+  onCardsError: (error: Error | null) => void;
   state: MiNoteRevealState;
   interactionEnabled: boolean;
   onReadyChange: (ready: boolean) => void;
@@ -46,7 +51,6 @@ type MiNotePackViewerProps = {
 type Motion = { value: number; velocity: number };
 type OuterFlip = Motion & { from: 0 | 2; to: 0 | 2; direction: number; target: number; dragging: boolean };
 
-const CARD_LAYOUT_WIDTH = 480;
 const CARD_FRONT_CLEARANCE = 0.05;
 
 function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
@@ -62,30 +66,12 @@ function spring(motion: Motion, target: number, frequency: number, dt: number, r
   return motion.value !== target || motion.velocity !== 0;
 }
 
-function cardApertureGeometry() {
-  const width = MI_NOTE_CARD_WIDTH;
-  const height = MI_NOTE_CARD_HEIGHT;
-  const radius = width * 0.0455;
-  const shape = new THREE.Shape();
-  const x = -width / 2;
-  const y = -height / 2;
-  shape.moveTo(x + radius, y);
-  shape.lineTo(x + width - radius, y);
-  shape.quadraticCurveTo(x + width, y, x + width, y + radius);
-  shape.lineTo(x + width, y + height - radius);
-  shape.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  shape.lineTo(x + radius, y + height);
-  shape.quadraticCurveTo(x, y + height, x, y + height - radius);
-  shape.lineTo(x, y + radius);
-  shape.quadraticCurveTo(x, y, x + radius, y);
-  return new THREE.ShapeGeometry(shape, 12);
-}
-
 export default function MiNotePackViewer(props: MiNotePackViewerProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const currentProps = useRef(props);
   currentProps.current = props;
   const invalidateRef = useRef<() => void>(() => undefined);
+  const cardEffectRef = useRef<(effect: DrifCardConfig['effect']) => void>(() => undefined);
   const effectSettingsRef = useRef<(value: MiNoteStickerEffectSettings) => void>(() => undefined);
 
   useEffect(() => {
@@ -120,7 +106,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip' } | null = null;
     let tapHit: THREE.Intersection | null = null;
     let selected: 0 | 1 | null = null;
-    let foregroundCard: 0 | 1 | null = null;
     let cardPath: ReturnType<typeof createMiNoteCardPath> | null = null;
     let transition: 'lifting' | 'returning' | null = null;
     let cardTime = 0;
@@ -137,15 +122,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     renderer.toneMappingExposure = 1.05;
     renderer.domElement.className = 'mi-note-wip__canvas';
     renderer.domElement.setAttribute('aria-hidden', 'true');
-    const cssRenderer = new CSS3DRenderer();
-    cssRenderer.domElement.className = 'mi-note-wip__css-scene';
-    const foregroundRenderer = new CSS3DRenderer();
-    foregroundRenderer.domElement.className = 'mi-note-wip__css-scene mi-note-wip__css-scene--foreground';
-    host.append(cssRenderer.domElement, renderer.domElement, foregroundRenderer.domElement);
+    host.append(renderer.domElement);
     const scene = new THREE.Scene();
-    const foregroundScene = new THREE.Scene();
-    const foregroundAnchor = new THREE.Group();
-    foregroundScene.add(foregroundAnchor);
     const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 40);
     scene.add(new THREE.HemisphereLight(0xffffff, 0xb1b9ac, 2.2));
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.6);
@@ -168,8 +146,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
-      cssRenderer.domElement.remove();
-      foregroundRenderer.domElement.remove();
       currentProps.current.onError(error instanceof Error ? error : new Error('Unable to create the pack.'));
       return;
     }
@@ -178,32 +154,46 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     scene.add(tapSparkles.points);
     effectSettingsRef.current = model.setSealEffectSettings;
     let lastSealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
-    const apertureGeometry = cardApertureGeometry();
-    const apertureMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      opacity: 0,
-      transparent: true,
-      blending: THREE.NoBlending,
-      depthWrite: true,
-      depthTest: true,
-      side: THREE.FrontSide,
-      toneMapped: false,
-    });
-    const cards = props.cardElements.map((element, index) => {
+    const cardGeometry = createMiNoteCardGeometry();
+    const cards = props.cards.map((config, index) => {
       const anchor = new THREE.Group();
       const home = new THREE.Vector3((index === 0 ? -1 : 1) * MI_NOTE_LEAF_WIDTH / 2, -0.005, 0.0057);
       anchor.position.copy(home);
-      element.style.width = `${CARD_LAYOUT_WIDTH}px`;
-      element.style.height = `${CARD_LAYOUT_WIDTH * MI_NOTE_CARD_HEIGHT / MI_NOTE_CARD_WIDTH}px`;
-      const cssObject = new CSS3DObject(element);
-      cssObject.scale.setScalar(MI_NOTE_CARD_WIDTH / CARD_LAYOUT_WIDTH);
-      const aperture = new THREE.Mesh(apertureGeometry, apertureMaterial);
-      aperture.userData.card = index;
-      anchor.add(cssObject, aperture);
+      const surface = createMiNoteCardMaterial(config);
+      const mesh = new THREE.Mesh(cardGeometry, surface.material);
+      mesh.name = `mi-note-card-${index}`;
+      mesh.userData.card = index;
+      mesh.visible = false;
+      anchor.add(mesh);
       const parent = index === 0 ? model.left : model.right;
       parent.add(anchor);
-      return { anchor, cssObject, aperture, parent, home };
+      return { anchor, mesh, surface, parent, home };
     });
+    let cardEffectRequest = 0;
+    let activeCardEffect: DrifCardConfig['effect'] | undefined;
+    cardEffectRef.current = (effect) => {
+      if (effect === activeCardEffect || disposed || failed) return;
+      activeCardEffect = effect;
+      const request = ++cardEffectRequest;
+      currentProps.current.onCardsError(null);
+      currentProps.current.onCardsReadyChange(false);
+      void Promise.all(cards.map(({ surface }) => surface.setEffect(effect))).then(() => {
+        if (disposed || failed || request !== cardEffectRequest) return;
+        cards.forEach(({ mesh }) => { mesh.visible = true; });
+        renderer.compile(scene, camera);
+        currentProps.current.onCardsReadyChange(true);
+        invalidate();
+      }).catch((error: unknown) => {
+        if (disposed || failed || request !== cardEffectRequest) return;
+        currentProps.current.onCardsError(error instanceof Error ? error : new Error('Unable to load the cards.'));
+      });
+    };
+    const tiltX: Motion = { value: 0, velocity: 0 };
+    const tiltY: Motion = { value: 0, velocity: 0 };
+    const tiltTarget = new THREE.Vector2();
+    const projectedCenter = new THREE.Vector3();
+    const projectedCorner = new THREE.Vector3();
+    let inspectingPointer: number | null = null;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -235,6 +225,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       dispatch({ type: 'select-card', index });
     };
     const returnCard = () => {
+      input.cancel();
+      tiltTarget.set(0, 0);
       dispatch({ type: 'return-card' });
       invalidate();
     };
@@ -297,7 +289,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const input = createMiNoteCardInput((event) => {
       if (!event) return;
       if (currentProps.current.state.selectedCard !== null) {
-        if (!tapHit) returnCard();
+        returnCard();
         return;
       }
       if (!tapHit) {
@@ -313,10 +305,14 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const state = currentProps.current.state;
         if (state.cardStage === 'lifting' || state.cardStage === 'returning') return false;
         tapHit = hit(event);
-        if (state.selectedCard !== null && tapHit) return false;
         if (state.stage === 'seal-peeling' || state.stage === 'unsealed') return false;
         host.focus({ preventScroll: true });
         host.setPointerCapture(event.pointerId);
+        if (state.selectedCard !== null) {
+          inspectingPointer = event.pointerId;
+          aimCard(event);
+          return true;
+        }
         if (outerFlip) {
           outerFlip.dragging = true;
           outerFlip.velocity = 0;
@@ -325,7 +321,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         fold.velocity = 0;
         return true;
       },
-      onMove(_event, movement) {
+      onMove(event, movement) {
+        if (inspectingPointer !== null) {
+          aimCard(event);
+          return;
+        }
         if (!drag?.hit || currentProps.current.state.selectedCard !== null) return;
         const { deltaX, deltaY, moved } = movement;
         if (drag.mode === 'pending' && moved && Math.abs(deltaX) > Math.abs(deltaY)) {
@@ -347,6 +347,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         invalidate();
       },
       onEnd(event, movement) {
+        if (inspectingPointer !== null) {
+          inspectingPointer = null;
+          if (movement.cancelled || event.pointerType !== 'mouse') tiltTarget.set(0, 0);
+          else aimCard(event);
+        }
         if (outerFlip) {
           outerFlip.dragging = false;
           outerFlip.target = Math.round(outerFlip.value);
@@ -361,17 +366,33 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         invalidate();
       },
     });
-    const handlePointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Element && event.target.closest('.mi-note-wip__card[data-active="true"]')) return;
-      input.onPointerDown(event);
-    };
+    function aimCard(event: PackPointerEvent) {
+      if (selected === null || currentProps.current.state.cardStage !== 'inspecting' || reducedMotion.matches) return;
+      const anchor = cards[selected].anchor;
+      const rect = host?.getBoundingClientRect();
+      if (!rect) return;
+      projectedCenter.set(0, 0, 0).applyMatrix4(anchor.matrixWorld).project(camera);
+      projectedCorner.set(MI_NOTE_CARD_WIDTH / 2, MI_NOTE_CARD_HEIGHT / 2, 0).applyMatrix4(anchor.matrixWorld).project(camera);
+      const halfWidth = Math.max(1, Math.abs(projectedCorner.x - projectedCenter.x) * width / 2);
+      const halfHeight = Math.max(1, Math.abs(projectedCorner.y - projectedCenter.y) * height / 2);
+      const x = (event.clientX - rect.left - (projectedCenter.x + 1) * width / 2) / halfWidth;
+      const y = (event.clientY - rect.top - (1 - projectedCenter.y) * height / 2) / halfHeight;
+      if (inspectingPointer === null && (Math.abs(x) > 1 || Math.abs(y) > 1)) tiltTarget.set(0, 0);
+      else tiltTarget.set(-THREE.MathUtils.clamp(y, -1, 1) * 0.24, -THREE.MathUtils.clamp(x, -1, 1) * 0.3);
+      invalidate();
+    }
+    const handlePointerDown = (event: PointerEvent) => input.onPointerDown(event);
     const handlePointerMove = (event: PointerEvent) => {
       input.onPointerMove(event);
-      if (!drag && currentProps.current.state.selectedCard === null) host.style.cursor = hit(event) ? 'grab' : '';
+      if (event.isPrimary && event.pointerType === 'mouse') aimCard(event);
+      if (!drag) host.style.cursor = currentProps.current.state.selectedCard !== null ? 'pointer' : hit(event) ? 'grab' : '';
     };
-    const handleBlur = () => input.cancel();
+    const resetTilt = () => { tiltTarget.set(0, 0); invalidate(); };
+    const handlePointerLeave = () => { if (inspectingPointer === null) resetTilt(); };
+    const handleBlur = () => { input.cancel(); resetTilt(); };
     host.addEventListener('pointerdown', handlePointerDown);
     host.addEventListener('pointermove', handlePointerMove);
+    host.addEventListener('pointerleave', handlePointerLeave);
     host.addEventListener('pointerup', input.onPointerUp);
     host.addEventListener('pointercancel', input.onPointerCancel);
     host.addEventListener('lostpointercapture', input.onLostPointerCapture);
@@ -395,6 +416,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       lastTime = now;
       let moving = false;
       const state = currentProps.current.state;
+      if (inspectingPointer !== null && state.cardStage !== 'inspecting') input.cancel();
       model.setSealFoldPosition(currentProps.current.foldPosition);
       model.setSealRotationOffsetDegrees(currentProps.current.rotationOffsetDegrees);
       model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
@@ -518,15 +540,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const progress = Math.min(1, cardTime / duration);
         const card = cards[selected];
         const pathProgress = transition === 'lifting' ? progress : 1 - Math.max(0, (progress - 0.18) / 0.82);
-        if (pathProgress >= MI_NOTE_CARD_LIFT_FRACTION && foregroundCard === null) {
-          foregroundAnchor.add(card.cssObject);
-          card.aperture.visible = false;
-          foregroundCard = selected;
-        } else if (pathProgress < MI_NOTE_CARD_LIFT_FRACTION && foregroundCard !== null) {
-          card.anchor.add(card.cssObject);
-          card.aperture.visible = true;
-          foregroundCard = null;
-        }
         poseMiNoteCardPath(card.anchor, cardPath, pathProgress);
         if (progress === 1) {
           if (transition === 'returning') {
@@ -544,17 +557,14 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           transition = null;
         } else moving = true;
       }
+      if (state.cardStage !== 'inspecting' || reducedMotion.matches) tiltTarget.set(0, 0);
+      moving = spring(tiltX, tiltTarget.x, state.cardStage === 'returning' ? 40 : 16, dt, reducedMotion.matches) || moving;
+      moving = spring(tiltY, tiltTarget.y, state.cardStage === 'returning' ? 40 : 16, dt, reducedMotion.matches) || moving;
+      cards.forEach(({ mesh }, index) => mesh.rotation.set(index === selected ? tiltX.value : 0, index === selected ? tiltY.value : 0, 0));
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
-      if (foregroundCard !== null) {
-        const anchor = cards[foregroundCard].anchor;
-        anchor.getWorldPosition(foregroundAnchor.position);
-        anchor.getWorldQuaternion(foregroundAnchor.quaternion);
-        anchor.getWorldScale(foregroundAnchor.scale);
-      }
+      cards.forEach(({ mesh, surface }) => { if (mesh.visible) surface.update(mesh, camera); });
       renderer.render(scene, camera);
-      cssRenderer.render(scene, camera);
-      foregroundRenderer.render(foregroundScene, camera);
       if (moving) invalidate();
       else lastTime = 0;
     }
@@ -568,8 +578,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       height = nextHeight;
       pixelRatio = nextPixelRatio;
       renderer.setDrawingBufferSize(width, height, pixelRatio);
-      cssRenderer.setSize(width, height);
-      foregroundRenderer.setSize(width, height);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       invalidate();
@@ -578,10 +586,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       event.preventDefault();
       failed = true;
       currentProps.current.onReadyChange(false);
+      currentProps.current.onCardsReadyChange(false);
       currentProps.current.onError(new Error('The pack display was interrupted. Please retry.'));
     };
     const handleVisibility = () => {
-      input.cancel();
+      handleBlur();
       if (document.hidden) {
         tapSparkles.clear();
         cancelAnimationFrame(frameId);
@@ -597,6 +606,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     renderer.domElement.addEventListener('webglcontextlost', handleContextLost);
     currentProps.current.onReadyChange(false);
     resize();
+    cardEffectRef.current(currentProps.current.cardEffect);
     void model.ready.then(() => {
       if (disposed || failed) return;
       renderer.compile(scene, camera);
@@ -614,6 +624,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       cancelAnimationFrame(frameId);
       invalidateRef.current = () => undefined;
       effectSettingsRef.current = () => undefined;
+      cardEffectRef.current = () => undefined;
       if (currentProps.current.controlsRef.current === controls) currentProps.current.controlsRef.current = null;
       observer.disconnect();
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -621,26 +632,28 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       host.removeEventListener('pointerdown', handlePointerDown);
       host.removeEventListener('pointermove', handlePointerMove);
+      host.removeEventListener('pointerleave', handlePointerLeave);
       host.removeEventListener('pointerup', input.onPointerUp);
       host.removeEventListener('pointercancel', input.onPointerCancel);
       host.removeEventListener('lostpointercapture', input.onLostPointerCapture);
       window.removeEventListener('blur', handleBlur);
-      cards.forEach(({ anchor, cssObject }) => {
-        cssObject.removeFromParent();
+      cards.forEach(({ anchor, surface }) => {
+        surface.dispose();
         anchor.removeFromParent();
       });
-      apertureGeometry.dispose();
-      apertureMaterial.dispose();
+      cardGeometry.dispose();
       tapSparkles.dispose();
       model.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
-      cssRenderer.domElement.remove();
-      foregroundRenderer.domElement.remove();
     };
-  }, [props.color, props.star, props.cardElements, props.controlsRef]);
+  }, [props.color, props.star, props.cards, props.controlsRef]);
 
+  useEffect(() => {
+    cardEffectRef.current(props.cardEffect);
+    invalidateRef.current();
+  }, [props.cardEffect]);
   useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker]);
   useEffect(() => {
     effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);

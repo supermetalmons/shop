@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { MI_NOTE_CARD_HEIGHT } from './miNotePackModel';
 
-export const MI_NOTE_CARD_LIFT_FRACTION = 0.4;
+const MI_NOTE_CARD_LIFT_FRACTION = 0.4;
 const LIP_CLEARANCE = 0.085;
 const identity = new THREE.Quaternion();
 

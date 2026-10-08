@@ -1,28 +1,24 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach } from 'node:test';
-import { createElement, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
+import { createElement, useLayoutEffect, useRef } from 'react';
 import type MiNotePackViewer from '../src/components/MiNotePackViewer.tsx';
-import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import type { MiNoteRevealEvent } from '../src/lib/miNoteCardReveal.ts';
+import { MI_NOTE_CARD_EFFECTS } from '../src/lib/miNoteCardEffects.ts';
 import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type ViewerProps = Parameters<typeof MiNotePackViewer>[0];
-type CardProps = Parameters<typeof WipInteractiveCard>[0];
 type ViewerInstance = { props: ViewerProps; calls: string[]; mounted: boolean };
 const { dom } = setupFrontendDom();
 Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const instances: ViewerInstance[] = [];
-const assetListeners = new Set<() => void>();
-let assetState = { ready: true, error: null as Error | null, retry() {} };
 let escape: (instance: ViewerInstance) => boolean = () => false;
 
 function FakeViewer(props: ViewerProps) {
-  const host = useRef<HTMLDivElement>(null);
   const record = useRef<ViewerInstance | null>(null);
   if (!record.current) record.current = { props, calls: [], mounted: false };
   const instance = record.current;
@@ -30,7 +26,6 @@ function FakeViewer(props: ViewerProps) {
   useLayoutEffect(() => {
     instances.push(instance);
     instance.mounted = true;
-    host.current!.append(...props.cardElements);
     const controls: MiNotePackControls = {
       activate() {
         instance.calls.push('activate');
@@ -50,46 +45,21 @@ function FakeViewer(props: ViewerProps) {
     props.controlsRef.current = controls;
     return () => {
       instance.mounted = false;
-      props.cardElements.forEach(element => element.remove());
       if (props.controlsRef.current === controls) props.controlsRef.current = null;
     };
   }, []);
-  return createElement('div', { ref: host, 'data-testid': 'viewer' });
-}
-
-function FakeCard(props: CardProps) {
-  useEffect(() => props.onImageReadyChange?.(true), [props.onImageReadyChange]);
-  return createElement('div', {
-    'data-testid': 'card',
-    'data-image': props.imageAlt,
-    'data-aria-label': props.ariaLabel,
-    'data-image-src': props.card.imageSrc,
-    'data-foil-src': props.card.foilSrc,
-    'data-texture-src': props.card.textureSrc,
-    'data-effect': props.card.effect.effectKey,
-    'data-interactive': String(props.interactive),
-    'data-interaction-mode': props.interactionMode,
-  });
-}
-
-function useFakeAssets() {
-  return useSyncExternalStore(
-    listener => { assetListeners.add(listener); return () => { assetListeners.delete(listener); }; },
-    () => assetState,
-  );
+  return createElement('div', { 'data-testid': 'viewer' });
 }
 
 const bridgeKey = '__miNoteWipAppTest';
 Object.defineProperty(globalThis, bridgeKey, {
   configurable: true,
-  value: { FakeViewer, FakeCard, useFakeAssets },
+  value: { FakeViewer },
 });
 const imports = registerHooks({
   load(url, context, nextLoad) {
     let source: string | undefined;
     if (url.endsWith('/components/MiNotePackViewer.tsx')) source = `export default globalThis.${bridgeKey}.FakeViewer;`;
-    else if (url.endsWith('/components/WipInteractiveCard.tsx')) source = `export default globalThis.${bridgeKey}.FakeCard;`;
-    else if (url.endsWith('/hooks/useMiNoteCardAssets.ts')) source = `export const useMiNoteCardAssets = globalThis.${bridgeKey}.useFakeAssets;`;
     else if (url.endsWith('.css')) source = '';
     else if (url.endsWith('.webp')) source = `export default ${JSON.stringify(url)};`;
     return source === undefined ? nextLoad(url, context) : { format: 'module', source, shortCircuit: true };
@@ -101,14 +71,12 @@ imports.deregister();
 beforeEach(() => {
   instances.length = 0;
   escape = () => false;
-  assetState = { ready: true, error: null, retry() {} };
   window.localStorage.clear();
   window.history.replaceState(null, '', '/mi_note_cards/wip');
 });
 afterEach(() => {
   cleanup();
   assert.ok(instances.every(instance => !instance.mounted));
-  assert.equal(assetListeners.size, 0);
 });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
@@ -122,19 +90,15 @@ function emit(event: MiNoteRevealEvent) {
   act(() => viewer().props.onEvent(event));
 }
 
-function makeReady() {
-  act(() => viewer().props.onReadyChange(true));
-}
-
-function setAssets(ready: boolean) {
+function makeReady(cardsReady = true) {
   act(() => {
-    assetState = { ...assetState, ready };
-    assetListeners.forEach(listener => listener());
+    viewer().props.onReadyChange(true);
+    viewer().props.onCardsReadyChange(cardsReady);
   });
 }
 
-function peelSeal(view: ReturnType<typeof render>) {
-  makeReady();
+function peelSeal(view: ReturnType<typeof render>, cardsReady = true) {
+  makeReady(cardsReady);
   for (let remaining = 4; remaining > 0; remaining -= 1) {
     fireEvent.click(view.getByRole('button', { name: new RegExp(`${remaining} taps? remaining`) }));
   }
@@ -146,50 +110,15 @@ function openPack(view: ReturnType<typeof render>) {
   fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
 }
 
-function card(index: 0 | 1) {
-  const element = viewer().props.cardElements[index];
-  const content = element.querySelector<HTMLElement>('[data-testid="card"]');
-  assert.ok(content);
-  return { element, content };
-}
-
-function pointer(target: HTMLElement, type: string, overrides: Partial<PointerEvent> = {}) {
-  const event = new window.MouseEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    button: overrides.button ?? 0,
-    clientX: overrides.clientX ?? 100,
-    clientY: overrides.clientY ?? 100,
-  });
-  Object.defineProperties(event, {
-    pointerId: { value: overrides.pointerId ?? 1 },
-    pointerType: { value: overrides.pointerType ?? 'mouse' },
-    isPrimary: { value: overrides.isPrimary ?? true },
-  });
-  fireEvent(target, event);
-  return event;
-}
-
 function renderedMiNoteCards() {
-  const names: Record<string, string> = {
-    1302: 'Emo★Purple Drifella',
-    1325: 'The Dratini Player',
-    1327: 'Strawberry Saint',
-  };
-  const cards = ([0, 1] as const).map((index) => {
-    const { image, ariaLabel, imageSrc, foilSrc, textureSrc, effect } = card(index).content.dataset;
-    const id = imageSrc?.match(/\/mi_note_cards_demo\/front\/(1302|1325|1327)\.webp$/)?.[1];
+  const cards = viewer().props.cards.map(({ imageSrc, foilSrc, textureSrc, effect }) => {
+    const id = imageSrc.match(/\/mi_note_cards_demo\/front\/(1302|1325|1327)\.webp$/)?.[1];
     assert.ok(id);
     assert.equal(imageSrc, new URL(`../mi_note_cards_demo/front/${id}.webp`, import.meta.url).href);
     assert.equal(foilSrc, new URL(`../mi_note_cards_demo/foil/${id}.webp`, import.meta.url).href);
     assert.equal(textureSrc, new URL(`../mi_note_cards_demo/mask/${id}.webp`, import.meta.url).href);
-    assert.equal(effect, 'v-regular');
-    for (const label of [image, ariaLabel]) {
-      assert.ok(label?.includes(id));
-      assert.ok(label.includes(names[id]));
-      assert.doesNotMatch(label, /Card NFT 2/);
-    }
-    return { id, image, ariaLabel, imageSrc, foilSrc, textureSrc, effect };
+    assert.equal(effect.effectKey, 'v-regular');
+    return { id, imageSrc, foilSrc, textureSrc, effect };
   });
   assert.notEqual(cards[0].id, cards[1].id);
   return cards;
@@ -311,172 +240,70 @@ test('peeling leaves the ready pack closed until the next click opens it', () =>
   assert.ok(view.getByRole('button', { name: 'View left card' }));
 });
 
-test('accessible folder actions expose one inspected portal and settle it before returning', () => {
+test('accessible folder actions select either GPU card and wait for its return animation', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   assert.equal((view.getByRole('button', { name: /4 taps remaining/ }) as HTMLButtonElement).disabled, true);
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   openPack(view);
   const close = view.getByRole('button', { name: 'Close Mi Note Cards folder' });
   assert.equal(close.getAttribute('aria-expanded'), 'true');
-  assert.ok(view.getByRole('button', { name: 'View right card' }));
-  for (const index of [0, 1] as const) {
-    assert.equal(card(index).element.hasAttribute('inert'), true);
-    assert.equal(card(index).content.dataset.interactive, 'false');
+  for (const side of ['left', 'right']) {
+    const select = view.getByRole('button', { name: `View ${side} card` });
+    const description = select.getAttribute('aria-description')!;
+    assert.match(description, /^(1302|1325|1327) — /);
+    fireEvent.click(select);
+    assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards folder' }), null);
+    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, true);
+    emit({ type: 'card-lifted' });
+    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, false);
+    fireEvent.click(view.getByRole('button', { name: 'Return card to pocket', description }));
+    assert.equal(viewer().props.state.cardStage, 'returning');
+    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, true);
+    emit({ type: 'card-returned' });
+    assert.equal(viewer().props.state.cardStage, 'pocket');
   }
-
-  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
-  assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards folder' }), null);
-  assert.equal((view.getByRole('button', { name: 'Return card to pocket' }) as HTMLButtonElement).disabled, true);
-  assert.equal(card(0).element.hasAttribute('inert'), true);
-  emit({ type: 'card-lifted' });
-  assert.equal(card(0).element.hasAttribute('inert'), false);
-  assert.equal(card(0).element.hasAttribute('aria-hidden'), false);
-  assert.equal(card(0).content.dataset.interactive, 'true');
-  assert.equal(card(0).content.dataset.interactionMode, 'normal');
-  assert.equal(card(1).element.hasAttribute('inert'), true);
-  assert.equal(card(1).content.dataset.interactive, 'false');
-
+  assert.deepEqual(viewer().calls.filter(call => call.startsWith('select:') || call === 'return'), ['select:0', 'return', 'select:1', 'return']);
   act(() => viewer().props.onBackgroundTap());
   assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards preview' }), null);
-  fireEvent.click(view.getByRole('button', { name: 'Return card to pocket' }));
-  assert.equal(card(0).element.hasAttribute('inert'), true);
-  assert.equal(card(0).content.dataset.interactive, 'true');
-  assert.equal(card(0).content.dataset.interactionMode, 'settling');
-  assert.equal((view.getByRole('button', { name: 'Return card to pocket' }) as HTMLButtonElement).disabled, true);
-  emit({ type: 'card-returned' });
-  assert.equal(card(0).content.dataset.interactive, 'false');
+  assert.equal(view.queryByRole('combobox', { name: 'Effect' }), null);
   assert.ok(view.getByRole('button', { name: 'View left card' }));
+  act(() => viewer().props.onBackgroundTap());
+  assert.ok(view.getByRole('combobox', { name: 'Effect' }));
   fireEvent.click(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   assert.ok(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
 });
 
-test('mouse, touch, and pen taps return either inspected card once without repeating on the synthetic click', () => {
+test('all three card effects update live without replacing cards or resetting the opened pack', () => {
   const view = render(createElement(MiNoteCardsWipApp));
+  const picker = view.getByRole('combobox', { name: 'Effect' }) as HTMLSelectElement;
+  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), [
+    ['v-regular', 'V Regular'], ['trainer-full-art', 'Trainer Full Art'], ['lighting-only', 'Lighting only'],
+  ]);
+  const initial = viewer();
+  const cards = initial.props.cards;
   openPack(view);
-  let returns = 0;
-  for (const index of [0, 1] as const) {
-    for (const pointerType of ['mouse', 'touch', 'pen']) {
-      fireEvent.click(view.getByRole('button', { name: `View ${index === 0 ? 'left' : 'right'} card` }));
-      emit({ type: 'card-lifted' });
-      const { content } = card(index);
-      pointer(content, 'pointerdown', { pointerType });
-      pointer(content, 'pointerup', { pointerType, clientX: 103, clientY: 104 });
-      assert.equal(viewer().props.state.cardStage, 'returning');
-      assert.equal(content.dataset.interactionMode, 'settling');
-      fireEvent.click(content, { detail: 1 });
-      pointer(content, 'pointerup', { pointerType });
-      fireEvent.click(content, { detail: 0 });
-      assert.equal(viewer().calls.filter(call => call === 'return').length, ++returns);
-      emit({ type: 'card-returned' });
-    }
+  for (const { effect } of MI_NOTE_CARD_EFFECTS) {
+    const state = viewer().props.state;
+    fireEvent.change(picker, { target: { value: effect.effectKey } });
+    assert.equal(viewer(), initial);
+    assert.equal(viewer().props.cards, cards);
+    assert.equal(viewer().props.state, state);
+    assert.equal(viewer().props.cardEffect, effect);
+    assert.equal(viewer().props.state.folderPose, 1);
   }
-});
-
-test('dragging an inspected card preserves tilt events and touch settling without returning it', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  openPack(view);
   fireEvent.click(view.getByRole('button', { name: 'View left card' }));
   emit({ type: 'card-lifted' });
-  const { content } = card(0);
-  let moves = 0;
-  content.addEventListener('pointermove', event => {
-    assert.equal(event.defaultPrevented, false);
-    moves += 1;
-  });
-  for (const pointerType of ['mouse', 'touch']) {
-    pointer(content, 'pointerdown', { pointerType });
-    assert.equal(content.dataset.interactionMode, 'normal');
-    pointer(content, 'pointermove', { pointerType, clientX: 120 });
-    pointer(content, 'pointermove', { pointerType });
-    pointer(content, 'pointerup', { pointerType });
-    fireEvent.click(content, { detail: 1 });
-    assert.equal(viewer().props.state.cardStage, 'inspecting');
-    assert.equal(content.dataset.interactionMode, pointerType === 'touch' ? 'settling' : 'normal');
-  }
-  assert.equal(moves, 4);
-  assert.equal(viewer().calls.includes('return'), false);
-  pointer(content, 'pointerdown', { pointerType: 'touch' });
-  assert.equal(content.dataset.interactionMode, 'normal');
-  pointer(content, 'pointerup', { pointerType: 'touch' });
-  assert.equal(viewer().props.state.cardStage, 'returning');
-});
-
-test('cancelled and interrupted card gestures do not return the card or block its next tap', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  openPack(view);
-  fireEvent.click(view.getByRole('button', { name: 'View right card' }));
-  emit({ type: 'card-lifted' });
-  const { content } = card(1);
-  for (const type of ['pointercancel', 'lostpointercapture', 'pointerout']) {
-    pointer(content, 'pointerdown', { pointerType: 'touch' });
-    pointer(content, type, { pointerType: 'touch' });
-    pointer(content, 'pointerup', { pointerType: 'touch' });
-    fireEvent.click(content, { detail: 1 });
-    assert.equal(viewer().props.state.cardStage, 'inspecting');
-    assert.equal(content.dataset.interactionMode, 'settling');
-    assert.equal(viewer().calls.includes('return'), false);
-  }
-  pointer(content, 'pointerdown');
-  pointer(content, 'pointerup');
-  assert.equal(viewer().props.state.cardStage, 'returning');
-  assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
-});
-
-for (const interruption of ['blur', 'hidden'] as const) {
-  test(`a card press interrupted by ${interruption} does not block the next tap`, t => {
-    let hidden = false;
-    t.mock.getter(document, 'hidden', () => hidden);
-    const view = render(createElement(MiNoteCardsWipApp));
-    openPack(view);
-    fireEvent.click(view.getByRole('button', { name: 'View left card' }));
-    emit({ type: 'card-lifted' });
-    const { content } = card(0);
-    pointer(content, 'pointerdown');
-    if (interruption === 'blur') {
-      fireEvent(window, new window.Event('blur'));
-      fireEvent(window, new window.Event('focus'));
-    } else {
-      hidden = true;
-      fireEvent(document, new window.Event('visibilitychange'));
-      hidden = false;
-      fireEvent(document, new window.Event('visibilitychange'));
-    }
-    assert.equal(viewer().props.state.cardStage, 'inspecting');
-    assert.equal(viewer().calls.includes('return'), false);
-    pointer(content, 'pointerdown', { clientX: 180 });
-    pointer(content, 'pointerup', { clientX: 180 });
-    assert.equal(viewer().props.state.cardStage, 'returning');
-    assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
-  });
-}
-
-test('only the selected inspecting card accepts primary pointer gestures or keyboard clicks', () => {
-  const view = render(createElement(MiNoteCardsWipApp));
-  openPack(view);
-  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
-  const selected = card(0).content;
-  pointer(selected, 'pointerdown');
-  fireEvent.click(selected, { detail: 0 });
-  emit({ type: 'card-lifted' });
-  pointer(selected, 'pointerup');
-  fireEvent.click(selected, { detail: 1 });
-  assert.equal(viewer().calls.includes('return'), false);
-
-  const inactive = card(1).content;
-  pointer(inactive, 'pointerdown');
-  pointer(inactive, 'pointerup');
-  fireEvent.click(inactive, { detail: 0 });
-  for (const overrides of [{ isPrimary: false }, { button: 2 }]) {
-    pointer(selected, 'pointerdown', overrides);
-    pointer(selected, 'pointerup', overrides);
-    fireEvent.click(selected, { detail: 1 });
-  }
-  assert.equal(viewer().props.state.cardStage, 'inspecting');
-  assert.equal(viewer().calls.includes('return'), false);
-  fireEvent.click(selected, { detail: 0 });
-  assert.equal(viewer().props.state.cardStage, 'returning');
-  assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
+  const inspecting = viewer().props.state;
+  fireEvent.change(picker, { target: { value: 'trainer-full-art' } });
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.cards, cards);
+  assert.equal(viewer().props.state, inspecting);
+  assert.equal(viewer().props.cardEffect.effectKey, 'trainer-full-art');
+  assert.ok(cards.every(card => Boolean(card.foilSrc && card.textureSrc)));
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+  assert.equal(viewer().props.cardEffect.effectKey, 'trainer-full-art');
+  assert.equal(picker.value, 'trainer-full-art');
 });
 
 test('modal Escape delegates to the active viewer before navigating away', () => {
@@ -508,7 +335,6 @@ test('modal Escape delegates to the active viewer before navigating away', () =>
 test('Mi Note demo cards keep their assets and appearance through picker changes and retry, while reset resamples', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
-  setAssets(false);
   const view = render(createElement(MiNoteCardsWipApp));
   const initialCards = renderedMiNoteCards();
   random = 0.8;
@@ -516,19 +342,20 @@ test('Mi Note demo cards keep their assets and appearance through picker changes
   assert.deepEqual(renderedMiNoteCards(), initialCards);
   fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'zombie' } });
   assert.deepEqual(renderedMiNoteCards(), initialCards);
-  peelSeal(view);
+  peelSeal(view, false);
   assert.equal(viewer().props.state.stage, 'unsealed');
   assert.equal(viewer().props.state.folderPose, 0);
   assert.equal((view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement).disabled, true);
   assert.equal(view.getByText('Loading cards…').getAttribute('role'), 'status');
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
-  setAssets(true);
+  act(() => viewer().props.onCardsReadyChange(true));
   assert.equal(viewer().props.state.stage, 'interactive');
   assert.equal(viewer().props.state.folderPose, 0);
   assert.equal(view.queryByText('Loading cards…'), null);
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
   assert.equal(viewer().props.state.folderPose, 1);
+  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
   const failed = viewer();
   act(() => failed.props.onError(new Error('Lost renderer')));
   assert.equal(viewer().props.interactionEnabled, false);
@@ -538,6 +365,7 @@ test('Mi Note demo cards keep their assets and appearance through picker changes
   assert.equal(failed.mounted, false);
   assert.equal(viewer().props.color, failed.props.color);
   assert.equal(viewer().props.star.id, failed.props.star.id);
+  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
   assert.deepEqual(renderedMiNoteCards(), initialCards);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
@@ -545,6 +373,7 @@ test('Mi Note demo cards keep their assets and appearance through picker changes
   act(() => {
     failed.props.onEvent({ type: 'seal-finished' });
     failed.props.onReadyChange(true);
+    failed.props.onCardsReadyChange(true);
     failed.props.onError(new Error('Obsolete failure'));
   });
   assert.equal(view.queryByRole('alert'), null);
@@ -553,6 +382,7 @@ test('Mi Note demo cards keep their assets and appearance through picker changes
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.equal(viewer().props.color, failed.props.color);
   assert.equal(viewer().props.star.id, failed.props.star.id);
+  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
   const resetCards = renderedMiNoteCards();
   assert.notDeepEqual(resetCards, initialCards);
   assert.deepEqual([...new Set([...initialCards, ...resetCards].map(({ id }) => id))].sort(), ['1302', '1325', '1327']);
@@ -568,7 +398,7 @@ test('keyboard shortcuts use current controls and leave focused form controls al
   fireEvent.keyDown(dialog, { key: 'ArrowLeft', code: 'ArrowLeft' });
   fireEvent.keyDown(dialog, { key: 'ArrowRight', code: 'ArrowRight' });
   assert.deepEqual(viewer().calls, ['activate', 'activate', 'navigate:-1', 'navigate:1']);
-  for (const target of [view.getByRole('combobox', { name: 'Star sticker' }), view.getByRole('button', { name: /2 taps remaining/ }), view.getByRole('button', { name: 'Next star' }), view.getByRole('button', { name: 'Marigold' })]) {
+  for (const target of [view.getByRole('combobox', { name: 'Effect' }), view.getByRole('combobox', { name: 'Star sticker' }), view.getByRole('button', { name: /2 taps remaining/ }), view.getByRole('button', { name: 'Next star' }), view.getByRole('button', { name: 'Marigold' })]) {
     fireEvent.keyDown(target, { key: 'Enter', code: 'Enter' });
     fireEvent.keyDown(target, { key: 'ArrowRight', code: 'ArrowRight' });
   }
@@ -592,4 +422,31 @@ test('keyboard shortcuts use current controls and leave focused form controls al
   assert.equal(window.location.pathname, '/mi_note_cards/wip');
   assert.deepEqual(active.calls, ['activate']);
   assert.equal(instances.length, mounts);
+});
+
+test('effect-loading errors recover in the open pack without clearing renderer failures', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  const instance = viewer();
+  act(() => {
+    instance.props.onCardsReadyChange(false);
+    instance.props.onCardsError(new Error('Missing foil'));
+  });
+  assert.ok(view.getByRole('alert'));
+  assert.equal(instance.props.interactionEnabled, false);
+  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
+  act(() => {
+    instance.props.onCardsError(null);
+    instance.props.onCardsReadyChange(true);
+  });
+  assert.equal(viewer(), instance);
+  assert.equal(instance.props.state.folderPose, 1);
+  assert.equal(instance.props.interactionEnabled, true);
+  assert.equal(view.queryByRole('alert'), null);
+  act(() => {
+    instance.props.onError(new Error('Lost renderer'));
+    instance.props.onCardsError(null);
+  });
+  assert.ok(view.getByRole('alert'));
+  assert.equal(instance.props.interactionEnabled, false);
 });
