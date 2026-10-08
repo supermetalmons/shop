@@ -4,15 +4,13 @@ import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePa
 import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { MI_NOTE_CARD_EFFECTS } from './lib/miNoteCardEffects';
-import { createMiNoteCard, MI_NOTE_CARD_COUNT } from './lib/miNoteCards';
+import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteIndex } from './lib/miNoteCards';
 import {
   createMiNoteRevealState,
-  MI_NOTE_PACK_VARIANTS,
   MI_NOTE_OPEN_TAPS,
   reduceMiNoteReveal,
   sampleMiNotePack,
   type MiNotePack,
-  type MiNotePackVariant,
 } from './lib/miNoteCardReveal';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from './lib/miNotePackStars';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS } from './lib/miNoteStickerEffects';
@@ -152,7 +150,7 @@ export default function MiNoteCardsWipApp() {
     return {
       generation: 0,
       selection,
-      star: MI_NOTE_PACK_STARS[0],
+      star: MI_NOTE_PACK_STARS[sampleMiNoteIndex(MI_NOTE_PACK_STARS.length, Math.random)],
       cardIdInputs: [String(selection.cardIds[0]), String(selection.cardIds[1])],
     };
   });
@@ -166,31 +164,18 @@ export default function MiNoteCardsWipApp() {
   const handleBackgroundTap = useCallback(() => setFocused((value) => !value), []);
   const handleReset = useCallback(() => {
     setRound((previous) => {
-      const selection = { ...sampleMiNotePack(), variant: previous.selection.variant };
+      const selection = sampleMiNotePack();
       return {
         ...previous,
         generation: previous.generation + 1,
         selection,
+        star: MI_NOTE_PACK_STARS[sampleMiNoteIndex(MI_NOTE_PACK_STARS.length, Math.random)],
         cardIdInputs: [String(selection.cardIds[0]), String(selection.cardIds[1])],
       };
     });
   }, []);
   const handleRetry = useCallback(() => {
     setRound((previous) => ({ ...previous, generation: previous.generation + 1 }));
-  }, []);
-  const handleStarChange = useCallback((star: MiNotePackStar) => {
-    setRound((previous) => previous.star.id === star.id ? previous : {
-      ...previous,
-      generation: previous.generation + 1,
-      star,
-    });
-  }, []);
-  const handleColorChange = useCallback((variant: MiNotePackVariant) => {
-    setRound((previous) => previous.selection.variant.id === variant.id ? previous : {
-      ...previous,
-      generation: previous.generation + 1,
-      selection: { ...previous.selection, variant },
-    });
   }, []);
   const handleCardIdChange = useCallback((index: 0 | 1, value: string) => {
     const id = Number(value);
@@ -205,10 +190,6 @@ export default function MiNoteCardsWipApp() {
       return { ...previous, cardIdInputs, selection: { ...previous.selection, cardIds } };
     });
   }, []);
-  const cycleStar = (direction: number) => {
-    const index = MI_NOTE_PACK_STARS.findIndex((star) => star.id === round.star.id);
-    handleStarChange(MI_NOTE_PACK_STARS[(index + direction + MI_NOTE_PACK_STARS.length) % MI_NOTE_PACK_STARS.length]);
-  };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -246,38 +227,7 @@ export default function MiNoteCardsWipApp() {
       />
       <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
         <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards preview">Close</button>
-        <div className="mi-note-wip__pickers" role="group" aria-label="Pack appearance">
-          <div className="mi-note-wip__appearance-row">
-            <div className="mi-note-wip__star-picker">
-              <button type="button" className="mi-note-wip__star-step" onClick={() => cycleStar(-1)} aria-label="Previous star">‹</button>
-              <select
-                aria-label="Star sticker"
-                value={round.star.id}
-                onChange={(event) => {
-                  const star = MI_NOTE_PACK_STARS.find((entry) => entry.id === event.target.value);
-                  if (star) handleStarChange(star);
-                }}
-              >
-                {MI_NOTE_PACK_STARS.map((star) => <option key={star.id} value={star.id}>{star.name}</option>)}
-              </select>
-              <button type="button" className="mi-note-wip__star-step" onClick={() => cycleStar(1)} aria-label="Next star">›</button>
-            </div>
-            <div className="mi-note-wip__colors" role="group" aria-label="Pack color">
-              {MI_NOTE_PACK_VARIANTS.map((variant) => (
-                <button
-                  key={variant.id}
-                  type="button"
-                  className="mi-note-wip__color"
-                  aria-label={variant.name}
-                  aria-pressed={round.selection.variant.id === variant.id}
-                  title={variant.name}
-                  onClick={() => handleColorChange(variant)}
-                >
-                  <span style={{ backgroundColor: variant.color }} />
-                </button>
-              ))}
-            </div>
-          </div>
+        <div className="mi-note-wip__pickers" role="group" aria-label="Card controls">
           <div className="mi-note-wip__card-row">
             {([0, 1] as const).map((index) => (
               <input
