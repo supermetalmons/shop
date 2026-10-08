@@ -47,6 +47,7 @@ type Motion = { value: number; velocity: number };
 type OuterFlip = Motion & { from: 0 | 2; to: 0 | 2; direction: number; target: number; dragging: boolean };
 
 const CARD_LAYOUT_WIDTH = 480;
+const CARD_FRONT_CLEARANCE = 0.05;
 
 function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
   const offset = motion.value - target;
@@ -101,19 +102,20 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let sealTime = 0;
     let sealStarted = false;
     let sealFinished = false;
-    const idlePitch = { value: 0.055, phase: Math.PI / 2, amplitude: 0.055, frequency: 0.45 };
-    const idleYaw = { value: -0.12, phase: -Math.PI / 2, amplitude: 0.12, frequency: 0.32 };
-    const idleRoll = { value: -0.016, phase: -Math.PI / 2, amplitude: 0.016, frequency: 0.55 };
-    const idleHeight = { value: 0, phase: 0, amplitude: 0.037, frequency: 0.75 };
+    const idlePitch = { value: 0.055, phase: Math.PI / 2, amplitude: 0.055, openAmplitude: 0.004, openOffset: -0.012, frequency: 0.45 };
+    const idleYaw = { value: -0.12, phase: -Math.PI / 2, amplitude: 0.12, openAmplitude: 0, openOffset: 0, frequency: 0.32 };
+    const idleRoll = { value: -0.016, phase: -Math.PI / 2, amplitude: 0.016, openAmplitude: 0, openOffset: 0, frequency: 0.55 };
+    const idleHeight = { value: 0, phase: 0, amplitude: 0.037, openAmplitude: 0.0185, openOffset: 0, frequency: 0.75 };
     const idleMotions = [idlePitch, idleYaw, idleRoll, idleHeight];
-    const idleSpeed: Motion = { value: 1, velocity: 0 };
-    let previousClosed = Math.abs(props.state.folderPose - 1);
+    const idleSpeed: Motion = { value: props.state.folderPose === 1 ? 0.65 : 1, velocity: 0 };
+    const idleStrength: Motion = { value: props.state.selectedCard === null ? 1 : 0, velocity: 0 };
     const fold: Motion = { value: props.state.folderPose, velocity: 0 };
     const recoil: Motion = { value: 0, velocity: 0 };
     const cameraMotion: Motion = { value: 0, velocity: 0 };
     const cameraFocusX: Motion = { value: 0, velocity: 0 };
     const cameraFocusY: Motion = { value: 0, velocity: 0 };
     const stickerFocus = new THREE.Vector3();
+    const cardDestination = new THREE.Vector3();
     let outerFlip: OuterFlip | null = null;
     let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip' } | null = null;
     let tapHit: THREE.Intersection | null = null;
@@ -433,24 +435,17 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         else moving = true;
       }
       const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
-      const opening = closed < previousClosed || (state.folderPose === 1 && !drag);
-      const idleAdvancing = !reducedMotion.matches && !drag && state.selectedCard === null && !opening && closed > 0;
-      if (opening || closed === 0 || reducedMotion.matches) {
-        const amount = reducedMotion.matches || previousClosed === 0 ? 0 : Math.min(1, closed / previousClosed);
-        for (const motion of idleMotions) {
-          motion.value *= amount;
-          const phase = Math.asin(THREE.MathUtils.clamp(motion.value / motion.amplitude, -1, 1));
-          motion.phase = Math.cos(motion.phase) < 0 ? Math.PI - phase : phase;
-        }
-        idleSpeed.value = idleSpeed.velocity = 0;
-      } else if (idleAdvancing) {
-        spring(idleSpeed, 1, 3, dt, false);
-        for (const motion of idleMotions) {
-          motion.phase += motion.frequency * idleSpeed.value * dt;
-          motion.value = Math.sin(motion.phase) * motion.amplitude;
-        }
+      const idleAdvancing = !reducedMotion.matches && !drag && state.selectedCard === null;
+      if (!drag || reducedMotion.matches) {
+        moving = spring(idleStrength, reducedMotion.matches || state.selectedCard !== null ? 0 : 1, 16, dt, reducedMotion.matches) || moving;
       }
-      previousClosed = closed;
+      if (idleAdvancing) spring(idleSpeed, THREE.MathUtils.lerp(0.65, 1, closed), 3, dt, false);
+      for (const motion of idleMotions) {
+        if (idleAdvancing) motion.phase += motion.frequency * idleSpeed.value * dt;
+        const amplitude = THREE.MathUtils.lerp(motion.openAmplitude, motion.amplitude, closed);
+        motion.value = idleStrength.value === 0 ? 0
+          : (Math.sin(motion.phase) * amplitude + motion.openOffset * (1 - closed)) * idleStrength.value;
+      }
       moving = idleAdvancing || moving;
       applyPackPose();
       const sealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
@@ -470,11 +465,32 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       if (reducedMotion.matches || sealFinished) tapSparkles.clear();
       else moving = tapSparkles.update(dt, pixelRatio) || moving;
 
-      if (state.cardStage === 'lifting' && state.selectedCard !== null && selected === null && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015) {
+      const aspect = width / height;
+      const closedHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH / (aspect * 0.68));
+      const openHeight = Math.max(1.82 / 0.52, (MI_NOTE_LEAF_WIDTH * 2 + 0.32) / (aspect * 0.86));
+      const selectedHeight = Math.max(MI_NOTE_CARD_HEIGHT * 1.28 / 0.66, MI_NOTE_CARD_WIDTH * 1.28 / (aspect * 0.72));
+      const inspectSticker = currentProps.current.inspectSticker && state.selectedCard === null;
+      stickerFocus.set(0, 0, 0);
+      if (inspectSticker) model.getSealFocus(stickerFocus);
+      const viewHeight = inspectSticker ? Math.max(.9, .72 / aspect)
+        : THREE.MathUtils.lerp(closedHeight, openHeight, 1 - Math.abs(fold.value - 1));
+      const frustumHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const cameraTarget = viewHeight / frustumHeight + stickerFocus.z;
+      if (cameraMotion.value === 0) {
+        cameraMotion.value = cameraTarget;
+        cameraFocusX.value = stickerFocus.x;
+        cameraFocusY.value = stickerFocus.y;
+      }
+      moving = spring(cameraMotion, cameraTarget, 12, dt, reducedMotion.matches) || moving;
+      moving = spring(cameraFocusX, stickerFocus.x, 12, dt, reducedMotion.matches) || moving;
+      moving = spring(cameraFocusY, stickerFocus.y, 12, dt, reducedMotion.matches) || moving;
+      camera.position.set(cameraFocusX.value, cameraFocusY.value, cameraMotion.value);
+      cardDestination.set(cameraFocusX.value, cameraFocusY.value, Math.max(CARD_FRONT_CLEARANCE, cameraMotion.value - selectedHeight / frustumHeight));
+
+      if (state.cardStage === 'lifting' && state.selectedCard !== null && selected === null && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015 && idleStrength.value === 0) {
         fold.value = 1;
         fold.velocity = 0;
         model.setFolderPhase(1);
-        for (const motion of idleMotions) motion.value = 0;
         applyPackPose();
         scene.updateMatrixWorld(true);
         selected = state.selectedCard;
@@ -482,7 +498,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const homePosition = card.anchor.getWorldPosition(new THREE.Vector3());
         const homeQuaternion = card.anchor.getWorldQuaternion(new THREE.Quaternion());
         const pocketTop = card.parent.localToWorld(new THREE.Vector3(card.home.x, MI_NOTE_POCKET_TOP, card.home.z));
-        cardPath = createMiNoteCardPath(homePosition, homeQuaternion, pocketTop, new THREE.Vector3(0, 0, 1.4));
+        cardPath = createMiNoteCardPath(homePosition, homeQuaternion, pocketTop, cardDestination);
         scene.attach(card.anchor);
         transition = 'lifting';
         cardTime = 0;
@@ -490,6 +506,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       if (selected !== null && state.cardStage === 'returning' && transition === null) {
         transition = 'returning';
         cardTime = 0;
+      }
+      if (cardPath && selected !== null) {
+        cardPath.curve.v2.copy(cardDestination);
+        cardPath.curve.v3.copy(cardDestination);
+        if (!transition) poseMiNoteCardPath(cards[selected].anchor, cardPath, 1);
       }
       if (transition && selected !== null && cardPath) {
         cardTime += dt;
@@ -521,26 +542,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           transition = null;
         } else moving = true;
       }
-      const aspect = width / height;
-      const closedHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH / (aspect * 0.68));
-      const openHeight = Math.max(1.82 / 0.52, (MI_NOTE_LEAF_WIDTH * 2 + 0.32) / (aspect * 0.86));
-      const selectedHeight = Math.max(MI_NOTE_CARD_HEIGHT * 1.28 / 0.66, MI_NOTE_CARD_WIDTH * 1.28 / (aspect * 0.72));
-      const inspectSticker = currentProps.current.inspectSticker && state.selectedCard === null;
-      stickerFocus.set(0, 0, 0);
-      if (inspectSticker) model.getSealFocus(stickerFocus);
-      const viewHeight = inspectSticker ? Math.max(.9, .72 / aspect)
-        : state.selectedCard !== null ? selectedHeight : THREE.MathUtils.lerp(closedHeight, openHeight, 1 - Math.abs(fold.value - 1));
-      const cameraTarget = viewHeight / (2 * Math.tan(THREE.MathUtils.degToRad(17)))
-        + stickerFocus.z + (state.selectedCard !== null ? 1.4 : 0);
-      if (cameraMotion.value === 0) {
-        cameraMotion.value = cameraTarget;
-        cameraFocusX.value = stickerFocus.x;
-        cameraFocusY.value = stickerFocus.y;
-      }
-      moving = spring(cameraMotion, cameraTarget, 12, dt, reducedMotion.matches) || moving;
-      moving = spring(cameraFocusX, stickerFocus.x, 12, dt, reducedMotion.matches) || moving;
-      moving = spring(cameraFocusY, stickerFocus.y, 12, dt, reducedMotion.matches) || moving;
-      camera.position.set(cameraFocusX.value, cameraFocusY.value, cameraMotion.value);
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
       if (foregroundCard !== null) {

@@ -153,6 +153,23 @@ function card(index: 0 | 1) {
   return { element, content };
 }
 
+function pointer(target: HTMLElement, type: string, overrides: Partial<PointerEvent> = {}) {
+  const event = new window.MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: overrides.button ?? 0,
+    clientX: overrides.clientX ?? 100,
+    clientY: overrides.clientY ?? 100,
+  });
+  Object.defineProperties(event, {
+    pointerId: { value: overrides.pointerId ?? 1 },
+    pointerType: { value: overrides.pointerType ?? 'mouse' },
+    isPrimary: { value: overrides.isPrimary ?? true },
+  });
+  fireEvent(target, event);
+  return event;
+}
+
 function renderedMiNoteCards() {
   const names: Record<string, string> = {
     1302: 'Emo★Purple Drifella',
@@ -332,6 +349,134 @@ test('accessible folder actions expose one inspected portal and settle it before
   fireEvent.click(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   assert.ok(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
+});
+
+test('mouse, touch, and pen taps return either inspected card once without repeating on the synthetic click', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  let returns = 0;
+  for (const index of [0, 1] as const) {
+    for (const pointerType of ['mouse', 'touch', 'pen']) {
+      fireEvent.click(view.getByRole('button', { name: `View ${index === 0 ? 'left' : 'right'} card` }));
+      emit({ type: 'card-lifted' });
+      const { content } = card(index);
+      pointer(content, 'pointerdown', { pointerType });
+      pointer(content, 'pointerup', { pointerType, clientX: 103, clientY: 104 });
+      assert.equal(viewer().props.state.cardStage, 'returning');
+      assert.equal(content.dataset.interactionMode, 'settling');
+      fireEvent.click(content, { detail: 1 });
+      pointer(content, 'pointerup', { pointerType });
+      fireEvent.click(content, { detail: 0 });
+      assert.equal(viewer().calls.filter(call => call === 'return').length, ++returns);
+      emit({ type: 'card-returned' });
+    }
+  }
+});
+
+test('dragging an inspected card preserves tilt events and touch settling without returning it', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  emit({ type: 'card-lifted' });
+  const { content } = card(0);
+  let moves = 0;
+  content.addEventListener('pointermove', event => {
+    assert.equal(event.defaultPrevented, false);
+    moves += 1;
+  });
+  for (const pointerType of ['mouse', 'touch']) {
+    pointer(content, 'pointerdown', { pointerType });
+    assert.equal(content.dataset.interactionMode, 'normal');
+    pointer(content, 'pointermove', { pointerType, clientX: 120 });
+    pointer(content, 'pointermove', { pointerType });
+    pointer(content, 'pointerup', { pointerType });
+    fireEvent.click(content, { detail: 1 });
+    assert.equal(viewer().props.state.cardStage, 'inspecting');
+    assert.equal(content.dataset.interactionMode, pointerType === 'touch' ? 'settling' : 'normal');
+  }
+  assert.equal(moves, 4);
+  assert.equal(viewer().calls.includes('return'), false);
+  pointer(content, 'pointerdown', { pointerType: 'touch' });
+  assert.equal(content.dataset.interactionMode, 'normal');
+  pointer(content, 'pointerup', { pointerType: 'touch' });
+  assert.equal(viewer().props.state.cardStage, 'returning');
+});
+
+test('cancelled and interrupted card gestures do not return the card or block its next tap', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View right card' }));
+  emit({ type: 'card-lifted' });
+  const { content } = card(1);
+  for (const type of ['pointercancel', 'lostpointercapture', 'pointerout']) {
+    pointer(content, 'pointerdown', { pointerType: 'touch' });
+    pointer(content, type, { pointerType: 'touch' });
+    pointer(content, 'pointerup', { pointerType: 'touch' });
+    fireEvent.click(content, { detail: 1 });
+    assert.equal(viewer().props.state.cardStage, 'inspecting');
+    assert.equal(content.dataset.interactionMode, 'settling');
+    assert.equal(viewer().calls.includes('return'), false);
+  }
+  pointer(content, 'pointerdown');
+  pointer(content, 'pointerup');
+  assert.equal(viewer().props.state.cardStage, 'returning');
+  assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
+});
+
+for (const interruption of ['blur', 'hidden'] as const) {
+  test(`a card press interrupted by ${interruption} does not block the next tap`, t => {
+    let hidden = false;
+    t.mock.getter(document, 'hidden', () => hidden);
+    const view = render(createElement(MiNoteCardsWipApp));
+    openPack(view);
+    fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+    emit({ type: 'card-lifted' });
+    const { content } = card(0);
+    pointer(content, 'pointerdown');
+    if (interruption === 'blur') {
+      fireEvent(window, new window.Event('blur'));
+      fireEvent(window, new window.Event('focus'));
+    } else {
+      hidden = true;
+      fireEvent(document, new window.Event('visibilitychange'));
+      hidden = false;
+      fireEvent(document, new window.Event('visibilitychange'));
+    }
+    assert.equal(viewer().props.state.cardStage, 'inspecting');
+    assert.equal(viewer().calls.includes('return'), false);
+    pointer(content, 'pointerdown', { clientX: 180 });
+    pointer(content, 'pointerup', { clientX: 180 });
+    assert.equal(viewer().props.state.cardStage, 'returning');
+    assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
+  });
+}
+
+test('only the selected inspecting card accepts primary pointer gestures or keyboard clicks', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  const selected = card(0).content;
+  pointer(selected, 'pointerdown');
+  fireEvent.click(selected, { detail: 0 });
+  emit({ type: 'card-lifted' });
+  pointer(selected, 'pointerup');
+  fireEvent.click(selected, { detail: 1 });
+  assert.equal(viewer().calls.includes('return'), false);
+
+  const inactive = card(1).content;
+  pointer(inactive, 'pointerdown');
+  pointer(inactive, 'pointerup');
+  fireEvent.click(inactive, { detail: 0 });
+  for (const overrides of [{ isPrimary: false }, { button: 2 }]) {
+    pointer(selected, 'pointerdown', overrides);
+    pointer(selected, 'pointerup', overrides);
+    fireEvent.click(selected, { detail: 1 });
+  }
+  assert.equal(viewer().props.state.cardStage, 'inspecting');
+  assert.equal(viewer().calls.includes('return'), false);
+  fireEvent.click(selected, { detail: 0 });
+  assert.equal(viewer().props.state.cardStage, 'returning');
+  assert.equal(viewer().calls.filter(call => call === 'return').length, 1);
 });
 
 test('modal Escape delegates to the active viewer before navigating away', () => {

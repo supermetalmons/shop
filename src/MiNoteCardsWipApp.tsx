@@ -5,6 +5,7 @@ import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePa
 import WipInteractiveCard from './components/WipInteractiveCard';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
+import { createMiNoteCardInput } from './lib/miNoteCardInput';
 import { createMiNoteDemoCard, MI_NOTE_DEMO_CARDS } from './lib/miNoteDemoCards';
 import {
   createMiNoteRevealState,
@@ -64,6 +65,24 @@ function MiNotePackOpening({
   const handleSecondImageReady = useCallback((value: boolean) => {
     setMountedReady((previous) => previous[1] === value ? previous : [previous[0], value]);
   }, []);
+  const cardInputs = useMemo(() => cardElements.map((_, index) => {
+    const active = state.selectedCard === index && state.cardStage === 'inspecting';
+    return createMiNoteCardInput(() => {
+      if (active) controlsRef.current?.returnCard();
+    }, { onStart: () => active });
+  }), [cardElements, controlsRef, state.selectedCard, state.cardStage]);
+
+  useEffect(() => {
+    const cancel = () => cardInputs.forEach(input => input.cancel());
+    const handleVisibilityChange = () => { if (document.hidden) cancel(); };
+    window.addEventListener('blur', cancel);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', cancel);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      cancel();
+    };
+  }, [cardInputs]);
 
   useLayoutEffect(() => {
     cardElements.forEach((element, index) => {
@@ -154,10 +173,23 @@ function MiNotePackOpening({
       {cards.map((card, index) => createPortal(
         <div
           className="mi-note-wip__card-content"
-          onPointerDownCapture={() => setTouchResting(false)}
+          onPointerDownCapture={(event) => {
+            setTouchResting(false);
+            cardInputs[index].onPointerDown(event);
+          }}
+          onPointerMoveCapture={cardInputs[index].onPointerMove}
           onPointerEnter={(event) => { if (event.pointerType === 'mouse') setTouchResting(false); }}
-          onPointerUpCapture={(event) => { if (event.pointerType !== 'mouse') setTouchResting(true); }}
-          onPointerCancel={() => setTouchResting(true)}
+          onPointerLeave={cardInputs[index].cancel}
+          onPointerUpCapture={(event) => {
+            if (event.pointerType !== 'mouse') setTouchResting(true);
+            cardInputs[index].onPointerUp(event);
+          }}
+          onPointerCancelCapture={(event) => {
+            setTouchResting(true);
+            cardInputs[index].onPointerCancel(event);
+          }}
+          onLostPointerCaptureCapture={cardInputs[index].onLostPointerCapture}
+          onClickCapture={cardInputs[index].onClick}
         >
           <WipInteractiveCard
             card={card}

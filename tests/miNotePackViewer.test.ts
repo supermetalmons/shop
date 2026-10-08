@@ -339,6 +339,29 @@ function assertGentleFloat(model: TestModel) {
   assert.equal(frames.size, 1);
 }
 
+function assertCalmOpen(model: TestModel) {
+  const [pitch, yaw, roll, height] = packPose(model);
+  assert.equal(model.phase, 1);
+  assert.ok(pitch >= -0.016 && pitch <= -0.008);
+  assert.equal(yaw, 0);
+  assert.equal(roll, 0);
+  assert.ok(Math.abs(height) <= 0.0185);
+  assert.equal(model.group.position.x, 0);
+  assert.equal(model.group.position.z, 0);
+  assert.ok(model.group.scale.equals(new THREE.Vector3(1, 1, 1)));
+  assert.equal(frames.size, 1);
+}
+
+function advanceSmoothly(model: TestModel, count = 80) {
+  for (let frame = 0; frame < count; frame += 1) {
+    const before = packPose(model);
+    advanceFrame(16.67);
+    packPose(model).forEach((value, axis) => {
+      assert.ok(Math.abs(value - before[axis]) < [0.014, 0.026, 0.004, 0.007][axis]);
+    });
+  }
+}
+
 function cardLayout(home: ReturnType<typeof homeFor>) {
   const cssObject = home.anchor.children.find(child => child instanceof CSS3DObject);
   const aperture = home.anchor.children.find(child => child instanceof THREE.Mesh);
@@ -382,6 +405,18 @@ function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeW
     assert.equal(layer.style.width, `${viewportWidth}px`);
     assert.equal(layer.style.height, `${viewportHeight}px`);
   });
+}
+
+function assertInspectionFits(anchor: THREE.Object3D, camera: THREE.PerspectiveCamera) {
+  const lower = new THREE.Vector3(-MI_NOTE_CARD_WIDTH / 2, -MI_NOTE_CARD_HEIGHT / 2, 0)
+    .applyMatrix4(anchor.matrixWorld).project(camera);
+  const upper = new THREE.Vector3(MI_NOTE_CARD_WIDTH / 2, MI_NOTE_CARD_HEIGHT / 2, 0)
+    .applyMatrix4(anchor.matrixWorld).project(camera);
+  const width = (upper.x - lower.x) / 2;
+  const height = (upper.y - lower.y) / 2;
+  assert.ok(width <= 0.72 + 1e-8 && height <= 0.66 + 1e-8);
+  assert.ok(Math.abs(width - 0.72) < 1e-8 || Math.abs(height - 0.66) < 1e-8);
+  assert.ok(Math.abs(upper.x + lower.x) < 1e-8 && Math.abs(upper.y + lower.y) < 1e-8);
 }
 
 test('a sealed pack gently floats on both covers while outer flips still finish', async () => {
@@ -457,15 +492,15 @@ test('closing before opening finishes continues gently from the visible pose', a
   assert.ok(model.phase > 0.99 && model.phase < 1);
   const before = packPose(model);
   act(() => run.controls.current!.activate());
-  advanceFrames(4);
+  assert.deepEqual(packPose(model), before);
+  advanceSmoothly(model, 12);
   assert.ok(model.phase < 0.2);
-  packPose(model).forEach((value, axis) => assert.ok(Math.abs(value - before[axis]) < 0.002));
   advanceFrames();
   assert.equal(model.phase, 0);
   assertGentleFloat(model);
 });
 
-test('opening removes the full floating pose while stickers flutter and either cover restores it', async () => {
+test('opening keeps a calmer float while stickers flutter and either cover restores the full motion', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness();
   await makeReady();
@@ -473,41 +508,61 @@ test('opening removes the full floating pose while stickers flutter and either c
   act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
   advanceFrames();
   assert.equal(run.state.stage, 'interactive');
-  const closed = new THREE.Vector4(...packPose(model));
-
   act(() => run.controls.current!.activate());
   advanceFrame();
   assert.ok(model.phase > 0 && model.phase < 1);
-  assert.ok(new THREE.Vector4(...packPose(model)).length() < closed.length());
-  advanceFrames();
-  assertSquareOpen(model);
+  advanceSmoothly(model);
+  assertCalmOpen(model);
   const updates = model.sealUpdates.length;
   const openMatrix = model.group.matrixWorld.clone();
   advanceFrames(40);
-  assertSquareOpen(model);
-  assert.ok(model.group.matrixWorld.equals(openMatrix));
+  assertCalmOpen(model);
+  assert.ok(!model.group.matrixWorld.equals(openMatrix));
   assert.equal(model.sealUpdates.length, updates + 40);
 
   for (const direction of [1, -1] as const) {
+    const before = packPose(model);
     act(() => run.controls.current!.navigate(direction));
-    advanceFrame();
-    assert.ok(packPose(model).some(value => value !== 0));
-    advanceFrames(3);
-    assert.ok(Math.abs(model.phase - 1) > 0.8);
-    assert.ok(Math.abs(model.group.rotation.x) < 0.024 * 0.15);
-    assert.ok(Math.abs(model.group.rotation.y) < 0.052 * 0.15);
-    assert.ok(Math.abs(model.group.rotation.z) < 0.016 * 0.15);
-    assert.ok(Math.abs(model.group.position.y) < 0.037 * 0.15);
-    advanceFrames();
+    assert.deepEqual(packPose(model), before);
+    advanceSmoothly(model);
     assert.equal(model.phase, direction === 1 ? 2 : 0);
     assertGentleFloat(model);
     act(() => run.controls.current!.activate());
-    advanceFrames();
-    assertSquareOpen(model);
+    advanceSmoothly(model);
+    assertCalmOpen(model);
   }
 });
 
-test('rapid open and close reversals finish in the latest square open pose', async () => {
+test('open idle bobs slowly with a small forward lean and no sideways tilt', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const model = models[0];
+  let previousHeight = model.group.position.y;
+  let minimumHeight = Infinity;
+  let maximumHeight = -Infinity;
+  let minimumPitch = Infinity;
+  let maximumPitch = -Infinity;
+  const rises: number[] = [];
+  for (let frame = 0; frame < 900; frame += 1) {
+    advanceFrame();
+    assertCalmOpen(model);
+    const { y: height } = model.group.position;
+    const { x: pitch } = model.group.rotation;
+    minimumHeight = Math.min(minimumHeight, height);
+    maximumHeight = Math.max(maximumHeight, height);
+    minimumPitch = Math.min(minimumPitch, pitch);
+    maximumPitch = Math.max(maximumPitch, pitch);
+    if (previousHeight < 0 && height >= 0) rises.push(time);
+    previousHeight = height;
+  }
+  assert.ok(minimumHeight < -0.018 && maximumHeight > 0.018);
+  assert.ok(minimumPitch < -0.0158 && maximumPitch > -0.0082);
+  assert.ok(rises.length >= 3);
+  rises.slice(1).forEach((rise, index) => assert.ok(rise - rises[index] >= 12_800 && rise - rises[index] <= 13_000));
+});
+
+test('rapid open and close reversals finish in the latest calmly floating open pose', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4 });
   await makeReady();
@@ -518,80 +573,84 @@ test('rapid open and close reversals finish in the latest square open pose', asy
   act(() => run.controls.current!.navigate(-1));
   advanceFrame();
   act(() => run.controls.current!.activate());
-  settle();
-  assertSquareOpen(model);
+  advanceSmoothly(model);
+  assertCalmOpen(model);
 
   act(() => run.controls.current!.navigate(1));
   advanceFrames(2);
   assert.ok(model.phase > 1 && model.phase < 2);
   act(() => run.controls.current!.activate());
-  settle();
-  assertSquareOpen(model);
+  advanceSmoothly(model);
+  assertCalmOpen(model);
   assert.equal(run.state.folderPose, 1);
 });
 
-test('pointer manipulation pauses the idle pose and resumes the same motion phase', async () => {
-  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
-  const run = harness();
-  await makeReady();
-  const before = packPose(models[0]);
-  advanceFrame(16.67);
-  advanceFrames(9);
-  const expected = packPose(models[0]);
+for (const folderPose of [0, 1] as const) {
+  test(`pointer manipulation pauses ${folderPose === 1 ? 'open' : 'closed'} idle and resumes the same motion phase`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness(folderPose === 1 ? { ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose } : undefined);
+    await makeReady();
+    const before = packPose(models[0]);
+    advanceFrame(16.67);
+    advanceFrames(9);
+    const expected = packPose(models[0]);
 
-  run.reset();
-  await makeReady();
-  const model = models[1];
-  assert.deepEqual(packPose(model), before);
-  const pointer = pointerControls(run);
-  pointer.dispatch('pointerdown');
-  advanceFrame();
-  assert.deepEqual(packPose(model), before);
-  assert.equal(frames.size, 0);
-  time += 10_000;
-  pointer.dispatch('pointercancel');
-  advanceFrames(10);
-  packPose(model).forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-12));
-  assertGentleFloat(model);
-});
-
-test('hidden tabs pause floating without advancing its phase and unmount cancels stale callbacks', async () => {
-  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
-  const run = harness();
-  await makeReady();
-  const before = packPose(models[0]);
-  advanceFrame(16.67);
-  advanceFrames(9);
-  const expected = packPose(models[0]);
-
-  run.reset();
-  await makeReady();
-  const model = models[1];
-  const staleFrames = [...frames.values()];
-  act(() => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
-    document.dispatchEvent(new window.Event('visibilitychange'));
+    run.reset();
+    await makeReady();
+    const model = models[1];
+    assert.deepEqual(packPose(model), before);
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown');
+    advanceFrame();
+    assert.deepEqual(packPose(model), before);
+    assert.equal(frames.size, 0);
     time += 10_000;
-    staleFrames.forEach(callback => callback(time));
+    pointer.dispatch('pointercancel');
+    advanceFrames(10);
+    packPose(model).forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-12));
+    if (folderPose === 1) assertCalmOpen(model);
+    else assertGentleFloat(model);
   });
-  assert.equal(frames.size, 0);
-  assert.deepEqual(packPose(model), before);
-  act(() => {
-    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
-    document.dispatchEvent(new window.Event('visibilitychange'));
-  });
-  advanceFrames(10);
-  packPose(model).forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-12));
-  assertGentleFloat(model);
-  const unmountedPose = packPose(model);
-  const pending = [...frames.values()];
-  run.view.unmount();
-  act(() => pending.forEach(callback => callback(time + 1000)));
-  assert.equal(frames.size, 0);
-  assert.deepEqual(packPose(model), unmountedPose);
-});
 
-test('live reduced motion changes keep both closed and open poses neutral', async () => {
+  test(`hidden tabs pause ${folderPose === 1 ? 'open' : 'closed'} floating without advancing its phase and unmount cancels stale callbacks`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness(folderPose === 1 ? { ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose } : undefined);
+    await makeReady();
+    const before = packPose(models[0]);
+    advanceFrame(16.67);
+    advanceFrames(9);
+    const expected = packPose(models[0]);
+
+    run.reset();
+    await makeReady();
+    const model = models[1];
+    const staleFrames = [...frames.values()];
+    act(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new window.Event('visibilitychange'));
+      time += 10_000;
+      staleFrames.forEach(callback => callback(time));
+    });
+    assert.equal(frames.size, 0);
+    assert.deepEqual(packPose(model), before);
+    act(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new window.Event('visibilitychange'));
+    });
+    advanceFrames(10);
+    packPose(model).forEach((value, index) => assert.ok(Math.abs(value - expected[index]) < 1e-12));
+    if (folderPose === 1) assertCalmOpen(model);
+    else assertGentleFloat(model);
+    const unmountedPose = packPose(model);
+    const pending = [...frames.values()];
+    run.view.unmount();
+    act(() => pending.forEach(callback => callback(time + 1000)));
+    assert.equal(frames.size, 0);
+    assert.deepEqual(packPose(model), unmountedPose);
+  });
+}
+
+test('live reduced motion neutralizes both poses and re-enabling motion resumes open idle', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4 });
   await makeReady();
@@ -604,8 +663,17 @@ test('live reduced motion changes keep both closed and open poses neutral', asyn
   assertSquareOpen(model);
 
   act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  advanceFrames();
+  assertCalmOpen(model);
+  const openPose = packPose(model);
+  advanceFrames(20);
+  assert.notDeepEqual(packPose(model), openPose);
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
   settle();
   assertSquareOpen(model);
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  advanceFrames();
+  assertCalmOpen(model);
   act(() => run.controls.current!.navigate(1));
   advanceFrames();
   assertGentleFloat(model);
@@ -623,6 +691,7 @@ test('viewport changes preserve card layout and projection in the folder and aft
   const homes = [homeFor(model, 0), homeFor(model, 1)];
   const cards = homes.map(cardLayout);
   const sizes = [[574, 831], [319, 700], [1440, 420], [900, 700]] as const;
+  const openCameraPositions = new Map<number, THREE.Vector3>();
   const assertLayout = () => {
     assertRendererViewport(run, renderer);
     cards.forEach(card => assertCardAlignment(card, renderer.camera!));
@@ -644,6 +713,7 @@ test('viewport changes preserve card layout and projection in the folder and aft
     resizeViewport(width, height);
     assertLayout();
     homes.forEach(assertHome);
+    openCameraPositions.set(width, renderer.camera!.position.clone());
   }
 
   for (const index of [0, 1] as const) {
@@ -654,6 +724,8 @@ test('viewport changes preserve card layout and projection in the folder and aft
     for (const [width, height] of sizes) {
       resizeViewport(width, height);
       assertLayout();
+      assert.ok(renderer.camera!.position.equals(openCameraPositions.get(width)!));
+      assertInspectionFits(homes[index].anchor, renderer.camera!);
     }
     act(() => run.controls.current!.returnCard());
     settle();
@@ -662,6 +734,55 @@ test('viewport changes preserve card layout and projection in the folder and aft
     assertLayout();
   }
   assert.deepEqual(run.errors, []);
+});
+
+test('resizing during card transitions preserves close-up framing and the original pocket', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const home = homeFor(models[0], 0);
+  const camera = renderers[0].camera!;
+  act(() => run.controls.current!.selectCard(0));
+  for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame();
+  assert.equal(run.state.cardStage, 'lifting');
+  assert.notEqual(home.anchor.parent, home.parent);
+  advanceFrames(6);
+  act(() => {
+    viewportWidth = 319;
+    viewportHeight = 700;
+    observers.forEach(observer => observer.callback());
+  });
+  for (let count = 0; run.state.cardStage === 'lifting' && count < 80; count += 1) {
+    advanceFrame(16.67);
+    assert.ok(home.anchor.position.z >= home.position.z - 1e-8, 'Resizing must not push the lifting card behind its pocket');
+  }
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assertInspectionFits(home.anchor, camera);
+
+  act(() => {
+    viewportWidth = 1440;
+    viewportHeight = 420;
+    observers.forEach(observer => observer.callback());
+  });
+  for (let count = 0; frames.size && count < 80; count += 1) {
+    advanceFrame();
+    assertInspectionFits(home.anchor, camera);
+  }
+  assert.equal(frames.size, 0);
+  act(() => run.controls.current!.returnCard());
+  advanceFrames(2);
+  act(() => {
+    viewportWidth = 319;
+    viewportHeight = 700;
+    observers.forEach(observer => observer.callback());
+  });
+  for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) {
+    advanceFrame(16.67);
+    assert.ok(home.anchor.position.z >= home.position.z - 1e-8, 'Resizing must not push the returning card behind its pocket');
+  }
+  assert.equal(run.state.cardStage, 'pocket');
+  assertHome(home);
 });
 
 test('unchanged resize notifications preserve an idle viewer without redundant renderer updates', async () => {
@@ -1151,33 +1272,71 @@ test('narrow viewports leave room for the attached sticker beyond the open pack 
   assert.ok(halfViewWidth > MI_NOTE_LEAF_WIDTH + 0.32);
 });
 
-test('normal motion finishes unfolding before extraction and cleanup cancels a later transition', async () => {
+test('normal motion settles before either card lifts, stays still through inspection, and resumes after return', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const initial: MiNoteRevealState = { ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 2 };
   const run = harness(initial);
   const model = models[0];
-  const home = homeFor(model, 1);
+  const homes = [homeFor(model, 0), homeFor(model, 1)];
   await makeReady();
-  act(() => run.controls.current!.selectCard(1));
-  advanceFrame();
-  assert.ok(model.phase > 1.015);
-  assert.equal(run.state.cardStage, 'lifting');
-  assertHome(home);
-  for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame();
-  assertSquareOpen(model);
-  assert.equal(home.anchor.parent, renderers[0].scene);
-  assert.equal(home.anchor.position.x, home.position.x);
-  assert.equal(home.anchor.position.z, home.position.z);
-  assert.ok(home.anchor.position.y > home.position.y);
-  assert.ok(home.anchor.quaternion.equals(home.quaternion));
-  settle();
-  assert.equal(run.count('card-lifted'), 1);
-  assert.equal(run.state.cardStage, 'inspecting');
-  act(() => run.controls.current!.returnCard());
-  settle();
-  assert.equal(run.count('card-returned'), 1);
-  assertHome(home);
-  assertSquareOpen(model);
+  const camera = renderers[0].camera!;
+  const openCameraPosition = camera.position.clone();
+  for (const index of [1, 0] as const) {
+    const home = homes[index];
+    const before = packPose(model);
+    act(() => run.controls.current!.selectCard(index));
+    assert.deepEqual(packPose(model), before);
+    advanceFrame();
+    if (index === 1) assert.ok(model.phase > 1.015);
+    else {
+      const magnitude = new THREE.Vector4(...packPose(model)).length();
+      assert.ok(magnitude > 0 && magnitude < new THREE.Vector4(...before).length());
+    }
+    assert.equal(run.state.cardStage, 'lifting');
+    assertHome(home);
+    for (let count = 0; run.state.cardStage === 'lifting' && home.anchor.parent === home.parent && count < 80; count += 1) {
+      advanceFrame();
+      assert.ok(camera.position.equals(openCameraPosition));
+    }
+    assertSquareOpen(model);
+    assert.equal(home.anchor.parent, renderers[0].scene);
+    assert.equal(home.anchor.position.x, home.position.x);
+    assert.equal(home.anchor.position.z, home.position.z);
+    assert.ok(home.anchor.position.y > home.position.y);
+    assert.ok(home.anchor.quaternion.equals(home.quaternion));
+    for (let count = 0; run.state.cardStage === 'lifting' && count < 80; count += 1) {
+      advanceFrame();
+      assert.ok(camera.position.equals(openCameraPosition));
+    }
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assertSquareOpen(model);
+    assert.ok(camera.position.equals(openCameraPosition));
+    assertInspectionFits(home.anchor, camera);
+    const inspection = home.anchor.matrixWorld.clone();
+    run.setVerticalPosition(index === 1 ? 0.3 : 0.4);
+    settle();
+    assert.ok(home.anchor.matrixWorld.equals(inspection));
+    assertSquareOpen(model);
+
+    act(() => run.controls.current!.returnCard());
+    for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) {
+      advanceFrame();
+      assertSquareOpen(model);
+      assert.ok(camera.position.equals(openCameraPosition));
+    }
+    assert.equal(run.state.cardStage, 'pocket');
+    homes.forEach(assertHome);
+    advanceFrame(16.67);
+    assert.ok(new THREE.Vector4(...packPose(model)).length() < 0.001);
+    advanceFrames();
+    assertCalmOpen(model);
+    const resumed = packPose(model);
+    advanceFrames(20);
+    assert.notDeepEqual(packPose(model), resumed);
+  }
+  assert.equal(run.count('card-lifted'), 2);
+  assert.equal(run.count('card-returned'), 2);
 
   act(() => run.controls.current!.selectCard(1));
   advanceFrame();
@@ -1188,10 +1347,10 @@ test('normal motion finishes unfolding before extraction and cleanup cancels a l
   act(() => staleFrames.forEach(callback => callback(time + 1000)));
   assert.deepEqual([run.events.length, run.readyChanges.length, run.errors.length], callbacksBefore);
   assert.equal(run.controls.current, null);
-  assert.equal(home.anchor.parent, null);
+  homes.forEach(home => assert.equal(home.anchor.parent, null));
   assert.equal(model.disposed, true);
-  assert.equal(run.count('card-lifted'), 1);
-  assert.equal(run.count('card-returned'), 1);
+  assert.equal(run.count('card-lifted'), 2);
+  assert.equal(run.count('card-returned'), 2);
 });
 
 test('reset ignores readiness and animation callbacks belonging to the previous viewer', async () => {
