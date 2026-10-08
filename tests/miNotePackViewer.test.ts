@@ -7,7 +7,7 @@ import { DRIF_EFFECTS, CARD_NFT_2_NEUTRAL_CARD_EFFECT, type DrifCardConfig } fro
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteCardMaterial } from '../src/lib/miNoteCardMaterial.ts';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
-import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
+import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH, sampleMiNoteFolderPose } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
@@ -69,6 +69,7 @@ const renderers: FakeWebGLRenderer[] = [];
 type TestModel = {
   group: THREE.Group;
   flipRoot: THREE.Group;
+  book: THREE.Group;
   left: THREE.Group;
   right: THREE.Group;
   ready: Promise<void>;
@@ -95,14 +96,16 @@ type TestModel = {
 function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAULT, sizeScale = star.sizeScale }: { star: MiNotePackStar; verticalPosition?: number; sizeScale?: number }): TestModel {
   const group = new THREE.Group();
   const flipRoot = new THREE.Group();
+  const book = new THREE.Group();
   const left = new THREE.Group();
   const right = new THREE.Group();
   group.add(flipRoot);
-  flipRoot.add(left, right);
+  flipRoot.add(book);
+  book.add(left, right);
   let resolveReady!: () => void;
   const ready = new Promise<void>(resolve => { resolveReady = resolve; });
   const model = {
-    group, flipRoot, left, right, ready, resolveReady,
+    group, flipRoot, book, left, right, ready, resolveReady,
     phase: 0,
     sealStarts: 0,
     sealUpdates: [] as TestModel['sealUpdates'],
@@ -110,7 +113,15 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
     sealVerticalPosition: verticalPosition,
     sealSizeScale: sizeScale,
     disposed: false,
-    setFolderPhase(phase: number) { model.phase = phase; },
+    setFolderPhase(phase: number) {
+      const pose = sampleMiNoteFolderPose(phase);
+      model.phase = pose.phase;
+      left.rotation.y = pose.frontAngle;
+      left.position.copy(pose.leftPosition);
+      right.rotation.y = -pose.backAngle;
+      right.position.copy(pose.rightPosition);
+      book.position.x = pose.bookX;
+    },
     setSealFoldPosition() {},
     setSealRotationOffsetDegrees() {},
     setSealVerticalPosition(value: number) { model.sealVerticalPosition = value; },
@@ -124,6 +135,7 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
     },
     dispose() { model.disposed = true; group.removeFromParent(); },
   };
+  model.setFolderPhase(0);
   models.push(model);
   return model;
 }
@@ -371,8 +383,18 @@ function packPose(model: TestModel) {
   return [model.group.rotation.x, model.group.rotation.y, model.group.rotation.z, model.group.position.y] as const;
 }
 
-function assertSquareOpen(model: TestModel) {
+function assertOpenFold(model: TestModel) {
+  const halfDeficit = THREE.MathUtils.degToRad(2.5);
   assert.equal(model.phase, 1);
+  assert.ok(Math.abs(model.left.rotation.y - halfDeficit) < 1e-10);
+  assert.ok(Math.abs(model.right.rotation.y + halfDeficit) < 1e-10);
+  assert.ok(Math.abs(model.left.position.x + model.right.position.x) < 1e-10);
+  assert.equal(model.left.position.z, model.right.position.z);
+  assert.equal(model.book.position.x, 0);
+}
+
+function assertSquareOpen(model: TestModel) {
+  assertOpenFold(model);
   assert.ok(packPose(model).every(value => value === 0));
   assert.ok(model.group.scale.equals(new THREE.Vector3(1, 1, 1)));
 }
@@ -390,7 +412,7 @@ function assertGentleFloat(model: TestModel) {
 
 function assertCalmOpen(model: TestModel) {
   const [pitch, yaw, roll, height] = packPose(model);
-  assert.equal(model.phase, 1);
+  assertOpenFold(model);
   assert.ok(pitch >= -0.016 && pitch <= -0.008);
   assert.equal(yaw, 0);
   assert.equal(roll, 0);
@@ -1446,28 +1468,52 @@ test('normal motion lifts either card immediately while the folder keeps floatin
   assert.equal(run.count('card-returned'), 2);
 });
 
-test('selecting a card from a closed folder still waits for the folder to open', async () => {
-  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
-  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 2 });
-  await makeReady();
-  const model = models[0];
-  const home = homeFor(model, 1);
-  act(() => run.controls.current!.selectCard(1));
-  advanceFrame(16.67);
-  assert.equal(run.state.folderPose, 1);
-  assert.equal(run.state.cardStage, 'lifting');
-  assert.ok(model.phase > 1.015);
-  assertHome(home);
-  for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame(16.67);
-  assert.equal(model.phase, 1);
-  assert.equal(home.anchor.parent, renderers[0].scene);
-  advanceFrames();
-  assert.equal(run.state.cardStage, 'inspecting');
-  act(() => run.controls.current!.returnCard());
-  for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) advanceFrame(16.67);
-  assert.equal(run.state.cardStage, 'pocket');
-  assertHome(home);
-});
+for (const folderPose of [0, 2] as const) {
+  for (const index of [0, 1] as const) {
+    test(`card ${index} waits for cover ${folderPose} to open and returns to its tilted pocket without snapping`, async () => {
+      setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose });
+      await makeReady();
+      const model = models[0];
+      const home = homeFor(model, index);
+      act(() => run.controls.current!.selectCard(index));
+      advanceFrame(16.67);
+      assert.equal(run.state.folderPose, 1);
+      assert.equal(run.state.cardStage, 'lifting');
+      assert.ok(Math.abs(model.phase - 1) > 0.015);
+      assertHome(home);
+      for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame(16.67);
+      assertOpenFold(model);
+      assert.equal(home.anchor.parent, renderers[0].scene);
+      const liftedPosition = home.parent.worldToLocal(home.anchor.getWorldPosition(new THREE.Vector3()));
+      const pocketQuaternion = home.parent.getWorldQuaternion(new THREE.Quaternion());
+      assert.ok(Math.abs(liftedPosition.x - home.position.x) < 1e-10);
+      assert.ok(Math.abs(liftedPosition.z - home.position.z) < 1e-10);
+      assert.ok(liftedPosition.y > home.position.y);
+      assert.ok(home.anchor.getWorldQuaternion(new THREE.Quaternion()).angleTo(pocketQuaternion) < 1e-7);
+      advanceFrames();
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.ok(home.anchor.quaternion.equals(new THREE.Quaternion()));
+      assertInspectionFits(home.anchor, renderers[0].camera!);
+      act(() => run.controls.current!.returnCard());
+      for (let count = 0; count < 33; count += 1) advanceFrame(16.67);
+      advanceFrame(9);
+      assert.equal(run.state.cardStage, 'returning');
+      const beforePosition = home.anchor.getWorldPosition(new THREE.Vector3());
+      const beforeQuaternion = home.anchor.getWorldQuaternion(new THREE.Quaternion());
+      assert.ok(beforePosition.distanceTo(home.parent.localToWorld(home.position.clone())) < 0.0002);
+      assert.ok(beforeQuaternion.angleTo(home.parent.getWorldQuaternion(new THREE.Quaternion())) < 1e-7);
+      advanceFrame(1);
+      assert.equal(run.state.cardStage, 'pocket');
+      assertHome(home);
+      assertOpenFold(model);
+      assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).distanceTo(beforePosition) < 0.0002);
+      assert.ok(home.anchor.getWorldQuaternion(new THREE.Quaternion()).angleTo(beforeQuaternion) < 0.0002);
+      assert.equal(run.count('card-lifted'), 1);
+      assert.equal(run.count('card-returned'), 1);
+    });
+  }
+}
 
 test('reduced motion can stop and restart folder idle during inspection without moving the close-up', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);

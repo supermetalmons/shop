@@ -18,11 +18,14 @@ const SPINE_SEGMENTS = 8;
 const POCKET_BASE = 0.0069;
 const POCKET_BOW = 0.0038;
 const LINER_Z = THICKNESS / 2;
+const OPEN_LEAF_ANGLE = THREE.MathUtils.degToRad(2.5);
 
 export function sampleMiNoteFolderPose(value: number) {
   const phase = THREE.MathUtils.clamp(value, 0, 2);
-  const frontAngle = Math.PI * (1 - Math.min(phase, 1));
-  const backAngle = Math.PI * Math.max(phase - 1, 0);
+  const spread = 1 - Math.abs(phase - 1);
+  const openAngle = OPEN_LEAF_ANGLE * spread;
+  const frontAngle = Math.PI * (1 - Math.min(phase, 1)) + openAngle;
+  const backAngle = Math.PI * Math.max(phase - 1, 0) + openAngle;
   return {
     phase,
     frontAngle,
@@ -30,9 +33,8 @@ export function sampleMiNoteFolderPose(value: number) {
     leftPosition: new THREE.Vector3(-HINGE_OFFSET * Math.sin(frontAngle), 0, HINGE_OFFSET * (1 - Math.cos(frontAngle))),
     rightPosition: new THREE.Vector3(HINGE_OFFSET * Math.sin(backAngle), 0, HINGE_OFFSET * (1 - Math.cos(backAngle))),
     bookX: MI_NOTE_LEAF_WIDTH / 4 * (Math.cos(frontAngle) - Math.cos(backAngle)),
-    spread: 1 - Math.abs(phase - 1),
-    spineAngle: Math.max(frontAngle, backAngle),
-    spineSide: phase > 1 ? 1 : -1,
+    spread,
+    spineAngle: frontAngle + backAngle,
   };
 }
 
@@ -318,12 +320,15 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     const angle = pose.spineAngle;
     spine.visible = angle > 0.001;
     centerSeam.visible = angle < 0.04;
-    const endX = pose.spineSide * HINGE_OFFSET * Math.sin(angle);
-    const endZ = HINGE_OFFSET * (1 - Math.cos(angle));
+    const pinchOffset = 0.0014 * (Math.sin(pose.backAngle / 2) ** 2 - Math.sin(pose.frontAngle / 2) ** 2);
     for (let i = 0; i < spinePositions.count; i += 1) {
       const t = (i % (SPINE_SEGMENTS + 1)) / SPINE_SEGMENTS;
-      const pinch = 0.0014 * Math.sin(angle / 2) ** 2 * Math.sin(Math.PI * t);
-      spinePositions.setXYZ(i, endX * t + pose.spineSide * pinch, i <= SPINE_SEGMENTS ? HEIGHT / 2 : -HEIGHT / 2, endZ * t);
+      spinePositions.setXYZ(
+        i,
+        THREE.MathUtils.lerp(pose.leftPosition.x, pose.rightPosition.x, t) + pinchOffset * Math.sin(Math.PI * t),
+        i <= SPINE_SEGMENTS ? HEIGHT / 2 : -HEIGHT / 2,
+        THREE.MathUtils.lerp(pose.leftPosition.z, pose.rightPosition.z, t),
+      );
     }
     spinePositions.needsUpdate = true;
     spineGeometry.computeVertexNormals();

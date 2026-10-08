@@ -39,22 +39,30 @@ test('folder front, open, and back poses keep both closures centered and hinges 
   const front = sampleMiNoteFolderPose(0);
   const open = sampleMiNoteFolderPose(1);
   const back = sampleMiNoteFolderPose(2);
+  const openLeafAngle = THREE.MathUtils.degToRad(2.5);
   near(front.frontAngle, Math.PI);
   near(front.backAngle, 0);
-  near(open.frontAngle, 0);
-  near(open.backAngle, 0);
+  near(open.frontAngle, openLeafAngle);
+  near(open.backAngle, openLeafAngle);
+  near(Math.PI - open.spineAngle, THREE.MathUtils.degToRad(175));
   near(back.frontAngle, 0);
   near(back.backAngle, Math.PI);
   near(front.leftPosition.z, 0.0158);
   near(back.rightPosition.z, 0.0158);
-  nearVector(open.leftPosition, new THREE.Vector3());
-  nearVector(open.rightPosition, new THREE.Vector3());
+  near(open.leftPosition.x, -open.rightPosition.x);
+  near(open.leftPosition.z, open.rightPosition.z);
+  assert.ok(open.leftPosition.x < 0);
+  assert.ok(open.leftPosition.z > 0);
+  near(open.bookX, 0);
   for (const phase of [0, 2]) {
     const bounds = leafBounds(phase);
     near(bounds.getCenter(new THREE.Vector3()).x, 0);
     near(bounds.getSize(new THREE.Vector3()).x, MI_NOTE_LEAF_WIDTH);
   }
-  near(leafBounds(1).getSize(new THREE.Vector3()).x, MI_NOTE_LEAF_WIDTH * 2);
+  const openBounds = leafBounds(1);
+  near(openBounds.getCenter(new THREE.Vector3()).x, 0);
+  near(openBounds.getSize(new THREE.Vector3()).x, 2 * (MI_NOTE_LEAF_WIDTH * Math.cos(openLeafAngle) + open.rightPosition.x));
+  assert.ok(openBounds.getSize(new THREE.Vector3()).z > 0.05);
   near(front.spread, 0);
   near(back.spread, 0);
   near(open.spread, 1);
@@ -65,10 +73,15 @@ test('folder poses stay symmetric through either hinge and clamp at each closed 
     const front = sampleMiNoteFolderPose(phase);
     const back = sampleMiNoteFolderPose(2 - phase);
     near(front.frontAngle, back.backAngle);
+    near(front.backAngle, back.frontAngle);
     near(front.bookX, -back.bookX);
     near(front.leftPosition.x, -back.rightPosition.x);
     near(front.leftPosition.z, back.rightPosition.z);
+    near(front.rightPosition.x, -back.leftPosition.x);
+    near(front.rightPosition.z, back.leftPosition.z);
     near(front.spread, back.spread);
+    near(front.spineAngle, back.spineAngle);
+    assert.ok(front.spineAngle >= THREE.MathUtils.degToRad(5));
   }
   assert.deepEqual(sampleMiNoteFolderPose(-4), sampleMiNoteFolderPose(0));
   assert.deepEqual(sampleMiNoteFolderPose(7), sampleMiNoteFolderPose(2));
@@ -109,6 +122,59 @@ function setupArtwork(t: TestContext) {
     else Reflect.deleteProperty(globalThis, 'Image');
   });
 }
+
+test('spine connects both moving hinges and stays mirrored and continuous through the open pose', async (t) => {
+  setupArtwork(t);
+  const model = createMiNotePackModel({
+    color: '#3559b7',
+    star: { id: 'test', name: 'Test star', src: '/star.png', foldPosition: 0.573, rotationOffsetDegrees: 0, sizeScale: 1 },
+    foldPosition: 0.573,
+    rotationOffsetDegrees: 0,
+  });
+  t.after(() => model.dispose());
+  await model.ready;
+  const spine = model.left.parent!.children.find((object): object is THREE.Mesh<THREE.PlaneGeometry> => (
+    object instanceof THREE.Mesh && object.geometry instanceof THREE.PlaneGeometry && object.geometry.parameters.widthSegments > 1
+  ));
+  assert.ok(spine);
+  const columns = spine.geometry.parameters.widthSegments + 1;
+  const sampleSpine = (phase: number) => {
+    model.setFolderPhase(phase);
+    assert.equal(spine.visible, true);
+    const position = spine.geometry.attributes.position;
+    const points = Array.from({ length: position.count }, (_, index) => new THREE.Vector3().fromBufferAttribute(position, index));
+    for (const row of [0, 1]) {
+      const left = points[row * columns];
+      const right = points[row * columns + columns - 1];
+      near(left.x, model.left.position.x, 1e-8);
+      near(left.z, model.left.position.z, 1e-8);
+      near(right.x, model.right.position.x, 1e-8);
+      near(right.z, model.right.position.z, 1e-8);
+    }
+    assert.ok(Array.from(spine.geometry.attributes.normal.array).every(Number.isFinite));
+    return points;
+  };
+  for (const phase of [0, 0.2, 0.5, 0.9, 0.99, 1]) {
+    const front = sampleSpine(phase);
+    const back = sampleSpine(2 - phase);
+    for (let index = 0; index < front.length; index += 1) {
+      const mirrorIndex = Math.floor(index / columns) * columns + columns - 1 - index % columns;
+      nearVector(front[index], back[mirrorIndex].clone().multiply(new THREE.Vector3(-1, 1, 1)), 1e-8);
+    }
+  }
+  const open = sampleSpine(1);
+  for (const phase of [1 - 1e-6, 1 + 1e-6]) {
+    sampleSpine(phase).forEach((point, index) => nearVector(point, open[index], 1e-7));
+  }
+  for (const phase of [0, 2]) {
+    sampleSpine(phase).forEach((point, index) => {
+      const u = (index % columns) / (columns - 1);
+      const progress = phase === 0 ? 1 - u : u;
+      near(point.x, (phase === 0 ? -1 : 1) * 0.0014 * Math.sin(Math.PI * progress), 1e-8);
+      near(point.z, 0.0158 * progress, 1e-8);
+    });
+  }
+});
 
 test('model retains the seal, pocket geometry, and picking metadata through both closures and outer flips', async (t) => {
   setupArtwork(t);
