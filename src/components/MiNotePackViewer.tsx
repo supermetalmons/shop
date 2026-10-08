@@ -161,7 +161,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const cardGeometry = createMiNoteCardGeometry();
     const cards = props.cards.map((config, index) => {
       const anchor = new THREE.Group();
-      const home = new THREE.Vector3((index === 0 ? -1 : 1) * MI_NOTE_LEAF_WIDTH / 2, -0.005, 0.0057);
+      const home = new THREE.Vector3((index === 0 ? -1 : 1) * (MI_NOTE_LEAF_WIDTH / 2 - 0.015), -0.005, 0.0057);
       anchor.position.copy(home);
       const surface = createMiNoteCardMaterial(config);
       const mesh = new THREE.Mesh(cardGeometry, surface.material);
