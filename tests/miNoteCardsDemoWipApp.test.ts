@@ -4,6 +4,7 @@ import test, { after, afterEach, beforeEach } from 'node:test';
 import { createElement, useLayoutEffect, useRef, useState } from 'react';
 import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { DrifCardConfig } from '../src/drifCards.ts';
+import { MI_NOTE_CARDS_DEFAULT } from '../src/lib/miNoteCardEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type CardProps = Parameters<typeof WipInteractiveCard>[0];
@@ -95,19 +96,19 @@ function assets() {
   return instance;
 }
 
-function assertCard(id: number, effect = 'v-regular') {
+function assertCard(id: number) {
   const { props } = card();
   const base = 'https://cdn.lil.org/nft/mi_note_cards';
   assert.equal(props.card.imageSrc, `${base}/fronts/${id}.webp`);
-  assert.equal(props.card.foilSrc, effect === 'lighting-only' ? undefined : `${base}/foils/${id}.webp`);
-  assert.equal(props.card.textureSrc, effect === 'lighting-only' ? undefined : `${base}/masks/${id}.webp`);
-  assert.equal(props.card.effect.effectKey, effect);
+  assert.equal(props.card.foilSrc, `${base}/foils/${id}.webp`);
+  assert.equal(props.card.textureSrc, `${base}/masks/${id}.webp`);
+  assert.equal(props.card.effect, MI_NOTE_CARDS_DEFAULT);
   assert.equal(props.imageAlt, `Mi Note Card #${id}`);
   assert.equal(props.ariaLabel, `Inspect Mi Note Card #${id}`);
   assert.deepEqual(assets().cards, [props.card]);
 }
 
-test('devnet starts with a random card across the full ID range and keeps it on rerender', t => {
+test('devnet starts with a random card and a fixed default effect without a picker', t => {
   let random = 0;
   t.mock.method(Math, 'random', () => random);
   for (const [sample, id] of [[0, 1], [0.5, 716], [1 - Number.EPSILON, 1430]]) {
@@ -119,7 +120,7 @@ test('devnet starts with a random card across the full ID range and keeps it on 
     assert.equal(input.max, '1430');
     assert.equal(input.step, '1');
     assert.equal(input.value, String(id));
-    assert.equal(view.queryByRole('combobox', { name: 'Card' }), null);
+    assert.equal(view.queryByRole('combobox'), null);
     assertCard(id);
     random = 0.25;
     view.rerender(createElement(MiNoteCardsDemoWipApp));
@@ -150,29 +151,10 @@ test('valid ID edits update immediately and invalid drafts preserve the last dis
   assertCard(1430);
 });
 
-test('all effects preserve the selected ID and load only the assets that effect uses', t => {
-  t.mock.method(Math, 'random', () => 0);
-  const view = render(createElement(MiNoteCardsDemoWipApp));
-  const input = view.getByRole('spinbutton', { name: 'Card ID' }) as HTMLInputElement;
-  const picker = view.getByRole('combobox', { name: 'Effect' }) as HTMLSelectElement;
-  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), [
-    ['v-regular', 'V Regular'], ['trainer-full-art', 'Trainer Full Art'], ['lighting-only', 'Lighting only'],
-  ]);
-  fireEvent.change(input, { target: { value: '1430' } });
-  for (const effect of ['trainer-full-art', 'lighting-only', 'v-regular']) {
-    const previous = card();
-    fireEvent.change(picker, { target: { value: effect } });
-    assert.equal(previous.mounted, false);
-    assert.equal(input.value, '1430');
-    assertCard(1430, effect);
-  }
-});
-
-test('loading waits for the card image and Retry retains the chosen ID and effect', t => {
+test('loading waits for the card image and Retry retains the chosen ID and default effect', t => {
   t.mock.method(Math, 'random', () => 0);
   const view = render(createElement(MiNoteCardsDemoWipApp));
   fireEvent.change(view.getByRole('spinbutton', { name: 'Card ID' }), { target: { value: '1430' } });
-  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'trainer-full-art' } });
   assert.equal(view.getByRole('status').textContent, 'Loading…');
   assert.equal(card().props.interactive, false);
   act(() => assets().setState({ ready: true, error: null }));
@@ -192,7 +174,7 @@ test('loading waits for the card image and Retry retains the chosen ID and effec
   assert.equal(failedAssets.retryCount, 1);
   assert.equal(view.queryByRole('alert'), null);
   assert.ok(view.getByRole('status'));
-  assertCard(1430, 'trainer-full-art');
+  assertCard(1430);
   act(() => assets().setState({ ready: true, error: null }));
   assert.equal(card().props.interactive, false);
   act(() => card().props.onImageReadyChange?.(true));

@@ -45,7 +45,7 @@
   bottom: max(8px, env(safe-area-inset-bottom));
   left: 18px;
   display: grid;
-  grid-template-columns: minmax(44px, 1fr) minmax(0, 440px) minmax(44px, 1fr);
+  grid-template-columns: minmax(44px, 1fr) minmax(0, 260px) minmax(44px, 1fr);
   align-items: center;
   gap: 12px;
 }
@@ -55,15 +55,11 @@
   justify-self: start;
 }
 
-.mi-note-demo__pickers {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
-  gap: 16px;
+.mi-note-demo__card-controls {
   min-width: 0;
 }
 
-.mi-note-demo__pickers select,
-.mi-note-demo__pickers input {
+.mi-note-demo__card-controls input {
   width: 100%;
   min-width: 0;
   min-height: 36px;
@@ -77,12 +73,7 @@
   touch-action: manipulation;
 }
 
-.mi-note-demo__pickers select {
-  cursor: pointer;
-}
-
-.mi-note-demo__pickers select:hover,
-.mi-note-demo__pickers input:hover {
+.mi-note-demo__card-controls input:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
 }
@@ -93,10 +84,5 @@
     bottom: max(2px, env(safe-area-inset-bottom));
     left: 12px;
     grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .mi-note-demo__pickers {
-    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
-    gap: 8px;
   }
 }

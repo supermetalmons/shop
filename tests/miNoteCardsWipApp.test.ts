@@ -5,7 +5,7 @@ import { createElement, useLayoutEffect, useRef } from 'react';
 import type MiNotePackViewer from '../src/components/MiNotePackViewer.tsx';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { MI_NOTE_PACK_VARIANTS, type MiNoteRevealEvent } from '../src/lib/miNoteCardReveal.ts';
-import { MI_NOTE_CARD_EFFECTS } from '../src/lib/miNoteCardEffects.ts';
+import { MI_NOTE_CARDS_DEFAULT } from '../src/lib/miNoteCardEffects.ts';
 import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
@@ -118,7 +118,7 @@ function renderedMiNoteCards() {
     assert.equal(imageSrc, `https://cdn.lil.org/nft/mi_note_cards/fronts/${id}.webp`);
     assert.equal(foilSrc, `https://cdn.lil.org/nft/mi_note_cards/foils/${id}.webp`);
     assert.equal(textureSrc, `https://cdn.lil.org/nft/mi_note_cards/masks/${id}.webp`);
-    assert.equal(effect.effectKey, 'v-regular');
+    assert.equal(effect, MI_NOTE_CARDS_DEFAULT);
     return { id, imageSrc, foilSrc, textureSrc, effect };
   });
   assert.notEqual(cards[0].id, cards[1].id);
@@ -268,10 +268,10 @@ test('accessible folder actions select either GPU card and wait for its return a
   assert.deepEqual(viewer().calls.filter(call => call.startsWith('select:') || call === 'return'), ['select:0', 'return', 'select:1', 'return']);
   act(() => viewer().props.onBackgroundTap());
   assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards preview' }), null);
-  assert.equal(view.queryByRole('combobox', { name: 'Effect' }), null);
+  assert.equal(view.queryByRole('spinbutton', { name: 'Left card ID' }), null);
   assert.ok(view.getByRole('button', { name: 'View left card' }));
   act(() => viewer().props.onBackgroundTap());
-  assert.ok(view.getByRole('combobox', { name: 'Effect' }));
+  assert.ok(view.getByRole('spinbutton', { name: 'Left card ID' }));
   fireEvent.click(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   assert.ok(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
@@ -389,36 +389,28 @@ test('selected card action requires a working viewer but can reverse while repla
   assert.equal(viewer().props.state.cardStage, 'lifting');
 });
 
-test('all three card effects update live without replacing cards or resetting the opened pack', () => {
+test('the dedicated default effect stays fixed through opening, inspection, and reset without a picker', () => {
   const view = render(createElement(MiNoteCardsWipApp));
-  const picker = view.getByRole('combobox', { name: 'Effect' }) as HTMLSelectElement;
-  assert.deepEqual(Array.from(picker.options, option => [option.value, option.text]), [
-    ['v-regular', 'V Regular'], ['trainer-full-art', 'Trainer Full Art'], ['lighting-only', 'Lighting only'],
-  ]);
+  const assertDefault = () => {
+    assert.equal(view.queryByRole('combobox'), null);
+    assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
+    renderedMiNoteCards();
+  };
+  assertDefault();
   const initial = viewer();
   const cards = initial.props.cards;
   openPack(view);
-  for (const { effect } of MI_NOTE_CARD_EFFECTS) {
-    const state = viewer().props.state;
-    fireEvent.change(picker, { target: { value: effect.effectKey } });
-    assert.equal(viewer(), initial);
-    assert.equal(viewer().props.cards, cards);
-    assert.equal(viewer().props.state, state);
-    assert.equal(viewer().props.cardEffect, effect);
-    assert.equal(viewer().props.state.folderPose, 1);
-  }
+  assertDefault();
+  assert.equal(viewer().props.state.folderPose, 1);
   fireEvent.click(view.getByRole('button', { name: 'View left card' }));
   emit({ type: 'card-lifted' });
-  const inspecting = viewer().props.state;
-  fireEvent.change(picker, { target: { value: 'trainer-full-art' } });
+  assertDefault();
   assert.equal(viewer(), initial);
   assert.equal(viewer().props.cards, cards);
-  assert.equal(viewer().props.state, inspecting);
-  assert.equal(viewer().props.cardEffect.effectKey, 'trainer-full-art');
-  assert.ok(cards.every(card => Boolean(card.foilSrc && card.textureSrc)));
+  assert.equal(viewer().props.state.cardStage, 'inspecting');
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
-  assert.equal(viewer().props.cardEffect.effectKey, 'trainer-full-art');
-  assert.equal(picker.value, 'trainer-full-art');
+  assertDefault();
+  assert.equal(viewer().props.state.stage, 'sealed');
 });
 
 test('card ID inputs update either card without resetting the open folder or inspected card', t => {
@@ -491,7 +483,7 @@ test('invalid card ID drafts preserve both displayed cards and the open folder s
   assert.equal(viewer().props.state, opened);
 });
 
-test('effect changes and Retry keep edited IDs and drafts while Reset replaces both inputs', t => {
+test('Retry keeps edited IDs and drafts while Reset replaces both inputs with the same default effect', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   const view = render(createElement(MiNoteCardsWipApp));
@@ -507,16 +499,14 @@ test('effect changes and Retry keep edited IDs and drafts while Reset replaces b
     assert.deepEqual(renderedMiNoteCards(), cards);
     assert.deepEqual([left.value, right.value], ['', '1431']);
   };
-  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
-  assertSelection();
   act(() => viewer().props.onError(new Error('Lost renderer')));
   fireEvent.click(view.getByRole('button', { name: 'Retry' }));
   assertSelection();
-  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+  assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1145', '1144']);
   assert.deepEqual([left.value, right.value], ['1145', '1144']);
-  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+  assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
 });
 
 test('modal Escape delegates to the active viewer before navigating away', () => {
@@ -545,7 +535,7 @@ test('modal Escape delegates to the active viewer before navigating away', () =>
   assert.equal(viewer().calls.filter(call => call === 'escape').length, 5);
 });
 
-test('Mi Note cards keep their assets and random appearance through effect changes and retry, while reset resamples', t => {
+test('Mi Note cards keep their assets and random appearance through retry, while reset resamples', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   const view = render(createElement(MiNoteCardsWipApp));
@@ -567,7 +557,6 @@ test('Mi Note cards keep their assets and random appearance through effect chang
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   fireEvent.click(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
   assert.equal(viewer().props.state.folderPose, 1);
-  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
   assert.equal(viewer().props.color, initialColor);
   assert.equal(viewer().props.star, initialStar);
   assert.deepEqual(renderedMiNoteCards(), initialCards);
@@ -580,7 +569,7 @@ test('Mi Note cards keep their assets and random appearance through effect chang
   assert.equal(failed.mounted, false);
   assert.equal(viewer().props.color, failed.props.color);
   assert.equal(viewer().props.star.id, failed.props.star.id);
-  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+  assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
   assert.deepEqual(renderedMiNoteCards(), initialCards);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
@@ -597,7 +586,7 @@ test('Mi Note cards keep their assets and random appearance through effect chang
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.equal(viewer().props.color, MI_NOTE_PACK_VARIANTS[2].color);
   assert.equal(viewer().props.star, MI_NOTE_PACK_STARS[2]);
-  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+  assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
   const resetCards = renderedMiNoteCards();
   assert.notDeepEqual(resetCards, initialCards);
   assert.deepEqual(resetCards.map(({ id }) => id), ['1145', '1144']);
@@ -613,7 +602,7 @@ test('keyboard shortcuts use current controls and leave focused form controls al
   fireEvent.keyDown(dialog, { key: 'ArrowLeft', code: 'ArrowLeft' });
   fireEvent.keyDown(dialog, { key: 'ArrowRight', code: 'ArrowRight' });
   assert.deepEqual(viewer().calls, ['activate', 'activate', 'navigate:-1', 'navigate:1']);
-  for (const target of [view.getByRole('combobox', { name: 'Effect' }), view.getByRole('button', { name: /2 taps remaining/ }), view.getByRole('button', { name: 'Reset opening' })]) {
+  for (const target of [view.getByRole('button', { name: /2 taps remaining/ }), view.getByRole('button', { name: 'Reset opening' })]) {
     fireEvent.keyDown(target, { key: 'Enter', code: 'Enter' });
     fireEvent.keyDown(target, { key: 'ArrowRight', code: 'ArrowRight' });
   }
@@ -649,17 +638,18 @@ test('keyboard shortcuts use current controls and leave focused form controls al
   assert.equal(instances.length, mounts);
 });
 
-test('effect-loading errors recover in the open pack without clearing renderer failures', () => {
+test('card-loading errors recover after an ID edit without closing the pack or clearing renderer failures', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   openPack(view);
   const instance = viewer();
   act(() => {
     instance.props.onCardsReadyChange(false);
-    instance.props.onCardsError(new Error('Missing foil'));
+    instance.props.onCardsError(new Error('Missing mask'));
   });
   assert.ok(view.getByRole('alert'));
   assert.equal(instance.props.interactionEnabled, false);
-  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
+  const input = view.getByRole('spinbutton', { name: 'Left card ID' }) as HTMLInputElement;
+  fireEvent.change(input, { target: { value: input.value === '1' ? '2' : '1' } });
   act(() => {
     instance.props.onCardsError(null);
     instance.props.onCardsReadyChange(true);

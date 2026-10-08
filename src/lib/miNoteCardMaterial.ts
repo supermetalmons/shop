@@ -300,7 +300,8 @@ export function createMiNoteCardMaterial(
   async function setEffect(effect: DrifCardConfig['effect']): Promise<void> {
     if (disposed) return;
     const version = ++effectVersion;
-    const value = effect.effectKey === DRIF_EFFECT_KEYS.lightingOnly ? 2
+    const value = effect.effectKey === DRIF_EFFECT_KEYS.miNoteCardsDefault ? 0
+      : effect.effectKey === DRIF_EFFECT_KEYS.lightingOnly ? 2
       : effect.effectKey === DRIF_EFFECT_KEYS.trainerFullArt ? 1 : 0;
     const pending = [ensureTexture(uniforms.uFront, card.imageSrc)];
     if (value !== 2) {

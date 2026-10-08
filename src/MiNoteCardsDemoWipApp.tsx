@@ -1,17 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import WipInteractiveCard from './components/WipInteractiveCard';
-import { CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS, type DrifCardConfig } from './drifCards';
+import type { DrifCardConfig } from './drifCards';
 import { useMiNoteCardAssets } from './hooks/useMiNoteCardAssets';
+import { MI_NOTE_CARDS_DEFAULT } from './lib/miNoteCardEffects';
 import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteCardId } from './lib/miNoteCards';
 import { navigate } from './navigation';
 import './styles/mi-note-cards-demo-wip.css';
-
-const DEMO_EFFECTS = [
-  { name: 'V Regular', effect: DRIF_EFFECTS['swshp-SWSH179'] },
-  { name: 'Trainer Full Art', effect: DRIF_EFFECTS['swsh6-196'] },
-  { name: 'Lighting only', effect: CARD_NFT_2_NEUTRAL_CARD_EFFECT },
-];
 
 function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string }) {
   const assets = useMiNoteCardAssets([card]);
@@ -70,10 +65,9 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
 export default function MiNoteCardsDemoWipApp() {
   const [selectedCardId, setSelectedCardId] = useState(() => sampleMiNoteCardId());
   const [cardIdInput, setCardIdInput] = useState(() => String(selectedCardId));
-  const [selectedEffect, setSelectedEffect] = useState(DEMO_EFFECTS[0]);
   const card = useMemo(
-    () => createMiNoteCard(selectedCardId, selectedEffect.effect),
-    [selectedCardId, selectedEffect],
+    () => createMiNoteCard(selectedCardId, MI_NOTE_CARDS_DEFAULT),
+    [selectedCardId],
   );
   const handleClose = () => navigate('/');
 
@@ -86,14 +80,14 @@ export default function MiNoteCardsDemoWipApp() {
     >
       <div className="mi-note-demo__content">
         <DemoCardPreview
-          key={`${selectedCardId}:${selectedEffect.effect.effectKey}`}
+          key={selectedCardId}
           card={card}
           name={`Mi Note Card #${selectedCardId}`}
         />
       </div>
       <div className="mi-note-demo__controls">
         <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards demo">Close</button>
-        <div className="mi-note-demo__pickers" role="group" aria-label="Card appearance">
+        <div className="mi-note-demo__card-controls" role="group" aria-label="Card controls">
           <input
             type="number"
             inputMode="numeric"
@@ -108,12 +102,6 @@ export default function MiNoteCardsDemoWipApp() {
               if (Number.isInteger(next) && next >= 1 && next <= MI_NOTE_CARD_COUNT) setSelectedCardId(next);
             }}
           />
-          <select aria-label="Effect" value={selectedEffect.effect.effectKey} onChange={(event) => {
-            const next = DEMO_EFFECTS.find((entry) => entry.effect.effectKey === event.target.value);
-            if (next) setSelectedEffect(next);
-          }}>
-            {DEMO_EFFECTS.map((entry) => <option key={entry.effect.effectKey} value={entry.effect.effectKey}>{entry.name}</option>)}
-          </select>
         </div>
       </div>
     </ModalFocusScope>

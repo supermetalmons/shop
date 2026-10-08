@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 import { CARD_NFT_2_NEUTRAL_CARD_EFFECT, DRIF_EFFECTS, DRIF_GRAIN_URL, type DrifCardConfig } from '../src/drifCards.ts';
 import { createMiNoteCardMaterial } from '../src/lib/miNoteCardMaterial.ts';
+import { MI_NOTE_CARDS_DEFAULT } from '../src/lib/miNoteCardEffects.ts';
 
 const card: DrifCardConfig = {
   imageSrc: 'front.webp',
@@ -28,6 +29,20 @@ function textureLoader() {
     },
   };
 }
+
+test('MI default loads the same front, mask, grain, and shader mode as V Regular', async () => {
+  for (const effect of [card.effect, MI_NOTE_CARDS_DEFAULT]) {
+    const loader = textureLoader();
+    const result = createMiNoteCardMaterial({ ...card, effect }, loader);
+    await result.setEffect(effect);
+    assert.deepEqual(loader.requests, [card.imageSrc, card.textureSrc, DRIF_GRAIN_URL]);
+    assert.equal(result.material.uniforms.uEffect!.value, 0);
+    assert.equal(result.material.uniforms.uFront!.value, loader.textures.get(card.imageSrc));
+    assert.equal(result.material.uniforms.uMask!.value, loader.textures.get(card.textureSrc!));
+    assert.equal(result.material.uniforms.uGrain!.value, loader.textures.get(DRIF_GRAIN_URL));
+    result.dispose();
+  }
+});
 
 test('live effect selection reuses the same material and textures with CSS color handling', async () => {
   const loader = textureLoader();

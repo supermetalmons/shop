@@ -3,7 +3,7 @@ import { ModalFocusScope } from './components/ModalFocusScope';
 import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePackViewer';
 import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
-import { MI_NOTE_CARD_EFFECTS } from './lib/miNoteCardEffects';
+import { MI_NOTE_CARDS_DEFAULT } from './lib/miNoteCardEffects';
 import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteIndex } from './lib/miNoteCards';
 import {
   createMiNoteRevealState,
@@ -172,7 +172,6 @@ export default function MiNoteCardsWipApp() {
     };
   });
   const [focused, setFocused] = useState(false);
-  const [selectedEffect, setSelectedEffect] = useState<(typeof MI_NOTE_CARD_EFFECTS)[number]>(MI_NOTE_CARD_EFFECTS[0]);
   const controlsRef = useRef<MiNotePackControls | null>(null);
   const handleClose = useCallback(() => navigate('/'), []);
   const handleEscape = useCallback(() => {
@@ -237,14 +236,14 @@ export default function MiNoteCardsWipApp() {
         key={round.generation}
         selection={round.selection}
         star={round.star}
-        cardEffect={selectedEffect.effect}
+        cardEffect={MI_NOTE_CARDS_DEFAULT}
         controlsRef={controlsRef}
         onRetry={handleRetry}
         onBackgroundTap={handleBackgroundTap}
       />
       <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>
         <button type="button" className="wip-close-btn" onClick={handleClose} aria-label="Close Mi Note Cards preview">Close</button>
-        <div className="mi-note-wip__pickers" role="group" aria-label="Card controls">
+        <div className="mi-note-wip__card-controls" role="group" aria-label="Card controls">
           <div className="mi-note-wip__card-row">
             {([0, 1] as const).map((index) => (
               <input
@@ -260,17 +259,6 @@ export default function MiNoteCardsWipApp() {
                 onChange={(event) => handleCardIdChange(index, event.target.value)}
               />
             ))}
-            <select
-              className="mi-note-wip__effect-picker"
-              aria-label="Effect"
-              value={selectedEffect.effect.effectKey}
-              onChange={(event) => {
-                const effect = MI_NOTE_CARD_EFFECTS.find((entry) => entry.effect.effectKey === event.target.value);
-                if (effect) setSelectedEffect(effect);
-              }}
-            >
-              {MI_NOTE_CARD_EFFECTS.map(({ name, effect }) => <option key={effect.effectKey} value={effect.effectKey}>{name}</option>)}
-            </select>
           </div>
         </div>
         <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>

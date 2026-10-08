@@ -1,4 +1,5 @@
-import { DRIF_EFFECTS, DRIF_EFFECT_KEYS, type DrifCardConfig } from '../drifCards.ts';
+import { DRIF_EFFECT_KEYS, type DrifCardConfig } from '../drifCards.ts';
+import { MI_NOTE_CARDS_DEFAULT } from './miNoteCardEffects.ts';
 
 export const MI_NOTE_CARD_COUNT = 1430;
 
@@ -13,7 +14,7 @@ export function sampleMiNoteCardId(random: () => number = Math.random): number {
 
 export function createMiNoteCard(
   id: number,
-  effect: DrifCardConfig['effect'] = DRIF_EFFECTS['swshp-SWSH179'],
+  effect: DrifCardConfig['effect'] = MI_NOTE_CARDS_DEFAULT,
 ): DrifCardConfig {
   const baseUrl = 'https://cdn.lil.org/nft/mi_note_cards';
   const base: DrifCardConfig = { imageSrc: `${baseUrl}/fronts/${id}.webp`, effect, glowType: 'metal' };

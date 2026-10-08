@@ -17,6 +17,7 @@ type GlowType =
 
 export const DRIF_EFFECT_KEYS = Object.freeze({
   vRegular: 'v-regular',
+  miNoteCardsDefault: 'mi-note-cards-default',
   trainerFullArt: 'trainer-full-art',
   amazingRare: 'amazing-rare',
   regularHolo: 'regular-holo',

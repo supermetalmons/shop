@@ -76,18 +76,17 @@
   font-size: inherit;
 }
 
-.mi-note-wip__pickers {
+.mi-note-wip__card-controls {
   position: fixed;
   z-index: 1120;
   bottom: max(10px, env(safe-area-inset-bottom));
   left: 50%;
-  width: 380px;
+  width: 232px;
   max-width: calc(100vw - 24px);
   transform: translateX(-50%);
   transition: opacity 160ms ease, visibility 0s linear;
 }
 
-.mi-note-wip__effect-picker,
 .mi-note-wip__card-id {
   min-width: 0;
   height: 32px;
@@ -96,12 +95,11 @@
   background: transparent;
   color: color-mix(in srgb, var(--fg) 68%, transparent);
   font-size: 12px;
-  cursor: pointer;
 }
 
 .mi-note-wip__card-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 8px;
 }
@@ -113,25 +111,19 @@
   touch-action: manipulation;
 }
 
-.mi-note-wip__effect-picker {
-  width: 100%;
-}
-
-.mi-note-wip__effect-picker:hover,
 .mi-note-wip__card-id:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
 }
 
 .mi-note-wip-page .wip-controls button:focus-visible,
-.mi-note-wip__effect-picker:focus-visible,
 .mi-note-wip__card-id:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--fg) 48%, transparent) !important;
   outline-offset: 3px;
 }
 
 @media (max-width: 540px) {
-  .mi-note-wip__pickers {
+  .mi-note-wip__card-controls {
     bottom: max(42px, calc(env(safe-area-inset-bottom) + 32px));
   }
 
@@ -148,7 +140,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mi-note-wip__pickers {
+  .mi-note-wip__card-controls {
     transition-duration: 1ms;
   }
 }
