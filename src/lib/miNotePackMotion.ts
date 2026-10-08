@@ -46,7 +46,7 @@ export function poseMiNoteCardPath(anchor: THREE.Object3D, path: MiNoteCardPath,
   const value = THREE.MathUtils.clamp(progress, 0, 1);
   if (value < MI_NOTE_CARD_LIFT_FRACTION) {
     const u = value / MI_NOTE_CARD_LIFT_FRACTION;
-    anchor.position.lerpVectors(path.home, path.lift, u * u * (2 - u));
+    anchor.position.lerpVectors(path.home, path.lift, u);
     anchor.quaternion.copy(path.homeRotation);
     anchor.scale.setScalar(1);
     return;

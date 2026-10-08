@@ -189,20 +189,21 @@ test('mi note selection requires visible ready cards and locks the folder until 
     let state = reduceMiNoteReveal(runEvents(openEvents), { type: 'select-card', index });
     assert.equal(state.selectedCard, index);
     assert.equal(state.cardStage, 'lifting');
-    assert.equal(reduceMiNoteReveal(state, { type: 'return-card' }), state);
     assert.equal(reduceMiNoteReveal(state, { type: 'card-returned' }), state);
     for (const transition of [null, 'card-lifted', 'return-card'] as const) {
       if (transition) state = reduceMiNoteReveal(state, { type: transition });
       for (const event of [
         { type: 'activate' },
         { type: 'folder-pose', pose: 0 },
-        { type: 'select-card', index: 0 },
-        { type: 'select-card', index: 1 },
+        { type: 'select-card', index: index === 0 ? 1 : 0 },
       ] as const) {
         assert.equal(reduceMiNoteReveal(state, event), state);
       }
       assert.equal(state.folderPose, 1);
       assert.equal(state.selectedCard, index);
+      if (state.cardStage !== 'returning') {
+        assert.equal(reduceMiNoteReveal(state, { type: 'select-card', index }), state);
+      }
     }
     assert.equal(state.cardStage, 'returning');
     state = reduceMiNoteReveal(state, { type: 'card-returned' });
@@ -211,6 +212,36 @@ test('mi note selection requires visible ready cards and locks the folder until 
     state = reduceMiNoteReveal(state, { type: 'select-card', index: index === 0 ? 1 : 0 });
     assert.equal(state.cardStage, 'lifting');
     assert.notEqual(state.selectedCard, index);
+  }
+});
+
+test('mi note card motion reverses repeatedly without releasing its pocket or accepting stale completions', () => {
+  for (const index of [0, 1] as const) {
+    let state = reduceMiNoteReveal(runEvents(openEvents), { type: 'select-card', index });
+    state = reduceMiNoteReveal(state, { type: 'ready', ready: false });
+    for (let reversal = 0; reversal < 3; reversal += 1) {
+      state = reduceMiNoteReveal(state, { type: 'return-card' });
+      assert.equal(state.cardStage, 'returning');
+      assert.equal(reduceMiNoteReveal(state, { type: 'return-card' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'card-lifted' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'select-card', index: index === 0 ? 1 : 0 }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 0 }), state);
+      state = reduceMiNoteReveal(state, { type: 'select-card', index });
+      assert.equal(state.cardStage, 'lifting');
+      assert.equal(state.selectedCard, index);
+      assert.equal(state.folderPose, 1);
+      assert.equal(state.ready, false);
+      assert.equal(reduceMiNoteReveal(state, { type: 'card-returned' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+      assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 2 }), state);
+    }
+    state = reduceMiNoteReveal(state, { type: 'card-lifted' });
+    assert.equal(state.cardStage, 'inspecting');
+    state = reduceMiNoteReveal(state, { type: 'return-card' });
+    state = reduceMiNoteReveal(state, { type: 'card-returned' });
+    assert.equal(state.cardStage, 'pocket');
+    assert.equal(state.selectedCard, null);
   }
 });
 

@@ -77,6 +77,9 @@ export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteReveal
       ) return state;
       return { ...state, folderPose: event.pose };
     case 'select-card':
+      if (state.cardStage === 'returning' && state.selectedCard === event.index) {
+        return { ...state, cardStage: 'lifting' };
+      }
       if (state.stage !== 'interactive' || !state.ready || state.folderPose !== 1 || state.selectedCard !== null) {
         return state;
       }
@@ -84,7 +87,9 @@ export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteReveal
     case 'card-lifted':
       return state.cardStage === 'lifting' ? { ...state, cardStage: 'inspecting' } : state;
     case 'return-card':
-      return state.cardStage === 'inspecting' ? { ...state, cardStage: 'returning' } : state;
+      return state.cardStage === 'lifting' || state.cardStage === 'inspecting'
+        ? { ...state, cardStage: 'returning' }
+        : state;
     case 'card-returned':
       return state.cardStage === 'returning' ? { ...state, selectedCard: null, cardStage: 'pocket' } : state;
   }

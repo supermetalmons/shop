@@ -379,6 +379,11 @@ function assertHome(home: ReturnType<typeof homeFor>) {
   assert.equal(home.anchor.children.length, 1);
 }
 
+function cardScreenPosition(home: ReturnType<typeof homeFor>) {
+  const point = home.anchor.getWorldPosition(new THREE.Vector3()).project(renderers.at(-1)!.camera!);
+  return [(point.x + 1) * viewportWidth / 2, (1 - point.y) * viewportHeight / 2] as const;
+}
+
 function packPose(model: TestModel) {
   return [model.group.rotation.x, model.group.rotation.y, model.group.rotation.z, model.group.position.y] as const;
 }
@@ -1248,7 +1253,7 @@ test('reduced motion unseals once and returns a selected card to its original po
   const inspection = home.anchor.position.clone();
   act(() => run.controls.current!.returnCard());
   advanceFrame();
-  assert.ok(home.anchor.position.equals(inspection), 'The card pauses while its tilt settles');
+  assert.ok(!home.anchor.position.equals(inspection), 'The card starts returning on its first frame');
   settle();
   assert.equal(run.state.cardStage, 'pocket');
   assert.equal(run.state.selectedCard, null);
@@ -1417,10 +1422,10 @@ test('normal motion lifts either card immediately while the folder keeps floatin
     assert.equal(home.anchor.parent, renderers[0].scene);
     assertAlignedWithPocket();
     assert.ok(home.parent.worldToLocal(home.anchor.getWorldPosition(new THREE.Vector3())).y > home.position.y);
-    for (let count = 1; count < 35; count += 1) {
+    for (let count = 1; count < 26; count += 1) {
       advanceWithIdle();
       assert.equal(run.state.cardStage, 'lifting');
-      if (count < 14) assertAlignedWithPocket();
+      if (count < 10) assertAlignedWithPocket();
     }
     advanceWithIdle();
     assert.equal(run.state.cardStage, 'inspecting');
@@ -1433,18 +1438,18 @@ test('normal motion lifts either card immediately while the folder keeps floatin
     }
 
     act(() => run.controls.current!.returnCard());
-    for (let count = 1; count <= 33; count += 1) {
+    for (let count = 1; count <= 23; count += 1) {
       advanceWithIdle();
       assert.equal(run.state.cardStage, 'returning');
-      if (count >= 23) assertAlignedWithPocket();
+      if (count >= 15) assertAlignedWithPocket();
     }
-    advanceWithIdle(9);
+    advanceWithIdle(16.58);
     assert.equal(run.state.cardStage, 'returning');
     assertAlignedWithPocket();
     const beforeReattachment = home.anchor.getWorldPosition(new THREE.Vector3());
     const movingPocket = home.parent.localToWorld(home.position.clone());
     assert.ok(beforeReattachment.distanceTo(movingPocket) < 0.0002);
-    advanceWithIdle(1);
+    advanceWithIdle(0.02);
     assert.equal(run.state.cardStage, 'pocket');
     homes.forEach(assertHome);
     assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).distanceTo(beforeReattachment) < 0.0002);
@@ -1496,14 +1501,14 @@ for (const folderPose of [0, 2] as const) {
       assert.ok(home.anchor.quaternion.equals(new THREE.Quaternion()));
       assertInspectionFits(home.anchor, renderers[0].camera!);
       act(() => run.controls.current!.returnCard());
-      for (let count = 0; count < 33; count += 1) advanceFrame(16.67);
-      advanceFrame(9);
+      for (let count = 0; count < 23; count += 1) advanceFrame(16.67);
+      advanceFrame(16.58);
       assert.equal(run.state.cardStage, 'returning');
       const beforePosition = home.anchor.getWorldPosition(new THREE.Vector3());
       const beforeQuaternion = home.anchor.getWorldQuaternion(new THREE.Quaternion());
       assert.ok(beforePosition.distanceTo(home.parent.localToWorld(home.position.clone())) < 0.0002);
       assert.ok(beforeQuaternion.angleTo(home.parent.getWorldQuaternion(new THREE.Quaternion())) < 1e-7);
-      advanceFrame(1);
+      advanceFrame(0.02);
       assert.equal(run.state.cardStage, 'pocket');
       assertHome(home);
       assertOpenFold(model);
@@ -1725,7 +1730,210 @@ for (const [position, x] of [['outside', 870], ['inside', 530]] as const) {
   });
 }
 
-test('returning a card cancels a held pointer so release cannot select it again', async () => {
+for (const pointerType of ['mouse', 'touch']) {
+  for (const reducedMotion of [false, true]) {
+    test(`${pointerType} taps repeatedly reverse moving cards without snapping with ${reducedMotion ? 'reduced' : 'normal'} motion`, async () => {
+      setMediaQueryMatches('(prefers-reduced-motion: reduce)', reducedMotion);
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+      await makeReady();
+      const pointer = pointerControls(run);
+      const model = models[0];
+      const homes = [homeFor(model, 0), homeFor(model, 1)];
+      const home = homes[1];
+      const reverse = (stage: 'lifting' | 'returning') => {
+        const position = home.anchor.position.clone();
+        const quaternion = home.anchor.quaternion.clone();
+        const scale = home.anchor.scale.clone();
+        pointer.tap(pointerType, ...cardScreenPosition(home));
+        assert.equal(run.state.cardStage, stage);
+        assert.equal(run.state.selectedCard, 1);
+        assert.equal(pointer.captured.size, 0);
+        assert.ok(home.anchor.position.equals(position));
+        assert.ok(home.anchor.quaternion.equals(quaternion));
+        assert.ok(home.anchor.scale.equals(scale));
+        advanceFrame(0.1);
+        assert.equal(run.state.cardStage, stage);
+        assert.ok(home.anchor.position.distanceTo(position) < 0.01);
+        assert.ok(home.anchor.quaternion.angleTo(quaternion) < 0.01);
+        assert.ok(home.anchor.scale.distanceTo(scale) < 0.01);
+        assertHome(homes[0]);
+        if (reducedMotion) assertSquareOpen(model);
+        else assertCalmOpen(model);
+      };
+      act(() => run.controls.current!.selectCard(1));
+      advanceFrame(16);
+      for (let count = 0; count < 5; count += 1) advanceFrame(reducedMotion ? 16 : 45);
+      for (let count = 0; count < 3; count += 1) {
+        reverse('returning');
+        advanceFrame(12);
+        reverse('lifting');
+        advanceFrame(12);
+      }
+      assert.equal(run.count('card-lifted'), 0);
+      assert.equal(run.count('card-returned'), 0);
+      advanceFrames();
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.equal(run.count('card-lifted'), 1);
+      pointer.tap(pointerType, ...cardScreenPosition(home));
+      advanceFrame(16);
+      advanceFrame(16);
+      reverse('lifting');
+      advanceFrames();
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.equal(run.count('card-lifted'), 2);
+      pointer.tap(pointerType, ...cardScreenPosition(home));
+      advanceFrames();
+      assert.equal(run.state.cardStage, 'pocket');
+      assert.equal(run.count('card-returned'), 1);
+      homes.forEach(assertHome);
+      if (reducedMotion) assertSquareOpen(model);
+      else assertCalmOpen(model);
+    });
+  }
+
+  test(`${pointerType} taps can cancel or reverse a lift before its first frame`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    pointer.tap(pointerType, ...cardScreenPosition(home));
+    assert.equal(run.state.cardStage, 'returning');
+    assertHome(home);
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-lifted'), 0);
+    assert.equal(run.count('card-returned'), 1);
+    assertHome(home);
+
+    act(() => run.controls.current!.selectCard(0));
+    pointer.tap(pointerType, ...cardScreenPosition(home));
+    pointer.tap(pointerType, ...cardScreenPosition(home));
+    assert.equal(run.state.cardStage, 'lifting');
+    assertHome(home);
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('card-lifted'), 1);
+    act(() => run.controls.current!.returnCard());
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assertHome(home);
+  });
+
+  test(`${pointerType} drags and cancelled presses do not reverse card transitions`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    advanceFrame(40);
+    for (const stage of ['lifting', 'returning'] as const) {
+      if (stage === 'returning') {
+        advanceFrames();
+        act(() => run.controls.current!.returnCard());
+        advanceFrame(40);
+      }
+      const [x, y] = cardScreenPosition(home);
+      pointer.dispatch('pointerdown', x, y, pointerType);
+      pointer.dispatch('pointermove', x + 20, y, pointerType);
+      pointer.dispatch('pointerup', x + 20, y, pointerType);
+      assert.equal(run.state.cardStage, stage);
+      for (const cancellation of ['pointercancel', 'lostpointercapture']) {
+        pointer.dispatch('pointerdown', x, y, pointerType);
+        pointer.dispatch(cancellation, x, y, pointerType);
+        pointer.dispatch('pointerup', x, y, pointerType);
+        assert.equal(run.state.cardStage, stage);
+        assert.equal(pointer.captured.size, 0);
+      }
+    }
+    assert.equal(run.count('select-card'), 1);
+    assert.equal(run.count('return-card'), 1);
+    advanceFrames();
+    assert.equal(run.state.cardStage, 'pocket');
+    assertHome(home);
+  });
+
+  test(`${pointerType} release after lifting finishes returns the inspected card`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 1);
+    act(() => run.controls.current!.selectCard(1));
+    advanceFrame();
+    const [x, y] = cardScreenPosition(home);
+    pointer.dispatch('pointerdown', x, y, pointerType);
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.ok(pointer.captured.has(1));
+    pointer.dispatch('pointerup', x, y, pointerType);
+    assert.equal(run.state.cardStage, 'returning');
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assertHome(home);
+  });
+
+  for (const action of ['escape', 'activate', 'navigate', 'selectCard'] as const) {
+    test(`${pointerType} pending return tap cannot undo ${action}`, async () => {
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+      await makeReady();
+      const pointer = pointerControls(run);
+      const home = homeFor(models[0], 0);
+      act(() => run.controls.current!.selectCard(0));
+      settle();
+      act(() => run.controls.current!.returnCard());
+      advanceFrame();
+      const [x, y] = cardScreenPosition(home);
+      pointer.dispatch('pointerdown', x, y, pointerType);
+      settle();
+      assert.equal(run.state.cardStage, 'pocket');
+      assert.ok(pointer.captured.has(1));
+      act(() => {
+        if (action === 'navigate') run.controls.current!.navigate(-1);
+        else if (action === 'selectCard') run.controls.current!.selectCard(1);
+        else run.controls.current![action]();
+      });
+      assert.equal(pointer.captured.size, 0);
+      settle();
+      const expectedState = run.state;
+      pointer.dispatch('pointerup', x, y, pointerType);
+      settle();
+      assert.equal(run.state, expectedState);
+      assert.equal(run.state.selectedCard, action === 'selectCard' ? 1 : null);
+      assert.equal(run.state.folderPose, action === 'selectCard' ? 1 : 0);
+      assertHome(home);
+    });
+  }
+
+  test(`${pointerType} release after returning finishes reopens the originally pressed card`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    act(() => run.controls.current!.returnCard());
+    advanceFrame();
+    const [x, y] = cardScreenPosition(home);
+    pointer.dispatch('pointerdown', x, y, pointerType);
+    assert.ok(pointer.captured.has(1));
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.ok(pointer.captured.has(1));
+    pointer.dispatch('pointerup', x, y, pointerType);
+    assert.equal(pointer.captured.size, 0);
+    assert.equal(run.state.cardStage, 'lifting');
+    assert.equal(run.state.selectedCard, 0);
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('select-card'), 2);
+    act(() => run.controls.current!.returnCard());
+    settle();
+    assertHome(home);
+  });
+}
+
+test('Escape cancels a held inspection pointer so release cannot select the card again', async () => {
   const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
   await makeReady();
   const pointer = pointerControls(run);

@@ -93,7 +93,18 @@ function MiNotePackOpening({
           controlsRef={controlsRef}
         />
       </div>
-      <div className="mi-note-wip__actions" role="group" aria-label="Folder actions">
+      <div
+        className="mi-note-wip__actions"
+        role="group"
+        aria-label="Folder actions"
+        onKeyDown={(event) => {
+          if (!(event.target instanceof HTMLElement) || !event.target.matches('button')) return;
+          if (event.key === 'Enter' && event.repeat) event.preventDefault();
+          if (event.key !== ' ') return;
+          event.preventDefault();
+          if (!event.repeat) event.target.click();
+        }}
+      >
         {state.selectedCard === null ? (
           <>
             <button
@@ -119,10 +130,16 @@ function MiNotePackOpening({
           <button
             type="button"
             aria-describedby={selectedCardDescriptionId}
-            disabled={state.cardStage !== 'inspecting'}
-            onClick={() => controlsRef.current?.returnCard()}
+            disabled={!viewerReady || Boolean(error)}
+            onClick={() => {
+              if (state.cardStage === 'returning' && state.selectedCard !== null) {
+                controlsRef.current?.selectCard(state.selectedCard);
+              } else {
+                controlsRef.current?.returnCard();
+              }
+            }}
           >
-            Return card to pocket
+            {state.cardStage === 'returning' ? 'View card closeup' : 'Return card to pocket'}
             <span id={selectedCardDescriptionId} hidden>
               Mi Note Card #{selection.cardIds[state.selectedCard]}
             </span>

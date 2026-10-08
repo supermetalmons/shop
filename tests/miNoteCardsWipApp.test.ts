@@ -256,12 +256,12 @@ test('accessible folder actions select either GPU card and wait for its return a
     assert.match(description, /^Mi Note Card #\d+$/);
     fireEvent.click(select);
     assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards folder' }), null);
-    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, true);
+    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, false);
     emit({ type: 'card-lifted' });
     assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, false);
     fireEvent.click(view.getByRole('button', { name: 'Return card to pocket', description }));
     assert.equal(viewer().props.state.cardStage, 'returning');
-    assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, true);
+    assert.equal((view.getByRole('button', { name: 'View card closeup', description }) as HTMLButtonElement).disabled, false);
     emit({ type: 'card-returned' });
     assert.equal(viewer().props.state.cardStage, 'pocket');
   }
@@ -275,6 +275,118 @@ test('accessible folder actions select either GPU card and wait for its return a
   fireEvent.click(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   assert.ok(view.getByRole('button', { name: 'Open Mi Note Cards folder' }));
+});
+
+test('accessible card action repeatedly reverses either moving card and ignores stale opposite completions', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  for (const [index, side] of ['left', 'right'].entries()) {
+    const select = view.getByRole('button', { name: `View ${side} card` });
+    const description = select.getAttribute('aria-description')!;
+    fireEvent.click(select);
+    for (let reversal = 0; reversal < 3; reversal += 1) {
+      fireEvent.click(view.getByRole('button', { name: 'Return card to pocket', description }));
+      assert.equal(viewer().props.state.cardStage, 'returning');
+      emit({ type: 'card-lifted' });
+      assert.equal(viewer().props.state.cardStage, 'returning');
+      fireEvent.click(view.getByRole('button', { name: 'View card closeup', description }));
+      assert.equal(viewer().props.state.cardStage, 'lifting');
+      assert.equal(viewer().props.state.selectedCard, index);
+      emit({ type: 'card-returned' });
+      assert.equal(viewer().props.state.cardStage, 'lifting');
+      assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards folder' }), null);
+      assert.equal(view.queryByRole('button', { name: `View ${side === 'left' ? 'right' : 'left'} card` }), null);
+    }
+    fireEvent.click(view.getByRole('button', { name: 'Return card to pocket', description }));
+    emit({ type: 'card-returned' });
+    assert.ok(view.getByRole('button', { name: 'Close Mi Note Cards folder' }));
+  }
+  assert.deepEqual(viewer().calls.filter(call => call.startsWith('select:') || call === 'return'), [
+    'select:0', 'return', 'select:0', 'return', 'select:0', 'return', 'select:0', 'return',
+    'select:1', 'return', 'select:1', 'return', 'select:1', 'return', 'select:1', 'return',
+  ]);
+});
+
+test('Space activates card actions on press and cannot repeat after a transition completes', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  emit({ type: 'card-lifted' });
+  fireEvent.click(view.getByRole('button', { name: 'Return card to pocket' }));
+  const action = view.getByRole('button', { name: 'View card closeup' });
+  action.focus();
+  assert.equal(fireEvent.keyDown(action, { key: ' ', code: 'Space' }), false);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  emit({ type: 'card-returned' });
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  assert.equal(fireEvent.keyDown(action, { key: ' ', code: 'Space', repeat: true }), false);
+  emit({ type: 'card-lifted' });
+  fireEvent.keyUp(action, { key: ' ', code: 'Space' });
+  assert.equal(viewer().props.state.cardStage, 'inspecting');
+  assert.deepEqual(viewer().calls.filter(call => call.startsWith('select:')), ['select:0', 'select:0']);
+
+  assert.equal(fireEvent.keyDown(action, { key: ' ', code: 'Space' }), false);
+  assert.equal(viewer().props.state.cardStage, 'returning');
+  emit({ type: 'card-returned' });
+  assert.equal(view.getByRole('button', { name: 'Close Mi Note Cards folder' }), action);
+  assert.equal(fireEvent.keyDown(action, { key: ' ', code: 'Space', repeat: true }), false);
+  fireEvent.keyUp(action, { key: ' ', code: 'Space' });
+  assert.equal(viewer().props.state.folderPose, 1);
+  assert.equal(viewer().props.state.cardStage, 'pocket');
+});
+
+test('Enter keeps its initial native activation but suppresses repeats across card and folder actions', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  emit({ type: 'card-lifted' });
+  fireEvent.click(view.getByRole('button', { name: 'Return card to pocket' }));
+  const action = view.getByRole('button', { name: 'View card closeup' });
+  action.focus();
+  assert.equal(fireEvent.keyDown(action, { key: 'Enter', code: 'Enter' }), true);
+  fireEvent.click(action);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  const calls = [...viewer().calls];
+  for (let repeat = 0; repeat < 3; repeat += 1) {
+    assert.equal(fireEvent.keyDown(action, { key: 'Enter', code: 'Enter', repeat: true }), false);
+  }
+  emit({ type: 'card-lifted' });
+  fireEvent.keyUp(action, { key: 'Enter', code: 'Enter' });
+  assert.equal(viewer().props.state.cardStage, 'inspecting');
+  assert.deepEqual(viewer().calls, calls);
+
+  assert.equal(fireEvent.keyDown(action, { key: 'Enter', code: 'Enter' }), true);
+  fireEvent.click(action);
+  emit({ type: 'card-returned' });
+  assert.equal(view.getByRole('button', { name: 'Close Mi Note Cards folder' }), action);
+  assert.equal(fireEvent.keyDown(action, { key: 'Enter', code: 'NumpadEnter', repeat: true }), false);
+  fireEvent.keyUp(action, { key: 'Enter', code: 'Enter' });
+  assert.equal(viewer().props.state.folderPose, 1);
+  assert.equal(viewer().props.state.cardStage, 'pocket');
+});
+
+test('selected card action requires a working viewer but can reverse while replacement card assets load', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  openPack(view);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  act(() => viewer().props.onReadyChange(false));
+  const returnAction = view.getByRole('button', { name: 'Return card to pocket' }) as HTMLButtonElement;
+  assert.equal(returnAction.disabled, true);
+  fireEvent.click(returnAction);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  act(() => {
+    viewer().props.onReadyChange(true);
+    viewer().props.onCardsReadyChange(false);
+  });
+  assert.equal(returnAction.disabled, false);
+  fireEvent.click(returnAction);
+  assert.equal(viewer().props.state.cardStage, 'returning');
+  fireEvent.click(view.getByRole('button', { name: 'View card closeup' }));
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  act(() => viewer().props.onCardsError(new Error('Card load failed')));
+  assert.equal(returnAction.disabled, true);
+  fireEvent.click(returnAction);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
 });
 
 test('all three card effects update live without replacing cards or resetting the opened pack', () => {

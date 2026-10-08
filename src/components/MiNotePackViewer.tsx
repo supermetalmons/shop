@@ -112,10 +112,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let outerFlip: OuterFlip | null = null;
     let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip' } | null = null;
     let tapHit: THREE.Intersection | null = null;
+    let tapCard: 0 | 1 | null = null;
     let selected: 0 | 1 | null = null;
     let cardPath: ReturnType<typeof createMiNoteCardPath> | null = null;
-    let transition: 'lifting' | 'returning' | null = null;
-    let cardTime = 0;
+    let cardProgress = 0;
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
@@ -240,7 +240,14 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       && currentProps.current.state.selectedCard === null;
     const selectCard = (index: 0 | 1) => {
       const state = currentProps.current.state;
+      if (currentProps.current.interactionEnabled && state.selectedCard === index && state.cardStage === 'returning') {
+        input.cancel();
+        dispatch({ type: 'select-card', index });
+        invalidate();
+        return;
+      }
       if (!canNavigate() || state.stage !== 'interactive' || !state.ready || drag || outerFlip) return;
+      input.cancel();
       setPose(1);
       dispatch({ type: 'select-card', index });
     };
@@ -252,6 +259,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
     const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
       if (!canNavigate() || drag || outerFlip) return;
+      input.cancel();
       if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
         const worldPerPixel = 2 * Math.abs(camera.position.z - point.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / height;
         tapSparkles.burst(point, worldPerPixel);
@@ -265,6 +273,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       returnCard,
       navigate(direction) {
         if (!canNavigate() || drag || outerFlip) return;
+        input.cancel();
         if (currentProps.current.state.stage === 'sealed') {
           beginFlip(-direction);
           return;
@@ -282,6 +291,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         }
         if (drag || outerFlip || state.stage === 'seal-peeling' || state.stage === 'unsealed') return true;
         if (state.stage === 'interactive' && (state.folderPose === 1 || Math.abs(fold.value - state.folderPose) > 0.015)) {
+          input.cancel();
           setPose(0);
           return true;
         }
@@ -308,8 +318,16 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
     const input = createMiNoteCardInput((event) => {
       if (!event) return;
-      if (currentProps.current.state.selectedCard !== null) {
-        returnCard();
+      const state = currentProps.current.state;
+      const tappedCard = tapCard;
+      tapCard = null;
+      if (state.selectedCard !== null) {
+        if (state.cardStage === 'returning') selectCard(state.selectedCard);
+        else returnCard();
+        return;
+      }
+      if (tappedCard !== null) {
+        selectCard(tappedCard);
         return;
       }
       if (!tapHit) {
@@ -323,8 +341,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       onStart(event) {
         if (!currentProps.current.interactionEnabled) return false;
         const state = currentProps.current.state;
-        if (state.cardStage === 'lifting' || state.cardStage === 'returning') return false;
         tapHit = hit(event);
+        tapCard = state.selectedCard;
         if (state.stage === 'seal-peeling' || state.stage === 'unsealed') return false;
         host.focus({ preventScroll: true });
         host.setPointerCapture(event.pointerId);
@@ -380,7 +398,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           setPose(Math.round(fold.value) as MiNoteFolderPose);
           fold.velocity = 0;
         }
-        if (movement.cancelled) tapHit = null;
+        if (movement.cancelled) {
+          tapHit = null;
+          tapCard = null;
+        }
         drag = null;
         if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
         invalidate();
@@ -436,7 +457,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       lastTime = now;
       let moving = false;
       const state = currentProps.current.state;
-      if (inspectingPointer !== null && state.cardStage !== 'inspecting') input.cancel();
       model.setSealFoldPosition(currentProps.current.foldPosition);
       model.setSealRotationOffsetDegrees(currentProps.current.rotationOffsetDegrees);
       model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
@@ -539,12 +559,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         selected = state.selectedCard;
         const card = cards[selected];
         scene.attach(card.anchor);
-        transition = 'lifting';
-        cardTime = 0;
+        cardProgress = 0;
       }
-      if (selected !== null && state.cardStage === 'returning' && transition === null) {
-        transition = 'returning';
-        cardTime = 0;
+      if (selected === null && state.selectedCard !== null && state.cardStage === 'returning') {
+        dispatch({ type: 'card-returned' });
       }
       if (selected !== null) {
         const card = cards[selected];
@@ -553,17 +571,16 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         card.parent.localToWorld(cardPocketTop.set(card.home.x, MI_NOTE_POCKET_TOP, card.home.z));
         if (cardPath) updateMiNoteCardPath(cardPath, cardHomePosition, cardHomeQuaternion, cardPocketTop, cardDestination);
         else cardPath = createMiNoteCardPath(cardHomePosition, cardHomeQuaternion, cardPocketTop, cardDestination);
-        if (!transition) poseMiNoteCardPath(card.anchor, cardPath, 1);
+        if (state.cardStage === 'inspecting') poseMiNoteCardPath(card.anchor, cardPath, 1);
       }
-      if (transition && selected !== null && cardPath) {
-        cardTime += dt;
-        const duration = reducedMotion.matches ? 0.16 : transition === 'lifting' ? 0.6 : 0.56;
-        const progress = Math.min(1, cardTime / duration);
+      if ((state.cardStage === 'lifting' || state.cardStage === 'returning') && selected !== null && cardPath) {
+        const lifting = state.cardStage === 'lifting';
+        const duration = reducedMotion.matches ? 0.16 : lifting ? 0.44 : 0.4;
+        cardProgress = THREE.MathUtils.clamp(cardProgress + (lifting ? 1 : -1) * dt / duration, 0, 1);
         const card = cards[selected];
-        const pathProgress = transition === 'lifting' ? progress : 1 - Math.max(0, (progress - 0.18) / 0.82);
-        poseMiNoteCardPath(card.anchor, cardPath, pathProgress);
-        if (progress === 1) {
-          if (transition === 'returning') {
+        poseMiNoteCardPath(card.anchor, cardPath, cardProgress);
+        if (cardProgress === (lifting ? 1 : 0)) {
+          if (!lifting) {
             card.parent.add(card.anchor);
             card.anchor.position.copy(card.home);
             card.anchor.quaternion.identity();
@@ -575,7 +592,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           } else {
             dispatch({ type: 'card-lifted' });
           }
-          transition = null;
         } else moving = true;
       }
       if (state.cardStage !== 'inspecting' || reducedMotion.matches) tiltTarget.set(0, 0);
