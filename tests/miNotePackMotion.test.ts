@@ -8,7 +8,7 @@ import {
   MI_NOTE_POCKET_TOP,
   sampleMiNoteFolderPose,
 } from '../src/lib/miNotePackModel.ts';
-import { createMiNoteCardPath, poseMiNoteCardPath } from '../src/lib/miNotePackMotion.ts';
+import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '../src/lib/miNotePackMotion.ts';
 
 function near(actual: number, expected: number, tolerance = 1e-10) {
   assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} differs from ${expected}`);
@@ -213,7 +213,7 @@ function tiltedPath(side: number) {
   const rotation = parent.getWorldQuaternion(new THREE.Quaternion());
   const destination = new THREE.Vector3(0, 0, 1.4);
   const path = createMiNoteCardPath(home, rotation, pocket, destination);
-  return { path, home, pocket, rotation, destination };
+  return { path, home, pocket, rotation, destination, parent };
 }
 
 test('either card lifts along its tilted pocket without turning or growing before clearing the lip', () => {
@@ -254,6 +254,61 @@ test('extraction starts in its pocket, ends centered at inspection size, and own
   nearVector(anchor.position, originalDestination);
   nearQuaternion(anchor.quaternion, new THREE.Quaternion());
   near(anchor.scale.x, 1.28);
+});
+
+test('updating either moving pocket keeps extraction aligned and the inspection pose fixed without mutating inputs', () => {
+  for (const side of [-1, 1]) {
+    const { path, destination, parent } = tiltedPath(side);
+    const pathObjects = [path.home, path.homeRotation, path.lift, path.curve, path.curve.v0, path.curve.v1, path.curve.v2, path.curve.v3];
+    const anchor = new THREE.Group();
+    const inspectionPosition = destination.clone();
+    for (const step of [1, 2, 3]) {
+      parent.position.set(-0.09 * step, 0.05 * step, 0.03 * step);
+      parent.rotation.set(-0.08 * step, 0.11 * step, -0.06 * step);
+      parent.updateMatrixWorld(true);
+      const home = parent.localToWorld(new THREE.Vector3(side * MI_NOTE_LEAF_WIDTH / 2, -0.005, 0.0057));
+      const pocket = parent.localToWorld(new THREE.Vector3(side * MI_NOTE_LEAF_WIDTH / 2, MI_NOTE_POCKET_TOP, 0.0057));
+      const rotation = parent.getWorldQuaternion(new THREE.Quaternion());
+      const inputs = [home.clone(), rotation.clone(), pocket.clone(), destination.clone()];
+      const previousHome = path.home.clone();
+
+      updateMiNoteCardPath(path, home, rotation, pocket, destination);
+
+      assert.deepEqual([home, rotation, pocket, destination], inputs);
+      [path.home, path.homeRotation, path.lift, path.curve, path.curve.v0, path.curve.v1, path.curve.v2, path.curve.v3]
+        .forEach((value, index) => assert.equal(value, pathObjects[index]));
+      assert.ok(path.home.distanceTo(previousHome) > 0.01);
+      poseMiNoteCardPath(anchor, path, 0);
+      nearVector(anchor.position, home);
+      nearQuaternion(anchor.quaternion, rotation);
+      nearVector(anchor.scale, new THREE.Vector3(1, 1, 1));
+
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rotation);
+      for (const progress of [0.1, 0.25, 0.4]) {
+        poseMiNoteCardPath(anchor, path, progress);
+        const delta = anchor.position.clone().sub(home);
+        assert.ok(delta.dot(up) > 0);
+        near(delta.clone().cross(up).length(), 0);
+        nearQuaternion(anchor.quaternion, rotation);
+        nearVector(anchor.scale, new THREE.Vector3(1, 1, 1));
+      }
+      const bottom = anchor.position.clone().addScaledVector(up, -MI_NOTE_CARD_HEIGHT / 2);
+      near(bottom.sub(pocket).dot(up), 0.085);
+
+      const epsilon = 1e-6;
+      poseMiNoteCardPath(anchor, path, 0.4 - epsilon);
+      const before = anchor.position.clone();
+      poseMiNoteCardPath(anchor, path, 0.4);
+      const middle = anchor.position.clone();
+      poseMiNoteCardPath(anchor, path, 0.4 + epsilon);
+      nearVector(middle.clone().sub(before).divideScalar(epsilon), anchor.position.clone().sub(middle).divideScalar(epsilon), 0.00003);
+
+      poseMiNoteCardPath(anchor, path, 1);
+      nearVector(anchor.position, inspectionPosition);
+      nearQuaternion(anchor.quaternion, new THREE.Quaternion());
+      nearVector(anchor.scale, new THREE.Vector3(1.28, 1.28, 1.28));
+    }
+  }
 });
 
 test('straight lift enters the forward curve with continuous position and velocity', () => {

@@ -779,6 +779,11 @@ test('resizing during card transitions preserves close-up framing and the origin
   await makeReady();
   const home = homeFor(models[0], 0);
   const camera = renderers[0].camera!;
+  const assertInFrontOfPocket = () => {
+    const pocketNormal = new THREE.Vector3(0, 0, 1).applyQuaternion(home.parent.getWorldQuaternion(new THREE.Quaternion()));
+    const pocketDepth = home.parent.localToWorld(home.position.clone()).dot(pocketNormal);
+    assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).dot(pocketNormal) >= pocketDepth - 1e-8, 'Resizing must not push the card behind its moving pocket');
+  };
   act(() => run.controls.current!.selectCard(0));
   for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame();
   assert.equal(run.state.cardStage, 'lifting');
@@ -791,9 +796,9 @@ test('resizing during card transitions preserves close-up framing and the origin
   });
   for (let count = 0; run.state.cardStage === 'lifting' && count < 80; count += 1) {
     advanceFrame(16.67);
-    assert.ok(home.anchor.position.z >= home.position.z - 1e-8, 'Resizing must not push the lifting card behind its pocket');
+    assertInFrontOfPocket();
   }
-  settle();
+  advanceFrames();
   assert.equal(run.state.cardStage, 'inspecting');
   assertInspectionFits(home.anchor, camera);
 
@@ -806,7 +811,7 @@ test('resizing during card transitions preserves close-up framing and the origin
     advanceFrame();
     assertInspectionFits(home.anchor, camera);
   }
-  assert.equal(frames.size, 0);
+  assert.equal(frames.size, 1);
   act(() => run.controls.current!.returnCard());
   advanceFrames(2);
   act(() => {
@@ -816,7 +821,7 @@ test('resizing during card transitions preserves close-up framing and the origin
   });
   for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) {
     advanceFrame(16.67);
-    assert.ok(home.anchor.position.z >= home.position.z - 1e-8, 'Resizing must not push the returning card behind its pocket');
+    assertInFrontOfPocket();
   }
   assert.equal(run.state.cardStage, 'pocket');
   assertHome(home);
@@ -847,7 +852,8 @@ for (const reducedMotion of [false, true]) {
           assertLayers(index);
         }
         assert.equal(run.state.cardStage, 'inspecting');
-        settle();
+        if (reducedMotion) settle();
+        else advanceFrames();
         assertLayers(index);
         act(() => run.controls.current!.returnCard());
         for (let frame = 0; run.state.cardStage === 'returning' && frame < 80; frame += 1) {
@@ -1350,9 +1356,9 @@ test('narrow viewports leave room for the attached sticker beyond the open pack 
   assert.ok(halfViewWidth > MI_NOTE_LEAF_WIDTH + 0.32);
 });
 
-test('normal motion settles before either card lifts, stays still through inspection, and resumes after return', async () => {
+test('normal motion lifts either card immediately while the folder keeps floating and the close-up stays fixed', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
-  const initial: MiNoteRevealState = { ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 2 };
+  const initial: MiNoteRevealState = { ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 };
   const run = harness(initial);
   const model = models[0];
   const homes = [homeFor(model, 0), homeFor(model, 1)];
@@ -1361,57 +1367,66 @@ test('normal motion settles before either card lifts, stays still through inspec
   const openCameraPosition = camera.position.clone();
   for (const index of [1, 0] as const) {
     const home = homes[index];
+    const neighbor = homes[index === 0 ? 1 : 0];
     const before = packPose(model);
+    const advanceWithIdle = (elapsed = 16.67) => {
+      const previousPose = packPose(model);
+      const previousNeighbor = neighbor.anchor.matrixWorld.clone();
+      advanceFrame(elapsed);
+      assertCalmOpen(model);
+      assert.notDeepEqual(packPose(model), previousPose);
+      assert.ok(!neighbor.anchor.matrixWorld.equals(previousNeighbor));
+      assert.ok(camera.position.equals(openCameraPosition));
+      assertHome(neighbor);
+    };
+    const assertAlignedWithPocket = () => {
+      const position = home.parent.worldToLocal(home.anchor.getWorldPosition(new THREE.Vector3()));
+      const quaternion = home.parent.getWorldQuaternion(new THREE.Quaternion());
+      assert.ok(Math.abs(position.x - home.position.x) < 1e-10);
+      assert.ok(Math.abs(position.z - home.position.z) < 1e-10);
+      assert.ok(position.y >= home.position.y);
+      assert.ok(1 - Math.abs(home.anchor.getWorldQuaternion(new THREE.Quaternion()).dot(quaternion)) < 1e-10);
+    };
+    assert.ok(new THREE.Vector4(...before).length() > 0.001);
     act(() => run.controls.current!.selectCard(index));
     assert.deepEqual(packPose(model), before);
-    advanceFrame();
-    if (index === 1) assert.ok(model.phase > 1.015);
-    else {
-      const magnitude = new THREE.Vector4(...packPose(model)).length();
-      assert.ok(magnitude > 0 && magnitude < new THREE.Vector4(...before).length());
-    }
+    advanceWithIdle();
     assert.equal(run.state.cardStage, 'lifting');
-    assertHome(home);
-    for (let count = 0; run.state.cardStage === 'lifting' && home.anchor.parent === home.parent && count < 80; count += 1) {
-      advanceFrame();
-      assert.ok(camera.position.equals(openCameraPosition));
-    }
-    assertSquareOpen(model);
     assert.equal(home.anchor.parent, renderers[0].scene);
-    assert.equal(home.anchor.position.x, home.position.x);
-    assert.equal(home.anchor.position.z, home.position.z);
-    assert.ok(home.anchor.position.y > home.position.y);
-    assert.ok(home.anchor.quaternion.equals(home.quaternion));
-    for (let count = 0; run.state.cardStage === 'lifting' && count < 80; count += 1) {
-      advanceFrame();
-      assert.ok(camera.position.equals(openCameraPosition));
+    assertAlignedWithPocket();
+    assert.ok(home.parent.worldToLocal(home.anchor.getWorldPosition(new THREE.Vector3())).y > home.position.y);
+    for (let count = 1; count < 35; count += 1) {
+      advanceWithIdle();
+      assert.equal(run.state.cardStage, 'lifting');
+      if (count < 14) assertAlignedWithPocket();
     }
-    settle();
+    advanceWithIdle();
     assert.equal(run.state.cardStage, 'inspecting');
-    assertSquareOpen(model);
-    assert.ok(camera.position.equals(openCameraPosition));
     assertInspectionFits(home.anchor, camera);
     const inspection = home.anchor.matrixWorld.clone();
     run.setVerticalPosition(index === 1 ? 0.3 : 0.4);
-    settle();
-    assert.ok(home.anchor.matrixWorld.equals(inspection));
-    assertSquareOpen(model);
+    for (let count = 0; count < 60; count += 1) {
+      advanceWithIdle();
+      assert.ok(home.anchor.matrixWorld.equals(inspection));
+    }
 
     act(() => run.controls.current!.returnCard());
-    for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) {
-      advanceFrame();
-      assertSquareOpen(model);
-      assert.ok(camera.position.equals(openCameraPosition));
+    for (let count = 1; count <= 33; count += 1) {
+      advanceWithIdle();
+      assert.equal(run.state.cardStage, 'returning');
+      if (count >= 23) assertAlignedWithPocket();
     }
+    advanceWithIdle(9);
+    assert.equal(run.state.cardStage, 'returning');
+    assertAlignedWithPocket();
+    const beforeReattachment = home.anchor.getWorldPosition(new THREE.Vector3());
+    const movingPocket = home.parent.localToWorld(home.position.clone());
+    assert.ok(beforeReattachment.distanceTo(movingPocket) < 0.0002);
+    advanceWithIdle(1);
     assert.equal(run.state.cardStage, 'pocket');
     homes.forEach(assertHome);
-    advanceFrame(16.67);
-    assert.ok(new THREE.Vector4(...packPose(model)).length() < 0.001);
-    advanceFrames();
-    assertCalmOpen(model);
-    const resumed = packPose(model);
-    advanceFrames(20);
-    assert.notDeepEqual(packPose(model), resumed);
+    assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).distanceTo(beforeReattachment) < 0.0002);
+    advanceWithIdle();
   }
   assert.equal(run.count('card-lifted'), 2);
   assert.equal(run.count('card-returned'), 2);
@@ -1429,6 +1444,64 @@ test('normal motion settles before either card lifts, stays still through inspec
   assert.equal(model.disposed, true);
   assert.equal(run.count('card-lifted'), 2);
   assert.equal(run.count('card-returned'), 2);
+});
+
+test('selecting a card from a closed folder still waits for the folder to open', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 2 });
+  await makeReady();
+  const model = models[0];
+  const home = homeFor(model, 1);
+  act(() => run.controls.current!.selectCard(1));
+  advanceFrame(16.67);
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(run.state.cardStage, 'lifting');
+  assert.ok(model.phase > 1.015);
+  assertHome(home);
+  for (let count = 0; home.anchor.parent === home.parent && count < 80; count += 1) advanceFrame(16.67);
+  assert.equal(model.phase, 1);
+  assert.equal(home.anchor.parent, renderers[0].scene);
+  advanceFrames();
+  assert.equal(run.state.cardStage, 'inspecting');
+  act(() => run.controls.current!.returnCard());
+  for (let count = 0; run.state.cardStage === 'returning' && count < 80; count += 1) advanceFrame(16.67);
+  assert.equal(run.state.cardStage, 'pocket');
+  assertHome(home);
+});
+
+test('reduced motion can stop and restart folder idle during inspection without moving the close-up', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const model = models[0];
+  const home = homeFor(model, 0);
+  act(() => run.controls.current!.selectCard(0));
+  advanceFrames();
+  assert.equal(run.state.cardStage, 'inspecting');
+  const inspection = home.anchor.matrixWorld.clone();
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
+  settle();
+  assertSquareOpen(model);
+  assert.ok(home.anchor.matrixWorld.equals(inspection));
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+  advanceFrames();
+  assertCalmOpen(model);
+  const floating = packPose(model);
+  advanceFrames(20);
+  assert.notDeepEqual(packPose(model), floating);
+  assert.ok(home.anchor.matrixWorld.equals(inspection));
+  act(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', true));
+  settle();
+  assertSquareOpen(model);
+  act(() => run.controls.current!.returnCard());
+  for (let count = 0; run.state.cardStage === 'returning' && count < 20; count += 1) {
+    advanceFrame(16.67);
+    assertSquareOpen(model);
+  }
+  assert.equal(run.state.cardStage, 'pocket');
+  assertHome(home);
+  settle();
+  assertSquareOpen(model);
 });
 
 test('reset ignores readiness and animation callbacks belonging to the previous viewer', async () => {
@@ -1529,15 +1602,15 @@ test('GPU close-up drives the real material highlights toward the pointer for ev
   await makeReady();
   const pointer = pointerControls(run);
   act(() => run.controls.current!.selectCard(0));
-  settle();
+  advanceFrames();
   assert.equal(run.state.cardStage, 'inspecting');
   const uniforms = surfaces[0].material.uniforms;
   for (const effect of [DRIF_EFFECTS['swshp-SWSH179'], DRIF_EFFECTS['swsh6-196'], CARD_NFT_2_NEUTRAL_CARD_EFFECT]) {
     await act(async () => run.setCardEffect(effect));
-    settle();
+    advanceFrames();
     for (const [x, y] of [[550, 350], [350, 350], [450, 250], [450, 450]]) {
       pointer.dispatch('pointermove', x, y);
-      settle();
+      advanceFrames();
       const signX = Math.sign(x - viewportWidth / 2);
       const signY = Math.sign(y - viewportHeight / 2);
       if (signX) {
@@ -1560,16 +1633,16 @@ test('GPU close-up tilts with the pointer, ignores drags as taps, and settles af
   const home = homeFor(models[0], 0);
   const card = cardLayout(home);
   act(() => run.controls.current!.selectCard(0));
-  settle();
+  advanceFrames();
   pointer.dispatch('pointermove', 490, 300);
-  settle();
+  advanceFrames();
   assert.notEqual(card.mesh.rotation.x, 0);
   assert.notEqual(card.mesh.rotation.y, 0);
   pointer.dispatch('pointerdown', 490, 300, 'touch');
   pointer.dispatch('pointermove', 530, 340, 'touch');
   advanceFrame();
   pointer.dispatch('pointerup', 530, 340, 'touch');
-  settle();
+  advanceFrames();
   assert.equal(run.state.cardStage, 'inspecting');
   assert.equal(card.mesh.rotation.x, 0);
   assert.equal(card.mesh.rotation.y, 0);
@@ -1587,15 +1660,15 @@ for (const [position, x] of [['outside', 870], ['inside', 530]] as const) {
     const pointer = pointerControls(run);
     const card = cardLayout(homeFor(models[0], 0));
     act(() => run.controls.current!.selectCard(0));
-    settle();
+    advanceFrames();
     pointer.dispatch('pointerdown', 490, 300);
     pointer.dispatch('pointermove', x, 340);
-    settle();
+    advanceFrames();
     assert.notEqual(card.mesh.rotation.x, 0);
     assert.notEqual(card.mesh.rotation.y, 0);
     const heldTilt = card.mesh.rotation.clone();
     pointer.dispatch('pointerup', x, 340);
-    settle();
+    advanceFrames();
     assert.equal(pointer.captured.size, 0);
     assert.equal(run.state.cardStage, 'inspecting');
     assert.equal(run.count('return-card'), 0);
@@ -1974,9 +2047,9 @@ for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidd
     const home = homeFor(models[0], 0);
     const card = cardLayout(home);
     act(() => run.controls.current!.selectCard(0));
-    settle();
+    advanceFrames();
     pointer.dispatch('pointerdown', 490, 300, 'touch');
-    settle();
+    advanceFrames();
     assert.equal(document.activeElement, pointer.host);
     assert.ok(pointer.captured.has(1));
     assert.notEqual(card.mesh.rotation.y, 0);
@@ -1995,7 +2068,7 @@ for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidd
     } else pointer.dispatch(cancellation, 490, 300, 'touch');
     pointer.dispatch('pointerup', 490, 300, 'touch');
     act(() => pointer.host.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 })));
-    settle();
+    advanceFrames();
     assert.equal(pointer.captured.size, 0);
     assert.equal(run.state.cardStage, 'inspecting');
     assert.equal(run.count('return-card'), 0);
