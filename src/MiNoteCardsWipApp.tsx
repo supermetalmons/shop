@@ -4,7 +4,7 @@ import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePa
 import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { MI_NOTE_CARD_EFFECTS } from './lib/miNoteCardEffects';
-import { createMiNoteCard } from './lib/miNoteCards';
+import { createMiNoteCard, MI_NOTE_CARD_COUNT } from './lib/miNoteCards';
 import {
   createMiNoteRevealState,
   MI_NOTE_PACK_VARIANTS,
@@ -142,11 +142,20 @@ function MiNotePackOpening({
 }
 
 export default function MiNoteCardsWipApp() {
-  const [round, setRound] = useState<{ generation: number; selection: MiNotePack; star: MiNotePackStar }>(() => ({
-    generation: 0,
-    selection: sampleMiNotePack(),
-    star: MI_NOTE_PACK_STARS[0],
-  }));
+  const [round, setRound] = useState<{
+    generation: number;
+    selection: MiNotePack;
+    star: MiNotePackStar;
+    cardIdInputs: readonly [string, string];
+  }>(() => {
+    const selection = sampleMiNotePack();
+    return {
+      generation: 0,
+      selection,
+      star: MI_NOTE_PACK_STARS[0],
+      cardIdInputs: [String(selection.cardIds[0]), String(selection.cardIds[1])],
+    };
+  });
   const [focused, setFocused] = useState(false);
   const [selectedEffect, setSelectedEffect] = useState<(typeof MI_NOTE_CARD_EFFECTS)[number]>(MI_NOTE_CARD_EFFECTS[0]);
   const controlsRef = useRef<MiNotePackControls | null>(null);
@@ -156,11 +165,15 @@ export default function MiNoteCardsWipApp() {
   }, [handleClose]);
   const handleBackgroundTap = useCallback(() => setFocused((value) => !value), []);
   const handleReset = useCallback(() => {
-    setRound((previous) => ({
-      ...previous,
-      generation: previous.generation + 1,
-      selection: { ...sampleMiNotePack(), variant: previous.selection.variant },
-    }));
+    setRound((previous) => {
+      const selection = { ...sampleMiNotePack(), variant: previous.selection.variant };
+      return {
+        ...previous,
+        generation: previous.generation + 1,
+        selection,
+        cardIdInputs: [String(selection.cardIds[0]), String(selection.cardIds[1])],
+      };
+    });
   }, []);
   const handleRetry = useCallback(() => {
     setRound((previous) => ({ ...previous, generation: previous.generation + 1 }));
@@ -177,6 +190,19 @@ export default function MiNoteCardsWipApp() {
       ...previous,
       generation: previous.generation + 1,
       selection: { ...previous.selection, variant },
+    });
+  }, []);
+  const handleCardIdChange = useCallback((index: 0 | 1, value: string) => {
+    const id = Number(value);
+    setRound((previous) => {
+      const cardIdInputs: [string, string] = [...previous.cardIdInputs];
+      cardIdInputs[index] = value;
+      if (!Number.isInteger(id) || id < 1 || id > MI_NOTE_CARD_COUNT || id === previous.selection.cardIds[index]) {
+        return { ...previous, cardIdInputs };
+      }
+      const cardIds: [number, number] = [...previous.selection.cardIds];
+      cardIds[index] = id;
+      return { ...previous, cardIdInputs, selection: { ...previous.selection, cardIds } };
     });
   }, []);
   const cycleStar = (direction: number) => {
@@ -252,17 +278,33 @@ export default function MiNoteCardsWipApp() {
               ))}
             </div>
           </div>
-          <select
-            className="mi-note-wip__effect-picker"
-            aria-label="Effect"
-            value={selectedEffect.effect.effectKey}
-            onChange={(event) => {
-              const effect = MI_NOTE_CARD_EFFECTS.find((entry) => entry.effect.effectKey === event.target.value);
-              if (effect) setSelectedEffect(effect);
-            }}
-          >
-            {MI_NOTE_CARD_EFFECTS.map(({ name, effect }) => <option key={effect.effectKey} value={effect.effectKey}>{name}</option>)}
-          </select>
+          <div className="mi-note-wip__card-row">
+            {([0, 1] as const).map((index) => (
+              <input
+                key={index}
+                className="mi-note-wip__card-id"
+                type="number"
+                inputMode="numeric"
+                aria-label={`${index === 0 ? 'Left' : 'Right'} card ID`}
+                min={1}
+                max={MI_NOTE_CARD_COUNT}
+                step={1}
+                value={round.cardIdInputs[index]}
+                onChange={(event) => handleCardIdChange(index, event.target.value)}
+              />
+            ))}
+            <select
+              className="mi-note-wip__effect-picker"
+              aria-label="Effect"
+              value={selectedEffect.effect.effectKey}
+              onChange={(event) => {
+                const effect = MI_NOTE_CARD_EFFECTS.find((entry) => entry.effect.effectKey === event.target.value);
+                if (effect) setSelectedEffect(effect);
+              }}
+            >
+              {MI_NOTE_CARD_EFFECTS.map(({ name, effect }) => <option key={effect.effectKey} value={effect.effectKey}>{name}</option>)}
+            </select>
+          </div>
         </div>
         <button type="button" className="wip-reset-btn" onClick={handleReset} aria-label="Reset opening">Reset</button>
       </div>

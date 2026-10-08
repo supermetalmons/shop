@@ -307,6 +307,108 @@ test('all three card effects update live without replacing cards or resetting th
   assert.equal(picker.value, 'trainer-full-art');
 });
 
+test('card ID inputs update either card without resetting the open folder or inspected card', t => {
+  t.mock.method(Math, 'random', () => 0.1);
+  const view = render(createElement(MiNoteCardsWipApp));
+  const left = view.getByRole('spinbutton', { name: 'Left card ID' }) as HTMLInputElement;
+  const right = view.getByRole('spinbutton', { name: 'Right card ID' }) as HTMLInputElement;
+  for (const input of [left, right]) {
+    assert.equal(input.type, 'number');
+    assert.equal(input.min, '1');
+    assert.equal(input.max, '1430');
+    assert.equal(input.step, '1');
+  }
+  assert.deepEqual([left.value, right.value], ['144', '143']);
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['144', '143']);
+  openPack(view);
+  const initial = viewer();
+  const opened = initial.props.state;
+  fireEvent.change(left, { target: { value: '1430' } });
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.state, opened);
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1430', '143']);
+  assert.equal(view.getByRole('button', { name: 'View left card' }).getAttribute('aria-description'), 'Mi Note Card #1430');
+  fireEvent.change(right, { target: { value: '1' } });
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.state, opened);
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1430', '1']);
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  emit({ type: 'card-lifted' });
+  const inspecting = viewer().props.state;
+  fireEvent.change(left, { target: { value: '2' } });
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.state, inspecting);
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['2', '1']);
+  assert.ok(view.getByRole('button', { name: 'Return card to pocket', description: 'Mi Note Card #2' }));
+  fireEvent.change(right, { target: { value: '2' } });
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.state, inspecting);
+  assert.equal(viewer().props.cards[0].imageSrc, 'https://cdn.lil.org/nft/mi_note_cards/fronts/2.webp');
+  assert.deepEqual(viewer().props.cards[0], viewer().props.cards[1]);
+  assert.deepEqual([left.value, right.value], ['2', '2']);
+});
+
+test('invalid card ID drafts preserve both displayed cards and the open folder state', t => {
+  t.mock.method(Math, 'random', () => 0);
+  const view = render(createElement(MiNoteCardsWipApp));
+  const inputs = [
+    view.getByRole('spinbutton', { name: 'Left card ID' }),
+    view.getByRole('spinbutton', { name: 'Right card ID' }),
+  ] as HTMLInputElement[];
+  fireEvent.change(inputs[0], { target: { value: '12' } });
+  fireEvent.change(inputs[1], { target: { value: '34' } });
+  openPack(view);
+  const initial = viewer();
+  const opened = initial.props.state;
+  const cards = renderedMiNoteCards();
+  for (const input of inputs) {
+    for (const draft of ['', '0', '-1', '1431', '7.5']) {
+      fireEvent.change(input, { target: { value: draft } });
+      assert.equal(input.value, draft);
+      assert.equal(viewer(), initial);
+      assert.equal(viewer().props.state, opened);
+      assert.deepEqual(renderedMiNoteCards(), cards);
+    }
+  }
+  fireEvent.change(inputs[0], { target: { value: '1430' } });
+  fireEvent.change(inputs[1], { target: { value: '1' } });
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1430', '1']);
+  assert.equal(viewer(), initial);
+  assert.equal(viewer().props.state, opened);
+});
+
+test('appearance and Retry keep edited IDs and drafts while Reset replaces both inputs', t => {
+  let random = 0.1;
+  t.mock.method(Math, 'random', () => random);
+  const view = render(createElement(MiNoteCardsWipApp));
+  const left = view.getByRole('spinbutton', { name: 'Left card ID' }) as HTMLInputElement;
+  const right = view.getByRole('spinbutton', { name: 'Right card ID' }) as HTMLInputElement;
+  fireEvent.change(left, { target: { value: '12' } });
+  fireEvent.change(right, { target: { value: '34' } });
+  fireEvent.change(left, { target: { value: '' } });
+  fireEvent.change(right, { target: { value: '1431' } });
+  const cards = renderedMiNoteCards();
+  random = 0.8;
+  const assertSelection = () => {
+    assert.deepEqual(renderedMiNoteCards(), cards);
+    assert.deepEqual([left.value, right.value], ['', '1431']);
+  };
+  fireEvent.click(view.getByRole('button', { name: 'Marigold' }));
+  assertSelection();
+  fireEvent.change(view.getByRole('combobox', { name: 'Star sticker' }), { target: { value: 'zombie' } });
+  assertSelection();
+  fireEvent.change(view.getByRole('combobox', { name: 'Effect' }), { target: { value: 'lighting-only' } });
+  assertSelection();
+  act(() => viewer().props.onError(new Error('Lost renderer')));
+  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
+  assertSelection();
+  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+  assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1145', '1144']);
+  assert.deepEqual([left.value, right.value], ['1145', '1144']);
+  assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
+});
+
 test('modal Escape delegates to the active viewer before navigating away', () => {
   const view = render(createElement(MiNoteCardsWipApp));
   openPack(view);
@@ -404,6 +506,16 @@ test('keyboard shortcuts use current controls and leave focused form controls al
     fireEvent.keyDown(target, { key: 'Enter', code: 'Enter' });
     fireEvent.keyDown(target, { key: 'ArrowRight', code: 'ArrowRight' });
   }
+  const beforeTyping = viewer();
+  const beforeTypingState = beforeTyping.props.state;
+  for (const target of [view.getByRole('spinbutton', { name: 'Left card ID' }), view.getByRole('spinbutton', { name: 'Right card ID' })]) {
+    target.focus();
+    for (const key of ['Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'r']) {
+      fireEvent.keyDown(target, { key, code: key === 'r' ? 'KeyR' : key });
+    }
+  }
+  assert.equal(viewer(), beforeTyping);
+  assert.equal(viewer().props.state, beforeTypingState);
   fireEvent.keyDown(dialog, { key: ' ', code: 'Space', repeat: true });
   fireEvent.keyDown(dialog, { key: 'Enter', code: 'Enter', ctrlKey: true });
   assert.equal(viewer().calls.length, 4);

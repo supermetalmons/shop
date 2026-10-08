@@ -137,18 +137,20 @@ function createTestSurface(card: DrifCardConfig) {
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   if (!deferSurfaceReady) resolveReady();
   const surface = {
+    card,
     material: actual.material,
     ready, resolveReady, rejectReady,
     effectReadiness: new Map<string, Promise<void>>(),
     effects: [] as DrifCardConfig['effect'][],
     updates: 0,
     disposed: false,
+    disposeCalls: 0,
     setEffect(effect: DrifCardConfig['effect']) {
       surface.effects.push(effect);
       return (surface.effectReadiness.get(effect.effectKey) ?? ready).then(() => actual.setEffect(effect));
     },
     update(mesh: THREE.Object3D, camera: THREE.Camera) { surface.updates += 1; actual.update(mesh, camera); },
-    dispose() { surface.disposed = true; actual.dispose(); },
+    dispose() { surface.disposed = true; surface.disposeCalls += 1; actual.dispose(); },
   };
   surfaces.push(surface);
   return surface;
@@ -245,7 +247,7 @@ function harness(
   const cardReadyChanges: boolean[] = [];
   const cardErrors: (Error | null)[] = [];
   const errors: Error[] = [];
-  const cards = [
+  let cards: readonly [DrifCardConfig, DrifCardConfig] = [
     { imageSrc: '/card-a.png', textureSrc: '/mask-a.png', foilSrc: '/foil-a.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
     { imageSrc: '/card-b.png', textureSrc: '/mask-b.png', foilSrc: '/foil-b.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
   ] as const;
@@ -274,7 +276,12 @@ function harness(
   return {
     view, controls, events, readyChanges, cardReadyChanges, cardErrors, errors,
     get state() { return state; },
+    get cards() { return cards; },
     count(type: MiNoteRevealEvent['type']) { return events.filter(event => event.type === type).length; },
+    setCards(next: typeof cards) {
+      cards = next;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
     setCardEffect(effect: DrifCardConfig['effect']) {
       cardEffect = effect;
       view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
@@ -1615,6 +1622,234 @@ test('returning a card cancels a held pointer so release cannot select it again'
   assert.equal(run.count('select-card'), 1);
 });
 
+
+test('card edits replace only changed materials and preserve the open folder and current effect', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  await act(async () => run.setCardEffect(DRIF_EFFECTS['swsh6-196']));
+  settle();
+  const model = models[0];
+  const homes = [homeFor(model, 0), homeFor(model, 1)];
+  const meshes = homes.map(home => cardLayout(home).mesh);
+  const previous = [...surfaces];
+  const state = run.state;
+  const controls = run.controls.current;
+  deferSurfaceReady = true;
+  run.setCards([{ ...run.cards[0], imageSrc: '/card-c.png', foilSrc: '/foil-c.png', textureSrc: '/mask-c.png' }, run.cards[1]]);
+  const replacement = surfaces[2];
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  assert.equal(run.controls.current, controls);
+  assert.equal(run.state, state);
+  assert.equal(model.phase, 1);
+  homes.forEach(assertHome);
+  assert.deepEqual(homes.map(home => cardLayout(home).mesh), meshes);
+  assert.equal(previous[0].disposeCalls, 1);
+  assert.equal(previous[1].disposeCalls, 0);
+  assert.equal(meshes[0].material, replacement.material);
+  assert.equal(meshes[1].material, previous[1].material);
+  assert.equal(meshes[0].visible, false);
+  assert.equal(meshes[1].visible, true);
+  assert.equal(run.cardReadyChanges.at(-1), false);
+  assert.equal(replacement.effects.at(-1), DRIF_EFFECTS['swsh6-196']);
+  await act(async () => { replacement.resolveReady(); await replacement.ready; });
+  settle();
+  assert.equal(run.cardReadyChanges.at(-1), true);
+  meshes.forEach(mesh => assert.equal(mesh.visible, true));
+  const readiness = [...run.cardReadyChanges];
+  run.setCards([{ ...run.cards[0] }, { ...run.cards[1] }]);
+  assert.equal(surfaces.length, 3);
+  assert.deepEqual(run.cardReadyChanges, readiness);
+  run.view.unmount();
+  assert.ok(surfaces.every(surface => surface.disposeCalls === 1));
+});
+
+test('editing an inspected card preserves its anchor and allows returning it to its pocket', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const home = homeFor(models[0], 0);
+  const mesh = cardLayout(home).mesh;
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  const inspection = home.anchor.matrixWorld.clone();
+  const scene = renderers[0].scene;
+  await act(async () => run.setCards([run.cards[1], run.cards[1]]));
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(run.state.selectedCard, 0);
+  assert.equal(home.anchor.parent, scene);
+  assert.ok(home.anchor.matrixWorld.equals(inspection));
+  assert.equal(cardLayout(home).mesh, mesh);
+  assert.equal(mesh.material, surfaces[2].material);
+  assert.equal(surfaces[2].card, run.cards[1]);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  act(() => run.controls.current!.returnCard());
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(document.activeElement, run.view.getByRole('group', { name: 'Interactive Mi Note Cards folder' }));
+  assert.equal(run.count('card-lifted'), 1);
+  assert.equal(run.count('card-returned'), 1);
+  assertHome(home);
+});
+
+test('finishing a card return preserves focus in an ID input being edited', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  act(() => run.controls.current!.returnCard());
+  advanceFrame();
+  assert.equal(run.state.cardStage, 'returning');
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.setAttribute('aria-label', 'Left card ID');
+  run.view.container.append(input);
+  input.focus();
+  input.value = '1430';
+  await act(async () => run.setCards([{ ...run.cards[0], imageSrc: '/fronts/1430.webp' }, run.cards[1]]));
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(document.activeElement, input);
+  assert.equal(input.value, '1430');
+});
+
+for (const transition of ['lifting', 'returning'] as const) {
+  test(`card edits during ${transition} preserve the active animation`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    if (transition === 'returning') {
+      settle();
+      act(() => run.controls.current!.returnCard());
+    }
+    advanceFrame();
+    assert.equal(run.state.cardStage, transition);
+    const position = home.anchor.position.clone();
+    deferSurfaceReady = true;
+    run.setCards([{ ...run.cards[0], imageSrc: '/card-c.png' }, run.cards[1]]);
+    assert.ok(home.anchor.position.equals(position));
+    assert.equal(run.state.cardStage, transition);
+    assert.equal(models.length, 1);
+    settle();
+    assert.equal(run.state.cardStage, transition === 'lifting' ? 'inspecting' : 'pocket');
+    await act(async () => { surfaces[2].resolveReady(); await surfaces[2].ready; });
+    settle();
+    assert.equal(run.cardReadyChanges.at(-1), true);
+    assert.equal(cardLayout(home).mesh.visible, true);
+    if (transition === 'returning') assertHome(home);
+    else assert.equal(home.anchor.parent, renderers[0].scene);
+    assert.equal(run.count('card-lifted'), 1);
+    assert.equal(run.count('card-returned'), transition === 'returning' ? 1 : 0);
+  });
+}
+
+test('card edits keep an active seal peel and its completion on the same model', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness();
+  await makeReady();
+  act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
+  advanceFrame();
+  const model = models[0];
+  assert.equal(run.state.stage, 'seal-peeling');
+  assert.equal(model.sealStarts, 1);
+  await act(async () => run.setCards([{ ...run.cards[0], textureSrc: '/mask-c.png' }, run.cards[1]]));
+  assert.equal(models.length, 1);
+  advanceFrames();
+  assert.equal(run.state.stage, 'interactive');
+  assert.equal(model.sealStarts, 1);
+  assert.equal(run.count('seal-finished'), 1);
+  assert.equal(surfaces[2].card.textureSrc, '/mask-c.png');
+});
+
+for (const outcome of ['ready', 'failure'] as const) {
+  test(`rapid card edits ignore obsolete ${outcome} and wait for both current surfaces`, async () => {
+    deferSurfaceReady = true;
+    const run = harness();
+    await makeReady();
+    const previous = [...surfaces];
+    run.setCards([{ ...run.cards[0], imageSrc: '/card-c.png' }, { ...run.cards[1], foilSrc: '/foil-d.png' }]);
+    const current = surfaces.slice(2);
+    assert.ok(previous.every(surface => surface.disposeCalls === 1));
+    run.setCardEffect(DRIF_EFFECTS['swsh6-196']);
+    const readiness = [...run.cardReadyChanges];
+    const errors = [...run.cardErrors];
+    await act(async () => {
+      previous.forEach(surface => {
+        if (outcome === 'ready') surface.resolveReady();
+        else surface.rejectReady(new Error('Obsolete card error'));
+      });
+      await Promise.allSettled(previous.map(surface => surface.ready));
+    });
+    assert.deepEqual(run.cardReadyChanges, readiness);
+    assert.deepEqual(run.cardErrors, errors);
+    await act(async () => { current[0].resolveReady(); await current[0].ready; });
+    assert.equal(run.cardReadyChanges.at(-1), false);
+    const meshes = [homeFor(models[0], 0), homeFor(models[0], 1)].map(home => cardLayout(home).mesh);
+    meshes.forEach(mesh => assert.equal(mesh.visible, false));
+    await act(async () => { current[1].resolveReady(); await current[1].ready; });
+    settle();
+    assert.equal(run.cardReadyChanges.at(-1), true);
+    meshes.forEach((mesh, index) => {
+      assert.equal(mesh.material, current[index].material);
+      assert.equal(mesh.visible, true);
+      assert.equal(current[index].effects.at(-1), DRIF_EFFECTS['swsh6-196']);
+    });
+    assert.equal(renderers.length, 1);
+    assert.deepEqual(run.errors, []);
+  });
+}
+
+test('a new card ID clears a load failure and a newer effect wins over its pending load', async () => {
+  const run = harness();
+  await makeReady();
+  deferSurfaceReady = true;
+  run.setCards([{ ...run.cards[0], imageSrc: '/missing.png' }, run.cards[1]]);
+  const error = new Error('Card unavailable');
+  await act(async () => {
+    surfaces[2].rejectReady(error);
+    await surfaces[2].ready.catch(() => undefined);
+  });
+  assert.equal(run.cardErrors.at(-1), error);
+  assert.equal(run.cardReadyChanges.at(-1), false);
+  run.setCards([{ ...run.cards[0], imageSrc: '/card-c.png' }, run.cards[1]]);
+  assert.equal(run.cardErrors.at(-1), null);
+  const current = surfaces[3];
+  current.effectReadiness.set('lighting-only', Promise.resolve());
+  await act(async () => run.setCardEffect(CARD_NFT_2_NEUTRAL_CARD_EFFECT));
+  settle();
+  assert.equal(run.cardReadyChanges.at(-1), true);
+  assert.equal(current.material.uniforms.uEffect.value, 2);
+  const errors = [...run.cardErrors];
+  const readiness = [...run.cardReadyChanges];
+  await act(async () => {
+    current.rejectReady(new Error('Obsolete effect failed'));
+    await current.ready.catch(() => undefined);
+  });
+  assert.deepEqual(run.cardErrors, errors);
+  assert.deepEqual(run.cardReadyChanges, readiness);
+  assert.equal(renderers.length, 1);
+});
+
+test('unmount disposes replacement surfaces and ignores their late completion', async () => {
+  const run = harness();
+  await makeReady();
+  deferSurfaceReady = true;
+  run.setCards([{ ...run.cards[0], imageSrc: '/card-c.png' }, run.cards[1]]);
+  run.setCards([{ ...run.cards[0], imageSrc: '/card-d.png' }, run.cards[1]]);
+  run.view.unmount();
+  assert.ok(surfaces.every(surface => surface.disposeCalls === 1));
+  const readiness = [...run.cardReadyChanges];
+  const errors = [...run.cardErrors];
+  await act(async () => {
+    surfaces.forEach(surface => surface.resolveReady());
+    await Promise.all(surfaces.map(surface => surface.ready));
+  });
+  assert.deepEqual(run.cardReadyChanges, readiness);
+  assert.deepEqual(run.cardErrors, errors);
+  assert.equal(run.controls.current, null);
+});
 
 test('both GPU surfaces must finish loading before cards become visible or report ready', async () => {
   deferSurfaceReady = true;

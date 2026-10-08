@@ -53,6 +53,10 @@ type OuterFlip = Motion & { from: 0 | 2; to: 0 | 2; direction: number; target: n
 
 const CARD_FRONT_CLEARANCE = 0.05;
 
+function cardAssetKey(card: DrifCardConfig) {
+  return JSON.stringify([card.imageSrc, card.foilSrc, card.textureSrc]);
+}
+
 function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
   const offset = motion.value - target;
   const impulse = motion.velocity + frequency * offset;
@@ -71,7 +75,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
   const currentProps = useRef(props);
   currentProps.current = props;
   const invalidateRef = useRef<() => void>(() => undefined);
-  const cardEffectRef = useRef<(effect: DrifCardConfig['effect']) => void>(() => undefined);
+  const cardAppearanceRef = useRef<(cards: MiNotePackViewerProps['cards'], effect: DrifCardConfig['effect']) => void>(() => undefined);
   const effectSettingsRef = useRef<(value: MiNoteStickerEffectSettings) => void>(() => undefined);
 
   useEffect(() => {
@@ -167,12 +171,25 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       anchor.add(mesh);
       const parent = index === 0 ? model.left : model.right;
       parent.add(anchor);
-      return { anchor, mesh, surface, parent, home };
+      return { anchor, mesh, surface, parent, home, assetKey: cardAssetKey(config) };
     });
     let cardEffectRequest = 0;
     let activeCardEffect: DrifCardConfig['effect'] | undefined;
-    cardEffectRef.current = (effect) => {
-      if (effect === activeCardEffect || disposed || failed) return;
+    cardAppearanceRef.current = (configs, effect) => {
+      if (disposed || failed) return;
+      let assetsChanged = false;
+      cards.forEach((card, index) => {
+        const assetKey = cardAssetKey(configs[index]);
+        if (card.assetKey === assetKey) return;
+        const previous = card.surface;
+        card.surface = createMiNoteCardMaterial(configs[index]);
+        card.mesh.material = card.surface.material;
+        card.mesh.visible = false;
+        card.assetKey = assetKey;
+        previous.dispose();
+        assetsChanged = true;
+      });
+      if (!assetsChanged && effect === activeCardEffect) return;
       activeCardEffect = effect;
       const request = ++cardEffectRequest;
       currentProps.current.onCardsError(null);
@@ -549,7 +566,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
             card.anchor.scale.setScalar(1);
             selected = null;
             cardPath = null;
-            host?.focus({ preventScroll: true });
+            if (!document.activeElement?.matches('input, textarea, select')) host?.focus({ preventScroll: true });
             dispatch({ type: 'card-returned' });
           } else {
             dispatch({ type: 'card-lifted' });
@@ -606,7 +623,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     renderer.domElement.addEventListener('webglcontextlost', handleContextLost);
     currentProps.current.onReadyChange(false);
     resize();
-    cardEffectRef.current(currentProps.current.cardEffect);
+    cardAppearanceRef.current(currentProps.current.cards, currentProps.current.cardEffect);
     void model.ready.then(() => {
       if (disposed || failed) return;
       renderer.compile(scene, camera);
@@ -624,7 +641,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       cancelAnimationFrame(frameId);
       invalidateRef.current = () => undefined;
       effectSettingsRef.current = () => undefined;
-      cardEffectRef.current = () => undefined;
+      cardAppearanceRef.current = () => undefined;
       if (currentProps.current.controlsRef.current === controls) currentProps.current.controlsRef.current = null;
       observer.disconnect();
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -648,12 +665,12 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       renderer.forceContextLoss();
       renderer.domElement.remove();
     };
-  }, [props.color, props.star, props.cards, props.controlsRef]);
+  }, [props.color, props.star, props.controlsRef]);
 
   useEffect(() => {
-    cardEffectRef.current(props.cardEffect);
+    cardAppearanceRef.current(props.cards, props.cardEffect);
     invalidateRef.current();
-  }, [props.cardEffect]);
+  }, [props.cards, props.cardEffect]);
   useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker]);
   useEffect(() => {
     effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
