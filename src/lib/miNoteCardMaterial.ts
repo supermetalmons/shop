@@ -94,6 +94,9 @@ uniform float uPointerFromCenter;
 uniform int uEffect;
 varying vec2 vUv;
 
+const float FOIL_HIGHLIGHTS = 0.7;
+const float GLARE_OPACITY = 0.5;
+
 float lum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 float linearStep(float a, float b, float t) { return clamp((t - a) / (b - a), 0.0, 1.0); }
 vec3 screenBlend(vec3 a, vec3 b) { return 1.0 - (1.0 - a) * (1.0 - b); }
@@ -196,7 +199,7 @@ vec3 lighting(vec3 base, float d) {
   if (d <= 0.24) glare = premultipliedMix(vec4(1.0, 1.0, 1.0, 0.66), vec4(1.0, 1.0, 1.0, 0.34), linearStep(0.08, 0.24, d));
   else if (d <= 0.58) glare = premultipliedMix(vec4(1.0, 1.0, 1.0, 0.34), vec4(1.0, 1.0, 1.0, 0.04), linearStep(0.24, 0.58, d));
   else glare = premultipliedMix(vec4(1.0, 1.0, 1.0, 0.04), vec4(0.0, 0.0, 0.0, 0.16), linearStep(0.58, 1.0, d));
-  return mix(base, overlayBlend(base, glare.rgb * 0.98), 0.56 * glare.a);
+  return mix(base, overlayBlend(base, glare.rgb * 0.98), clamp(0.56 * glare.a * GLARE_OPACITY, 0.0, 1.0));
 }
 void main() {
   vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
@@ -227,21 +230,21 @@ void main() {
     shine = mix(shine, shine + shineAfter - 2.0 * shine * shineAfter, 0.99);
     float hotspot = mask * smoothstep(0.52, 0.82, lum(shine));
     float ribHotspot = mask * smoothstep(0.48, 0.70, max(lum(afterRib), lum(mainRib) * 0.70));
-    base = mix(base, dodgeBlend(base, shine), mask);
-    base = mix(base, vec3(1.0), 0.08 * hotspot * beforeAlpha);
+    base = mix(base, dodgeBlend(base, clamp(shine * FOIL_HIGHLIGHTS, 0.0, 1.0)), mask);
+    base = mix(base, vec3(1.0), clamp(0.08 * hotspot * beforeAlpha * FOIL_HIGHLIGHTS, 0.0, 1.0));
     float glareD = radialProgress(backgroundUV(uv, vec2(1.7), vec2(0.5)), uPointer, uCardSize * 1.7);
     vec3 glare = radialStops(glareD, vec4(vec3(0.75), 1.0), vec4(0.3325, 0.3558333, 0.3675, 1.0), vec4(0.14, 0.06, 0.1133333, 1.0), vec3(0.05, 0.60, 1.50)).rgb;
     glare = filterColor(glare, 1.50, 1.40, 1.0);
-    base = mix(base, base * glare, 0.75 * (1.0 - 0.25 * hotspot - 0.45 * ribHotspot));
-    base = mix(base, screenBlend(base, vec3(1.0, 0.96, 0.82)), 0.16 * ribHotspot);
+    base = mix(base, base * glare, clamp(0.75 * (1.0 - 0.25 * hotspot - 0.45 * ribHotspot) * GLARE_OPACITY, 0.0, 1.0));
+    base = mix(base, screenBlend(base, vec3(1.0, 0.96, 0.82)), clamp(0.16 * ribHotspot * FOIL_HIGHLIGHTS, 0.0, 1.0));
   } else {
     shine = filterColor(shine, 0.80, 2.95, 0.65);
-    base = mix(base, dodgeBlend(base, shine), mask);
+    base = mix(base, dodgeBlend(base, clamp(shine * FOIL_HIGHLIGHTS, 0.0, 1.0)), mask);
     shineAfter = filterColor(shineAfter, 1.0, 2.5, 1.75);
     base = mix(base, softLightBlend(base, shineAfter), mask);
     vec4 glare = radialStops(d, vec4(1.0), vec4(vec3(0.54), 0.33), vec4(vec3(0.20), 0.90), vec3(0.0, 0.45, 1.30));
     glare.rgb = filterColor(glare.rgb, 0.90, 1.75, 1.0);
-    base = mix(base, hardLightBlend(base, glare.rgb), 0.50 * glare.a);
+    base = mix(base, hardLightBlend(base, glare.rgb), clamp(0.50 * glare.a * GLARE_OPACITY, 0.0, 1.0));
   }
   gl_FragColor = vec4(clamp(base, 0.0, 1.0), front.a);
 }
