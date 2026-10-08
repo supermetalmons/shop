@@ -497,9 +497,9 @@ test('selection preserves shipment limits and action eligibility with country-sp
   assert.equal(result.current.selection.canViewSelected, false);
   assert.equal(result.current.selection.canShowAdminIrlRedeem, true);
   assert.equal(result.current.selection.selectionSummary, '1 pack');
-  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.2 SOL');
+  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.12 SOL');
   rerender({ ...initial, selectionOptions: { deliveryCountryCode: 'TR', isSignedInWallet: false } });
-  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.4 SOL');
+  assert.equal(result.current.selection.deliveryCtaLabel, 'Send for 0.24 SOL');
   assert.equal(result.current.selection.canShowAdminIrlRedeem, false);
   act(() => {
     for (let index = 1; index < 25; index += 1) result.current.selection.toggleSelected(`pack-${index}`);

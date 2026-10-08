@@ -40,8 +40,8 @@ const binderNotes = {
 const cardNotes = {
   boxNamePrefix: 'pack',
   figureNamePrefix: 'card',
-  US: 'US delivery: 0.2 SOL up to 3 cards. 0.06 SOL each additional card.',
-  TR: 'International delivery: 0.4 SOL up to 3 cards. 0.06 SOL each additional card.',
+  US: 'US delivery: 0.12 SOL up to 3 cards. 0.03 SOL each additional card.',
+  TR: 'International delivery: 0.24 SOL up to 3 cards. 0.03 SOL each additional card.',
 };
 const familyNotes: Record<DropFamily, ShippingNoteCase> = {
   default: defaultNotes,
@@ -73,7 +73,13 @@ const familyNotes: Record<DropFamily, ShippingNoteCase> = {
   },
   card_nft_2: { ...cardNotes, itemsPerBox: 3 },
   clear_cards: { ...cardNotes, itemsPerBox: 1 },
-  mi_note_cards: defaultNotes,
+  mi_note_cards: {
+    itemsPerBox: 2,
+    boxNamePrefix: 'pack',
+    figureNamePrefix: 'card',
+    US: 'US delivery: 0.12 SOL up to 2 cards. 0.03 SOL each additional card.',
+    TR: 'International delivery: 0.24 SOL up to 2 cards. 0.03 SOL each additional card.',
+  },
   tbd: defaultNotes,
 };
 
@@ -134,17 +140,17 @@ test('delivery form keeps its initial shipping terms until it is reopened', () =
     figureNamePrefix: 'card',
     dropFamily: 'card_nft_2',
     countryCode: 'US',
-    submitLabel: 'Send for 0.2 SOL',
+    submitLabel: 'Send for 0.12 SOL',
   }));
 
-  assert.match(view.container.textContent || '', /US delivery: 0\.2 SOL up to 3 cards/);
+  assert.match(view.container.textContent || '', /US delivery: 0\.12 SOL up to 3 cards/);
   view.rerender(createElement(DeliveryForm, {
     onSubmit,
     countryCode: 'TR',
     shipmentPending: true,
     submitLabel: 'Send',
   }));
-  assert.match(view.container.textContent || '', /International delivery: 0\.4 SOL up to 3 cards/);
+  assert.match(view.container.textContent || '', /International delivery: 0\.24 SOL up to 3 cards/);
   assert.match(view.container.textContent || '', /Shipment pending…/);
   assert.equal((view.getByRole('button', { name: 'Shipment pending…' }) as HTMLButtonElement).disabled, true);
   assert.doesNotMatch(view.container.textContent || '', /Free US shipping/);
@@ -172,10 +178,10 @@ test('delivery form captures shipping terms when its context becomes available',
     figureNamePrefix: 'card',
     dropFamily: 'card_nft_2',
     countryCode: 'US',
-    submitLabel: 'Send for 0.2 SOL',
+    submitLabel: 'Send for 0.12 SOL',
   }));
-  assert.match(view.container.textContent || '', /US delivery: 0\.2 SOL up to 3 cards/);
-  assert.match(view.container.textContent || '', /Send for 0\.2 SOL/);
+  assert.match(view.container.textContent || '', /US delivery: 0\.12 SOL up to 3 cards/);
+  assert.match(view.container.textContent || '', /Send for 0\.12 SOL/);
 
   view.rerender(createElement(DeliveryForm, {
     onSubmit,

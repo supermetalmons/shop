@@ -6,9 +6,10 @@ const INTL_DELIVERY_EXTRA_LAMPORTS = 50_000_000;
 const LITTLE_SWAG_BOXES_US_BASE_LAMPORTS = 100_000_000;
 const LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS = 25_000_000;
 const CARD_NFT_2_BASE_DELIVERY_CARD_COUNT = 3;
-const CARD_NFT_2_US_BASE_LAMPORTS = 200_000_000;
-const CARD_NFT_2_INTL_BASE_LAMPORTS = 400_000_000;
-const CARD_NFT_2_EXTRA_LAMPORTS = 60_000_000;
+const MI_NOTE_CARDS_BASE_DELIVERY_CARD_COUNT = 2;
+const CARD_US_BASE_LAMPORTS = 120_000_000;
+const CARD_INTL_BASE_LAMPORTS = 240_000_000;
+const CARD_EXTRA_LAMPORTS = 30_000_000;
 const DRIFELLA_SHIRT_US_FLAT_LAMPORTS = 100_000_000;
 const DRIFELLA_SHIRT_INTL_FLAT_LAMPORTS = 250_000_000;
 const PONCHO_DRIFELLA_US_FLAT_LAMPORTS = 50_000_000;
@@ -24,8 +25,8 @@ type DeliveryPricing =
   | { kind: 'flat'; baseLamports: number }
   | { kind: 'per-unit'; baseLamports: number; includedUnits: number; extraUnitLamports: number };
 
-function usesCardNft2DeliveryFees(dropFamily: DropFamily | undefined): boolean {
-  return dropFamily === 'card_nft_2' || dropFamily === 'clear_cards';
+function usesCardDeliveryFees(dropFamily: DropFamily | undefined): boolean {
+  return dropFamily === 'card_nft_2' || dropFamily === 'clear_cards' || dropFamily === 'mi_note_cards';
 }
 
 export function canDeliverItemKind(
@@ -101,14 +102,16 @@ export function resolveDeliveryPricing(
     if (dropFamily === 'poncho_drifella') {
       return { kind: 'flat', baseLamports: PONCHO_DRIFELLA_US_FLAT_LAMPORTS };
     }
-    if (!usesCardNft2DeliveryFees(dropFamily)) return { kind: 'free' };
+    if (!usesCardDeliveryFees(dropFamily)) return { kind: 'free' };
   }
-  if (usesCardNft2DeliveryFees(dropFamily)) {
+  if (usesCardDeliveryFees(dropFamily)) {
     return {
       kind: 'per-unit',
-      baseLamports: isUs ? CARD_NFT_2_US_BASE_LAMPORTS : CARD_NFT_2_INTL_BASE_LAMPORTS,
-      includedUnits: CARD_NFT_2_BASE_DELIVERY_CARD_COUNT,
-      extraUnitLamports: CARD_NFT_2_EXTRA_LAMPORTS,
+      baseLamports: isUs ? CARD_US_BASE_LAMPORTS : CARD_INTL_BASE_LAMPORTS,
+      includedUnits: dropFamily === 'mi_note_cards'
+        ? MI_NOTE_CARDS_BASE_DELIVERY_CARD_COUNT
+        : CARD_NFT_2_BASE_DELIVERY_CARD_COUNT,
+      extraUnitLamports: CARD_EXTRA_LAMPORTS,
     };
   }
   return {
