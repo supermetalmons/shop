@@ -4,7 +4,7 @@ import MiNotePackViewer, { type MiNotePackControls } from './components/MiNotePa
 import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { MI_NOTE_CARD_EFFECTS } from './lib/miNoteCardEffects';
-import { createMiNoteDemoCard, MI_NOTE_DEMO_CARDS } from './lib/miNoteDemoCards';
+import { createMiNoteCard } from './lib/miNoteCards';
 import {
   createMiNoteRevealState,
   MI_NOTE_PACK_VARIANTS,
@@ -42,7 +42,7 @@ function MiNotePackOpening({
   const [cardsError, setCardsError] = useState<Error | null>(null);
   const selectedCardDescriptionId = useId();
   const cards = useMemo<readonly [DrifCardConfig, DrifCardConfig]>(
-    () => [createMiNoteDemoCard(selection.cardIds[0]), createMiNoteDemoCard(selection.cardIds[1])],
+    () => [createMiNoteCard(selection.cardIds[0]), createMiNoteCard(selection.cardIds[1])],
     [selection.cardIds],
   );
   const error = viewerError || cardsError;
@@ -110,7 +110,7 @@ function MiNotePackOpening({
               <button
                 key={index}
                 type="button"
-                aria-description={`${selection.cardIds[index]} — ${MI_NOTE_DEMO_CARDS[selection.cardIds[index]].name}`}
+                aria-description={`Mi Note Card #${selection.cardIds[index]}`}
                 onClick={() => controlsRef.current?.selectCard(index as 0 | 1)}
               >
                 View {index === 0 ? 'left' : 'right'} card
@@ -126,7 +126,7 @@ function MiNotePackOpening({
           >
             Return card to pocket
             <span id={selectedCardDescriptionId} hidden>
-              {selection.cardIds[state.selectedCard]} — {MI_NOTE_DEMO_CARDS[selection.cardIds[state.selectedCard]].name}
+              Mi Note Card #{selection.cardIds[state.selectedCard]}
             </span>
           </button>
         )}

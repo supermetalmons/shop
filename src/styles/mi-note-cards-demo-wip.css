@@ -62,7 +62,8 @@
   min-width: 0;
 }
 
-.mi-note-demo__pickers select {
+.mi-note-demo__pickers select,
+.mi-note-demo__pickers input {
   width: 100%;
   min-width: 0;
   min-height: 36px;
@@ -73,11 +74,15 @@
   color: color-mix(in srgb, var(--fg) 78%, transparent);
   font: inherit;
   font-size: 12px;
-  cursor: pointer;
   touch-action: manipulation;
 }
 
-.mi-note-demo__pickers select:hover {
+.mi-note-demo__pickers select {
+  cursor: pointer;
+}
+
+.mi-note-demo__pickers select:hover,
+.mi-note-demo__pickers input:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
   color: var(--fg);
 }

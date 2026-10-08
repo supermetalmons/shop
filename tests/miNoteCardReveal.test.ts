@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MI_NOTE_DEMO_CARD_IDS,
   MI_NOTE_OPEN_TAPS,
   MI_NOTE_PACK_VARIANTS,
   createMiNoteRevealState,
@@ -10,6 +9,7 @@ import {
   type MiNoteRevealEvent,
   type MiNoteRevealState,
 } from '../src/lib/miNoteCardReveal.ts';
+import { MI_NOTE_CARD_COUNT } from '../src/lib/miNoteCards.ts';
 
 function runEvents(events: readonly MiNoteRevealEvent[]): MiNoteRevealState {
   return events.reduce(reduceMiNoteReveal, createMiNoteRevealState());
@@ -26,8 +26,8 @@ test('mi note packs have only the three requested source colors', () => {
   }
 });
 
-test('mi note sampling always produces two distinct demo cards with exactly three draws', () => {
-  assert.deepEqual(MI_NOTE_DEMO_CARD_IDS, [1302, 1325, 1327]);
+test('mi note sampling always produces two distinct cards with exactly three draws', () => {
+  assert.equal(MI_NOTE_CARD_COUNT, 1430);
   for (const value of [0, 0.1, 0.5, 0.999999, 1, -1, NaN, Infinity, -Infinity]) {
     let calls = 0;
     const pack = sampleMiNotePack(() => {
@@ -37,23 +37,45 @@ test('mi note sampling always produces two distinct demo cards with exactly thre
     assert.equal(calls, 3);
     assert.notEqual(pack.cardIds[0], pack.cardIds[1]);
     for (const cardId of pack.cardIds) {
-      assert.ok(MI_NOTE_DEMO_CARD_IDS.includes(cardId));
+      assert.ok(Number.isInteger(cardId) && cardId >= 1 && cardId <= MI_NOTE_CARD_COUNT);
     }
   }
 });
 
-test('mi note sampling reaches all six ordered demo-card pairs without duplicates', () => {
+test('mi note sampling reaches both boundaries and skips the first card in either direction', () => {
   for (const [values, expected] of [
-    [[0, 0, 0], [1302, 1325]],
-    [[0, 0, 0.999999], [1302, 1327]],
-    [[0, 0.5, 0], [1325, 1302]],
-    [[0, 0.5, 0.999999], [1325, 1327]],
-    [[0, 0.999999, 0], [1327, 1302]],
-    [[0, 0.999999, 0.999999], [1327, 1325]],
+    [[0, 0, 0], [1, 2]],
+    [[0, 0, 0.999999], [1, 1430]],
+    [[0, 0.5, 0], [716, 1]],
+    [[0, 0.5, 0.5], [716, 715]],
+    [[0, 0.5, 0.501], [716, 717]],
+    [[0, 0.5, 0.999999], [716, 1430]],
+    [[0, 0.999999, 0], [1430, 1]],
+    [[0, 0.999999, 0.999999], [1430, 1429]],
   ] as const) {
     let index = 0;
     assert.deepEqual(sampleMiNotePack(() => values[index++]).cardIds, expected);
   }
+});
+
+test('mi note sampling reaches every card in both positions', () => {
+  const firstIds = new Set<number>();
+  const secondIds = new Set<number>();
+  for (let index = 0; index < MI_NOTE_CARD_COUNT; index += 1) {
+    const values = [0, (index + 0.5) / MI_NOTE_CARD_COUNT, 0];
+    const pack = sampleMiNotePack(() => values.shift()!);
+    firstIds.add(pack.cardIds[0]);
+  }
+  for (const firstValue of [0, 0.999999]) {
+    for (let index = 0; index < MI_NOTE_CARD_COUNT - 1; index += 1) {
+      const values = [0, firstValue, (index + 0.5) / (MI_NOTE_CARD_COUNT - 1)];
+      const pack = sampleMiNotePack(() => values.shift()!);
+      assert.notEqual(pack.cardIds[0], pack.cardIds[1]);
+      secondIds.add(pack.cardIds[1]);
+    }
+  }
+  assert.equal(firstIds.size, MI_NOTE_CARD_COUNT);
+  assert.deepEqual(firstIds, secondIds);
 });
 
 const openingTaps: readonly MiNoteRevealEvent[] = Array.from({ length: 4 }, () => ({ type: 'activate' }));

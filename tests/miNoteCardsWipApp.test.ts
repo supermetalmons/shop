@@ -112,11 +112,12 @@ function openPack(view: ReturnType<typeof render>) {
 
 function renderedMiNoteCards() {
   const cards = viewer().props.cards.map(({ imageSrc, foilSrc, textureSrc, effect }) => {
-    const id = imageSrc.match(/\/mi_note_cards_demo\/front\/(1302|1325|1327)\.webp$/)?.[1];
+    const id = imageSrc.match(/\/mi_note_cards\/fronts\/(\d+)\.webp$/)?.[1];
     assert.ok(id);
-    assert.equal(imageSrc, new URL(`../mi_note_cards_demo/front/${id}.webp`, import.meta.url).href);
-    assert.equal(foilSrc, new URL(`../mi_note_cards_demo/foil/${id}.webp`, import.meta.url).href);
-    assert.equal(textureSrc, new URL(`../mi_note_cards_demo/mask/${id}.webp`, import.meta.url).href);
+    assert.ok(Number(id) >= 1 && Number(id) <= 1430);
+    assert.equal(imageSrc, `https://cdn.lil.org/nft/mi_note_cards/fronts/${id}.webp`);
+    assert.equal(foilSrc, `https://cdn.lil.org/nft/mi_note_cards/foils/${id}.webp`);
+    assert.equal(textureSrc, `https://cdn.lil.org/nft/mi_note_cards/masks/${id}.webp`);
     assert.equal(effect.effectKey, 'v-regular');
     return { id, imageSrc, foilSrc, textureSrc, effect };
   });
@@ -250,7 +251,7 @@ test('accessible folder actions select either GPU card and wait for its return a
   for (const side of ['left', 'right']) {
     const select = view.getByRole('button', { name: `View ${side} card` });
     const description = select.getAttribute('aria-description')!;
-    assert.match(description, /^(1302|1325|1327) — /);
+    assert.match(description, /^Mi Note Card #\d+$/);
     fireEvent.click(select);
     assert.equal(view.queryByRole('button', { name: 'Close Mi Note Cards folder' }), null);
     assert.equal((view.getByRole('button', { name: 'Return card to pocket', description }) as HTMLButtonElement).disabled, true);
@@ -332,11 +333,12 @@ test('modal Escape delegates to the active viewer before navigating away', () =>
   assert.equal(viewer().calls.filter(call => call === 'escape').length, 5);
 });
 
-test('Mi Note demo cards keep their assets and appearance through picker changes and retry, while reset resamples', t => {
+test('Mi Note cards keep their assets and appearance through picker changes and retry, while reset resamples', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   const view = render(createElement(MiNoteCardsWipApp));
   const initialCards = renderedMiNoteCards();
+  assert.deepEqual(initialCards.map(({ id }) => id), ['144', '143']);
   random = 0.8;
   fireEvent.click(view.getByRole('button', { name: 'Marigold' }));
   assert.deepEqual(renderedMiNoteCards(), initialCards);
@@ -385,7 +387,7 @@ test('Mi Note demo cards keep their assets and appearance through picker changes
   assert.equal(viewer().props.cardEffect.effectKey, 'lighting-only');
   const resetCards = renderedMiNoteCards();
   assert.notDeepEqual(resetCards, initialCards);
-  assert.deepEqual([...new Set([...initialCards, ...resetCards].map(({ id }) => id))].sort(), ['1302', '1325', '1327']);
+  assert.deepEqual(resetCards.map(({ id }) => id), ['1145', '1144']);
   assert.equal(viewer().props.state.taps, 0);
 });
 
