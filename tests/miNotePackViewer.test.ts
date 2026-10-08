@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { CSS3DObject } from 'three/addons/renderers/CSS3DRenderer.js';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
-import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH } from '../src/lib/miNotePackModel.ts';
+import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH, MI_NOTE_POCKET_TOP } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
@@ -784,6 +784,58 @@ test('resizing during card transitions preserves close-up framing and the origin
   assert.equal(run.state.cardStage, 'pocket');
   assertHome(home);
 });
+
+for (const reducedMotion of [false, true]) {
+  for (const firstCard of [0, 1] as const) {
+    test(`alternating cards from ${firstCard} keeps the moving card above its neighbor with ${reducedMotion ? 'reduced' : 'normal'} motion`, async () => {
+      setMediaQueryMatches('(prefers-reduced-motion: reduce)', reducedMotion);
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+      await makeReady();
+      const homes = [homeFor(models[0], 0), homeFor(models[0], 1)];
+      const cards = homes.map(cardLayout);
+      const mainLayer = run.view.container.querySelector('.mi-note-wip__css-scene:not(.mi-note-wip__css-scene--foreground)');
+      const foregroundLayer = run.view.container.querySelector('.mi-note-wip__css-scene--foreground');
+      assert.ok(mainLayer && foregroundLayer);
+      const camera = renderers[0].camera!;
+      const assertLayers = (index: 0 | 1) => {
+        const selectedHome = homes[index];
+        const movingAcrossFolder = selectedHome.anchor.parent !== selectedHome.parent
+          && (Math.abs(selectedHome.anchor.position.x - selectedHome.position.x) > 1e-10 || selectedHome.anchor.scale.x > 1 + 1e-10);
+        const insidePocket = selectedHome.anchor.parent === selectedHome.parent
+          || (!movingAcrossFolder && selectedHome.anchor.position.y - MI_NOTE_CARD_HEIGHT * selectedHome.anchor.scale.y / 2 <= MI_NOTE_POCKET_TOP);
+        cards.forEach((card, cardIndex) => {
+          const foreground = foregroundLayer.contains(card.cssObject.element);
+          if (cardIndex !== index || insidePocket) assert.equal(foreground, false);
+          else if (movingAcrossFolder) assert.equal(foreground, true);
+          assert.equal(mainLayer.contains(card.cssObject.element), !foreground);
+          assert.equal(card.aperture.visible, !foreground);
+          assertCardAlignment(card, camera);
+        });
+        assertHome(homes[index === 0 ? 1 : 0]);
+      };
+
+      for (const index of [firstCard, firstCard === 0 ? 1 : 0, firstCard, firstCard === 0 ? 1 : 0] as const) {
+        act(() => run.controls.current!.selectCard(index));
+        for (let frame = 0; run.state.cardStage === 'lifting' && frame < 200; frame += 1) {
+          advanceFrame(17);
+          assertLayers(index);
+        }
+        assert.equal(run.state.cardStage, 'inspecting');
+        settle();
+        assertLayers(index);
+        act(() => run.controls.current!.returnCard());
+        for (let frame = 0; run.state.cardStage === 'returning' && frame < 80; frame += 1) {
+          advanceFrame(17);
+          assertLayers(index);
+        }
+        assert.equal(run.state.cardStage, 'pocket');
+        homes.forEach(assertHome);
+      }
+      assert.equal(run.count('card-lifted'), 4);
+      assert.equal(run.count('card-returned'), 4);
+    });
+  }
+}
 
 test('unchanged resize notifications preserve an idle viewer without redundant renderer updates', async () => {
   const run = harness();

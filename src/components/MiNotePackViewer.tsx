@@ -11,7 +11,7 @@ import {
   MI_NOTE_LEAF_WIDTH,
   MI_NOTE_POCKET_TOP,
 } from '../lib/miNotePackModel';
-import { createMiNoteCardPath, poseMiNoteCardPath } from '../lib/miNotePackMotion';
+import { createMiNoteCardPath, MI_NOTE_CARD_LIFT_FRACTION, poseMiNoteCardPath } from '../lib/miNotePackMotion';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
 import type { MiNoteFolderPose, MiNoteRevealEvent, MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
@@ -517,12 +517,17 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const duration = reducedMotion.matches ? 0.16 : transition === 'lifting' ? 0.6 : 0.56;
         const progress = Math.min(1, cardTime / duration);
         const card = cards[selected];
-        if (transition === 'returning' && progress >= 0.18 && foregroundCard !== null) {
+        const pathProgress = transition === 'lifting' ? progress : 1 - Math.max(0, (progress - 0.18) / 0.82);
+        if (pathProgress >= MI_NOTE_CARD_LIFT_FRACTION && foregroundCard === null) {
+          foregroundAnchor.add(card.cssObject);
+          card.aperture.visible = false;
+          foregroundCard = selected;
+        } else if (pathProgress < MI_NOTE_CARD_LIFT_FRACTION && foregroundCard !== null) {
           card.anchor.add(card.cssObject);
           card.aperture.visible = true;
           foregroundCard = null;
         }
-        poseMiNoteCardPath(card.anchor, cardPath, transition === 'lifting' ? progress : 1 - Math.max(0, (progress - 0.18) / 0.82));
+        poseMiNoteCardPath(card.anchor, cardPath, pathProgress);
         if (progress === 1) {
           if (transition === 'returning') {
             card.parent.add(card.anchor);
@@ -534,9 +539,6 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
             host?.focus({ preventScroll: true });
             dispatch({ type: 'card-returned' });
           } else {
-            foregroundAnchor.add(card.cssObject);
-            card.aperture.visible = false;
-            foregroundCard = selected;
             dispatch({ type: 'card-lifted' });
           }
           transition = null;
