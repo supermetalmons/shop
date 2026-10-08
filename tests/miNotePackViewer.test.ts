@@ -462,7 +462,7 @@ function assertRendererViewport(run: ReturnType<typeof harness>, renderer: FakeW
   assert.deepEqual(renderer.sizeChanges.at(-1), {
     width: viewportWidth,
     height: viewportHeight,
-    pixelRatio: Math.min(window.devicePixelRatio, 2),
+    pixelRatio: Math.min(window.devicePixelRatio, run.state.selectedCard === null ? 2 : 3),
   });
   assert.equal(renderer.camera!.aspect, viewportWidth / viewportHeight);
   const projection = renderer.camera!.projectionMatrix.elements;
@@ -928,6 +928,52 @@ test('unchanged resize notifications preserve an idle viewer without redundant r
   assert.equal(models.length, 1);
   assert.equal(renderers.length, 1);
 });
+
+for (const devicePixelRatio of [2.3, 4]) {
+  test(`selected cards render at native density up to 3x and restore overview density at ${devicePixelRatio}x`, async () => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: devicePixelRatio });
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const renderer = renderers[0];
+    assert.equal(renderer.pixelRatio, 2);
+    const originalSizeChanges = renderer.sizeChanges.length;
+    const projection = renderer.camera!.projectionMatrix.clone();
+
+    act(() => run.controls.current!.selectCard(0));
+    advanceFrame(16);
+    assert.equal(run.state.cardStage, 'lifting');
+    assert.equal(renderer.pixelRatio, Math.min(devicePixelRatio, 3));
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 1);
+    assert.ok(renderer.camera!.projectionMatrix.equals(projection));
+    assertRendererViewport(run, renderer);
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 1);
+
+    act(() => observers.forEach(observer => observer.callback()));
+    assert.equal(frames.size, 0);
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 1);
+    resizeViewport(574, 831);
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 2);
+    assertRendererViewport(run, renderer);
+    act(() => observers.forEach(observer => observer.callback()));
+    assert.equal(frames.size, 0);
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 2);
+
+    act(() => run.controls.current!.returnCard());
+    advanceFrame(16);
+    assert.equal(run.state.cardStage, 'returning');
+    assert.equal(renderer.pixelRatio, Math.min(devicePixelRatio, 3));
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 2);
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(renderer.pixelRatio, 2);
+    assert.equal(renderer.sizeChanges.length, originalSizeChanges + 3);
+    assertRendererViewport(run, renderer);
+    assert.equal(models.length, 1);
+    assert.equal(renderers.length, 1);
+  });
+}
 
 test('sealed pack sparkles appear only for accepted pointer taps and fade while floating continues', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);

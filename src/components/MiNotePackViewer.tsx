@@ -457,6 +457,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       lastTime = now;
       let moving = false;
       const state = currentProps.current.state;
+      updateDrawingBuffer();
       model.setSealFoldPosition(currentProps.current.foldPosition);
       model.setSealRotationOffsetDegrees(currentProps.current.rotationOffsetDegrees);
       model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
@@ -606,18 +607,23 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       else lastTime = 0;
     }
 
-    const resize = () => {
-      const nextWidth = Math.max(1, host.clientWidth);
-      const nextHeight = Math.max(1, host.clientHeight);
-      const nextPixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      if (width === nextWidth && height === nextHeight && pixelRatio === nextPixelRatio) return;
+    function updateDrawingBuffer(nextWidth = width, nextHeight = height) {
+      const densityLimit = currentProps.current.state.selectedCard === null ? 2 : 3;
+      const nextPixelRatio = Math.min(window.devicePixelRatio || 1, densityLimit);
+      const sizeChanged = width !== nextWidth || height !== nextHeight;
+      if (!sizeChanged && pixelRatio === nextPixelRatio) return false;
       width = nextWidth;
       height = nextHeight;
       pixelRatio = nextPixelRatio;
       renderer.setDrawingBufferSize(width, height, pixelRatio);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      invalidate();
+      if (sizeChanged) {
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+      }
+      return true;
+    }
+    const resize = () => {
+      if (updateDrawingBuffer(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight))) invalidate();
     };
     const handleContextLost = (event: Event) => {
       event.preventDefault();
