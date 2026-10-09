@@ -383,7 +383,7 @@ export async function runStartMint(
     } else {
       if (journal.attempts.some((attempt) => attempt.status === 'signed')) throw new Error('An unresolved activation attempt must be reconciled before fresh signing.');
       if (migrated) persist();
-      const previewBlockhash = await connection.getLatestBlockhash('finalized');
+      const previewBlockhash = await connection.getLatestBlockhash({ commitment: 'finalized', minContextSlot: state.slot });
       await simulate(buildMintActivationTransaction(identity, previewBlockhash.blockhash), false);
       if (!await confirm(`Permanently enable minting for ${drop.dropId} on ${drop.solanaCluster}? Type y: `)) {
         return { dropId: drop.dropId, cluster: drop.solanaCluster, active: false, alreadyActive: false, activationPath };
@@ -394,7 +394,7 @@ export async function runStartMint(
         alreadyActive = true;
         recordActive();
       } else {
-        const latest = await connection.getLatestBlockhash('finalized');
+        const latest = await connection.getLatestBlockhash({ commitment: 'finalized', minContextSlot: state.slot });
         const transaction = buildMintActivationTransaction(identity, latest.blockhash);
         await simulate(transaction, false);
         if (await connection.getBlockHeight('finalized') > latest.lastValidBlockHeight) {
@@ -404,6 +404,9 @@ export async function runStartMint(
         const attempt: ActivationAttempt = { signature: bs58.encode(transaction.signatures[0]), ...latest,
           transactionBase64: Buffer.from(transaction.serialize()).toString('base64'), status: 'signed', signedAt: deps.now().toISOString() };
         validateMintActivationAttempt(attempt, identity);
+        if (journal.attempts.some(previous => previous.signature === attempt.signature)) {
+          throw new Error('RPC reused a previous activation blockhash; no new attempt was saved or sent. Retry with fresh RPC state.');
+        }
         journal.attempts.push(attempt);
         journal.status = 'signed';
         persist();

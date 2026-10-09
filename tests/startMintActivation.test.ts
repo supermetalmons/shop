@@ -95,7 +95,8 @@ async function fixture(t: TestContext, dual = true) {
   t.mock.method(connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS.devnet);
   t.mock.method(connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[]) => ({ context: { slot: state.slot },
     value: keys.map((key) => key.toBase58() === drop.boxMinterConfigPda ? mintAccount() : operationsAccount()) }));
-  t.mock.method(connection, 'getLatestBlockhash', async () => {
+  t.mock.method(connection, 'getLatestBlockhash', async (options) => {
+    assert.deepEqual(options, { commitment: 'finalized', minContextSlot: state.slot });
     const blockhash = new PublicKey(new Uint8Array(32).fill(state.nextHash++)).toBase58();
     const lastValidBlockHeight = state.height + 100; blockhashes.set(blockhash, lastValidBlockHeight);
     return { blockhash, lastValidBlockHeight };
@@ -382,6 +383,30 @@ for (const failure of ['before', 'after'] as const) test(`saved activation recov
   if (failure === 'before') assert.equal(f.state.sends[0], f.state.sends[1]);
   const after = JSON.parse(readFileSync(f.activationPath, 'utf8'));
   assert.equal(after.attempts.length, 1); assert.equal(after.attempts[0].signature, before.signature); assert.equal(after.attempts[0].status, 'finalized');
+});
+
+test('a reused blockhash cannot duplicate activation history and a fresh retry still succeeds', async (t) => {
+  const f = await fixture(t);
+  f.state.failure = 'failed';
+  await assert.rejects(f.run(), /failed at finality/);
+  const original = readFileSync(f.activationPath, 'utf8');
+  const first = JSON.parse(original).attempts[0];
+  const freshBlockhash = f.connection.getLatestBlockhash.bind(f.connection);
+  t.mock.method(f.connection, 'getLatestBlockhash', async (options) => {
+    assert.deepEqual(options, { commitment: 'finalized', minContextSlot: f.state.slot });
+    return { blockhash: first.blockhash, lastValidBlockHeight: first.lastValidBlockHeight };
+  });
+  await assert.rejects(f.run(), /reused a previous activation blockhash/);
+  assert.equal(readFileSync(f.activationPath, 'utf8'), original);
+  assert.equal(f.state.sends.length, 1);
+  t.mock.method(f.connection, 'getLatestBlockhash', freshBlockhash);
+  assert.equal((await f.run()).active, true);
+  const attempts = JSON.parse(readFileSync(f.activationPath, 'utf8')).attempts;
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].status, 'failed');
+  assert.equal(attempts[1].status, 'finalized');
+  assert.notEqual(attempts[0].signature, attempts[1].signature);
+  assert.equal(f.state.sends.length, 2);
 });
 
 for (const prior of ['expired', 'failed'] as const) test(`a definitively ${prior} attempt is durably archived before fresh signing`, async (t) => {
