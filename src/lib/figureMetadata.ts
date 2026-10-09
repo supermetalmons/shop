@@ -165,6 +165,7 @@ function canResolveFigureMetadataImageDirectly(
   figureId: number,
 ): boolean {
   if (drop.dropFamily === 'card_nft_2') return true;
+  if (drop.dropFamily === 'mi_note_cards') return figureId <= 1430;
   if (drop.dropFamily !== 'little_swag_boxes' && drop.dropFamily !== 'clear_cards') return false;
 
   const maxFigureId = Math.floor(Number(drop.maxSupply)) * Math.floor(Number(drop.itemsPerBox));

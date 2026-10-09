@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { createElement } from 'react';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
-import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
+import { figureMetadataCacheKey, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 import type { FulfillmentOrder } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -197,6 +197,42 @@ test('pack and card downloads retain original indices while used codes and dupli
   }
   assert.equal(onDownloadSecretCode.mock.callCount(), 2);
 });
+
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} fulfillment shows clean packs while codes or contents are pending and clean cards`, async () => {
+    const drop = FRONTEND_DROPS[dropId];
+    const records = await Promise.all([1, 9, 1401, 1430].map(id => loadFigureMetadata(dropId, id)));
+    const figureMetadataByKey: Props['figureMetadataByKey'] = {};
+    for (const record of records) {
+      assert.ok(record);
+      figureMetadataByKey[figureMetadataCacheKey(dropId, record.id)] = record;
+    }
+    const view = render(createElement(FulfillmentOrderCard, props({
+      drop,
+      figureMetadataByKey,
+      order: order({
+        dropId,
+        boxes: [
+          { boxId: 1, claimCode: 'PENDING-CONTENTS', dudeIds: [] },
+          { boxId: 9, dudeIds: [] },
+          { boxId: 704, claimCode: 'PACK-SECRET', dudeIds: [1401, 1430] },
+        ],
+        looseDudes: [1],
+        cardClaims: [{ figureId: 9, receiptClaimCode: 'CARD-SECRET' }],
+      }),
+    })));
+    assert.deepEqual(
+      Array.from(view.container.querySelectorAll('.fulfillment-pack-secret-image'), image => image.getAttribute('src')),
+      [1, 9, 2].map(id => `https://cdn.lil.org/nft/mi_note_cards/packs/clean/${id}.webp`),
+    );
+    assert.ok(view.getByText('Assigned cards pending'));
+    assert.ok(view.getByText('Secret code unavailable'));
+    assert.deepEqual(
+      Array.from(view.container.querySelectorAll('.figure-image'), image => image.getAttribute('src')).sort(),
+      [1, 9, 1401, 1430].map(id => `https://cdn.lil.org/nft/mi_note_cards/clean/${id}.webp`).sort(),
+    );
+  });
+}
 
 test('direct-delivery boxes render product tiles and preserve code status and download targets', (t) => {
   const drop = FRONTEND_DROPS.card_nft_binder;

@@ -194,7 +194,8 @@ export function FulfillmentOrderCard({
   const orderDropContent = resolveDropContent(orderDrop);
   const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
   const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
-  const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
+  const orderIsMiNoteCards = isDropFamily(orderDrop, 'mi_note_cards');
+  const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2') || orderIsMiNoteCards;
   const cardClaims = order.cardClaims || [];
   const looseDudes = fulfillmentLooseFigureIdsExcludingCardClaims(order);
   const canEditOrderAddress = canEditFulfillmentOrderAddress(order, {
@@ -345,6 +346,11 @@ export function FulfillmentOrderCard({
                                 : () => void onDownloadSecretCode(order, { kind: 'box', index: boxIndex })
                             }
                           />
+                        </span>
+                      ) : orderIsMiNoteCards ? (
+                        <span className="fulfillment-pack-secret">
+                          {packSecretImage}
+                          {fulfillmentBoxContentsLabel(orderDrop, box.boxId, '')}
                         </span>
                       ) : (
                         fulfillmentBoxContentsLabel(orderDrop, box.boxId, '')

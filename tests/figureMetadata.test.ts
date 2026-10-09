@@ -7,6 +7,24 @@ import {
 import { cardNft2AssetUrl } from '../shared/cardNft2Assets.ts';
 import { getCachedFigureMetadata, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} card images resolve and cache without metadata JSON`, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => {
+      throw new Error('unexpected metadata fetch');
+    });
+    for (const figureId of [1, 9, 1401, 1430]) {
+      const record = await loadFigureMetadata(dropId, figureId);
+      assert.deepEqual(record, {
+        id: figureId,
+        dropId,
+        image: `https://cdn.lil.org/nft/mi_note_cards/clean/${figureId}.webp`,
+      });
+      assert.deepEqual(getCachedFigureMetadata(dropId, figureId), record);
+    }
+    assert.equal(fetchMock.mock.callCount(), 0);
+  });
+}
+
 test('card_nft_2 figure metadata resolves from derived CDN image without fetching json', async () => {
   const originalFetch = globalThis.fetch;
   const calls: unknown[] = [];

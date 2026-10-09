@@ -7,6 +7,7 @@ import { createElement, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop, isDropFamily } from '../src/config/deployment.ts';
+import { resolveDropContent } from '../src/lib/dropContent.ts';
 import { hasDevnetInventoryAccess } from '../src/lib/fulfillmentAccess.ts';
 import { figureMetadataCacheKey, getFigureMetadataSnapshot, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 import type { InventoryItem, PendingOpenBox } from '../src/types.ts';
@@ -417,6 +418,32 @@ test('an unresolved minted pack stays represented once until its authoritative b
   assert.deepEqual(result.current.source.localMintedBoxes, []);
   assert.deepEqual(result.current.view.inventoryItems.map((item) => item.id), ['existing', 'minted']);
 });
+
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} replaces the pending pack placeholder once its ID resolves`, () => {
+    const options = sourceOptions();
+    const viewOptions = {
+      routeDrop: getFrontendDrop(dropId)!,
+      boxImageForDropId: (id?: string) => resolveDropContent(id).box.previewImageUrl,
+    };
+    const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options, viewOptions } });
+    act(() => result.current.source.actions.addLocalMintedBoxes(1, dropId, ['minted']));
+    assert.equal(result.current.view.inventoryItems.length, 1);
+    assert.equal(result.current.view.inventoryItems[0].image,
+      'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp');
+
+    rerender({ options: { ...options, inventory: [box('minted', dropId)] }, viewOptions });
+    assert.deepEqual(result.current.view.inventoryItems.map(item => item.id), ['minted']);
+    assert.equal(result.current.view.inventoryItems[0].image,
+      'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp');
+
+    rerender({ options: { ...options, inventory: [box('minted', dropId, '704')] }, viewOptions });
+    assert.deepEqual(result.current.source.localMintedBoxes, []);
+    assert.deepEqual(result.current.view.inventoryItems.map(item => item.id), ['minted']);
+    assert.equal(result.current.view.inventoryItems[0].image,
+      'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp');
+  });
+}
 
 test('selection excludes pending delivery/reveal items, follows drop rules and prunes vanished assets', () => {
   const items: InventoryItem[] = [

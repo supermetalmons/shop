@@ -502,7 +502,7 @@ export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, f
     return cardNft2AssetUrl('img', figureId) || cardNft2ImageUrlFromRawDisplayMediaUrl(imageRaw);
   }
   if (isDropFamily(dropId, 'mi_note_cards') && Number.isSafeInteger(figureId) && Number(figureId) >= 1 && Number(figureId) <= 1430) {
-    return joinDropAssetUrl(MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL, `${figureId}.png`);
+    return joinDropAssetUrl(MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL, `${figureId}.webp`);
   }
 
   const drop = getFrontendDrop(dropId);

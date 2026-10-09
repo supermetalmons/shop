@@ -496,6 +496,33 @@ test('clear cards order email items use the configured pack and card thumbnails'
   );
 });
 
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} emails use clean cyclic pack and direct card images for both audiences`, async () => {
+    const order = {
+      items: [
+        { kind: 'dude', refId: 1430 },
+        { kind: 'box', refId: 704 },
+        { kind: 'box', refId: 10 },
+        { kind: 'box', refId: 9 },
+        { kind: 'dude', refId: 1 },
+      ],
+      irlClaims: [{ boxId: 704, dudeIds: [23, 24] }],
+    };
+    const [buyerItems, shipperItems] = await Promise.all([
+      buildBuyerVisibleOrderEmailItems(order, { dropId }),
+      buildShipperVisibleOrderEmailItems(order, { dropId }),
+    ]);
+    assert.deepEqual(buyerItems, [
+      { label: 'Pack 9', thumbnailUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/9.webp' },
+      { label: 'Pack 10', thumbnailUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp' },
+      { label: 'Pack 704', thumbnailUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp' },
+      { label: 'Card 1', thumbnailUrl: 'https://cdn.lil.org/nft/mi_note_cards/clean/1.webp' },
+      { label: 'Card 1430', thumbnailUrl: 'https://cdn.lil.org/nft/mi_note_cards/clean/1430.webp' },
+    ]);
+    assert.deepEqual(shipperItems, buyerItems);
+  });
+}
+
 test('order email items keep assigned card contents hidden for card nft 2 packs', async () => {
   const items = await buildBuyerVisibleOrderEmailItems(
     {

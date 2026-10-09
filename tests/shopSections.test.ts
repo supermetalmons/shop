@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import { resolveDropContent } from '../src/lib/dropContent.ts';
+import { figureMetadataCacheKey, loadFigureMetadata, type FigureMetadataRecord } from '../src/lib/figureMetadata.ts';
 
 const { dom } = setupFrontendDom();
 const { cleanup, fireEvent, render } = await import('@testing-library/react');
@@ -98,6 +99,48 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   assert.equal(hiddenPlaceholder?.getAttribute('aria-hidden'), 'true');
   assert.equal(hiddenPlaceholder?.textContent, 'Loading shipments…');
 });
+
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} shipment tiles and expanded previews use clean pack and card images`, async () => {
+    const drop = getFrontendDrop(dropId)!;
+    const record = await loadFigureMetadata(dropId, 1430);
+    assert.ok(record);
+    const figureMetadataByKey: Record<string, FigureMetadataRecord> = {
+      [figureMetadataCacheKey(dropId, 1430)]: record,
+    };
+    const opened: Array<Parameters<Parameters<typeof ShopShipmentsSection>[0]['openImageViewer']>> = [];
+    const view = render(createElement(ShopShipmentsSection, {
+      shipmentHistory: {
+        orders: [], hasMore: false, loadingMore: false, fetching: false, error: null,
+        fetchMore: async () => undefined, retry: async () => undefined,
+      },
+      openClearCardModelViewer: () => undefined,
+      openImageViewer: (...args) => { opened.push(args); return true; },
+      openInteractiveCardViewer: () => undefined,
+      usesClearCard3dRevealForDropId: () => false,
+      usesInteractiveCardPackRevealForDropId: () => false,
+      shipmentsSectionReady: true,
+      deliveryOrders: [{ dropId, deliveryId: 7, status: 'processing', items: [
+        { kind: 'box', refId: 704 }, { kind: 'dude', refId: 1430 },
+      ] }],
+      shipmentsRetainedError: null,
+      dropById: new Map([[dropId, drop]]),
+      shipmentsEmptyStateVisibility: 'visible',
+      shipmentsEmptyContent: 'No shipments yet.',
+      figureMetadataByKey,
+      getDropContent: id => resolveDropContent(id),
+    }));
+    const expectedImages = [
+      'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp',
+      'https://cdn.lil.org/nft/mi_note_cards/clean/1430.webp',
+    ];
+    assert.deepEqual(view.getAllByRole('img').map(image => image.getAttribute('src')), expectedImages);
+    const tiles = view.getAllByRole('button', { name: /^View / });
+    fireEvent.click(tiles[0]);
+    fireEvent.keyDown(tiles[1], { key: 'Enter' });
+    assert.deepEqual(opened.map(args => args[0].image), expectedImages);
+  });
+}
 
 test('shipment sign-in stays disabled during authentication or any pending wallet action', () => {
   let signIns = 0;

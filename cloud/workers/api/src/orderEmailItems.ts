@@ -20,6 +20,9 @@ import {
   LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
   LITTLE_SWAG_BOXES_FIGURE_MEDIA,
   LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
+  MI_NOTE_CARDS_BOX_MEDIA,
+  MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL,
+  MI_NOTE_CARDS_PACK_IMAGE_BASE_URL,
   PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
   PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL,
 } from '../../../../shared/dropMediaDefaults.js';
@@ -79,6 +82,10 @@ function boxThumbnailUrl(dropId: string, drop: ApiDropConfig | undefined, boxId:
     const mediaId = getMediaIdForTokenId(boxId, CARD_NFT_2_BOX_MEDIA);
     return mediaId ? `${CARD_NFT_2_PACK_BASE_URL}/${mediaId}/initial.webp` : undefined;
   }
+  if (family === 'mi_note_cards') {
+    const mediaId = getMediaIdForTokenId(boxId, MI_NOTE_CARDS_BOX_MEDIA);
+    return mediaId ? `${MI_NOTE_CARDS_PACK_IMAGE_BASE_URL}/${mediaId}.webp` : undefined;
+  }
   if (family === 'card_nft_binder') return CARD_NFT_BINDER_CLEAN_IMAGE_URL;
   if (family === 'clear_cards') return CLEAR_CARDS_PACK_CLEAN_IMAGE_URL;
   if (family === 'drifella_shirt') return DRIFELLA_SHIRT_CLEAN_IMAGE_URL;
@@ -91,6 +98,7 @@ function boxThumbnailUrl(dropId: string, drop: ApiDropConfig | undefined, boxId:
 function figureThumbnailUrl(dropId: string, drop: ApiDropConfig | undefined, figureId: number): string | undefined {
   const family = drop?.dropFamily || normalizeDropId(dropId);
   if (family === 'card_nft_2') return cardNft2AssetUrl('img', figureId);
+  if (family === 'mi_note_cards') return `${MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL}/${figureId}.webp`;
   if (family === 'clear_cards') return `${CLEAR_CARDS_CARD_CLEAN_BASE_URL}/${figureId}.webp`;
   if (family === 'little_swag_boxes') {
     const mediaId = getMediaIdForTokenId(figureId, LITTLE_SWAG_BOXES_FIGURE_MEDIA) || figureId;

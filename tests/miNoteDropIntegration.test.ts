@@ -84,23 +84,29 @@ test('pending opens from operations config B resolve to the logical drop and min
   assert.equal(resolvePendingOpenDropId({ ...pending, dudeAssetIds: ['one-card'] }), null);
 });
 
-test('Mi Note media stays usable without pack JSONs above 627 and preserves PNG card images', () => {
-  assert.deepEqual(FRONTEND_DROPS[drop.dropId].boxMedia, { strategy: 'cyclic', count: 9 });
-  for (const [id, variant] of [[1, 1], [9, 9], [10, 1], [627, 6], [628, 7], [704, 2]]) {
-    assert.equal(normalizeBoxDisplayImage({ dropId: drop.dropId, boxId: id }),
-      `https://cdn.lil.org/nft/mi_note_cards/packs/${variant}.webp`);
-    assert.equal(normalizeCertificateDisplayImage({ dropId: drop.dropId, boxId: id }),
-      `https://cdn.lil.org/nft/mi_note_cards/receipts/packs/${variant}.webp`);
-  }
-  for (const id of [1, 1401, 1430]) {
-    assert.equal(normalizeFigureDisplayImage(drop.dropId, undefined, id),
-      `https://cdn.lil.org/nft/mi_note_cards/clean/${id}.png`);
-    assert.equal(normalizeCertificateDisplayImage({ dropId: drop.dropId, figureId: id }),
-      `https://cdn.lil.org/nft/mi_note_cards/receipts/cards/${id}.webp`);
-  }
-  assert.equal(mintPanelPreviewImage(drop.dropId), 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp');
-  const content = resolveDropContent(drop.dropId);
-  assert.equal(content.reveal.mode, 'static');
-  assert.equal(content.reveal.renderer, 'default');
-  assert.equal(content.figures.revealPresentation, 'metadata_stills');
-});
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} uses clean WebP media, cyclic pack receipts, and an unresolved pack placeholder`, () => {
+    assert.deepEqual(FRONTEND_DROPS[dropId].boxMedia, { strategy: 'cyclic', count: 9 });
+    for (const [id, variant] of [[1, 1], [9, 9], [10, 1], [627, 6], [628, 7], [704, 2]]) {
+      assert.equal(normalizeBoxDisplayImage({ dropId, boxId: id }),
+        `https://cdn.lil.org/nft/mi_note_cards/packs/clean/${variant}.webp`);
+      assert.equal(normalizeCertificateDisplayImage({ dropId, boxId: id }),
+        `https://cdn.lil.org/nft/mi_note_cards/receipts/packs/${variant}.webp`);
+    }
+    for (const id of [1, 9, 1401, 1430]) {
+      assert.equal(normalizeFigureDisplayImage(dropId, 'https://legacy.example/card.png', id),
+        `https://cdn.lil.org/nft/mi_note_cards/clean/${id}.webp`);
+      assert.equal(normalizeCertificateDisplayImage({ dropId, figureId: id }),
+        `https://cdn.lil.org/nft/mi_note_cards/receipts/cards/${id}.webp`);
+    }
+    for (const boxId of [undefined, '', '0']) {
+      assert.equal(normalizeBoxDisplayImage({ dropId, boxId, imageRaw: 'https://legacy.example/pack.webp' }),
+        'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp');
+    }
+    assert.equal(mintPanelPreviewImage(dropId), 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp');
+    const content = resolveDropContent(dropId);
+    assert.equal(content.reveal.mode, 'static');
+    assert.equal(content.reveal.renderer, 'default');
+    assert.equal(content.figures.revealPresentation, 'metadata_stills');
+  });
+}

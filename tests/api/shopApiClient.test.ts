@@ -96,6 +96,31 @@ test('inventory client uses api.mons.shop, no-store, abort signals, and display-
   });
 });
 
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} inventory normalizes cards, packs and receipts while preserving preorder artwork`, async () => {
+    const rawImage = 'https://metadata.example/art.png';
+    const items = [
+      { id: 'pack', kind: 'box', boxId: '704' },
+      { id: 'pending-pack', kind: 'box' },
+      { id: 'card', kind: 'dude', dudeId: 1430 },
+      { id: 'pack-receipt', kind: 'certificate', boxId: '704' },
+      { id: 'card-receipt', kind: 'certificate', dudeId: 1430 },
+      { id: 'preorder', kind: 'preorder', preorderId: 1 },
+    ].map(item => ({ ...item, name: item.id, dropId, rawImage }));
+    await withFetch(async () => Response.json({ ok: true, items }), async () => {
+      const inventory = await fetchInventory(OWNER, { includeDevnet: true });
+      assert.deepEqual(inventory.map(item => item.image), [
+        'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp',
+        'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp',
+        'https://cdn.lil.org/nft/mi_note_cards/clean/1430.webp',
+        'https://cdn.lil.org/nft/mi_note_cards/receipts/packs/2.webp',
+        'https://cdn.lil.org/nft/mi_note_cards/receipts/cards/1430.webp',
+        rawImage,
+      ]);
+    });
+  });
+}
+
 test('inventory client serializes expected asset IDs by cluster without changing the default request', async () => {
   const mainnetAsset = '11111111111111111111111111111111';
   const devnetAsset = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
