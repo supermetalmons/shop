@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "preorderId": "mi_note_cards",
+  "cluster": "mainnet-beta",
+  "manifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "totalAssets": 176,
+  "remainingAssets": 0,
+  "convertedAssets": 176,
+  "finalizedSlot": 454997436,
+  "eligiblePublicCards": 1254,
+  "availablePublicCards": 1254,
+  "assignedPublicCards": 0,
+  "checkedAt": "2026-10-09T20:50:40.221Z",
+  "complete": true,
+  "metadataOnly": true,
+  "originalOrdersAndClaimsPreserved": true,
+  "publicInventoryExclusionsPreserved": true
+}

@@ -26,6 +26,7 @@ import { parseCommerceD1DocumentRow, queryRemoteCommerceD1, sqlString } from './
 import { requireInventoryConfig, validateInventoryOwnership, validateManifestInventory } from './dudeInventoryMaintenance.ts';
 
 export const PREORDER_UPGRADE_BATCH_SIZE = 4;
+export class MiNoteUpgradeRetryableError extends Error {}
 const PREORDER_UPGRADE_COMPUTE_UNITS = 100_000;
 export type UpgradeAsset = { id: number; address: string; original: { name: string; uri: string }; target: { name: string; uri: string } };
 export type MiNoteUpgradeSource = {
@@ -142,15 +143,20 @@ export async function validateMiNoteUpgradeSource(args: {
     inventoryGeneration: args.inventoryGeneration, available: args.available, assigned: args.assigned };
 }
 
-export function validateMiNoteUpgradeTargetMetadata(text: string, id: number, artworkName: string): string {
+export function validateMiNoteUpgradeTargetMetadata(text: string, id: number, artworkName: string, cluster: PreorderConfig['cluster']): string {
   const metadata = JSON.parse(text);
-  const image = `https://cdn.lil.org/nft/mi_note_cards/clean/${id}.png`;
+  const cleanImage = `https://cdn.lil.org/nft/mi_note_cards/clean/${id}.png`;
+  const mainnet = cluster === 'mainnet-beta';
+  const image = mainnet ? `https://cdn.lil.org/nft/mi_note_cards/square/${id}.jpg` : cleanImage;
+  const files = metadata?.properties?.files;
   const attribute = (type: string, value: unknown) => Array.isArray(metadata?.attributes) &&
     metadata.attributes.filter((entry: { trait_type?: unknown }) => entry?.trait_type === type).length === 1 &&
     metadata.attributes.some((entry: { trait_type?: unknown; value?: unknown }) => entry?.trait_type === type && entry.value === value);
-  if (metadata?.id !== id || metadata.name !== `Card #${id}` || metadata.image !== image || metadata.external_url !== 'https://mons.shop' ||
+  if (!['devnet', 'mainnet-beta'].includes(cluster) ||
+    metadata?.id !== id || metadata.name !== `Card #${id}` || metadata.image !== image || metadata.external_url !== 'https://mons.shop' ||
     !attribute('type', 'card') || !attribute('redeemed', false) || !attribute('name', artworkName) ||
-    !Array.isArray(metadata.properties?.files) || metadata.properties.files[0]?.uri !== image || metadata.properties.files[0]?.type !== 'image/png') {
+    !Array.isArray(files) || files[0]?.uri !== image || files[0]?.type !== (mainnet ? 'image/jpeg' : 'image/png') ||
+    mainnet && !files.some(file => file?.uri === cleanImage && file.type === 'image/png')) {
     throw new Error(`Target card JSON does not match source card ${id}.`);
   }
   return miNoteManifestDigest(text);
@@ -168,6 +174,10 @@ async function readTargetMetadataHashes(config: PreorderConfig, drop: Deployment
       const target = preorderCardMetadata({ config, publicDrop: drop, id });
       if (!target) throw new Error(`No canonical target metadata for card ${id}.`);
       const response = await fetch(target.uri, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
+      if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        throw new MiNoteUpgradeRetryableError(`Target card JSON is temporarily unavailable for card ${id} (HTTP ${response.status}).`);
+      }
       if (!response.ok || !response.body) throw new Error(`Target card JSON is unavailable for card ${id}.`);
       const reader = response.body.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
@@ -180,7 +190,7 @@ async function readTargetMetadataHashes(config: PreorderConfig, drop: Deployment
         }
       } finally { await reader.cancel().catch(() => {}); }
       const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
-      hashes.push({ id, uri: target.uri, sha256: validateMiNoteUpgradeTargetMetadata(text, id, cards.get(id)!) });
+      hashes.push({ id, uri: target.uri, sha256: validateMiNoteUpgradeTargetMetadata(text, id, cards.get(id)!, config.cluster) });
     }
   }));
   return miNoteManifestDigest(hashes.sort((left, right) => left.id - right.id));

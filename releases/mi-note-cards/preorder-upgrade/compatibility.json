@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-09T18:45:26.622Z",
+  "cluster": "mainnet-beta",
+  "preorderId": "mi_note_cards",
+  "phase": "compatibility-before-conversion",
+  "migrationManifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "preorderSnapshotSha256": "95029f754e8f08b225d50ecd17abcfb1f265d5007c8cf95be1e9a71e97811c04",
+  "chainSlot": 454962579,
+  "originalAssets": 176,
+  "convertedAssets": 0,
+  "currentOwners": 58,
+  "inventoryGeneration": "7433c586-999d-471e-90f0-f90bea35b3ef",
+  "available": 1254,
+  "assigned": 0,
+  "mintStarted": false,
+  "operationsStarted": false,
+  "mintedPacks": 0,
+  "publicPageState": "Soon",
+  "apiAudit": {
+    "requestsPassed": 244,
+    "assetChecksPassed": 704,
+    "assets": 176,
+    "currentOwners": 58,
+    "devnetFilters": [
+      false,
+      true
+    ],
+    "convertedPreorderCapabilities": [
+      false,
+      true
+    ],
+    "allAssetsRemainedPreorders": true,
+    "completedBeforeFrontendVersionCheck": true,
+    "applicationVersionsChangedDuringAudit": true
+  },
+  "postMediaDeploymentApiChecks": [
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": false,
+      "originalPreorders": 2,
+      "passed": true
+    },
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": true,
+      "originalPreorders": 2,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": false,
+      "originalPreorders": 2,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": true,
+      "originalPreorders": 2,
+      "passed": true
+    }
+  ],
+  "health": [
+    {
+      "url": "https://api.mons.shop/health",
+      "passed": true
+    },
+    {
+      "url": "https://mons.shop/api/health",
+      "passed": true
+    }
+  ],
+  "apiVersion": "67d9ec91-6a63-48c8-8c1c-e7f62cef379a",
+  "frontendVersion": "9d96c13a-53a1-46c1-8f37-51997c734b3c",
+  "apiDeploymentId": "bd0b3277-6e19-4c33-a73d-c0630a8dc55a",
+  "frontendDeploymentId": "25bbd289-cd0d-489a-9a69-56eb38fb0df9",
+  "frontendBundle": {
+    "entry": "/assets/index-DMdUSlo3.js",
+    "sha256": "35109da19f7db7eb13a0afb2e4452ef9e07f9e34a7089e25a48e53c1f57807c6",
+    "bytes": 1257358,
+    "convertedPreorderCapability": true,
+    "mainnetSoonVerifiedInBrowser": true
+  },
+  "concurrentMediaDeployment": {
+    "commit": "c6fc8da8647283601d7fe1006e5592fc2196bdca",
+    "conversionProtocolAndRouteHoldUnchanged": true,
+    "verifiedSourceFiles": [
+      {
+        "path": "shared/preorderAssetIdentity.ts",
+        "sha256": "ed0f8b9c5c42cddeb5f5cf16b4ed609257e3b0d9819b73ee6a23ec8948c01531"
+      },
+      {
+        "path": "shared/preorders.ts",
+        "sha256": "7370069c7a99b979cccb4ee59326eeb0a99b5063608e39bff19b7b46239b1e31"
+      },
+      {
+        "path": "shared/deploymentRegistry.ts",
+        "sha256": "fbe7f13bc4104c4712880e62e5d511a6e263d5508c2d0682e59eb98bf9ea126b"
+      },
+      {
+        "path": "shared/shopApi.ts",
+        "sha256": "650126149bb1bdc665e4ae0cf5f5e9c29ff32ab440a81c54b368cc9942042fe0"
+      },
+      {
+        "path": "shared/shopDomain.ts",
+        "sha256": "69d5792a0457b2349e98bab11b8bea5c3a7b3967acd5745db63d865eac741a92"
+      },
+      {
+        "path": "cloud/workers/api/src/shopInventory.ts",
+        "sha256": "006e5425a8b958cefdd9d5ab17a8dad8774dacb667983ad25ad45b21b53b4561"
+      },
+      {
+        "path": "cloud/workers/api/src/preorderStore.ts",
+        "sha256": "204aacaf38d3635b332af1284c0cb918f16daee2ed392ddb3c0975a8ce19725e"
+      },
+      {
+        "path": "src/lib/preorderInventory.ts",
+        "sha256": "561aad8e1e7a67129ee0bba3e2eeddd8b4bc2ee1fa8bd0060de87862b27e0b95"
+      },
+      {
+        "path": "src/lib/preorderRecovery.ts",
+        "sha256": "e6b6b0c571cb14930a273f3af13bcb2a0e1d42e2a25482f7695a83429a5ef322"
+      },
+      {
+        "path": "src/routes.ts",
+        "sha256": "c45b299e0d95a513ab4312da453c8e7eefc2d7f419fb38e72c633ceee0a3d375"
+      },
+      {
+        "path": "src/lib/dropConfig.ts",
+        "sha256": "ba03396cde58210fdf1f581b4a7ed5cf6e78a3eb54c3df7f40a1e88479249e9a"
+      }
+    ]
+  },
+  "contractTests": {
+    "mainnetConvertedAlwaysVisible": true,
+    "staleMissingAndConvertedIndexerStates": true,
+    "legacyProofOmission": true,
+    "coldOwnerRecoveryBeyondProofLimit": true,
+    "wrongClusterRejected": true,
+    "metadataFormatsClusterBound": true,
+    "mainnet44BatchResume": true,
+    "minimumSlotRetryPreservesFloorAndTransaction": true
+  },
+  "checks": {
+    "command": "NO_DNA=1 npm run check",
+    "status": "passed",
+    "frontendWorkerTests": 4,
+    "apiTests": 2251,
+    "apiRuntimeTests": 31,
+    "rootTests": 3247,
+    "onchainTests": 35,
+    "migrationTests": 20
+  },
+  "onchainUpdatesSent": 0
+}

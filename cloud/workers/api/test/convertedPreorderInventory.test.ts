@@ -13,7 +13,6 @@ import { defaultDependencies, type ProviderFetch } from '../src/publicRouteSuppo
 import { handlePost } from '../src/shopInventory.ts';
 
 const drop = DEPLOYMENT_DROPS.mi_note_cards_devnet;
-const config = getPreorderConfig(drop.dropId)!;
 const cardId = PREORDER_CARD_IDS.find(id => !drop.inventoryManifest!.cardIds.includes(id))!;
 const key = (seed: number) => new PublicKey(new Uint8Array(32).fill(seed)).toBase58();
 const owner = key(61);
@@ -24,20 +23,21 @@ const mainnet = {
   content: { json_uri: `${DEPLOYMENT_DROPS.card_nft_2.metadataBase}/b1.json` },
 };
 
-function metadata(converted: boolean, id = cardId) {
-  return converted ? { name: `card ${id}`, uri: `${drop.metadataBase}/f${id}.json` }
-    : { name: `Preorder #${id}`, uri: preorderMetadataUri(config, id) };
+function metadata(converted: boolean, id = cardId, selectedDrop = drop) {
+  return converted ? { name: `card ${id}`, uri: `${selectedDrop.metadataBase}/f${id}.json` }
+    : { name: `Preorder #${id}`, uri: preorderMetadataUri(getPreorderConfig(selectedDrop.dropId)!, id) };
 }
 
-function indexed(converted: boolean, currentOwner = owner, asset = { id: cardId, address }) {
-  const value = metadata(converted, asset.id);
+function indexed(converted: boolean, currentOwner = owner, asset = { id: cardId, address }, selectedDrop = drop) {
+  const value = metadata(converted, asset.id, selectedDrop);
   return { id: asset.address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: currentOwner },
-    grouping: [{ group_key: 'collection', group_value: config.collection }],
+    grouping: [{ group_key: 'collection', group_value: selectedDrop.collectionMint }],
     content: { json_uri: value.uri, metadata: { name: value.name } } };
 }
 
-function account(converted = true, overrides: { owner?: string; collection?: string; name?: string; uri?: string } = {}) {
-  const value = { ...metadata(converted), owner, collection: config.collection, ...overrides };
+function account(converted = true, overrides: { owner?: string; collection?: string; name?: string; uri?: string } = {}, selectedDrop = drop) {
+  const selectedId = PREORDER_CARD_IDS.find(id => !selectedDrop.inventoryManifest!.cardIds.includes(id))!;
+  const value = { ...metadata(converted, selectedId, selectedDrop), owner, collection: selectedDrop.collectionMint, ...overrides };
   const string = (text: string) => {
     const bytes = Buffer.from(text);
     const size = Buffer.alloc(4); size.writeUInt32LE(bytes.length);
@@ -49,7 +49,9 @@ function account(converted = true, overrides: { owner?: string; collection?: str
 }
 
 async function fixture(t: TestContext, submitted = false, confirmedSlot: number | null = 200,
-  overrides: Partial<StoredPreorder> = {}, extraAssets: StoredPreorder['assets'] = []) {
+  overrides: Partial<StoredPreorder> = {}, extraAssets: StoredPreorder['assets'] = [], selectedDrop = drop) {
+  const config = getPreorderConfig(selectedDrop.dropId)!;
+  const cardId = PREORDER_CARD_IDS.find(id => !selectedDrop.inventoryManifest!.cardIds.includes(id))!;
   const commerce = createCommerceD1Harness();
   t.after(() => commerce.database.close());
   const store = new PreorderStore(commerce.db);
@@ -71,7 +73,8 @@ async function fixture(t: TestContext, submitted = false, confirmedSlot: number 
     await store.finish(submittedExtra, 'succeeded', 3000, confirmedSlot ?? undefined);
   }
   const claims = await store.claims(config.cluster, config.collection);
-  const state = { account: account() as ReturnType<typeof account> | null, indexed: [indexed(true)], slot: 250,
+  const state = { account: account(true, {}, selectedDrop) as ReturnType<typeof account> | null,
+    indexed: [indexed(true, owner, { id: cardId, address }, selectedDrop)], slot: 250,
     unavailable: false, floor: 200, commitment: '', directBatches: [] as string[][],
     accounts: new Map<string, ReturnType<typeof account> | null>() };
   const providerFetch: ProviderFetch = async (_input, init) => {
@@ -115,6 +118,66 @@ async function fixture(t: TestContext, submitted = false, confirmedSlot: number 
   };
   return { state, load };
 }
+
+const mainnetDrop = DEPLOYMENT_DROPS.mi_note_cards;
+const mainnetCardId = PREORDER_CARD_IDS.find(id => !mainnetDrop.inventoryManifest!.cardIds.includes(id))!;
+
+for (const includeDevnet of [false, true]) for (const capable of [false, true]) for (const das of ['missing', 'preorder', 'converted'] as const) {
+  test(`mainnet converted cards remain visible with ${das} index metadata, devnet=${includeDevnet}, proofs=${capable}`, async t => {
+    const f = await fixture(t, false, 200, {}, [], mainnetDrop);
+    f.state.indexed = das === 'missing' ? [] : [indexed(das === 'converted', owner, { id: mainnetCardId, address }, mainnetDrop)];
+    const body = await f.load(includeDevnet, capable);
+    const item = body.items.find(item => item.id === address);
+    assert.ok(item);
+    assert.deepEqual([item.dropId, item.kind, item.dudeId, item.name], ['mi_note_cards', 'dude', mainnetCardId, `card ${mainnetCardId}`]);
+    assert.deepEqual(body.preorderAssetResolutions, capable
+      ? [{ id: address, slot: 250, owned: true, kind: 'dude', visible: true }] : []);
+    assert.deepEqual(body.resolvedPreorderAssetIds, capable ? [address] : undefined);
+    assert.equal(f.state.commitment, 'finalized');
+  });
+}
+
+for (const includeDevnet of [false, true]) for (const capable of [false, true]) {
+  test(`a new mainnet holder repairs stale preorders beyond the proof limit with devnet=${includeDevnet}, proofs=${capable}`, async t => {
+    const assets = PREORDER_CARD_IDS.filter(id => !mainnetDrop.inventoryManifest!.cardIds.includes(id)).slice(0, 17)
+      .map((id, index) => ({ id, address: index === 0 ? address : key(80 + index) }));
+    const f = await fixture(t, false, null, {}, assets.slice(1), mainnetDrop);
+    const currentOwner = key(64);
+    f.state.indexed = assets.map(asset => indexed(false, currentOwner, asset, mainnetDrop));
+    for (const asset of assets) {
+      f.state.accounts.set(asset.address, account(true, { owner: currentOwner, ...metadata(true, asset.id, mainnetDrop) }, mainnetDrop));
+    }
+    for (const hinted of [false, true]) {
+      f.state.directBatches.length = 0;
+      const hint = assets.at(-1)!;
+      const body = await f.load(includeDevnet, capable, { owner: currentOwner,
+        ...(hinted ? { expectedAssetIds: { 'mainnet-beta': [hint.address] } } : {}) });
+      assert.deepEqual(body.items.filter(item => item.dropId === mainnetDrop.dropId).map(item => [item.id, item.kind, item.dudeId]).sort(),
+        assets.map(asset => [asset.address, 'dude', asset.id]).sort());
+      assert.deepEqual(f.state.directBatches.flat().sort(), assets.map(asset => asset.address).sort());
+      const proofs = body.preorderAssetResolutions ?? [];
+      assert.ok(proofs.length <= SHOP_EXPECTED_ASSET_IDS_MAX);
+      if (capable) {
+        assert.equal(proofs.length, SHOP_EXPECTED_ASSET_IDS_MAX);
+        assert.ok(proofs.every(proof => proof.kind === 'dude' && proof.owned && proof.visible));
+        if (hinted) assert.ok(proofs.some(proof => proof.id === hint.address));
+      } else {
+        assert.deepEqual(proofs, []);
+        assert.equal(body.resolvedPreorderAssetIds, undefined);
+      }
+    }
+  });
+}
+
+test('a mainnet claimed asset cannot adopt a devnet metadata URI', async t => {
+  const f = await fixture(t, false, 200, {}, [], mainnetDrop);
+  f.state.indexed = [indexed(false, owner, { id: mainnetCardId, address }, mainnetDrop)];
+  f.state.account = account(true, { uri: `${drop.metadataBase}/f${mainnetCardId}.json` }, mainnetDrop);
+  const body = await f.load(false);
+  assert.equal(body.items.find(item => item.id === address)?.kind, 'preorder');
+  assert.deepEqual(body.preorderAssetResolutions, []);
+  assert.equal(body.resolvedPreorderAssetIds, undefined);
+});
 
 for (const includeDevnet of [false, true]) for (const capable of [false, true]) {
   test(`a cold new owner repairs all22 stale indexed preorders with devnet=${includeDevnet}, converted proofs=${capable}`, async t => {

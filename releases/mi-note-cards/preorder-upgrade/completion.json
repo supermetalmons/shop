@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T21:20:02.536Z",
+  "cluster": "mainnet-beta",
+  "manifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "completedAt": "2026-10-09T20:50:40.221Z",
+  "completedSlot": 454997436,
+  "totalConverted": 176,
+  "finalizedBatches": 44,
+  "expiredAttempts": 1,
+  "preservationVerifiedBatches": 44,
+  "allFinalizedSignaturesVerified": true,
+  "currentAssetReadSlot": 455005494,
+  "currentLiveConvertedAssets": 174,
+  "burnedAfterConversion": [
+    {
+      "id": 698,
+      "address": "6DMt936MznQv2UkeYpkigjBXC6LgPZMVoKTpxSvAqxEk"
+    },
+    {
+      "id": 1092,
+      "address": "6sGcw2KGRywGDAGBHzDBanrscJ5Ez58LPEA1VFiqyxiU"
+    }
+  ],
+  "permanentExclusionsRetained": true,
+  "publicInventory": {
+    "dropId": "mi_note_cards",
+    "ready": true,
+    "configMatches": true,
+    "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+    "available": 1234,
+    "assigned": 20,
+    "orphanAssignments": 0
+  },
+  "sourceFiles": {
+    "activationSha256": "190442990fc1b6e9085fb013621d332b18f13c42d723ae09763d213bfd4ab9c3",
+    "upgradeManifestSha256": "3047643bf0a7b2757d06b3c10c49ed0cff9025e90c5e7bb9d33a3f79291f996f",
+    "upgradeJournalSha256": "3acdf45796c62a5cefcaa8fa6379e154fa2e7bf06791b1cd75e0f46be128ce0d",
+    "upgradeExecutionVerificationSha256": "94dcb8b421b20f7d77fbd5e3413780661d992907563cef3dd8556b4d2154e64d"
+  },
+  "originalExecutionEvidencePreserved": true
+}

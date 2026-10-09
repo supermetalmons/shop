@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import bs58 from 'bs58';
-import { Keypair, PublicKey, type AccountInfo, type Connection, type VersionedTransaction } from '@solana/web3.js';
+import { Keypair, PublicKey, SendTransactionError, SolanaJSONRPCError, type AccountInfo, type Connection, type VersionedTransaction } from '@solana/web3.js';
 import { decodeBoxMinterConfigData } from '../shared/boxMinterConfigCodec.ts';
 import { parsePrivateKeyInput, promptMaskedInput, promptYConfirmation } from './shared/interactive.ts';
 import { acquireDeploymentRegistryMutationLock } from './shared/deploymentRegistry.ts';
@@ -16,11 +17,12 @@ import {
   buildMiNoteUpgradeTransaction, createMiNoteUpgradeManifest, inspectMiNoteUpgradeAsset, loadMiNoteUpgradeSource,
   miNoteUpgradeCollectionFingerprint, PREORDER_UPGRADE_BATCH_SIZE, readMiNoteUpgradeJournal,
   validateMiNoteUpgradeAttempt, validateMiNoteUpgradeManifest, writeMiNoteUpgradeJson,
+  MiNoteUpgradeRetryableError,
   type MiNoteUpgradeAttempt, type MiNoteUpgradeSource,
 } from './shared/miNotePreorderUpgrade.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const USAGE = 'npm run upgrade-mi-note-preorders -- <preorderId> --prepare <file> | --manifest <file> [--check | --write [--yes] [--allow-mainnet]]';
+const USAGE = 'npm run upgrade-mi-note-preorders -- <preorderId> --prepare <file> | --manifest <file> [--check | --write [--yes] [--allow-mainnet] [--auto-recover]]';
 
 export type MiNotePreorderUpgradeOptions = {
   preorderId: string;
@@ -30,11 +32,12 @@ export type MiNotePreorderUpgradeOptions = {
   write: boolean;
   yes: boolean;
   allowMainnet: boolean;
+  autoRecover?: boolean;
   root?: string;
 };
 
 export function parseMiNotePreorderUpgradeArgs(argv: string[]): MiNotePreorderUpgradeOptions {
-  const options: MiNotePreorderUpgradeOptions = { preorderId: argv[0], check: false, write: false, yes: false, allowMainnet: false };
+  const options: MiNotePreorderUpgradeOptions = { preorderId: argv[0], check: false, write: false, yes: false, allowMainnet: false, autoRecover: false };
   if (!['mi_note_cards_devnet', 'mi_note_cards'].includes(options.preorderId)) throw new Error(USAGE);
   for (let index = 1; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -44,11 +47,12 @@ export function parseMiNotePreorderUpgradeArgs(argv: string[]): MiNotePreorderUp
     else if (flag === '--write' && !options.write) options.write = true;
     else if (flag === '--yes' && !options.yes) options.yes = true;
     else if (flag === '--allow-mainnet' && !options.allowMainnet) options.allowMainnet = true;
+    else if (flag === '--auto-recover' && !options.autoRecover) options.autoRecover = true;
     else throw new Error(USAGE);
   }
   if (Boolean(options.preparePath) === Boolean(options.manifestPath) || options.check && options.write ||
     options.preparePath && (options.check || options.write || options.yes || options.allowMainnet) ||
-    (options.yes || options.allowMainnet) && !options.write) throw new Error(USAGE);
+    (options.yes || options.allowMainnet) && !options.write || options.autoRecover && (!options.write || !options.yes)) throw new Error(USAGE);
   return options;
 }
 
@@ -61,6 +65,7 @@ export type MiNoteUpgradeDependencies = {
   promptPrivateKey: () => Promise<string>;
   now: () => Date;
   log: (message: string) => void;
+  sleep: (milliseconds: number) => Promise<void>;
 };
 
 const defaults: MiNoteUpgradeDependencies = {
@@ -88,6 +93,7 @@ const defaults: MiNoteUpgradeDependencies = {
   confirm: promptYConfirmation,
   promptPrivateKey: () => promptMaskedInput('Existing collection authority private key (masked, memory only): '),
   now: () => new Date(), log: message => console.log(message),
+  sleep: milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
 };
 
 function simulatedAccount(value: unknown): AccountInfo<Buffer> | null {
@@ -101,21 +107,59 @@ function simulatedAccount(value: unknown): AccountInfo<Buffer> | null {
   return { data, owner: new PublicKey(account.owner), executable: account.executable, lamports: Number(account.lamports), rentEpoch: 0 };
 }
 
+async function finalizedRpc<T>(request: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await request(); } catch (error) {
+      const behind = error instanceof SolanaJSONRPCError && error.code === -32016 ||
+        error instanceof Error && error.message === 'failed to simulate transaction: Minimum context slot has not been reached';
+      if (!behind || attempt >= 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+}
+
+function retryableUpgradeError(error: unknown): boolean {
+  if (error instanceof MiNoteUpgradeRetryableError) return true;
+  if (error instanceof SolanaJSONRPCError) return typeof error.code === 'number' && [-32005, -32016, -32603].includes(error.code);
+  if (error instanceof SendTransactionError) return false;
+  if (!(error instanceof Error)) return false;
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return true;
+  const cause = error.cause;
+  if (cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string' &&
+    ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET'].includes(cause.code)) return true;
+  if (error.message === 'failed to simulate transaction: Minimum context slot has not been reached') return true;
+  if (error.name === 'ScriptSolanaRpcError') return /^Solana RPC transport |^Solana RPC retry limit reached |failed with HTTP (408|429|500|502|503|504) /.test(error.message);
+  return /fetch failed|\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b/.test(error.message);
+}
+
 export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOptions, overrides: Partial<MiNoteUpgradeDependencies> = {}) {
   const deps = { ...defaults, ...overrides };
   const root = options.root ?? ROOT;
   if (!['mi_note_cards_devnet', 'mi_note_cards'].includes(options.preorderId) ||
     Boolean(options.preparePath) === Boolean(options.manifestPath) || options.check && options.write ||
     options.preparePath && (options.check || options.write || options.yes || options.allowMainnet) ||
-    (options.yes || options.allowMainnet) && !options.write) throw new Error(USAGE);
+    (options.yes || options.allowMainnet) && !options.write || options.autoRecover && (!options.write || !options.yes)) throw new Error(USAGE);
   if (options.write && options.preorderId === 'mi_note_cards' && !options.allowMainnet) throw new Error('Mainnet upgrades require explicit --allow-mainnet and a matching deployed public drop.');
+  const waitToRetry = async (attempt: number, message: string) => {
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempt, 5));
+    deps.log(`${message} Retrying automatically in ${delay / 1000}s.`);
+    await deps.sleep(delay);
+  };
+  const retryRead = async <T>(request: () => Promise<T>, label = 'Read-only validation'): Promise<T> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await request(); } catch (error) {
+        if (!options.autoRecover || !retryableUpgradeError(error)) throw error;
+        await waitToRetry(attempt, `${label} is temporarily unavailable.`);
+      }
+    }
+  };
   const manifestPath = path.resolve(root, options.preparePath ?? options.manifestPath!);
   if (options.preparePath && existsSync(manifestPath)) throw new Error('The reviewed upgrade manifest already exists; it will not be overwritten.');
   const manifestSource = options.manifestPath ? readFileSync(manifestPath, 'utf8') : undefined;
-  let source = await deps.loadSource(root, options.preorderId);
+  let source = await retryRead(() => deps.loadSource(root, options.preorderId));
   const connection = deps.createConnection(source, root);
   const genesis = MI_NOTE_CLUSTER_GENESIS[source.config.cluster as 'devnet' | 'mainnet-beta'];
-  if (source.config.preorderId !== options.preorderId || await connection.getGenesisHash() !== genesis) throw new Error('Preorder upgrade selected the wrong identity or RPC cluster.');
+  if (source.config.preorderId !== options.preorderId || await retryRead(() => connection.getGenesisHash()) !== genesis) throw new Error('Preorder upgrade selected the wrong identity or RPC cluster.');
   let slot = source.inventory.chain.slot;
   const advance = (value: number) => {
     if (!Number.isSafeInteger(value) || value < slot) throw new Error('Upgrade RPC returned stale finalized context.');
@@ -123,13 +167,13 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
   };
   const read: Connection['getMultipleAccountsInfoAndContext'] = async (keys, input) => {
     const minimum = Math.max(slot, typeof input === 'object' ? input.minContextSlot ?? 0 : 0);
-    const result = await connection.getMultipleAccountsInfoAndContext(keys, { commitment: 'finalized', minContextSlot: minimum });
+    const result = await retryRead(() => finalizedRpc(() => connection.getMultipleAccountsInfoAndContext(keys, { commitment: 'finalized', minContextSlot: minimum })));
     if (result.value.length !== keys.length || result.context.slot < minimum) throw new Error('Upgrade account read was incomplete or stale.');
     advance(result.context.slot);
     return result;
   };
-  let programsSha256 = await deps.verifyPrograms(source, connection);
-  await deps.verifyResources(source, read, slot);
+  let programsSha256 = await retryRead(() => deps.verifyPrograms(source, connection));
+  await retryRead(() => deps.verifyResources(source, read, slot));
   const readAssets = async () => {
     const states = new Map<number, ReturnType<typeof inspectMiNoteUpgradeAsset>>();
     for (let offset = 0; offset < source.assets.length; offset += 100) {
@@ -148,13 +192,13 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
   };
   const revalidate = async () => {
     requireManifestUnchanged();
-    const fresh = await deps.loadSource(root, options.preorderId);
-    programsSha256 = await deps.verifyPrograms(fresh, connection);
+    const fresh = await retryRead(() => deps.loadSource(root, options.preorderId));
+    programsSha256 = await retryRead(() => deps.verifyPrograms(fresh, connection));
     validateMiNoteUpgradeManifest(manifest, fresh, programsSha256);
     source = fresh;
-    await deps.verifyResources(source, read, slot);
+    await retryRead(() => deps.verifyResources(source, read, slot));
     states = await readAssets();
-    const last = await deps.loadSource(root, options.preorderId);
+    const last = await retryRead(() => deps.loadSource(root, options.preorderId));
     validateMiNoteUpgradeManifest(manifest, last, programsSha256);
     source = last;
   };
@@ -171,13 +215,19 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
     if (saved) { transaction = validateMiNoteUpgradeAttempt(saved, manifest); blockhash = saved; }
     else {
       if (assetStates.some(state => state.state !== 'original')) throw new Error('A batch asset changed to target metadata; recheck before preparing another attempt.');
-      const latest = await connection.getLatestBlockhashAndContext({ commitment: 'finalized', minContextSlot: slot });
+      const latest = await retryRead(() => finalizedRpc(() => connection.getLatestBlockhashAndContext({ commitment: 'finalized', minContextSlot: slot })));
       advance(latest.context.slot); blockhash = latest.value;
       transaction = buildMiNoteUpgradeTransaction(manifest, cardIds, blockhash.blockhash);
     }
-    const simulation = await connection.simulateTransaction(transaction, { sigVerify: Boolean(saved), commitment: 'finalized', minContextSlot: slot,
-      accounts: { encoding: 'base64', addresses: keys.map(key => key.toBase58()) } });
+    const simulation = await retryRead(() => finalizedRpc(() => connection.simulateTransaction(transaction, { sigVerify: Boolean(saved), commitment: 'finalized', minContextSlot: slot,
+      accounts: { encoding: 'base64', addresses: keys.map(key => key.toBase58()) } }))).catch(error => {
+      if (error instanceof Error && /^failed to simulate transaction: (?:Blockhash not found|blockhash expired)$/i.test(error.message)) {
+        throw new MiNoteUpgradeRetryableError('Simulation blockhash is no longer available; the attempt will be reconciled before refreshing it.');
+      }
+      throw error;
+    });
     advance(simulation.context.slot);
+    if (simulation.value.err === 'BlockhashNotFound') throw new MiNoteUpgradeRetryableError('Simulation blockhash is no longer available; the attempt will be reconciled before refreshing it.');
     if (simulation.value.err || simulation.value.accounts?.length !== keys.length) throw new Error(`Upgrade simulation failed for card IDs ${cardIds.join(', ')}.`);
     const after = simulation.value.accounts.map(simulatedAccount);
     const protectedBefore = batch.map((asset, index) => ({ id: asset.id, protectedSha256: assetStates[index].protectedSha256,
@@ -189,7 +239,7 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
         updated.sequence !== (original.sequence === null ? null : original.sequence + 1n)) throw new Error(`Simulation changed protected fields for card ${asset.id}.`);
     }
     if (miNoteUpgradeCollectionFingerprint(after[batch.length]) !== collectionSha256) throw new Error('Simulation changed the collection policy or metadata.');
-    const fee = (await connection.getFeeForMessage(transaction.message, 'finalized')).value;
+    const fee = (await retryRead(() => connection.getFeeForMessage(transaction.message, 'finalized'))).value;
     if (!Number.isSafeInteger(fee) || fee === null || fee < 0 || fee > 100_000) throw new Error('Upgrade transaction fee is outside the approved bound.');
     const assetRentDelta = batch.reduce((total, _asset, index) => total + after[index]!.lamports - before.value[index]!.lamports, 0);
     const payerDelta = after.at(-1)!.lamports - before.value.at(-1)!.lamports;
@@ -212,10 +262,13 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
   }
   const inspect = async (attempt: MiNoteUpgradeAttempt): Promise<'pending' | Exclude<MiNoteUpgradeAttempt['status'], 'signed'>> => {
     const status = async () => {
-      const result = await connection.getSignatureStatuses([attempt.signature], { searchTransactionHistory: true });
-      if (!Number.isSafeInteger(result.context.slot) || result.context.slot < slot || result.value.length !== 1) {
-        throw new Error('Incomplete or stale upgrade signature history.');
-      }
+      const minimum = slot;
+      const result = await retryRead(async () => {
+        const response = await connection.getSignatureStatuses([attempt.signature], { searchTransactionHistory: true });
+        if (!Number.isSafeInteger(response.context.slot) || response.value.length !== 1) throw new Error('Incomplete or malformed upgrade signature history.');
+        if (response.context.slot < minimum) throw new MiNoteUpgradeRetryableError('Signature history has not reached the required slot.');
+        return response;
+      });
       const signature = result.value[0];
       if (signature?.confirmationStatus === 'finalized') {
         if (!Number.isSafeInteger(signature.slot)) throw new Error('Invalid finalized upgrade signature slot.');
@@ -227,9 +280,9 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
     if (found?.confirmationStatus === 'finalized') return found.err ? 'failed' : 'finalized';
     if (attempt.cardIds.every(id => states.get(id)?.state === 'target')) return 'state-verified';
     if (found) return 'pending';
-    const epoch = await connection.getEpochInfo({ commitment: 'finalized', minContextSlot: slot });
+    const epoch = await retryRead(() => finalizedRpc(() => connection.getEpochInfo({ commitment: 'finalized', minContextSlot: slot })));
     advance(epoch.absoluteSlot);
-    const valid = await connection.isBlockhashValid(attempt.blockhash, { commitment: 'finalized', minContextSlot: slot });
+    const valid = await retryRead(() => finalizedRpc(() => connection.isBlockhashValid(attempt.blockhash, { commitment: 'finalized', minContextSlot: slot })));
     advance(valid.context.slot);
     if (valid.value !== false || !Number.isSafeInteger(epoch.blockHeight) || epoch.blockHeight! <= attempt.lastValidBlockHeight) return 'pending';
     found = await status();
@@ -297,22 +350,37 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
     const broadcast = async (attempt: MiNoteUpgradeAttempt) => {
       unchanged();
       const transaction = validateMiNoteUpgradeAttempt(attempt, manifest);
+      let sentSignature: string | undefined;
+      let sendError: unknown;
       try {
-        const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 });
-        if (signature !== attempt.signature) throw new Error('RPC returned a different upgrade signature.');
-        await connection.confirmTransaction({ signature, blockhash: attempt.blockhash, lastValidBlockHeight: attempt.lastValidBlockHeight }, 'finalized');
-      } catch { }
+        sentSignature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 });
+      } catch (error) { sendError = error; }
+      if (sentSignature !== undefined && sentSignature !== attempt.signature) throw new Error('RPC returned a different upgrade signature.');
+      if (sentSignature) {
+        try {
+          await connection.confirmTransaction({ signature: attempt.signature, blockhash: attempt.blockhash, lastValidBlockHeight: attempt.lastValidBlockHeight }, 'finalized');
+        } catch { }
+      }
       await revalidate();
       const outcome = await inspect(attempt);
-      if (outcome === 'pending') throw new Error(`Upgrade outcome is uncertain for ${attempt.signature}. Rerun the same manifest to recover the same signed bytes.`);
+      const rejected = sendError instanceof SendTransactionError && !/blockhash not found|already (?:been )?processed/i.test(sendError.message);
+      if (outcome === 'pending') {
+        if (rejected) throw sendError;
+        throw new MiNoteUpgradeRetryableError(`Upgrade outcome is uncertain for ${attempt.signature}; its exact signed bytes are retained.`);
+      }
       await resolve(attempt, outcome);
-      if (outcome === 'failed' || outcome === 'expired') throw new Error(`Upgrade attempt ${outcome}; history is preserved. Rerun to review a fresh attempt.`);
+      if (outcome === 'failed') throw new Error('Upgrade attempt failed; history is preserved. Inspect the on-chain failure before retrying.');
+      if (outcome === 'expired') {
+        if (rejected) throw sendError;
+        throw new MiNoteUpgradeRetryableError('Upgrade attempt expired; history is preserved and a fresh transaction can be prepared.');
+      }
     };
-    await revalidate();
-    const pending = journal.attempts.find(attempt => attempt.status === 'signed');
-    if (pending) {
+    const recoverPending = async (pending: MiNoteUpgradeAttempt) => {
       const outcome = await inspect(pending);
-      if (outcome !== 'pending') await resolve(pending, outcome);
+      if (outcome !== 'pending') {
+        await resolve(pending, outcome);
+        if (outcome === 'failed') throw new Error('Upgrade attempt failed; history is preserved. Inspect the on-chain failure before retrying.');
+      }
       else {
         await verifyPreserved(pending, false);
         const preview = await simulate(pending.cardIds, pending);
@@ -320,41 +388,64 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
         if (!options.yes && !await deps.confirm('Resend only this saved metadata-only transaction? Type y: ')) throw new Error('Cancelled; upgrade recovery history is retained.');
         await revalidate();
         const latest = await inspect(pending);
-        if (latest !== 'pending') await resolve(pending, latest);
+        if (latest !== 'pending') {
+          await resolve(pending, latest);
+          if (latest === 'failed') throw new Error('Upgrade attempt failed; history is preserved. Inspect the on-chain failure before retrying.');
+        }
         else { await verifyPreserved(pending, false); await broadcast(pending); }
       }
-    }
-    if (journal.status === 'complete' && remainingIds().length) throw new Error('Completed upgrade and current asset metadata disagree.');
-    while (remainingIds().length) {
-      await revalidate();
-      const cardIds = remainingIds().slice(0, PREORDER_UPGRADE_BATCH_SIZE);
-      if (!cardIds.length) break;
-      const preview = await simulate(cardIds);
-      deps.log(`Cards ${cardIds.join(', ')}: metadata-only UpdateV1; payer ${manifest.authority}; fee ${preview.feeLamports} lamports (cap 100000); asset rent delta ${preview.assetRentDelta}; ${preview.simulationUnits} CU.`);
-      if (!options.yes && !await deps.confirm(`Update these ${cardIds.length} existing NFTs on ${manifest.cluster}? Type y: `)) throw new Error('Cancelled; existing upgrade history is retained.');
-      if (!signer) {
-        const parsed = parsePrivateKeyInput(await deps.promptPrivateKey());
-        secret = parsed.secretKey; signer = Keypair.fromSecretKey(secret);
-        if (signer.publicKey.toBase58() !== manifest.authority) throw new Error('Signer is not the existing collection authority.');
+    };
+    let recoveryAttempts = 0;
+    for (;;) {
+      try {
+        await revalidate();
+        const pending = journal.attempts.find(attempt => attempt.status === 'signed');
+        if (pending) {
+          await recoverPending(pending);
+          recoveryAttempts = 0;
+          continue;
+        }
+        if (journal.status === 'complete' && remainingIds().length) throw new Error('Completed upgrade and current asset metadata disagree.');
+        const cardIds = remainingIds().slice(0, PREORDER_UPGRADE_BATCH_SIZE);
+        if (!cardIds.length) break;
+        const preview = await simulate(cardIds);
+        deps.log(`Cards ${cardIds.join(', ')}: metadata-only UpdateV1; payer ${manifest.authority}; fee ${preview.feeLamports} lamports (cap 100000); asset rent delta ${preview.assetRentDelta}; ${preview.simulationUnits} CU.`);
+        if (!options.yes && !await deps.confirm(`Update these ${cardIds.length} existing NFTs on ${manifest.cluster}? Type y: `)) throw new Error('Cancelled; existing upgrade history is retained.');
+        if (!signer) {
+          const parsed = parsePrivateKeyInput(await deps.promptPrivateKey());
+          secret = parsed.secretKey; signer = Keypair.fromSecretKey(secret);
+          if (signer.publicKey.toBase58() !== manifest.authority) throw new Error('Signer is not the existing collection authority.');
+        }
+        await revalidate();
+        const prepared = await simulate(cardIds);
+        await revalidate();
+        const collection = await read([new PublicKey(manifest.collection)], { commitment: 'finalized', minContextSlot: slot });
+        if (miNoteUpgradeCollectionFingerprint(collection.value[0]) !== prepared.collectionSha256 || prepared.before.some(before =>
+          states.get(before.id)!.state !== 'original' || states.get(before.id)!.protectedSha256 !== before.protectedSha256)) {
+          throw new Error('Batch ownership or collection policy changed after simulation; recheck before signing.');
+        }
+        unchanged();
+        const fresh = await simulate(cardIds);
+        if (fresh.collectionSha256 !== prepared.collectionSha256 || !isDeepStrictEqual(fresh.before, prepared.before)) {
+          throw new Error('Batch ownership or collection policy changed during the final simulation; recheck before signing.');
+        }
+        unchanged();
+        if (await retryRead(() => finalizedRpc(() => connection.getBlockHeight({ commitment: 'finalized', minContextSlot: slot }))) > fresh.blockhash.lastValidBlockHeight) throw new MiNoteUpgradeRetryableError('Upgrade blockhash expired before signing; refreshing the unsigned transaction.');
+        fresh.transaction.sign([signer]);
+        const attempt: MiNoteUpgradeAttempt = { cardIds, before: fresh.before, collectionSha256: fresh.collectionSha256,
+          ...fresh.blockhash, signature: bs58.encode(fresh.transaction.signatures[0]),
+          transactionBase64: Buffer.from(fresh.transaction.serialize()).toString('base64'), signedAt: deps.now().toISOString(), status: 'signed' };
+        validateMiNoteUpgradeAttempt(attempt, manifest);
+        if (journal.attempts.some(previous => previous.signature === attempt.signature)) throw new Error('RPC reused an earlier upgrade signature; no new attempt was saved or sent.');
+        journal.attempts.push(attempt); journal.status = 'running'; persist();
+        await broadcast(attempt);
+        recoveryAttempts = 0;
+        deps.log(`Verified ${manifest.assets.length - remainingIds().length}/${manifest.assets.length} converted NFTs.`);
+      } catch (error) {
+        if (!options.autoRecover || !retryableUpgradeError(error)) throw error;
+        unchanged();
+        await waitToRetry(recoveryAttempts++, error instanceof MiNoteUpgradeRetryableError ? error.message : 'A temporary network failure interrupted the batch.');
       }
-      await revalidate();
-      const prepared = await simulate(cardIds);
-      await revalidate();
-      const collection = await read([new PublicKey(manifest.collection)], { commitment: 'finalized', minContextSlot: slot });
-      if (miNoteUpgradeCollectionFingerprint(collection.value[0]) !== prepared.collectionSha256 || prepared.before.some(before =>
-        states.get(before.id)!.state !== 'original' || states.get(before.id)!.protectedSha256 !== before.protectedSha256)) {
-        throw new Error('Batch ownership or collection policy changed after simulation; recheck before signing.');
-      }
-      unchanged();
-      if (await connection.getBlockHeight({ commitment: 'finalized', minContextSlot: slot }) > prepared.blockhash.lastValidBlockHeight) throw new Error('Upgrade blockhash expired before signing; retry with fresh RPC state.');
-      prepared.transaction.sign([signer]);
-      const attempt: MiNoteUpgradeAttempt = { cardIds, before: prepared.before, collectionSha256: prepared.collectionSha256,
-        ...prepared.blockhash, signature: bs58.encode(prepared.transaction.signatures[0]),
-        transactionBase64: Buffer.from(prepared.transaction.serialize()).toString('base64'), signedAt: deps.now().toISOString(), status: 'signed' };
-      validateMiNoteUpgradeAttempt(attempt, manifest);
-      if (journal.attempts.some(previous => previous.signature === attempt.signature)) throw new Error('RPC reused an earlier upgrade signature; no new attempt was saved or sent.');
-      journal.attempts.push(attempt); journal.status = 'running'; persist();
-      await broadcast(attempt);
     }
     await revalidate();
     if (remainingIds().length || journal.attempts.some(attempt => attempt.status === 'signed')) throw new Error('Upgrade is not fully verified.');
@@ -367,7 +458,7 @@ export async function runMiNotePreorderUpgrade(options: MiNotePreorderUpgradeOpt
       if (previous.manifestSha256 !== manifest.sha256 || previous.complete !== true) throw new Error('Another verification report already exists; it was preserved.');
     }
     return { mode: 'write', ...report, journalPath, verificationPath };
-  } finally { secret?.fill(0); cleanup.cleanup(); }
+  } finally { secret?.fill(0); signer?.secretKey.fill(0); cleanup.cleanup(); }
 }
 
 async function main() {

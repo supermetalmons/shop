@@ -1,0 +1,506 @@
+{
+  "version": 1,
+  "previewedAt": "2026-10-09T18:32:58.102Z",
+  "mode": "preview",
+  "preorderId": "mi_note_cards",
+  "cluster": "mainnet-beta",
+  "manifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "totalAssets": 176,
+  "remainingAssets": 176,
+  "convertedAssets": 0,
+  "finalizedSlot": 454958856,
+  "eligiblePublicCards": 1254,
+  "availablePublicCards": 1254,
+  "assignedPublicCards": 0,
+  "simulations": [
+    {
+      "cardIds": [
+        5,
+        31,
+        45,
+        52
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42678,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        71,
+        73,
+        75,
+        87
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42722,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        129,
+        141,
+        155,
+        173
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        190,
+        213,
+        218,
+        240
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        276,
+        328,
+        331,
+        351
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        426,
+        470,
+        484,
+        558
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        569,
+        570,
+        576,
+        578
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        579,
+        593,
+        600,
+        603
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        605,
+        606,
+        607,
+        611
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        612,
+        613,
+        618,
+        628
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        660,
+        674,
+        698,
+        717
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        738,
+        741,
+        753,
+        782
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        795,
+        799,
+        814,
+        835
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        837,
+        841,
+        852,
+        872
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        873,
+        881,
+        883,
+        885
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        886,
+        888,
+        894,
+        896
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        907,
+        915,
+        928,
+        949
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        957,
+        972,
+        987,
+        988
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42762,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        989,
+        993,
+        999,
+        1006
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42924,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1027,
+        1044,
+        1087,
+        1092
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1097,
+        1098,
+        1101,
+        1102
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1114,
+        1117,
+        1119,
+        1123
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1126,
+        1127,
+        1133,
+        1134
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1137,
+        1138,
+        1140,
+        1143
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1145,
+        1147,
+        1152,
+        1155
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1163,
+        1165,
+        1168,
+        1181
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1189,
+        1197,
+        1199,
+        1207
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1209,
+        1212,
+        1214,
+        1215
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1219,
+        1227,
+        1232,
+        1233
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1236,
+        1245,
+        1247,
+        1250
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1251,
+        1252,
+        1254,
+        1260
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1265,
+        1270,
+        1275,
+        1278
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1279,
+        1283,
+        1285,
+        1287
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1288,
+        1292,
+        1297,
+        1298
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1300,
+        1303,
+        1304,
+        1308
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1314,
+        1318,
+        1320,
+        1326
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1327,
+        1341,
+        1342,
+        1343
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1344,
+        1348,
+        1349,
+        1350
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1351,
+        1352,
+        1353,
+        1354
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1359,
+        1361,
+        1362,
+        1368
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1369,
+        1372,
+        1373,
+        1375
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1379,
+        1382,
+        1383,
+        1384
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1385,
+        1388,
+        1389,
+        1394
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    },
+    {
+      "cardIds": [
+        1414,
+        1423,
+        1424,
+        1425
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 43410,
+      "assetRentDelta": -264160
+    }
+  ],
+  "totals": {
+    "transactions": 44,
+    "feeLamports": 220000,
+    "assetRentDelta": -11623040
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T19:42:11.649Z",
+  "cluster": "mainnet-beta",
+  "manifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "journalSha256": "3fe859e104fd115f993f5762d45c5f5b97b68635a3d0f821a27c730663f86d55",
+  "onchainConverted": 28,
+  "onchainRemaining": 148,
+  "finalizedSlot": 454978693,
+  "mintStarted": false,
+  "operationsStarted": false,
+  "requiredCommandOption": "--auto-recover",
+  "behavior": {
+    "oneSignerPromptPerProcess": true,
+    "signerKeptInMemoryOnly": true,
+    "completedAssetsSkipped": true,
+    "expiredAttemptsRetained": true,
+    "freshSignatureOnlyAfterVerifiedExpiry": true,
+    "pendingAttemptsUseSameSignedBytes": true,
+    "temporaryNetworkFailuresRetryWithBackoff": true,
+    "validationAndOnchainFailuresStillStop": true
+  },
+  "tests": {
+    "upgradeTests": 36,
+    "rootSuiteTests": 3261,
+    "toolTypecheck": "passed",
+    "deadCode": "passed"
+  },
+  "journalUnchanged": true
+}
