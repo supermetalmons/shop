@@ -161,13 +161,14 @@ class SoundPlayer {
     }
   }
 
-  public async playSound(url: string, volumeMultiplier: number = 1): Promise<void> {
+  public async playSound(url: string, volumeMultiplier: number = 1, isActive?: () => boolean): Promise<void> {
     if (!this.isInitialized) return;
     if (document.visibilityState !== "visible") return;
     const ctx = await this.prepareContext();
     if (!ctx) return;
     try {
       const audioBuffer = await this.loadAudioBuffer(url);
+      if (document.visibilityState !== "visible" || isActive?.() === false) return;
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       const gainNode = ctx.createGain();

@@ -17,6 +17,7 @@ import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
 import { MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
+import { playMiNotePackSound, preloadMiNotePackSounds, unlockMiNotePackSounds, type MiNotePackSound } from '../lib/miNotePackSounds';
 
 export type MiNotePackControls = {
   activate: () => void;
@@ -89,7 +90,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let height = 1;
     let pixelRatio = 0;
     let lastTime = 0;
-    let taps = 0;
+    let taps = props.state.taps;
     let sealTime = 0;
     let sealStarted = false;
     let sealFinished = false;
@@ -113,12 +114,19 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const cardHomeQuaternion = new THREE.Quaternion();
     const cardPocketTop = new THREE.Vector3();
     let outerFlip: OuterFlip | null = null;
-    let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip' } | null = null;
+    let drag: { hit: THREE.Intersection | null; phase: number; outerStart: number; mode: 'pending' | 'fold' | 'flip'; soundStarted: boolean } | null = null;
     let tapHit: THREE.Intersection | null = null;
     let tapCard: 0 | 1 | null = null;
     let selected: 0 | 1 | null = null;
     let cardPath: ReturnType<typeof createMiNoteCardPath> | null = null;
     let cardProgress = 0;
+    let cardMotionSoundStage: 'lifting' | 'returning' | null = null;
+    let dragSoundVersion = 0;
+    const soundEnabled = () => !disposed && !failed && currentProps.current.activationEnabled !== false;
+    const playSound = (sound: MiNotePackSound, isCurrent = () => true) => {
+      void playMiNotePackSound(sound, () => soundEnabled() && currentProps.current.interactionEnabled && isCurrent());
+    };
+    if (soundEnabled()) void preloadMiNotePackSounds();
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
@@ -202,6 +210,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         });
         selected = null;
         cardPath = null;
+        cardMotionSoundStage = null;
         activeCardEffect = undefined;
         currentProps.current.onCardsReadyChange(false);
         return;
@@ -285,17 +294,20 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       if (!cards[index]) return;
       const state = currentProps.current.state;
       if (currentProps.current.interactionEnabled && state.selectedCard === index && state.cardStage === 'returning') {
+        if (soundEnabled()) void unlockMiNotePackSounds();
         input.cancel();
         dispatch({ type: 'select-card', index });
         invalidate();
         return;
       }
       if (!canNavigate() || state.stage !== 'interactive' || !state.ready || drag || outerFlip) return;
+      if (soundEnabled()) void unlockMiNotePackSounds();
       input.cancel();
       setPose(1);
       dispatch({ type: 'select-card', index });
     };
     const returnCard = () => {
+      if (soundEnabled() && currentProps.current.interactionEnabled) void unlockMiNotePackSounds();
       input.cancel();
       tiltTarget.set(0, 0);
       dispatch({ type: 'return-card' });
@@ -303,10 +315,14 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
     const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
       if (currentProps.current.activationEnabled === false || !canNavigate() || drag || outerFlip) return;
+      void unlockMiNotePackSounds();
       input.cancel();
       if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
         const worldPerPixel = 2 * Math.abs(camera.position.z - point.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / height;
         tapSparkles.burst(point, worldPerPixel);
+      }
+      if (currentProps.current.state.stage === 'interactive') {
+        playSound(currentProps.current.state.folderPose === 1 ? 'folderClose' : 'folderOpen');
       }
       dispatch({ type: 'activate', leaf });
       invalidate();
@@ -399,7 +415,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           outerFlip.dragging = true;
           outerFlip.velocity = 0;
         }
-        drag = { hit: tapHit, phase: fold.value, outerStart: outerFlip?.value ?? 0, mode: outerFlip ? 'flip' : 'pending' };
+        drag = { hit: tapHit, phase: fold.value, outerStart: outerFlip?.value ?? 0, mode: outerFlip ? 'flip' : 'pending', soundStarted: false };
         fold.velocity = 0;
         return true;
       },
@@ -410,6 +426,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         }
         if (!drag?.hit || currentProps.current.state.selectedCard !== null) return;
         const { deltaX, deltaY, moved } = movement;
+        const previousPosition = outerFlip?.value ?? fold.value;
         if (drag.mode === 'pending' && moved && Math.abs(deltaX) > Math.abs(deltaY)) {
           const phase = Math.round(drag.phase);
           const closed = Math.abs(drag.phase - phase) < 0.015 && (phase === 0 || phase === 2);
@@ -426,9 +443,20 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         } else if (drag.mode === 'fold') {
           fold.value = THREE.MathUtils.clamp(drag.phase - deltaX / distance, 0, 2);
         }
+        if (moved && !drag.soundStarted && (outerFlip?.value ?? fold.value) !== previousPosition) {
+          drag.soundStarted = true;
+          dragSoundVersion += 1;
+          const startedDrag = drag;
+          if (soundEnabled()) void unlockMiNotePackSounds();
+          playSound('folderDragStart', () => drag === startedDrag);
+        }
         invalidate();
       },
       onEnd(event, movement) {
+        if (drag?.soundStarted) {
+          const version = dragSoundVersion;
+          playSound('folderDragEnd', () => version === dragSoundVersion);
+        }
         if (inspectingPointer !== null) {
           inspectingPointer = null;
           if (movement.cancelled || event.pointerType !== 'mouse') tiltTarget.set(0, 0);
@@ -507,12 +535,16 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
       model.setSealSizeScale(currentProps.current.sizeScale ?? currentProps.current.star.sizeScale);
       if (state.taps !== taps) {
-        for (let count = taps + 1; count <= state.taps; count += 1) recoil.velocity += 1.6 + Math.min(count, MI_NOTE_OPEN_TAPS) * 0.65;
+        for (let count = taps + 1; count <= state.taps; count += 1) {
+          recoil.velocity += 1.6 + Math.min(count, MI_NOTE_OPEN_TAPS) * 0.65;
+          playSound('folderTap');
+        }
         taps = state.taps;
       }
       if (state.stage === 'seal-peeling' && !sealStarted) {
         sealStarted = true;
         model.startSealPeel();
+        playSound('stickerUnseal');
       }
       if (outerFlip) {
         const flip = outerFlip;
@@ -620,6 +652,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       }
       if ((state.cardStage === 'lifting' || state.cardStage === 'returning') && selected !== null && cardPath) {
         const lifting = state.cardStage === 'lifting';
+        if (cardMotionSoundStage !== state.cardStage) {
+          cardMotionSoundStage = state.cardStage;
+          playSound(lifting ? 'cardPullout' : 'cardPutback');
+        }
         const duration = reducedMotion.matches ? 0.16 : lifting ? 0.44 : 0.4;
         cardProgress = THREE.MathUtils.clamp(cardProgress + (lifting ? 1 : -1) * dt / duration, 0, 1);
         const card = cards[selected];
@@ -632,6 +668,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
             card.anchor.scale.setScalar(1);
             selected = null;
             cardPath = null;
+            cardMotionSoundStage = null;
             if (!document.activeElement?.matches('input, textarea, select')) host?.focus({ preventScroll: true });
             dispatch({ type: 'card-returned' });
           } else {
@@ -691,6 +728,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         tapSparkles.clear();
         cancelAnimationFrame(frameId);
         frameId = 0;
+      } else if (soundEnabled()) {
+        void preloadMiNotePackSounds();
       }
       lastTime = 0;
       invalidate();

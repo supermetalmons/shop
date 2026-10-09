@@ -8,6 +8,7 @@ import {
 } from '../../config/dropsExtraContent';
 import { joinDropAssetUrl, resolveBoxMediaIdForDrop } from '../../lib/dropContent';
 import { soundPlayer } from '../../lib/SoundPlayer';
+import { preloadMiNotePackSounds } from '../../lib/miNotePackSounds';
 import {
   clearPonchoDrifellaImageCache,
   createPonchoDrifellaImageCache,
@@ -248,6 +249,10 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
   }, []);
 
   const preloadRevealSounds = useCallback((dropId?: string) => {
+    if (usesMiNotePack3dRevealForDropId(dropId)) {
+      void preloadMiNotePackSounds();
+      return;
+    }
     const { click, reveal, cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);
     const motionSounds = [cardSwipe, cardSpread].filter((soundUrl): soundUrl is string => Boolean(soundUrl));
     void soundPlayer.preloadSound(reveal);
@@ -266,7 +271,7 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
         void soundPlayer.preloadSound(motionUrl);
       });
     });
-  }, [ensureSoundReady, revealSoundUrlsForDropId]);
+  }, [ensureSoundReady, revealSoundUrlsForDropId, usesMiNotePack3dRevealForDropId]);
   const preloadCardMotionSoundsForDropId = useCallback(
     (dropId?: string) => {
       const { cardSwipe, cardSpread } = revealSoundUrlsForDropId(dropId);

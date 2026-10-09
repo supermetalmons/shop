@@ -12,6 +12,7 @@ import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackSt
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import type { MiNotePackSound } from '../src/lib/miNotePackSounds.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, render } = await import('@testing-library/react');
@@ -160,6 +161,11 @@ type TestSurface = ReturnType<typeof createMiNoteCardMaterial> & {
   disposeCalls: number;
 };
 const surfaces: TestSurface[] = [];
+const sounds: MiNotePackSound[] = [];
+const deferredSounds = new Set<MiNotePackSound>();
+const pendingSounds: { sound: MiNotePackSound; isActive: () => boolean }[] = [];
+let soundPreloads = 0;
+let soundUnlocks = 0;
 let deferSurfaceReady = false;
 function createTestSurface(card: DrifCardConfig): TestSurface {
   const actual = createMiNoteCardMaterial(card, { loadTexture: async () => new THREE.Texture() });
@@ -187,17 +193,28 @@ function createTestSurface(card: DrifCardConfig): TestSurface {
   return surface;
 }
 const bridgeKey = '__miNotePackViewerTest';
-Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: { FakeWebGLRenderer, createTestModel, createTestSurface } });
+Object.defineProperty(globalThis, bridgeKey, { configurable: true, value: {
+  FakeWebGLRenderer, createTestModel, createTestSurface,
+  async preloadMiNotePackSounds() { soundPreloads += 1; },
+  async unlockMiNotePackSounds() { soundUnlocks += 1; },
+  async playMiNotePackSound(sound: MiNotePackSound, isActive: () => boolean) {
+    if (deferredSounds.has(sound)) pendingSounds.push({ sound, isActive });
+    else if (isActive()) sounds.push(sound);
+  },
+} });
 const imports = registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL?.endsWith('/components/MiNotePackViewer.tsx')) {
       if (specifier === 'three') return { url: 'test:mi-note-viewer-three', shortCircuit: true };
       if (specifier.endsWith('/miNoteCardMaterial')) return { url: 'test:mi-note-card-material', shortCircuit: true };
       if (specifier.endsWith('/miNotePackModel')) return { url: 'test:mi-note-viewer-model', shortCircuit: true };
+      if (specifier.endsWith('/miNotePackSounds')) return { url: 'test:mi-note-viewer-sounds', shortCircuit: true };
     }
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    if (url === 'test:mi-note-viewer-sounds') return { format: 'module', shortCircuit: true,
+      source: `export const { preloadMiNotePackSounds, unlockMiNotePackSounds, playMiNotePackSound } = globalThis.${bridgeKey};` };
     if (url === 'test:mi-note-card-material') return { format: 'module', shortCircuit: true, source: `export const createMiNoteCardMaterial = globalThis.${bridgeKey}.createTestSurface;` };
     if (url === 'test:mi-note-viewer-three') {
       return {
@@ -222,6 +239,10 @@ beforeEach(() => {
   surfaces.length = 0;
   models.length = 0;
   renderers.length = 0;
+  sounds.length = 0;
+  deferredSounds.clear();
+  pendingSounds.length = 0;
+  soundPreloads = soundUnlocks = 0;
   time = 1000;
   viewportWidth = 900;
   viewportHeight = 700;
@@ -271,7 +292,7 @@ function harness(
   initialState = createMiNoteRevealState(),
   interactionEnabled = true,
   initialLayout: { star?: MiNotePackStar; verticalPosition?: number; sizeScale?: number } = { verticalPosition: 0.5, sizeScale: 1 },
-  options: { cardsAvailable?: boolean; activationEnabled?: boolean; inventoryReveal?: boolean } = {},
+  options: { cardsAvailable?: boolean; activationEnabled?: boolean; inventoryReveal?: boolean; rejectActivation?: boolean } = {},
 ) {
   const controls = { current: null as MiNotePackControls | null };
   const events: MiNoteRevealEvent[] = [];
@@ -300,7 +321,7 @@ function harness(
       color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
       cards: cardsAvailable ? cards : undefined, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); },
       state: current, interactionEnabled, activationEnabled: options.activationEnabled, controlsRef: controls,
-      onEvent(event) { events.push(event); dispatch(event); },
+      onEvent(event) { events.push(event); if (event.type !== 'activate' || !options.rejectActivation) dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready: ready && (!options.inventoryReveal || cardsAvailable) }); },
       onError(error) { errors.push(error); },
       onCardsError(error) { cardErrors.push(error); },
@@ -1068,6 +1089,176 @@ test('live packs keep a bounded recoil on every mouse and touch tap while assign
     advanceFrames();
     assert.equal(model.group.scale.x, 1);
   }
+  assert.deepEqual(sounds, Array(20).fill('folderTap'));
+});
+
+test('demo taps play one hit each, the peel plays once, and click toggles use folder sounds', async () => {
+  const run = harness();
+  await makeReady();
+  assert.equal(soundPreloads, 1);
+  assert.deepEqual(sounds, []);
+  const pointer = pointerControls(run);
+  for (const type of ['mouse', 'touch', 'mouse']) {
+    pointer.tap(type);
+    settle();
+  }
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.deepEqual(sounds, ['folderTap', 'folderTap', 'folderTap', 'folderTap', 'stickerUnseal']);
+  assert.equal(soundUnlocks, 4);
+  assert.equal(run.state.stage, 'interactive');
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(sounds.at(-1), 'folderOpen');
+  act(() => run.controls.current!.activate());
+  settle();
+  assert.equal(sounds.at(-1), 'folderClose');
+  assert.equal(sounds.filter(sound => sound === 'stickerUnseal').length, 1);
+});
+
+test('inventory peeling plays its third tap together with the unseal sound', async () => {
+  const run = harness(undefined, true, undefined, { inventoryReveal: true });
+  await makeReady();
+  for (let tap = 0; tap < 3; tap += 1) {
+    act(() => run.controls.current!.activate());
+    settle();
+  }
+  assert.equal(run.state.stage, 'interactive');
+  assert.deepEqual(sounds, ['folderTap', 'folderTap', 'folderTap', 'stickerUnseal']);
+});
+
+test('folder drags use their own sounds, navigation stays silent, and card reversals each play once', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', viewportWidth / 2 + 260, viewportHeight / 2);
+  pointer.dispatch('pointerup', viewportWidth / 2 + 260, viewportHeight / 2);
+  advanceFrames();
+  assert.equal(run.state.folderPose, 0);
+  act(() => run.controls.current!.navigate(1));
+  advanceFrames();
+  assert.equal(run.state.folderPose, 1);
+  assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd']);
+  sounds.length = 0;
+  act(() => run.controls.current!.selectCard(0));
+  advanceFrames(3);
+  assert.deepEqual(sounds, ['cardPullout']);
+  act(() => run.controls.current!.returnCard());
+  advanceFrame(12);
+  assert.deepEqual(sounds, ['cardPullout', 'cardPutback']);
+  act(() => run.controls.current!.selectCard(0));
+  advanceFrames();
+  assert.deepEqual(sounds, ['cardPullout', 'cardPutback', 'cardPullout']);
+  assert.equal(run.state.cardStage, 'inspecting');
+  act(() => run.controls.current!.escape());
+  advanceFrames();
+  assert.deepEqual(sounds, ['cardPullout', 'cardPutback', 'cardPullout', 'cardPutback']);
+  act(() => run.controls.current!.escape());
+  advanceFrames();
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(sounds.length, 4);
+});
+
+for (const pointerType of ['mouse', 'touch']) {
+  test(`${pointerType} folder dragging sounds once at the motion threshold and once on release`, async () => {
+    const run = harness();
+    await makeReady();
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown', 450, 350, pointerType);
+    pointer.dispatch('pointermove', 453, 350, pointerType);
+    assert.deepEqual(sounds, []);
+    pointer.dispatch('pointermove', 465, 350, pointerType);
+    assert.deepEqual(sounds, ['folderDragStart']);
+    pointer.dispatch('pointermove', 540, 350, pointerType);
+    assert.equal(sounds.length, 1);
+    pointer.dispatch('pointerup', 550, 350, pointerType);
+    pointer.dispatch('lostpointercapture', 550, 350, pointerType);
+    settle();
+    assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd']);
+    assert.equal(run.state.taps, 0);
+  });
+}
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur']) {
+  test(`a started folder drag ends its sound once on ${cancellation}`, async () => {
+    const run = harness();
+    await makeReady();
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown');
+    pointer.dispatch('pointermove', 530, 350);
+    assert.deepEqual(sounds, ['folderDragStart']);
+    if (cancellation === 'blur') act(() => window.dispatchEvent(new window.Event('blur')));
+    else pointer.dispatch(cancellation, 530, 350);
+    pointer.dispatch('lostpointercapture', 530, 350);
+    settle();
+    assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd']);
+  });
+}
+
+test('delayed drag sounds are invalidated by release and subsequent drags', async () => {
+  deferredSounds.add('folderDragStart');
+  deferredSounds.add('folderDragEnd');
+  const run = harness();
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', 530, 350);
+  const firstStart = pendingSounds[0];
+  assert.equal(firstStart.isActive(), true);
+  pointer.dispatch('pointerup', 530, 350);
+  const firstEnd = pendingSounds[1];
+  assert.equal(firstStart.isActive(), false);
+  assert.equal(firstEnd.isActive(), true);
+  settle();
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', 540, 350);
+  assert.equal(firstStart.isActive(), false);
+  assert.equal(firstEnd.isActive(), false);
+  assert.equal(pendingSounds[2].isActive(), true);
+  pointer.dispatch('pointercancel', 540, 350);
+  assert.equal(pendingSounds[2].isActive(), false);
+  assert.equal(pendingSounds[3].isActive(), true);
+});
+
+test('background gestures and card tilting do not play folder drag sounds', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.dispatch('pointerdown', 0, 0);
+  pointer.dispatch('pointermove', 100, 0);
+  pointer.dispatch('pointerup', 100, 0);
+  settle();
+  assert.deepEqual(sounds, []);
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', 530, 350);
+  pointer.dispatch('pointerup', 530, 350);
+  settle();
+  assert.deepEqual(sounds, ['cardPullout']);
+});
+
+test('rejected activation, pointer cancellation, and blocked interactions produce no sounds', async () => {
+  const run = harness(undefined, true, undefined, { rejectActivation: true });
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.tap();
+  settle();
+  assert.equal(run.state.taps, 0);
+  assert.deepEqual(sounds, []);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointercancel');
+  settle();
+  assert.deepEqual(sounds, []);
+  run.view.unmount();
+  const blocked = harness(undefined, false);
+  await makeReady();
+  act(() => blocked.controls.current!.activate());
+  pointerControls(blocked).tap();
+  settle();
+  assert.deepEqual(sounds, []);
 });
 
 test('the final sealed tap sparkles stop when peeling finishes and later folder taps stay clear', async () => {
@@ -2348,6 +2539,9 @@ test('closed-pack viewing disables activation but preserves sealed 3D rotation w
   assert.equal(run.count('activate'), 0);
   assert.equal(models[0].sealStarts, 0);
   assert.equal(surfaces.length, 0);
+  assert.equal(soundPreloads, 0);
+  assert.equal(soundUnlocks, 0);
+  assert.deepEqual(sounds, []);
   act(() => run.controls.current?.navigate(1));
   settle();
   assert.equal(run.state.folderPose, 2);
