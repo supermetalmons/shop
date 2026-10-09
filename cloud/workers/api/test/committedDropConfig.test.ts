@@ -5,14 +5,18 @@ import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterCon
 import { DEPLOYMENT_DROPS, projectDeploymentPaymentRouting } from '../../../../shared/deploymentRegistry.ts';
 import { API_DROPS } from '../src/dropConfig.ts';
 import { matchesCommittedDropConfig, type CommittedDropConfig } from '../src/committedDropConfig.ts';
+import { miNoteDropFixture } from '../../../../tests/helpers/miNoteDropFixture.ts';
 
-function decodedConfig(expected: CommittedDropConfig): DecodedBoxMinterConfigData {
+function decodedConfig(expected: CommittedDropConfig, role: 'mint' | 'operations' = 'mint'): DecodedBoxMinterConfigData {
   const treasury = bs58.decode(expected.treasury);
+  const operations = expected.operationsConfig;
   return {
     admin: new Uint8Array(32), treasury, coreCollection: bs58.decode(expected.collectionMint),
     priceLamports: 0n, discountPriceLamports: 0n, discountMerkleRoot: new Uint8Array(32),
-    discountMintsPerWallet: expected.discountMintsPerWallet, maxSupply: expected.maxSupply,
-    maxPerTx: 1, itemsPerBox: expected.itemsPerBox, started: true, minted: 0,
+    discountMintsPerWallet: expected.discountMintsPerWallet,
+    maxSupply: operations && role === 'operations' ? operations.maxSupply : expected.maxSupply,
+    maxPerTx: 1, itemsPerBox: operations && role === 'mint' ? 0 : expected.itemsPerBox,
+    started: role === 'mint', minted: 0,
     namePrefix: '', figureNamePrefix: '', symbol: '', uriBase: expected.metadataBase,
     bump: 0, mintVariantKind: 0, mintVariantStartIds: [0, 0, 0],
     mintVariantEndIds: [0, 0, 0], mintVariantNextIds: [0, 0, 0],
@@ -31,6 +35,20 @@ test('committed configuration matches API projections and reveal payment adapter
     const decoded = decodedConfig(API_DROPS[dropId]);
     assert.equal(matchesCommittedDropConfig(decoded, API_DROPS[dropId]), true, dropId);
     assert.equal(matchesCommittedDropConfig(decoded, { ...drop, ...projectDeploymentPaymentRouting(drop) }), true, dropId);
+  }
+});
+
+test('two-config validation requires exact role values and keeps operations minting disabled', () => {
+  const drop = miNoteDropFixture();
+  const expected = { ...drop, ...projectDeploymentPaymentRouting(drop) };
+  const mint = decodedConfig(expected, 'mint');
+  const operations = decodedConfig(expected, 'operations');
+  assert.equal(matchesCommittedDropConfig(mint, expected, 'mint'), true);
+  assert.equal(matchesCommittedDropConfig(operations, expected, 'operations'), true);
+  assert.equal(matchesCommittedDropConfig(mint, expected, 'operations'), false);
+  assert.equal(matchesCommittedDropConfig(operations, expected, 'mint'), false);
+  for (const changed of [{ started: true }, { minted: 1 }, { maxSupply: 704 }, { itemsPerBox: 0 }]) {
+    assert.equal(matchesCommittedDropConfig({ ...operations, ...changed }, expected, 'operations'), false);
   }
 });
 

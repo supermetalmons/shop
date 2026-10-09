@@ -25,6 +25,7 @@ import {
   type BoxMinterMintVariantTuple,
 } from '../../shared/boxMinterProtocol.ts';
 import { boxMinterMetadataBaseMatchesDrop } from '../../shared/deploymentCore.ts';
+import { resolveDropConfigRole } from '../../shared/dropConfigRoles.ts';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
@@ -147,11 +148,15 @@ type DropProgramValidationConfig = Partial<
     | 'metadataBaseAliases'
     | 'treasury'
     | 'paymentRouting'
+    | 'maxSupply'
+    | 'itemsPerBox'
   >
 >;
 type DropProgramConfig = DropProgramScopeConfig &
   DropProgramValidationConfig &
   Pick<FrontendDeploymentConfig, 'maxPerTx' | 'mintSelection'>;
+type DropProgramFetchConfig = DropProgramScopeConfig & DropProgramValidationConfig &
+  Pick<FrontendDeploymentConfig, 'dropId' | 'maxSupply' | 'itemsPerBox' | 'operationsConfig'>;
 type ScopedConfigPda = Pick<BoxMinterConfigAccount, 'pubkey'>;
 
 function normalizeMaxMintsPerTx(config: Pick<FrontendDeploymentConfig, 'maxPerTx'> | undefined): number {
@@ -228,9 +233,15 @@ function resolveConfiguredBoxMinterConfigPda(dropConfig: DropProgramScopeConfig,
 
 export function assertBoxMinterConfigMatchesDropConfig(
   cfg: Pick<BoxMinterConfigAccount, 'coreCollection' | 'uriBase'> &
-    Partial<Pick<BoxMinterConfigAccount, 'treasury' | 'paymentRouting'>>,
+    Partial<Pick<BoxMinterConfigAccount, 'treasury' | 'paymentRouting' | 'maxSupply' | 'itemsPerBox'>>,
   dropConfig: DropProgramValidationConfig,
 ): void {
+  if (dropConfig.maxSupply !== undefined && cfg.maxSupply !== dropConfig.maxSupply) {
+    throw new Error('Deployment config is out of sync with the on-chain supply');
+  }
+  if (dropConfig.itemsPerBox !== undefined && cfg.itemsPerBox !== dropConfig.itemsPerBox) {
+    throw new Error('Deployment config is out of sync with the on-chain items per pack');
+  }
   const expectedCollectionMint =
     typeof dropConfig.collectionMint === 'string' ? dropConfig.collectionMint.trim() : '';
   if (expectedCollectionMint && cfg.coreCollection.toBase58() !== expectedCollectionMint) {
@@ -481,7 +492,7 @@ function decodeDiscountMintRecordUsedCount(data: Uint8Array): number {
 export async function fetchDiscountMintRecordUsedCount(
   connection: Connection,
   payer: PublicKey,
-  dropConfig: DropProgramScopeConfig & DropProgramValidationConfig,
+  dropConfig: DropProgramFetchConfig,
 ): Promise<number> {
   const programId = boxMinterProgramId(dropConfig);
   const cfg = await fetchBoxMinterConfig(connection, dropConfig);
@@ -505,10 +516,12 @@ export async function fetchDiscountMintRecordUsedCount(
 
 export async function fetchBoxMinterConfig(
   connection: Connection,
-  dropConfig: DropProgramScopeConfig & DropProgramValidationConfig,
+  dropConfig: DropProgramFetchConfig,
+  role: 'mint' | 'operations' = 'mint',
 ): Promise<BoxMinterConfigAccount> {
   const programId = boxMinterProgramId(dropConfig);
-  const pda = resolveConfiguredBoxMinterConfigPda(dropConfig, programId);
+  const expectedConfig = { ...dropConfig, ...resolveDropConfigRole(dropConfig, role) };
+  const pda = resolveConfiguredBoxMinterConfigPda(expectedConfig, programId);
   const info = await retryRpc(() => connection.getAccountInfo(pda, 'confirmed'), {
     retries: 3,
     baseDelayMs: 300,
@@ -519,13 +532,16 @@ export async function fetchBoxMinterConfig(
     throw new Error('Invalid box minter config account owner');
   }
   const cfg = decodeBoxMinterConfigAccount(pda, info.data);
-  assertBoxMinterConfigMatchesDropConfig(cfg, dropConfig);
+  assertBoxMinterConfigMatchesDropConfig(cfg, expectedConfig);
+  if (role === 'operations' && dropConfig.operationsConfig && (cfg.started || cfg.minted !== 0)) {
+    throw new Error('Opening configuration must remain unstarted and unminted.');
+  }
   return cfg;
 }
 
 export async function fetchMintStatsFromProgram(
   connection: Connection,
-  dropConfig: DropProgramConfig,
+  dropConfig: DropProgramFetchConfig & Pick<FrontendDeploymentConfig, 'maxPerTx' | 'mintSelection'>,
 ): Promise<MintStats> {
   const cfg = await fetchBoxMinterConfig(connection, dropConfig);
   const minted = Number(cfg.minted || 0);

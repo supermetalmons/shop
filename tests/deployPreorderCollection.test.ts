@@ -19,10 +19,42 @@ import {
 } from '../scripts/shared/preorderCollectionConfig.ts';
 import { buildCreateMplCoreCollectionV2Ix } from '../scripts/deploy-all-onchain.ts';
 import { BUBBLEGUM_PROGRAM_ADDRESS, MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
+import { getPreorderConfig } from '../shared/preorders.ts';
 
 const CORE_PROGRAM = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const MAINNET_GENESIS = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
 const FIXED_DATE = new Date('2026-09-25T10:00:00.000Z');
+
+test('preorder verification permits only the registered mint and operations delegates after activation', t => {
+  const f = fixture(t);
+  const mint = Keypair.generate().publicKey;
+  const operations = Keypair.generate().publicKey;
+  const previous = DEPLOYMENT_DROPS.mi_note_cards;
+  DEPLOYMENT_DROPS.mi_note_cards = {
+    ...DEPLOYMENT_DROPS.card_nft_2, dropId: 'mi_note_cards', dropFamily: 'mi_note_cards',
+    collectionMint: getPreorderConfig('mi_note_cards')!.collection,
+    boxMinterConfigPda: mint.toBase58(),
+    operationsConfig: { configId: 'mi_note_cards_operations', boxMinterConfigPda: operations.toBase58(), maxSupply: 715 },
+  };
+  t.after(() => { if (previous) DEPLOYMENT_DROPS.mi_note_cards = previous; else delete DEPLOYMENT_DROPS.mi_note_cards; });
+  const delegates = [new PublicKey(f.config.authority), mint, operations];
+  const collectionMint = getPreorderConfig('mi_note_cards')!.collection;
+  assert.doesNotThrow(() => validatePreorderCollectionAccount({ config: f.config, collectionMint, account: collectionAccount(f.config, { delegates }) }));
+  assert.throws(() => validatePreorderCollectionAccount({ config: f.config, collectionMint,
+    account: collectionAccount(f.config, { delegates: [...delegates, Keypair.generate().publicKey] }),
+  }), /registered drop delegates/);
+  assert.throws(() => validatePreorderCollectionAccount({ config: f.config, collectionMint: Keypair.generate().publicKey.toBase58(),
+    account: collectionAccount(f.config, { delegates }),
+  }), /registered drop delegates/);
+  assert.throws(() => validatePreorderCollectionAccount({ config: { ...f.config, solanaCluster: 'devnet' }, collectionMint,
+    account: collectionAccount(f.config, { delegates }),
+  }), /registered drop delegates/);
+  delete DEPLOYMENT_DROPS.mi_note_cards;
+  assert.throws(() => validatePreorderCollectionAccount({ config: f.config, collectionMint,
+    account: collectionAccount(f.config, { delegates }),
+  }), /registered drop delegates/);
+});
 
 function integer(value: number, size: 2 | 4 | 8): Buffer {
   const buffer = Buffer.alloc(size);

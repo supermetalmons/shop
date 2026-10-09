@@ -161,7 +161,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
       const targetConnection = getDropConnection(targetDrop.dropId);
-      const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop);
+      const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop, 'operations');
       const enablesEarlyPackInteraction = isDropFamily(targetDrop, 'clear_cards');
       if (enablesEarlyPackInteraction) {
         let settleConfirmation!: (confirmed: boolean) => void;

@@ -1,5 +1,6 @@
 import {
   normalizeAndValidateMetadataBaseInput,
+  normalizeAndValidateDropId,
   normalizeAndValidatePaymentRouting,
   type DropFamily,
   type MintSelectionConfigSerialized,
@@ -9,6 +10,8 @@ import {
   normalizeDropSalesMode,
   type DropSalesMode,
 } from '../../shared/deploymentCore.ts';
+import { resolveDropMaxFigureId } from '../../shared/dropFigureIds.ts';
+import { resolveDropInventoryManifest, type DropInventoryManifest } from '../../shared/dropInventoryManifest.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -16,6 +19,8 @@ type NewDropDeployConfig = {
   solanaCluster: SolanaCluster;
   solanaRpcUrl?: string;
   coreCollectionPubkey?: string;
+  grantCollectionUpdateDelegate?: boolean;
+  preserveCollectionMetadata?: boolean;
   reuseProgramId: boolean;
   reuseProgramIdFromDropId?: string;
 };
@@ -28,6 +33,7 @@ type NewDropOnchainConfigBase = {
   receiptPoolId?: string;
   // Accept either `https://...`, `ipfs://...`, or a raw IPFS CID like `bafy...`.
   metadataBase: string;
+  collectionMetadataUri?: string;
   mintSelection?: MintSelectionConfigSerialized;
   collectionMetadata?: {
     name: string;
@@ -41,7 +47,7 @@ type NewDropOnchainConfigBase = {
       share: number;
     }[];
   };
-  discountWhitelistCsvRelativePath: string;
+  discountWhitelistCsvRelativePath?: string;
   receiptsTree?: {
     maxDepth: number;
     maxBufferSize: number;
@@ -55,6 +61,8 @@ type NewDropOnchainConfigBase = {
   stripeProductTaxCode?: string;
   discountMintsPerWallet: number;
   maxSupply: number;
+  operationsConfig?: { configId: string; maxSupply: number };
+  inventoryManifest?: DropInventoryManifest;
   itemsPerBox: number;
   maxPerTx: number;
   namePrefix: string;
@@ -138,6 +146,21 @@ export type NewDropConfigInput =
 
 export const defineNewDropConfig = (config: NewDropConfigInput): NewDropConfig => {
   const { shared, deploy, onchain } = config;
+  resolveDropMaxFigureId(onchain);
+  resolveDropInventoryManifest(onchain);
+  if ((deploy.grantCollectionUpdateDelegate || deploy.preserveCollectionMetadata) && !deploy.coreCollectionPubkey) {
+    throw new Error('Collection preservation and delegate grants require an existing coreCollectionPubkey.');
+  }
+  if (onchain.operationsConfig) {
+    const operations = onchain.operationsConfig;
+    if (!deploy.reuseProgramId || !deploy.coreCollectionPubkey || onchain.itemsPerBox < 1 ||
+      onchain.receiptPoolId || onchain.mintSelection ||
+      normalizeAndValidateDropId(operations.configId, 'operations configId') !== operations.configId ||
+      operations.configId === onchain.dropId || !Number.isSafeInteger(operations.maxSupply) ||
+      operations.maxSupply < onchain.maxSupply) {
+      throw new Error('Separate operations require an existing program and collection, distinct config identity, and sufficient openable supply.');
+    }
+  }
   const hasTreasury = Object.prototype.hasOwnProperty.call(
     onchain,
     'treasury',

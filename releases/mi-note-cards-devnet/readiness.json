@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "recordedDate": "2026-10-09",
+  "dropId": "mi_note_cards_devnet",
+  "cluster": "devnet",
+  "status": "live_and_verified",
+  "onchain": {
+    "deploymentRecord": "deployment.json",
+    "status": "finalized",
+    "finalizedSlot": 509194528,
+    "mintStarted": true,
+    "operationsStarted": false,
+    "activationRecord": "activation.json",
+    "activationSignature": "5oMUVFjJD8aPVx5XRSjMvJCA3yJgaACLpEX7TGfhci3beujezhDauYeDtWmfAe1VpoHvwEMt27k96wPkkSMQQ93t",
+    "activationSlot": 509201368,
+    "mintedPacks": 1,
+    "remainingPacks": 703,
+    "operationsMinted": 0
+  },
+  "inventory": {
+    "manifest": "inventory.json",
+    "manifestSha256": "198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d",
+    "generation": "238fd2ea-b62b-454a-9a65-97968204d60c",
+    "preorderCardsExcluded": 22,
+    "eligibleCards": 1408,
+    "availableCards": 1406,
+    "assignedCards": 2,
+    "packCount": 704,
+    "initialized": true
+  },
+  "commerce": {
+    "appliedMigration": "0036_scoped_inventory_initialization.sql",
+    "inventoryMode": "rows",
+    "authorityState": "d1",
+    "authorityRevision": 23,
+    "documentsRevision": 1081,
+    "active": true,
+    "paused": false,
+    "audit": {
+      "command": "npm run check:commerce-d1 -- --for-deployment",
+      "status": "passed"
+    }
+  },
+  "pending": [],
+  "physicalFulfillment": {
+    "includedInRehearsal": false,
+    "customsDefaultsConfigured": false
+  },
+  "application": {
+    "publishedAt": "2026-10-09T13:56:03.014Z",
+    "api": {
+      "worker": "mons-shop-api",
+      "version": "4a1e94f7-2c75-487d-871e-419a94d666e8"
+    },
+    "frontend": {
+      "worker": "mons-shop",
+      "version": "20c782be-2340-45b9-b04d-1fe72d1fefb8",
+      "url": "https://mons.shop/mi_note_cards_devnet",
+      "indexSha256": "52cd1528e9cb76738e00deecc25fedea0dcba09d61089df741cb8be586346e55"
+    },
+    "publicationOrder": [
+      "api",
+      "frontend"
+    ],
+    "checks": {
+      "apiHealth": 200,
+      "inventoryMainnet": 200,
+      "inventoryIncludingDevnet": 200,
+      "browserErrors": 0,
+      "renderedSupply": 704,
+      "renderedPriceSol": 0.25,
+      "mainnetPage": "upcoming",
+      "renderedRemainingPacks": 703,
+      "postSmokeInventory": {
+        "status": 200,
+        "cards": 2,
+        "receipts": 3
+      }
+    }
+  },
+  "validation": {
+    "command": "npm run check",
+    "status": "passed",
+    "frontendWorkerTests": 4,
+    "apiTests": 2203,
+    "databaseRuntimeTests": 31,
+    "repositoryTests": 3151,
+    "rustTests": 35,
+    "exactDeployedBinaryGate": "passed",
+    "smokeRecoveryTests": 25,
+    "smokeRecoveryToolsTypecheck": "passed"
+  },
+  "smoke": {
+    "runId": "35421489-f216-41b3-b684-7b012b59a5f5",
+    "status": "passed",
+    "recordStatus": "recovered",
+    "record": "smoke/35421489-f216-41b3-b684-7b012b59a5f5.json",
+    "packId": 1,
+    "cardIds": [
+      897,
+      323
+    ],
+    "receiptCount": 3,
+    "preordersUnchanged": 22,
+    "buyerLamports": 0,
+    "verifiedAt": "2026-10-09T14:34:46.693Z",
+    "preflight": {
+      "checkedAt": "2026-10-09T14:13:35.298Z",
+      "command": "npm run smoke:mi-note-devnet -- --check",
+      "status": "passed",
+      "mint": {
+        "address": "8Cb6FqM1ymyULJZ6htwJAHH8n4pbMMqMz2yfDLLSicPY",
+        "started": true,
+        "minted": 0,
+        "supply": 704
+      },
+      "operations": {
+        "address": "FdHqdSLxUDenJki3eHXBVf6m49h5nnyM5jNreTHzUS6d",
+        "started": false,
+        "minted": 0
+      },
+      "preorders": {
+        "count": 22,
+        "sha256": "581a98de1421574b8ced17df0f8e81c175d963a9629bfb6dffe8917380118a2c"
+      },
+      "fundingLamports": 350000000,
+      "unsignedFundingSimulationUnits": 300
+    }
+  },
+  "verifiedAt": "2026-10-09T14:34:46.693Z",
+  "verificationRecord": "verification.json"
+}

@@ -1,3 +1,5 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import {
@@ -106,7 +108,7 @@ export function runtimeForDrop(rawDropId: string): DeliveryRuntime {
   if (!config) throw new DeliveryReceiptError('invalid-argument', `Unsupported dropId: ${dropId}`);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
-  const maxDudeId = itemsPerBox * maxSupply;
+  const maxDudeId = resolveDropMaxFigureId(config);
   if (
     !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
     !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
@@ -115,7 +117,7 @@ export function runtimeForDrop(rawDropId: string): DeliveryRuntime {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
   }
   const boxMinterProgramId = configuredPublicKey(config.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
-  const boxMinterConfigPda = configuredPublicKey(config.boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false);
+  const boxMinterConfigPda = configuredPublicKey(resolveDropConfigRole(config, 'operations').boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false);
   return {
     config,
     dropId,
@@ -230,7 +232,7 @@ function assertOnchainConfigMatchesRuntime(runtime: DeliveryRuntime, config: Dec
       collectionMint: runtime.collectionMint.toBase58(),
       itemsPerBox: runtime.itemsPerBox,
       maxSupply: runtime.maxSupply,
-    })
+    }, 'operations')
   ) {
     throw new DeliveryReceiptError('failed-precondition', 'Committed drop configuration does not match the on-chain config.');
   }
@@ -527,7 +529,7 @@ export async function sendAndConfirmSignedTransaction(
       });
     }
     const confirmed = await waitForSignature(connection, signature, signal, TX_CONFIRM_TIMEOUT_MS);
-    if (confirmed.ok) return signature;
+    if (confirmed.ok === true) return signature;
     const message = transactionErrorMessage(confirmed.error);
     throw new DeliveryReceiptError(
       /timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition',

@@ -7,6 +7,7 @@ import { createElement, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop, isDropFamily } from '../src/config/deployment.ts';
+import { hasDevnetInventoryAccess } from '../src/lib/fulfillmentAccess.ts';
 import { figureMetadataCacheKey, getFigureMetadataSnapshot, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 import type { InventoryItem, PendingOpenBox } from '../src/types.ts';
 import {
@@ -34,6 +35,58 @@ type Views = Parameters<typeof useShopInventoryMaintenance>[1];
 type ViewOptions = Parameters<typeof useShopInventoryView>[0];
 type SelectionOptions = Parameters<typeof useShopInventorySelection>[0];
 const clients: InstanceType<typeof QueryClient>[] = [];
+
+test('an ordinary wallet on a devnet route refreshes minted assets and recovers pending packs after reload', async (t) => {
+  const { registerRecentExpectedInventoryAssets } = await import('../src/lib/recentExpectedInventoryAssets.ts');
+  const walletKey = new PublicKey(new Uint8Array(32).fill(31));
+  const owner = walletKey.toBase58();
+  const packId = new PublicKey(new Uint8Array(32).fill(32)).toBase58();
+  assert.equal(hasDevnetInventoryAccess(owner), false);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  const calls: Array<{ path: string; body: { includeDevnet?: boolean; expectedAssetIds?: { devnet?: string[] } } }> = [];
+  let opening = false;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), window.location.href).pathname;
+    const body = JSON.parse(String(init?.body));
+    calls.push({ path, body });
+    const items = !body.includeDevnet ? [] : path.endsWith('/inventory')
+      ? opening ? [] : [{ id: packId, dropId: 'mi_note_cards_devnet', kind: 'box', name: 'Pack #704', boxId: '704' }]
+      : opening ? [{ dropId: 'mi_note_cards_devnet', pendingPda: new PublicKey(new Uint8Array(32).fill(33)).toBase58(),
+        boxAssetId: packId, dudeAssetIds: [34, 35].map(seed => new PublicKey(new Uint8Array(32).fill(seed)).toBase58()) }] : [];
+    return Response.json({ ok: true, items });
+  });
+  const wallet = {
+    autoConnect: false, wallets: [], wallet: null, publicKey: walletKey,
+    connecting: false, connected: true, disconnecting: false,
+    select: () => undefined, connect: async () => undefined, disconnect: async () => undefined,
+    sendTransaction: async () => '', signTransaction: undefined, signAllTransactions: undefined,
+    signMessage: undefined, signIn: undefined,
+  };
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client },
+    createElement(WalletContext.Provider, { value: wallet }, children));
+  const hook = ({ activeCluster }: { activeCluster: 'devnet' | 'mainnet-beta' }) =>
+    useShopInventoryQueries(owner, hasDevnetInventoryAccess(owner) || activeCluster === 'devnet', false);
+  const first = renderHook(hook, { initialProps: { activeCluster: 'devnet' }, wrapper });
+  await waitFor(() => assert.deepEqual(first.result.current.inventory.map(item => item.id), [packId]));
+  await waitFor(() => assert.equal(first.result.current.pendingOpenBoxesSuccess, true));
+  registerRecentExpectedInventoryAssets(owner, 'devnet', [packId]);
+  await act(async () => { await first.result.current.refreshInventoryAfterMint(); });
+  assert.ok(calls.some(call => call.path.endsWith('/inventory') && call.body.includeDevnet === true &&
+    call.body.expectedAssetIds?.devnet?.includes(packId)));
+  assert.ok(calls.some(call => call.path.endsWith('/pending-open-boxes') && call.body.includeDevnet === true));
+  opening = true;
+  first.unmount();
+  client.removeQueries();
+  const reloaded = renderHook(hook, { initialProps: { activeCluster: 'devnet' }, wrapper });
+  await waitFor(() => assert.deepEqual(reloaded.result.current.pendingOpenBoxes.map(item => item.boxAssetId), [packId]));
+  reloaded.rerender({ activeCluster: 'mainnet-beta' });
+  await waitFor(() => assert.equal(reloaded.result.current.pendingOpenBoxesSuccess, true));
+  assert.deepEqual(reloaded.result.current.pendingOpenBoxes, []);
+  assert.deepEqual(reloaded.result.current.inventory, []);
+  assert.ok(calls.some(call => call.path.endsWith('/inventory') && call.body.includeDevnet !== true));
+  assert.ok(calls.some(call => call.path.endsWith('/pending-open-boxes') && call.body.includeDevnet !== true));
+});
 
 afterEach(() => {
   cleanup();

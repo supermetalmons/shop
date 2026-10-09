@@ -49,6 +49,7 @@ import {
 } from '../scripts/shared/deploymentRegistry.ts';
 import { defineNewDropConfig } from '../scripts/shared/newDropConfig.ts';
 import { resolveDeploymentConfig } from '../scripts/startMint.ts';
+import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
 import { decodeBoxMinterConfigForPriceUpdate } from '../scripts/setMintPrices.ts';
 import {
   BOX_MINTER_CONFIG_TOMBSTONES,
@@ -268,6 +269,8 @@ const ALL_OPTIONAL_DEPLOYMENT_FIELD_VALUES = {
       | 'receiptMaxId'
       | 'treasury'
       | 'paymentRouting'
+      | 'operationsConfig'
+      | 'inventoryManifest'
     >
   >
 >;
@@ -2172,4 +2175,29 @@ test('set-mint-prices preserves its historical schema and discriminator errors',
       ),
     /Invalid box minter config discriminator/,
   );
+});
+
+
+test('two-config registry survives read-render-read with its immutable inventory', async () => {
+  const drop = { ...miNoteDropFixture(), maxSupply: 2,
+    inventoryManifest: { sha256: 'a'.repeat(64), cardIds: [3, 13, 1409, 1430] } };
+  const source = registrySource(`export const DEPLOYMENT_DROPS = ${JSON.stringify({ [drop.dropId]: drop })};`);
+  await withTempCanonical(source, async (filePath) => {
+    const first = await readDeploymentDropRegistry(filePath);
+    assert.deepEqual(first.drops[drop.dropId].operationsConfig, drop.operationsConfig);
+    assert.deepEqual(first.drops[drop.dropId].inventoryManifest, drop.inventoryManifest);
+    const rendered = renderDeploymentRegistryFileFromSource({
+      filePath, existingContent: first.sourceContent, drops: first.drops, tombstones: first.tombstones,
+    });
+    await writeFile(filePath, rendered);
+    const second = await readDeploymentDropRegistry(filePath);
+    assert.deepEqual(second.drops[drop.dropId], first.drops[drop.dropId]);
+    assert.deepEqual(second.drops[drop.dropId].inventoryManifest!.cardIds, [3, 13, 1409, 1430]);
+    const collision = { ...drop, dropId: drop.operationsConfig!.configId,
+      boxMinterConfigPda: drop.operationsConfig!.boxMinterConfigPda, operationsConfig: undefined, inventoryManifest: undefined };
+    await writeFile(filePath, registrySource(`export const DEPLOYMENT_DROPS = ${JSON.stringify({
+      [drop.dropId]: drop, [collision.dropId]: collision,
+    })};`));
+    await assert.rejects(readDeploymentDropRegistry(filePath), /config identity collision/);
+  });
 });

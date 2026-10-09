@@ -70,6 +70,9 @@ export async function runBootstrapCommerce(argv: string[], overrides: Partial<De
   const options = parseBootstrapCommerceArgs(argv);
   const dependencies: Dependencies = { query: queryRemoteCommerceD1, configs: inventoryDropConfigs(), uuid: () => crypto.randomUUID(), ...overrides };
   const { query, configs } = dependencies;
+  if (configs.some((config) => config.inventoryManifest)) {
+    throw new Error('Empty-database bootstrap cannot reconstruct frozen-manifest inventory. Restore authoritative Commerce state; use initialize-new only for a new unstarted drop with its verified preorder ledger.');
+  }
   checkCurrentCommerceSchema(query);
   requireEmptyPaused(query, options.expectedRevision);
   return withCommerceMaintenanceLease({ query, token: dependencies.uuid(),

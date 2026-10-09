@@ -94,10 +94,11 @@ generated captures and reports stay outside version control.
 
 ## Mi Note cards
 
-Preorders are closed on both Solana mainnet and devnet. `/mi_note_cards` and
-`/mi_note_cards_devnet` display the standard upcoming **Mi Note Cards** drop
-with the same pack showcase, **Soon**, and **Notify Me**. Each route keeps its
-own network and URL; their WIP routes remain separate.
+Preorders are closed on both Solana mainnet and devnet. `/mi_note_cards` retains
+the upcoming **Mi Note Cards** showcase, **Soon**, and **Notify Me**. The registered
+`/mi_note_cards_devnet` route uses the standard purchase flow for 704 two-card
+packs at 0.25 SOL with Stripe disabled. Each route keeps its own network and URL;
+their WIP routes remain separate.
 
 Metadata for the upcoming public `mi_note_cards` family drop is hosted at
 `https://cdn.lil.org/nft/mi_note_cards/json/pre/`: 1,430 cards, 627 two-card packs,

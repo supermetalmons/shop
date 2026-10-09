@@ -20,7 +20,10 @@ import {
   decodePendingOpenData,
   normalizePendingOpenDudeCount,
 } from './pendingOpenCodec.ts';
-import type { SolanaCluster } from './deploymentCore.ts';
+import { dropPathsFromBase, metadataBasesForDrop, type SolanaCluster } from './deploymentCore.ts';
+import { resolveDropConfigRole } from './dropConfigRoles.ts';
+import { resolveDropMaxFigureId } from './dropFigureIds.ts';
+import { dropAssetReference } from './dropLabels.ts';
 import { PREORDER_CONFIGS, preorderIdFromMetadataUri, preorderImageUrl } from './preorders.ts';
 import {
   SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
@@ -95,7 +98,7 @@ const SHOP_DROP_RUNTIMES: ShopDropRuntime[] = Object.values(DEPLOYMENT_DROPS)
     maxSupply: drop.maxSupply,
     receiptMaxId: drop.receiptMaxId,
     boxMinterProgramId: drop.boxMinterProgramId,
-    boxMinterConfigPda: typeof drop.boxMinterConfigPda === 'string' ? drop.boxMinterConfigPda.trim() || undefined : undefined,
+    boxMinterConfigPda: resolveDropConfigRole(drop, 'operations').boxMinterConfigPda?.trim() || undefined,
     itemsPerBox: drop.itemsPerBox,
   }))
   .sort((left, right) => left.dropId.localeCompare(right.dropId));
@@ -220,30 +223,68 @@ function resolveShopAssetDropId(asset: DasAsset, cluster?: SolanaCluster): strin
   return resolveInventoryAssetDropId(asset, collectionDropCandidates(collectionMint, cluster), cluster);
 }
 
+type CanonicalInventoryMetadata = {
+  drop: DeploymentRegistryDrop;
+  kind: 'box' | 'dude' | 'certificate';
+  referenceKind: 'box' | 'figure';
+  id: number;
+};
+
+function canonicalInventoryMetadata(uri: string, collection: string, cluster: SolanaCluster): CanonicalInventoryMetadata | null {
+  const matches: CanonicalInventoryMetadata[] = [];
+  for (const drop of Object.values(DEPLOYMENT_DROPS)) {
+    if (drop.solanaCluster !== cluster || drop.collectionMint !== collection || drop.receiptPoolId) continue;
+    for (const base of metadataBasesForDrop(drop.metadataBase, drop.metadataBaseAliases)) {
+      const paths = dropPathsFromBase(canonicalMetadataBase(base), drop.metadataPathFormat);
+      const prefixes = [
+        { prefix: paths.boxesJsonBase, kind: 'box', referenceKind: 'box', maxId: drop.maxSupply },
+        { prefix: paths.figuresJsonBase, kind: 'dude', referenceKind: 'figure', maxId: resolveDropMaxFigureId(drop) },
+        { prefix: paths.receiptsBoxesJsonBase, kind: 'certificate', referenceKind: 'box', maxId: drop.receiptMaxId ?? drop.maxSupply },
+        { prefix: paths.receiptsFiguresJsonBase, kind: 'certificate', referenceKind: 'figure', maxId: resolveDropMaxFigureId(drop) },
+      ] as const;
+      for (const candidate of prefixes) {
+        if (!uri.startsWith(candidate.prefix)) continue;
+        const suffix = uri.slice(candidate.prefix.length);
+        if (!/^[1-9]\d*\.json$/.test(suffix)) continue;
+        const id = Number(suffix.slice(0, -5));
+        if (!Number.isSafeInteger(id) || id > candidate.maxId) continue;
+        matches.push({ drop, kind: candidate.kind, referenceKind: candidate.referenceKind, id });
+      }
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function transformShopInventoryItem(asset: DasAsset, cluster?: SolanaCluster): ShopInventoryItem | null {
   if (dasAssetLooksBurntOrClosed(asset, BURN_POLICY)) return null;
   const collection = uniqueAssetGroupingCollectionMint(asset);
+  if (!cluster && PREORDER_CONFIGS.some((config) => config.enabled && config.collection === collection)) return null;
   const preorder = PREORDER_CONFIGS.find((config) =>
     config.enabled && config.cluster === cluster && config.collection === collection);
+  let canonical: CanonicalInventoryMetadata | null = null;
   if (preorder) {
     const preorderId = preorderIdFromMetadataUri(preorder, dasAssetMetadataUri(asset));
-    if (preorderId === null || asset.interface !== 'MplCoreAsset' || asset.burnt !== false || typeof asset.id !== 'string' || !asset.id) return null;
-    return {
-      id: asset.id,
-      dropId: preorder.preorderId,
-      name: `Preorder #${preorderId}`,
-      kind: 'preorder',
-      preorderId,
-      rawImage: preorderImageUrl(preorder, preorderId),
-    };
+    if (preorderId !== null) {
+      if (asset.interface !== 'MplCoreAsset' || asset.burnt !== false || typeof asset.id !== 'string' || !asset.id) return null;
+      return {
+        id: asset.id,
+        dropId: preorder.preorderId,
+        name: `Preorder #${preorderId}`,
+        kind: 'preorder',
+        preorderId,
+        rawImage: preorderImageUrl(preorder, preorderId),
+      };
+    }
+    canonical = canonicalInventoryMetadata(dasAssetMetadataUri(asset), preorder.collection, preorder.cluster);
+    if (!canonical) return null;
   }
-  const kind = dasAssetKind(asset, NAME_POLICY);
+  const kind = canonical?.kind ?? dasAssetKind(asset, NAME_POLICY);
   if (!kind) return null;
-  const dropId = resolveShopAssetDropId(asset, cluster);
+  const dropId = canonical?.drop.dropId ?? resolveShopAssetDropId(asset, cluster);
   if (!dropId || typeof asset.id !== 'string' || !asset.id) return null;
-  const boxId = dasAssetBoxId(asset, NAME_POLICY);
-  let dudeId = dasAssetDudeId(asset);
-  if (dudeId == null) {
+  const boxId = canonical ? canonical.referenceKind === 'box' ? String(canonical.id) : undefined : dasAssetBoxId(asset, NAME_POLICY);
+  let dudeId = canonical ? canonical.referenceKind === 'figure' ? canonical.id : undefined : dasAssetDudeId(asset);
+  if (!canonical && dudeId == null) {
     const match = dasAssetMetadataName(asset)?.match(/(?:figure|dude)\s*#?\s*(\d+)/i);
     const parsed = Number(match?.[1]);
     if (Number.isSafeInteger(parsed) && parsed > 0) dudeId = parsed;
@@ -261,7 +302,9 @@ export function transformShopInventoryItem(asset: DasAsset, cluster?: SolanaClus
     SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
   ) ? boxId : undefined;
   const name = truncateShopApiStringToUtf8Bytes(
-    dasAssetMetadataName(asset) || asset.id,
+    dasAssetMetadataName(asset) || (canonical
+      ? `${dropAssetReference(canonical.drop, canonical.referenceKind, `#${canonical.id}`)}${kind === 'certificate' ? ' Receipt' : ''}`
+      : asset.id),
     SHOP_INVENTORY_NAME_MAX_UTF8_BYTES,
   );
   return {

@@ -1151,6 +1151,15 @@ export async function buildRepoPlan(args: {
           treasury: registryDrop.treasury,
         };
     tombstonesNext[dropId] = tombstone;
+    if (registryDrop.operationsConfig) {
+      const operations = registryDrop.operationsConfig;
+      tombstonesNext[operations.configId] = {
+        ...tombstone,
+        dropId: operations.configId,
+        dropSeed: createHash('sha256').update(operations.configId, 'utf8').digest('hex'),
+        boxMinterConfigPda: operations.boxMinterConfigPda,
+      };
+    }
   }
   const registryNextContent = registryWillChange
     ? renderDeploymentRegistryFileFromSource({

@@ -1,3 +1,5 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import {
@@ -255,7 +257,7 @@ function buildRuntime(config: ApiDropConfig): IrlClaimRuntime {
   const dropId = normalizeDropId(config.dropId);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
-  const maxDudeId = maxSupply * itemsPerBox;
+  const maxDudeId = resolveDropMaxFigureId(config);
   if (
     itemsPerBox < BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX ||
     !Number.isInteger(maxSupply) || maxSupply < 1 ||
@@ -264,7 +266,7 @@ function buildRuntime(config: ApiDropConfig): IrlClaimRuntime {
     throw new IrlClaimError('failed-precondition', 'This drop does not use secret claim codes.');
   }
   const boxMinterProgramId = publicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = publicKey('BOX_MINTER_CONFIG_PDA', config.boxMinterConfigPda, false) ||
+  const boxMinterConfigPda = publicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
     PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
     config,
@@ -454,7 +456,7 @@ function validateOnchainConfig(runtime: IrlClaimRuntime, decoded: DecodedBoxMint
       ...runtime.config,
       collectionMint: runtime.collectionMint.toBase58(),
       itemsPerBox: runtime.itemsPerBox,
-    })
+    }, 'operations')
   ) {
     throw new IrlClaimError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,

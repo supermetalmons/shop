@@ -241,6 +241,7 @@ export async function assignDudes(
       dropId: runtime.dropId,
       itemsPerBox: runtime.itemsPerBox,
       maxDudeId: runtime.maxDudeId,
+      inventoryManifest: runtime.config.inventoryManifest,
       nowMs: context.nowMs,
       randomInt: dependencies.randomInt,
       repository,

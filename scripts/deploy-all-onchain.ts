@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { loadNewDropConfigById, newDropConfigUsage } from './shared/newDropLoader.ts';
 import type { NewDropOnchainConfig, SolanaCluster } from './shared/newDropConfig.ts';
 import { parsePrivateKeyInput, promptMaskedInput } from './shared/interactive.ts';
+import { resolveDeploymentDiscountAddresses } from './shared/deploymentDiscounts.ts';
 import {
   requireDiscountMerkleDatasetIdentity,
   validateDiscountMerkleFamilyRootInvariant,
@@ -1126,18 +1127,13 @@ export async function assertReceiptMetadataRange(args: {
   if (failed) throw firstError;
 }
 
-function prepareInitDropInputs(args: {
+export function prepareInitDropInputs(args: {
   root: string;
   dropCfg: NewDropOnchainConfig;
   dropMetadataBase: string;
 }): PreparedInitDropInputs {
-  const discountWhitelistCsvRelativePath = requireNonEmptyString(
-    args.dropCfg.discountWhitelistCsvRelativePath,
-    'NEW_DROP.onchain.discountWhitelistCsvRelativePath',
-  );
   const requiredDropMetadataBase = requireNonEmptyString(args.dropMetadataBase, 'NEW_DROP.onchain.metadataBase');
-  const discountCsvPath = path.join(args.root, discountWhitelistCsvRelativePath);
-  const discountAddresses = readDiscountList(discountCsvPath);
+  const discountAddresses = resolveDeploymentDiscountAddresses({ root: args.root, config: args.dropCfg });
   const discountMerkle = buildDiscountMerkleData(discountAddresses);
   return {
     requiredDropMetadataBase,
@@ -1151,19 +1147,6 @@ function writeTextFileIfChanged(filePath: string, content: string) {
   const prev = existsSync(filePath) ? readFileSync(filePath, 'utf8') : '';
   if (prev === next) return;
   writeFileSync(filePath, next, 'utf8');
-}
-
-function readDiscountList(filePath: string): string[] {
-  if (!existsSync(filePath)) {
-    throw new Error(`Missing discount whitelist CSV: ${filePath}`);
-  }
-  const raw = readFileSync(filePath, 'utf8');
-  const lines = raw
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const normalized = lines.map((addr) => new PublicKey(addr).toBase58());
-  return Array.from(new Set(normalized));
 }
 
 function sha256(data: Buffer): Buffer {
@@ -1210,7 +1193,7 @@ function buildMerkleProof(levels: Buffer[][], leafIndex: number): Buffer[] {
   return proof;
 }
 
-function buildDiscountMerkleData(addresses: string[]) {
+export function buildDiscountMerkleData(addresses: string[]) {
   const leaves = addresses
     .map((address) => ({ address, hash: hashLeafAddress(address) }))
     .sort((a, b) => Buffer.compare(a.hash, b.hash));
@@ -1733,7 +1716,7 @@ function mplCorePluginBubblegumV2(): Buffer {
   return u8(15);
 }
 
-function mplCorePluginUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
+export function mplCorePluginUpdateDelegate(additionalDelegates: PublicKey[]): Buffer {
   // Plugin::UpdateDelegate enum index = 4 (Royalties=0, FreezeDelegate=1, BurnDelegate=2, TransferDelegate=3, UpdateDelegate=4)
   // UpdateDelegate data: { additionalDelegates: Vec<Pubkey> }
   return Buffer.concat([u8(4), encodeUmiArray(additionalDelegates.map((k) => k.toBuffer()))]);
@@ -1882,7 +1865,7 @@ export function buildCreateMplCoreCollectionV2Ix(args: {
 
 // MPL-Core instructions used to keep collection-level royalties in sync.
 const IX_MPL_CORE_ADD_COLLECTION_PLUGIN_V1 = 3;
-const IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1 = 7;
+export const IX_MPL_CORE_UPDATE_COLLECTION_PLUGIN_V1 = 7;
 
 function buildUpdateMplCoreCollectionRoyaltiesV1Ix(args: {
   collection: PublicKey;
@@ -2356,6 +2339,7 @@ export function assertExistingConfigMatchesResume(args: {
   mintSelection?: MintSelectionConfigSerialized;
   mintProceeds?: MplCoreRoyaltyCreator[];
   dropSeed: Buffer;
+  allowStartedMint?: boolean;
 }): void {
   const decodedRaw = decodeBoxMinterConfigData(args.data, {
     validateDiscriminator: true,
@@ -2438,8 +2422,11 @@ export function assertExistingConfigMatchesResume(args: {
       ? ''
       : 'dropSeed',
     routingMatches ? '' : 'paymentRouting',
-    !decoded.started ? '' : 'started',
-    decoded.minted === 0 ? '' : 'minted',
+    !decoded.started || args.allowStartedMint ? '' : 'started',
+    (args.allowStartedMint
+      ? Number.isSafeInteger(decoded.minted) && decoded.minted >= 0 && decoded.minted <= args.maxSupply &&
+        (decoded.started || decoded.minted === 0)
+      : decoded.minted === 0) ? '' : 'minted',
   ].filter(Boolean);
   if (mismatches.length) {
     throw new Error(
@@ -3473,6 +3460,9 @@ async function main() {
   setActiveNewDropConfigPath(root, configPath);
   const deployCfg = newDropConfig.deploy;
   const dropCfg = newDropConfig.onchain;
+  if (dropCfg.operationsConfig) {
+    throw new Error(`Two-config drops use the existing program only. Run npm run deploy-two-config-drop -- ${requestedDropId} --manifest <inventory.json> to inspect, then add --write after review.`);
+  }
   const metadataPathFormat: MetadataPathFormat = 'compact';
   const cluster: SolanaCluster = deployCfg.solanaCluster;
   const dropId = normalizeAndValidateDropId(

@@ -1,3 +1,5 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { matchesCommittedDropConfig } from './committedDropConfig.js';
 import bs58 from 'bs58';
 import { z } from 'zod';
@@ -287,7 +289,7 @@ function buildRuntime(config: ApiDropConfig): DeliveryRuntime {
   const dropId = normalizeDropId(config.dropId);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
-  const maxDudeId = maxSupply * itemsPerBox;
+  const maxDudeId = resolveDropMaxFigureId(config);
   if (
     !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
     !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
@@ -296,7 +298,7 @@ function buildRuntime(config: ApiDropConfig): DeliveryRuntime {
     throw new DeliveryPrepareError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
   }
   const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', config.boxMinterConfigPda, false) ||
+  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
     PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
     config,
@@ -485,7 +487,7 @@ async function loadOnchainState(
       collectionMint: runtime.collectionMint.toBase58(),
       itemsPerBox: runtime.itemsPerBox,
       maxSupply: runtime.maxSupply,
-    })
+    }, 'operations')
   ) {
     throw new DeliveryPrepareError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,

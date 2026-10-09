@@ -30,6 +30,9 @@ import {
 import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
 import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
+import { getPreorderConfig } from '../shared/preorders.ts';
+import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
 
 const commerceMigrations = readCommerceMigrations();
 const latestMigrationError = {
@@ -38,6 +41,9 @@ const latestMigrationError = {
 const FIXTURE_NOW_SQL = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 const FIXTURE_TIME = '2026-01-01T00:00:00.000Z';
 const FIXTURE_GENERATION = '00000000-0000-4000-8000-000000000408';
+function fixtureAvailableDudes() {
+  return 1 + inventoryDropConfigs().reduce((count, config) => count + (config.inventoryManifest?.cardIds.length ?? 0), 0);
+}
 const CONTROL_TABLES = [
   'commerce_notification_outbox_control', 'commerce_stripe_checkout_state_control',
   'commerce_pack_status_outbox_control', 'commerce_delivery_recovery_control',
@@ -86,6 +92,26 @@ function seedInventory(database: DatabaseSync) {
     VALUES (?, ?, 0, ?, ?, ?, 1000)`);
   for (const config of configs) insert.run(config.dropId, FIXTURE_GENERATION, config.dropFamily, config.itemsPerBox, config.maxDudeId);
   database.prepare('INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position) VALUES (?, 1, 0)').run(configs[0].dropId);
+  for (const config of configs.filter((value) => value.inventoryManifest)) {
+    database.prepare(`INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position)
+      SELECT ?, value, key FROM json_each(?)`).run(config.dropId, JSON.stringify(config.inventoryManifest!.cardIds));
+    const names = ['commerce_inventory_initialization_insert_guard', 'commerce_inventory_initialization_apply'];
+    const triggers = names.map((name) => String(database.prepare('SELECT sql FROM sqlite_schema WHERE name = ?').get(name)!.sql));
+    for (const name of names) database.exec(`DROP TRIGGER ${name}`);
+    try {
+      const preorder = getPreorderConfig('mi_note_cards_devnet')!;
+      database.prepare(`INSERT INTO commerce_inventory_initializations (
+        drop_id, generation, lease_token, authority_revision, manifest_sha256, catalog_sha256, preorder_snapshot_sha256,
+        source_preorder_id, source_cluster, source_collection, drop_family, items_per_box, pack_count, max_dude_id,
+        excluded_card_ids_json, eligible_card_ids_json, created_at_ms, completed_at_ms
+      ) VALUES (?, ?, '00000000-0000-4000-8000-000000000407', 2, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, 1000, ${FIXTURE_NOW_SQL})`)
+        .run(config.dropId, FIXTURE_GENERATION, config.inventoryManifest!.sha256, '0'.repeat(64), '0'.repeat(64),
+          preorder.preorderId, preorder.cluster, preorder.collection, config.dropFamily, config.itemsPerBox,
+          config.inventoryManifest!.cardIds.length / config.itemsPerBox, config.maxDudeId, JSON.stringify(config.inventoryManifest!.cardIds));
+    } finally {
+      for (const trigger of triggers) database.exec(trigger);
+    }
+  }
   database.exec("UPDATE commerce_inventory_drops SET ready = 1; UPDATE commerce_authority_control SET dude_inventory_mode = 'rows'");
   return configs[0];
 }
@@ -279,7 +305,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       deliveryRecoveryStatePreparation: 'ready',
       deliveryRecoveryStateRows: 256,
       inventoryDrops: inventoryDropConfigs().length,
-      availableDudes: 1,
+      availableDudes: fixtureAvailableDudes(),
       authoritativeDocuments: 513,
       deliveryOwnerRevisions: 16,
       documentPathRevisions: 513,
@@ -662,7 +688,7 @@ test('Commerce D1 checker rejects uninitialized latest schema and accepts initia
       notificationOutboxFailures: [], stripeCheckoutStateMode: 'table', stripeCheckoutStatePreparation: 'ready',
       stripeCheckoutStateRows: 0, packStatusOutboxMode: 'table', packStatusOutboxPreparation: 'ready',
       packStatusOutboxRows: 0, deliveryRecoveryStateMode: 'table', deliveryRecoveryStatePreparation: 'ready',
-      deliveryRecoveryStateRows: 0, inventoryDrops: inventoryDropConfigs().length, availableDudes: 1,
+      deliveryRecoveryStateRows: 0, inventoryDrops: inventoryDropConfigs().length, availableDudes: fixtureAvailableDudes(),
       authoritativeDocuments: 0, deliveryOwnerRevisions: 0, documentPathRevisions: 0, kindCounts: {},
     });
   } finally { database.close(); }
@@ -826,6 +852,56 @@ test('Commerce D1 checker rejects legacy inventory for inspection and deployment
     assert.throws(() => checkCommerceD1(legacy), /requires initialized figure inventory/);
     assert.throws(() => checkCommerceD1(legacy, { forDeployment: true }), /requires initialized figure inventory/);
   } finally { database.close(); }
+});
+
+test('Commerce D1 deployment audit validates committed sparse manifests and a single inventory snapshot', () => {
+  const dropId = 'mi_note_sparse_audit_fixture';
+  DEPLOYMENT_DROPS[dropId] = {
+    ...miNoteDropFixture(), dropId, maxSupply: 2,
+    inventoryManifest: { sha256: 'a'.repeat(64), cardIds: [2, 3, 1401, 1430] },
+  };
+  const database = currentDatabase(false);
+  try {
+    const query = localQuery(database);
+    assert.equal(checkCommerceD1(query).inventoryDrops, inventoryDropConfigs().length);
+    for (const mutate of [
+      (row: Record<string, unknown>) => { row.manifest_sha256 = 'b'.repeat(64); },
+      (row: Record<string, unknown>) => { row.initialization_generation = 'wrong'; },
+      (row: Record<string, unknown>) => { row.completed_at_ms = null; },
+      (row: Record<string, unknown>) => { row.eligible_card_ids_json = '[1,3,1401,1430]'; },
+      (row: Record<string, unknown>) => { row.manifest_available_json = '[{"dudeId":2,"poolPosition":0}]'; },
+      (row: Record<string, unknown>) => { row.manifest_available_json = '[{"dudeId":1,"poolPosition":0},{"dudeId":3,"poolPosition":1},{"dudeId":1401,"poolPosition":2},{"dudeId":1430,"poolPosition":3}]'; },
+    ]) {
+      assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) => {
+        if (sql.startsWith('SELECT inventory.*') && row.drop_id === dropId) mutate(row);
+        return row;
+      })), /inventory manifest|exactly match/);
+    }
+    resumeDatabase(database);
+    let assignedAfterSnapshot = false;
+    const result = checkCommerceD1((sql) => {
+      const rows = query(sql);
+      if (!assignedAfterSnapshot && sql.startsWith('SELECT inventory.*')) {
+        assignedAfterSnapshot = true;
+        database.exec('BEGIN');
+        database.prepare(`INSERT INTO commerce_documents (
+          document_path, document_kind, drop_id, document_id, document_json, version, create_time, update_time
+        ) VALUES (?, 'dude_assignment', ?, '2', ?, 1, ?, ?)`).run(
+          `drops/${dropId}/dudeAssignments/2`, dropId,
+          JSON.stringify({ dudeId: 2, boxAssetId: 'assigned-after-audit-read', inventoryGeneration: FIXTURE_GENERATION }),
+          FIXTURE_TIME, FIXTURE_TIME,
+        );
+        database.exec('UPDATE commerce_authority_control SET documents_revision = documents_revision + 1, updated_at_ms = updated_at_ms + 1; COMMIT');
+      }
+      return rows;
+    });
+    assert.equal(assignedAfterSnapshot, true);
+    assert.equal(result.authorityState, 'd1');
+    assert.equal(checkCommerceD1(query).inventoryDrops, inventoryDropConfigs().length);
+  } finally {
+    database.close();
+    delete DEPLOYMENT_DROPS[dropId];
+  }
 });
 
 test('Commerce D1 checker rejects native mode with missing or unready inventory', () => {

@@ -226,6 +226,9 @@ export async function loadOnchainState(
     throw error;
   }
   const coreCollection = new PublicKey(decoded.coreCollection);
+  if (runtime.config.operationsConfig && !matchesCommittedDropConfig(decoded, runtime.config, 'operations')) {
+    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Committed operations configuration does not match the on-chain config.');
+  }
   if (!coreCollection.equals(runtime.collectionMint)) {
     throw new AdminIrlRedeemPrepareError('failed-precondition', 'COLLECTION_MINT does not match on-chain config', {
       configured: runtime.collectionMint.toBase58(),
@@ -316,3 +319,4 @@ export function parseProof(
     );
   }
 }
+import { matchesCommittedDropConfig } from './committedDropConfig.js';

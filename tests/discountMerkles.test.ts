@@ -7,6 +7,7 @@ import { PublicKey } from '@solana/web3.js';
 
 import { API_DROPS } from '../cloud/workers/api/src/dropConfig.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
+import { validateDiscountMerkleFamilyRootInvariant } from '../scripts/shared/discountMerkleDataset.ts';
 
 const DISCOUNT_MERKLE_DIR = path.resolve('src/drops/discountMerkles');
 const ROOT_RE = /^[0-9a-f]{64}$/;
@@ -43,7 +44,6 @@ test('discount merkle registries and datasets are canonical and complete', async
   );
 
   const rootByFamily = new Map<string, string>();
-  const familyByRoot = new Map<string, string>();
   for (const dropId of frontendDropIds) {
     const frontendDrop = FRONTEND_DROPS[dropId];
     const apiDrop = API_DROPS[dropId];
@@ -82,14 +82,10 @@ test('discount merkle registries and datasets are canonical and complete', async
       `drop family ${frontendDrop.dropFamily} must resolve to exactly one discount Merkle root`,
     );
     rootByFamily.set(frontendDrop.dropFamily, frontendDrop.discountMerkleRoot);
-
-    const existingFamily = familyByRoot.get(frontendDrop.discountMerkleRoot);
-    assert.ok(
-      !existingFamily || existingFamily === frontendDrop.dropFamily,
-      `discount Merkle root ${frontendDrop.discountMerkleRoot} must resolve to exactly one drop family`,
-    );
-    familyByRoot.set(frontendDrop.discountMerkleRoot, frontendDrop.dropFamily);
   }
+  validateDiscountMerkleFamilyRootInvariant(frontendDropIds.map(dropId => ({
+    dropFamily: FRONTEND_DROPS[dropId].dropFamily, rootHex: FRONTEND_DROPS[dropId].discountMerkleRoot, source: dropId,
+  })));
 
   const filenames = (await readdir(DISCOUNT_MERKLE_DIR))
     .filter((filename) => filename.toLowerCase().endsWith('.json'))
@@ -122,6 +118,9 @@ test('discount merkle registries and datasets are canonical and complete', async
     assert.equal(typeof dataset.proofs, 'object');
     assert.ok(dataset.proofs !== null);
     const proofs = dataset.proofs as Record<string, unknown>;
+    if (expectedRoot === sha256(PublicKey.default.toBuffer()).toString('hex')) {
+      assert.deepEqual(proofs, { [PublicKey.default.toBase58()]: [] }, `${filename} must contain only the disabled-discount sentinel`);
+    }
     assert.ok(
       Object.keys(proofs).length > 0,
       `discount Merkle dataset ${filename} must contain at least one proof`,

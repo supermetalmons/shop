@@ -14,6 +14,13 @@ const TEST_MINT_RECIPIENT_A = new PublicKey(new Uint8Array(32).fill(17)).toBase5
 const TEST_MINT_RECIPIENT_B = new PublicKey(new Uint8Array(32).fill(18)).toBase58();
 const TEST_TREASURY = new PublicKey(new Uint8Array(32).fill(19)).toBase58();
 
+test('new-drop templates default to equal prices without requiring a discount CSV', () => {
+  for (const template of [PACK_INPUT, VARIANTS_INPUT, RECEIPTS_INPUT]) {
+    assert.equal(template.onchain.discountPriceSol, template.onchain.priceSol);
+    assert.equal(Object.hasOwn(template.onchain, 'discountWhitelistCsvRelativePath'), false);
+  }
+});
+
 function customizedPackInput(): NewDropConfigInput {
   return {
     ...PACK_INPUT,

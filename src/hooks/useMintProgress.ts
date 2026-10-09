@@ -15,7 +15,8 @@ export function useMintProgress(
   dropConfig:
     | Pick<
         FrontendDeploymentConfig,
-        'dropId' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'maxPerTx' | 'mintSelection'
+        'dropId' | 'boxMinterProgramId' | 'boxMinterConfigPda' | 'maxPerTx' | 'mintSelection' |
+        'maxSupply' | 'itemsPerBox' | 'operationsConfig'
       >
     | null,
   enabled = true,

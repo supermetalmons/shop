@@ -22,6 +22,8 @@ import {
   assertStripeLivePriceConfigured,
   resolveStripeCheckoutEnabledForDropFamily,
 } from './stripeCheckoutCore.ts';
+import { resolveDropInventoryManifest, type DropInventoryManifest } from './dropInventoryManifest.ts';
+import type { DropOperationsConfig } from './dropConfigRoles.ts';
 
 export type DeploymentDropProjectionCore = {
   solanaCluster: SolanaCluster;
@@ -44,6 +46,8 @@ export type DeploymentDropProjectionCore = {
   discountMintsPerWallet: number;
   discountMerkleRoot: string;
   maxSupply: number;
+  operationsConfig?: DropOperationsConfig;
+  inventoryManifest?: DropInventoryManifest;
   receiptMaxId?: number;
   itemsPerBox: number;
   maxPerTx: number;
@@ -78,6 +82,7 @@ export function projectDeploymentDropCore(
   const displayName = normalizeOptionalString(config.displayName);
   const receiptPoolId = normalizeOptionalString(config.receiptPoolId);
   const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
+  const inventoryManifest = resolveDropInventoryManifest(config);
   const salesMode = normalizeDropSalesMode(config.salesMode);
   const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(
     config.stripeCheckoutEnabled,
@@ -113,6 +118,8 @@ export function projectDeploymentDropCore(
     ),
     discountMerkleRoot: config.discountMerkleRoot,
     maxSupply: config.maxSupply,
+    ...(config.operationsConfig ? { operationsConfig: { ...config.operationsConfig } } : {}),
+    ...(inventoryManifest ? { inventoryManifest } : {}),
     ...(config.receiptMaxId != null
       ? { receiptMaxId: config.receiptMaxId }
       : {}),

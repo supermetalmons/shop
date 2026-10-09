@@ -1119,7 +1119,16 @@ export async function inspectSharedProgramConfigs(args: {
         drop.solanaCluster === args.cluster &&
         drop.boxMinterProgramId === args.programId.toBase58(),
     )
-    .map((drop) => expectedActiveConfig(drop, args.programId));
+    .flatMap((drop) => [
+      expectedActiveConfig(drop, args.programId),
+      ...(drop.operationsConfig ? [expectedActiveConfig({
+        ...drop,
+        dropId: drop.operationsConfig.configId,
+        boxMinterConfigPda: drop.operationsConfig.boxMinterConfigPda,
+        maxSupply: drop.operationsConfig.maxSupply,
+        operationsConfig: undefined,
+      }, args.programId)] : []),
+    ]);
   const tombstones = Object.values(registry.tombstones)
     .filter(
       (tombstone) =>

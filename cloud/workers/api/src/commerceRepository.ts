@@ -1,4 +1,5 @@
 import { buildWalletDeliveryRecoveryState } from '../../../../shared/deliveryRecovery.js';
+import type { DropInventoryManifest } from '../../../../shared/dropInventoryManifest.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
 import { executeGuardedCommerceRead } from './commerceGuardedRead.js';
 import {
@@ -91,6 +92,7 @@ export class D1CommerceRepository {
     dropId: string;
     itemsPerBox: number;
     maxDudeId: number;
+    inventoryManifest?: DropInventoryManifest;
   }>): Promise<{ generation: string; pool: number[] }> {
     const results = await executeCommerceD1Batch(this.db, () => [
       this.db.prepare(`SELECT authority_state, dude_inventory_mode
@@ -105,6 +107,13 @@ export class D1CommerceRepository {
           AND authority.dude_inventory_mode = 'rows'
           AND inventory.drop_id = ? AND inventory.ready = 1
         ORDER BY available.pool_position`).bind(args.dropId),
+      ...(args.inventoryManifest ? [
+        this.db.prepare(`SELECT generation, manifest_sha256, eligible_card_ids_json, completed_at_ms
+          FROM commerce_inventory_initializations WHERE drop_id = ?`).bind(args.dropId),
+        this.db.prepare(`SELECT document_id, json_extract(document_json, '$.dudeId') AS dude_id,
+          json_extract(document_json, '$.inventoryGeneration') AS inventory_generation
+          FROM commerce_documents WHERE drop_id = ? AND document_kind = 'dude_assignment'`).bind(args.dropId),
+      ] : []),
     ], {
       invalidResult: unavailableCommerceData,
       mapBatchError: (error) => {
@@ -127,16 +136,42 @@ export class D1CommerceRepository {
       throw new CommerceRepositoryError('unavailable', 'Figure inventory is not initialized for this drop.');
     }
     let previousPosition = -1;
+    const eligible = args.inventoryManifest ? new Set(args.inventoryManifest.cardIds) : null;
+    const positions = args.inventoryManifest
+      ? new Map(args.inventoryManifest.cardIds.map((id, index) => [id, index]))
+      : null;
     const pool = availableResult.results.map((row) => {
       const id = row.dude_id;
       const position = row.pool_position;
       if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1 || id > args.maxDudeId ||
+        (eligible && !eligible.has(id)) ||
+        (positions && positions.get(id as number) !== position) ||
         typeof position !== 'number' || !Number.isSafeInteger(position) || position <= previousPosition) {
         throw unavailableCommerceData();
       }
       previousPosition = position;
       return id;
     });
+    if (args.inventoryManifest) {
+      const authorization = results[3]?.results[0];
+      const assignments = results[4]?.results;
+      if (results[3]?.results.length !== 1 || !authorization || !assignments ||
+        authorization.generation !== inventory.generation ||
+        authorization.manifest_sha256 !== args.inventoryManifest.sha256 ||
+        authorization.eligible_card_ids_json !== JSON.stringify(args.inventoryManifest.cardIds) ||
+        !Number.isSafeInteger(authorization.completed_at_ms) || Number(authorization.completed_at_ms) <= 0) {
+        throw unavailableCommerceData();
+      }
+      const accounted = new Set(pool);
+      for (const assignment of assignments) {
+        const id = assignment.dude_id;
+        if (typeof id !== 'number' || !Number.isSafeInteger(id) || !eligible!.has(id) ||
+          assignment.document_id !== String(id) || assignment.inventory_generation !== inventory.generation ||
+          accounted.has(id)) throw unavailableCommerceData();
+        accounted.add(id);
+      }
+      if (accounted.size !== args.inventoryManifest.cardIds.length) throw unavailableCommerceData();
+    }
     return { generation: inventory.generation, pool };
   }
 

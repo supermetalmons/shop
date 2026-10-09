@@ -178,7 +178,16 @@ function devnetFixtures(): ConfigFixture[] {
         drop.solanaCluster === 'devnet' &&
         drop.boxMinterProgramId === DEVNET_PROGRAM_ID.toBase58(),
     )
-    .map(activeFixture);
+    .flatMap((drop) => [
+      activeFixture(drop),
+      ...(drop.operationsConfig ? [activeFixture({
+        ...drop,
+        dropId: drop.operationsConfig.configId,
+        boxMinterConfigPda: drop.operationsConfig.boxMinterConfigPda,
+        maxSupply: drop.operationsConfig.maxSupply,
+        operationsConfig: undefined,
+      })] : []),
+    ]);
   const tombstones = Object.values(BOX_MINTER_CONFIG_TOMBSTONES)
     .filter(
       (tombstone) =>

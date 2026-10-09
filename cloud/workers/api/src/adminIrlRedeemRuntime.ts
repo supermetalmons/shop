@@ -1,3 +1,5 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { PublicKey } from '@solana/web3.js';
 import {
   BOX_MINTER_CONFIG_SEED,
@@ -47,7 +49,7 @@ export function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
   const maxSupply = Number(config.maxSupply);
   const itemsPerBox = Number(config.itemsPerBox);
   const receiptMaxId = Number(config.receiptMaxId ?? maxSupply);
-  const maxDudeId = maxSupply * itemsPerBox;
+  const maxDudeId = resolveDropMaxFigureId(config);
   const receiptsTreeMaxDepth = Number(config.receiptsTreeMaxDepth);
   const receiptsTreeCanopyDepth = Number(config.receiptsTreeCanopyDepth ?? 0);
   if (
@@ -61,7 +63,7 @@ export function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
     throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL redeem drop configuration is invalid.', { dropId });
   }
   const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', config.boxMinterConfigPda, false) ||
+  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
     PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
     config,

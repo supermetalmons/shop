@@ -4,6 +4,7 @@ import { MintPanel, type MintPanelBoxMedia } from '../../components/MintPanel';
 import { MiNotePackShowcasePreview } from '../../components/MiNotePackShowcasePreview';
 import type { PrimaryMediaControls } from '../../components/MediaWithFallback';
 import {
+  isDropFamily,
   type FrontendDeploymentConfig
 } from '../../config/deployment';
 import type { UpcomingDropRouteConfig } from '../../lib/dropConfig';
@@ -75,7 +76,7 @@ export function ShopPurchaseSection({
   routeStripePaymentPriceLabel,
   routeStripePaymentUnitAmountCents,
 }: ShopPurchaseSectionProps) {
-  const showMiNotePackShowcase = upcomingDropRoute?.dropFamily === 'mi_note_cards';
+  const showMiNotePackShowcase = upcomingDropRoute?.dropFamily === 'mi_note_cards' || isDropFamily(routeDrop || undefined, 'mi_note_cards');
   return (!routeDrop && upcomingDropRoute ? (
     <MintPanel
       mode="announcement"
@@ -104,6 +105,8 @@ export function ShopPurchaseSection({
       onError={showToast}
       title={routeDrop.displayName || routeDrop.collectionName}
       boxMedia={mintPreviewMedia}
+      renderPreviewPrimary={showMiNotePackShowcase ? renderMiNotePackShowcase : undefined}
+      previewPrimaryKey={showMiNotePackShowcase ? 'mi-note-cards-showcase' : undefined}
       boxNamePrefix={routeDrop.namePrefix}
       dropId={routeDrop.dropId}
       receiptPoolId={routeDrop.receiptPoolId}

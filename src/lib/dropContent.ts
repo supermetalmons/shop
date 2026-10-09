@@ -21,6 +21,7 @@ import {
   type DropRevealSoundProfile,
 } from '../config/dropsExtraContent.ts';
 import { cardNft2AssetUrl } from '../../shared/cardNft2Assets.ts';
+import { MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL } from '../config/dropMediaDefaults.ts';
 import { getMediaIdForFigureId } from './figureMediaMap.ts';
 import { isKnownCdnUrl, rewriteLegacyDisplayMediaUrl } from './legacyDisplayMediaPaths.ts';
 import { getMediaIdForTokenId } from '../../shared/mediaMap.ts';
@@ -499,6 +500,9 @@ export function mintPanelPreviewAspectRatio(dropId: string): number {
 export function normalizeFigureDisplayImage(dropId: string, imageRaw?: string, figureId?: number): string | undefined {
   if (isDropFamily(dropId, 'card_nft_2')) {
     return cardNft2AssetUrl('img', figureId) || cardNft2ImageUrlFromRawDisplayMediaUrl(imageRaw);
+  }
+  if (isDropFamily(dropId, 'mi_note_cards') && Number.isSafeInteger(figureId) && Number(figureId) >= 1 && Number(figureId) <= 1430) {
+    return joinDropAssetUrl(MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL, `${figureId}.png`);
   }
 
   const drop = getFrontendDrop(dropId);

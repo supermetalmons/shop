@@ -15,6 +15,15 @@ const CARD_NFT_2_PACK_MEDIA_VALUE = {
 export const CARD_NFT_2_PACK_RECEIPT_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 export const CARD_NFT_2_BOX_MEDIA = CARD_NFT_2_PACK_MEDIA_VALUE;
 
+const MI_NOTE_CARDS_CDN_BASE_URL = 'https://cdn.lil.org/nft/mi_note_cards';
+export const MI_NOTE_CARDS_CLEAN_IMAGE_BASE_URL = `${MI_NOTE_CARDS_CDN_BASE_URL}/clean`;
+export const MI_NOTE_CARDS_PACK_IMAGE_BASE_URL = `${MI_NOTE_CARDS_CDN_BASE_URL}/packs`;
+export const MI_NOTE_CARDS_PACK_PREVIEW_IMAGE_URL = `${MI_NOTE_CARDS_PACK_IMAGE_BASE_URL}/clean/1.webp`;
+export const MI_NOTE_CARDS_PACK_PREVIEW_ASPECT_RATIO = 1050 / 1400;
+export const MI_NOTE_CARDS_RECEIPT_IMAGE_BASE_URL = `${MI_NOTE_CARDS_CDN_BASE_URL}/receipts/cards`;
+export const MI_NOTE_CARDS_PACK_RECEIPT_IMAGE_BASE_URL = `${MI_NOTE_CARDS_CDN_BASE_URL}/receipts/packs`;
+export const MI_NOTE_CARDS_BOX_MEDIA = { strategy: 'cyclic' as const, count: 9 };
+
 export const CLEAR_CARDS_CDN_BASE_URL = 'https://cdn.lil.org/nft/clear_cards';
 export const CLEAR_CARDS_PACK_CLEAN_IMAGE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/pack_clean.webp`;
 export const CLEAR_CARDS_CARD_CLEAN_BASE_URL = `${CLEAR_CARDS_CDN_BASE_URL}/cards/clean`;
@@ -116,7 +125,7 @@ export function defaultFigureMediaConfigForDropFamily(
 export function defaultBoxMediaConfigForDropFamily(
   dropFamily: DropFamily,
 ): SharedMediaMapConfig | undefined {
-  return dropFamily === 'card_nft_2'
-    ? copyMediaMapConfig(CARD_NFT_2_BOX_MEDIA)
-    : undefined;
+  if (dropFamily === 'card_nft_2') return copyMediaMapConfig(CARD_NFT_2_BOX_MEDIA);
+  if (dropFamily === 'mi_note_cards') return copyMediaMapConfig(MI_NOTE_CARDS_BOX_MEDIA);
+  return undefined;
 }

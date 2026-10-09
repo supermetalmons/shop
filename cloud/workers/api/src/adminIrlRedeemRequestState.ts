@@ -602,16 +602,20 @@ export function workflowExecutionForReplay(
 }
 
 export function workflowExecutionData(execution: AdminIrlRedeemFinalizeWorkflowExecutionV1): CommerceDocumentData {
-  const { paymentRouting, ...config } = execution.config;
+  const { paymentRouting, inventoryManifest, ...config } = execution.config;
   return {
     ...execution,
-    config: paymentRouting ? {
-      ...execution.config,
-      paymentRouting: {
+    config: {
+      ...config,
+      ...(paymentRouting ? { paymentRouting: {
         ...paymentRouting,
         mintProceeds: [...paymentRouting.mintProceeds],
-      },
-    } : config,
+      } } : {}),
+      ...(inventoryManifest ? { inventoryManifest: {
+        sha256: inventoryManifest.sha256,
+        cardIds: [...inventoryManifest.cardIds],
+      } } : {}),
+    },
   };
 }
 

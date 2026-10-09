@@ -19,6 +19,7 @@ export type DiscountMerkleDatasetRemovalPlan = DiscountMerkleDatasetIdentity & {
 const CANONICAL_DROP_FAMILY_PATTERN = /^[a-z0-9]+(?:_[a-z0-9]+)*$/;
 const CANONICAL_MERKLE_ROOT_PATTERN = /^[0-9a-f]{64}$/;
 const DISCOUNT_MERKLE_DATASET_DIRECTORY = 'src/drops/discountMerkles';
+const DISABLED_DISCOUNT_MERKLE_ROOT = '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925';
 
 function referenceLabel(reference: DiscountMerkleDatasetReference, fallback: string): string {
   return reference.source ? `${fallback} (${reference.source})` : fallback;
@@ -67,7 +68,7 @@ export function validateDiscountMerkleFamilyRootInvariant(
       );
     }
     const existingFamily = familyByRoot.get(identity.rootHex);
-    if (existingFamily && existingFamily.dropFamily !== identity.dropFamily) {
+    if (existingFamily && existingFamily.dropFamily !== identity.dropFamily && identity.rootHex !== DISABLED_DISCOUNT_MERKLE_ROOT) {
       throw new Error(
         `Discount Merkle root ${identity.rootHex} maps to conflicting families: ` +
           `${existingFamily.dropFamily} (${existingFamily.label}) and ${identity.dropFamily} (${label}).`,
@@ -95,7 +96,7 @@ export function planCanonicalDiscountMerkleDatasetRemoval(args: {
     ...args.remaining,
   ]);
   const remainingRootReferences = args.remaining.filter(
-    (reference) => reference.rootHex === removedIdentity.rootHex,
+    (reference) => reference.dropFamily === removedIdentity.dropFamily && reference.rootHex === removedIdentity.rootHex,
   ).length;
   return {
     ...removedIdentity,

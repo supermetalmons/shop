@@ -1,3 +1,5 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { PublicKey } from '@solana/web3.js';
 import { normalizeDropId, type SolanaCluster } from '../../../../shared/deploymentCore.js';
 import { DEPLOYMENT_DROPS, type DeploymentRegistryDrop } from '../../../../shared/deploymentRegistry.js';
@@ -94,7 +96,7 @@ export function runtimeForDrop(rawDropId: string): RevealRuntime {
   if (!config) throw new RevealDudesError('invalid-argument', `Unsupported dropId: ${dropId}`);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
-  const maxDudeId = itemsPerBox * maxSupply;
+  const maxDudeId = resolveDropMaxFigureId(config);
   if (
     itemsPerBox < BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX ||
     !Number.isInteger(maxSupply) || maxSupply < 1 ||
@@ -103,7 +105,7 @@ export function runtimeForDrop(rawDropId: string): RevealRuntime {
     throw new RevealDudesError('failed-precondition', 'This drop does not support opening.');
   }
   const boxMinterProgramId = configuredPublicKey(config.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID')!;
-  const boxMinterConfigPda = configuredPublicKey(config.boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false) ||
+  const boxMinterConfigPda = configuredPublicKey(resolveDropConfigRole(config, 'operations').boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false) ||
     PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
     config,

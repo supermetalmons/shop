@@ -370,8 +370,8 @@ async function fetchInventory(
   context.metrics.expectedAssetIds = expectedGroups.reduce((total, group) => total + group.ids.length, 0);
   const scopes = listShopInventoryCollectionScopes(requestBody.includeDevnet === true);
   const optionalScopes = scopes.filter((scope) => scope.solanaCluster === 'devnet' &&
-    !Object.values(DEPLOYMENT_DROPS).some((drop) =>
-      drop.solanaCluster === scope.solanaCluster && drop.collectionMint === scope.collectionMint));
+    (requestBody.includeDevnet !== true || !Object.values(DEPLOYMENT_DROPS).some((drop) =>
+      drop.solanaCluster === scope.solanaCluster && drop.collectionMint === scope.collectionMint)));
   const requiredScopes = scopes.filter((scope) => !optionalScopes.includes(scope));
   const itemsById = await fetchInventoryCollections(context, requestBody.owner, requiredScopes);
   const indexedPreorders = new Set([...itemsById.values()].filter((item) => item.kind === 'preorder').map((item) => item.id));
@@ -402,6 +402,11 @@ async function fetchInventory(
     optionalScope.dispose();
   }
   if (optionalItems) {
+    if (requestBody.includeDevnet !== true) {
+      for (const [id, item] of optionalItems) {
+        if (item.kind !== 'preorder') optionalItems.delete(id);
+      }
+    }
     const combined = new Map([...itemsById, ...optionalItems]);
     if (combined.size <= SHOP_API_MAX_RESPONSE_ITEMS &&
       utf8ByteLength(JSON.stringify(inventoryResponse(requestBody, combined, []))) <= context.dependencies.inventoryMaxResponseBodyBytes) {
@@ -734,7 +739,7 @@ async function fetchPendingOpenBoxes(
 
 export async function handlePost(
   request: Request,
-  env: Env,
+  env: Pick<Env, 'HELIUS_API_KEY' | 'COMMERCE_DB' | 'PUBLIC_SHOP_RATE_LIMITER'>,
   pathname: '/inventory' | '/pending-open-boxes',
   dependencies: ShopInventoryDependencies,
   metrics: WorkerRequestMetrics,

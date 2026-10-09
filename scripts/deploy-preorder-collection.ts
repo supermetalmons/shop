@@ -25,6 +25,7 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import {
   buildCreateMplCoreCollectionV2Ix,
   decodeMplCoreCollectionBase,
@@ -135,6 +136,7 @@ async function validateHostedMetadata(config: PreparedPreorderCollectionConfig, 
 export function validatePreorderCollectionAccount(args: {
   config: PreparedPreorderCollectionConfig;
   account: AccountInfo<Buffer> | null;
+  collectionMint?: string;
 }): void {
   const { config, account } = args;
   if (!account || account.executable || !account.owner.equals(CORE_PROGRAM)) {
@@ -166,10 +168,17 @@ export function validatePreorderCollectionAccount(args: {
     )
   ) throw new Error('Preorder collection royalties mismatch');
   const delegates = decodeMplCoreCollectionUpdateDelegates(data);
+  const registered = DEPLOYMENT_DROPS[config.collectionId];
+  const allowedDelegates = new Set([config.authority]);
+  if (registered?.solanaCluster === config.solanaCluster && registered.collectionMint === args.collectionMint) {
+    if (registered.boxMinterConfigPda) allowedDelegates.add(registered.boxMinterConfigPda);
+    if (registered.operationsConfig) allowedDelegates.add(registered.operationsConfig.boxMinterConfigPda);
+  }
   if (
-    !delegates || delegates.authorityKind !== 2 || delegates.delegates.length !== 1 ||
-    !delegates.delegates[0].equals(new PublicKey(config.authority))
-  ) throw new Error('Preorder collection UpdateDelegate must be controlled by UpdateAuthority and delegate only to the deployer');
+    !delegates || delegates.authorityKind !== 2 || delegates.delegates.length !== allowedDelegates.size ||
+    new Set(delegates.delegates.map(delegate => delegate.toBase58())).size !== allowedDelegates.size ||
+    delegates.delegates.some(delegate => !allowedDelegates.has(delegate.toBase58()))
+  ) throw new Error('Preorder collection UpdateDelegate must be controlled by UpdateAuthority and contain only the deployer and registered drop delegates');
 }
 
 function syncDirectory(directory: string): void {
@@ -316,7 +325,7 @@ export async function runPreorderCollectionDeployment(
         commitment: 'finalized', minContextSlot: existing.finalizedSlot,
       });
       if (result.context.slot < existing.finalizedSlot) throw new Error('RPC returned stale collection state for the completed deployment');
-      validatePreorderCollectionAccount({ config, account: result.value });
+      validatePreorderCollectionAccount({ config, account: result.value, collectionMint: existing.collectionMint });
       if (journal) rmSync(journalPath);
       printDeployment(existing, recordPath, deps.log);
       return existing;
@@ -332,7 +341,7 @@ export async function runPreorderCollectionDeployment(
       });
       if (result.context.slot < epoch.absoluteSlot) throw new Error('RPC returned stale collection state; preserving preorder journal');
       if (result.value) {
-        validatePreorderCollectionAccount({ config, account: result.value });
+        validatePreorderCollectionAccount({ config, account: result.value, collectionMint: journal.collectionMint });
         const recovered: PreorderCollectionDeployment = {
           version: 1, config: configuration, collectionMint: journal.collectionMint,
           transactionSignature: journal.transactionSignature, deployedAt: journal.createdAt, finalizedSlot: result.context.slot,
@@ -400,6 +409,7 @@ export async function runPreorderCollectionDeployment(
     }
     validatePreorderCollectionAccount({
       config,
+      collectionMint: collection.publicKey.toBase58(),
       account: {
         ...simulatedAccount,
         data: Buffer.from(simulatedAccount.data[0], 'base64'),
@@ -440,7 +450,7 @@ export async function runPreorderCollectionDeployment(
         commitment: 'finalized', minContextSlot: confirmation.context.slot,
       });
       if (result.context.slot < confirmation.context.slot) throw new Error('RPC returned stale collection state after finalization');
-      validatePreorderCollectionAccount({ config, account: result.value });
+      validatePreorderCollectionAccount({ config, account: result.value, collectionMint: collection.publicKey.toBase58() });
       const deployment: PreorderCollectionDeployment = {
         version: 1, config: configuration, collectionMint: collection.publicKey.toBase58(), transactionSignature,
         deployedAt: nextJournal.createdAt, finalizedSlot: result.context.slot,

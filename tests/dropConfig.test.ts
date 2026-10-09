@@ -22,20 +22,26 @@ import {
 } from '../src/lib/dropConfig.ts';
 import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
-test('Mi Note mainnet and devnet use upcoming drops without a preorder gallery', () => {
-  for (const [path, cluster] of [
-    ['/mi_note_cards', 'mainnet-beta'],
-    ['/mi_note_cards_devnet', 'devnet'],
+test('Mi Note mainnet stays upcoming while devnet uses its registered drop without a preorder gallery', () => {
+  for (const [path, cluster, kind] of [
+    ['/mi_note_cards', 'mainnet-beta', 'upcoming'],
+    ['/mi_note_cards_devnet', 'devnet', 'drop'],
   ] as const) {
     for (const pathname of [path, `${path}/`]) {
       const route = resolveAppRoute({ pathname, search: '?from=drop', hash: '#preview' });
-      assert.equal(route.kind, 'upcoming');
+      assert.equal(route.kind, kind);
       assert.equal(route.path, path);
       assert.equal(route.shopPath, path);
       assert.equal(route.preorderId, null);
       assert.equal(route.walletCluster, cluster);
-      assert.equal(route.drop, null);
-      assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
+      if (kind === 'upcoming') {
+        assert.equal(route.drop, null);
+        assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
+      } else {
+        assert.equal(route.drop, FRONTEND_DROPS.mi_note_cards_devnet);
+        assert.equal(route.drop?.itemsPerBox, 2);
+        assert.equal(route.upcoming, null);
+      }
       assert.equal(route.replacementHref, null);
     }
   }
@@ -201,7 +207,7 @@ test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi
 
   assert.equal(resolveUpcomingDropRouteByPath('/mi_note_cards_devnet/wip'), null);
   assert.equal(resolveFrontendDropByPath('/mi_note_cards_devnet/wip'), null);
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'upcoming');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'drop');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).walletCluster, 'devnet');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards/wip' }).wipExperience, 'mi_note_cards');

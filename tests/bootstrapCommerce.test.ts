@@ -3,6 +3,7 @@ import test from 'node:test';
 import { parseBootstrapCommerceArgs, runBootstrapCommerce } from '../scripts/ops/bootstrapCommerce.ts';
 import { checkCommerceD1 } from '../scripts/ops/checkCommerceD1.ts';
 import { COMMERCE_STORAGE_CONTROLS } from '../scripts/shared/commerceStateControl.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import { bootstrapTestCommerce, commerceTestConfig, commerceTestLease, commerceTestNow,
   commerceTestQuery, createCurrentCommerceDatabase } from './helpers/commerceDatabase.ts';
 
@@ -21,7 +22,10 @@ test('bootstrap requires an explicit write and positive expected revision', () =
   }
 });
 
-test('fresh replay bootstraps registry inventory and passes current deployment checks while remaining paused', async (t) => {
+test('fresh replay bootstraps ordinary registry inventory and passes deployment checks while remaining paused', async (t) => {
+  const frozen = Object.entries(DEPLOYMENT_DROPS).filter(([, drop]) => drop.inventoryManifest);
+  for (const [id] of frozen) delete DEPLOYMENT_DROPS[id];
+  t.after(() => { for (const [id, drop] of frozen) DEPLOYMENT_DROPS[id] = drop; });
   const database = createCurrentCommerceDatabase(t);
   const query = commerceTestQuery(database);
   const before = query('SELECT * FROM commerce_authority_control');
@@ -43,6 +47,19 @@ test('fresh replay bootstraps registry inventory and passes current deployment c
   const initialized = snapshot(query);
   await runBootstrapCommerce(args, { query });
   assert.deepEqual(snapshot(query), initialized);
+});
+
+test('empty bootstrap rejects frozen-manifest inventory before any database mutation', async (t) => {
+  const database = createCurrentCommerceDatabase(t);
+  const query = commerceTestQuery(database);
+  const before = snapshot(query);
+  await assert.rejects(runBootstrapCommerce(args, {
+    query: (sql) => { assert.match(sql, /^(SELECT|PRAGMA)/); return query(sql); },
+    configs: [{ ...commerceTestConfig, dropFamily: 'mi_note_cards', itemsPerBox: 2, maxDudeId: 1430,
+      inventoryManifest: { sha256: 'a'.repeat(64), cardIds: [2, 3, 1401, 1430] } }],
+  }), /cannot reconstruct frozen-manifest inventory/);
+  assert.deepEqual(snapshot(query), before);
+  assert.equal(query('SELECT COUNT(*) AS count FROM commerce_authority_control_lease')[0].count, 0);
 });
 
 test('bootstrap rejects stale schema, missing drain and wrong authority revision before writes', async (t) => {

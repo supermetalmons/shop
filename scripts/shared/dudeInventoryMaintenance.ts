@@ -1,22 +1,28 @@
 import { DEPLOYMENT_DROPS } from '../../shared/deploymentRegistry.ts';
+import { resolveDropMaxFigureId } from '../../shared/dropFigureIds.ts';
+import { resolveDropInventoryManifest, type DropInventoryManifest } from '../../shared/dropInventoryManifest.ts';
 import { COMMERCE_D1_NOW_MS_SQL, sqlString, type CommerceAuthorityQuery, type CommerceD1Document } from './commerceD1Maintenance.ts';
+import { parseMiNoteDropManifest, type MiNoteDropManifest } from './miNoteDropManifest.ts';
 
 export type InventoryDropConfig = {
   dropId: string;
   dropFamily: string;
   itemsPerBox: number;
   maxDudeId: number;
+  inventoryManifest?: DropInventoryManifest;
 };
 
 export function inventoryDropConfigs(): InventoryDropConfig[] {
   return Object.entries(DEPLOYMENT_DROPS).flatMap(([dropId, drop]) => {
     if (drop.itemsPerBox === 0) return [];
-    const maxDudeId = drop.itemsPerBox * drop.maxSupply;
+    const maxDudeId = resolveDropMaxFigureId(drop);
+    const inventoryManifest = resolveDropInventoryManifest(drop);
     if (!Number.isSafeInteger(drop.itemsPerBox) || drop.itemsPerBox < 1 ||
       !Number.isSafeInteger(maxDudeId) || maxDudeId < drop.itemsPerBox || maxDudeId > 0xffff) {
       throw new Error(`Invalid figure inventory configuration for ${dropId}.`);
     }
-    return [{ dropId, dropFamily: drop.dropFamily, itemsPerBox: drop.itemsPerBox, maxDudeId }];
+    return [{ dropId, dropFamily: drop.dropFamily, itemsPerBox: drop.itemsPerBox, maxDudeId,
+      ...(inventoryManifest ? { inventoryManifest } : {}) }];
   }).sort((left, right) => left.dropId.localeCompare(right.dropId));
 }
 
@@ -27,6 +33,7 @@ export function validateInventoryOwnership(
   const rows = documents.filter((document) => document.dropId === config.dropId);
   const assignments = new Map<number, string>();
   const boxes = new Map<string, number[]>();
+  const eligible = config.inventoryManifest ? new Set(config.inventoryManifest.cardIds) : undefined;
   const invalid = (detail: string): never => {
     throw new Error(`Inventory ownership conflict for ${config.dropId}: ${detail}`);
   };
@@ -34,19 +41,24 @@ export function validateInventoryOwnership(
     if (document.kind === 'dude_assignment') {
       const id = Number(document.documentId);
       const box = document.data.boxAssetId;
-      if (!Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId ||
+      if (!Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId || eligible && !eligible.has(id) ||
         String(id) !== document.documentId || Number(document.data.dudeId) !== id ||
+        eligible && typeof document.data.dudeId !== 'number' ||
         typeof box !== 'string' || !box.trim() || assignments.has(id)) {
         invalid(`invalid figure marker ${document.path}.`);
       }
       assignments.set(id, box as string);
     }
     if (document.kind === 'box_assignment') {
+      if (eligible && (!Array.isArray(document.data.dudeIds) ||
+        document.data.dudeIds.some((id) => typeof id !== 'number' || !Number.isSafeInteger(id)))) {
+        invalid(`invalid box assignment ${document.path}.`);
+      }
       const ids = Array.isArray(document.data.dudeIds)
         ? document.data.dudeIds.map((id) => Math.floor(Number(id)))
         : [];
       if (ids.length !== config.itemsPerBox || new Set(ids).size !== ids.length ||
-        ids.some((id) => !Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId)) {
+        ids.some((id) => !Number.isSafeInteger(id) || id < 1 || id > config.maxDudeId || eligible && !eligible.has(id))) {
         invalid(`invalid box assignment ${document.path}.`);
       }
       boxes.set(document.documentId, ids);
@@ -88,10 +100,82 @@ export function requireInventoryConfig(row: Record<string, unknown> | undefined,
 
 export async function requireInitialInventory(query: CommerceAuthorityQuery, config: InventoryDropConfig, complete: boolean): Promise<void> {
   const rows = await readAvailableInventory(query, config.dropId);
+  const ids = initialInventoryIds(config);
   if (rows.some((row) => !Number.isSafeInteger(row.dudeId) || row.dudeId < 1 || row.dudeId > config.maxDudeId ||
-    row.poolPosition !== row.dudeId - 1) || (complete && rows.length !== config.maxDudeId)) {
+    ids[row.poolPosition] !== row.dudeId) || (complete && rows.length !== ids.length)) {
     throw new Error(`Initial inventory differs from the configured full range for ${config.dropId}.`);
   }
+}
+
+function initialInventoryIds(config: InventoryDropConfig): readonly number[] {
+  return config.inventoryManifest?.cardIds ?? Array.from({ length: config.maxDudeId }, (_, index) => index + 1);
+}
+
+export function validateManifestInventory(
+  config: InventoryDropConfig, available: readonly { dudeId: number; poolPosition: number }[], assigned: ReadonlySet<number>,
+): void {
+  if (!config.inventoryManifest) return;
+  const expected = config.inventoryManifest.cardIds;
+  const eligible = new Set(expected);
+  const all = new Set(assigned);
+  if ([...assigned].some((id) => !eligible.has(id)) || available.some((row) => {
+    if (expected[row.poolPosition] !== row.dudeId || all.has(row.dudeId)) return true;
+    all.add(row.dudeId);
+    return false;
+  }) || all.size !== expected.length) {
+    throw new Error(`Available and assigned cards do not exactly match the inventory manifest for ${config.dropId}.`);
+  }
+}
+
+export async function initializeNewInventoryDrop(args: {
+  query: CommerceAuthorityQuery;
+  config: InventoryDropConfig;
+  manifest: MiNoteDropManifest;
+  authorityRevision: number;
+  leaseToken: string;
+  generation: string;
+}): Promise<void> {
+  const { query, config, manifest } = args;
+  parseMiNoteDropManifest(manifest);
+  if (!config.inventoryManifest || config.inventoryManifest.sha256 !== manifest.sha256 ||
+    JSON.stringify(config.inventoryManifest.cardIds) !== JSON.stringify(manifest.eligibleCardIds) ||
+    config.dropFamily !== manifest.dropFamily || config.itemsPerBox !== manifest.itemsPerPack || config.maxDudeId !== manifest.maxFigureId) {
+    throw new Error('New inventory configuration does not match the reviewed manifest.');
+  }
+  const verify = async () => {
+    const record = (await query(`SELECT generation, manifest_sha256, eligible_card_ids_json, completed_at_ms
+      FROM commerce_inventory_initializations WHERE drop_id = ${sqlString(config.dropId)}`))[0];
+    const metadata = await readInventoryDrop(query, config.dropId);
+    if (!record || record.manifest_sha256 !== manifest.sha256 || record.completed_at_ms === null ||
+      record.eligible_card_ids_json !== JSON.stringify(manifest.eligibleCardIds) || metadata?.generation !== record.generation || metadata.ready !== 1) {
+      throw new Error('Online inventory initialization did not complete with the expected manifest.');
+    }
+    requireInventoryConfig(metadata, config);
+  };
+  if (await readInventoryDrop(query, config.dropId)) {
+    await verify();
+    return;
+  }
+  try {
+    const result = await query(`INSERT INTO commerce_inventory_initializations (
+      drop_id, generation, lease_token, authority_revision, manifest_sha256, catalog_sha256,
+      preorder_snapshot_sha256, source_preorder_id, source_cluster, source_collection,
+      drop_family, items_per_box, pack_count, max_dude_id, excluded_card_ids_json, eligible_card_ids_json,
+      created_at_ms, completed_at_ms
+    ) VALUES (
+      ${sqlString(config.dropId)}, ${sqlString(args.generation)}, ${sqlString(args.leaseToken)}, ${args.authorityRevision},
+      ${sqlString(manifest.sha256)}, ${sqlString(manifest.catalogSha256)}, ${sqlString(manifest.preorderSnapshotSha256)},
+      ${sqlString(manifest.sourcePreorder.preorderId)}, ${sqlString(manifest.sourcePreorder.cluster)}, ${sqlString(manifest.sourcePreorder.collection)},
+      ${sqlString(config.dropFamily)}, ${config.itemsPerBox}, ${manifest.packCount}, ${config.maxDudeId},
+      ${sqlString(JSON.stringify(manifest.excludedCardIds))}, ${sqlString(JSON.stringify(manifest.eligibleCardIds))},
+      ${COMMERCE_D1_NOW_MS_SQL}, NULL
+    ) RETURNING drop_id`);
+    if (result.length !== 1 || result[0].drop_id !== config.dropId) throw new Error('New inventory initialization was not confirmed.');
+  } catch (error) {
+    const existing = await readInventoryDrop(query, config.dropId);
+    if (!existing || existing.generation !== args.generation) throw error;
+  }
+  await verify();
 }
 
 export async function initializeInventoryDrop(args: {
@@ -99,6 +183,9 @@ export async function initializeInventoryDrop(args: {
   uuid: () => string; renew: () => Promise<void>;
 }): Promise<void> {
   const { query, config, guard } = args;
+  if (config.inventoryManifest) {
+    throw new Error('Frozen-manifest inventory requires initialize-new with its verified preorder ledger; paused range initialization cannot reconstruct it.');
+  }
   let existing = await readInventoryDrop(query, config.dropId);
   if (existing) {
     requireInventoryConfig(existing, config);
@@ -121,11 +208,12 @@ export async function initializeInventoryDrop(args: {
     existing = await readInventoryDrop(query, config.dropId);
     requireInventoryConfig(existing, config);
   }
-  for (let offset = 0; offset < config.maxDudeId; offset += 1000) {
+  const initialIds = initialInventoryIds(config);
+  for (let offset = 0; offset < initialIds.length; offset += 1000) {
     await args.renew();
-    const ids = Array.from({ length: Math.min(1000, config.maxDudeId - offset) }, (_, index) => offset + index + 1);
+    const ids = initialIds.slice(offset, offset + 1000);
     const insert = `INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position)
-      SELECT ${sqlString(config.dropId)}, value, value - 1 FROM json_each(${sqlString(JSON.stringify(ids))})
+      SELECT ${sqlString(config.dropId)}, value, key + ${offset} FROM json_each(${sqlString(JSON.stringify(ids))})
       WHERE ${guard} AND NOT EXISTS (SELECT 1 FROM commerce_available_dudes
         WHERE drop_id = ${sqlString(config.dropId)} AND dude_id = value) RETURNING dude_id`;
     try { await query(insert); } catch (error) {

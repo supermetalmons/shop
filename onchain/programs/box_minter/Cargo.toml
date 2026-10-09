@@ -43,6 +43,11 @@ name = "split_payments_sbf"
 path = "tests/split_payments_sbf.rs"
 required-features = ["sbf-tests"]
 
+[[test]]
+name = "two_config_existing_programs"
+path = "tests/two_config_existing_programs.rs"
+required-features = ["sbf-tests"]
+
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0

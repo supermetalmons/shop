@@ -1,3 +1,6 @@
+import { resolveDropConfigRole } from '../../../../shared/dropConfigRoles.js';
+import { matchesCommittedDropConfig } from './committedDropConfig.js';
+import { resolveDropMaxFigureId } from '../../../../shared/dropFigureIds.js';
 import { z } from 'zod';
 import {
   type AddressLookupTableAccount,
@@ -236,7 +239,7 @@ function buildRuntime(config: ApiDropConfig): ReceiptTransferRuntime {
   const maxSupply = Number(config.maxSupply);
   const itemsPerBox = Number(config.itemsPerBox);
   const receiptMaxId = Number(config.receiptMaxId ?? maxSupply);
-  const maxDudeId = maxSupply * itemsPerBox;
+  const maxDudeId = resolveDropMaxFigureId(config);
   const receiptsTreeMaxDepth = Number(config.receiptsTreeMaxDepth);
   const receiptsTreeCanopyDepth = Number(config.receiptsTreeCanopyDepth ?? 0);
   if (
@@ -250,7 +253,7 @@ function buildRuntime(config: ApiDropConfig): ReceiptTransferRuntime {
     throw new ReceiptTransferError('failed-precondition', 'Receipt transfer drop configuration is invalid.', { dropId });
   }
   const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', config.boxMinterConfigPda, false) ||
+  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', resolveDropConfigRole(config, 'operations').boxMinterConfigPda, false) ||
     PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
   return {
     config,
@@ -445,6 +448,9 @@ async function loadOnchainState(
     throw error;
   }
   const coreCollection = new PublicKey(decoded.coreCollection);
+  if (runtime.config.operationsConfig && !matchesCommittedDropConfig(decoded, runtime.config, 'operations')) {
+    throw new ReceiptTransferError('failed-precondition', 'Committed operations configuration does not match the on-chain config.');
+  }
   if (!coreCollection.equals(runtime.collectionMint)) {
     throw new ReceiptTransferError('failed-precondition', 'COLLECTION_MINT does not match on-chain config', {
       configured: runtime.collectionMint.toBase58(),

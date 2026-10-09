@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  Connection,
   PublicKey,
-  type Connection,
   type VersionedTransaction,
 } from '@solana/web3.js';
 import {
@@ -13,8 +13,11 @@ import {
   buildMintDiscountedBoxTxWithAccounts,
   buildMintDiscountedVariantBoxTxWithAccounts,
   buildMintVariantBoxTxWithAccounts,
+  buildStartOpenBoxTxWithPending,
   decodeBoxMinterConfigAccount,
   discountMintRecordPda,
+  fetchBoxMinterConfig,
+  fetchMintStatsFromProgram,
   type BoxMinterConfigAccount,
 } from '../src/lib/boxMinter.ts';
 import {
@@ -58,6 +61,7 @@ function u32Tuple(values: [number, number, number]): Buffer {
 function encodeConfigAccount(
   dropSeed?: Uint8Array,
   uriBase = `https://assets.example.com/drops/${'x'.repeat(63)}`,
+  overrides: { maxSupply?: number; itemsPerBox?: number; standard?: boolean; started?: boolean; minted?: number } = {},
 ): Buffer {
   const maxLenName = 'hoodie01';
   const maxLenSymbol = 'monsshop10';
@@ -69,21 +73,21 @@ function encodeConfigAccount(
     u64LE(1_000_000n),
     u64LE(500_000n),
     Buffer.alloc(32, 9),
-    u32LE(34),
+    u32LE(overrides.maxSupply ?? 34),
     Buffer.from([15]),
-    Buffer.from([0]),
-    u32LE(7),
+    Buffer.from([overrides.itemsPerBox ?? 0]),
+    u32LE(overrides.minted ?? 7),
     borshString(maxLenName),
     borshString(maxLenSymbol),
     borshString(uriBase),
-    Buffer.from([1]),
+    Buffer.from([Number(overrides.started ?? true)]),
     Buffer.from([254]),
     Buffer.from([2]),
     borshString('figure'),
-    Buffer.from([1]),
-    u32Tuple([1, 16, 31]),
-    u32Tuple([15, 30, 34]),
-    u32Tuple([1, 16, 31]),
+    Buffer.from([overrides.standard ? 0 : 1]),
+    u32Tuple(overrides.standard ? [0, 0, 0] : [1, 16, 31]),
+    u32Tuple(overrides.standard ? [0, 0, 0] : [15, 30, 34]),
+    u32Tuple(overrides.standard ? [0, 0, 0] : [1, 16, 31]),
     ...(dropSeed ? [Buffer.from(dropSeed)] : []),
   ]);
 }
@@ -224,6 +228,65 @@ test('decodeBoxMinterConfigAccount handles legacy and v2 schemas', () => {
   );
   assert.deepEqual(Array.from(v2.dropSeed || []), Array.from(dropSeed));
   assert.equal(v2.paymentRouting.schema, 'legacy');
+});
+
+test('two-config drops fetch mint statistics from A and build initial openings with B', async (t) => {
+  const programId = pubkey(20);
+  const mintPda = pubkey(21);
+  const operationsPda = pubkey(22);
+  const payer = pubkey(23);
+  const drop = {
+    dropId: 'mi_note_cards_devnet', boxMinterProgramId: programId.toBase58(),
+    boxMinterConfigPda: mintPda.toBase58(), collectionMint: pubkey(3).toBase58(),
+    metadataBase: 'https://cdn.lil.org/nft/mi_note_cards/json/pre', treasury: pubkey(2).toBase58(),
+    maxSupply: 704, itemsPerBox: 2, maxPerTx: 15,
+    operationsConfig: { configId: 'mi_note_cards_devnet_operations', boxMinterConfigPda: operationsPda.toBase58(), maxSupply: 715 },
+  };
+  const data = (maxSupply: number, itemsPerBox: number, started = itemsPerBox === 0, minted = itemsPerBox === 0 ? 7 : 0) => padToAccountSize(
+    encodeConfigAccount(new Uint8Array(32).fill(7), drop.metadataBase, { maxSupply, itemsPerBox, standard: true, started, minted }),
+    BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+  );
+  const mintData = data(704, 0);
+  const operationsData = data(715, 2);
+  const connection = new Connection('https://rpc.example.com');
+  const read = t.mock.method(connection, 'getAccountInfo', async (address) => ({
+    data: address.equals(mintPda) ? mintData : operationsData,
+    owner: programId, executable: false, lamports: 1, rentEpoch: 0,
+  }));
+  t.mock.method(connection, 'getLatestBlockhash', async () => ({ blockhash: pubkey(50).toBase58(), lastValidBlockHeight: 100 }));
+
+  const stats = await fetchMintStatsFromProgram(connection, drop);
+  assert.equal(stats.total, 704);
+  assert.equal(stats.minted, 7);
+  assert.equal(read.mock.calls[0].arguments[0].toBase58(), mintPda.toBase58());
+  const mintConfig = await fetchBoxMinterConfig(connection, drop);
+  assert.equal(mintConfig.itemsPerBox, 0);
+  const mint = await buildMintBoxesTxWithAccounts(connection, mintConfig, payer, 1, drop);
+  assert.equal(programInstructionAccounts(mint.tx, programId)[0].toBase58(), mintPda.toBase58());
+  await assert.rejects(buildStartOpenBoxTxWithPending(connection, mintConfig, payer, pubkey(24), drop), /does not support opening/);
+
+  const operationsConfig = await fetchBoxMinterConfig(connection, drop, 'operations');
+  assert.equal(operationsConfig.itemsPerBox, 2);
+  assert.equal(operationsConfig.maxSupply, 715);
+  const opened = await buildStartOpenBoxTxWithPending(connection, operationsConfig, payer, pubkey(24), drop);
+  const accounts = programInstructionAccounts(opened.tx, programId);
+  assert.equal(accounts[0].toBase58(), operationsPda.toBase58());
+  assert.equal(accounts.length, 11);
+
+  t.mock.method(connection, 'getAccountInfo', async () => ({
+    data: mintData, owner: programId, executable: false, lamports: 1, rentEpoch: 0,
+  }));
+  await assert.rejects(fetchBoxMinterConfig(connection, drop, 'operations'), /on-chain supply/);
+  t.mock.method(connection, 'getAccountInfo', async () => ({
+    data: data(715, 0), owner: programId, executable: false, lamports: 1, rentEpoch: 0,
+  }));
+  await assert.rejects(fetchBoxMinterConfig(connection, drop, 'operations'), /on-chain items per pack/);
+  for (const [started, minted] of [[true, 0], [false, 1]] as const) {
+    t.mock.method(connection, 'getAccountInfo', async () => ({
+      data: data(715, 2, started, minted), owner: programId, executable: false, lamports: 1, rentEpoch: 0,
+    }));
+    await assert.rejects(fetchBoxMinterConfig(connection, drop, 'operations'), /must remain unstarted and unminted/);
+  }
 });
 
 test('decodeBoxMinterConfigAccount decodes exact split-payments-v1 routing', () => {

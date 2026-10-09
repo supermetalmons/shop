@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "status": "passed",
+  "checkedAt": "2026-10-09T14:34:46.693Z",
+  "dropId": "mi_note_cards_devnet",
+  "cluster": "devnet",
+  "runId": "35421489-f216-41b3-b684-7b012b59a5f5",
+  "smokeRecord": "smoke/35421489-f216-41b3-b684-7b012b59a5f5.json",
+  "smokeRecordStatus": "recovered",
+  "smokeRecordSha256": "1d90f06e9bf0c476faf100420f9ce2d61f92cdcc15b4b20eb95faa9fbf1dab4e",
+  "chainVerificationSlot": 509209645,
+  "inventoryVerificationSlot": 509209204,
+  "programId": "8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6",
+  "collection": "65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv",
+  "mint": {
+    "config": "8Cb6FqM1ymyULJZ6htwJAHH8n4pbMMqMz2yfDLLSicPY",
+    "started": true,
+    "minted": 1,
+    "maxSupply": 704,
+    "itemsPerBox": 0
+  },
+  "operations": {
+    "config": "FdHqdSLxUDenJki3eHXBVf6m49h5nnyM5jNreTHzUS6d",
+    "started": false,
+    "minted": 0,
+    "maxSupply": 715,
+    "itemsPerBox": 2
+  },
+  "pack": {
+    "address": "NjWp4bEPFCFMqYjvwbL7AbTwudkVzTNUcVScP4AeRy8",
+    "pending": "HDR4ZM1G1GerZLK4o2XRgipuWV9RkNJoSTzS4EwAHdvw",
+    "cards": [
+      "58w48CZm3oBrsdCKCtsVJkbgBX4aZG3pWN2jNKPmfmFx",
+      "4AGwSmgv3rR6Q3B3tZxDovXHAvfx6AYEq478DDuPXbAr"
+    ],
+    "id": 1,
+    "burned": true,
+    "burnedAccountDataBytes": 1
+  },
+  "reveal": {
+    "signature": "4AKhMEHQEuQEg2QP7drFLXVN6KAGyL1pchBCH5PzE7Kgxu4XhBjJML7ije2HNVMdn4YnbC3AxrAupdnbqqDyniQA",
+    "ids": [
+      897,
+      323
+    ]
+  },
+  "receipts": {
+    "signature": "ALGMhNNTCyYht8ACMQA5zzunkCSehTMVSgmociMqqzNZCoaWfwihWYTP59ySYHPMiuYARKxvLurC7dfsSdDr7Jr",
+    "tree": "FLHhgXrEEwDWvVkFHPK22cNL3DcZHq1GGxuvkoS2V1rG",
+    "uris": [
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rb1.json",
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rf897.json",
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rf323.json"
+    ],
+    "recipient": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "count": 3,
+    "bubblegumCpiMetadataVerified": true,
+    "ownerAndDelegate": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+  },
+  "transactions": [
+    {
+      "label": "fund buyer",
+      "signature": "364sawanFM1XCxaUbai8f4diBxXZLPUakv9XtQYKBeSbrtb5do3bzq1wKNcYzNsxNw7Dc3ge2XFB5TGs5sigq2DT",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "mint A pack",
+      "signature": "2PhVC7CYFYL1PUBhUGf4xhFMdQn5fYnD6PDeGVssS7thgSYiWnPfb5w1jpV9obqpTnGSNv9sgkzHDidFNjaSoPM1",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "start open B",
+      "signature": "2PPBCtUKSJSJboQYak8sYKWWds38azbFEQhRi8F7QwnmpTPMUiL5ZF16kXfT3MXkFQo4TyaGu5s6Fs2rrRzjbLFZ",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "deliver and close B",
+      "signature": "4EyDQAdmMrqZnFVzEjhAEb3EMwM1mideAcMSXjxxLu2Dcr11Xwg15Qmx3RKF3YKEPGhcaDJso51hXuZrVqbVorz4",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "mint B receipts",
+      "signature": "ALGMhNNTCyYht8ACMQA5zzunkCSehTMVSgmociMqqzNZCoaWfwihWYTP59ySYHPMiuYARKxvLurC7dfsSdDr7Jr",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "refund buyer SOL",
+      "signature": "AYteettHS67N46F5QTQ93d3pgDnSYFz99zQBtC1kpMJ2eBzwhZj9Hji1qEG9rvFpRiSi5Am6KWwFrgX4eDdU82M",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "API reveal",
+      "signature": "4AKhMEHQEuQEg2QP7drFLXVN6KAGyL1pchBCH5PzE7Kgxu4XhBjJML7ije2HNVMdn4YnbC3AxrAupdnbqqDyniQA",
+      "commitment": "finalized",
+      "error": null
+    },
+    {
+      "label": "activate A",
+      "signature": "5oMUVFjJD8aPVx5XRSjMvJCA3yJgaACLpEX7TGfhci3beujezhDauYeDtWmfAe1VpoHvwEMt27k96wPkkSMQQ93t",
+      "commitment": "finalized",
+      "error": null
+    }
+  ],
+  "inventory": {
+    "generation": "238fd2ea-b62b-454a-9a65-97968204d60c",
+    "eligible": 1408,
+    "available": 1406,
+    "assigned": 2,
+    "orphanAssignments": 0,
+    "excludedPreorders": 22,
+    "excludedIdsAbsentFromPublicInventory": true,
+    "boxAsset": "NjWp4bEPFCFMqYjvwbL7AbTwudkVzTNUcVScP4AeRy8",
+    "assignedCardIds": [
+      897,
+      323
+    ]
+  },
+  "commerce": {
+    "active": true,
+    "paused": false,
+    "authorityRevision": 23,
+    "documentsRevision": 1081
+  },
+  "preorders": {
+    "count": 22,
+    "sha256": "581a98de1421574b8ced17df0f8e81c175d963a9629bfb6dffe8917380118a2c"
+  },
+  "cleanup": {
+    "buyerLamports": 0,
+    "buyerOwnedAssets": [],
+    "unexpectedOwners": [],
+    "pendingOpen": false,
+    "deliveryRecordAbsent": true,
+    "cardsOwnedByAuthority": true
+  },
+  "shippingOrderCreated": false,
+  "mainnetMutations": false,
+  "programUpgrades": false,
+  "publicInventory": {
+    "verifiedAt": "2026-10-09T14:36:52.314Z",
+    "status": 200,
+    "cards": [
+      {
+        "id": 897,
+        "address": "58w48CZm3oBrsdCKCtsVJkbgBX4aZG3pWN2jNKPmfmFx"
+      },
+      {
+        "id": 323,
+        "address": "4AGwSmgv3rR6Q3B3tZxDovXHAvfx6AYEq478DDuPXbAr"
+      }
+    ],
+    "receipts": [
+      {
+        "kind": "pack",
+        "id": 1,
+        "address": "Fwjg35UiLwAM8xgraM8YKTD27FEsNbnbLyvo2McL4GkT"
+      },
+      {
+        "kind": "card",
+        "id": 897,
+        "address": "2SkHK9AhkxtKwR5JbzJGKEoz2SCs83iShDkYpg1poWAZ"
+      },
+      {
+        "kind": "card",
+        "id": 323,
+        "address": "62GAb3ZovbPLRqAzz3WPXEQBxGBf12VBaKVkXGDsLN9g"
+      }
+    ]
+  }
+}

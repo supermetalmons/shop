@@ -75,9 +75,10 @@ test('pageshow restores the current route while irrelevant URL changes retain it
     window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true }));
   });
   const current = view.result.current;
-  assert.equal(current.kind, 'upcoming');
+  assert.equal(current.kind, 'drop');
   assert.equal(current.preorderId, null);
-  assert.equal(current.upcoming?.dropFamily, 'mi_note_cards');
+  assert.equal(current.drop?.dropId, 'mi_note_cards_devnet');
+  assert.equal(current.upcoming, null);
   assert.equal(current.walletCluster, 'devnet');
 
   act(() => {
@@ -87,18 +88,24 @@ test('pageshow restores the current route while irrelevant URL changes retain it
   assert.equal(view.result.current, current);
 });
 
-for (const [path, cluster] of [
-  ['/mi_note_cards', 'mainnet-beta'],
-  ['/mi_note_cards_devnet', 'devnet'],
+for (const [path, cluster, kind] of [
+  ['/mi_note_cards', 'mainnet-beta', 'upcoming'],
+  ['/mi_note_cards_devnet', 'devnet', 'drop'],
 ] as const) {
-  test(`${path} loads and remounts as an upcoming drop without replacing its URL`, () => {
+  test(`${path} loads and remounts as ${kind} without replacing its URL`, () => {
     const href = `https://mons.shop${path}/?from=drop#preview`;
     window.history.replaceState({ retained: true }, '', href);
     for (let load = 0; load < 2; load += 1) {
       const view = renderHook(useAppRoute);
-      assert.equal(view.result.current.kind, 'upcoming');
+      assert.equal(view.result.current.kind, kind);
       assert.equal(view.result.current.preorderId, null);
-      assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+      if (kind === 'upcoming') {
+        assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+        assert.equal(view.result.current.drop, null);
+      } else {
+        assert.equal(view.result.current.drop?.dropId, 'mi_note_cards_devnet');
+        assert.equal(view.result.current.upcoming, null);
+      }
       assert.equal(view.result.current.walletCluster, cluster);
       assert.equal(window.location.href, href);
       assert.deepEqual(window.history.state, { retained: true });
@@ -107,7 +114,7 @@ for (const [path, cluster] of [
   });
 }
 
-test('custom navigation and browser history switch between the Mi Note upcoming networks', async () => {
+test('custom navigation and browser history switch between upcoming mainnet and registered devnet', async () => {
   const view = renderHook(useAppRoute);
   act(() => navigate('/mi_note_cards'));
   assert.equal(view.result.current.kind, 'upcoming');
@@ -115,9 +122,10 @@ test('custom navigation and browser history switch between the Mi Note upcoming 
   assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
   act(() => navigate('/mi_note_cards_devnet'));
-  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.kind, 'drop');
   assert.equal(view.result.current.preorderId, null);
-  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+  assert.equal(view.result.current.drop?.dropId, 'mi_note_cards_devnet');
+  assert.equal(view.result.current.upcoming, null);
   assert.equal(view.result.current.walletCluster, 'devnet');
 
   await act(async () => {
@@ -135,9 +143,10 @@ test('custom navigation and browser history switch between the Mi Note upcoming 
     window.history.forward();
     await navigated;
   });
-  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.kind, 'drop');
   assert.equal(view.result.current.preorderId, null);
-  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+  assert.equal(view.result.current.drop?.dropId, 'mi_note_cards_devnet');
+  assert.equal(view.result.current.upcoming, null);
   assert.equal(view.result.current.walletCluster, 'devnet');
 });
 

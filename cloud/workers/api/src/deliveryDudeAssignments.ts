@@ -8,7 +8,7 @@ import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.
 import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
 
 type DeliveryAssignmentRuntime = Pick<DeliveryRuntime, 'dropId' | 'itemsPerBox' | 'maxDudeId'> & {
-  config: Pick<DeliveryRuntime['config'], 'dropFamily'>;
+  config: Pick<DeliveryRuntime['config'], 'dropFamily' | 'inventoryManifest'>;
 };
 
 export async function assignDudesForBox(
@@ -24,6 +24,7 @@ export async function assignDudesForBox(
       dropId: runtime.dropId,
       itemsPerBox: runtime.itemsPerBox,
       maxDudeId: runtime.maxDudeId,
+      inventoryManifest: runtime.config.inventoryManifest,
       nowMs: context.nowMs,
       randomInt,
       repository: context.repository,

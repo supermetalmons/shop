@@ -1,3 +1,4 @@
+import { resolveDropMaxFigureId } from '../../shared/dropFigureIds';
 import type {
   AdminIrlRedeemFinalizeResult,
   AdminIrlRedeemPreparedTxResponse,
@@ -77,7 +78,7 @@ export function parseRevealDudesResponse(
     !Array.isArray(value.dudeIds) ||
     value.dudeIds.length !== drop.itemsPerBox
   ) return null;
-  const maxDudeId = drop.maxSupply * drop.itemsPerBox;
+  const maxDudeId = resolveDropMaxFigureId(drop);
   const dudeIds: number[] = [];
   for (const id of value.dudeIds) {
     if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1 || id > maxDudeId) return null;
@@ -453,7 +454,7 @@ export function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaim
     !response.certificates.every((id) =>
       Number.isSafeInteger(id) &&
       Number(id) > 0 &&
-      Number(id) <= drop.maxSupply * drop.itemsPerBox
+      Number(id) <= resolveDropMaxFigureId(drop)
     ) ||
     new Set(response.certificates).size !== response.certificates.length ||
     typeof response.certificateId !== 'string' ||

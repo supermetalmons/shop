@@ -4220,7 +4220,7 @@ test('public inventory includes preorder assets and excludes other devnet collec
   assert.deepEqual(body.items.map((item) => [item.id, item.kind, item.preorderId]), [[source.id, 'preorder', 167]]);
 });
 
-test('failed devnet preorder queries preserve ordinary inventory for public and devnet-enabled requests', async () => {
+test('devnet failures preserve public mainnet inventory and surface when devnet is explicitly requested', async () => {
   const preorder = getPreorderConfig('mi_note_cards_devnet')!;
   for (const includeDevnet of [false, true]) {
     let failedCalls = 0;
@@ -4235,9 +4235,13 @@ test('failed devnet preorder queries preserve ordinary inventory for public and 
         ? [cardAsset('mainnet-during-devnet-outage', 1)] : []);
     };
     const response = await handleRequest(request('/inventory', { owner: OWNER, includeDevnet }), env(), quietDependencies(providerFetch));
-    assert.equal(response.status, 200);
-    assert.deepEqual((await response.json() as { items: { id: string }[] }).items.map((item) => item.id),
-      [assetId('mainnet-during-devnet-outage')]);
+    if (includeDevnet) {
+      assert.equal(response.status, 502);
+    } else {
+      assert.equal(response.status, 200);
+      assert.deepEqual((await response.json() as { items: { id: string }[] }).items.map((item) => item.id),
+        [assetId('mainnet-during-devnet-outage')]);
+    }
     assert.equal(failedCalls, 4);
   }
 });

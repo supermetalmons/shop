@@ -104,7 +104,8 @@ function App({ route, suspended = false }: AppProps) {
   const { owner, localAccountWallet, isViewerMode, isSignedInWallet } = account;
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const queries = useShopInventoryQueries(owner, account.includeDevnetInventory, isViewerMode);
+  const includeDevnetInventory = account.includeDevnetInventory || route.drop?.solanaCluster === 'devnet';
+  const queries = useShopInventoryQueries(owner, includeDevnetInventory, isViewerMode);
   const stripeCheckoutInventoryRefreshPending = useStripeCheckoutInventoryRecovery({
     recoveredProfile: stripeRecovery.recoveredProfile,
     owner,

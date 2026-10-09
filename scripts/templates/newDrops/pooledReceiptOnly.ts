@@ -14,7 +14,6 @@ export const NEW_DROP_INPUT = {
     salesMode: 'stripe_receipt_only',
     receiptPoolId: 'REPLACE_RECEIPT_POOL_ID',
     metadataBase: 'https://example.com/replace_receipts/json',
-    discountWhitelistCsvRelativePath: 'scripts/discounts/REPLACE_WHITELIST.csv',
     treasury: 'REPLACE_TREASURY',
     priceSol: 1_000_000,
     discountPriceSol: 1_000_000,

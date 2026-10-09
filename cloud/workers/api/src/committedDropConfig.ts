@@ -2,10 +2,11 @@ import bs58 from 'bs58';
 import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.js';
 import { boxMinterMetadataBaseMatchesDrop } from '../../../../shared/deploymentCore.js';
 import type { DeploymentDropProjectionCore } from '../../../../shared/deploymentProjection.js';
+import type { DropConfigRole } from '../../../../shared/dropConfigRoles.js';
 
 export type CommittedDropConfig = Pick<DeploymentDropProjectionCore,
   'collectionMint' | 'itemsPerBox' | 'maxSupply' | 'discountMintsPerWallet' |
-  'metadataBase' | 'metadataBaseAliases' | 'treasury' | 'paymentRouting'>;
+  'metadataBase' | 'metadataBaseAliases' | 'treasury' | 'paymentRouting' | 'operationsConfig'>;
 
 function paymentRoutingMatches(decoded: DecodedBoxMinterConfigData, expected: CommittedDropConfig): boolean {
   const routing = decoded.paymentRouting;
@@ -22,10 +23,18 @@ function paymentRoutingMatches(decoded: DecodedBoxMinterConfigData, expected: Co
   });
 }
 
-export function matchesCommittedDropConfig(decoded: DecodedBoxMinterConfigData, expected: CommittedDropConfig): boolean {
+export function matchesCommittedDropConfig(
+  decoded: DecodedBoxMinterConfigData,
+  expected: CommittedDropConfig,
+  role: DropConfigRole = 'mint',
+): boolean {
+  const operations = expected.operationsConfig;
+  const itemsPerBox = operations && role === 'mint' ? 0 : expected.itemsPerBox;
+  const maxSupply = operations && role === 'operations' ? operations.maxSupply : expected.maxSupply;
   return bs58.encode(decoded.coreCollection) === expected.collectionMint &&
-    decoded.itemsPerBox === expected.itemsPerBox &&
-    decoded.maxSupply === expected.maxSupply &&
+    decoded.itemsPerBox === itemsPerBox &&
+    decoded.maxSupply === maxSupply &&
+    (!operations || role !== 'operations' || (!decoded.started && decoded.minted === 0)) &&
     decoded.discountMintsPerWallet === expected.discountMintsPerWallet &&
     boxMinterMetadataBaseMatchesDrop(decoded.uriBase, expected.metadataBase, expected.metadataBaseAliases) &&
     bs58.encode(decoded.treasury) === expected.treasury &&

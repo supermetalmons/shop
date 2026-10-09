@@ -13,6 +13,7 @@ import {
   runCommerceTransaction,
   type CommerceRetrySleep,
 } from './commerceTransactions.js';
+import type { DropInventoryManifest } from '../../../../shared/dropInventoryManifest.js';
 
 export type CommerceDudeAssignmentResult = {
   dudeIds: number[];
@@ -83,6 +84,7 @@ export function assignCommerceDudes(args: {
   dropId: string;
   itemsPerBox: number;
   maxDudeId: number;
+  inventoryManifest?: DropInventoryManifest;
   nowMs: number;
   randomInt: (maxExclusive: number) => number;
   repository: D1CommerceRepository;
@@ -97,6 +99,12 @@ export function assignCommerceDudes(args: {
   }, async (transaction) => {
     const existing = await transaction.get(assignmentKey);
     if (existing) {
+      if (args.inventoryManifest && (!Array.isArray(existing.data.dudeIds) ||
+        existing.data.dudeIds.some((id) => typeof id !== 'number' || !args.inventoryManifest!.cardIds.includes(id)))) {
+        throw new CommerceDudeAssignmentError('invalid-stored-assignment', 'Stored assignment is outside the approved inventory.', {
+          boxAssetId: args.boxAssetId,
+        });
+      }
       return {
         dudeIds: normalizeCommerceDudeIds(
           existing.data.dudeIds,

@@ -11,6 +11,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { PublicKey } from '@solana/web3.js';
+import { resolveDropMaxFigureId } from '../../shared/dropFigureIds.ts';
+import { resolveDropInventoryManifest } from '../../shared/dropInventoryManifest.ts';
 import ts from 'typescript';
 import {
   defaultBoxMediaConfigForDropFamily,
@@ -329,12 +331,14 @@ type DeploymentDropNormalizationOptions = {
   forceSoldOutFallback?: (dropId: string) => boolean;
 };
 
-function normalizeDeploymentDropForRegistry(
+export function normalizeDeploymentDropForRegistry(
   raw: unknown,
   options: DeploymentDropNormalizationOptions = {},
 ): DeploymentDropConfigSerialized | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const object = raw as Record<string, unknown>;
+  const operationsConfig = object.operationsConfig as DeploymentRegistryDrop['operationsConfig'];
+  const inventoryManifest = object.inventoryManifest as DeploymentRegistryDrop['inventoryManifest'];
   const dropId = normalizeDropId(asTrimmedString(object.dropId));
   if (!dropId) return undefined;
   const dropFamily = normalizeDropFamily(object.dropFamily, dropId);
@@ -435,6 +439,8 @@ function normalizeDeploymentDropForRegistry(
     ),
     discountMerkleRoot: asTrimmedString(object.discountMerkleRoot),
     maxSupply: Math.floor(asFiniteNumber(object.maxSupply)),
+    ...(operationsConfig ? { operationsConfig: { ...operationsConfig } } : {}),
+    ...(inventoryManifest ? { inventoryManifest: { ...inventoryManifest, cardIds: [...inventoryManifest.cardIds] } } : {}),
     ...(Number.isInteger(object.receiptMaxId)
       ? {
           receiptMaxId: Math.floor(
@@ -553,7 +559,7 @@ function assertValidReceiptPoolDeployment(args: {
       `Invalid receipt pool deployment ${args.registryKey}: ${reason}: ${args.filePath}`,
     );
   };
-  if (!isPlainRecord(args.value)) invalid('expected an object');
+  if (!isPlainRecord(args.value)) return invalid('expected an object');
   const row = args.value;
   const allowed = new Set([
     'solanaCluster',
@@ -580,7 +586,7 @@ function assertValidReceiptPoolDeployment(args: {
   const requireString = (field: string): string => {
     const value = row[field];
     if (typeof value !== 'string' || !value || value !== value.trim()) {
-      invalid(`${field} must be a non-empty trimmed string`);
+      return invalid(`${field} must be a non-empty trimmed string`);
     }
     return value;
   };
@@ -596,7 +602,7 @@ function assertValidReceiptPoolDeployment(args: {
       value < min ||
       value > max
     ) {
-      invalid(`${field} has an invalid integer value`);
+      return invalid(`${field} has an invalid integer value`);
     }
     return value;
   };
@@ -729,7 +735,7 @@ function assertValidCanonicalRegistryRow(args: {
       `Invalid canonical deployment registry row ${args.registryKey}: ${reason}: ${args.filePath}`,
     );
   };
-  if (!isPlainRecord(args.value)) invalid('expected an object');
+  if (!isPlainRecord(args.value)) return invalid('expected an object');
   const row = args.value;
   const unknownKey = Object.keys(row).find(
     (key) => !DEPLOYMENT_REGISTRY_DROP_KEYS.has(key),
@@ -752,7 +758,7 @@ function assertValidCanonicalRegistryRow(args: {
       value !== value.trim() ||
       (!options.allowEmpty && !value)
     ) {
-      invalid(`${field} must be a${options.allowEmpty ? '' : ' non-empty'} trimmed string`);
+      return invalid(`${field} must be a${options.allowEmpty ? '' : ' non-empty'} trimmed string`);
     }
     return value;
   };
@@ -772,7 +778,7 @@ function assertValidCanonicalRegistryRow(args: {
       (options.min != null && value < options.min) ||
       (options.max != null && value > options.max)
     ) {
-      invalid(`${field} has an invalid numeric value`);
+      return invalid(`${field} has an invalid numeric value`);
     }
     return value;
   };
@@ -854,7 +860,7 @@ function assertValidCanonicalRegistryRow(args: {
   if (Object.prototype.hasOwnProperty.call(row, 'metadataBaseAliases')) {
     const aliases = row['metadataBaseAliases'];
     if (!Array.isArray(aliases) || aliases.length === 0) {
-      invalid('metadataBaseAliases must be a non-empty array');
+      return invalid('metadataBaseAliases must be a non-empty array');
     }
     const normalizedAliases = aliases.map((alias) => {
       if (typeof alias !== 'string' || !alias || alias !== alias.trim()) {
@@ -940,6 +946,32 @@ function assertValidCanonicalRegistryRow(args: {
   });
   if (maxSupply * itemsPerBox > 0xffff) {
     invalid('maxSupply and itemsPerBox exceed the supported figure ID range');
+  }
+  if (Object.prototype.hasOwnProperty.call(row, 'operationsConfig')) {
+    const operations = row.operationsConfig;
+    if (!isPlainRecord(operations) ||
+      Object.keys(operations).sort().join(',') !== 'boxMinterConfigPda,configId,maxSupply' ||
+      typeof operations.configId !== 'string' ||
+      normalizeAndValidateDropId(operations.configId, 'operations configId') !== operations.configId ||
+      operations.configId === dropId || !Number.isSafeInteger(operations.maxSupply) ||
+      Number(operations.maxSupply) < maxSupply || itemsPerBox < 1 ||
+      row.receiptPoolId !== undefined || row.mintSelection !== undefined) {
+      return invalid('operationsConfig must describe a distinct config for an openable dedicated drop');
+    }
+    const program = new PublicKey(requireString('boxMinterProgramId'));
+    for (const [configId, configPda] of [[dropId, row.boxMinterConfigPda], [operations.configId, operations.boxMinterConfigPda]]) {
+      if (typeof configId !== 'string' || typeof configPda !== 'string') return invalid('Both config roles require an identity and PDA');
+      const expected = PublicKey.findProgramAddressSync([
+        Buffer.from(BOX_MINTER_CONFIG_SEED), createHash('sha256').update(configId).digest(),
+      ], program)[0].toBase58();
+      if (configPda !== expected) invalid(`Config PDA must match its role identity ${configId}`);
+    }
+  }
+  try {
+    resolveDropMaxFigureId(row as DeploymentRegistryDrop);
+    resolveDropInventoryManifest(row as DeploymentRegistryDrop);
+  } catch (error) {
+    invalid(error instanceof Error ? error.message : String(error));
   }
   const maxPerTx = requireNumber('maxPerTx', {
     integer: true,
@@ -1238,23 +1270,34 @@ function assertNoBoxMinterConfigRegistryCollisions(args: {
   filePath: string;
 }): void {
   const configOwners = new Map<string, string>();
+  const identities = new Map<string, string>();
+  const claimIdentity = (identity: string, owner: string) => {
+    const previous = identities.get(identity);
+    if (previous) throw new Error(`Deployment config identity collision between ${previous} and ${owner}: ${identity}`);
+    identities.set(identity, owner);
+  };
   Object.entries(args.drops).forEach(([dropId, drop]) => {
+    claimIdentity(dropId, `active drop ${dropId}`);
+    if (drop.operationsConfig) claimIdentity(drop.operationsConfig.configId, `operations for ${dropId}`);
     if (Object.prototype.hasOwnProperty.call(args.tombstones, dropId)) {
       throw new Error(
         `Deployment registry drop ${dropId} cannot also be a BoxMinter config tombstone: ${args.filePath}`,
       );
     }
-    if (!drop.boxMinterConfigPda) return;
-    const key = `${drop.solanaCluster}:${drop.boxMinterConfigPda}`;
-    const duplicate = configOwners.get(key);
-    if (duplicate) {
-      throw new Error(
-        `Deployment registry config PDA collision between ${duplicate} and ${dropId}: ${args.filePath}`,
-      );
+    for (const configPda of [drop.boxMinterConfigPda, drop.operationsConfig?.boxMinterConfigPda]) {
+      if (!configPda) continue;
+      const key = `${drop.solanaCluster}:${configPda}`;
+      const duplicate = configOwners.get(key);
+      if (duplicate) {
+        throw new Error(
+          `Deployment registry config PDA collision between ${duplicate} and ${dropId}: ${args.filePath}`,
+        );
+      }
+      configOwners.set(key, `active drop ${dropId}`);
     }
-    configOwners.set(key, `active drop ${dropId}`);
   });
   Object.entries(args.tombstones).forEach(([dropId, tombstone]) => {
+    claimIdentity(dropId, `tombstone ${dropId}`);
     const key = `${tombstone.solanaCluster}:${tombstone.boxMinterConfigPda}`;
     const duplicate = configOwners.get(key);
     if (duplicate) {
@@ -1611,6 +1654,26 @@ function renderDeploymentDropEntry(
     `    discountMerkleRoot: ${tsStringLiteral(drop.discountMerkleRoot)},`,
     `    maxSupply: ${Math.floor(drop.maxSupply)},`,
   );
+  if (drop.operationsConfig) {
+    lines.push(
+      '    operationsConfig: {',
+      `      configId: ${tsStringLiteral(drop.operationsConfig.configId)},`,
+      `      boxMinterConfigPda: ${tsStringLiteral(drop.operationsConfig.boxMinterConfigPda)},`,
+      `      maxSupply: ${drop.operationsConfig.maxSupply},`,
+      '    },',
+    );
+  }
+  if (drop.inventoryManifest) {
+    lines.push(
+      '    inventoryManifest: {',
+      `      sha256: ${tsStringLiteral(drop.inventoryManifest.sha256)},`,
+      '      cardIds: [',
+    );
+    for (let index = 0; index < drop.inventoryManifest.cardIds.length; index += 20) {
+      lines.push(`        ${drop.inventoryManifest.cardIds.slice(index, index + 20).join(', ')},`);
+    }
+    lines.push('      ],', '    },');
+  }
   if (drop.receiptMaxId != null) {
     lines.push(`    receiptMaxId: ${Math.floor(drop.receiptMaxId)},`);
   }

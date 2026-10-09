@@ -19,6 +19,12 @@ import {
   LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
   LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
   LITTLE_SWAG_HOODIE_RECEIPT_MEDIA,
+  MI_NOTE_CARDS_BOX_MEDIA,
+  MI_NOTE_CARDS_PACK_IMAGE_BASE_URL,
+  MI_NOTE_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  MI_NOTE_CARDS_PACK_PREVIEW_IMAGE_URL,
+  MI_NOTE_CARDS_PACK_RECEIPT_IMAGE_BASE_URL,
+  MI_NOTE_CARDS_RECEIPT_IMAGE_BASE_URL,
   PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
   PONCHO_DRIFELLA_PACK_INITIAL_IMAGE_URL,
   PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
@@ -210,6 +216,27 @@ const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     boxInventoryMedia: CARD_NFT_2_PACK_RECEIPT_MEDIA,
   },
 };
+const MI_NOTE_CARDS_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
+  box: {
+    previewImageUrl: MI_NOTE_CARDS_PACK_PREVIEW_IMAGE_URL,
+    inventoryImageBaseUrl: MI_NOTE_CARDS_PACK_IMAGE_BASE_URL,
+    inventoryImagePathMode: 'file',
+    aspectRatio: MI_NOTE_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  },
+  mintPanel: {
+    previewImageUrl: MI_NOTE_CARDS_PACK_PREVIEW_IMAGE_URL,
+    aspectRatio: MI_NOTE_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  },
+  figures: {
+    fulfillmentAspectRatio: 5 / 7,
+  },
+  certificates: {
+    inventoryImageBaseUrl: MI_NOTE_CARDS_RECEIPT_IMAGE_BASE_URL,
+    boxInventoryImageBaseUrl: MI_NOTE_CARDS_PACK_RECEIPT_IMAGE_BASE_URL,
+    boxInventoryImagePathMode: 'file',
+    boxInventoryMedia: MI_NOTE_CARDS_BOX_MEDIA,
+  },
+};
 const CARD_NFT_BINDER_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   box: {
     previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
@@ -256,6 +283,7 @@ function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraC
   if (isDropFamily(normalizedDropId, 'little_swag_boxes')) return LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'little_swag_hoodies')) return LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'card_nft_2')) return CARD_NFT_2_FAMILY_EXTRA_CONTENT;
+  if (isDropFamily(normalizedDropId, 'mi_note_cards')) return MI_NOTE_CARDS_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'card_nft_binder')) return CARD_NFT_BINDER_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'clear_cards')) return CLEAR_CARDS_FAMILY_EXTRA_CONTENT;
   return undefined;

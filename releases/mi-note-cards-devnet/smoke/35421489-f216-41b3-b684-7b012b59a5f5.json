@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "runId": "35421489-f216-41b3-b684-7b012b59a5f5",
+  "cluster": "devnet",
+  "dropId": "mi_note_cards_devnet",
+  "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "buyer": "J6M8XULameAgbbrrvJNEqrF3Q6PhenjF3WjukEtj2PoZ",
+  "collection": "65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv",
+  "mintConfig": "8Cb6FqM1ymyULJZ6htwJAHH8n4pbMMqMz2yfDLLSicPY",
+  "operationsConfig": "FdHqdSLxUDenJki3eHXBVf6m49h5nnyM5jNreTHzUS6d",
+  "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json/pre",
+  "manifestSha256": "198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d",
+  "origin": "https://mons.shop",
+  "createdAt": "2026-10-09T14:19:33.758Z",
+  "updatedAt": "2026-10-09T14:28:18.144Z",
+  "status": "recovered",
+  "stage": "recovered",
+  "fundingLamports": 350000000,
+  "knownAssets": [
+    "NjWp4bEPFCFMqYjvwbL7AbTwudkVzTNUcVScP4AeRy8",
+    "58w48CZm3oBrsdCKCtsVJkbgBX4aZG3pWN2jNKPmfmFx",
+    "4AGwSmgv3rR6Q3B3tZxDovXHAvfx6AYEq478DDuPXbAr"
+  ],
+  "transactions": [
+    {
+      "label": "fund buyer",
+      "signature": "364sawanFM1XCxaUbai8f4diBxXZLPUakv9XtQYKBeSbrtb5do3bzq1wKNcYzNsxNw7Dc3ge2XFB5TGs5sigq2DT",
+      "blockhash": "JCtt37zTkCp2CRo2mGbPtW8ZxcmtasRBoMJ8n4V3d6D4",
+      "lastValidBlockHeight": 496439611,
+      "status": "finalized",
+      "simulationUnits": 300,
+      "feeLamports": 5000
+    },
+    {
+      "label": "mint A pack",
+      "signature": "2PhVC7CYFYL1PUBhUGf4xhFMdQn5fYnD6PDeGVssS7thgSYiWnPfb5w1jpV9obqpTnGSNv9sgkzHDidFNjaSoPM1",
+      "blockhash": "4w6Ywqo9426cVtMM6ii1D4y2GmxaxvBeNy1v9WUgS32V",
+      "lastValidBlockHeight": 496439625,
+      "status": "finalized",
+      "simulationUnits": 31904,
+      "feeLamports": 5000
+    },
+    {
+      "label": "start open B",
+      "signature": "2PPBCtUKSJSJboQYak8sYKWWds38azbFEQhRi8F7QwnmpTPMUiL5ZF16kXfT3MXkFQo4TyaGu5s6Fs2rrRzjbLFZ",
+      "blockhash": "6kn1eKfdCb8xomToLzUWihbJQMQAFhrgJEFH11gXpKGW",
+      "lastValidBlockHeight": 496439638,
+      "status": "finalized",
+      "simulationUnits": 59108,
+      "feeLamports": 5000
+    },
+    {
+      "label": "deliver and close B",
+      "signature": "4EyDQAdmMrqZnFVzEjhAEb3EMwM1mideAcMSXjxxLu2Dcr11Xwg15Qmx3RKF3YKEPGhcaDJso51hXuZrVqbVorz4",
+      "blockhash": "BcNMVV1as9RUMP6FfVHAYCzwoDBDMBtGNFaCkUDGM5tt",
+      "lastValidBlockHeight": 496439675,
+      "status": "finalized",
+      "simulationUnits": 38182,
+      "feeLamports": 10000
+    },
+    {
+      "label": "mint B receipts",
+      "signature": "ALGMhNNTCyYht8ACMQA5zzunkCSehTMVSgmociMqqzNZCoaWfwihWYTP59ySYHPMiuYARKxvLurC7dfsSdDr7Jr",
+      "blockhash": "9F7YoPEpktDX93KLk6iMN8VdHh7k8XLubRPGy7Emtm9A",
+      "lastValidBlockHeight": 496439687,
+      "status": "finalized",
+      "simulationUnits": 260588,
+      "feeLamports": 5000
+    },
+    {
+      "label": "refund buyer SOL",
+      "signature": "AYteettHS67N46F5QTQ93d3pgDnSYFz99zQBtC1kpMJ2eBzwhZj9Hji1qEG9rvFpRiSi5Am6KWwFrgX4eDdU82M",
+      "blockhash": "GfwRob8xM5FQEqdoTo8uwFHqTrtV4Z2JDBkhJk7J6Jx7",
+      "lastValidBlockHeight": 496439713,
+      "status": "finalized",
+      "simulationUnits": 300,
+      "feeLamports": 10000
+    }
+  ],
+  "shippingOrderCreated": false,
+  "missingPreflightRecord": true,
+  "activationSignature": "5oMUVFjJD8aPVx5XRSjMvJCA3yJgaACLpEX7TGfhci3beujezhDauYeDtWmfAe1VpoHvwEMt27k96wPkkSMQQ93t",
+  "preorderBefore": {
+    "count": 22,
+    "sha256": "581a98de1421574b8ced17df0f8e81c175d963a9629bfb6dffe8917380118a2c"
+  },
+  "pack": {
+    "address": "NjWp4bEPFCFMqYjvwbL7AbTwudkVzTNUcVScP4AeRy8",
+    "pending": "HDR4ZM1G1GerZLK4o2XRgipuWV9RkNJoSTzS4EwAHdvw",
+    "cards": [
+      "58w48CZm3oBrsdCKCtsVJkbgBX4aZG3pWN2jNKPmfmFx",
+      "4AGwSmgv3rR6Q3B3tZxDovXHAvfx6AYEq478DDuPXbAr"
+    ],
+    "id": 1
+  },
+  "reveal": {
+    "signature": "4AKhMEHQEuQEg2QP7drFLXVN6KAGyL1pchBCH5PzE7Kgxu4XhBjJML7ije2HNVMdn4YnbC3AxrAupdnbqqDyniQA",
+    "ids": [
+      897,
+      323
+    ]
+  },
+  "receipts": {
+    "signature": "ALGMhNNTCyYht8ACMQA5zzunkCSehTMVSgmociMqqzNZCoaWfwihWYTP59ySYHPMiuYARKxvLurC7dfsSdDr7Jr",
+    "tree": "FLHhgXrEEwDWvVkFHPK22cNL3DcZHq1GGxuvkoS2V1rG",
+    "uris": [
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rb1.json",
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rf897.json",
+      "https://cdn.lil.org/nft/mi_note_cards/json/pre/rf323.json"
+    ],
+    "recipient": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+  },
+  "preorderAfter": {
+    "count": 22,
+    "sha256": "581a98de1421574b8ced17df0f8e81c175d963a9629bfb6dffe8917380118a2c"
+  },
+  "cleanup": {
+    "buyerLamports": 0,
+    "buyerOwnedAssets": [],
+    "unexpectedOwners": [],
+    "pendingOpen": false
+  }
+}

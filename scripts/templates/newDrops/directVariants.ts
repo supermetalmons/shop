@@ -27,7 +27,6 @@ export const NEW_DROP_INPUT = {
       externalUrl: 'https://example.com',
       image: 'https://example.com/replace_variants/cover.png',
     },
-    discountWhitelistCsvRelativePath: 'scripts/discounts/REPLACE_WHITELIST.csv',
     receiptsTree: {
       maxDepth: 14,
       maxBufferSize: 64,
@@ -35,7 +34,7 @@ export const NEW_DROP_INPUT = {
     },
     treasury: 'REPLACE_TREASURY',
     priceSol: 0.1,
-    discountPriceSol: 0.05,
+    discountPriceSol: 0.1,
     stripeCheckoutEnabled: false,
     discountMintsPerWallet: 1,
     maxSupply: 30,

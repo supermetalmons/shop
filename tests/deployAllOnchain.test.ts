@@ -749,6 +749,24 @@ test('deploy discount Merkle preflight rejects a family mapped to a different ro
   );
 });
 
+test('disabled sentinel datasets can span families while preflight still rejects changed proofs', async t => {
+  const rootHex = '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925';
+  const fixture = makeDeploymentRegistryFixture([deploymentRegistryTestDrop({
+    dropId: 'binder_existing', dropFamily: 'card_nft_binder', programId: pubkey(1).toBase58(), discountMerkleRoot: rootHex,
+  })]);
+  t.after(() => rmSync(fixture.rootDir, { recursive: true, force: true }));
+  const proofs = { '11111111111111111111111111111111': [] };
+  const input = { root: fixture.rootDir, dropId: 'mi_note_cards_devnet', dropFamily: 'mi_note_cards' as const,
+    merkleRoot: Buffer.from(rootHex, 'hex'), proofs };
+  const result = await validateDiscountMerkleDatasetForDeploy(input);
+  assert.equal(result.fileName, 'mi_note_cards.json');
+  mkdirSync(path.dirname(result.filePath), { recursive: true });
+  writeFileSync(result.filePath, JSON.stringify({ root: rootHex, proofs }));
+  await validateDiscountMerkleDatasetForDeploy(input);
+  writeFileSync(result.filePath, JSON.stringify({ root: rootHex, proofs: { [pubkey(90).toBase58()]: [] } }));
+  await assert.rejects(validateDiscountMerkleDatasetForDeploy(input), /conflicts with the generated dataset/);
+});
+
 test('reusable program revalidation accepts a same-program registry addition', async (t) => {
   const programId = pubkey(1).toBase58();
   const fixture = makeDeploymentRegistryFixture([

@@ -96,22 +96,36 @@ test('drop, upcoming, and home transitions discard the previous route configurat
   assert.equal(window.location.pathname, '/clear_cards');
 });
 
-for (const path of ['/mi_note_cards', '/mi_note_cards_devnet']) {
-  test(`${path} uses the pack 1 image without activating purchases`, () => {
-    const route = resolveAppRoute({ pathname: path });
-    const { result } = renderHook(() => useShopDrop(route));
+test('Mi Note mainnet uses the pack 1 announcement without activating purchases', () => {
+  const route = resolveAppRoute({ pathname: '/mi_note_cards' });
+  const { result } = renderHook(() => useShopDrop(route));
 
-    assert.equal(result.current.upcomingDropRoute?.title, 'Mi Note Cards');
-    assert.deepEqual(result.current.upcomingMintPreviewMedia, {
-      imageSrc: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
-      aspectRatio: 1050 / 1400,
-    });
-    assert.equal(result.current.routeDrop, null);
-    assert.equal(result.current.routeConnection, null);
-    assert.equal(result.current.routeStripePaymentVisible, false);
-    assert.throws(() => result.current.requireRouteDrop('purchase'), /requires an explicit drop route/);
+  assert.equal(result.current.upcomingDropRoute?.title, 'Mi Note Cards');
+  assert.deepEqual(result.current.upcomingMintPreviewMedia, {
+    imageSrc: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    aspectRatio: 1050 / 1400,
   });
-}
+  assert.equal(result.current.routeDrop, null);
+  assert.equal(result.current.routeConnection, null);
+  assert.equal(result.current.routeStripePaymentVisible, false);
+  assert.throws(() => result.current.requireRouteDrop('purchase'), /requires an explicit drop route/);
+});
+
+test('Mi Note devnet uses the registered pack purchase context and logical two-card opening', () => {
+  const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet' });
+  const { result } = renderHook(() => useShopDrop(route));
+  assert.equal(result.current.routeDrop?.dropId, 'mi_note_cards_devnet');
+  assert.equal(result.current.routeDrop?.itemsPerBox, 2);
+  assert.equal(result.current.routeDrop?.priceSol, 0.25);
+  assert.equal(result.current.requireRouteDrop('purchase'), route.drop);
+  assert.ok(result.current.routeConnection);
+  assert.equal(result.current.upcomingDropRoute, null);
+  assert.equal(result.current.routeStripePaymentVisible, false);
+  assert.equal(result.current.canOpenBoxesForDropId('mi_note_cards_devnet'), true);
+  assert.deepEqual(result.current.mintPreviewMedia, {
+    imageSrc: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp', aspectRatio: 1050 / 1400,
+  });
+});
 
 test('WIP routes keep home scroll semantics while their URL points at a preview', (t) => {
   const viewport = controlledViewport(t, 480);

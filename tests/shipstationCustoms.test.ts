@@ -9,11 +9,11 @@ import {
 } from '../shared/shipstationCustoms.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 
-test('the ShipStation customs catalog contains every deployed drop family', () => {
+test('the ShipStation customs catalog contains every mainnet-deployed drop family', () => {
   const deployedFamilies = Array.from(new Set(
-    Object.values(DEPLOYMENT_DROPS).map((drop) => drop.dropFamily),
+    Object.values(DEPLOYMENT_DROPS).filter(drop => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropFamily),
   )).sort();
-  assert.deepEqual(Object.keys(SHIPSTATION_CUSTOMS_CATALOG).sort(), deployedFamilies);
+  for (const family of deployedFamilies) assert.ok(SHIPSTATION_CUSTOMS_CATALOG[family], `${family} requires customs defaults before mainnet fulfillment`);
   assert.deepEqual(SHIPSTATION_CUSTOMS_CATALOG, {
     little_swag_boxes: {
       contentDescription: 'Painted collectible resin figure',
@@ -75,6 +75,7 @@ test('the ShipStation customs catalog contains every deployed drop family', () =
 });
 
 test('physical customs quantities expand boxes and count loose products individually', () => {
+  assert.equal(shipStationPhysicalProductQuantity('mi_note_cards_devnet', 2, 1), 5);
   assert.equal(shipStationPhysicalProductQuantity('card_nft_2', 2, 1), 7);
   assert.equal(shipStationPhysicalProductQuantity('little_swag_boxes', 3, 2), 11);
   assert.equal(shipStationPhysicalProductQuantity('poncho_drifella', 2, 1), 3);
@@ -83,6 +84,12 @@ test('physical customs quantities expand boxes and count loose products individu
   assert.equal(shipStationPhysicalProductQuantity('little_swag_hoodies', 2, 3), 5);
   assert.equal(shipStationPhysicalProductQuantity('card_nft_binder', 2, 3), 5);
   assert.equal(shipStationPhysicalProductQuantity('unknown', 2, 3), 3);
+});
+
+test('Mi Note devnet does not fabricate automatic customs values before physical product details are configured', () => {
+  assert.equal(shipStationCustomsCatalogEntry('mi_note_cards_devnet'), undefined);
+  assert.equal(buildShipStationCustomsDeclaration('mi_note_cards_devnet', 1, 0), undefined);
+  assert.equal(buildShipStationCustomsDeclaration('mi_note_cards_devnet', 0, 2), undefined);
 });
 
 test('customs declarations use family defaults and add one ounce of packaging', () => {

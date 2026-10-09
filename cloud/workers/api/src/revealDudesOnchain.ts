@@ -151,7 +151,7 @@ export async function validateOnchainConfig(
       ...projectDeploymentPaymentRouting(runtime.config),
       collectionMint: runtime.collectionMint.toBase58(),
       itemsPerBox: runtime.itemsPerBox,
-    })
+    }, 'operations')
   ) {
     throw new RevealDudesError('failed-precondition', 'Committed drop configuration does not match the on-chain config.', {
       dropId: runtime.dropId,
