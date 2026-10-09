@@ -413,6 +413,21 @@ async function readStep(connection: Connection, step: StepKind, context: Deploym
   return { ready: validateStepAccounts(step, result.value, context, journal), slot: result.context.slot };
 }
 
+async function assertDelegateUpdatePreservesCollection(connection: Connection, transaction: VersionedTransaction,
+  context: DeploymentContext, journal: DeploymentJournal, minContextSlot: number) {
+  const result = await connection.getMultipleAccountsInfoAndContext([new PublicKey(context.plan.collection)], {
+    commitment: 'finalized', minContextSlot,
+  });
+  if (result.context.slot < minContextSlot) throw new Error('RPC returned stale finalized deployment state.');
+  const current = inspectCollection(result.value[0], context.plan, context.collectionConfig, journal.collection);
+  const data = TransactionMessage.decompile(transaction.message).instructions[1].data;
+  const delegates = Array.from({ length: data.readUInt32LE(2) }, (_, index) =>
+    new PublicKey(data.subarray(6 + index * 32, 38 + index * 32)).toBase58());
+  if (current.delegates.some(delegate => !delegates.includes(delegate))) {
+    throw new Error('Collection delegates changed after review; rerun to prepare and simulate a fresh update.');
+  }
+}
+
 async function buildStepInstructions(connection: Connection, step: StepKind, context: DeploymentContext, journal: DeploymentJournal) {
   const { plan } = context;
   const payer = new PublicKey(plan.authority);
@@ -560,7 +575,8 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
   let journalSource = recorded?.source;
   const persist = () => { journalSource = writeDurableJson(journalPath, journal, journalSource); };
   const steps: StepKind[] = ['delegates', 'mint-config', 'operations-config', 'receipt-tree', 'lookup-table'];
-  let finalizedSlot = manifest.chain.slot;
+  let finalizedSlot = Math.max(manifest.chain.slot, journal.finalizedSlot ?? 0,
+    ...journal.transactions.map(entry => entry.finalizedSlot ?? 0));
   const states = [];
   for (const step of steps) {
     const state = await readStep(connection, step, context, journal, finalizedSlot);
@@ -625,6 +641,7 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
           deps.log(`Recovering ${unresolved.step} with the original signature ${unresolved.signature}; resources ${unresolved.resources.join(', ')}.`);
           if (!await confirm(`Recover ${unresolved.step} by resending the same signed transaction ${unresolved.signature} on ${plan.cluster}? Type y: `)) throw new Error('Cancelled; the public recovery journal is retained.');
           await revalidate();
+          if (unresolved.step === 'delegates') await assertDelegateUpdatePreservesCollection(connection, transaction, context, journal, finalizedSlot);
           const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: false, maxRetries: 3 });
           if (signature !== unresolved.signature) throw new Error('RPC returned a different recovery transaction signature.');
           const confirmation = await connection.confirmTransaction({ signature, blockhash: unresolved.blockhash, lastValidBlockHeight: unresolved.lastValidBlockHeight }, 'finalized');
@@ -669,6 +686,7 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
         if (signer.publicKey.toBase58() !== plan.authority) throw new Error('Signer does not match the existing collection authority.');
       }
       await revalidate();
+      if (step === 'delegates') await assertDelegateUpdatePreservesCollection(connection, transaction, context, journal, finalizedSlot);
       if (await connection.getBlockHeight('finalized') > blockhash.lastValidBlockHeight) throw new Error('Transaction expired during confirmation; rerun to simulate a fresh transaction.');
       transaction.sign([signer]);
       const entry: TwoConfigJournalTransaction = {

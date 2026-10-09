@@ -41,8 +41,7 @@ function manifest(): MiNoteDropManifest {
   };
 }
 
-function transactionFixture() {
-  const authority = Keypair.fromSeed(new Uint8Array(32).fill(9));
+function transactionFixture(authority = Keypair.fromSeed(new Uint8Array(32).fill(9))) {
   const buyer = deriveMiNoteSmokeBuyer(authority, runId);
   const record: MiNoteSmokeRecord = {
     version: 1, runId, cluster: 'devnet', dropId: 'mi_note_cards_devnet', authority: authority.publicKey.toBase58(),
@@ -328,7 +327,7 @@ test('mismatched recovery identity is rejected without rewriting its public reco
 test('only a never-funded record may resume a fresh purchase for the same run', () => {
   const f = transactionFixture();
   try {
-    const record = { ...f.record, status: 'preflight-failed' as const };
+    const record = f.record;
     assert.equal(isNeverFundedMiNoteSmokeRecord(record), true);
     assert.equal(isNeverFundedMiNoteSmokeRecord({ ...record, status: 'passed' }), false);
     assert.equal(isNeverFundedMiNoteSmokeRecord({ ...record, knownAssets: [f.authority.publicKey.toBase58()] }), false);
@@ -336,6 +335,48 @@ test('only a never-funded record may resume a fresh purchase for the same run', 
       blockhash: 'blockhash', lastValidBlockHeight: 1, status: 'failed', simulationUnits: 1, feeLamports: 1 }] }), false);
   } finally { f.buyer.destroy(); }
 });
+
+for (const priorUse of ['unused', 'account', 'balance', 'history'] as const) {
+  test(`running smoke recovery proves the buyer is unused before continuing: ${priorUse}`, async (t) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'smoke-running-recovery-'));
+    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    const bytes = new Uint8Array(64);
+    bytes.set(new PublicKey('kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx').toBytes(), 32);
+    const f = transactionFixture(Keypair.fromSecretKey(bytes, { skipValidation: true }));
+    const file = path.join(directory, `${runId}.json`);
+    writeFileSync(file, JSON.stringify({ ...f.record, stage: 'buyer-authentication' }));
+    let clusterReads = 0;
+    const checks: string[] = [];
+    t.mock.method(Connection.prototype, 'getGenesisHash', async () => ++clusterReads === 1 ? genesis : 'wrong-cluster');
+    t.mock.method(Connection.prototype, 'getAccountInfo', async (_buyer: PublicKey, commitment: string) => {
+      checks.push(`${commitment}:account`);
+      return priorUse === 'account' ? { lamports: 0 } : null;
+    });
+    t.mock.method(Connection.prototype, 'getBalance', async (_buyer: PublicKey, commitment: string) => {
+      checks.push(`${commitment}:balance`);
+      return priorUse === 'balance' ? 1 : 0;
+    });
+    t.mock.method(Connection.prototype, 'getSignaturesForAddress', async (_buyer: PublicKey, _options: unknown, commitment: string) => {
+      checks.push(`${commitment}:history`);
+      return priorUse === 'history' ? [{ signature: 'prior' }] : [];
+    });
+    t.mock.method(Connection.prototype, 'sendRawTransaction', async () => assert.fail('recovery proof must precede sends'));
+    t.mock.method(globalThis, 'fetch', async () => assert.fail('recovery proof must precede HTTP requests'));
+    try {
+      await assert.rejects(runMiNoteDevnetSmoke({ authority: f.authority, recoverRunId: runId,
+        recordDirectory: directory, rpcUrl: 'https://fixture.invalid', yes: true }),
+      priorUse === 'unused' ? /non-devnet/ : /refusing a fresh purchase/);
+      const commitments = priorUse === 'unused' ? ['finalized', 'confirmed'] : ['finalized'];
+      assert.deepEqual(checks, commitments.flatMap((commitment) =>
+        ['account', 'balance', 'history'].map((check) => `${commitment}:${check}`)));
+      assert.equal(clusterReads, priorUse === 'unused' ? 2 : 1);
+      const saved = JSON.parse(readFileSync(file, 'utf8')) as MiNoteSmokeRecord;
+      assert.equal(saved.diagnostic?.stage, priorUse === 'unused' ? 'preflight-cluster' : 'preflight-unused-buyer');
+      assert.deepEqual(saved.transactions, []);
+      assert.equal(saved.status, 'preflight-failed');
+    } finally { bytes.fill(0); f.buyer.destroy(); }
+  });
+}
 
 test('unused-buyer proof checks account, balance and history at both finalized and confirmed commitments', async () => {
   const buyer = Keypair.generate().publicKey;

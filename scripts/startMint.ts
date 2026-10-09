@@ -117,13 +117,14 @@ export async function resolveDeploymentConfig(args: {
 }
 
 export async function verifyTwoConfigMintReadiness(
-  drop: DeploymentRegistryDrop, manifestPath: string, options: { allowActiveMint?: boolean; rpcUrl?: string } = {},
+  drop: DeploymentRegistryDrop, manifestPath: string, options: { allowActiveMint?: boolean; rpcUrl?: string; root?: string } = {},
 ): Promise<void> {
   if (!drop.operationsConfig || drop.solanaCluster === 'testnet') throw new Error('Unsupported two-config activation.');
   const [{ verifyTwoConfigGateForDeployment }, { parseMiNoteDropManifest, verifyMiNoteDropManifest },
-    { verifyMiNoteInventoryDrop }, { runDudeInventoryControl }] = await Promise.all([
+    { verifyMiNoteInventoryDrop }, { runDudeInventoryControl }, { verifyMiNoteMintResources }, { loadPreorderCollectionConfig }] = await Promise.all([
     import('./verify-two-config-programs.ts'), import('./shared/miNoteDropManifest.ts'),
     import('./shared/miNoteInventoryPreflight.ts'), import('./ops/dudeInventoryControl.ts'),
+    import('./shared/miNoteMintResources.ts'), import('./shared/preorderCollectionConfig.ts'),
   ]);
   const manifest = parseMiNoteDropManifest(JSON.parse(readFileSync(manifestPath, 'utf8')));
   if (manifest.sourcePreorder.preorderId !== drop.dropId || manifest.sourcePreorder.cluster !== drop.solanaCluster ||
@@ -133,6 +134,10 @@ export async function verifyTwoConfigMintReadiness(
   await verifyTwoConfigGateForDeployment({ cluster: drop.solanaCluster, rpcUrl: options.rpcUrl });
   await verifyMiNoteDropManifest(manifest);
   const state = await verifyMiNoteInventoryDrop(drop.dropId, manifest, options);
+  const root = options.root ?? ROOT;
+  const { config: collectionConfig } = await loadPreorderCollectionConfig({ root, collectionId: drop.dropId });
+  await verifyMiNoteMintResources({ drop, collectionConfig, mintStarted: state.mintStarted, minimumSlot: state.slot,
+    connection: createScriptSolanaConnection({ cluster: drop.solanaCluster, root, explicitUrl: options.rpcUrl }) });
   const report = await runDudeInventoryControl(['status', '--drop', drop.dropId]);
   if (!('drops' in report)) throw new Error('Initialize the approved inventory before enabling minting.');
   const inventory = report.drops.find((entry) => entry.dropId === drop.dropId);
@@ -273,7 +278,7 @@ export async function runStartMint(
       if (!isDeepStrictEqual(current.dropConfig, drop)) throw new Error('Mint deployment configuration changed after review.');
       if (dual) {
         if (readFileSync(manifestPath!, 'utf8') !== manifestSource) throw new Error('Activation manifest changed after review.');
-        await deps.verifyReadiness(drop, manifestPath!, { allowActiveMint: true, rpcUrl: connection.rpcEndpoint });
+        await deps.verifyReadiness(drop, manifestPath!, { allowActiveMint: true, rpcUrl: connection.rpcEndpoint, root });
       }
       state = await readState(state.slot);
       if (state.authority !== identity.authority) throw new Error('Mint authority changed after review.');

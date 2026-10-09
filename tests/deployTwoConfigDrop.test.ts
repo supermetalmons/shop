@@ -356,6 +356,45 @@ test('write workflow journals every signed transaction before broadcast and comm
   assert.equal(f.state.sends.length, 5);
 });
 
+for (const finalitySource of ['finalized', 'state-verified', 'journal'] as const) {
+  test(`resume honors ${finalitySource} slots and reuses the finalized lookup table before registry publication`, async t => {
+    const f = await fixture(t);
+    let interruptPublication = true;
+    f.dependencies.readRegistry = async filePath => {
+      if (interruptPublication && f.state.sends.length === 5) throw new Error('interrupted before publication');
+      return readDeploymentDropRegistry(filePath);
+    };
+    await assert.rejects(f.run(), /interrupted before publication/);
+    assert.equal((await readDeploymentDropRegistry(f.registryPath)).drops[f.plan.dropId], undefined);
+    const journal = JSON.parse(readFileSync(f.journalPath, 'utf8'));
+    const lookupAddress = journal.lookupTable.address;
+    assert.equal(journal.transactions.at(-1).step, 'lookup-table');
+    assert.equal(journal.transactions.at(-1).finalizedSlot, f.state.slot);
+    if (finalitySource === 'state-verified') journal.transactions.at(-1).status = 'state-verified';
+    if (finalitySource === 'journal') journal.finalizedSlot = ++f.state.slot;
+    writeFileSync(f.journalPath, JSON.stringify(journal));
+    const journalBefore = readFileSync(f.journalPath, 'utf8');
+    const knownFinalizedSlot = f.state.slot;
+    interruptPublication = false;
+    let stale = true;
+    const requestedFloors: number[] = [];
+    t.mock.method(f.connection, 'getMultipleAccountsInfoAndContext', async (keys, options) => {
+      requestedFloors.push(typeof options === 'object' ? options.minContextSlot ?? 0 : 0);
+      return { context: { slot: stale ? knownFinalizedSlot - 1 : f.state.slot },
+        value: keys.map(key => stale && key.toBase58() === lookupAddress ? null : f.accounts.get(key.toBase58()) || null) };
+    });
+    await assert.rejects(f.run(), /stale finalized deployment state/);
+    assert.equal(requestedFloors[0], knownFinalizedSlot);
+    assert.equal(f.state.sends.length, 5);
+    assert.equal(readFileSync(f.journalPath, 'utf8'), journalBefore);
+    stale = false;
+    assert.equal((await f.run()).ready, true);
+    assert.equal(f.state.sends.length, 5);
+    assert.equal(JSON.parse(readFileSync(f.journalPath, 'utf8')).lookupTable.address, lookupAddress);
+    assert.ok(f.accounts.has(lookupAddress));
+  });
+}
+
 for (const failure of ['before', 'after'] as const) test(`uncertain submission ${failure} landing recovers without creating duplicate resources`, async t => {
   const f = await fixture(t); f.state.failSend = failure;
   await assert.rejects(f.run(), /transport lost/);
@@ -365,6 +404,36 @@ for (const failure of ['before', 'after'] as const) test(`uncertain submission $
   assert.equal(f.state.sends.length, failure === 'before' ? 6 : 5);
   if (failure === 'before') assert.equal(f.state.sends[0], f.state.sends[1]);
   assert.ok(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions.every((entry: TwoConfigJournalTransaction) => entry.status === 'finalized'));
+});
+
+test('delegates added during approval stop signing and are preserved by a fresh attempt', async t => {
+  const f = await fixture(t);
+  const added = Keypair.generate().publicKey;
+  f.state.afterConfirmation = () => f.accounts.set(f.plan.collection,
+    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added]), MPL_CORE_PROGRAM_ADDRESS));
+  await assert.rejects(f.run(), /Collection delegates changed after review/);
+  assert.deepEqual(f.state.sends, []);
+  assert.deepEqual(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions, []);
+  f.state.afterConfirmation = undefined;
+  assert.equal((await f.run()).ready, true);
+  assert.deepEqual(decodeMplCoreCollectionUpdateDelegates(f.accounts.get(f.plan.collection)!.data)!.delegates.map(key => key.toBase58()),
+    [f.plan.authority, added.toBase58(), f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda]);
+});
+
+test('recovery cannot resend a signed update that removes a delegate added during approval', async t => {
+  const f = await fixture(t);
+  f.state.failSend = 'before';
+  await assert.rejects(f.run(), /transport lost/);
+  const added = Keypair.generate().publicKey;
+  f.state.afterConfirmation = () => f.accounts.set(f.plan.collection,
+    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added]), MPL_CORE_PROGRAM_ADDRESS));
+  await assert.rejects(f.run(), /Collection delegates changed after review/);
+  assert.equal(f.state.sends.length, 1);
+  assert.equal(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions[0].status, 'signed');
+  f.state.afterConfirmation = undefined;
+  f.state.height += 200;
+  assert.equal((await f.run()).ready, true);
+  assert.ok(decodeMplCoreCollectionUpdateDelegates(f.accounts.get(f.plan.collection)!.data)!.delegates.some(key => key.equals(added)));
 });
 
 test('manifest changes during human confirmation block signing and the first broadcast', async t => {

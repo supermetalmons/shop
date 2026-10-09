@@ -6,7 +6,8 @@ import path from 'node:path';
 import bs58 from 'bs58';
 import test, { type TestContext } from 'node:test';
 import {
-  Connection, Keypair, PublicKey, SystemProgram, TransactionMessage, VersionedTransaction, type AccountInfo,
+  AddressLookupTableProgram, ComputeBudgetProgram, Connection, Keypair, PublicKey, SystemProgram,
+  TransactionMessage, VersionedTransaction, type AccountInfo,
 } from '@solana/web3.js';
 import { parseStartMintArgs, resolveDeploymentConfig, runStartMint, type StartMintDependencies } from '../scripts/startMint.ts';
 import { getPreorderConfig, PREORDER_PAYMENT_RECIPIENTS } from '../shared/preorders.ts';
@@ -15,6 +16,14 @@ import { resolveDropConfigRole } from '../shared/dropConfigRoles.ts';
 import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/shared/miNoteDropManifest.ts';
 import { validateNewMiNoteDropConfigs } from '../scripts/shared/miNoteInventoryPreflight.ts';
 import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
+import { verifyMiNoteMintResources } from '../scripts/shared/miNoteMintResources.ts';
+import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
+import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
+import { bubblegumTreeConfigPda, getConcurrentMerkleTreeAccountSize } from '../scripts/deploy-all-onchain.ts';
+import {
+  BUBBLEGUM_PROGRAM_ADDRESS, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS, MPL_CORE_CPI_SIGNER_ADDRESS,
+  MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, SPL_NOOP_PROGRAM_ADDRESS,
+} from '../shared/solanaProgramAddresses.ts';
 
 const manifest = parseMiNoteDropManifest(JSON.parse(readFileSync(new URL('../releases/mi-note-cards-devnet/inventory.json', import.meta.url), 'utf8')));
 const SMOKE_ID = '11111111-2222-4333-8444-555555555555';
@@ -62,6 +71,8 @@ async function fixture(t: TestContext, dual = true) {
     ] },
   } : { ...base, dropId: 'legacy_cards', operationsConfig: undefined, inventoryManifest: undefined,
     maxSupply: 10, itemsPerBox: 1, treasury: payer.publicKey.toBase58() };
+  if (dual) Object.assign(drop, { receiptsTreeMaxDepth: 14, receiptsTreeCanopyDepth: 0,
+    deliveryLookupTable: new PublicKey(new Uint8Array(32).fill(92)).toBase58() });
   const registryPath = path.join(root, 'shared/deploymentRegistry.ts');
   mkdirSync(path.dirname(registryPath), { recursive: true });
   writeFileSync(registryPath, `export const DEPLOYMENT_DROPS = ${JSON.stringify({ [drop.dropId]: drop })};\nexport const BOX_MINTER_CONFIG_TOMBSTONES = {};\n`);
@@ -153,6 +164,71 @@ async function fixture(t: TestContext, dual = true) {
   return { root, drop, payer, connection, state, statuses, dependencies, options, run, manifestPath, activationPath, registryPath };
 }
 
+function resourceFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
+  const { drop, payer } = f;
+  const config = preparePreorderCollectionConfig({ ...NEW_PREORDER_COLLECTION,
+    collectionId: drop.dropId, isMainnet: false, authority: payer.publicKey.toBase58() }, drop.dropId);
+  const account = (data: Buffer, owner: string): AccountInfo<Buffer> => ({
+    data, owner: new PublicKey(owner), executable: false, lamports: 1, rentEpoch: 0,
+  });
+  const collection = (delegates = [config.authority, drop.boxMinterConfigPda!, drop.operationsConfig!.boxMinterConfigPda]) => {
+    const metadata = config.collectionMetadata;
+    const base = Buffer.concat([Buffer.from([5]), payer.publicKey.toBuffer(), string(metadata.name),
+      string(config.collectionMetadataUri), integer(22, 4), integer(22, 4)]);
+    const bps = Buffer.alloc(2); bps.writeUInt16LE(metadata.sellerFeeBasisPoints);
+    const plugins = [
+      { type: 0, authority: Buffer.from([2]), data: Buffer.concat([Buffer.from([0]), bps, integer(metadata.creators.length, 4),
+        ...metadata.creators.map(creator => Buffer.concat([new PublicKey(creator.address).toBuffer(), Buffer.from([creator.share])])), Buffer.from([0])]) },
+      { type: 4, authority: Buffer.from([2]), data: Buffer.concat([Buffer.from([4]), integer(delegates.length, 4), ...delegates.map(key => new PublicKey(key).toBuffer())]) },
+      { type: 15, authority: Buffer.concat([Buffer.from([3]), new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS).toBuffer()]), data: Buffer.from([15]) },
+    ];
+    let offset = base.length + 9;
+    const records = plugins.map(plugin => {
+      const record = Buffer.concat([Buffer.from([plugin.type]), plugin.authority, integer(offset, 8)]);
+      offset += plugin.data.length;
+      return record;
+    });
+    return account(Buffer.concat([base, Buffer.from([3]), integer(offset, 8), ...plugins.map(plugin => plugin.data),
+      Buffer.from([4]), integer(plugins.length, 4), ...records, integer(0, 4)]), MPL_CORE_PROGRAM_ADDRESS);
+  };
+  const treeConfigKey = bubblegumTreeConfigPda(new PublicKey(drop.receiptsMerkleTree)).toBase58();
+  const tree = Buffer.alloc(getConcurrentMerkleTreeAccountSize(14, 64, 0));
+  tree[0] = 1; tree.writeUInt32LE(64, 2); tree.writeUInt32LE(14, 6); new PublicKey(treeConfigKey).toBuffer().copy(tree, 10);
+  const treeConfig = Buffer.alloc(96);
+  Buffer.from([122, 245, 175, 248, 171, 34, 0, 207]).copy(treeConfig);
+  payer.publicKey.toBuffer().copy(treeConfig, 8); payer.publicKey.toBuffer().copy(treeConfig, 40);
+  treeConfig.writeBigUInt64LE(16384n, 72); treeConfig[90] = 1;
+  const required = [...new Set([drop.boxMinterProgramId, drop.boxMinterConfigPda!, drop.operationsConfig!.boxMinterConfigPda,
+    config.authority, drop.paymentRouting!.deliveryPaymentReceiver, drop.collectionMint,
+    MPL_CORE_PROGRAM_ADDRESS, SystemProgram.programId.toBase58(), ComputeBudgetProgram.programId.toBase58(),
+    SPL_NOOP_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
+    BUBBLEGUM_PROGRAM_ADDRESS, MPL_CORE_CPI_SIGNER_ADDRESS, drop.receiptsMerkleTree, treeConfigKey])];
+  const lookup = Buffer.alloc(56 + required.length * 32);
+  lookup.writeUInt32LE(1); lookup.writeBigUInt64LE(0xffff_ffff_ffff_ffffn, 4); lookup.writeBigUInt64LE(90n, 12);
+  lookup[21] = 1; payer.publicKey.toBuffer().copy(lookup, 22);
+  required.forEach((address, index) => new PublicKey(address).toBuffer().copy(lookup, 56 + index * 32));
+  const accounts = new Map([
+    [drop.collectionMint, collection()], [drop.receiptsMerkleTree, account(tree, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS)],
+    [treeConfigKey, account(treeConfig, BUBBLEGUM_PROGRAM_ADDRESS)],
+    [drop.deliveryLookupTable!, account(lookup, AddressLookupTableProgram.programId.toBase58())],
+  ]);
+  const resources = { accounts, collection, tree, treeConfig, lookup, treeConfigKey, slot: undefined as number | undefined, reads: 0 };
+  const read = f.connection.getMultipleAccountsInfoAndContext.bind(f.connection);
+  t.mock.method(f.connection, 'getMultipleAccountsInfoAndContext', async (keys: PublicKey[], options) => {
+    if (keys[0]?.toBase58() !== drop.collectionMint) return read(keys, options);
+    assert.deepEqual(options, { commitment: 'finalized', minContextSlot: f.state.slot });
+    resources.reads += 1;
+    return { context: { slot: resources.slot ?? f.state.slot }, value: keys.map(key => accounts.get(key.toBase58()) ?? null) };
+  });
+  const verify = f.dependencies.verifyReadiness!;
+  f.dependencies.verifyReadiness = async (...args) => {
+    await verify(...args);
+    await verifyMiNoteMintResources({ connection: f.connection, drop, collectionConfig: config,
+      mintStarted: f.state.started, minimumSlot: f.state.slot });
+  };
+  return resources;
+}
+
 test('activation rejects malformed flags and operations IDs before contacting RPC or a signer', async (t) => {
   for (const args of [[], ['--yes'], ['mi_note_cards_devnet', '--manifest'], ['mi_note_cards_devnet', '--manifest', '--yes'],
     ['mi_note_cards_devnet', '--yes', '--yes'], ['mi_note_cards_devnet', '--write'], ['other', '--smoke']]) assert.throws(() => parseStartMintArgs(args));
@@ -176,6 +252,72 @@ test('--yes activation simulates, asks for one key, persists before sending and 
   assert.equal(f.state.operationsStarted, false); assert.equal(f.state.operationsMinted, 0);
   assert.equal(source.includes(bs58.encode(f.payer.secretKey)), false);
   assert.equal(source.includes('never-log-this-token'), false); assert.equal(f.state.logs.join('\n').includes('never-log-this-token'), false);
+});
+
+test('activation verifies finalized collection, receipt and lookup resources again after key entry', async (t) => {
+  const f = await fixture(t);
+  const resources = resourceFixture(t, f);
+  await f.run();
+  assert.ok(resources.reads >= 2);
+  assert.equal(f.state.sends.length, 1);
+});
+
+for (const [name, mutate] of Object.entries({
+  'missing A delegate': (r, f) => r.accounts.set(f.drop.collectionMint, r.collection([f.payer.publicKey.toBase58(), f.drop.operationsConfig!.boxMinterConfigPda])),
+  'missing B delegate': (r, f) => r.accounts.set(f.drop.collectionMint, r.collection([f.payer.publicKey.toBase58(), f.drop.boxMinterConfigPda!])),
+  'missing collection': (r, f) => r.accounts.delete(f.drop.collectionMint),
+  'wrong collection authority': (r, f) => r.accounts.get(f.drop.collectionMint)!.data.fill(0, 1, 33),
+  'missing Bubblegum plugin': (r, f) => {
+    const account = r.accounts.get(f.drop.collectionMint)!;
+    const base = 1 + 32 + 4 + Buffer.byteLength(NEW_PREORDER_COLLECTION.collectionMetadata.name) +
+      4 + Buffer.byteLength(NEW_PREORDER_COLLECTION.collectionMetadataUri) + 8;
+    account.data = account.data.subarray(0, base);
+  },
+  'missing receipt tree': (r, f) => r.accounts.delete(f.drop.receiptsMerkleTree),
+  'missing receipt TreeConfig': r => r.accounts.delete(r.treeConfigKey),
+  'wrong receipt tree owner': (r, f) => { r.accounts.get(f.drop.receiptsMerkleTree)!.owner = SystemProgram.programId; },
+  'wrong receipt TreeConfig owner': r => { r.accounts.get(r.treeConfigKey)!.owner = SystemProgram.programId; },
+  'wrong receipt tree authority': r => r.tree.fill(0, 10, 42),
+  'wrong receipt tree depth': r => r.tree.writeUInt32LE(15, 6),
+  'wrong receipt creator': r => r.treeConfig.fill(0, 8, 40),
+  'wrong receipt delegate': r => r.treeConfig.fill(0, 40, 72),
+  'public receipt tree': r => { r.treeConfig[88] = 1; },
+  'used receipt tree before first activation': r => r.treeConfig.writeBigUInt64LE(3n, 80),
+  'missing lookup table': (r, f) => r.accounts.delete(f.drop.deliveryLookupTable!),
+  'wrong lookup table owner': (r, f) => { r.accounts.get(f.drop.deliveryLookupTable!)!.owner = SystemProgram.programId; },
+  'wrong lookup table authority': r => r.lookup.fill(0, 22, 54),
+  'deactivated lookup table': r => r.lookup.writeBigUInt64LE(99n, 4),
+  'lookup table missing B': r => r.lookup.fill(0, 56 + 64, 56 + 96),
+  'unwarmed lookup table': r => r.lookup.writeBigUInt64LE(100n, 12),
+  'stale resource snapshot': r => { r.slot = 99; },
+} satisfies Record<string, (resources: ReturnType<typeof resourceFixture>, activation: Awaited<ReturnType<typeof fixture>>) => unknown>)) {
+  test(`activation rejects ${name} before requesting a key or sending`, async (t) => {
+    const f = await fixture(t);
+    mutate(resourceFixture(t, f), f);
+    await assert.rejects(f.run());
+    assert.equal(f.state.prompts, 0);
+    assert.deepEqual(f.state.sends, []);
+  });
+}
+
+test('losing B delegation during key entry prevents activation submission', async (t) => {
+  const f = await fixture(t);
+  const resources = resourceFixture(t, f);
+  f.state.onPrompt = () => resources.accounts.set(f.drop.collectionMint,
+    resources.collection([f.payer.publicKey.toBase58(), f.drop.boxMinterConfigPda!]));
+  await assert.rejects(f.run(), /UpdateDelegate/);
+  assert.equal(f.state.prompts, 1);
+  assert.deepEqual(f.state.sends, []);
+});
+
+test('active mint verification permits its used receipt tree without another signature', async (t) => {
+  const f = await fixture(t);
+  f.state.started = true; f.state.minted = 1; f.state.assigned = 2;
+  const resources = resourceFixture(t, f);
+  resources.treeConfig.writeBigUInt64LE(3n, 80);
+  assert.equal((await f.run()).alreadyActive, true);
+  assert.equal(f.state.prompts, 0);
+  assert.deepEqual(f.state.sends, []);
 });
 
 test('delayed key entry cannot consume the signed activation blockhash lifetime', async (t) => {

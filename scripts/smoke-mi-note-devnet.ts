@@ -159,7 +159,7 @@ export function acquireMiNoteSmokeRunLock(file: string): () => void {
 }
 
 export function isNeverFundedMiNoteSmokeRecord(record: MiNoteSmokeRecord): boolean {
-  return ['prepared', 'preflight-failed', 'cancelled', 'recovery-required'].includes(record.status) &&
+  return ['prepared', 'preflight-failed', 'running', 'cancelled', 'recovery-required'].includes(record.status) &&
     record.transactions.length === 0 && record.knownAssets.length === 0 && !record.pack && !record.reveal && !record.receipts;
 }
 
