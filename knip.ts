@@ -17,6 +17,8 @@ const config = {
       entry: [
         'src/renderer/main.tsx!',
         'src/static-render/clearCards.tsx!',
+        'scripts/mi-note-renderer/harness.tsx',
+        'scripts/mi-note-renderer/tests/*.test.mjs',
         'src/lib/miNotePackRenderSetup.ts!',
         'cloud/workers/api/src/index.ts!',
         'cloud/workers/api/test/*.test.ts',
@@ -37,6 +39,7 @@ const config = {
         'cloud/workers/api/runtime-test/**/*.ts',
         'cloud/workers/frontend/test/**/*.ts',
         'scripts/**/*.{ts,mjs}',
+        'scripts/mi-note-renderer/*.tsx',
         'tests/**/*.ts',
       ],
       ignoreDependencies: ['buffer', 'cloudflare'],

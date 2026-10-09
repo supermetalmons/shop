@@ -19,6 +19,8 @@ dist/
 renderer-samples/
 scripts/collection-files/
 *.tsbuildinfo
+__pycache__/
+*.pyc
 
 npm-debug.log*
 yarn-debug.log*

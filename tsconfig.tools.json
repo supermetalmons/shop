@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "types": ["node", "vite/client", "dom-webcodecs", "wicg-file-system-access"]
   },
-  "include": ["scripts/**/*.ts", "shared/**/*.ts", "tests/**/*.ts"]
+  "include": ["scripts/**/*.ts", "scripts/mi-note-renderer/*.tsx", "shared/**/*.ts", "tests/**/*.ts"]
 }

@@ -86,6 +86,12 @@ Knip discovers supported CLI entrypoints from `package.json` scripts. Dynamic
 drop configurations remain explicit in `knip.ts`; standalone scripts are not
 automatically treated as live code.
 
+The [Mi Note Safari renderer](scripts/mi-note-renderer/README.md) exports the full
+1,430-card collection as native 2000 × 2800 transparent PNGs. Its tracked toolkit
+includes capture, resumable checkpoints, image QA, contact sheets, and ZIP64
+publication. Python dependencies are isolated from the shop's production runtime;
+generated captures and reports stay outside version control.
+
 ## Mi Note cards
 
 `/mi_note_cards_devnet` offers preorder checkout on Solana devnet, and

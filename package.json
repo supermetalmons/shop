@@ -22,6 +22,8 @@
     "dev": "vite",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",
+    "render:mi-note-cards": "node scripts/mi-note-renderer/cli.mjs",
+    "test:mi-note-renderer": "node scripts/mi-note-renderer/test.mjs",
     "build": "vite build",
     "validate:browser-bundle": "node --experimental-strip-types scripts/validate-browser-bundle.ts",
     "types:frontend-worker": "wrangler types cloud/workers/frontend/worker-configuration.d.ts --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
