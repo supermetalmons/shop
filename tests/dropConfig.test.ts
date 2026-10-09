@@ -22,21 +22,23 @@ import {
 } from '../src/lib/dropConfig.ts';
 import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
-test('Mi Note devnet previews the upcoming drop while the public gallery stays on mainnet', () => {
-  const route = resolveAppRoute({ pathname: '/mi_note_cards_devnet/' });
-  assert.equal(route.kind, 'upcoming');
-  assert.equal(route.path, '/mi_note_cards_devnet');
-  assert.equal(route.shopPath, '/mi_note_cards_devnet');
-  assert.equal(route.preorderId, null);
-  assert.equal(route.walletCluster, 'devnet');
-  assert.equal(route.drop, null);
-  assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
-  const mainnetRoute = resolveAppRoute({ pathname: '/mi_note_cards' });
-  assert.equal(mainnetRoute.kind, 'mi-note-cards');
-  assert.equal(mainnetRoute.walletCluster, 'mainnet-beta');
-  assert.equal(mainnetRoute.shopPath, '/mi_note_cards');
-  assert.equal(mainnetRoute.preorderId, 'mi_note_cards');
-  assert.equal(mainnetRoute.upcoming, null);
+test('Mi Note mainnet and devnet use upcoming drops without a preorder gallery', () => {
+  for (const [path, cluster] of [
+    ['/mi_note_cards', 'mainnet-beta'],
+    ['/mi_note_cards_devnet', 'devnet'],
+  ] as const) {
+    for (const pathname of [path, `${path}/`]) {
+      const route = resolveAppRoute({ pathname, search: '?from=drop', hash: '#preview' });
+      assert.equal(route.kind, 'upcoming');
+      assert.equal(route.path, path);
+      assert.equal(route.shopPath, path);
+      assert.equal(route.preorderId, null);
+      assert.equal(route.walletCluster, cluster);
+      assert.equal(route.drop, null);
+      assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
+      assert.equal(route.replacementHref, null);
+    }
+  }
 });
 
 const UPCOMING_ROUTES = [
@@ -80,6 +82,16 @@ const UPCOMING_ROUTES = [
     previewImageUrl: 'https://cdn.lil.org/nft/drifella_shirt/images/clean.webp',
     previewAspectRatio: 1585 / 1242,
     boxNamePrefix: 'shirt',
+  },
+  {
+    path: '/mi_note_cards',
+    dropFamily: 'mi_note_cards',
+    solanaCluster: 'mainnet-beta',
+    label: 'Mi Note Cards',
+    title: 'Mi Note Cards',
+    previewImageUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    previewAspectRatio: 1050 / 1400,
+    boxNamePrefix: 'pack',
   },
   {
     path: '/mi_note_cards_devnet',
@@ -159,7 +171,7 @@ test('the route resolver keeps the complete WIP table in one exported definition
   ]);
 });
 
-test('Mi Note Cards WIP stays separate from its preorder page', () => {
+test('Mi Note Cards WIP stays separate from its upcoming drop page', () => {
   const route = resolveAppRoute({ pathname: '/mi_note_cards/wip/' });
   assert.equal(route.kind, 'wip');
   assert.equal(route.path, '/mi_note_cards/wip');
@@ -170,7 +182,7 @@ test('Mi Note Cards WIP stays separate from its preorder page', () => {
   assert.equal(route.upcoming, null);
   assert.equal(route.walletCluster, 'mainnet-beta');
   assert.equal(route.replacementHref, null);
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId, 'mi_note_cards');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming');
 });
 
 test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi Note pages', () => {
@@ -191,7 +203,7 @@ test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi
   assert.equal(resolveFrontendDropByPath('/mi_note_cards_devnet/wip'), null);
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'upcoming');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).walletCluster, 'devnet');
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId, 'mi_note_cards');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards/wip' }).wipExperience, 'mi_note_cards');
 });
 

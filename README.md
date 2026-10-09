@@ -94,15 +94,32 @@ generated captures and reports stay outside version control.
 
 ## Mi Note cards
 
-`/mi_note_cards_devnet` offers preorder checkout on Solana devnet, and
-`/mi_note_cards` offers it on Solana mainnet. Both display **Preorder Mi Note
-Cards** and only show cards eligible for the verified Ethereum wallet. Select
-up to three available cards, then use Preorder to purchase them in one
-transaction. Each costs 0.25 SOL, split equally between the two configured
-recipients; the buyer also pays NFT creation and network costs.
+Preorders are closed on both Solana mainnet and devnet. `/mi_note_cards` and
+`/mi_note_cards_devnet` display the standard upcoming **Mi Note Cards** drop
+with the same pack showcase, **Soon**, and **Notify Me**. Each route keeps its
+own network and URL; their WIP routes remain separate.
 
-Connect an Ethereum wallet and sign the server-issued message with
-`personal_sign` before viewing cards. Each challenge is single-use, expires
+Both configurations in `shared/preorders.ts` have `checkoutEnabled: false`
+while keeping `enabled: true` for inventory recognition and recovery. The API
+rejects new preparations and initial submissions of prepared orders with HTTP
+409, `failed-precondition`, and "Preorders are closed for this collection."
+It does so before preparing or cosigning transactions. Status, cancellation,
+and reconciliation remain available; submitted retries use their stored signed
+transactions, and unsigned reservations expire normally. Existing purchases,
+order history, and permanent card claims remain intact. Closure requires no
+database migration or on-chain changes.
+
+Signed-in buyers still discover submitted orders without local recovery data.
+While checkout is closed, a successful status check clears unsigned local
+preparations instead of keeping them alive for a checkout that cannot resume.
+
+The retained preorder protocol supports up to three eligible cards in one
+transaction when checkout is enabled. Each costs 0.25 SOL, split equally between
+the two configured recipients; the buyer also pays NFT creation and network costs.
+
+When checkout is enabled, buyers connect an Ethereum wallet and sign the
+server-issued message with `personal_sign` before viewing eligible cards.
+Each challenge is single-use, expires
 after five minutes, and binds the wallet, shop origin, preorder collection,
 nonce, and expiration. Verification lasts one hour. The browser stores the
 session in `sessionStorage` and sends it with `X-Mi-Note-Session`; Ops D1 stores
@@ -122,8 +139,8 @@ submission require both the recorded Ethereum identity and the Solana buyer.
 Submitted transactions retain their reservations until finalized
 success, failure, or verified expiry. Once the server verifies successful
 `confirmed` execution, the shop shows its normal Preordered success, updates the
-artwork and inventory, and allows another preorder immediately. The order remains
-submitted internally while finalization continues in the background. Status polling
+artwork and inventory, and allows another preorder when checkout is enabled.
+The order remains submitted internally while finalization continues in the background. Status polling
 and scheduled reconciliation recover interrupted purchases. A finalized successful card ID can never be purchased again,
 even if its NFT is later transferred or burned.
 
@@ -216,8 +233,9 @@ Preorder expiry atomically releases an unsigned reservation's claims when its
 order expires. Availability is a read-only view that ignores expired unsigned
 reservations in enabled collections. Preparation and scheduled reconciliation
 expire stored reservations and release their claims.
-Both existing collections are enabled in the shared configuration. Preparation,
-broadcasting, blockhash validation, and reconciliation verify the RPC genesis
+Both existing collections remain enabled for recognition and recovery, with
+checkout disabled separately. Preparation, broadcasting, blockhash validation,
+and reconciliation verify the RPC genesis
 hash against the configured devnet or mainnet cluster.
 
 If an old submitted preorder stays unresolved after the RPC prunes its history,

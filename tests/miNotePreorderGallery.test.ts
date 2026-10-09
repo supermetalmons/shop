@@ -17,6 +17,7 @@ const { default: Gallery } = await import('../src/components/MiNoteCardsGallery.
 const { useShopFeedback } = await import('../src/shop/ui/useShopFeedback.ts');
 const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
 cssImports.deregister();
+const openConfig = (preorderId: string) => ({ ...getPreorderConfig(preorderId)!, checkoutEnabled: true });
 const ADDRESS = '0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe';
 const DISPLAY_ADDRESS = '0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE';
 const ETH_SESSION = { token: 'test-token', address: ADDRESS, preorderId: 'mi_note_cards_devnet', expiresAtMs: Date.now() + 3_600_000 };
@@ -35,12 +36,66 @@ after(() => dom.window.close());
 
 function checkout(): PreorderCheckout {
   return {
-    config: getPreorderConfig('mi_note_cards_devnet')!, buyer: undefined, authenticatedBuyer: undefined, ethereumAddress: ADDRESS,
+    config: openConfig('mi_note_cards_devnet')!, buyer: undefined, authenticatedBuyer: undefined, ethereumAddress: ADDRESS,
     availability: { preorderId: 'mi_note_cards_devnet', ethereumAddress: ADDRESS, ownershipStatus: 'success', requiresAdminSignIn: false, items: Array.from({ length: 10 }, (_, index) => ({ id: index + 1, status: 'available' })) },
     availabilityError: null, refreshAvailability: async () => {}, order: null, pending: null, phase: 'idle',
     error: null, purchase: async () => {}, cancel: async () => {}, busy: false, pendingOrder: false, recoveryReady: true,
   };
 }
+
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${preorderId} closed checkout hides purchase controls and keeps purchased cards viewable`, () => {
+    const preorder = checkout();
+    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.availability = { ...preorder.availability!, preorderId, items: [
+      { id: 1, status: 'available' }, { id: 2, status: 'preordered' },
+    ] };
+    let viewed = false;
+    const view = render(createElement(MiNoteCardsGallery, { preorder, onViewPreordered: () => { viewed = true; return true; } }));
+    assert.equal(preorder.config.enabled, true);
+    assert.equal(preorder.config.checkoutEnabled, false);
+    assert.equal(view.queryByRole('button', { name: /Select preorder/ }), null);
+    assert.ok(view.getByRole('img', { name: 'Angel Lady' }));
+    fireEvent.click(view.getByRole('button', { name: /Preordered preorder #2:/ }));
+    fireEvent.click(view.getByRole('button', { name: 'View' }));
+    assert.equal(viewed, true);
+    assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
+  });
+
+  test(`${preorderId} closed checkout keeps prepared order cancellation without offering resume`, async () => {
+    const preorder = checkout();
+    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.availability = { ...preorder.availability!, preorderId };
+    preorder.pending = { requestId: 'request', cardIds: [1], orderId: 'order', ethereumAddress: ADDRESS };
+    preorder.pendingOrder = true;
+    preorder.order = { orderId: 'order', preorderId, buyer: 'buyer', ethereumAddress: ADDRESS, cardIds: [1],
+      assets: [{ id: 1, address: 'asset' }], status: 'prepared', expiresAtMs: Date.now() + 60_000, signature: null,
+    };
+    let cancelled = 0;
+    preorder.cancel = async () => { cancelled++; };
+    const view = render(createElement(MiNoteCardsGallery, { preorder }));
+    assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
+    assert.equal(view.queryByRole('button', { name: /Select preorder/ }), null);
+    await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Cancel' })); });
+    assert.equal(cancelled, 1);
+  });
+}
+
+test('closing checkout clears selections and cancels pending sign-in', () => {
+  const preorder = checkout();
+  let cancelled = 0;
+  const props = { preorder, onCancelPendingSignIn: () => { cancelled++; } };
+  const view = render(createElement(MiNoteCardsGallery, props));
+  fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
+  assert.ok(view.getByRole('button', { name: 'Preorder for 0.25 SOL' }));
+  const priorCancellations = cancelled;
+  view.rerender(createElement(MiNoteCardsGallery, { ...props, preorder: { ...preorder,
+    config: { ...preorder.config, checkoutEnabled: false },
+  } }));
+  assert.equal(cancelled, priorCancellations + 1);
+  assert.equal(view.queryByRole('button', { name: /Preorder for/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Select preorder/ }), null);
+});
 
 function gridCardIds(): number[] {
   return Array.from(document.querySelectorAll('.mi-note-cards__grid button'), (button) =>
@@ -49,7 +104,7 @@ function gridCardIds(): number[] {
 
 function orderingCheckout(preorderId: string): PreorderCheckout {
   const preorder = checkout();
-  return { ...preorder, config: getPreorderConfig(preorderId)!, authenticatedBuyer: 'buyer-a', availability: {
+  return { ...preorder, config: openConfig(preorderId)!, authenticatedBuyer: 'buyer-a', availability: {
     ...preorder.availability!, preorderId, items: [
       { id: 5, status: 'preordered' }, { id: 4, status: 'available' }, { id: 2, status: 'reserved' },
       { id: 1, status: 'preordered' }, { id: 3, status: 'available' },
@@ -139,7 +194,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       { id: 1400, tokenId: 129, name: 'Azure Holy Knight' },
     ];
     const preorder = checkout();
-    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.config = openConfig(preorderId)!;
     preorder.availability = { ...preorder.availability!, preorderId,
       items: cards.map(({ id }) => ({ id, status: 'available' })) };
     let purchased: number[] = [];
@@ -169,7 +224,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       { id: 1417, tokenId: 139 }, { id: 1418, tokenId: 140 }, { id: 1419, tokenId: 141 },
     ];
     const preorder = checkout();
-    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.config = openConfig(preorderId)!;
     preorder.availability = { ...preorder.availability!, preorderId,
       items: cards.map(({ id }) => ({ id, status: 'available' })) };
     const purchased: number[][] = [];
@@ -336,7 +391,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
   test(`${preorderId} checkout progress is communicated only through the action button`, () => {
     Math.random = () => 0;
     const preorder = checkout();
-    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.config = openConfig(preorderId)!;
     preorder.availability = { ...preorder.availability!, preorderId };
     const view = render(createElement(MiNoteCardsGallery, { preorder: { ...preorder, recoveryReady: false } }));
     fireEvent.click(view.getByRole('button', { name: /Select preorder #1:/ }));
@@ -426,7 +481,7 @@ test('checkout errors toast once per occurrence without an error-only panel', ()
   assert.equal(document.querySelector('.mi-note-preorder-panel')?.textContent, 'CancelPreorder • 0.25 SOL');
   view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, error: 'Your preorder expired.' }, showToast }));
   assert.deepEqual(messages, [error, error, 'Your preorder expired.']);
-  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, config: { ...getPreorderConfig('mi_note_cards')!, enabled: false }, error }, showToast }));
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, config: { ...openConfig('mi_note_cards')!, enabled: false }, error }, showToast }));
   assert.equal(messages.length, 3);
   assert.equal(document.querySelector('.mi-note-preorder-panel'), null);
 });
@@ -750,7 +805,7 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
       if (reset === 'collection') {
         const next = preorderId === 'mi_note_cards' ? 'mi_note_cards_devnet' : 'mi_note_cards';
         verification = { ...verification, session: { ...verification.session, preorderId: next } };
-        preorder = { ...preorder, config: getPreorderConfig(next)!, availability: { ...preorder.availability!, preorderId: next } };
+        preorder = { ...preorder, config: openConfig(next)!, availability: { ...preorder.availability!, preorderId: next } };
       }
       const nextAvailability = preorder.availability;
       preorder = { ...preorder, availability: null };
@@ -765,7 +820,7 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
   test(`${preorderId} selects one completed preorder and opens its artwork without purchasing`, () => {
     Math.random = () => 0;
     const preorder = checkout();
-    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.config = openConfig(preorderId)!;
     preorder.availability = { ...preorder.availability!, preorderId, items: preorder.availability!.items.map((item) => ({
       ...item, status: item.id <= 2 ? 'preordered' : item.id === 4 ? 'reserved' : 'available',
     })) };
@@ -834,7 +889,7 @@ test('completed preorder selection clears when availability or gallery scope cha
   assert.equal(view.queryByRole('button', { name: 'View' }), null);
   view.rerender(createElement(MiNoteCardsGallery, { preorder }));
   select();
-  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, config: { ...getPreorderConfig('mi_note_cards')!, enabled: false } } }));
+  view.rerender(createElement(MiNoteCardsGallery, { preorder: { ...preorder, config: { ...openConfig('mi_note_cards')!, enabled: false } } }));
   assert.equal(view.queryByRole('button', { name: 'View' }), null);
   assert.equal(view.queryByRole('button', { name: /Preordered preorder/ }), null);
   view.rerender(createElement(MiNoteCardsGallery, { preorder }));
@@ -847,7 +902,7 @@ test('both routes show the introduction before verification and keep collections
   for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     window.history.replaceState(null, '', `/${preorderId}?address=0x1111111111111111111111111111111111111111`);
     const preorder = checkout();
-    preorder.config = getPreorderConfig(preorderId)!;
+    preorder.config = openConfig(preorderId)!;
     const view = render(createElement(Gallery, { preorder,
       wallet: { ...WALLET, address: null, provider: null, status: 'disconnected' },
       verification: { ...VERIFICATION, session: null },

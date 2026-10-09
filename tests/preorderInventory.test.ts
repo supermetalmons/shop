@@ -55,11 +55,14 @@ test('new preorder cards retain their metadata IDs and images in both collection
   }
 });
 
-test('both preorder collections are public while other devnet inventory stays hidden', () => {
+test('closed preorder collections remain public while other devnet inventory stays hidden', () => {
   const publicDevnet = listShopInventoryCollectionScopes(false).filter((scope) => scope.solanaCluster === 'devnet');
   assert.deepEqual(publicDevnet, [{ solanaCluster: 'devnet', collectionMint: config.collection }]);
   const mainnet = getPreorderConfig('mi_note_cards')!;
-  assert.equal(mainnet.enabled, true);
+  for (const preorderConfig of [mainnet, config]) {
+    assert.equal(preorderConfig.enabled, true);
+    assert.equal(preorderConfig.checkoutEnabled, false);
+  }
   assert.equal(mainnet.unitPriceLamports, 250_000_000);
   assert.equal(config.unitPriceLamports, mainnet.unitPriceLamports);
   assert.equal(listShopInventoryCollectionScopes(false).some((scope) => scope.collectionMint === mainnet.collection), true);

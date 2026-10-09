@@ -87,10 +87,32 @@ test('pageshow restores the current route while irrelevant URL changes retain it
   assert.equal(view.result.current, current);
 });
 
-test('custom navigation and browser history switch between the Mi Note preorder and upcoming drop', async () => {
+for (const [path, cluster] of [
+  ['/mi_note_cards', 'mainnet-beta'],
+  ['/mi_note_cards_devnet', 'devnet'],
+] as const) {
+  test(`${path} loads and remounts as an upcoming drop without replacing its URL`, () => {
+    const href = `https://mons.shop${path}/?from=drop#preview`;
+    window.history.replaceState({ retained: true }, '', href);
+    for (let load = 0; load < 2; load += 1) {
+      const view = renderHook(useAppRoute);
+      assert.equal(view.result.current.kind, 'upcoming');
+      assert.equal(view.result.current.preorderId, null);
+      assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+      assert.equal(view.result.current.walletCluster, cluster);
+      assert.equal(window.location.href, href);
+      assert.deepEqual(window.history.state, { retained: true });
+      view.unmount();
+    }
+  });
+}
+
+test('custom navigation and browser history switch between the Mi Note upcoming networks', async () => {
   const view = renderHook(useAppRoute);
   act(() => navigate('/mi_note_cards'));
-  assert.equal(view.result.current.preorderId, 'mi_note_cards');
+  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.preorderId, null);
+  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
   act(() => navigate('/mi_note_cards_devnet'));
   assert.equal(view.result.current.kind, 'upcoming');
@@ -103,7 +125,9 @@ test('custom navigation and browser history switch between the Mi Note preorder 
     window.history.back();
     await navigated;
   });
-  assert.equal(view.result.current.preorderId, 'mi_note_cards');
+  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.preorderId, null);
+  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
 
   await act(async () => {

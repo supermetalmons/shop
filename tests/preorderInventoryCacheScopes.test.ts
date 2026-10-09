@@ -98,6 +98,7 @@ for (const owned of [false, true]) test(`finalized ${owned ? 'ownership' : 'abse
   const unexpected = async (): Promise<never> => assert.fail('Inventory handoff must not prepare, sign, submit, or cancel a preorder');
   const api: PreorderCheckoutApi = {
     availability: unexpected, prepare: unexpected, submit: unexpected, cancel: unexpected,
+    recoveries: async () => ({ order: null, recoveries: [], nextRecoveryCursor: null }),
     status: async (_preorderId, orderId) => {
       statusCalls++;
       assert.equal(orderId, order.orderId);

@@ -75,14 +75,14 @@ export function ShopPurchaseSection({
   routeStripePaymentPriceLabel,
   routeStripePaymentUnitAmountCents,
 }: ShopPurchaseSectionProps) {
-  const showMiNotePackShowcase = upcomingDropRoute?.path === '/mi_note_cards_devnet';
+  const showMiNotePackShowcase = upcomingDropRoute?.dropFamily === 'mi_note_cards';
   return (!routeDrop && upcomingDropRoute ? (
     <MintPanel
       mode="announcement"
       title={upcomingDropRoute.title}
       boxMedia={upcomingMintPreviewMedia}
       renderPreviewPrimary={showMiNotePackShowcase ? renderMiNotePackShowcase : undefined}
-      previewPrimaryKey={showMiNotePackShowcase ? 'mi-note-cards-devnet-showcase' : undefined}
+      previewPrimaryKey={showMiNotePackShowcase ? 'mi-note-cards-showcase' : undefined}
       boxNamePrefix={upcomingDropRoute.boxNamePrefix}
       dropId={upcomingDropRoute.dropFamily}
       terminalAction={{

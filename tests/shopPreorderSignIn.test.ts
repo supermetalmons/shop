@@ -17,7 +17,7 @@ const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.t
 afterEach(() => { cleanup(); window.localStorage.clear(); });
 after(() => dom.window.close());
 
-const config = getPreorderConfig('mi_note_cards_devnet')!;
+const config = { ...getPreorderConfig('mi_note_cards_devnet')!, checkoutEnabled: true };
 type PreorderApi = ReturnType<typeof createPreorderApi>;
 type RigProps = { connected: boolean; scopeKey: string; ethereumAddress?: string };
 const ethereumSession = {

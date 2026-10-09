@@ -216,6 +216,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     scopedAvailability?.items.map((item) => [item.id, item.status]) ?? [],
   ), [scopedAvailability]);
   const preorderEnabled = preorder?.config.enabled === true;
+  const checkoutEnabled = preorderEnabled && preorder?.config.checkoutEnabled === true;
   const purchaseLocked = Boolean(preorder?.busy || preorder?.pending);
 
   useEffect(() => {
@@ -233,7 +234,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
     cancelPendingSignIn.current?.();
     setSelected([]);
     setSelectedPreordered(null);
-  }, [selectionScope, preorderEnabled]);
+  }, [selectionScope, preorderEnabled, checkoutEnabled]);
   useEffect(() => {
     if (previousBuyer.current && previousBuyer.current !== preorder?.buyer) {
       setSelected([]);
@@ -326,7 +327,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               );
               return (
               <figure key={card.mid} className="mi-note-cards__item">
-                {preorderEnabled || isPreordered ? (
+                {checkoutEnabled || isPreordered ? (
                   <button
                     ref={isPreordered && isSelected ? selectedPreorderedButton : undefined}
                     type="button"
@@ -378,7 +379,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
           }}
         />
       )}
-      {!viewableItem && preorderEnabled && preorder && panelIds.length > 0 && (
+      {!viewableItem && preorderEnabled && preorder && (checkoutEnabled || preorder.pending) && panelIds.length > 0 && (
         <BackgroundLayerPortal>
           <div className="selection-panel mi-note-preorder-panel">
             <div className="selection-panel__left">
@@ -398,7 +399,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
                 else if (preorder.pendingOrder) void preorder.cancel();
                 else setSelected([]);
               }}>Cancel</button>
-              <button
+              {checkoutEnabled && <button
                 type="button"
                 className="mi-note-preorder-panel__submit"
                 aria-label={preordering ? actionLabel : `${actionLabel} for ${totalPrice} SOL`}
@@ -407,7 +408,7 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
               >
                 <span className="mi-note-preorder-panel__label" aria-live="polite" aria-atomic="true">{actionLabel}</span>
                 {!preordering && ` • ${totalPrice} SOL`}
-              </button>
+              </button>}
             </div>
           </div>
         </BackgroundLayerPortal>

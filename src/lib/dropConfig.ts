@@ -47,6 +47,16 @@ export const LEGACY_DROP_ROUTE_ALIASES = {
 
 const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
   {
+    path: '/mi_note_cards',
+    dropFamily: 'mi_note_cards',
+    solanaCluster: 'mainnet-beta',
+    label: 'Mi Note Cards',
+    title: 'Mi Note Cards',
+    previewImageUrl: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp',
+    previewAspectRatio: 1050 / 1400,
+    boxNamePrefix: 'pack',
+  },
+  {
     path: '/mi_note_cards_devnet',
     dropFamily: 'mi_note_cards',
     solanaCluster: 'devnet',

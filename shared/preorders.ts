@@ -15,6 +15,7 @@ export type PreorderConfig = Readonly<{
   collection: string;
   authority: string;
   enabled: boolean;
+  checkoutEnabled: boolean;
   unitPriceLamports: number;
   metadataBase: string;
   imageBase: string;
@@ -36,6 +37,7 @@ export const PREORDER_CONFIGS: readonly PreorderConfig[] = [
     cluster: 'devnet',
     collection: '65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv',
     enabled: true,
+    checkoutEnabled: false,
   },
   {
     ...defaults,
@@ -43,6 +45,7 @@ export const PREORDER_CONFIGS: readonly PreorderConfig[] = [
     cluster: 'mainnet-beta',
     collection: 'BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG',
     enabled: true,
+    checkoutEnabled: false,
   },
 ];
 

@@ -11,7 +11,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { usePreorderCheckout } = await import('../src/hooks/usePreorderCheckout.ts');
-const config = getPreorderConfig('mi_note_cards_devnet')!;
+const config = { ...getPreorderConfig('mi_note_cards_devnet')!, checkoutEnabled: true };
 const preorderCardIds = miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map(({ clean_card_id }) => clean_card_id))
   .sort((left, right) => left - right);
 const ethereumSession: MiNoteEthereumSession = {
@@ -459,7 +459,9 @@ for (const status of ['prepared', 'submitted'] as const) {
     api.status = async () => ({ order: existing });
     const { result } = renderHook(() => usePreorderCheckout(options, api));
     await waitFor(() => assert.equal(result.current.recoveryReady, true));
-    const expected = { ...saved, orderId: existing.orderId, ethereumAddress: null };
+    const expected = { ...saved, orderId: existing.orderId, ethereumAddress: null,
+      ...(status === 'submitted' ? { submittedAttempt: true } : {}),
+    };
     assert.deepEqual(result.current.order, existing);
     assert.deepEqual(result.current.pending, expected);
     assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), expected);
@@ -769,7 +771,7 @@ test('unknown submission remains blocked when later status still reports prepare
 
 test('mainnet purchases use matching Ethereum verification and authenticated Solana checkout', async () => {
   const { api, options, calls } = runtime();
-  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const mainnet = { ...getPreorderConfig('mi_note_cards')!, checkoutEnabled: true };
   const prepared = { ...order(), preorderId: mainnet.preorderId };
   api.prepare = async (input, session) => {
     assert.equal(session, mainnetSession);
@@ -797,6 +799,258 @@ test('disabled collections and unsupported signing wallets cannot prepare purcha
   await act(async () => { await unsupported.result.current.purchase([1]); });
   assert.equal(calls.prepare.length, 0);
   assert.match(unsupported.result.current.error!, /transaction signing/);
+});
+
+for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${preorderId} rejects a new purchase before wallet authentication`, async () => {
+    const { api, options, calls } = runtime();
+    let signIns = 0;
+    const { result } = renderHook(() => usePreorderCheckout({ ...options, config: getPreorderConfig(preorderId)!,
+      ethereumSession: sessionFor(preorderId), ensureSignedIn: async () => { signIns++; return true; },
+    }, api));
+    await waitFor(() => assert.equal(result.current.recoveryReady, true));
+    await act(async () => { await result.current.purchase([1]); });
+    assert.equal(signIns, 0);
+    assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
+    assert.equal(result.current.pending, null);
+  });
+
+  test(`${preorderId} discards closed unsigned preparations locally without cancelling server reservations`, async () => {
+    const { api, options, calls } = runtime();
+    const closedConfig = getPreorderConfig(preorderId)!;
+    const prepared = { ...order(), preorderId };
+    const key = `mons:preorder:v1:${closedConfig.cluster}:${closedConfig.collection}:${buyer}`;
+    window.localStorage.setItem(key, JSON.stringify({ requestId: 'request', cardIds: [1], orderId: prepared.orderId,
+      ethereumAddress: prepared.ethereumAddress,
+    }));
+    let checks = 0;
+    api.status = async () => { checks++; return { order: prepared }; };
+    const { result } = renderHook(() => usePreorderCheckout({ ...options, config: closedConfig,
+      ethereumSession: null, active: false,
+    }, api));
+    await waitFor(() => assert.equal(result.current.recoveryReady, true));
+    assert.equal(result.current.order, null);
+    assert.equal(result.current.pending, null);
+    assert.equal(window.localStorage.getItem(key), null);
+    await act(async () => {
+      await result.current.purchase([1]);
+      await result.current.cancel();
+      window.dispatchEvent(new dom.window.Event('focus'));
+    });
+    assert.equal(checks, 1);
+    assert.equal(calls.prepare.length + calls.submit.length + calls.signed + calls.cancel.length, 0);
+  });
+
+  test(`${preorderId} recovers persisted submitted orders after checkout closes and the gallery is inactive`, async () => {
+    const { api, options, calls } = runtime();
+    const closedConfig = getPreorderConfig(preorderId)!;
+    const pendingOrder = { ...order('submitted'), preorderId };
+    const key = `mons:preorder:v1:${closedConfig.cluster}:${closedConfig.collection}:${buyer}`;
+    window.localStorage.setItem(key, JSON.stringify({ requestId: 'request', cardIds: [1], orderId: pendingOrder.orderId,
+      ethereumAddress: pendingOrder.ethereumAddress, submittedAttempt: true,
+    }));
+    api.status = async () => ({ order: pendingOrder });
+    const { result } = renderHook(() => usePreorderCheckout({ ...options, config: closedConfig,
+      ethereumSession: null, active: false,
+    }, api));
+    await waitFor(() => assert.equal(result.current.order?.status, 'submitted'));
+    api.status = async () => ({ order: { ...pendingOrder, status: 'succeeded' } });
+    await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+    await waitFor(() => assert.equal(result.current.order?.status, 'succeeded'));
+    assert.equal(result.current.pending, null);
+    assert.equal(window.localStorage.getItem(key), null);
+    assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
+    assert.equal(calls.succeeded.length, 1);
+  });
+
+  test(`${preorderId} discovers server-only unconfirmed submissions without an active gallery or local pending record`, async () => {
+    const { api, options, calls } = runtime();
+    const submitted = { ...order('submitted'), preorderId };
+    let discoveryCalls = 0;
+    api.recoveries = async id => {
+      assert.equal(id, preorderId);
+      discoveryCalls++;
+      return { order: submitted, recoveries: [], nextRecoveryCursor: null };
+    };
+    const statusIds: (string | undefined)[] = [];
+    api.status = async (id, orderId) => {
+      assert.equal(id, preorderId);
+      statusIds.push(orderId);
+      return { order: { ...submitted, status: 'succeeded' } };
+    };
+    assert.equal(window.localStorage.length, 0);
+    const { result } = renderHook(() => usePreorderCheckout({ ...options, config: getPreorderConfig(preorderId)!,
+      ethereumSession: null, active: false,
+    }, api));
+    await waitFor(() => assert.equal(result.current.order?.status, 'submitted'));
+    assert.ok(discoveryCalls > 0);
+    assert.equal(result.current.pending?.orderId, submitted.orderId);
+    assert.equal(result.current.order?.confirmedSlot, undefined);
+    await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+    await waitFor(() => assert.equal(result.current.order?.status, 'succeeded'));
+    assert.deepEqual(statusIds, [submitted.orderId]);
+    assert.equal(result.current.pending, null);
+    assert.equal(calls.prepare.length + calls.submit.length + calls.signed + calls.cancel.length, 0);
+  });
+
+  for (const knownOrder of [false, true]) {
+    test(`${preorderId} clears an orphan ${knownOrder ? 'order' : 'request'} and stops foreground polling after a successful empty lookup`, async t => {
+      t.mock.timers.enable({ apis: ['setInterval'] });
+      const { api, options, calls } = runtime();
+      const closedConfig = getPreorderConfig(preorderId)!;
+      const key = `mons:preorder:v1:${closedConfig.cluster}:${closedConfig.collection}:${buyer}`;
+      const saved = { requestId: 'orphan', cardIds: [1], ethereumAddress: sessionFor(preorderId).address,
+        ...(knownOrder ? { orderId: 'missing-order' } : {}),
+      };
+      window.localStorage.setItem(key, JSON.stringify(saved));
+      let checks = 0;
+      api.status = async () => { checks++; return { order: null }; };
+      const { result } = renderHook(() => usePreorderCheckout({ ...options, config: closedConfig,
+        ethereumSession: null, active: false,
+      }, api));
+      await act(async () => {});
+      assert.equal(result.current.recoveryReady, true);
+      assert.equal(result.current.pending, null);
+      assert.equal(window.localStorage.getItem(key), null);
+      await act(async () => {
+        t.mock.timers.tick(5_000);
+        window.dispatchEvent(new dom.window.Event('focus'));
+      });
+      assert.equal(checks, 1);
+      assert.equal(calls.prepare.length + calls.submit.length + calls.signed + calls.cancel.length, 0);
+    });
+  }
+}
+
+for (const knownOrder of [false, true]) {
+  test(`closed ${knownOrder ? 'prepared order' : 'preparation request'} survives a failed recovery lookup`, async () => {
+    const { api, options } = runtime();
+    const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
+    const saved = { requestId: 'request', cardIds: [1], ethereumAddress: ethereumSession.address,
+      ...(knownOrder ? { orderId: 'order-1' } : {}),
+    };
+    window.localStorage.setItem(key, JSON.stringify(saved));
+    api.status = async () => { throw new Error('Offline'); };
+    const { result } = renderHook(() => usePreorderCheckout({ ...options, config: { ...config, checkoutEnabled: false },
+      ethereumSession: null, active: false,
+    }, api));
+    await waitFor(() => assert.match(result.current.error!, /keep checking/));
+    assert.deepEqual(result.current.pending, saved);
+    assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), saved);
+    assert.equal(result.current.recoveryReady, false);
+    api.status = async () => ({ order: null });
+    await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+    await waitFor(() => assert.equal(result.current.recoveryReady, true));
+    assert.equal(result.current.pending, null);
+    assert.equal(window.localStorage.getItem(key), null);
+  });
+}
+
+for (const responseStatus of [null, 'prepared'] as const) {
+  for (const replacedOrder of [false, true]) {
+    test(`closed ${responseStatus ?? 'empty'} recovery preserves another tab's ${replacedOrder ? 'newer order' : 'same-order submission attempt'}`, async () => {
+      const { api, options } = runtime();
+      const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
+      const saved = { requestId: 'request', cardIds: [1], orderId: 'order-1', ethereumAddress: ethereumSession.address };
+      window.localStorage.setItem(key, JSON.stringify(saved));
+      const response = Promise.withResolvers<{ order: PreorderOrder | null }>();
+      let checks = 0;
+      api.status = async () => { checks++; return checks === 1 ? response.promise : { order: null }; };
+      const { result } = renderHook(() => usePreorderCheckout({ ...options, config: { ...config, checkoutEnabled: false },
+        ethereumSession: null, active: false,
+      }, api));
+      await waitFor(() => assert.equal(checks, 1));
+      const newer = { ...saved, submittedAttempt: true,
+        ...(replacedOrder ? { requestId: 'new-request', orderId: 'order-2', cardIds: [2] } : {}),
+      };
+      window.localStorage.setItem(key, JSON.stringify(newer));
+      await act(async () => { response.resolve({ order: responseStatus ? order(responseStatus) : null }); });
+      await waitFor(() => assert.deepEqual(result.current.pending, newer));
+      assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), newer);
+    });
+  }
+
+  for (const savedState of ['uncertain', 'known', 'reloaded'] as const) {
+    test(`closed recovery preserves ${savedState} submission state after ${responseStatus ?? 'empty'} status`, async () => {
+      const { api, options, calls } = runtime();
+      const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
+      const submitted = order('submitted');
+      const uncertain = savedState === 'uncertain';
+      if (uncertain) window.localStorage.setItem(key, JSON.stringify({ requestId: 'request', cardIds: [1],
+        orderId: submitted.orderId, ethereumAddress: ethereumSession.address, submittedAttempt: true,
+      }));
+      api.status = async () => ({ order: uncertain ? responseStatus ? order(responseStatus) : null : submitted });
+      const render = () => renderHook(() => usePreorderCheckout({ ...options, config: { ...config, checkoutEnabled: false },
+        ethereumSession: null, active: false,
+      }, api));
+      let view = render();
+      await waitFor(() => assert.equal(view.result.current.recoveryReady, true));
+      api.status = async () => ({ order: responseStatus ? order(responseStatus) : null });
+      if (savedState === 'reloaded') {
+        view.unmount();
+        view = render();
+        await waitFor(() => assert.equal(view.result.current.recoveryReady, true));
+      }
+      await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+      assert.equal(view.result.current.pending?.orderId, submitted.orderId);
+      assert.ok(window.localStorage.getItem(key));
+      api.status = async () => ({ order: { ...submitted, status: 'succeeded' } });
+      await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
+      await waitFor(() => assert.equal(view.result.current.order?.status, 'succeeded'));
+      assert.equal(view.result.current.pending, null);
+      assert.equal(calls.prepare.length + calls.submit.length + calls.signed + calls.cancel.length, 0);
+    });
+  }
+}
+
+for (const phase of ['authenticating', 'preparing', 'signing'] as const) {
+  test(`closing checkout during ${phase} prevents subsequent transaction preparation, signing, or submission`, async () => {
+    const { api, options, calls } = runtime();
+    const paused = Promise.withResolvers<void>();
+    if (phase === 'authenticating') options.ensureSignedIn = async () => { await paused.promise; return true; };
+    if (phase === 'preparing') {
+      const prepare = api.prepare;
+      api.prepare = async (...args) => { await paused.promise; return prepare(...args); };
+    }
+    if (phase === 'signing') {
+      const sign = options.signTransaction;
+      options.signTransaction = async tx => { await paused.promise; return sign(tx); };
+    }
+    const { result, rerender } = renderHook(checkoutEnabled => usePreorderCheckout({ ...options,
+      config: { ...config, checkoutEnabled },
+    }, api), { initialProps: true });
+    await waitFor(() => assert.equal(result.current.recoveryReady, true));
+    let purchase!: Promise<void>;
+    act(() => { purchase = result.current.purchase([1]); });
+    await waitFor(() => assert.equal(result.current.phase, phase));
+    rerender(false);
+    await act(async () => { paused.resolve(); await purchase; });
+    assert.equal(calls.prepare.length, phase === 'authenticating' ? 0 : 1);
+    assert.equal(calls.signed, phase === 'signing' ? 1 : 0);
+    assert.equal(calls.submit.length, 0);
+    assert.equal(result.current.phase, 'idle');
+    if (phase !== 'authenticating') assert.equal(result.current.order?.status, 'prepared');
+  });
+}
+
+test('closing checkout while a submitted transaction completes preserves success and recovery', async () => {
+  const { api, options, calls } = runtime();
+  const submitted = Promise.withResolvers<Awaited<ReturnType<typeof api.submit>>>();
+  api.submit = async input => { calls.submit.push(input); return submitted.promise; };
+  const { result, rerender } = renderHook(checkoutEnabled => usePreorderCheckout({ ...options,
+    config: { ...config, checkoutEnabled },
+  }, api), { initialProps: true });
+  await waitFor(() => assert.equal(result.current.recoveryReady, true));
+  let purchase!: Promise<void>;
+  act(() => { purchase = result.current.purchase([1]); });
+  await waitFor(() => assert.equal(result.current.phase, 'submitting'));
+  rerender(false);
+  await act(async () => { submitted.resolve({ order: order('succeeded') }); await purchase; });
+  assert.equal(result.current.order?.status, 'succeeded');
+  assert.equal(result.current.pending, null);
+  assert.equal(calls.signed, 1);
+  assert.equal(calls.submit.length, 1);
+  assert.equal(calls.succeeded.length, 1);
 });
 
 test('a reservation conflict releases local pending state instead of trapping checkout', async () => {
@@ -1380,7 +1634,7 @@ for (const resolution of ['empty', 'matching'] as const) {
 
 test('Ethereum-verified mainnet loads availability before Solana sign-in without recovering or purchasing', async () => {
   const { api, options, calls } = runtime();
-  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const mainnet = { ...getPreorderConfig('mi_note_cards')!, checkoutEnabled: true };
   const requested: string[] = [];
   api.availability = async (preorderId) => {
     requested.push(preorderId);
@@ -1446,7 +1700,7 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
 
 test('collection changes hide old availability and errors and discard late responses', async () => {
   const { api, options } = runtime();
-  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const mainnet = { ...getPreorderConfig('mi_note_cards')!, checkoutEnabled: true };
   type Availability = Awaited<ReturnType<typeof api.availability>>;
   const requests: { preorderId: string; resolve: (value: Availability) => void; reject: (error: Error) => void }[] = [];
   api.availability = (preorderId) => new Promise((resolve, reject) => { requests.push({ preorderId, resolve, reject }); });
@@ -1477,7 +1731,7 @@ test('collection changes hide old availability and errors and discard late respo
 
 test('switching collections during signing clears checkout presentation and ignores the old result', async () => {
   const { api, options, calls } = runtime();
-  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const mainnet = { ...getPreorderConfig('mi_note_cards')!, checkoutEnabled: true };
   api.availability = async (preorderId) => ({ ...ownership, preorderId, items: [{ id: 1, status: 'available' }] });
   let finishSigning!: (value: VersionedTransaction) => void;
   options.signTransaction = () => new Promise((resolve) => { finishSigning = resolve; });
@@ -1498,7 +1752,7 @@ test('switching collections during signing clears checkout presentation and igno
 
 test('an inactive collection refresh cannot block or overwrite a newly active collection', async () => {
   const { api, options } = runtime();
-  const mainnet = getPreorderConfig('mi_note_cards')!;
+  const mainnet = { ...getPreorderConfig('mi_note_cards')!, checkoutEnabled: true };
   type Availability = Awaited<ReturnType<typeof api.availability>>;
   const requests: { preorderId: string; resolve: (value: Availability) => void }[] = [];
   api.availability = (preorderId) => new Promise((resolve) => { requests.push({ preorderId, resolve }); });

@@ -80,6 +80,12 @@ function enabledConfig(preorderId: string): PreorderConfig {
   return config;
 }
 
+function assertCheckoutEnabled(config: PreorderConfig): void {
+  if (!config.checkoutEnabled) {
+    throw new ProfileReadError('failed-precondition', 409, 'Preorders are closed for this collection.');
+  }
+}
+
 function rpcArgs(env: Env, config: PreorderConfig, dependencies: PreorderDependencies, signal: AbortSignal) {
   if (!env.HELIUS_API_KEY) throw new ProfileReadError('unavailable', 503, 'Preorders are temporarily unavailable.');
   return { config, apiKey: env.HELIUS_API_KEY, fetch: dependencies.providerFetch, signal };
@@ -200,6 +206,7 @@ export async function handlePreorderRequest(
       const body = parsed.data;
       const includeRecoveries = path === '/preorders/status' && 'includeRecoveries' in body && body.includeRecoveries === true;
       const config = path === '/preorders/availability' ? collectionConfig(body.preorderId) : enabledConfig(body.preorderId);
+      if (path === '/preorders/prepare') assertCheckoutEnabled(config);
       const store = new PreorderStore(env.COMMERCE_DB);
       const checkCommerce = async () => {
         if ((await loadCommerceAuthorityControl(env.COMMERCE_DB)).state !== 'd1') {
@@ -327,6 +334,7 @@ export async function handlePreorderRequest(
       if (order && path === '/preorders/cancel' && order.status === 'prepared') {
         order = await store.finish(order, 'cancelled', deps.nowMs());
       } else if (order && path === '/preorders/submit' && order.status === 'prepared') {
+        assertCheckoutEnabled(config);
         order = await reconcileOrder(order, store, env, deps, deadline.signal, { checkPreparedBlockhash: true });
         if (order.status === 'prepared') {
           if (!order.ethereumAddress) throw new ProfileReadError('failed-precondition', 409, 'Cancel this older preorder and select your verified cards again.');

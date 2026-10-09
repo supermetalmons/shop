@@ -104,45 +104,34 @@ function harness(overrides: Partial<Options> = {}, client = new QueryClient({
   return { ...view, options, client, toasts, successes, get refreshes() { return refreshes; } };
 }
 
-test('the devnet upcoming route disables preorders while mainnet verification remains available', async t => {
+test('both upcoming routes disable preorder wallet verification and checkout', async t => {
   const calls = server(t);
   const providerListeners = new Set<unknown>();
   Object.defineProperty(window, 'ethereum', { configurable: true, value: {
-    request: async ({ method }: { method: string }) => method === 'eth_chainId' ? '0x1'
-      : method === 'personal_sign' ? `0x${'01'.repeat(65)}` : [ethereumAddress],
+    request: async () => { throw new Error('Upcoming drops must not request the Ethereum wallet'); },
     on: (_event: string, listener: unknown) => providerListeners.add(listener),
     removeListener: (_event: string, listener: unknown) => providerListeners.delete(listener),
   } });
   window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'legacy' }));
-  const view = harness({ preorderId: resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId });
-  await waitFor(() => assert.equal(view.result.current.ethereumWallet.address, ethereumAddress));
-  await act(async () => { await view.result.current.ethereumVerification.verify(); });
-  await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, mainnet.preorderId));
-  assert.equal(view.result.current.miNoteCardsPage, true);
-
-  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).preorderId });
-  assert.equal(view.result.current.miNoteCardsPage, false);
-  assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);
-  assert.equal(view.result.current.ethereumVerification.session, null);
-  assert.equal(view.result.current.preorderCheckout.availability, null);
-  assert.deepEqual(calls.availabilityChecks, [mainnet.preorderId]);
-  await act(async () => {
-    await view.result.current.ethereumVerification.verify();
-    window.dispatchEvent(new dom.window.Event('focus'));
-  });
-  assert.equal(view.result.current.ethereumVerification.session, null);
-  assert.equal(view.result.current.preorderCheckout.availability, null);
-  assert.deepEqual(calls.challengeChecks, [mainnet.preorderId]);
-  assert.deepEqual(calls.availabilityChecks, [mainnet.preorderId]);
-
-  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/mi_note_cards' }).preorderId });
-  assert.equal(view.result.current.miNoteCardsPage, true);
-  assert.equal(view.result.current.preorderCheckout.config.preorderId, mainnet.preorderId);
-  await waitFor(() => assert.equal(view.result.current.preorderCheckout.availability?.preorderId, mainnet.preorderId));
-  assert.ok(calls.availabilityChecks.every(preorderId => preorderId === mainnet.preorderId));
-  view.rerender({ ...view.options, preorderId: resolveAppRoute({ pathname: '/' }).preorderId });
-  assert.equal(view.result.current.miNoteCardsPage, false);
-  assert.equal(view.result.current.preorderCheckout.config.preorderId, devnet.preorderId);
+  const view = harness();
+  for (const pathname of ['/mi_note_cards', '/mi_note_cards_devnet', '/mi_note_cards', '/']) {
+    const route = resolveAppRoute({ pathname });
+    assert.equal(route.preorderId, null);
+    view.rerender({ ...view.options, preorderId: route.preorderId });
+    assert.equal(view.result.current.miNoteCardsPage, false);
+    assert.equal(view.result.current.ethereumVerification.session, null);
+    assert.equal(view.result.current.preorderCheckout.availability, null);
+    assert.equal(view.result.current.preorderCheckout.config.checkoutEnabled, false);
+    await act(async () => {
+      await view.result.current.ethereumVerification.verify();
+      await view.result.current.preorderCheckout.purchase([1]);
+      window.dispatchEvent(new dom.window.Event('focus'));
+    });
+    assert.equal(view.result.current.ethereumVerification.session, null);
+    assert.equal(view.result.current.preorderCheckout.pending, null);
+  }
+  assert.deepEqual(calls.challengeChecks, []);
+  assert.deepEqual(calls.availabilityChecks, []);
   view.unmount();
   assert.equal(providerListeners.size, 0);
 });

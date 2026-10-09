@@ -25,7 +25,7 @@ const DISPLAY_ADDRESS = '0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE';
 const OTHER_DISPLAY_ADDRESS = '0x5BFce4149F520FE0823Dc8C0aFaF979121e824EC';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const SIGNATURE = `0x${'12'.repeat(65)}`;
-const config = getPreorderConfig('mi_note_cards_devnet')!;
+const config = { ...getPreorderConfig('mi_note_cards_devnet')!, checkoutEnabled: true };
 const originalFetch = globalThis.fetch;
 beforeEach(() => { ({ dom } = setupFrontendDom()); });
 afterEach(() => { cleanup(); globalThis.fetch = originalFetch; dom.window.close(); });
@@ -97,7 +97,7 @@ function rig() {
     prepare: forbidden, submit: forbidden, cancel: forbidden, status: async () => ({ order: null }),
   };
   function Harness({ admin = false, preorderId = config.preorderId, active = true }: { admin?: boolean; preorderId?: string; active?: boolean }) {
-    const collection = getPreorderConfig(preorderId)!;
+    const collection = { ...getPreorderConfig(preorderId)!, checkoutEnabled: true };
     const wallet = useMiNoteEthereumWallet(active);
     const verification = useMiNoteVerification(active, collection.preorderId, wallet);
     const preorder = usePreorderCheckout({ config: collection, active, buyer: admin ? ADMIN : undefined, signedIn: admin, authenticatedBuyer: admin ? ADMIN : undefined,
@@ -234,7 +234,7 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       const wallet = provider(); Object.assign(window, { ethereum: wallet });
       wallet.responses.eth_accounts = () => accounts.promise;
       rememberVerifiedWallet(preorderId);
-      const collection = getPreorderConfig(preorderId)!;
+      const collection = { ...getPreorderConfig(preorderId)!, checkoutEnabled: true };
       window.localStorage.setItem(`mons:preorder:v1:${collection.cluster}:${collection.collection}:${ADMIN}`, JSON.stringify({
         requestId: 'saved-preorder', cardIds: [1], ethereumAddress: ADDRESS,
       }));

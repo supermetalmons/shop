@@ -187,7 +187,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       const saved = matches(stored) ? stored : null;
       const previous = matches(pendingRef.current) ? pendingRef.current : null;
       keepPending({ requestId: saved?.requestId ?? previous?.requestId ?? null, cardIds: next.cardIds, orderId: next.orderId, ethereumAddress: next.ethereumAddress,
-        ...(saved?.submittedAttempt || previous?.submittedAttempt ? { submittedAttempt: true } : {}),
+        ...(next.status === 'submitted' || saved?.submittedAttempt || previous?.submittedAttempt ? { submittedAttempt: true } : {}),
       }, key);
     } else {
       keepPending(null, key);
@@ -255,7 +255,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
   }, [scope, scopeId, config.enabled, commitPending, invalidateOperation]);
 
   useEffect(() => {
-    if (!buyer || !signedIn || !config.enabled || (!active && !readPending(scope))) return;
+    if (!buyer || !signedIn || !config.enabled) return;
     let stopped = false;
     let checking = false;
     let lookedUp = false;
@@ -271,7 +271,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       if (lookedUp && !pendingRef.current) return;
       checking = true;
       const generation = recoveryGeneration.current;
-      const recoveringPending = pendingRef.current;
+      let recoveringPending = pendingRef.current;
       const isCurrent = () => !stopped && currentScope.current === scope && phaseRef.current === 'idle' &&
         recoveryGeneration.current === generation && pendingRef.current === recoveringPending;
       try {
@@ -283,9 +283,11 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
           await upsertPreorderRecovery(recovered);
           if (!isCurrent()) return;
         }
-        if (result.order && result.order.buyer !== buyer) throw new Error('Preorder wallet does not match.');
-        if (result.order && !await acceptPersistedOrder(result.order, scope, isCurrent)) return;
-        if (!result.order && recoveringPending && !recoveringPending.ethereumAddress &&
+        if (result.order && (result.order.buyer !== buyer || result.order.preorderId !== config.preorderId)) {
+          throw new Error('Preorder wallet or collection does not match.');
+        }
+        const retirePreparation = !config.checkoutEnabled && !recoveringPending?.submittedAttempt;
+        if (retirePreparation || !result.order && recoveringPending && !recoveringPending.ethereumAddress &&
           !recoveringPending.orderId && !recoveringPending.submittedAttempt) {
           const stored = readPending(scope);
           if (stored && !samePending(stored, recoveringPending)) {
@@ -294,7 +296,11 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
             return;
           }
           keepPending(null, scope);
+          setOrder(null);
+          recoveringPending = null;
         }
+        if (result.order && !(retirePreparation && result.order.status === 'prepared') &&
+          !await acceptPersistedOrder(result.order, scope, isCurrent)) return;
         setError((current) => current === RECOVERY_ERROR_MESSAGE || current === RECOVERY_CONFLICT_MESSAGE ? null : current);
         lookedUp = true;
         setRecoveryReady(true);
@@ -329,7 +335,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       unsubscribeRefreshEvents();
       window.removeEventListener('storage', storage);
     };
-  }, [acceptPersistedOrder, active, adoptPending, api, buyer, commitPending, config.enabled, config.preorderId, keepPending, recoveryRevision, scope, signedIn]);
+  }, [acceptPersistedOrder, active, adoptPending, api, buyer, commitPending, config.enabled, config.checkoutEnabled, config.preorderId, keepPending, recoveryRevision, scope, signedIn]);
 
   const beginOperation = (key: string, initialPhase: CheckoutPhase) => {
     const generation = ++recoveryGeneration.current;
@@ -352,7 +358,8 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
   };
 
   const purchase = async (selectedIds: number[]) => {
-    if (!latest.current.active || !config.enabled || checkoutScope !== scopeId || latest.current.config.preorderId !== config.preorderId || phaseRef.current !== 'idle' || order?.status === 'submitted' && order.confirmedSlot == null || pendingRef.current?.submittedAttempt) return;
+    const checkoutEnabled = () => latest.current.active && latest.current.config.enabled && latest.current.config.checkoutEnabled;
+    if (!checkoutEnabled() || checkoutScope !== scopeId || latest.current.config.preorderId !== config.preorderId || phaseRef.current !== 'idle' || order?.status === 'submitted' && order.confirmedSlot == null || pendingRef.current?.submittedAttempt) return;
     const startScope = scope;
     const ethereumSession = latest.current.ethereumSession;
     if (!ethereumSession || ethereumSession.preorderId !== config.preorderId || ethereumSession.expiresAtMs <= Date.now()) {
@@ -372,7 +379,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
     let attemptedSubmit = false;
     try {
       if (!await latest.current.ensureSignedIn()) return;
-      if (!buyer || !operation.isCurrent() || !latest.current.active) return;
+      if (!buyer || !operation.isCurrent() || !checkoutEnabled()) return;
       const signer = latest.current.signTransaction;
       if (!signer) throw new Error('Use a wallet that supports transaction signing to preorder.');
       const previous = pendingRef.current;
@@ -390,14 +397,14 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       if (!accepted) return;
       preparedOrder = accepted;
       void refreshAvailability();
-      if (preparedOrder.status !== 'prepared') return;
+      if (!checkoutEnabled() || preparedOrder.status !== 'prepared') return;
       if (!prepared.transactionBase64) throw new Error('Your preorder is being checked. Try again shortly.');
       if (Date.now() >= preparedOrder.expiresAtMs) throw new Error('This preorder expired. Waiting for availability to refresh.');
       operation.setCurrentPhase('signing');
       const transaction = VersionedTransaction.deserialize(Uint8Array.from(atob(prepared.transactionBase64), (character) => character.charCodeAt(0)));
       const originalMessage = transaction.message.serialize();
       const signed = await signer(transaction);
-      if (!operation.isCurrent() || !latest.current.active) return;
+      if (!operation.isCurrent() || !checkoutEnabled()) return;
       const acceptedAfterSigning = acceptOrder(preparedOrder, startScope);
       if (!acceptedAfterSigning || acceptedAfterSigning.status !== 'prepared') return;
       preparedOrder = acceptedAfterSigning;

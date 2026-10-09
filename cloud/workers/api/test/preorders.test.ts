@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { afterEach, beforeEach } from 'node:test';
 import { Keypair } from '@solana/web3.js';
 import miNoteCatalog from '../../../../mi_note_cards.json';
-import { getPreorderConfig, PREORDER_CARD_COUNT } from '../../../../shared/preorders.ts';
+import { getPreorderConfig, PREORDER_CARD_COUNT, PREORDER_CONFIGS } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
 import { PreorderStore, listPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
@@ -13,6 +13,13 @@ import { handleAnonymousAuthRequest } from '../src/anonymousAuth.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const config = getPreorderConfig('mi_note_cards_devnet')!;
+const checkoutDefaults = PREORDER_CONFIGS.map(config => config.checkoutEnabled);
+beforeEach(() => {
+  for (const config of PREORDER_CONFIGS) Object.assign(config, { checkoutEnabled: true });
+});
+afterEach(() => {
+  PREORDER_CONFIGS.forEach((config, index) => Object.assign(config, { checkoutEnabled: checkoutDefaults[index] }));
+});
 const preorderCardIds = miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map(({ clean_card_id }) => clean_card_id))
   .sort((left, right) => left - right);
 const BUYER = Keypair.generate().publicKey.toBase58();
@@ -88,6 +95,127 @@ function harness(options?: Parameters<typeof createCommerceD1Harness>[0]) {
     signedIn: (value: boolean) => { signedIn = value; },
     outcome: (value: typeof outcome) => { outcome = value; }, valid: (value: boolean) => { valid = value; },
     counts: () => ({ prepares, authorizations, sends }) };
+}
+
+for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
+  test(`${preorderId} closed checkout rejects new and replayed preparations without signing or reserving`, async t => {
+    const h = harness();
+    t.after(() => h.database.close());
+    const config = getPreorderConfig(preorderId)!;
+    const requestId = crypto.randomUUID();
+    const prepared = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId });
+    const order = (await h.store.get(prepared.body.order.orderId))!;
+    const counts = h.counts();
+    Object.assign(config, { checkoutEnabled: false });
+    const unexpected = t.mock.fn(async () => { assert.fail('Closed checkout must reject preparation before auth or provider work.'); });
+    for (const id of [crypto.randomUUID(), requestId]) {
+      const result = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId: id }, {
+        verifyIdentity: unexpected, verifyEthereumSession: unexpected, eligibility: unexpected,
+        prepare: unexpected, authorize: unexpected, blockhashValid: unexpected, probe: unexpected, send: unexpected,
+      });
+      assert.equal(result.status, 409);
+      assert.equal(result.body.error.code, 'failed-precondition');
+      assert.equal(result.body.error.message, 'Preorders are closed for this collection.');
+    }
+    assert.equal(unexpected.mock.callCount(), 0);
+    assert.deepEqual(h.counts(), counts);
+    assert.deepEqual(await h.store.get(order.orderId), order);
+    assert.deepEqual((await h.store.claims(config.cluster, config.collection)).map(claim => claim.orderId), [order.orderId]);
+    assert.equal(h.database.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').get()!.count, 1);
+  });
+
+  test(`${preorderId} closed checkout rejects unsigned submissions while preserving status and cancellation`, async t => {
+    const h = harness();
+    t.after(() => h.database.close());
+    const config = getPreorderConfig(preorderId)!;
+    const prepared = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() });
+    const order = (await h.store.get(prepared.body.order.orderId))!;
+    Object.assign(config, { checkoutEnabled: false });
+    const unexpected = t.mock.fn(async () => { assert.fail('Closed checkout must not authorize an unsigned order.'); });
+    const result = await h.call('submit', { preorderId, orderId: order.orderId, transactionBase64: 'buyer-signed' }, {
+      verifyEthereumSession: unexpected, eligibility: unexpected, prepare: unexpected,
+      authorize: unexpected, blockhashValid: unexpected, probe: unexpected, send: unexpected,
+    });
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error.code, 'failed-precondition');
+    assert.equal(result.body.error.message, 'Preorders are closed for this collection.');
+    assert.equal(unexpected.mock.callCount(), 0);
+    assert.deepEqual(h.counts(), { prepares: 1, authorizations: 0, sends: 0 });
+    assert.deepEqual(await h.store.get(order.orderId), order);
+    h.wallet(OTHER);
+    for (const path of ['status', 'cancel', 'submit']) {
+      assert.equal((await h.call(path, { preorderId, orderId: order.orderId,
+        ...(path === 'submit' ? { transactionBase64: 'buyer-signed' } : {}) })).status, 403);
+    }
+    h.wallet(BUYER);
+    assert.equal((await h.call('status', { preorderId, orderId: order.orderId })).body.order.status, 'prepared');
+    assert.equal((await h.call('status', { preorderId, includeRecoveries: true })).body.order.orderId, order.orderId);
+    assert.equal((await h.call('cancel', { preorderId, orderId: order.orderId })).body.order.status, 'cancelled');
+    const retry = await h.call('submit', { preorderId, orderId: order.orderId, transactionBase64: 'buyer-signed' });
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.order.status, 'cancelled');
+    assert.deepEqual(await h.store.claims(config.cluster, config.collection), []);
+    assert.deepEqual(h.counts(), { prepares: 1, authorizations: 0, sends: 0 });
+  });
+
+  test(`${preorderId} unsigned reservations expire normally after checkout closes`, async t => {
+    const h = harness();
+    t.after(() => h.database.close());
+    const config = getPreorderConfig(preorderId)!;
+    const prepared = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() });
+    const order = (await h.store.get(prepared.body.order.orderId))!;
+    Object.assign(config, { checkoutEnabled: false });
+    h.time(order.expiresAtMs);
+    const unexpected = t.mock.fn(async () => { assert.fail('Unsigned expiry must not sign or broadcast.'); });
+    assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, {
+      ...h.deps, prepare: unexpected, authorize: unexpected, blockhashValid: unexpected, probe: unexpected, send: unexpected,
+    }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+    assert.equal(unexpected.mock.callCount(), 0);
+    assert.equal((await h.store.get(order.orderId))!.status, 'expired');
+    assert.deepEqual(await h.store.claims(config.cluster, config.collection), []);
+    assert.equal((await h.call('status', { preorderId, orderId: order.orderId })).body.order.status, 'expired');
+  });
+
+  test(`${preorderId} closed checkout preserves submitted retries, recovery, and purchased inventory`, async t => {
+    const h = harness();
+    t.after(() => h.database.close());
+    const config = getPreorderConfig(preorderId)!;
+    const prepared = await h.call('prepare', { preorderId, buyer: BUYER, cardIds: [1], requestId: crypto.randomUUID() });
+    const orderId = prepared.body.order.orderId;
+    assert.equal((await h.call('submit', { preorderId, orderId, transactionBase64: 'buyer-signed' })).body.order.status, 'submitted');
+    Object.assign(config, { checkoutEnabled: false });
+    const unexpected = t.mock.fn(async () => { assert.fail('Retry must only use the stored authorized transaction.'); });
+    const retry = await h.call('submit', { preorderId, orderId, transactionBase64: 'different-request-bytes' }, {
+      verifyEthereumSession: unexpected, eligibility: unexpected, prepare: unexpected, authorize: unexpected,
+    });
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.order.status, 'submitted');
+    assert.equal(unexpected.mock.callCount(), 0);
+    assert.deepEqual(h.counts(), { prepares: 1, authorizations: 1, sends: 2 });
+    assert.equal((await h.store.get(orderId))!.signedTransaction, 'fully-signed');
+    h.outcome('confirmed');
+    const confirmed = await h.call('status', { preorderId, orderId });
+    assert.equal(confirmed.body.order.confirmedSlot, 550);
+    const recoveries = await h.call('status', { preorderId, includeRecoveries: true });
+    assert.equal(recoveries.status, 200);
+    assert.deepEqual(recoveries.body.recoveries.map((order: { orderId: string }) => order.orderId), [orderId]);
+    assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map(asset => asset.id), [1]);
+    h.outcome('finalized');
+    h.time(20_000);
+    assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps),
+      { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+    const succeeded = (await h.store.get(orderId))!;
+    const terminalRetry = await h.call('submit', { preorderId, orderId, transactionBase64: 'different-request-bytes' });
+    assert.equal(terminalRetry.status, 200);
+    assert.equal(terminalRetry.body.order.status, 'succeeded');
+    assert.deepEqual(await h.store.get(orderId), succeeded);
+    assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map(asset => asset.id), [1]);
+    assert.deepEqual((await h.store.claims(config.cluster, config.collection)).map(claim => claim.status), ['preordered']);
+    const availability = await h.call('availability', { preorderId });
+    assert.equal(availability.body.items.find((item: { id: number }) => item.id === 1).status, 'preordered');
+    assert.equal((await h.call('status', { preorderId, includeRecoveries: true })).body.recoveries.length, 0);
+    assert.deepEqual(h.counts(), { prepares: 1, authorizations: 1, sends: 2 });
+  });
 }
 
 test('preorder preparation is idempotent, never renews a reservation, and rejects changed selections', async () => {
