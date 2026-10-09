@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "status": "passed",
+  "verifiedAt": "2026-10-09T18:10:09.121Z",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "chain": {
+    "record": "chain-verification.json",
+    "observedFinalizedSlot": 454950648,
+    "finalConfigCheckSlot": 454952623,
+    "originalPreorderAssets": 176,
+    "preorderMetadataUnchanged": true,
+    "mintStarted": false,
+    "mintedPacks": 0,
+    "operationsStarted": false,
+    "operationsMinted": 0
+  },
+  "transactions": {
+    "record": "transactions-verification.json",
+    "finalized": 5,
+    "accountFundingLamports": 173451520,
+    "feeLamports": 25000,
+    "totalSpentLamports": 173476520,
+    "noProgramUpgrade": true,
+    "noPreorderConversion": true,
+    "noMintActivation": true
+  },
+  "inventory": {
+    "record": "inventory-verification.json",
+    "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+    "available": 1254,
+    "assigned": 0,
+    "permanentPreorderClaims": 176,
+    "exactManifestIdsAndPositions": true
+  },
+  "application": {
+    "api": {
+      "version": "37954d9f-ca0b-42c7-8ff2-ce1aba04e524",
+      "deploymentId": "1c9c215b-b49e-4538-8337-4645daaba57d",
+      "publishedAt": "2026-10-09T18:05:53.131057Z",
+      "percentage": 100
+    },
+    "frontend": {
+      "version": "82b45552-b557-4b69-b31e-84eca07e7156",
+      "deploymentId": "e14ecfe8-0be2-4296-a2c7-3f941c9ea366",
+      "publishedAt": "2026-10-09T18:06:28.180957Z",
+      "percentage": 100
+    },
+    "fingerprints": {
+      "entry": "/assets/index-Dq2leqMN.js",
+      "entrySha256": "4403e5648da9c7cee28e16e93a347c0f912471a1d4551e299164480baa161a28",
+      "registrySha256": "fbe7f13bc4104c4712880e62e5d511a6e263d5508c2d0682e59eb98bf9ea126b",
+      "routeHoldSha256": "ba03396cde58210fdf1f581b4a7ed5cf6e78a3eb54c3df7f40a1e88479249e9a"
+    },
+    "health": [
+      {
+        "url": "https://api.mons.shop/health",
+        "status": 200
+      },
+      {
+        "url": "https://mons.shop/api/health",
+        "status": 200
+      }
+    ],
+    "inventoryChecks": [
+      {
+        "includeDevnet": true,
+        "supportsConvertedPreorders": true,
+        "httpStatus": 200,
+        "originalMainnetPreorderIds": [
+          1285,
+          1308
+        ],
+        "originalPreorderProofs": 2,
+        "conversionObserved": false
+      },
+      {
+        "includeDevnet": true,
+        "supportsConvertedPreorders": false,
+        "httpStatus": 200,
+        "originalMainnetPreorderIds": [
+          1285,
+          1308
+        ],
+        "originalPreorderProofs": 2,
+        "conversionObserved": false
+      },
+      {
+        "includeDevnet": false,
+        "supportsConvertedPreorders": true,
+        "httpStatus": 200,
+        "originalMainnetPreorderIds": [
+          1285,
+          1308
+        ],
+        "originalPreorderProofs": 2,
+        "conversionObserved": false
+      },
+      {
+        "includeDevnet": false,
+        "supportsConvertedPreorders": false,
+        "httpStatus": 200,
+        "originalMainnetPreorderIds": [
+          1285,
+          1308
+        ],
+        "originalPreorderProofs": 2,
+        "conversionObserved": false
+      }
+    ],
+    "browser": {
+      "checkedAt": "2026-10-09T18:08:32.299Z",
+      "method": "Safari native accessibility and screenshot",
+      "mainnet": {
+        "url": "https://mons.shop/mi_note_cards",
+        "statusText": "Soon",
+        "notifyMeVisible": true,
+        "mintVisible": false,
+        "discountVisible": false,
+        "stripeVisible": false,
+        "quantitySliderVisible": false,
+        "existingPreorderTilesVisible": [
+          1285,
+          1308
+        ]
+      },
+      "devnet": {
+        "url": "https://mons.shop/mi_note_cards_devnet",
+        "mintVisible": true,
+        "mintLabel": "Mint 0.25 SOL",
+        "quantitySliderVisible": true
+      },
+      "noSigningOrPurchaseActions": true
+    }
+  },
+  "checks": {
+    "command": "NO_DNA=1 npm run check",
+    "status": "passed",
+    "frontendWorkerTests": 4,
+    "apiTests": 2234,
+    "d1RuntimeTests": 31,
+    "rootTests": 3241,
+    "rustTests": 35,
+    "existingProgramBinaryGate": "passed",
+    "productionDatabaseReadiness": "passed"
+  }
+}

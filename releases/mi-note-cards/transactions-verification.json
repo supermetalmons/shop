@@ -1,0 +1,283 @@
+{
+  "version": 1,
+  "status": "passed",
+  "checkedAt": "2026-10-09T18:00:58.636Z",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "deploymentRecordSha256": "f7002b30349a7dcd07b57f72cb2b6eecd9941b763b2245fe231da6a8d4b32ad1",
+  "journalSha256": "175b94ef75e4081128d16ee671b3752f1efc97a02d0a7cd10c8a03af8de3dfc3",
+  "deploymentAndJournalMatch": true,
+  "resourceVerificationSlot": 454950887,
+  "transactions": [
+    {
+      "step": "delegates",
+      "signature": "5w6FyEsx7WzqVqrfam49LxSEP55dHb6NApREKLj7aX8koU3DWrxiVqLR9S47vAYDCm9Vu9U4uuqGWHva84FvhiyC",
+      "slot": 454949251,
+      "journalVerifiedSlot": 454949251,
+      "confirmationStatus": "finalized",
+      "error": null,
+      "exactSignedBytesMatch": true,
+      "approvedInstructionsMatch": true,
+      "transactionSha256": "97028820071e2b57420bf855c4a66ae59de15202366785aec97877e337da7c02",
+      "feeLamports": 5000,
+      "accountFundingLamports": 325120,
+      "payerSpentLamports": 330120,
+      "funding": [
+        {
+          "address": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+          "delta": 325120
+        }
+      ],
+      "topLevelPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d"
+      ],
+      "invokedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+        "11111111111111111111111111111111"
+      ]
+    },
+    {
+      "step": "mint-config",
+      "signature": "2wFaFkLxe1SdvivzJcYqityXSdr8Xb5E1fB4gWAgtHmn6sYh7xGa28MUx18HbSXVfpwdNr8MLZSgyM4DxXXFfWVG",
+      "slot": 454949311,
+      "journalVerifiedSlot": 454949311,
+      "confirmationStatus": "finalized",
+      "error": null,
+      "exactSignedBytesMatch": true,
+      "approvedInstructionsMatch": true,
+      "transactionSha256": "70416ac1aed09d80587f0ff9a9c9829f2d8108fd110cc8b6373b368a04e5dc78",
+      "feeLamports": 5000,
+      "accountFundingLamports": 3129280,
+      "payerSpentLamports": 3134280,
+      "funding": [
+        {
+          "address": "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+          "delta": 3129280
+        }
+      ],
+      "topLevelPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU"
+      ],
+      "invokedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+        "11111111111111111111111111111111"
+      ]
+    },
+    {
+      "step": "operations-config",
+      "signature": "3xFgVQm7kvycgWStnrp5JXWJCzwgPH9DYsKKy5zpLx6MkXjMUbMCKb1aPf6TkRDsWSNzTBriT8kJQXtms4CQaeGt",
+      "slot": 454949366,
+      "journalVerifiedSlot": 454949366,
+      "confirmationStatus": "finalized",
+      "error": null,
+      "exactSignedBytesMatch": true,
+      "approvedInstructionsMatch": true,
+      "transactionSha256": "da52acf4459795271c485f5d4d0e78ba76ec05f2a5bc56a65d258083f72cea2d",
+      "feeLamports": 5000,
+      "accountFundingLamports": 3129280,
+      "payerSpentLamports": 3134280,
+      "funding": [
+        {
+          "address": "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+          "delta": 3129280
+        }
+      ],
+      "topLevelPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU"
+      ],
+      "invokedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+        "11111111111111111111111111111111"
+      ]
+    },
+    {
+      "step": "receipt-tree",
+      "signature": "39BLUSC3hf5hMFqEbaNnZLTGi4XCnwbq44sZAcswkKoxbSRBYvG9oWPJtsBxW3x2TAL83QauexQYMEwTSpYjVCpo",
+      "slot": 454949420,
+      "journalVerifiedSlot": 454949420,
+      "confirmationStatus": "finalized",
+      "error": null,
+      "exactSignedBytesMatch": true,
+      "approvedInstructionsMatch": true,
+      "transactionSha256": "d0238a8079088e024c78c7e4763173907599efdfaa80c450a152189065a35d5f",
+      "feeLamports": 5000,
+      "accountFundingLamports": 163332160,
+      "payerSpentLamports": 163337160,
+      "funding": [
+        {
+          "address": "9kvQRquRALfWqFW6VCgXSWSqqQrzcksefxSEhfAVEDVY",
+          "delta": 162194240
+        },
+        {
+          "address": "4LJqUfUbTFHnB7mGxNy7pUgBHSTZykfiHoykzCzq8e7Y",
+          "delta": 1137920
+        }
+      ],
+      "topLevelPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY"
+      ],
+      "invokedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "11111111111111111111111111111111",
+        "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+        "mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3"
+      ]
+    },
+    {
+      "step": "lookup-table",
+      "signature": "5s2x9rRS7A7wJ8YpNFq6cvYiS1Dtny2SjADdUdpeLQkPYaPFMq9kMo1DDYpVEHhhhDD1w6TVfCggrWj6mKjSow9V",
+      "slot": 454949485,
+      "journalVerifiedSlot": 454949485,
+      "confirmationStatus": "finalized",
+      "error": null,
+      "exactSignedBytesMatch": true,
+      "approvedInstructionsMatch": true,
+      "transactionSha256": "9a0edf375a675ab21d8897cb4d98614ee264beefe7ec7707a6ee609e403caa39",
+      "feeLamports": 5000,
+      "accountFundingLamports": 3535680,
+      "payerSpentLamports": 3540680,
+      "funding": [
+        {
+          "address": "AmGxiZNLys6jQDUQsxumnuVmjzD6MA7H6MAh5PXbLvgz",
+          "delta": 3535680
+        }
+      ],
+      "topLevelPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "AddressLookupTab1e1111111111111111111111111",
+        "AddressLookupTab1e1111111111111111111111111"
+      ],
+      "invokedPrograms": [
+        "ComputeBudget111111111111111111111111111111",
+        "AddressLookupTab1e1111111111111111111111111",
+        "11111111111111111111111111111111"
+      ]
+    }
+  ],
+  "totals": {
+    "feeLamports": 25000,
+    "accountFundingLamports": 173451520,
+    "payerSpentLamports": 173476520
+  },
+  "guards": {
+    "noMintStart": true,
+    "noPreorderAssetUpdates": true,
+    "noProgramUpgrade": true,
+    "onlyApprovedSetupInstructions": true,
+    "collectionMetadataAndNonDelegatePluginsPreserved": true,
+    "onlyExpectedWritableAccounts": true
+  },
+  "roleStates": [
+    {
+      "role": "mint-config",
+      "config": "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "started": false,
+      "minted": 0,
+      "maxSupply": 627,
+      "itemsPerBox": 0,
+      "priceLamports": "500000000",
+      "discountPriceLamports": "500000000",
+      "deliveryReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+      "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json"
+    },
+    {
+      "role": "operations-config",
+      "config": "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+      "started": false,
+      "minted": 0,
+      "maxSupply": 715,
+      "itemsPerBox": 2,
+      "priceLamports": "500000000",
+      "discountPriceLamports": "500000000",
+      "deliveryReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+      "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json"
+    }
+  ],
+  "collection": {
+    "address": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+    "name": "Mi Note Cards",
+    "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json",
+    "delegates": [
+      "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+      "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+    ]
+  },
+  "receipts": {
+    "tree": "9kvQRquRALfWqFW6VCgXSWSqqQrzcksefxSEhfAVEDVY",
+    "treeConfig": "4LJqUfUbTFHnB7mGxNy7pUgBHSTZykfiHoykzCzq8e7Y",
+    "numMinted": 0,
+    "isPublic": false
+  },
+  "lookupTable": {
+    "address": "AmGxiZNLys6jQDUQsxumnuVmjzD6MA7H6MAh5PXbLvgz",
+    "addresses": 16,
+    "active": true
+  },
+  "gate": {
+    "status": "passed",
+    "completedAt": "2026-10-09T17:45:54.316Z",
+    "attestationSha256": "64e1093e4458a87396483408d148b508020c36ac0c6a2378908803ff4d52a056",
+    "harnessSha256": "125c383be8bad0ef0342d5512967850fd43433f1a292618897218f4d3a2033aa",
+    "runnerSha256": "2fb3ea9ca3a1b4c4b6a90b5121d49eba6c2b33e0a367ed24eaaed979157d8b6d",
+    "currentPrograms": [
+      {
+        "name": "box_minter",
+        "programId": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+        "programDataAddress": "EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK",
+        "deploymentSlot": 438693777,
+        "sha256": "99fa84062b79da099b72b0559523e9781b0a6b31113ed0747c4ba56d15637ab5",
+        "bytes": 518720
+      },
+      {
+        "name": "mpl_core",
+        "programId": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+        "programDataAddress": "9ZC25KLUrfgSoFVgjE1rrydZBbZns58UXi8A8ZhTdGfr",
+        "deploymentSlot": 454236352,
+        "sha256": "30dce56b6b70ea524a3882ef7bc73936b9ae6ff3c3ea5cfee709ea935e710bf2",
+        "bytes": 848320
+      },
+      {
+        "name": "bubblegum",
+        "programId": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "programDataAddress": "BuBmqo7ehiQf5svTpw54air9bveqqFZQV9BjX277rqm7",
+        "deploymentSlot": 449480576,
+        "sha256": "b3a04a9d16cf2f168ae50e13756557867b3f6805c77519546147ec4065838bab",
+        "bytes": 1349808
+      },
+      {
+        "name": "compression",
+        "programId": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+        "programDataAddress": "EoHNeYc7mQJzb91fqLBtaMHiVdc4VcjDjZYZ7iCr9wFB",
+        "deploymentSlot": 339792668,
+        "sha256": "fd55664396a9589330bed7e9e0c6b579781744d53f4602d2f0cfb2eacb69fcc5",
+        "bytes": 2179480
+      },
+      {
+        "name": "mpl_noop",
+        "programId": "mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3",
+        "programDataAddress": "AqiaQQ7cbMKkypzEtRjp1SK2oV5bJELv4QoYCcPgNCMA",
+        "deploymentSlot": 339787184,
+        "sha256": "10d275edf5a3181eb4ac187c07d37efd0279c7a6fe0cb222b1ac97804bc14b8b",
+        "bytes": 19152
+      },
+      {
+        "name": "spl_noop",
+        "programId": "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV",
+        "programDataAddress": "3RHkdjCwWyK2firrwFQGvXCxbUpBky1GTmb9EDK9hUnX",
+        "deploymentSlot": 154177312,
+        "sha256": "3ebf49dd7d38bd45422caa3482446cd2d4867f956b040b1b75d6aafabdce8db7",
+        "bytes": 41056
+      }
+    ]
+  }
+}

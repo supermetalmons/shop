@@ -5,8 +5,8 @@ import {
   type MiNotePreorderChainSnapshot, type MiNotePreorderSnapshot,
 } from '../../scripts/shared/miNoteDropManifest.ts';
 
-export function miNoteManifestFixture() {
-  const config = getPreorderConfig('mi_note_cards_devnet')!;
+export function miNoteManifestFixture(preorderId: 'mi_note_cards_devnet' | 'mi_note_cards' = 'mi_note_cards_devnet') {
+  const config = getPreorderConfig(preorderId)!;
   const catalogText = JSON.stringify({
     ethereumCollections: [{ tokens: [1, 2, 3, 4, 1430].map((id) => ({ clean_card_id: id, name: `art ${id}` })) }],
     specialCards: [{ clean_card_id: 1401, name: 'special artwork' }],
@@ -18,7 +18,7 @@ export function miNoteManifestFixture() {
     claims: [1, 4].map((id) => ({ id, orderId: 'order', cluster: config.cluster, collection: config.collection })),
   };
   const chain: MiNotePreorderChainSnapshot = {
-    genesisHash: MI_NOTE_CLUSTER_GENESIS.devnet, slot: 1234,
+    genesisHash: MI_NOTE_CLUSTER_GENESIS[config.cluster as keyof typeof MI_NOTE_CLUSTER_GENESIS], slot: 1234,
     assets: assets.map((asset) => ({ ...asset, name: `Preorder #${asset.id}`,
       collection: config.collection, uri: `${config.metadataBase}${asset.id}.json` })),
   };

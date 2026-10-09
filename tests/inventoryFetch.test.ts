@@ -60,7 +60,7 @@ test('pending-open resolution requires the selected drop to match the placeholde
   assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 3)), 'card_nft_2');
   assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 1)), 'clear_cards');
   assert.equal(resolvePendingOpenDropId(entry([cardDrop, littleSwagDrop], 3), cardAsset), 'card_nft_2');
-  assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 2), shirtAsset), null);
+  assert.equal(resolvePendingOpenDropId(entry([cardDrop, shirtDrop], 2), shirtAsset), null);
 });
 
 test('shared receipt collections resolve drops by metadata base and share one query scope', () => {

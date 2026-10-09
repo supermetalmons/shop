@@ -6,11 +6,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import bs58 from 'bs58';
 import {
-  AddressLookupTableInstruction, AddressLookupTableProgram, ComputeBudgetProgram, Connection, Keypair, PublicKey,
+  AddressLookupTableAccount, AddressLookupTableInstruction, AddressLookupTableProgram, ComputeBudgetProgram, Connection, Keypair, PublicKey,
   SystemProgram, TransactionMessage, VersionedTransaction, type AccountInfo,
 } from '@solana/web3.js';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import { getPreorderConfig, PREORDER_PAYMENT_RECIPIENTS } from '../shared/preorders.ts';
+import { decodeBoxMinterConfigData } from '../shared/boxMinterConfigCodec.ts';
 import { defineNewDropConfig } from '../scripts/shared/newDropConfig.ts';
 import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
 import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/shared/miNoteDropManifest.ts';
@@ -31,22 +32,26 @@ const manifest = parseMiNoteDropManifest(JSON.parse(readFileSync(new URL('../rel
 const source = DEPLOYMENT_DROPS.clear_cards_devnet_v3;
 const DISABLED_DISCOUNT_ROOT = createHash('sha256').update(SystemProgram.programId.toBuffer()).digest();
 
-function recipe() {
+function recipe(mainnet = false) {
+  const selectedManifest = mainnet ? parseMiNoteDropManifest(JSON.parse(readFileSync(
+    new URL('../releases/mi-note-cards/inventory.json', import.meta.url), 'utf8',
+  ))) : manifest;
+  const selectedSource = mainnet ? DEPLOYMENT_DROPS.card_nft_2 : source;
   return defineNewDropConfig({
-    shared: { isMainnet: false, dropSymbol: 'minote', sellerFeeBasisPoints: 500 },
-    deploy: { reuseProgramId: true, reuseProgramIdFromDropId: source.dropId, coreCollectionPubkey: manifest.sourcePreorder.collection },
+    shared: { isMainnet: mainnet, dropSymbol: 'minote', sellerFeeBasisPoints: 500 },
+    deploy: { reuseProgramId: true, reuseProgramIdFromDropId: selectedSource.dropId, coreCollectionPubkey: selectedManifest.sourcePreorder.collection },
     onchain: {
-      dropId: manifest.sourcePreorder.preorderId, dropFamily: 'mi_note_cards', metadataBase: manifest.metadataBase,
+      dropId: selectedManifest.sourcePreorder.preorderId, dropFamily: 'mi_note_cards', metadataBase: selectedManifest.metadataBase,
       collectionMetadata: { name: 'Mi Note Cards', description: 'mi note cards', externalUrl: 'https://mons.shop',
         image: NEW_PREORDER_COLLECTION.collectionMetadata.image, creators: NEW_PREORDER_COLLECTION.collectionMetadata.creators },
       discountWhitelistCsvRelativePath: 'scripts/discounts/disabled.csv', receiptsTree: { maxDepth: 14, maxBufferSize: 64, canopyDepth: 0 },
       paymentRouting: { mintProceeds: [
         { address: PREORDER_PAYMENT_RECIPIENTS[0], percentage: 50 }, { address: PREORDER_PAYMENT_RECIPIENTS[1], percentage: 50 },
-      ], deliveryPaymentReceiver: getPreorderConfig(manifest.sourcePreorder.preorderId)!.authority },
-      priceSol: 0.25, discountPriceSol: 0.25, stripeCheckoutEnabled: false, discountMintsPerWallet: 1,
-      maxSupply: manifest.packCount, itemsPerBox: 2, maxPerTx: 15, namePrefix: 'pack', figureNamePrefix: 'card',
-      operationsConfig: { configId: 'mi_note_cards_devnet_operations', maxSupply: 715 },
-      inventoryManifest: { sha256: manifest.sha256, cardIds: [...manifest.eligibleCardIds] },
+      ], deliveryPaymentReceiver: mainnet ? PREORDER_PAYMENT_RECIPIENTS[1] : getPreorderConfig(selectedManifest.sourcePreorder.preorderId)!.authority },
+      priceSol: mainnet ? 0.5 : 0.25, discountPriceSol: mainnet ? 0.5 : 0.25, stripeCheckoutEnabled: false, discountMintsPerWallet: 1,
+      maxSupply: selectedManifest.packCount, itemsPerBox: 2, maxPerTx: 15, namePrefix: 'pack', figureNamePrefix: 'card',
+      operationsConfig: { configId: `${selectedManifest.sourcePreorder.preorderId}_operations`, maxSupply: 715 },
+      inventoryManifest: { sha256: selectedManifest.sha256, cardIds: [...selectedManifest.eligibleCardIds] },
     },
   });
 }
@@ -92,7 +97,7 @@ function roleAccount(plan: TwoConfigDeploymentPlan, kind: 'mint' | 'operations',
   const base = Buffer.concat([
     Buffer.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]), authority.toBuffer(),
     new PublicKey(drop.paymentRouting!.deliveryPaymentReceiver).toBuffer(), new PublicKey(plan.collection).toBuffer(),
-    int(250_000_000, 8), int(250_000_000, 8), DISABLED_DISCOUNT_ROOT, int(role.maxSupply, 4),
+    int(Math.round(drop.priceSol * 1_000_000_000), 8), int(Math.round(drop.discountPriceSol * 1_000_000_000), 8), DISABLED_DISCOUNT_ROOT, int(role.maxSupply, 4),
     Buffer.from([15, role.itemsPerBox]), int(0, 4), str('pack'), str('minote'), str(drop.metadataBase),
     Buffer.from([0, bump, 1]), str('card'), Buffer.alloc(37), seed,
   ]);
@@ -124,38 +129,42 @@ function lookupAccount(authority: PublicKey, addresses: PublicKey[], slot: numbe
   return account(data, AddressLookupTableProgram.programId.toBase58());
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, mainnet = false) {
   const root = mkdtempSync(path.join(tmpdir(), 'two-config-drop-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const payer = Keypair.generate();
-  const preorder = getPreorderConfig(manifest.sourcePreorder.preorderId)!;
+  const selectedManifest = mainnet ? parseMiNoteDropManifest(JSON.parse(readFileSync(
+    new URL('../releases/mi-note-cards/inventory.json', import.meta.url), 'utf8',
+  ))) : manifest;
+  const selectedSource = mainnet ? DEPLOYMENT_DROPS.card_nft_2 : source;
+  const preorder = getPreorderConfig(selectedManifest.sourcePreorder.preorderId)!;
   const originalAuthority = preorder.authority;
   Object.assign(preorder, { authority: payer.publicKey.toBase58() });
   t.after(() => Object.assign(preorder, { authority: originalAuthority }));
-  const config = recipe();
-  const plan = await createTwoConfigDeploymentPlan({ config, manifest, source });
+  const config = recipe(mainnet);
+  const plan = await createTwoConfigDeploymentPlan({ config, manifest: selectedManifest, source: selectedSource });
   const registryPath = path.join(root, 'shared/deploymentRegistry.ts');
   mkdirSync(path.dirname(registryPath), { recursive: true });
-  writeFileSync(registryPath, `export const DEPLOYMENT_DROPS = ${JSON.stringify({ [source.dropId]: source })};\nexport const BOX_MINTER_CONFIG_TOMBSTONES = {};\n`);
+  writeFileSync(registryPath, `export const DEPLOYMENT_DROPS = ${JSON.stringify({ [selectedSource.dropId]: selectedSource })};\nexport const BOX_MINTER_CONFIG_TOMBSTONES = {};\n`);
   const manifestPath = path.join(root, 'inventory.json');
-  writeFileSync(manifestPath, JSON.stringify(manifest));
+  writeFileSync(manifestPath, JSON.stringify(selectedManifest));
   const whitelistPath = path.join(root, config.onchain.discountWhitelistCsvRelativePath!);
   mkdirSync(path.dirname(whitelistPath), { recursive: true }); writeFileSync(whitelistPath, `${SystemProgram.programId.toBase58()}\n`);
-  const saved = path.join(root, 'scripts/preorderCollectionDeployments/devnet/mi_note_cards_devnet.json');
+  const saved = path.join(root, 'scripts/preorderCollectionDeployments', plan.cluster, `${plan.dropId}.json`);
   mkdirSync(path.dirname(saved), { recursive: true });
   writeFileSync(saved, JSON.stringify({ collectionMint: plan.collection, config: { authority: plan.authority } }));
-  const journalPath = path.join(root, '.cache/two-config-deployments/devnet/mi_note_cards_devnet.json');
+  const journalPath = path.join(root, '.cache/two-config-deployments', plan.cluster, `${plan.dropId}.json`);
   const collectionConfig = preparePreorderCollectionConfig({
-    ...NEW_PREORDER_COLLECTION, collectionId: plan.dropId, isMainnet: false, authority: plan.authority,
+    ...NEW_PREORDER_COLLECTION, collectionId: plan.dropId, isMainnet: mainnet, authority: plan.authority,
   }, plan.dropId);
   const accounts = new Map<string, AccountInfo<Buffer>>([[plan.collection, account(collectionBytes(payer.publicKey, [payer.publicKey]), MPL_CORE_PROGRAM_ADDRESS)]]);
   const simulated = new Map<string, Map<string, AccountInfo<Buffer>>>();
   const signatures = new Map<string, number>();
   const state = { sends: [] as string[], prompts: 0, confirmations: 0, simulations: 0, gateChecks: 0, manifestChecks: 0,
-    slot: manifest.chain.slot + 1, height: 100, failSend: '' as '' | 'before' | 'after', approval: true,
+    slot: selectedManifest.chain.slot + 1, height: 100, failSend: '' as '' | 'before' | 'after', approval: true,
     afterConfirmation: undefined as (() => void) | undefined };
   const connection = new Connection('https://fixture.example.com');
-  t.mock.method(connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS.devnet);
+  t.mock.method(connection, 'getGenesisHash', async () => MI_NOTE_CLUSTER_GENESIS[plan.cluster]);
   t.mock.method(connection, 'getAccountInfo', async key => accounts.get(key.toBase58()) || null);
   t.mock.method(connection, 'getMultipleAccountsInfoAndContext', async keys => ({ context: { slot: state.slot }, value: keys.map(key => accounts.get(key.toBase58()) || null) }));
   t.mock.method(connection, 'getMinimumBalanceForRentExemption', async () => 1_000_000);
@@ -218,14 +227,14 @@ async function fixture(t: TestContext) {
       state.gateChecks += 1;
       return { gate: { schemaVersion: 1, status: 'passed', testTarget: 'two_config_existing_programs', completedAt: '2026-10-09T00:00:00Z',
         attestationSha256: 'a'.repeat(64), harnessSha256: 'b'.repeat(64), runnerSha256: 'c'.repeat(64), targets: [] },
-      target: { cluster: 'devnet', genesisHash: MI_NOTE_CLUSTER_GENESIS.devnet, programs: [{ name: 'box_minter', programId: plan.programId,
+      target: { cluster: plan.cluster, genesisHash: MI_NOTE_CLUSTER_GENESIS[plan.cluster], programs: [{ name: 'box_minter', programId: plan.programId,
         loader: 'fixture', programReadSlot: 1, bytes: 1, sha256: 'd'.repeat(64), file: 'fixture' }] } };
     },
     promptPrivateKey: async () => { state.prompts += 1; return bs58.encode(payer.secretKey); },
     confirm: async () => { state.confirmations += 1; state.afterConfirmation?.(); return state.approval; },
     log: () => {}, now: () => new Date('2026-10-09T00:00:00Z'),
   };
-  const run = (write = true) => runTwoConfigDropDeployment({ root, dropId: plan.dropId, manifestPath, write, allowMainnet: false }, dependencies);
+  const run = (write = true) => runTwoConfigDropDeployment({ root, dropId: plan.dropId, manifestPath, write, allowMainnet: mainnet && write }, dependencies);
   return { root, config, plan, accounts, payer, connection, state, dependencies, run, manifestPath, journalPath, registryPath, whitelistPath };
 }
 
@@ -357,6 +366,62 @@ test('write workflow journals every signed transaction before broadcast and comm
   assert.deepEqual(record.collectionDelegates, delegates.delegates.map(key => key.toBase58()).sort());
   await f.run();
   assert.equal(f.state.sends.length, 5);
+});
+
+test('mainnet deploys the approved price and receivers into both stopped roles and one logical registry row', async t => {
+  const f = await fixture(t, true);
+  const result = await f.run();
+  assert.equal(result.ready, true);
+  assert.equal(f.state.sends.length, 5);
+  assert.equal(f.state.simulations, 5);
+  for (const role of [f.plan.mintConfig, f.plan.operationsConfig]) {
+    const config = decodeBoxMinterConfigData(f.accounts.get(role.boxMinterConfigPda)!.data);
+    assert.equal(config.started, false);
+    assert.equal(config.minted, 0);
+    assert.equal(config.maxSupply, role.maxSupply);
+    assert.equal(config.itemsPerBox, role.itemsPerBox);
+    assert.equal(config.priceLamports, 500_000_000n);
+    assert.equal(config.discountPriceLamports, 500_000_000n);
+    assert.equal(config.uriBase, 'https://cdn.lil.org/nft/mi_note_cards/json');
+    assert.equal(new PublicKey(config.paymentRouting.deliveryPaymentReceiver).toBase58(), PREORDER_PAYMENT_RECIPIENTS[1]);
+    assert.deepEqual(config.paymentRouting.mintProceeds.map(recipient => ({
+      address: new PublicKey(recipient.address).toBase58(), percentage: recipient.percentage,
+    })), PREORDER_PAYMENT_RECIPIENTS.map(address => ({ address, percentage: 50 })));
+  }
+  const registry = await readDeploymentDropRegistry(f.registryPath);
+  assert.deepEqual(Object.keys(registry.drops).sort(), ['card_nft_2', 'mi_note_cards']);
+  const drop = registry.drops.mi_note_cards;
+  assert.equal(drop.maxSupply, 627);
+  assert.equal(drop.itemsPerBox, 2);
+  assert.equal(drop.operationsConfig?.maxSupply, 715);
+  assert.equal(drop.inventoryManifest?.cardIds.length, 1254);
+  const lookup = AddressLookupTableAccount.deserialize(f.accounts.get(drop.deliveryLookupTable!)!.data);
+  for (const address of [f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda, PREORDER_PAYMENT_RECIPIENTS[1]]) {
+    assert.ok(lookup.addresses.some(key => key.toBase58() === address));
+  }
+  await f.run();
+  assert.equal(f.state.sends.length, 5);
+});
+
+test('mainnet rejects the devnet price, wrong delivery receiver, wrong mint split and metadata before signing', async t => {
+  const f = await fixture(t, true);
+  const approved = structuredClone(f.config.onchain);
+  const invalid = [
+    { priceSol: 0.25 },
+    { discountPriceSol: 0.25 },
+    { paymentRouting: { ...approved.paymentRouting!, deliveryPaymentReceiver: f.plan.authority } },
+    { paymentRouting: { ...approved.paymentRouting!, mintProceeds: PREORDER_PAYMENT_RECIPIENTS.map((address, index) => ({ address, percentage: index === 0 ? 100 : 0 })) } },
+    { metadataBase: 'https://cdn.lil.org/nft/mi_note_cards/json/pre' },
+  ];
+  for (const change of invalid) {
+    f.config.onchain = structuredClone(approved);
+    Object.assign(f.config.onchain, change);
+    await assert.rejects(f.run());
+  }
+  assert.equal(f.state.prompts, 0);
+  assert.equal(f.state.simulations, 0);
+  assert.deepEqual(f.state.sends, []);
+  assert.equal(existsSync(f.journalPath), false);
 });
 
 for (const finalitySource of ['finalized', 'state-verified', 'journal'] as const) {

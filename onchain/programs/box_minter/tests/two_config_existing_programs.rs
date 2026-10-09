@@ -16,7 +16,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_sha256_hasher::hashv;
-use std::{env, fs, path::PathBuf, str::FromStr};
+use std::{collections::BTreeSet, env, fs, path::PathBuf, str::FromStr};
 
 const ADMIN: &str = "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx";
 const MPL_CORE: &str = "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d";
@@ -25,7 +25,12 @@ const COMPRESSION: &str = "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW";
 const MPL_NOOP: &str = "mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3";
 const SPL_NOOP: &str = "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV";
 const CORE_CPI_SIGNER: &str = "CbNY3JiXdXNE9tPNEk1aRZVEkWdj2v7kfJLNQwZZgpXk";
-const METADATA_BASE: &str = "https://cdn.lil.org/nft/mi_note_cards/json/pre";
+const DEVNET_METADATA_BASE: &str = "https://cdn.lil.org/nft/mi_note_cards/json/pre";
+const MAINNET_METADATA_BASE: &str = "https://cdn.lil.org/nft/mi_note_cards/json";
+const MAINNET_RECIPIENTS: [&str; 2] = [
+    "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+    "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+];
 const COLLECTION_URI: &str = "https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json";
 
 fn key(value: &str) -> Pubkey {
@@ -198,6 +203,8 @@ struct Harness {
     sales: Pubkey,
     operations: Pubkey,
     public_supply: u32,
+    price_lamports: u64,
+    metadata_base: &'static str,
 }
 
 impl Harness {
@@ -227,9 +234,21 @@ impl Harness {
         let admin = key(ADMIN);
         let payer = Pubkey::new_unique();
         let collection = Pubkey::new_unique();
-        let treasury = Pubkey::new_unique();
-        let recipients = [Pubkey::new_unique(), Pubkey::new_unique()];
-        for address in [admin, payer, treasury, recipients[0], recipients[1]] {
+        let mainnet = cluster == "mainnet-beta";
+        let recipients = if mainnet {
+            MAINNET_RECIPIENTS.map(key)
+        } else {
+            [Pubkey::new_unique(), Pubkey::new_unique()]
+        };
+        let treasury = if mainnet {
+            recipients[1]
+        } else {
+            Pubkey::new_unique()
+        };
+        for address in [admin, payer, treasury, recipients[0], recipients[1]]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        {
             svm.set_account(
                 address,
                 Account {
@@ -261,6 +280,12 @@ impl Harness {
             sales,
             operations,
             public_supply,
+            price_lamports: if mainnet { 500_000_000 } else { 250_000_000 },
+            metadata_base: if mainnet {
+                MAINNET_METADATA_BASE
+            } else {
+                DEVNET_METADATA_BASE
+            },
         }
     }
 
@@ -388,15 +413,15 @@ impl Harness {
             drop_id.to_string()
         };
         let args = InitializeArgs {
-            price_lamports: 250_000_000,
-            discount_price_lamports: 250_000_000,
+            price_lamports: self.price_lamports,
+            discount_price_lamports: self.price_lamports,
             discount_merkle_root: hashv(&[Pubkey::default().as_ref()]).to_bytes(),
             max_supply: if operations { 715 } else { self.public_supply },
             max_per_tx: 15,
             items_per_box: if operations { 2 } else { 0 },
             name_prefix: "pack".into(),
             symbol: "minote".into(),
-            uri_base: METADATA_BASE.into(),
+            uri_base: self.metadata_base.into(),
             discount_mints_per_wallet: 1,
             figure_name_prefix: "card".into(),
             mint_variant_kind: 0,
@@ -439,8 +464,13 @@ impl Harness {
         assert_eq!(self.account(config).data.len(), 488);
         assert!(!self.config(config).started);
         assert_eq!(self.config(config).minted, 0);
-        assert_eq!(self.config(config).price_lamports, 250_000_000);
-        assert_eq!(self.config(config).discount_price_lamports, 250_000_000);
+        assert_eq!(self.config(config).price_lamports, self.price_lamports);
+        assert_eq!(
+            self.config(config).discount_price_lamports,
+            self.price_lamports
+        );
+        assert_eq!(self.config(config).treasury, self.treasury);
+        assert_eq!(self.config(config).uri_base, self.metadata_base);
         assert_eq!(
             self.config(config).discount_merkle_root,
             hashv(&[Pubkey::default().as_ref()]).to_bytes()
@@ -648,6 +678,7 @@ fn assert_missing_or_closed(harness: &Harness, address: Pubkey) {
 
 fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
     let mut h = Harness::new(cluster, program, public_supply);
+    let metadata_base = h.metadata_base;
     h.create_collection();
     let preorder = h.create_preorder();
     let preorder_before = h.account(preorder);
@@ -671,7 +702,7 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
     h.send("mint pack using A", h.payer, vec![mint]);
     assert_eq!(
         h.recipients.map(|recipient| h.account(recipient).lamports),
-        before.map(|amount| amount + 125_000_000)
+        before.map(|amount| amount + h.price_lamports / 2)
     );
     assert_eq!(
         core_asset(&h.account(asset)),
@@ -680,7 +711,7 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
             update_kind: 2,
             update_authority: Some(h.collection),
             name: "pack 1".into(),
-            uri: format!("{METADATA_BASE}/b1.json"),
+            uri: format!("{metadata_base}/b1.json"),
         }
     );
     let (wrong_open, pending, _) = h.open_ix(h.sales, asset);
@@ -806,7 +837,7 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
                 update_kind: 2,
                 update_authority: Some(h.collection),
                 name: format!("card {id}"),
-                uri: format!("{METADATA_BASE}/f{id}.json"),
+                uri: format!("{metadata_base}/f{id}.json"),
             }
         );
     }
@@ -858,15 +889,15 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
         vec![
             (
                 "receipt · pack 1".into(),
-                format!("{METADATA_BASE}/rb1.json")
+                format!("{metadata_base}/rb1.json")
             ),
             (
                 "receipt · card 1430".into(),
-                format!("{METADATA_BASE}/rf1430.json")
+                format!("{metadata_base}/rf1430.json")
             ),
             (
                 "receipt · card 1409".into(),
-                format!("{METADATA_BASE}/rf1409.json")
+                format!("{metadata_base}/rf1409.json")
             ),
         ]
     );
@@ -912,6 +943,7 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
         &h.program,
     );
     let before = h.account(h.treasury).lamports;
+    let recipients_before = h.recipients.map(|recipient| h.account(recipient).lamports);
     let mut deliver = h.ix(
         box_minter::accounts::Deliver {
             config: h.operations,
@@ -940,6 +972,17 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
         vec![deliver],
     );
     assert_eq!(h.account(h.treasury).lamports, before + 1_000_000);
+    for (index, recipient) in h.recipients.iter().enumerate() {
+        assert_eq!(
+            h.account(*recipient).lamports,
+            recipients_before[index]
+                + if *recipient == h.treasury {
+                    1_000_000
+                } else {
+                    0
+                }
+        );
+    }
     assert_eq!(core_asset(&h.account(dudes[0])).owner, h.admin);
     assert_eq!(core_asset(&h.account(sealed_pack)).owner, h.admin);
     let record = DeliveryRecord::try_deserialize(&mut h.account(delivery).data.as_slice()).unwrap();
@@ -972,7 +1015,7 @@ fn run_gate(cluster: &'static str, program: &str, public_supply: u32) {
     h.send("last allowed A pack", h.payer, vec![last]);
     assert_eq!(
         core_asset(&h.account(last_asset)).uri,
-        format!("{METADATA_BASE}/b{public_supply}.json")
+        format!("{metadata_base}/b{public_supply}.json")
     );
     let (over_supply, _) = h.mint_ix(h.sales, 5);
     h.reject("A supply cap", h.payer, over_supply, "SoldOut");

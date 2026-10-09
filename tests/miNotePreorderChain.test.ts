@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import bs58 from 'bs58';
 import test, { type TestContext } from 'node:test';
-import { Connection, PublicKey, type AccountInfo } from '@solana/web3.js';
+import { Connection, PublicKey, SolanaJSONRPCError, type AccountInfo } from '@solana/web3.js';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import { getPreorderConfig } from '../shared/preorders.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
@@ -45,6 +45,32 @@ test('prelaunch coverage directly verifies all22 claimed assets even when the co
   assert.ok(fixture.expected.every(({ address }) => fixture.state.directReads.flat().includes(address)));
   fixture.state.size = 23;
   await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection), /coverage is incomplete/);
+});
+
+test('a lagging finalized collection index retries the same minimum slot before verifying every claim', async (t) => {
+  const fixture = chainFixture(t);
+  const scan = fixture.connection.getProgramAccounts.bind(fixture.connection);
+  const slots: number[] = [];
+  t.mock.method(fixture.connection, 'getProgramAccounts', async (program, options) => {
+    slots.push(options.minContextSlot);
+    if (slots.length === 1) throw new SolanaJSONRPCError({ code: -32016, message: 'Minimum context slot has not been reached' });
+    return scan(program, options);
+  });
+  const result = await readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection);
+  assert.deepEqual(slots, [11, 11]);
+  assert.equal(result.assets.length, 22);
+  assert.ok(fixture.expected.every(({ address }) => fixture.state.directReads.flat().includes(address)));
+});
+
+test('unrelated RPC failures stop collection verification immediately', async (t) => {
+  const fixture = chainFixture(t);
+  let attempts = 0;
+  t.mock.method(fixture.connection, 'getProgramAccounts', async () => {
+    attempts += 1;
+    throw new SolanaJSONRPCError({ code: -32000, message: 'unavailable' });
+  });
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection), /unavailable/);
+  assert.equal(attempts, 1);
 });
 
 test('registered frozen verification permits compressed members but still checks every recorded preorder', async (t) => {

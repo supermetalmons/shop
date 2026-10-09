@@ -31,10 +31,12 @@ sales instructions belong to the mint role and are not enabled for this rehearsa
 
 - Devnet recipe: [`../newDrops/mi_note_cards_devnet.ts`](../newDrops/mi_note_cards_devnet.ts).
 - Devnet release: [`../../releases/mi-note-cards-devnet/README.md`](../../releases/mi-note-cards-devnet/README.md).
+- Mainnet recipe and release: [`../newDrops/mi_note_cards.ts`](../newDrops/mi_note_cards.ts), [`../../releases/mi-note-cards/README.md`](../../releases/mi-note-cards/README.md).
 - Preorder inventory process: [mi_note_public_inventory.md](mi_note_public_inventory.md).
 - Hosted metadata: [`../../releases/mi-note-cards-mainnet/README.md`](../../releases/mi-note-cards-mainnet/README.md).
 
-The metadata base is `https://cdn.lil.org/nft/mi_note_cards/json/pre`.
+The devnet metadata base is `https://cdn.lil.org/nft/mi_note_cards/json/pre`;
+mainnet uses `https://cdn.lil.org/nft/mi_note_cards/json`.
 Collection metadata continues to use the existing preorder collection URI.
 Devnet pack and pack-receipt JSONs 628–704 may be missing; preserve their numeric
 IDs and canonical URIs. All card IDs still use the original catalog numbering.
@@ -143,22 +145,63 @@ unchanged. Verify an ordinary wallet can mint, open, and recover a pending revea
 on `/mi_note_cards_devnet` while normal mainnet inventory stays independent of
 devnet provider availability.
 
-## Later mainnet launch
+## Mainnet setup with sales closed
+
+Mainnet uses the existing `card_nft_2` program deployment and mainnet preorder
+collection, with mint identity `mi_note_cards` (627 packs, zero on-chain items)
+and operations identity `mi_note_cards_operations` (715 supply, two items).
+Both configs remain unstarted and unminted. The logical drop has two cards per
+pack, both price fields are 0.5 SOL, and discounts and Stripe are disabled.
+Both configs split mint proceeds 50/50 between the existing preorder recipients;
+all shop delivery/redemption SOL fees go to
+`8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM`.
+
+```sh
+npm run prepare:mi-note-drop -- mi_note_cards --check releases/mi-note-cards/inventory.json
+npm run verify:two-config-programs
+npm run check
+npm run deploy-two-config-drop -- mi_note_cards --manifest releases/mi-note-cards/inventory.json
+npm run deploy-two-config-drop -- mi_note_cards --manifest releases/mi-note-cards/inventory.json --write --allow-mainnet --yes
+```
+
+The independent mainnet manifest must contain 176 excluded preorder IDs and
+1,254 eligible cards, filling exactly 627 packs. Preserve it at the canonical
+`releases/mi-note-cards/inventory.json` path used by later operations. The deployer
+preserves the existing authority delegate and adds both new config PDAs before
+creating the configs. Mainnet metadata is `/json`, without devnet's `/pre` suffix.
+The collection metadata URI and all existing preorder assets remain unchanged.
+
+After all five setup transactions finalize and the logical drop is registered:
+
+```sh
+npm run dude-inventory-control -- initialize-new --drop mi_note_cards --manifest releases/mi-note-cards/inventory.json
+npm run dude-inventory-control -- initialize-new --drop mi_note_cards --manifest releases/mi-note-cards/inventory.json --write
+npm run check:commerce-d1 -- --for-deployment
+npm run deploy:api
+npm run deploy
+```
+
+Commerce migration 0036 already supports this initialization; no new schema
+migration is needed. Initialize only this drop's eligible IDs before the API
+deployment audit. Do not bootstrap global inventory or alter the permanent claims.
+Publish the API before the frontend. The frontend explicitly holds
+`/mi_note_cards` in its existing Soon / Notify Me state despite registration.
+
+Verify finalized configs are both unstarted with zero minted, the collection's
+approved delegates contain both PDAs, the scoped inventory has 1,254 available
+cards and no assignments, and all 176 preorder NFTs retain their metadata. Save
+the deployment and verification records beside the manifest. This setup ends
+without running `start-mint`, a mainnet mint smoke, or `upgrade-mi-note-preorders`.
+
+## Later mainnet launch and fulfillment
 
 Before mainnet physical fulfillment, supply the measured per-card weight and the
 intended USD declared value and review the customs entry. Mi Note currently has
 no automatic customs defaults. Keep the devnet rehearsal limited to minting,
 opening, and on-chain receipts, without physical shipping or email orders.
 
-Prepare a separate manifest from `mi_note_cards` and require 627 packs from its
-own permanent preorder claims. Do not copy the devnet exclusion list. Create a
-reviewed mainnet recipe using existing program
-`7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU` and the saved mainnet preorder
-collection, with mint identity `mi_note_cards` and operations identity
-`mi_note_cards_operations`. The latter remains 715 supply, two items, and unstarted.
-
-Use the same gate, preview, initialization, publication, and verification sequence.
-Mainnet writes require an additional explicit `--allow-mainnet` flag. Mainnet
-metadata coverage must be complete for every public pack and receipt; the devnet
-missing-file allowance must not carry over. No mainnet activation is part of the
-devnet rehearsal.
+Activation and removal of the mainnet route hold require a separate launch task.
+Only the mint config may ever be started; operations stays unstarted. Preorder
+conversion is also separate and must preserve every permanent inventory exclusion.
+Recheck complete mainnet pack, card, and receipt metadata coverage before launch;
+the devnet missing-file allowance does not apply.

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { type AccountInfo, type Connection, PublicKey } from '@solana/web3.js';
+import { type AccountInfo, type Connection, PublicKey, SolanaJSONRPCError } from '@solana/web3.js';
 import {
   getPreorderConfig, preorderIdFromMetadataUri, type PreorderAsset, type PreorderConfig,
 } from '../../shared/preorders.ts';
@@ -15,7 +15,10 @@ import { decodePreorderAssetAccount } from '../../cloud/workers/api/src/preorder
 import { queryRemoteCommerceD1, sqlString, type CommerceAuthorityQuery } from './commerceD1Maintenance.ts';
 import { createScriptSolanaConnection } from './solanaRpcEnvironment.ts';
 
-const MI_NOTE_PUBLIC_METADATA_BASE = 'https://cdn.lil.org/nft/mi_note_cards/json/pre';
+const MI_NOTE_PUBLIC_METADATA_BASES = {
+  devnet: 'https://cdn.lil.org/nft/mi_note_cards/json/pre',
+  'mainnet-beta': 'https://cdn.lil.org/nft/mi_note_cards/json',
+} as const;
 const MI_NOTE_CATALOG_PATH = fileURLToPath(new URL('../../mi_note_cards.json', import.meta.url));
 export const MI_NOTE_CLUSTER_GENESIS = {
   devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
@@ -238,6 +241,15 @@ function collectionCoverage(account: AccountInfo<Buffer> | null, config: Preorde
     fingerprint: account.data.subarray(0, offset + 8).toString('hex'), size: account.data.readUInt32LE(offset + 4) };
 }
 
+async function finalizedRead<T>(read: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await read(); } catch (error) {
+      if (!(error instanceof SolanaJSONRPCError) || error.code !== -32016 || attempt >= 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+}
+
 export async function readMiNotePreorderChain(
   config: PreorderConfig, expectedAssets: readonly PreorderAsset[],
   connection: Pick<Connection, 'getGenesisHash' | 'getProgramAccounts' | 'getMultipleAccountsInfoAndContext'> =
@@ -253,10 +265,10 @@ export async function readMiNotePreorderChain(
     throw new Error('Invalid finalized collection response.');
   }
   const coverage = collectionCoverage(before.value[0], config);
-  const result = await connection.getProgramAccounts(new PublicKey(MPL_CORE_PROGRAM_ADDRESS), {
+  const result = await finalizedRead(() => connection.getProgramAccounts(new PublicKey(MPL_CORE_PROGRAM_ADDRESS), {
     commitment: 'finalized', withContext: true, minContextSlot: before.context.slot,
     filters: [{ memcmp: { offset: 0, bytes: '2' } }, { memcmp: { offset: 34, bytes: config.collection } }],
-  });
+  }));
   if (!Number.isSafeInteger(result.context.slot) || result.context.slot < before.context.slot) {
     throw new Error('Collection scan returned stale finalized state.');
   }
@@ -281,9 +293,9 @@ export async function readMiNotePreorderChain(
   let slot = result.context.slot;
   for (let offset = 0; offset < Math.max(1, addresses.length); offset += 99) {
     const batch = addresses.slice(offset, offset + 99);
-    const direct = await connection.getMultipleAccountsInfoAndContext([collectionKey, ...batch.map((address) => new PublicKey(address))], {
+    const direct = await finalizedRead(() => connection.getMultipleAccountsInfoAndContext([collectionKey, ...batch.map((address) => new PublicKey(address))], {
       commitment: 'finalized', minContextSlot: slot,
-    });
+    }));
     if (!Number.isSafeInteger(direct.context.slot) || direct.context.slot < slot || direct.value.length !== batch.length + 1) {
       throw new Error('Known preorder account verification returned stale or incomplete data.');
     }
@@ -355,7 +367,7 @@ async function verifiedMiNoteManifest(
   const content: Omit<MiNoteDropManifest, 'sha256'> = {
     version: 1, dropFamily: 'mi_note_cards',
     sourcePreorder: { preorderId: config.preorderId, cluster: config.cluster as 'devnet' | 'mainnet-beta', collection: config.collection },
-    metadataBase: MI_NOTE_PUBLIC_METADATA_BASE, itemsPerPack: 2,
+    metadataBase: MI_NOTE_PUBLIC_METADATA_BASES[config.cluster as keyof typeof MI_NOTE_PUBLIC_METADATA_BASES], itemsPerPack: 2,
     packCount: eligibleCardIds.length / 2, maxFigureId: catalog.all.at(-1)!,
     catalogSha256: miNoteManifestDigest(catalogText), preorderSnapshotSha256: miNoteManifestDigest(snapshot),
     excludedCardIds: excludedIds, eligibleCardIds, verifiedAt: dependencies.now().toISOString(),
@@ -377,7 +389,7 @@ export function parseMiNoteDropManifest(value: unknown): MiNoteDropManifest {
     'catalogSha256', 'preorderSnapshotSha256', 'excludedCardIds', 'eligibleCardIds', 'verifiedAt', 'chain', 'sha256'];
   if (Object.keys(value).length !== keys.length || keys.some((key) => !Object.hasOwn(value, key)) ||
     typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256) || miNoteManifestDigest(content) !== sha256 ||
-    value.version !== 1 || value.dropFamily !== 'mi_note_cards' || value.metadataBase !== MI_NOTE_PUBLIC_METADATA_BASE ||
+    value.version !== 1 || value.dropFamily !== 'mi_note_cards' ||
     value.itemsPerPack !== 2 || !positiveInteger(value.packCount) || !positiveInteger(value.maxFigureId) || value.maxFigureId > 0xffff ||
     !object(value.sourcePreorder) || typeof value.sourcePreorder.preorderId !== 'string' ||
     !object(value.chain) || value.chain.commitment !== 'finalized' || !Number.isSafeInteger(value.chain.slot) || Number(value.chain.slot) < 0 ||
@@ -391,6 +403,7 @@ export function parseMiNoteDropManifest(value: unknown): MiNoteDropManifest {
   const eligible = value.eligibleCardIds as number[];
   const ids = [...excluded, ...eligible];
   if (value.sourcePreorder.cluster !== config.cluster || value.sourcePreorder.collection !== config.collection ||
+    value.metadataBase !== MI_NOTE_PUBLIC_METADATA_BASES[config.cluster as keyof typeof MI_NOTE_PUBLIC_METADATA_BASES] ||
     value.chain.genesisHash !== MI_NOTE_CLUSTER_GENESIS[config.cluster as keyof typeof MI_NOTE_CLUSTER_GENESIS] ||
     value.chain.assetCount !== excluded.length || eligible.length !== value.packCount * 2 ||
     ids.some((id) => !positiveInteger(id) || id > Number(value.maxFigureId)) || new Set(ids).size !== ids.length ||

@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "status": "passed",
+  "checkedAt": "2026-10-09T18:07:17.813Z",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "preorderSnapshotSha256": "95029f754e8f08b225d50ecd17abcfb1f265d5007c8cf95be1e9a71e97811c04",
+  "authorityState": "d1",
+  "authorityRevision": 23,
+  "available": 1254,
+  "assigned": 0,
+  "publicDocuments": 0,
+  "permanentPreorderClaims": 176,
+  "exactManifestIdsAndPositions": true,
+  "allPreorderOrdersAndClaimsUnchanged": true,
+  "poolSha256": "05587fc9c82ecc5bdf8e4c6e2b12798b497016e94b38fd8a177d1852794de561",
+  "inventoryCompletedAtMs": 1791568738000,
+  "chain": {
+    "mintStarted": false,
+    "mintedPacks": 0,
+    "slot": 454952623
+  }
+}

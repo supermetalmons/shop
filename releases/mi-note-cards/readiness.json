@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "recordedAt": "2026-10-09T18:10:09.121Z",
+  "status": "deployed-sales-closed",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "packCount": 627,
+  "priceSol": 0.5,
+  "itemsPerPack": 2,
+  "maxFigureId": 1430,
+  "mintStarted": false,
+  "mintedPacks": 0,
+  "operationsStarted": false,
+  "operationsMinted": 0,
+  "preorderConversionPerformed": false,
+  "programUpgradePerformed": false,
+  "collection": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "inventoryGeneration": "7433c586-999d-471e-90f0-f90bea35b3ef",
+  "availableCards": 1254,
+  "assignedCards": 0,
+  "excludedPreorders": 176,
+  "paymentRouting": {
+    "mintProceeds": [
+      {
+        "address": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+        "percentage": 50
+      },
+      {
+        "address": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+        "percentage": 50
+      }
+    ],
+    "deliveryPaymentReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM"
+  },
+  "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json",
+  "publicPage": "https://mons.shop/mi_note_cards",
+  "publicPageState": "Soon",
+  "apiVersion": "37954d9f-ca0b-42c7-8ff2-ce1aba04e524",
+  "frontendVersion": "82b45552-b557-4b69-b31e-84eca07e7156",
+  "commerce": {
+    "authorityState": "d1",
+    "authorityRevision": 23,
+    "inventoryDrops": 8,
+    "availableCards": 6140
+  },
+  "verification": "verification.json",
+  "deferred": [
+    "mint activation",
+    "mainnet route hold removal",
+    "preorder metadata conversion",
+    "physical fulfillment customs setup"
+  ]
+}

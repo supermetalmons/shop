@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "preparedAt": "2026-10-09T17:53:06.789Z",
+  "status": "awaiting-authority-signing",
+  "cluster": "mainnet-beta",
+  "onchainTransactionsSent": 0,
+  "inventoryInitialized": false,
+  "applicationPublished": false,
+  "preview": {
+    "mode": "read-only",
+    "version": 1,
+    "dropId": "mi_note_cards",
+    "cluster": "mainnet-beta",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "collection": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+    "programId": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+    "mintConfig": {
+      "configId": "mi_note_cards",
+      "boxMinterConfigPda": "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "maxSupply": 627,
+      "itemsPerBox": 0
+    },
+    "operationsConfig": {
+      "configId": "mi_note_cards_operations",
+      "maxSupply": 715,
+      "boxMinterConfigPda": "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+      "itemsPerBox": 2
+    },
+    "receiptTree": {
+      "address": "9kvQRquRALfWqFW6VCgXSWSqqQrzcksefxSEhfAVEDVY",
+      "seed": "aa5c551910d3e1f3b864f4965651a178",
+      "space": 31800,
+      "maxDepth": 14,
+      "maxBufferSize": 64,
+      "canopyDepth": 0
+    },
+    "recipeSha256": "d24d6d3898e10c113d5096550cb7b323780d156cdfad7b4b378c400d1c5a3765",
+    "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+    "states": [
+      {
+        "step": "delegates",
+        "ready": false
+      },
+      {
+        "step": "mint-config",
+        "ready": false
+      },
+      {
+        "step": "operations-config",
+        "ready": false
+      },
+      {
+        "step": "receipt-tree",
+        "ready": false
+      },
+      {
+        "step": "lookup-table",
+        "ready": false
+      }
+    ],
+    "priceSol": 0.5,
+    "paymentRouting": {
+      "mintProceeds": [
+        {
+          "address": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+          "percentage": 50
+        },
+        {
+          "address": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+          "percentage": 50
+        }
+      ],
+      "deliveryPaymentReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM"
+    },
+    "preorderCardsPreserved": 176,
+    "inventoryCards": 1254,
+    "receiptTreeRentLamports": 162194240,
+    "gateCompletedAt": "2026-10-09T17:45:54.316Z"
+  },
+  "delegateSimulation": {
+    "version": 1,
+    "verifiedAt": "2026-10-09T17:51:28.032Z",
+    "cluster": "mainnet-beta",
+    "step": "delegates",
+    "simulationPassed": true,
+    "signed": false,
+    "broadcast": false,
+    "payer": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "collection": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+    "existingDelegates": [
+      "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+    ],
+    "addedDelegates": [
+      "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY"
+    ],
+    "collectionMetadataAndRoyaltiesPreserved": true,
+    "feeLamports": 5000,
+    "accountFundingLamports": 325120,
+    "unitsConsumed": 13323,
+    "slot": 454948281
+  },
+  "checks": {
+    "repository": {
+      "command": "NO_DNA=1 npm run check",
+      "status": "passed",
+      "frontendWorkerTests": 4,
+      "apiTests": 2234,
+      "d1RuntimeTests": 31,
+      "rootTests": 3240,
+      "rustTests": 35
+    },
+    "deployedProgramGate": {
+      "status": "passed",
+      "completedAt": "2026-10-09T17:45:54.316Z",
+      "attestationSha256": "64e1093e4458a87396483408d148b508020c36ac0c6a2378908803ff4d52a056",
+      "harnessSha256": "125c383be8bad0ef0342d5512967850fd43433f1a292618897218f4d3a2033aa",
+      "runnerSha256": "2fb3ea9ca3a1b4c4b6a90b5121d49eba6c2b33e0a367ed24eaaed979157d8b6d"
+    },
+    "databaseBeforeRegistration": {
+      "packStatus": "passed",
+      "ops": "passed",
+      "commerce": "passed",
+      "authorityState": "d1",
+      "authorityRevision": 23,
+      "inventoryDrops": 7,
+      "availableCards": 4886
+    },
+    "registeredMainnetSoonRoute": "passed-in-tests",
+    "independentReviews": "passed"
+  },
+  "nextStep": {
+    "command": "NO_DNA=1 npm run deploy-two-config-drop -- mi_note_cards --manifest releases/mi-note-cards/inventory.json --write --allow-mainnet --yes",
+    "journalPath": ".cache/two-config-deployments/mainnet-beta/mi_note_cards.json",
+    "recordPath": "releases/mi-note-cards/deployment.json"
+  },
+  "requiredFinalState": {
+    "mintStarted": false,
+    "mintedPacks": 0,
+    "operationsStarted": false,
+    "operationsMinted": 0,
+    "preorderCardsUnchanged": 176,
+    "eligibleCards": 1254,
+    "publicRoute": "Soon"
+  }
+}

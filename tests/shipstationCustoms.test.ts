@@ -8,12 +8,19 @@ import {
   shipStationPhysicalProductQuantity,
 } from '../shared/shipstationCustoms.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
+import { resolveAppRoute } from '../src/routes.ts';
 
-test('the ShipStation customs catalog contains every mainnet-deployed drop family', () => {
+test('the ShipStation customs catalog covers deployed mainnet families except the held Mi Note launch', () => {
   const deployedFamilies = Array.from(new Set(
     Object.values(DEPLOYMENT_DROPS).filter(drop => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropFamily),
   )).sort();
-  for (const family of deployedFamilies) assert.ok(SHIPSTATION_CUSTOMS_CATALOG[family], `${family} requires customs defaults before mainnet fulfillment`);
+  for (const family of deployedFamilies) {
+    if (family === 'mi_note_cards') {
+      assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming', 'Mi Note customs defaults must be configured before removing its launch hold');
+      continue;
+    }
+    assert.ok(SHIPSTATION_CUSTOMS_CATALOG[family], `${family} requires customs defaults before mainnet fulfillment`);
+  }
   assert.deepEqual(SHIPSTATION_CUSTOMS_CATALOG, {
     little_swag_boxes: {
       contentDescription: 'Painted collectible resin figure',
@@ -86,11 +93,13 @@ test('physical customs quantities expand boxes and count loose products individu
   assert.equal(shipStationPhysicalProductQuantity('unknown', 2, 3), 3);
 });
 
-test('Mi Note devnet does not fabricate automatic customs values before physical product details are configured', () => {
-  assert.equal(shipStationCustomsCatalogEntry('mi_note_cards_devnet'), undefined);
-  assert.equal(buildShipStationCustomsDeclaration('mi_note_cards_devnet', 1, 0), undefined);
-  assert.equal(buildShipStationCustomsDeclaration('mi_note_cards_devnet', 0, 2), undefined);
-});
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} does not fabricate automatic customs values before physical product details are configured`, () => {
+    assert.equal(shipStationCustomsCatalogEntry(dropId), undefined);
+    assert.equal(buildShipStationCustomsDeclaration(dropId, 1, 0), undefined);
+    assert.equal(buildShipStationCustomsDeclaration(dropId, 0, 2), undefined);
+  });
+}
 
 test('customs declarations use family defaults and add one ounce of packaging', () => {
   assert.deepEqual(buildShipStationCustomsDeclaration('little_swag_boxes', 2, 1), {

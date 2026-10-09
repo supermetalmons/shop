@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { parsePrepareMiNoteDropArgs } from '../scripts/prepare-mi-note-drop.ts';
 import {
@@ -33,6 +34,51 @@ test('snapshot SQL is one read scoped by both collection and cluster without cus
     assert.doesNotMatch(sql, /buyer|ethereum_address|signed_transaction|\bUPDATE\b|\bINSERT\b|\bDELETE\b/);
     return fixture.dependencies.query(sql);
   }, fixture.config);
+});
+
+test('mainnet inventory uses its own source collection, genesis, and canonical metadata base', async () => {
+  const fixture = miNoteManifestFixture('mi_note_cards');
+  const manifest = await prepareMiNoteDropManifest(fixture.config.preorderId, {
+    ...fixture.dependencies,
+    query: (sql) => {
+      assert.match(sql, /cluster = 'mainnet-beta' AND collection = 'BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG'/);
+      assert.doesNotMatch(sql, /devnet|65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv/);
+      return fixture.dependencies.query(sql);
+    },
+  });
+  assert.equal(manifest.metadataBase, 'https://cdn.lil.org/nft/mi_note_cards/json');
+  assert.deepEqual(manifest.sourcePreorder, { preorderId: 'mi_note_cards', cluster: 'mainnet-beta', collection: fixture.config.collection });
+  assert.equal(parseMiNoteDropManifest(manifest), manifest);
+  const devnet = miNoteManifestFixture();
+  await assert.rejects(prepareMiNoteDropManifest(fixture.config.preorderId,
+    { ...fixture.dependencies, query: devnet.dependencies.query }), /identity or card\/asset mapping/);
+  await assert.rejects(prepareMiNoteDropManifest(fixture.config.preorderId,
+    { ...fixture.dependencies, chain: devnet.dependencies.chain }), /Finalized preorder/);
+});
+
+test('resigned manifests reject metadata bases and source identities from the other cluster', async () => {
+  const devnet = await miNoteManifestFixture().manifest();
+  const mainnet = await miNoteManifestFixture('mi_note_cards').manifest();
+  for (const [manifest, other] of [[devnet, mainnet], [mainnet, devnet]]) {
+    for (const changes of [
+      { metadataBase: other.metadataBase },
+      { metadataBase: `${manifest.metadataBase}/` },
+      { sourcePreorder: { ...manifest.sourcePreorder, cluster: other.sourcePreorder.cluster } },
+      { sourcePreorder: { ...manifest.sourcePreorder, collection: other.sourcePreorder.collection } },
+      { chain: { ...manifest.chain, genesisHash: other.chain.genesisHash } },
+    ]) {
+      const { sha256: _sha256, ...content } = { ...manifest, ...changes };
+      assert.throws(() => parseMiNoteDropManifest({ ...content, sha256: miNoteManifestDigest(content) }), /source, inventory, or cardinality/);
+    }
+  }
+});
+
+test('the frozen devnet inventory keeps its metadata base and original manifest hash', () => {
+  const manifest = parseMiNoteDropManifest(JSON.parse(readFileSync(
+    new URL('../releases/mi-note-cards-devnet/inventory.json', import.meta.url), 'utf8',
+  )));
+  assert.equal(manifest.metadataBase, 'https://cdn.lil.org/nft/mi_note_cards/json/pre');
+  assert.equal(manifest.sha256, '198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d');
 });
 
 for (const status of ['prepared', 'submitted']) {

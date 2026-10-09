@@ -129,10 +129,13 @@ export async function createTwoConfigDeploymentPlan(args: {
     drop.stripeCheckoutEnabled !== false || drop.salesMode && drop.salesMode !== 'standard' || drop.receiptPoolId || drop.mintSelection) {
     throw new Error('Recipe must describe the closed preorder collection, exact saved inventory manifest, and standard two-card pack roles.');
   }
+  const expectedPriceSol = cluster === 'mainnet-beta' ? 0.5 : 0.25;
   if (!isDeepStrictEqual(drop.receiptsTree, TREE) || !drop.paymentRouting ||
     !isDeepStrictEqual(drop.paymentRouting.mintProceeds, PREORDER_PAYMENT_RECIPIENTS.map(address => ({ address, percentage: 50 }))) ||
-    drop.priceSol !== 0.25 || drop.discountPriceSol !== 0.25 || drop.namePrefix !== 'pack' || drop.figureNamePrefix !== 'card') {
-    throw new Error('Mi Note deployment requires the reviewed 0.25 SOL price, 50/50 proceeds, pack/card labels, and 14/64/0 receipt tree.');
+    drop.priceSol !== expectedPriceSol || drop.discountPriceSol !== expectedPriceSol ||
+    cluster === 'mainnet-beta' && drop.paymentRouting.deliveryPaymentReceiver !== PREORDER_PAYMENT_RECIPIENTS[1] ||
+    drop.namePrefix !== 'pack' || drop.figureNamePrefix !== 'card') {
+    throw new Error(`Mi Note deployment requires the reviewed ${expectedPriceSol} SOL price, 50/50 proceeds, approved delivery receiver, pack/card labels, and 14/64/0 receipt tree.`);
   }
   normalizeAndValidateDropId(drop.operationsConfig.configId, 'operations configId');
   const program = new PublicKey(source.boxMinterProgramId);

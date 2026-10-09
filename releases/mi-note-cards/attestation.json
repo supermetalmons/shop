@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-09T17:45:49.948Z",
+  "source": "read-only Solana RPC",
+  "targets": [
+    {
+      "cluster": "devnet",
+      "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+      "programs": [
+        {
+          "name": "box_minter",
+          "programId": "8oFSao3VA9DrZouLe3ZFqkbUsjuF6aFDr1eJPh4pyh6",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "F6axngB3Xv6FxRxoTV37qpDzzApZev5VnDLwvVrBYJB3",
+          "deploymentSlot": 483021046,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 518720,
+          "sha256": "863ef61a3a60fa873bc2504182acccd6e831a79c282eb9086c2bb2b1ab804837",
+          "file": "devnet/box_minter.so"
+        },
+        {
+          "name": "mpl_core",
+          "programId": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "9ZC25KLUrfgSoFVgjE1rrydZBbZns58UXi8A8ZhTdGfr",
+          "deploymentSlot": 508467871,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 855888,
+          "sha256": "6d9c16f05e3326652b40ff928a3e49c6db671318c031e952e4fc183109cc0888",
+          "file": "devnet/mpl_core.so"
+        },
+        {
+          "name": "bubblegum",
+          "programId": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "BuBmqo7ehiQf5svTpw54air9bveqqFZQV9BjX277rqm7",
+          "deploymentSlot": 502498383,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 1709808,
+          "sha256": "e054423179cc57281d5c2fc9fdb7e3cfcf2ef70cdbb0c4d36ab52696e51157b1",
+          "file": "devnet/bubblegum.so"
+        },
+        {
+          "name": "compression",
+          "programId": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "EoHNeYc7mQJzb91fqLBtaMHiVdc4VcjDjZYZ7iCr9wFB",
+          "deploymentSlot": 380631788,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 2421840,
+          "sha256": "3586e2852ea61311611e3941bb3af037aaf495b2f38503049b40b89065226fd4",
+          "file": "devnet/compression.so"
+        },
+        {
+          "name": "mpl_noop",
+          "programId": "mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "AqiaQQ7cbMKkypzEtRjp1SK2oV5bJELv4QoYCcPgNCMA",
+          "deploymentSlot": 380635046,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 19152,
+          "sha256": "10d275edf5a3181eb4ac187c07d37efd0279c7a6fe0cb222b1ac97804bc14b8b",
+          "file": "devnet/mpl_noop.so"
+        },
+        {
+          "name": "spl_noop",
+          "programId": "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "3RHkdjCwWyK2firrwFQGvXCxbUpBky1GTmb9EDK9hUnX",
+          "deploymentSlot": 163362765,
+          "programDataReadSlot": 509258539,
+          "programReadSlot": 509258538,
+          "bytes": 39088,
+          "sha256": "dfa9b5e1c425131cbbe77a7277cf2fecffce2ef4d1b94e9a5770dda218f54131",
+          "file": "devnet/spl_noop.so"
+        }
+      ]
+    },
+    {
+      "cluster": "mainnet-beta",
+      "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+      "programs": [
+        {
+          "name": "box_minter",
+          "programId": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK",
+          "deploymentSlot": 438693777,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 518720,
+          "sha256": "99fa84062b79da099b72b0559523e9781b0a6b31113ed0747c4ba56d15637ab5",
+          "file": "mainnet-beta/box_minter.so"
+        },
+        {
+          "name": "mpl_core",
+          "programId": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "9ZC25KLUrfgSoFVgjE1rrydZBbZns58UXi8A8ZhTdGfr",
+          "deploymentSlot": 454236352,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 848320,
+          "sha256": "30dce56b6b70ea524a3882ef7bc73936b9ae6ff3c3ea5cfee709ea935e710bf2",
+          "file": "mainnet-beta/mpl_core.so"
+        },
+        {
+          "name": "bubblegum",
+          "programId": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "BuBmqo7ehiQf5svTpw54air9bveqqFZQV9BjX277rqm7",
+          "deploymentSlot": 449480576,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 1349808,
+          "sha256": "b3a04a9d16cf2f168ae50e13756557867b3f6805c77519546147ec4065838bab",
+          "file": "mainnet-beta/bubblegum.so"
+        },
+        {
+          "name": "compression",
+          "programId": "mcmt6YrQEMKw8Mw43FmpRLmf7BqRnFMKmAcbxE3xkAW",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "EoHNeYc7mQJzb91fqLBtaMHiVdc4VcjDjZYZ7iCr9wFB",
+          "deploymentSlot": 339792668,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 2179480,
+          "sha256": "fd55664396a9589330bed7e9e0c6b579781744d53f4602d2f0cfb2eacb69fcc5",
+          "file": "mainnet-beta/compression.so"
+        },
+        {
+          "name": "mpl_noop",
+          "programId": "mnoopTCrg4p8ry25e4bcWA9XZjbNjMTfgYVGGEdRsf3",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "AqiaQQ7cbMKkypzEtRjp1SK2oV5bJELv4QoYCcPgNCMA",
+          "deploymentSlot": 339787184,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 19152,
+          "sha256": "10d275edf5a3181eb4ac187c07d37efd0279c7a6fe0cb222b1ac97804bc14b8b",
+          "file": "mainnet-beta/mpl_noop.so"
+        },
+        {
+          "name": "spl_noop",
+          "programId": "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV",
+          "loader": "BPFLoaderUpgradeab1e11111111111111111111111",
+          "programDataAddress": "3RHkdjCwWyK2firrwFQGvXCxbUpBky1GTmb9EDK9hUnX",
+          "deploymentSlot": 154177312,
+          "programDataReadSlot": 454946732,
+          "programReadSlot": 454946732,
+          "bytes": 41056,
+          "sha256": "3ebf49dd7d38bd45422caa3482446cd2d4867f956b040b1b75d6aafabdce8db7",
+          "file": "mainnet-beta/spl_noop.so"
+        }
+      ]
+    }
+  ]
+}

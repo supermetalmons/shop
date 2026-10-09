@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "recordedAt": "2026-10-09T18:01:06.361Z",
+  "cluster": "mainnet-beta",
+  "operation": "initialize-new",
+  "mode": "rows",
+  "paused": false,
+  "active": true,
+  "revision": 23,
+  "documentsRevision": 1104,
+  "drops": [
+    {
+      "dropId": "mi_note_cards",
+      "ready": true,
+      "configMatches": true,
+      "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+      "available": 1254,
+      "assigned": 0,
+      "orphanAssignments": 0
+    }
+  ],
+  "initialized": true,
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af"
+}

@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "status": "passed",
+  "readOnly": true,
+  "verifiedAt": "2026-10-09T18:00:05.380Z",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "commitment": "finalized",
+  "observedFinalizedSlot": 454950648,
+  "preorderVerifiedSlot": 454950624,
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "preorderSnapshotSha256": "95029f754e8f08b225d50ecd17abcfb1f265d5007c8cf95be1e9a71e97811c04",
+  "catalogSha256": "d1e36dd02f94976540545fc71fd79b65cc8f3827d66c8f01882f86b894f5bd3a",
+  "excludedCards": 176,
+  "eligibleCards": 1254,
+  "packCount": 627,
+  "maxFigureId": 1430,
+  "strictPreorderCoverage": {
+    "verifiedAssets": 176,
+    "allOriginalNamesAndUris": true,
+    "identitiesSha256": "30358ab69342a2ff6a4b8506c2317934d2cdc51b0d7c9a9561d7f01eb384db2c",
+    "allSpecialsEligible": true
+  },
+  "deploymentPreview": {
+    "ready": true,
+    "states": [
+      {
+        "step": "delegates",
+        "ready": true
+      },
+      {
+        "step": "mint-config",
+        "ready": true
+      },
+      {
+        "step": "operations-config",
+        "ready": true
+      },
+      {
+        "step": "receipt-tree",
+        "ready": true
+      },
+      {
+        "step": "lookup-table",
+        "ready": true
+      }
+    ],
+    "gateCompletedAt": "2026-10-09T17:45:54.316Z"
+  },
+  "roles": [
+    {
+      "role": "mint",
+      "address": "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "started": false,
+      "minted": 0,
+      "maxSupply": 627,
+      "itemsPerBox": 0,
+      "priceLamports": "500000000",
+      "discountPriceLamports": "500000000",
+      "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json",
+      "paymentRouting": {
+        "schema": "split-payments-v1",
+        "mintProceeds": [
+          {
+            "address": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+            "percentage": 50
+          },
+          {
+            "address": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+            "percentage": 50
+          }
+        ],
+        "deliveryPaymentReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM"
+      },
+      "accountSize": 488
+    },
+    {
+      "role": "operations",
+      "address": "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+      "started": false,
+      "minted": 0,
+      "maxSupply": 715,
+      "itemsPerBox": 2,
+      "priceLamports": "500000000",
+      "discountPriceLamports": "500000000",
+      "metadataBase": "https://cdn.lil.org/nft/mi_note_cards/json",
+      "paymentRouting": {
+        "schema": "split-payments-v1",
+        "mintProceeds": [
+          {
+            "address": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+            "percentage": 50
+          },
+          {
+            "address": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+            "percentage": 50
+          }
+        ],
+        "deliveryPaymentReceiver": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM"
+      },
+      "accountSize": 488
+    }
+  ],
+  "collection": {
+    "address": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "name": "Mi Note Cards",
+    "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json",
+    "minted": 176,
+    "size": 176,
+    "royaltyBasisPoints": 500,
+    "delegates": [
+      "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+      "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+      "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+    ],
+    "pluginTypes": [
+      0,
+      4,
+      15
+    ],
+    "originalBaseAndNonDelegatePluginsPreserved": true,
+    "preservationSha256": "dd529cf17d3c56f9f901d51440324c866b817f073fe606cc480216c6a16bc25c"
+  },
+  "receipts": {
+    "tree": "9kvQRquRALfWqFW6VCgXSWSqqQrzcksefxSEhfAVEDVY",
+    "treeConfig": "4LJqUfUbTFHnB7mGxNy7pUgBHSTZykfiHoykzCzq8e7Y",
+    "maxDepth": 14,
+    "maxBufferSize": 64,
+    "canopyDepth": 0,
+    "capacity": 16384,
+    "numMinted": 0,
+    "isPublic": false,
+    "creator": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "delegate": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx"
+  },
+  "lookupTable": {
+    "address": "AmGxiZNLys6jQDUQsxumnuVmjzD6MA7H6MAh5PXbLvgz",
+    "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "active": true,
+    "lastExtendedSlot": 454949485,
+    "addressCount": 16,
+    "exactOrderedResourceSetVerified": true
+  },
+  "historicalArtifactsUnchanged": true
+}

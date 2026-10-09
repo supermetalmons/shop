@@ -17,6 +17,7 @@ import {
   listShopPendingOpenProgramScopes,
 } from '../../../../shared/shopDomain.ts';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
+import { BOX_MINTER_MAX_ITEMS_PER_BOX, BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX } from '../../../../shared/boxMinterProtocol.ts';
 import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
 import { getPreorderConfig, preorderMetadataUri } from '../../../../shared/preorders.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
@@ -3931,6 +3932,15 @@ function buildPendingRecord(
   return Buffer.from(bytes).toString('base64');
 }
 
+function unmatchedPendingDudeCount(drops: readonly { itemsPerBox: number }[]): number {
+  const count = Array.from(
+    { length: BOX_MINTER_MAX_ITEMS_PER_BOX - BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX + 1 },
+    (_, index) => index + BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
+  ).find(candidate => drops.every(drop => drop.itemsPerBox !== candidate));
+  assert.ok(count, 'The legacy fallback fixture requires an unmatched openable card count');
+  return count;
+}
+
 test('pending opens keep valid legacy rows while omitting count-mismatched and non-openable records', async () => {
   const owner = new PublicKey(OWNER);
   const boxAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-box')], PublicKey.default)[0];
@@ -3938,10 +3948,10 @@ test('pending opens keep valid legacy rows while omitting count-mismatched and n
   const nonOpenableBoxAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-non-openable-box')], PublicKey.default)[0];
   const dudeAssets = Array.from({ length: 3 }, (_, index) =>
     PublicKey.findProgramAddressSync([Buffer.from(`shop-api-dude-${index}`)], PublicKey.default)[0]);
-  const mismatchedDudeAssets = Array.from({ length: 2 }, (_, index) =>
-    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-mismatched-dude-${index}`)], PublicKey.default)[0]);
-  const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.length > 1);
+  const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.some(drop => drop.dropId === 'card_nft_2'));
   assert.ok(sharedScope);
+  const mismatchedDudeAssets = Array.from({ length: unmatchedPendingDudeCount(sharedScope.drops) }, (_, index) =>
+    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-mismatched-dude-${index}`)], PublicKey.default)[0]);
   const nonOpenableDrop = sharedScope.drops.find((drop) => drop.dropId === 'drifella_shirt');
   assert.ok(nonOpenableDrop?.boxMinterConfigPda);
   const nonOpenableConfig = new PublicKey(nonOpenableDrop.boxMinterConfigPda);
@@ -4071,12 +4081,12 @@ test('pending opens intentionally filter structurally valid records for unknown 
 test('pending opens omit missing or unresolved assets but reject unexpected and duplicate identifiers', async (context) => {
   const owner = new PublicKey(OWNER);
   const boxAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-ambiguous-box')], PublicKey.default)[0];
-  const dudeAssets = Array.from({ length: 2 }, (_, index) =>
-    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-ambiguous-dude-${index}`)], PublicKey.default)[0]);
   const otherAsset = PublicKey.findProgramAddressSync([Buffer.from('shop-api-other-asset')], PublicKey.default)[0];
   const pendingPda = PublicKey.findProgramAddressSync([Buffer.from('shop-api-ambiguous-pending')], PublicKey.default)[0].toBase58();
-  const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.length > 1);
+  const sharedScope = listShopPendingOpenProgramScopes(false).find((scope) => scope.drops.some(drop => drop.dropId === 'card_nft_2'));
   assert.ok(sharedScope);
+  const dudeAssets = Array.from({ length: unmatchedPendingDudeCount(sharedScope.drops) }, (_, index) =>
+    PublicKey.findProgramAddressSync([Buffer.from(`shop-api-ambiguous-dude-${index}`)], PublicKey.default)[0]);
   const scenarios: Array<{ name: string; assets: unknown[]; status: 200 | 502 }> = [
     { name: 'missing requested asset', assets: [], status: 200 },
     { name: 'unresolved requested asset', assets: [unknownAsset(boxAsset.toBase58(), OWNER)], status: 200 },
