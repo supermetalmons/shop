@@ -14,6 +14,7 @@ import {
   isExactShopInventoryRequest,
   isExactShopPendingOpenBoxesRequest,
   SHOP_API_MAX_RESPONSE_ITEMS,
+  SHOP_EXPECTED_ASSET_IDS_MAX,
   type ShopExpectedAssetIds,
   type ShopInventoryRequest,
   type ShopInventoryItem,
@@ -35,7 +36,8 @@ import {
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
-import { getPreorderConfig, preorderIdFromMetadataUri, preorderImageUrl } from '../../../../shared/preorders.js';
+import { getPreorderConfig, preorderImageUrl } from '../../../../shared/preorders.js';
+import { resolveClaimedPreorderAsset } from '../../../../shared/preorderAssetIdentity.js';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
 import { decodePreorderAssetAccount } from './preorderTransaction.js';
 import { listPreorderInventoryAssets } from './preorderStore.js';
@@ -374,7 +376,7 @@ async function fetchInventory(
       drop.solanaCluster === scope.solanaCluster && drop.collectionMint === scope.collectionMint)));
   const requiredScopes = scopes.filter((scope) => !optionalScopes.includes(scope));
   const itemsById = await fetchInventoryCollections(context, requestBody.owner, requiredScopes);
-  const indexedPreorders = new Set([...itemsById.values()].filter((item) => item.kind === 'preorder').map((item) => item.id));
+  const indexedAssets = new Set(itemsById.keys());
   await mergeExpectedInventoryItems(context, requestBody.owner, expectedGroups.filter((group) =>
     requiredScopes.some((scope) => scope.solanaCluster === group.cluster)), itemsById, scopes);
 
@@ -389,10 +391,10 @@ async function fetchInventory(
     providerReadGate: new ProviderReadGate(),
   };
   let optionalItems: Map<string, ShopInventoryItem> | undefined;
-  let optionalIndexedPreorders: string[] = [];
+  let optionalIndexedAssets: string[] = [];
   try {
     optionalItems = await fetchInventoryCollections(optionalContext, requestBody.owner, optionalScopes);
-    optionalIndexedPreorders = [...optionalItems.values()].filter((item) => item.kind === 'preorder').map((item) => item.id);
+    optionalIndexedAssets = [...optionalItems.keys()];
     await mergeExpectedInventoryItems(optionalContext, requestBody.owner, expectedGroups.filter((group) =>
       !requiredScopes.some((scope) => scope.solanaCluster === group.cluster) &&
       optionalScopes.some((scope) => scope.solanaCluster === group.cluster)), optionalItems, optionalScopes);
@@ -411,7 +413,7 @@ async function fetchInventory(
     if (combined.size <= SHOP_API_MAX_RESPONSE_ITEMS &&
       utf8ByteLength(JSON.stringify(inventoryResponse(requestBody, combined, []))) <= context.dependencies.inventoryMaxResponseBodyBytes) {
       for (const [id, item] of optionalItems) itemsById.set(id, item);
-      for (const id of optionalIndexedPreorders) indexedPreorders.add(id);
+      for (const id of optionalIndexedAssets) indexedAssets.add(id);
     } else {
       context.metrics.expectedAssetRecoveryFailures += 1;
     }
@@ -425,7 +427,7 @@ async function fetchInventory(
     providerReadGate: new ProviderReadGate(),
   };
   const resolved = optionalItems || requestBody.includePreorderResolutions === true
-    ? await mergeRecentPreorderItems(recoveryContext, requestBody, commerceDb, itemsById, scopes, indexedPreorders)
+    ? await mergeRecentPreorderItems(recoveryContext, requestBody, commerceDb, itemsById, scopes, indexedAssets)
     : [];
   return inventoryResponse(requestBody, itemsById, resolved);
 }
@@ -443,7 +445,7 @@ function preorderAccountItem(
   account: unknown,
   asset: Awaited<ReturnType<typeof listPreorderInventoryAssets>>[number],
   owner: string,
-): ShopInventoryItem | null | undefined {
+): { kind: 'preorder' | 'dude'; item: ShopInventoryItem | null } | null | undefined {
   if (account === null) return null;
   if (!account || typeof account !== 'object') return undefined;
   const raw = account as { owner?: unknown; executable?: unknown; data?: unknown };
@@ -457,11 +459,18 @@ function preorderAccountItem(
   const config = getPreorderConfig(asset.preorderId);
   const decoded = decodePreorderAssetAccount(bytes);
   if (!config?.enabled || !decoded) return undefined;
-  if (decoded.owner !== owner || decoded.collection !== config.collection || preorderIdFromMetadataUri(config, decoded.uri) !== asset.id) return null;
-  return {
+  const publicDrop = DEPLOYMENT_DROPS[config.preorderId];
+  const identity = resolveClaimedPreorderAsset({ config, cluster: config.cluster, claim: asset,
+    actual: { address: asset.address, ...decoded }, publicDrop });
+  if (!identity) return undefined;
+  if (decoded.owner !== owner) return { kind: identity.kind, item: null };
+  const item: ShopInventoryItem = identity.kind === 'dude' ? {
+    id: asset.address, dropId: publicDrop!.dropId, name: decoded.name, kind: 'dude', dudeId: identity.id,
+  } : {
     id: asset.address, dropId: config.preorderId, name: `Preorder #${asset.id}`, kind: 'preorder',
     preorderId: asset.id, rawImage: preorderImageUrl(config, asset.id),
   };
+  return { kind: identity.kind, item };
 }
 
 async function mergeRecentPreorderItems(
@@ -470,56 +479,74 @@ async function mergeRecentPreorderItems(
   db: D1Database,
   items: Map<string, ShopInventoryItem>,
   scopes: readonly ShopInventoryCollectionScope[],
-  indexedPreorders: ReadonlySet<string>,
+  indexedAssets: ReadonlySet<string>,
 ): Promise<ShopPreorderAssetResolution[]> {
   const recoveryScope = createAttemptScope(context.signal, context.dependencies.expectedAssetRecoveryTimeoutMs);
   const resolved: ShopPreorderAssetResolution[] = [];
   try {
-    const expected = expectedAssetGroups(request.expectedAssetIds).flatMap((group) => group.ids);
-    const recent = await raceWithSignal(listPreorderInventoryAssets(db, request.owner, expected), recoveryScope.signal);
-    const candidates = recent.filter((asset) => {
-      const config = getPreorderConfig(asset.preorderId);
-      return config?.enabled && scopes.some((scope) => scope.solanaCluster === config.cluster && scope.collectionMint === config.collection);
-    });
-    for (const cluster of new Set(candidates.map((asset) => getPreorderConfig(asset.preorderId)!.cluster))) {
-      for (const commitment of ['confirmed', 'finalized'] as const) {
-        const assets = candidates.filter((asset) => getPreorderConfig(asset.preorderId)!.cluster === cluster &&
-          (asset.status === 'succeeded' ? commitment === 'finalized' : commitment === 'confirmed'));
-        if (!assets.length) continue;
-        if (context.inventoryCandidates + assets.length > context.dependencies.inventoryMaxCandidates) {
-          context.metrics.expectedAssetRecoveryFailures += 1;
-          continue;
-        }
-        context.inventoryCandidates += assets.length;
-        const minContextSlot = Math.max(0, ...assets.map((asset) => Math.max(asset.confirmedSlot ?? 0, request.preorderMinContextSlots?.[asset.address] ?? 0)));
-        const result = await heliusRpc<{ context: { slot: number }; value: unknown[] }>(
-          context, cluster, 'getMultipleAccounts', [assets.map((asset) => asset.address), {
-            commitment, encoding: 'base64', ...(minContextSlot > 0 ? { minContextSlot } : {}),
-          }],
-          { signal: recoveryScope.signal, inventoryCall: true, maxAttempts: 1 },
-        );
-        if (!Number.isSafeInteger(result?.context?.slot) || result.context.slot < minContextSlot ||
-          !Array.isArray(result?.value) || result.value.length !== assets.length) throw new ProviderFailure('unavailable');
-        const recovered = new Map(items);
-        const batchResolved: ShopPreorderAssetResolution[] = [];
-        result.value.forEach((account, index) => {
-          const asset = assets[index];
-          const item = preorderAccountItem(account, asset, request.owner);
-          if (item === undefined || item === null && asset.confirmedSlot == null) return;
-          if (item) recovered.set(asset.address, item);
-          else recovered.delete(asset.address);
-          if (commitment === 'finalized' && asset.confirmedSlot != null && (!item || indexedPreorders.has(asset.address))) {
-            batchResolved.push({ id: asset.address, slot: result.context.slot, owned: item !== null });
+    const expected = [...new Set([...expectedAssetGroups(request.expectedAssetIds).flatMap((group) => group.ids),
+      ...[...items.values()].filter(item => item.kind === 'preorder').map(item => item.id)])];
+    const checked = new Set<string>();
+    for (let offset = 0; offset < Math.max(1, expected.length); offset += SHOP_EXPECTED_ASSET_IDS_MAX) {
+      recoveryScope.signal.throwIfAborted();
+      const addresses = expected.slice(offset, offset + SHOP_EXPECTED_ASSET_IDS_MAX);
+      const recent = await raceWithSignal(listPreorderInventoryAssets(db, request.owner, addresses), recoveryScope.signal);
+      const candidates = recent.filter((asset) => {
+        const config = getPreorderConfig(asset.preorderId);
+        return !checked.has(asset.address) && config?.enabled && scopes.some((scope) => scope.solanaCluster === config.cluster && scope.collectionMint === config.collection);
+      });
+      for (const asset of candidates) checked.add(asset.address);
+      for (const cluster of new Set(candidates.map((asset) => getPreorderConfig(asset.preorderId)!.cluster))) {
+        for (const commitment of ['confirmed', 'finalized'] as const) {
+          const assets = candidates.filter((asset) => getPreorderConfig(asset.preorderId)!.cluster === cluster &&
+            (asset.status === 'succeeded' ? commitment === 'finalized' : commitment === 'confirmed'));
+          if (!assets.length) continue;
+          if (context.inventoryCandidates + assets.length > context.dependencies.inventoryMaxCandidates) {
+            context.metrics.expectedAssetRecoveryFailures += 1;
+            continue;
           }
-        });
-        const nextResponse = inventoryResponse(request, recovered, [...resolved, ...batchResolved]);
-        if (recovered.size > SHOP_API_MAX_RESPONSE_ITEMS || utf8ByteLength(JSON.stringify(nextResponse)) > context.dependencies.inventoryMaxResponseBodyBytes) {
-          context.metrics.expectedAssetRecoveryFailures += 1;
-          continue;
+          context.inventoryCandidates += assets.length;
+          const minContextSlot = Math.max(0, ...assets.map((asset) => Math.max(asset.confirmedSlot ?? 0, request.preorderMinContextSlots?.[asset.address] ?? 0)));
+          const result = await heliusRpc<{ context: { slot: number }; value: unknown[] }>(
+            context, cluster, 'getMultipleAccounts', [assets.map((asset) => asset.address), {
+              commitment, encoding: 'base64', ...(minContextSlot > 0 ? { minContextSlot } : {}),
+            }],
+            { signal: recoveryScope.signal, inventoryCall: true, maxAttempts: 1 },
+          );
+          if (!Number.isSafeInteger(result?.context?.slot) || result.context.slot < minContextSlot ||
+            !Array.isArray(result?.value) || result.value.length !== assets.length) throw new ProviderFailure('unavailable');
+          const recovered = new Map(items);
+          const batchResolved: ShopPreorderAssetResolution[] = [];
+          result.value.forEach((account, index) => {
+            const asset = assets[index];
+            const outcome = preorderAccountItem(account, asset, request.owner);
+            if (outcome === undefined || outcome === null && asset.confirmedSlot == null) return;
+            const item = outcome?.item;
+            const owned = Boolean(item);
+            const converted = outcome?.kind === 'dude';
+            const visible = owned && (!converted || cluster !== 'devnet' || request.includeDevnet === true);
+            if (visible && item) recovered.set(asset.address, item);
+            else recovered.delete(asset.address);
+            if (commitment === 'finalized' && (converted || asset.confirmedSlot != null) &&
+              resolved.length + batchResolved.length < SHOP_EXPECTED_ASSET_IDS_MAX) {
+              if (converted) {
+                if (request.supportsConvertedPreorders === true) {
+                  batchResolved.push({ id: asset.address, slot: result.context.slot, owned, kind: 'dude', visible });
+                }
+              } else if (!owned || indexedAssets.has(asset.address)) {
+                batchResolved.push({ id: asset.address, slot: result.context.slot, owned });
+              }
+            }
+          });
+          const nextResponse = inventoryResponse(request, recovered, [...resolved, ...batchResolved]);
+          if (recovered.size > SHOP_API_MAX_RESPONSE_ITEMS || utf8ByteLength(JSON.stringify(nextResponse)) > context.dependencies.inventoryMaxResponseBodyBytes) {
+            context.metrics.expectedAssetRecoveryFailures += 1;
+            continue;
+          }
+          items.clear();
+          for (const [id, item] of recovered) items.set(id, item);
+          resolved.push(...batchResolved);
         }
-        items.clear();
-        for (const [id, item] of recovered) items.set(id, item);
-        resolved.push(...batchResolved);
       }
     }
   } catch {
@@ -800,7 +827,7 @@ export async function handlePost(
       : await fetchPendingOpenBoxes(context, parsedRequest.body);
     request.signal.throwIfAborted();
     const valid = parsedRequest.kind === 'inventory'
-      ? dependencies.validateInventoryResponse(body)
+      ? dependencies.validateInventoryResponse(body, parsedRequest.body)
       : dependencies.validatePendingOpenBoxesResponse(body);
     if (!valid) throw new ProviderFailure('unavailable');
     const text = JSON.stringify(body);

@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-09T16:49:02.873Z",
+  "cluster": "devnet",
+  "preorderId": "mi_note_cards_devnet",
+  "phase": "compatibility-before-conversion",
+  "chainSlot": 509244227,
+  "originalAssets": 22,
+  "convertedAssets": 0,
+  "manifestSha256": "198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d",
+  "preorderSnapshotSha256": "475d5f3e127c22cac54eeacde3e062220506b28e293e878e7836718171515116",
+  "inventoryGeneration": "238fd2ea-b62b-454a-9a65-97968204d60c",
+  "available": 1400,
+  "assigned": 8,
+  "apiChecks": [
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": false,
+      "assets": 15,
+      "proofs": 5,
+      "passed": true
+    },
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": false,
+      "assets": 7,
+      "proofs": 1,
+      "passed": true
+    },
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": true,
+      "assets": 15,
+      "proofs": 5,
+      "passed": true
+    },
+    {
+      "includeDevnet": false,
+      "supportsConvertedPreorders": true,
+      "assets": 7,
+      "proofs": 1,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": false,
+      "assets": 15,
+      "proofs": 5,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": false,
+      "assets": 7,
+      "proofs": 1,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": true,
+      "assets": 15,
+      "proofs": 5,
+      "passed": true
+    },
+    {
+      "includeDevnet": true,
+      "supportsConvertedPreorders": true,
+      "assets": 7,
+      "proofs": 1,
+      "passed": true
+    }
+  ],
+  "health": [
+    {
+      "url": "https://api.mons.shop/health",
+      "passed": true
+    },
+    {
+      "url": "https://mons.shop/api/health",
+      "passed": true
+    }
+  ],
+  "apiVersion": "30bf9740-37b1-4907-a131-cd654c32630e",
+  "frontendVersion": "3a95b8f1-225a-46af-aaf9-ceffbbdb5a0b",
+  "deploymentOrder": [
+    "api",
+    "frontend"
+  ],
+  "contractTests": {
+    "convertedOwnedVisible": true,
+    "convertedOwnedFiltered": true,
+    "convertedTransferred": true,
+    "legacyProofOmission": true,
+    "mainnetIsolation": true
+  },
+  "checks": {
+    "frontendWorker": true,
+    "frontendTypes": true,
+    "apiTypes": true,
+    "apiTests": 2230,
+    "apiRuntimeTests": 31,
+    "apiBundle": true,
+    "apiStartup": true,
+    "toolsTypes": true,
+    "deadCode": true,
+    "rootTests": 3214,
+    "onchainTests": 35,
+    "productionBuild": true,
+    "browserBundle": true,
+    "migrationTests": 14
+  },
+  "migrationManifestSha256": "796605c202d6af3bac8044933583fede204ac0bab45eedae84470880594b3071",
+  "frontendBundle": {
+    "entry": "/assets/index-BdQ8mwwR.js",
+    "sha256": "2acecde7bbecdc323e71ae9b676f7d0df6e0f0fe847bbaadba8fbebe7da56e12",
+    "bytes": 645780,
+    "htmlMatchesBuild": true,
+    "javascriptMatchesBuild": true,
+    "convertedPreorderCapability": true,
+    "recoveryStorageVersion": 4
+  },
+  "independentApiChecks": {
+    "verifiedAt": "2026-10-09T16:51:32Z",
+    "chainSlot": 509244860,
+    "requestsPassed": 8,
+    "mainnetAuthorityItems": 277,
+    "legacyProofShapePreserved": true,
+    "ordinaryDevnetItemsWhenFiltered": 0,
+    "healthPassed": true
+  }
+}

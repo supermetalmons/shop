@@ -82,7 +82,7 @@ function delayedRuntime() {
 
 function receiveRecovery(order: PreorderOrder) {
   const orderConfig = getPreorderConfig(order.preorderId)!;
-  const key = `mons:preorder-recovery:v3:${orderConfig.cluster}:${orderConfig.collection}:${order.buyer}:${encodeURIComponent(order.orderId)}`;
+  const key = `mons:preorder-recovery:v4:${orderConfig.cluster}:${orderConfig.collection}:${order.buyer}:${encodeURIComponent(order.orderId)}`;
   window.localStorage.setItem(key, JSON.stringify({ order, resolvedAssetIds: [], failureNotified: false }));
   window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
 }
@@ -99,7 +99,7 @@ for (const httpStatus of [401, 409]) {
         if (!orderId) return { order: null };
         const prepared = orders.get(orderId)!;
         const confirmed = { ...prepared, status: recoveredStatus, confirmedSlot: 500, signature };
-        const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:${orderId}`;
+        const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:${orderId}`;
         window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
         return { order: prepared };
       };
@@ -351,7 +351,7 @@ test('confirmation waits for its queued durable write before releasing checkout'
   const { api, options, succeeded } = runtime();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const key = `mons:preorder-recovery-mutation:mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:order-1`;
+  const key = `mons:preorder-recovery-mutation:mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:order-1`;
   const holder = navigator.locks.request(key, async () => { entered.resolve(); await release.promise; });
   await entered.promise;
   const { result } = renderHook(() => usePreorderCheckout(options, api));
@@ -375,7 +375,7 @@ test('a confirmation write queued across a wallet change cannot complete the new
   const { api, options, succeeded } = runtime();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const key = `mons:preorder-recovery-mutation:mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:order-1`;
+  const key = `mons:preorder-recovery-mutation:mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:order-1`;
   const holder = navigator.locks.request(key, async () => { entered.resolve(); await release.promise; });
   await entered.promise;
   const { result, rerender } = renderHook(owner => usePreorderCheckout({ ...options, buyer: owner, authenticatedBuyer: owner }, api), { initialProps: buyer });
@@ -443,7 +443,7 @@ test('cross-tab rollback invalidates only affected artwork through delayed and f
   await waitFor(() => assert.equal(result.current.recoveryReady, true));
   let staleRefresh!: Promise<void>;
   act(() => { staleRefresh = result.current.refreshAvailability(); });
-  const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:${encodeURIComponent(confirmed.orderId)}`;
+  const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:${encodeURIComponent(confirmed.orderId)}`;
   await act(async () => {
     const saved = JSON.parse(window.localStorage.getItem(key)!);
     saved.order.status = 'failed';

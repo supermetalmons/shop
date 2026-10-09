@@ -20,6 +20,7 @@ export function useShopInventoryQueries(owner: string | undefined, includeDevnet
     isFetching: inventoryFetching,
     dataUpdatedAt: inventoryDataUpdatedAt,
     acknowledgedPreorderAssetIds,
+    acknowledgedConvertedAssetIds,
   } = useInventory(owner, {
     includeDevnet: includeDevnetInventory,
     useRecentExpectedAssets: !isViewerMode,
@@ -39,9 +40,11 @@ export function useShopInventoryQueries(owner: string | undefined, includeDevnet
     isSuccess: pendingOpenBoxesSuccess,
   } = usePendingOpenBoxes(owner, { includeDevnet: includeDevnetInventory });
   const preorderRecoveries = usePreorderRecoveryRecords(isViewerMode ? undefined : owner);
-  const inventory = useMemo(() => mergePreorderInventory(inventoryData ?? EMPTY_INVENTORY, preorderRecoveries, acknowledgedPreorderAssetIds),
-    [inventoryData, preorderRecoveries, acknowledgedPreorderAssetIds]);
-  const preorderRecoveryPending = unresolvedPreorderInventoryAssets(preorderRecoveries, acknowledgedPreorderAssetIds).length > 0;
+  const inventory = useMemo(() => mergePreorderInventory(inventoryData ?? EMPTY_INVENTORY, preorderRecoveries, acknowledgedPreorderAssetIds,
+    { includeDevnet: includeDevnetInventory, acknowledgedConvertedAssetIds }),
+  [inventoryData, preorderRecoveries, acknowledgedPreorderAssetIds, includeDevnetInventory, acknowledgedConvertedAssetIds]);
+  const preorderRecoveryPending = unresolvedPreorderInventoryAssets(preorderRecoveries, acknowledgedPreorderAssetIds,
+    { includeDevnet: includeDevnetInventory, acknowledgedConvertedAssetIds }).length > 0;
   useEffect(() => {
     if (!preorderRecoveryPending) return;
     const refresh = () => {

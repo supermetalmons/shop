@@ -17,7 +17,7 @@ beforeEach(t => { if ('after' in t) installBrowserLocks(t); });
 afterEach(() => { cleanup(); window.localStorage.clear(); window.sessionStorage.clear(); });
 after(() => dom.window.close());
 
-for (const version of ['v1', 'v2']) test(`the recovery hook hydrates terminal ${version} records without requiring a mutation`, async () => {
+for (const version of ['v1', 'v2', 'v3']) test(`the recovery hook hydrates terminal ${version} records without requiring a mutation`, async () => {
   const seeds = ['succeeded', 'failed'].map((status, index) => {
     const address = bs58.encode(new Uint8Array(32).fill(index + 42));
     const order = { orderId: `hydrate-${status}`, preorderId: config.preorderId, buyer: owner, ethereumAddress: null,
@@ -28,7 +28,7 @@ for (const version of ['v1', 'v2']) test(`the recovery hook hydrates terminal ${
     const key = `mons:preorder-recovery:${version}:${config.cluster}:${config.collection}:${owner}:${order.orderId}`;
     const value = JSON.stringify(record);
     window.localStorage.setItem(key, value);
-    return { key, value, record, currentKey: key.replace(`:${version}:`, ':v3:') };
+    return { key, value, record, currentKey: key.replace(`:${version}:`, ':v4:') };
   });
   const { result } = renderHook(() => usePreorderRecoveryRecords(owner));
   const before = JSON.stringify(result.current);
@@ -49,9 +49,9 @@ for (const owned of [false, true]) test(`the recovery hook observes newer shared
   const address = bs58.encode(new Uint8Array(32).fill(44));
   const order = { orderId: 'shared-proof-hydration', preorderId: config.preorderId, buyer: owner, ethereumAddress: null,
     status: 'succeeded', cardIds: [1], assets: [{ id: 1, address }], confirmedSlot: 200, expiresAtMs: 1, signature };
-  const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${owner}:${order.orderId}`;
+  const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${owner}:${order.orderId}`;
   const local = { order, resolvedAssetIds: [address], ownedResolvedAssetIds: owned ? [address] : [],
-    inventoryResolutionRevisions: { [address]: 1 }, inventoryResolutionSlots: { [address]: 249 }, inventoryResolutionVersion: 3, failureNotified: false };
+    inventoryResolutionRevisions: { [address]: 1 }, inventoryResolutionSlots: { [address]: 249 }, inventoryResolutionVersion: 4, failureNotified: false };
   const originalSet = dom.window.Storage.prototype.setItem;
   window.sessionStorage.setItem(key, JSON.stringify(local));
   const originalShared = JSON.stringify({ ...local, resolvedAssetIds: [], ownedResolvedAssetIds: [], inventoryResolutionSlots: {} });

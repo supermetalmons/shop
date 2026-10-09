@@ -6,6 +6,7 @@ import {
   manualReviewCheckoutsQuery, packStatusOutboxDueQuery, staleStripeFulfillmentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
 import { listPreorderInventoryAssets, PreorderStore } from '../cloud/workers/api/src/preorderStore.ts';
+import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
 import {
   createCommerceD1Harness, seedCommerceDocuments, seedPackStatusOutbox,
 } from '../cloud/workers/api/test/commerceD1Harness.ts';
@@ -61,7 +62,7 @@ test('obsolete index cleanup preserves populated commerce and indexed reconcilia
   const harness = createCommerceD1Harness({
     obsoleteIndexesMigration: false,
     observeCall: (call) => {
-      if (call.method === 'all' && call.sql.startsWith('SELECT preorder_id, assets_json')) preorderReads.push(call.sql);
+      if (call.method === 'all' && call.sql.startsWith('SELECT preorder.preorder_id,')) preorderReads.push(call.sql);
     },
   });
   const database = harness.database;
@@ -83,9 +84,10 @@ test('obsolete index cleanup preserves populated commerce and indexed reconcilia
     lastErrorCode: null, createdAtMs: 0, updatedAtMs: 0,
   });
   const store = new PreorderStore(harness.db);
+  const config = getPreorderConfig('mi_note_cards')!;
   for (const id of [1, 2]) {
     let order = await store.reserve({
-      orderId: `order${id}`, preorderId: 'preorder', cluster: 'mainnet-beta', collection: 'collection', buyer: owner,
+      orderId: `order${id}`, preorderId: config.preorderId, cluster: config.cluster, collection: config.collection, buyer: owner,
       ethereumAddress: '0x1111111111111111111111111111111111111111', requestId: `request${id}`, cardIds: [id],
       assets: [{ address: `asset${id}`, id }], status: 'prepared', preparedTransaction: 'prepared',
       signedTransaction: null, signature: null, confirmedSlot: null, blockhash: 'hash', blockhashContextSlot: 1,
@@ -115,9 +117,14 @@ test('obsolete index cleanup preserves populated commerce and indexed reconcilia
     assert.ok(plan.some(({ detail }) => String(detail).includes(`SEARCH `) && String(detail).includes(index)), index);
   }
   for (const sql of preorderReads.slice(0, 2)) {
-    const bindings = sql.includes('json_each(?)') ? [owner, '["asset1"]'] : [owner];
-    const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings);
-    assert.ok(plan.some(({ detail }) => String(detail).includes('SEARCH commerce_preorder_orders USING INDEX commerce_preorder_inventory_buyer')));
+    const scopes = PREORDER_CONFIGS.filter(config => config.enabled).flatMap(config => [config.preorderId, config.cluster, config.collection]);
+    const requested = sql.includes('json_each(?)');
+    const bindings = [...scopes, owner, ...(requested ? ['["asset1"]'] : [])];
+    const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings).map(row => String(row.detail)).join('\n');
+    assert.match(plan, requested ? /SEARCH preorder USING INDEX sqlite_autoindex_commerce_preorder_orders_2/ :
+      /SEARCH preorder USING INDEX commerce_preorder_inventory_buyer/);
+    assert.match(plan, /SEARCH claim USING INDEX commerce_preorder_claim_order/);
+    assert.doesNotMatch(plan, /SCAN (?:preorder|commerce_preorder_orders)(?:\s|$)|TEMP B-TREE/);
   }
 });
 

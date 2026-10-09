@@ -480,7 +480,18 @@ test('preorder fingerprint directly reads all 22 claimed assets despite an 18-it
   assert.notEqual((await f.read()).sha256, before.sha256);
 });
 
-test('direct preorder fingerprint rejects missing, migrated, malformed or wrong-program claimed assets', async () => {
+test('future preorder fingerprints accept converted claims and hash their current account bytes', async () => {
+  const f = await fingerprintFixture();
+  const before = await f.read();
+  const claim = f.assets[0];
+  f.accounts.get(claim.address)!.data = f.data(claim.id, `card ${claim.id}`, `${f.reviewed.metadataBase}/f${claim.id}.json`);
+  const after = await f.read();
+  assert.equal(after.count, 22);
+  assert.notEqual(after.sha256, before.sha256);
+  assert.deepEqual(await f.read(), after);
+});
+
+test('direct preorder fingerprint rejects missing, partially migrated, malformed or wrong-program claimed assets', async () => {
   for (const corruption of ['missing', 'name', 'uri', 'type', 'owner', 'executable'] as const) {
     const f = await fingerprintFixture();
     const address = f.assets[0].address;

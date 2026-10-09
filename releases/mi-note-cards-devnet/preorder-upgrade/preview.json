@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "previewedAt": "2026-10-09T16:47:02.232Z",
+  "mode": "preview",
+  "preorderId": "mi_note_cards_devnet",
+  "cluster": "devnet",
+  "manifestSha256": "796605c202d6af3bac8044933583fede204ac0bab45eedae84470880594b3071",
+  "totalAssets": 22,
+  "remainingAssets": 22,
+  "convertedAssets": 0,
+  "finalizedSlot": 509243719,
+  "eligiblePublicCards": 1408,
+  "availablePublicCards": 1400,
+  "assignedPublicCards": 8,
+  "simulations": [
+    {
+      "cardIds": [
+        1,
+        2,
+        4,
+        5
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42770,
+      "assetRentDelta": -182880
+    },
+    {
+      "cardIds": [
+        6,
+        7,
+        8,
+        9
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42770,
+      "assetRentDelta": -182880
+    },
+    {
+      "cardIds": [
+        10,
+        12,
+        15,
+        17
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42946,
+      "assetRentDelta": -182880
+    },
+    {
+      "cardIds": [
+        142,
+        192,
+        269,
+        583
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42790,
+      "assetRentDelta": -182880
+    },
+    {
+      "cardIds": [
+        610,
+        848,
+        1237,
+        1247
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 42878,
+      "assetRentDelta": -182880
+    },
+    {
+      "cardIds": [
+        1285,
+        1301
+      ],
+      "feeLamports": 5000,
+      "simulationUnits": 21558,
+      "assetRentDelta": -91440
+    }
+  ]
+}

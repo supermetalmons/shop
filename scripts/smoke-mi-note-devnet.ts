@@ -367,7 +367,7 @@ function transaction(payer: PublicKey, instructions: TransactionInstruction[]): 
 }
 
 async function loadModules() {
-  const [registry, manifest, minter, core, projection, receipts, preorders, commerce] = await Promise.all([
+  const [registry, manifest, minter, core, projection, receipts, commerce, preorderIdentity] = await Promise.all([
     tsImport('./shared/deploymentRegistry.ts', import.meta.url) as Promise<typeof import('./shared/deploymentRegistry.ts')>,
     tsImport('./shared/miNoteDropManifest.ts', import.meta.url) as Promise<typeof import('./shared/miNoteDropManifest.ts')>,
     tsImport('../src/lib/boxMinter.ts', import.meta.url) as Promise<typeof import('../src/lib/boxMinter.ts')>,
@@ -377,10 +377,10 @@ async function loadModules() {
       mintReceiptsInstruction: (args: object) => TransactionInstruction;
       closeDeliveryInstruction: (args: object) => TransactionInstruction;
     }>,
-    tsImport('../shared/preorders.ts', import.meta.url) as Promise<typeof import('../shared/preorders.ts')>,
     tsImport('./shared/commerceD1Maintenance.ts', import.meta.url) as Promise<typeof import('./shared/commerceD1Maintenance.ts')>,
+    tsImport('../shared/preorderAssetIdentity.ts', import.meta.url) as Promise<typeof import('../shared/preorderAssetIdentity.ts')>,
   ]);
-  return { registry, manifest, minter, core, projection, receipts, preorders, commerce };
+  return { registry, manifest, minter, core, projection, receipts, commerce, preorderIdentity };
 }
 
 export async function readMiNoteSmokePreorderFingerprint(
@@ -392,7 +392,9 @@ export async function readMiNoteSmokePreorderFingerprint(
   const modules = await loadModules();
   modules.manifest.parseMiNoteDropManifest(manifest);
   const config = modules.manifest.closedMiNotePreorderConfig(manifest.sourcePreorder.preorderId);
-  if (drop.solanaCluster !== config.cluster || drop.collectionMint !== config.collection || drop.maxSupply !== manifest.packCount ||
+  if (drop.dropId !== config.preorderId || drop.solanaCluster !== config.cluster || drop.collectionMint !== config.collection ||
+    drop.maxSupply !== manifest.packCount || drop.inventoryManifest?.sha256 !== manifest.sha256 ||
+    JSON.stringify(drop.inventoryManifest.cardIds) !== JSON.stringify(manifest.eligibleCardIds) ||
     await connection.getGenesisHash() !== modules.manifest.MI_NOTE_CLUSTER_GENESIS[manifest.sourcePreorder.cluster]) {
     throw new Error('Smoke preorder audit has an unexpected drop or RPC cluster.');
   }
@@ -424,8 +426,8 @@ export async function readMiNoteSmokePreorderFingerprint(
       const account = result.value[index];
       const asset = account && modules.core.decodePreorderAssetAccount(account.data);
       if (!account || account.executable || !account.owner.equals(CORE) || !asset ||
-        asset.collection !== config.collection || asset.name !== `Preorder #${expected.id}` ||
-        asset.uri !== modules.preorders.preorderMetadataUri(config, expected.id)) {
+        !modules.preorderIdentity.resolveClaimedPreorderAsset({ config, cluster: config.cluster, claim: expected,
+          actual: { ...asset, address: expected.address }, publicDrop: drop })) {
         throw new Error('A claimed preorder account is missing, changed, or invalid during smoke.');
       }
       fingerprints.push([expected.id, expected.address, hash(account.data)]);

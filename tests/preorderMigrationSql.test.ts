@@ -5,7 +5,7 @@ import test from 'node:test';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { createCommerceD1Harness } from '../cloud/workers/api/test/commerceD1Harness.ts';
 import { listPreorderInventoryAssets, PreorderStore, type StoredPreorder } from '../cloud/workers/api/src/preorderStore.ts';
-import { getPreorderConfig } from '../shared/preorders.ts';
+import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 
 const BOOTSTRAP_CARD_IDS = [
@@ -214,9 +214,10 @@ test('recent preorder inventory uses the buyer index without scanning or sorting
   context.after(() => database.close());
   assert.deepEqual(await listPreorderInventoryAssets(db, 'buyer'), []);
   assert.ok(query.includes('commerce_preorder_orders'));
-  const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all('buyer').map((row) => String(row.detail)).join('\n');
-  assert.match(plan, /SEARCH commerce_preorder_orders USING INDEX commerce_preorder_(?:succeeded|inventory)_buyer/);
-  assert.doesNotMatch(plan, /SCAN commerce_preorder_orders|TEMP B-TREE/);
+  const scopes = PREORDER_CONFIGS.filter(config => config.enabled).flatMap(config => [config.preorderId, config.cluster, config.collection]);
+  const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...scopes, 'buyer').map((row) => String(row.detail)).join('\n');
+  assert.match(plan, /SEARCH (?:preorder|commerce_preorder_orders) USING INDEX commerce_preorder_(?:succeeded|inventory)_buyer/);
+  assert.doesNotMatch(plan, /SCAN (?:preorder|commerce_preorder_orders)(?:\s|$)|TEMP B-TREE/);
 });
 
 test('expiry uses collection and order indexes without scanning permanent claims or history', async (context) => {

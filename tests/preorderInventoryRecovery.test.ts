@@ -6,7 +6,7 @@ beforeEach(context => { if ('after' in context) installBrowserLocks(context); })
 import bs58 from 'bs58';
 import { QueryClient } from '@tanstack/react-query';
 import { getPreorderConfig, type PreorderOrder } from '../shared/preorders.ts';
-import { isExactShopInventoryRequest, isExactShopInventoryResponse } from '../shared/shopApi.ts';
+import { isExactShopInventoryRequest, isExactShopInventoryResponse, type ShopPreorderAssetResolution } from '../shared/shopApi.ts';
 import { loadInventoryQuery, revokePreorderInventoryAssets } from '../src/lib/inventoryQuery.ts';
 import { mergePreorderInventory, unresolvedPreorderInventoryAssets } from '../src/lib/preorderInventory.ts';
 import type { PreorderRecoveryRecord } from '../src/lib/preorderRecovery.ts';
@@ -197,7 +197,7 @@ test('legacy resolved records are rechecked once and finalized absence requires 
   assert.deepEqual(listPreorderRecoveries(owner)[0].resolvedAssetIds, []);
   assert.deepEqual(mergePreorderInventory([], listPreorderRecoveries(owner)), [{ ...item(1), image: `${config.imageBase}1.webp` }]);
   await resolvePreorderInventoryAssets(owner, [address(1)]);
-  assert.equal(JSON.parse(stored.get(key.replace(':v1:', ':v3:'))!).inventoryResolutionVersion, 3);
+  assert.equal(JSON.parse(stored.get(key.replace(':v1:', ':v4:'))!).inventoryResolutionVersion, 4);
   assert.deepEqual(listPreorderRecoveries(owner)[0].resolvedAssetIds, [address(1)]);
   assert.deepEqual(mergePreorderInventory([], listPreorderRecoveries(owner)), []);
   assert.deepEqual(mergePreorderInventory([item(1)], listPreorderRecoveries(owner)), []);
@@ -503,7 +503,7 @@ for (const fallbackMode of ['session', 'memory'] as const) test(`a submitted ${f
   const first: typeof import('../src/lib/preorderRecovery.ts') = await import(`../src/lib/preorderRecovery.ts?submitted-shadow-${fallbackMode}`);
   const second: typeof import('../src/lib/preorderRecovery.ts') = await import(`../src/lib/preorderRecovery.ts?submitted-shared-${fallbackMode}`);
   await first.upsertPreorderRecovery(submitted);
-  const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:${submitted.orderId}`;
+  const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:${submitted.orderId}`;
   const original = shared.getItem(key)!;
   const sharedWrite = shared.setItem;
   shared.setItem = () => { throw new Error('Shared write unavailable'); };
@@ -548,4 +548,68 @@ test('slot floors are bounded to the actual selected hint batch', async () => {
     });
   }
   assert.equal(visited.size, 18);
+});
+
+test('converted devnet ownership obeys the view filter without restoring a Preorder overlay', () => {
+  const converted = { ...record(1, 'succeeded', 'mi_note_cards_devnet'), resolvedAssetIds: [address(1)],
+    ownedResolvedAssetIds: [address(1)], convertedAssetIds: [address(1)], inventoryResolutionSlots: { [address(1)]: 250 } };
+  const card: InventoryItem = { id: address(1), dropId: converted.order.preorderId, name: 'card 1', kind: 'dude', dudeId: 1 };
+  const empty = new Set<string>();
+  const hidden = { includeDevnet: false, acknowledgedConvertedAssetIds: empty };
+  const visible = { includeDevnet: true, acknowledgedConvertedAssetIds: empty };
+  assert.deepEqual(unresolvedPreorderInventoryAssets([converted], empty, hidden), []);
+  assert.deepEqual(unresolvedPreorderInventoryAssets([converted], empty, { ...hidden, recheckResolved: true }), []);
+  assert.deepEqual(mergePreorderInventory([card], [converted], new Set([card.id]), hidden), []);
+  assert.deepEqual(mergePreorderInventory([item(1)], [converted], new Set([card.id]), visible), []);
+  assert.deepEqual(mergePreorderInventory([], [converted], empty, visible), []);
+  assert.deepEqual(unresolvedPreorderInventoryAssets([converted], empty, visible).map(asset => asset.address), [card.id]);
+  assert.deepEqual(mergePreorderInventory([card], [converted], new Set([card.id]),
+    { includeDevnet: true, acknowledgedConvertedAssetIds: new Set([card.id]) }), [card]);
+});
+
+test('normal refreshes recheck old absences and stale Preorder rows beyond the recent fifteen after a later conversion', async () => {
+  const buyer = bs58.encode(new Uint8Array(32).fill(74));
+  let records = Array.from({ length: 18 }, (_, index) => {
+    const initial = record(index + 1, 'succeeded');
+    return { ...initial, order: { ...initial.order, buyer }, resolvedAssetIds: [address(index + 1)],
+      ownedResolvedAssetIds: index % 2 ? [address(index + 1)] : [], inventoryResolutionSlots: { [address(index + 1)]: 250 },
+      convertedAssetIds: [] as string[] };
+  });
+  const staleRows = new Set(records.flatMap(record => record.ownedResolvedAssetIds));
+  assert.deepEqual(unresolvedPreorderInventoryAssets(records, staleRows), []);
+  const visited = new Set<string>();
+  const acknowledgedCards = new Set<string>();
+  let converted = false;
+  const dependencies = {
+    prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: () => records,
+    resolvePreorders: (_owner: string, ids: readonly string[]) => {
+      if (converted) {
+        for (const id of ids) acknowledgedCards.add(id);
+        records = records.map(record => ids.includes(record.order.assets[0].address)
+          ? { ...record, convertedAssetIds: [record.order.assets[0].address], ownedResolvedAssetIds: [record.order.assets[0].address] } : record);
+      }
+    },
+    fetchInventory: async (_owner: string, options: import('../src/lib/shopApi.ts').InventoryFetchOptions) => {
+      const selected = options.expectedAssetIds?.['mainnet-beta'] ?? [];
+      assert.ok(selected.length > 0 && selected.length <= 15);
+      for (const id of selected) visited.add(id);
+      options.onPreorderAssetResolutions?.(selected.map((id): ShopPreorderAssetResolution => {
+        if (converted) return { id, slot: 251, owned: true, kind: 'dude', visible: true };
+        return { id, slot: 250, owned: staleRows.has(id) };
+      }));
+      return [];
+    },
+  };
+  const load = () => loadInventoryQuery(buyer, { includeDevnet: false, useRecentExpectedAssets: false,
+    usePreorderRecovery: true, acknowledgedPreorderAssetIds: new Set([...staleRows, ...acknowledgedCards]),
+    acknowledgedConvertedAssetIds: acknowledgedCards }, dependencies);
+  await load();
+  await load();
+  assert.equal(visited.size, 18);
+  visited.clear();
+  converted = true;
+  await load();
+  await load();
+  assert.equal(visited.size, 18);
+  assert.ok(records.every(record => record.convertedAssetIds.includes(record.order.assets[0].address)));
 });

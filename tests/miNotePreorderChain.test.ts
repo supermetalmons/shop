@@ -18,9 +18,9 @@ function chainFixture(t: TestContext) {
     address: new PublicKey(new Uint8Array(32).fill(index + 20)).toBase58() }));
   const account = (data: Buffer): AccountInfo<Buffer> => ({ data, executable: false,
     owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS), lamports: 1, rentEpoch: 0 });
-  const asset = (id: number, uri = `${config.metadataBase}${id}.json`) => account(Buffer.concat([
+  const asset = (id: number, uri = `${config.metadataBase}${id}.json`, name = `Preorder #${id}`) => account(Buffer.concat([
     Buffer.from([1]), new Uint8Array(32).fill(9), Buffer.from([2]), bs58.decode(config.collection),
-    string(`Preorder #${id}`), string(uri), Buffer.from([0]),
+    string(name), string(uri), Buffer.from([0]),
   ]));
   const accounts = new Map(expected.map(({ id, address }) => [address, asset(id)]));
   const state = { slot: 10, size: 22, minted: 22, directReads: [] as string[][], scanned: expected.slice(0, 18).map((entry) => entry.address) };
@@ -72,6 +72,19 @@ test('frozen verification still rejects observed unknown preorder identities', a
     { requireCompleteMembership: false }), /unaccounted preorder identity/);
 });
 
+test('registered verification retains converted claims while preparation requires original metadata', async (t) => {
+  const fixture = chainFixture(t);
+  const claim = fixture.expected[0];
+  const uri = `${DEPLOYMENT_DROPS[fixture.config.preorderId].metadataBase}/f${claim.id}.json`;
+  fixture.accounts.set(claim.address, fixture.asset(claim.id, uri, `card ${claim.id}`));
+  const result = await readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection, { requireCompleteMembership: false });
+  assert.equal(result.assets.find((asset) => asset.address === claim.address)?.id, claim.id);
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection), /identities differ/);
+  fixture.accounts.set(claim.address, fixture.asset(claim.id, uri.replace('f1.json', 'f2.json'), `card ${claim.id}`));
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection,
+    { requireCompleteMembership: false }), /identities differ/);
+});
+
 test('new preparation is always strict while existing verification changes mode only after exact public registration', async (t) => {
   const fixture = miNoteManifestFixture();
   const manifest = await fixture.manifest();
@@ -88,6 +101,11 @@ test('new preparation is always strict while existing verification changes mode 
   await verifyMiNoteDropManifest(manifest, dependencies);
   await prepareMiNoteDropManifest(dropId, dependencies);
   assert.deepEqual(modes, [true, false, true]);
+  const converted = fixture.chain.assets[0];
+  converted.name = `card ${converted.id}`;
+  converted.uri = `${DEPLOYMENT_DROPS[dropId].metadataBase}/f${converted.id}.json`;
+  await verifyMiNoteDropManifest(manifest, dependencies);
+  await assert.rejects(prepareMiNoteDropManifest(dropId, dependencies), /asset addresses differ/);
   fixture.snapshot.orders[0].revision += 1;
   await assert.rejects(verifyMiNoteDropManifest(manifest, dependencies), /stale/);
 });

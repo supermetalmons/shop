@@ -22,6 +22,7 @@ export type ShopInventoryRequest = ShopApiBaseRequest & {
   expectedAssetIds?: ShopExpectedAssetIds;
   includePreorderResolutions?: boolean;
   includePreorderResolutionSlots?: true;
+  supportsConvertedPreorders?: true;
   preorderMinContextSlots?: Record<string, number>;
 };
 
@@ -88,7 +89,10 @@ export type ShopInventoryResponse = {
   preorderAssetResolutions?: ShopPreorderAssetResolution[];
 };
 
-export type ShopPreorderAssetResolution = { id: string; slot: number; owned: boolean };
+export type ShopPreorderAssetResolution = { id: string; slot: number; owned: boolean } & (
+  | { kind?: never; visible?: never }
+  | { kind: 'dude'; visible: boolean }
+);
 
 export type ShopPendingOpenBoxesResponse = {
   ok: true;
@@ -155,9 +159,10 @@ function isExactShopExpectedAssetIds(
 }
 
 export function isExactShopInventoryRequest(value: unknown): value is ShopInventoryRequest {
-  if (!isRecord(value) || !isExactShopApiBaseRequest(value, ['expectedAssetIds', 'includePreorderResolutions', 'includePreorderResolutionSlots', 'preorderMinContextSlots']) ||
+  if (!isRecord(value) || !isExactShopApiBaseRequest(value, ['expectedAssetIds', 'includePreorderResolutions', 'includePreorderResolutionSlots', 'supportsConvertedPreorders', 'preorderMinContextSlots']) ||
     value.includePreorderResolutions !== undefined && typeof value.includePreorderResolutions !== 'boolean' ||
-    value.includePreorderResolutionSlots !== undefined && (value.includePreorderResolutionSlots !== true || value.includePreorderResolutions !== true)) return false;
+    value.includePreorderResolutionSlots !== undefined && (value.includePreorderResolutionSlots !== true || value.includePreorderResolutions !== true) ||
+    value.supportsConvertedPreorders !== undefined && (value.supportsConvertedPreorders !== true || value.includePreorderResolutionSlots !== true)) return false;
   if (value.expectedAssetIds !== undefined && !isExactShopExpectedAssetIds(value.expectedAssetIds,
     value.includeDevnet === true || value.includePreorderResolutions === true)) return false;
   if (value.preorderMinContextSlots === undefined) return true;
@@ -285,7 +290,10 @@ function isExactShopPackStatusBreakdown(value: unknown): value is PackStatusBrea
   return new Set(value.items.map((item) => item.key)).size === 3;
 }
 
-export function isExactShopInventoryResponse(value: unknown): value is ShopInventoryResponse {
+export function isExactShopInventoryResponse(
+  value: unknown,
+  request?: Pick<ShopInventoryRequest, 'supportsConvertedPreorders' | 'includeDevnet'>,
+): value is ShopInventoryResponse {
   if (!(isRecord(value) &&
     hasExactKeys(value, ['ok', 'items'], ['resolvedPreorderAssetIds', 'preorderAssetResolutions']) &&
     value.ok === true &&
@@ -303,11 +311,19 @@ export function isExactShopInventoryResponse(value: unknown): value is ShopInven
   const items = value.items as ShopInventoryItem[];
   if (value.preorderAssetResolutions.length !== resolved.size) return false;
   return value.preorderAssetResolutions.every(proof => {
-    if (!isRecord(proof) || !hasExactKeys(proof, ['id', 'slot', 'owned']) || typeof proof.id !== 'string' ||
+    if (!isRecord(proof) || typeof proof.id !== 'string' ||
       !isBase58Bytes(proof.id, 32) || !resolved.has(proof.id) || seen.has(proof.id) ||
       !Number.isSafeInteger(proof.slot) || Number(proof.slot) < 0 || typeof proof.owned !== 'boolean') return false;
     seen.add(proof.id);
     const present = items.filter(item => item.id === proof.id);
+    if (proof.kind === 'dude') {
+      if (!hasExactKeys(proof, ['id', 'slot', 'owned', 'kind', 'visible']) || typeof proof.visible !== 'boolean' ||
+        request && request.supportsConvertedPreorders !== true) return false;
+      if (proof.visible) return proof.owned && present.length === 1 && present[0].kind === 'dude' &&
+        Number.isSafeInteger(present[0].dudeId) && Number(present[0].dudeId) > 0;
+      return present.length === 0 && (!proof.owned || request?.includeDevnet !== true);
+    }
+    if (!hasExactKeys(proof, ['id', 'slot', 'owned'])) return false;
     return proof.owned ? present.length === 1 && present[0].kind === 'preorder' : present.length === 0;
   });
 }

@@ -36,7 +36,7 @@ async function fixture(context: TestContext) {
   const first: typeof import('../src/lib/preorderRecovery.ts') = await import(`../src/lib/preorderRecovery.ts?lock-first-${id}`);
   const second: typeof import('../src/lib/preorderRecovery.ts') = await import(`../src/lib/preorderRecovery.ts?lock-second-${id}`);
   assert.notEqual(first.upsertPreorderRecovery, second.upsertPreorderRecovery);
-  const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${buyer}:${order.orderId}`;
+  const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:${order.orderId}`;
   const lockKey = `mons:preorder-recovery-mutation:${key}`;
   await first.upsertPreorderRecovery(order);
   const hold = async () => {
@@ -65,6 +65,73 @@ test('independent recovery modules serialize proof checks and status merges unde
   assert.deepEqual(record.ownedResolvedAssetIds, []);
   assert.equal(record.inventoryResolutionRevisions?.[f.address], 1);
   assert.equal(f.session.length, 0);
+});
+
+for (const previouslyOwned of [false, true]) test(`v3 ${previouslyOwned ? 'ownership' : 'absence'} imports without losing its slot and remains eligible for bounded conversion checks`, async context => {
+  const f = await fixture(context);
+  await f.first.resolvePreorderInventoryAssets(f.order.buyer, [f.address], [], undefined, undefined,
+    [{ id: f.address, slot: 250, owned: previouslyOwned }]);
+  const legacy = { ...JSON.parse(f.shared.getItem(f.key)!), inventoryResolutionVersion: 3 };
+  delete legacy.convertedAssetIds;
+  const legacyKey = f.key.replace(':v4:', ':v3:');
+  f.shared.setItem(legacyKey, JSON.stringify(legacy));
+  f.shared.removeItem(f.key);
+  await f.first.hydratePreorderRecoveries(f.order.buyer);
+  const imported = f.first.listPreorderRecoveries(f.order.buyer)[0];
+  assert.equal(JSON.parse(f.shared.getItem(f.key)!).inventoryResolutionVersion, 4);
+  assert.deepEqual(imported.ownedResolvedAssetIds, previouslyOwned ? [f.address] : []);
+  assert.equal(imported.inventoryResolutionSlots?.[f.address], 250);
+  if (!previouslyOwned) assert.deepEqual(mergePreorderInventory([], [imported], new Set()), []);
+  await loadInventoryQuery(f.order.buyer, { includeDevnet: false, useRecentExpectedAssets: false, usePreorderRecovery: true,
+    acknowledgedPreorderAssetIds: new Set(previouslyOwned ? [f.address] : []) }, {
+    prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: f.first.listPreorderRecoveries,
+    resolvePreorders: f.first.resolvePreorderInventoryAssets,
+    fetchInventory: async (_owner, options) => {
+      assert.deepEqual(options.expectedAssetIds, { 'mainnet-beta': [f.address] });
+      assert.deepEqual(options.preorderMinContextSlots, { [f.address]: 250 });
+      options.onPreorderAssetResolutions?.([{ id: f.address, slot: 250, owned: true, kind: 'dude', visible: true }]);
+      return [{ id: f.address, dropId: f.order.preorderId, name: 'card 1', kind: 'dude', dudeId: 1 }];
+    },
+  });
+  const converted = f.first.listPreorderRecoveries(f.order.buyer)[0];
+  assert.deepEqual(converted.convertedAssetIds, [f.address]);
+  assert.deepEqual(converted.ownedResolvedAssetIds, [f.address]);
+  assert.equal(converted.inventoryResolutionSlots?.[f.address], 250);
+  f.shared.setItem(legacyKey, JSON.stringify({ ...legacy, inventoryResolutionSlots: { [f.address]: 999 }, ownedResolvedAssetIds: [] }));
+  assert.deepEqual(f.second.listPreorderRecoveries(f.order.buyer), [converted]);
+});
+
+test('converted identity survives newer absence and stale ownership evidence', async context => {
+  const f = await fixture(context);
+  await f.first.resolvePreorderInventoryAssets(f.order.buyer, [f.address], [], undefined, undefined,
+    [{ id: f.address, slot: 250, owned: true, kind: 'dude', visible: true }]);
+  await f.second.resolvePreorderInventoryAssets(f.order.buyer, [f.address], [], undefined, undefined,
+    [{ id: f.address, slot: 251, owned: false }]);
+  await f.first.resolvePreorderInventoryAssets(f.order.buyer, [f.address], [], undefined, undefined,
+    [{ id: f.address, slot: 250, owned: true }]);
+  const current = f.first.listPreorderRecoveries(f.order.buyer)[0];
+  assert.deepEqual(current.convertedAssetIds, [f.address]);
+  assert.deepEqual(current.ownedResolvedAssetIds, []);
+  assert.equal(current.inventoryResolutionSlots?.[f.address], 251);
+  assert.deepEqual(mergePreorderInventory([], [current], new Set()), []);
+});
+
+test('an equal-slot shared converted proof repairs a local untyped absence without reviving Preorder items', async context => {
+  const f = await fixture(context);
+  await localProof(f, 250, false);
+  await withOtherTab(f, () => f.second.resolvePreorderInventoryAssets(f.order.buyer, [f.address], [], undefined, undefined,
+    [{ id: f.address, slot: 250, owned: true, kind: 'dude', visible: true }]));
+  const current = f.first.listPreorderRecoveries(f.order.buyer)[0];
+  assert.deepEqual(current.convertedAssetIds, [f.address]);
+  assert.deepEqual(current.ownedResolvedAssetIds, [f.address]);
+  const stale = [{ id: f.address, dropId: f.order.preorderId, name: 'Preorder #1', kind: 'preorder' as const, preorderId: 1 }];
+  assert.deepEqual(mergePreorderInventory(stale, [current], new Set([f.address]), { acknowledgedConvertedAssetIds: new Set() }), []);
+  assert.deepEqual(unresolvedPreorderInventoryAssets([current], new Set([f.address]),
+    { acknowledgedConvertedAssetIds: new Set() }).map(asset => asset.address), [f.address]);
+  await f.first.hydratePreorderRecoveries(f.order.buyer);
+  f.shared.setItem(f.key, JSON.stringify({ ...current, convertedAssetIds: [], ownedResolvedAssetIds: [], inventoryResolutionVersion: 4 }));
+  assert.deepEqual(f.first.listPreorderRecoveries(f.order.buyer)[0].convertedAssetIds, [f.address]);
+  assert.deepEqual(f.first.listPreorderRecoveries(f.order.buyer)[0].ownedResolvedAssetIds, [f.address]);
 });
 
 test('failure acknowledgements and status updates merge the current locked record', async context => {
@@ -111,7 +178,7 @@ test('an inventory request aborted while waiting for its proof lock cannot publi
 
 test('late unlocked legacy writers cannot overwrite the new locked recovery record', async context => {
   const f = await fixture(context);
-  const legacyKey = f.key.replace(':v3:', ':v1:');
+  const legacyKey = f.key.replace(':v4:', ':v1:');
   const legacy = f.shared.getItem(f.key)!;
   f.shared.setItem(legacyKey, legacy);
   f.shared.removeItem(f.key);
@@ -174,7 +241,7 @@ for (const version of ['v1', 'v2'] as const) for (const mutation of ['status', '
     const f = await fixture(context);
     await f.first.resolvePreorderInventoryAssets(f.order.buyer, [f.address]);
     const negative = f.shared.getItem(f.key)!;
-    const legacyKey = f.key.replace(':v3:', `:${version}:`);
+    const legacyKey = f.key.replace(':v4:', `:${version}:`);
     f.shared.setItem(legacyKey, negative);
     f.shared.removeItem(f.key);
     const before = f.first.preorderRecoverySnapshot(f.order.buyer);
@@ -196,14 +263,14 @@ test('hydration prefers v2 seeds and materializes terminal records without chang
   const confirmed = JSON.parse(f.shared.getItem(f.key)!);
   confirmed.order.status = 'submitted';
   const failed = { ...confirmed, order: { ...confirmed.order, status: 'failed' }, failureNotified: true };
-  f.shared.setItem(f.key.replace(':v3:', ':v1:'), JSON.stringify(confirmed));
-  f.shared.setItem(f.key.replace(':v3:', ':v2:'), JSON.stringify(failed));
+  f.shared.setItem(f.key.replace(':v4:', ':v1:'), JSON.stringify(confirmed));
+  f.shared.setItem(f.key.replace(':v4:', ':v2:'), JSON.stringify(failed));
   f.shared.removeItem(f.key);
   assert.equal(f.first.listPreorderRecoveries(f.order.buyer)[0].order.status, 'failed');
   await f.first.hydratePreorderRecoveries(f.order.buyer);
   assert.equal(JSON.parse(f.shared.getItem(f.key)!).order.status, 'failed');
   assert.equal(f.first.listPreorderRecoveries(f.order.buyer)[0].failureNotified, true);
-  f.shared.setItem(f.key.replace(':v3:', ':v2:'), JSON.stringify(confirmed));
+  f.shared.setItem(f.key.replace(':v4:', ':v2:'), JSON.stringify(confirmed));
   assert.equal(f.second.listPreorderRecoveries(f.order.buyer)[0].order.status, 'failed');
 });
 
@@ -393,7 +460,7 @@ test('fallback merge ignores malformed, mismatched and legacy shared evidence', 
     assert.deepEqual(f.first.listPreorderRecoveries(f.order.buyer)[0].ownedResolvedAssetIds, [f.address]);
   }
   f.shared.removeItem(f.key);
-  for (const version of ['v1', 'v2']) f.shared.setItem(f.key.replace(':v3:', `:${version}:`), JSON.stringify(stronger));
+  for (const version of ['v1', 'v2']) f.shared.setItem(f.key.replace(':v4:', `:${version}:`), JSON.stringify(stronger));
   assert.equal(f.first.listPreorderRecoveries(f.order.buyer)[0].inventoryResolutionSlots?.[f.address], 249);
   f.shared.setItem(f.key, JSON.stringify(stronger));
   for (const invalidLocal of ['{', JSON.stringify({ ...local, order: { ...f.order, orderId: 'wrong-local-order' } })]) {

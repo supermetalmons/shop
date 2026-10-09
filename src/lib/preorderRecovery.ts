@@ -6,13 +6,14 @@ export type PreorderRecoveryRecord = {
   order: PreorderOrder;
   resolvedAssetIds: string[];
   ownedResolvedAssetIds?: string[];
+  convertedAssetIds?: string[];
   inventoryResolutionRevisions?: Record<string, number>;
   inventoryResolutionSlots?: Record<string, number>;
   failureNotified: boolean;
 };
 
-const PREFIX = 'mons:preorder-recovery:v3:';
-const LEGACY_PREFIXES = ['mons:preorder-recovery:v2:', 'mons:preorder-recovery:v1:'];
+const PREFIX = 'mons:preorder-recovery:v4:';
+const LEGACY_PREFIXES = ['mons:preorder-recovery:v3:', 'mons:preorder-recovery:v2:', 'mons:preorder-recovery:v1:'];
 const listeners = new Set<() => void>();
 const fallback = new Map<string, string>();
 
@@ -31,10 +32,12 @@ function parse(value: string | null): PreorderRecoveryRecord | null {
     if (!parsed || !parsed.order || !Array.isArray(parsed.resolvedAssetIds) || typeof parsed.failureNotified !== 'boolean') return null;
     const order = parsePreorderOrder(parsed.order, parsed.order.preorderId);
     if (order.confirmedSlot == null) return null;
-    const resolvedAssetIds: string[] = parsed.inventoryResolutionVersion === 3
+    const resolvedAssetIds: string[] = [3, 4].includes(parsed.inventoryResolutionVersion)
       ? parsed.resolvedAssetIds.filter((id: unknown) => order.assets.some(asset => asset.address === id)) : [];
     const ownedResolvedAssetIds = Array.isArray(parsed.ownedResolvedAssetIds)
       ? parsed.ownedResolvedAssetIds.filter((id: unknown) => resolvedAssetIds.includes(id as string)) : [];
+    const convertedAssetIds = parsed.inventoryResolutionVersion === 4 && Array.isArray(parsed.convertedAssetIds)
+      ? order.assets.filter(asset => parsed.convertedAssetIds.includes(asset.address)).map(asset => asset.address) : [];
     const inventoryResolutionRevisions = Object.fromEntries(order.assets.flatMap(asset => {
       const revision = parsed.inventoryResolutionRevisions?.[asset.address];
       return Number.isSafeInteger(revision) && revision >= 0 ? [[asset.address, revision]] : [];
@@ -43,7 +46,7 @@ function parse(value: string | null): PreorderRecoveryRecord | null {
       const slot = parsed.inventoryResolutionSlots?.[asset.address];
       return Number.isSafeInteger(slot) && slot >= 0 ? [[asset.address, slot]] : [];
     }));
-    return { order, resolvedAssetIds, ownedResolvedAssetIds, inventoryResolutionRevisions, inventoryResolutionSlots,
+    return { order, resolvedAssetIds, ownedResolvedAssetIds, convertedAssetIds, inventoryResolutionRevisions, inventoryResolutionSlots,
       failureNotified: parsed.failureNotified };
   } catch { return null; }
 }
@@ -67,6 +70,7 @@ function mergeRecoveryRecords(local: PreorderRecoveryRecord | null, shared: Preo
     confirmedSlot: Math.max(local.order.confirmedSlot!, shared.order.confirmedSlot!) };
   const resolved = new Set(local.resolvedAssetIds);
   const owned = new Set(local.ownedResolvedAssetIds);
+  const converted = new Set([...(local.convertedAssetIds ?? []), ...(shared.convertedAssetIds ?? [])]);
   const inventoryResolutionSlots = { ...local.inventoryResolutionSlots };
   const inventoryResolutionRevisions = { ...local.inventoryResolutionRevisions };
   for (const { address } of order.assets) {
@@ -76,9 +80,11 @@ function mergeRecoveryRecords(local: PreorderRecoveryRecord | null, shared: Preo
       shared.order.status !== 'succeeded' && shared.order.status !== 'submitted' || !shared.resolvedAssetIds.includes(address)) continue;
     const currentSlot = inventoryResolutionSlots[address];
     const sharedSlot = shared.inventoryResolutionSlots?.[address];
+    const newConversion = shared.convertedAssetIds?.includes(address) && !local.convertedAssetIds?.includes(address);
     if (shared.order.status === 'submitted' && sharedSlot === undefined) continue;
     if (sharedSlot === undefined ? currentSlot !== undefined || resolved.has(address)
-      : sharedSlot < order.confirmedSlot || currentSlot !== undefined && sharedSlot <= currentSlot) continue;
+      : sharedSlot < order.confirmedSlot || currentSlot !== undefined &&
+        (sharedSlot < currentSlot || sharedSlot === currentSlot && !newConversion)) continue;
     resolved.add(address);
     if (shared.ownedResolvedAssetIds?.includes(address)) owned.add(address);
     else owned.delete(address);
@@ -86,6 +92,7 @@ function mergeRecoveryRecords(local: PreorderRecoveryRecord | null, shared: Preo
   }
   return { order, resolvedAssetIds: order.assets.filter(asset => resolved.has(asset.address)).map(asset => asset.address),
     ownedResolvedAssetIds: order.assets.filter(asset => owned.has(asset.address)).map(asset => asset.address),
+    convertedAssetIds: order.assets.filter(asset => converted.has(asset.address)).map(asset => asset.address),
     inventoryResolutionRevisions, inventoryResolutionSlots, failureNotified: local.failureNotified || shared.failureNotified };
 }
 
@@ -127,7 +134,7 @@ function read(key: string): PreorderRecoveryRecord | null {
 function emit(): void { for (const listener of listeners) listener(); }
 
 function write(key: string, record: PreorderRecoveryRecord, shared: boolean): void {
-  const value = JSON.stringify({ ...record, inventoryResolutionVersion: 3 });
+  const value = JSON.stringify({ ...record, inventoryResolutionVersion: 4 });
   try {
     const target = storage(shared);
     if (!target) throw new Error('Storage unavailable');
@@ -220,6 +227,7 @@ export function upsertPreorderRecovery(order: PreorderOrder): Promise<void> {
     if (previous && previous.order.status !== 'submitted' && order.status !== previous.order.status) return;
     const next = { order: { ...order, confirmedSlot: Math.max(order.confirmedSlot!, previous?.order.confirmedSlot ?? 0) },
       resolvedAssetIds: previous?.resolvedAssetIds ?? [], ownedResolvedAssetIds: previous?.ownedResolvedAssetIds ?? [],
+      convertedAssetIds: previous?.convertedAssetIds ?? [],
       inventoryResolutionRevisions: previous?.inventoryResolutionRevisions ?? {},
       inventoryResolutionSlots: previous?.inventoryResolutionSlots ?? {},
       failureNotified: previous?.failureNotified ?? false };
@@ -240,13 +248,18 @@ export async function resolvePreorderInventoryAssets(owner: string, ids: readonl
       if (!record || record.order.status !== 'succeeded' &&
         !(record.order.status === 'submitted' && record.order.confirmedSlot != null && proofs !== undefined)) return;
       const initial = requestRecords?.find(value => value.order.orderId === record.order.orderId && value.order.preorderId === record.order.preorderId);
+      const newlyConverted = new Set(record.order.assets.filter(({ address }) => {
+        const proof = proofById.get(address);
+        return resolved.has(address) && proof?.kind === 'dude' && proof.slot >= (record.order.confirmedSlot ?? 0) &&
+          !record.convertedAssetIds?.includes(address);
+      }).map(asset => asset.address));
       const accepted = new Set(record.order.assets.filter(({ address }) => {
         if (!resolved.has(address)) return false;
         const currentSlot = record.inventoryResolutionSlots?.[address];
         if (proofs !== undefined) {
           const proof = proofById.get(address);
           if (!proof || proof.slot < Math.max(currentSlot ?? 0, record.order.confirmedSlot ?? 0)) return false;
-          if (currentSlot === proof.slot && record.resolvedAssetIds.includes(address)) return false;
+          if (currentSlot === proof.slot && record.resolvedAssetIds.includes(address) && !newlyConverted.has(address)) return false;
           return true;
         }
         if (currentSlot !== undefined) return false;
@@ -255,15 +268,17 @@ export async function resolvePreorderInventoryAssets(owner: string, ids: readonl
           Boolean(initial?.ownedResolvedAssetIds?.includes(address)) !== Boolean(record.ownedResolvedAssetIds?.includes(address));
         return requestRecords === undefined || !proofChanged;
       }).map(asset => asset.address));
-      if (!accepted.size) return;
+      if (!accepted.size && !newlyConverted.size) return;
       const resolvedAssetIds = record.order.assets.filter(asset => accepted.has(asset.address) || record.resolvedAssetIds.includes(asset.address)).map(asset => asset.address);
       const ownedResolvedAssetIds = record.order.assets.filter(asset => accepted.has(asset.address)
         ? owned.has(asset.address) : record.ownedResolvedAssetIds?.includes(asset.address)).map(asset => asset.address);
       const inventoryResolutionRevisions = { ...record.inventoryResolutionRevisions };
       const inventoryResolutionSlots = { ...record.inventoryResolutionSlots };
-      for (const id of accepted) inventoryResolutionRevisions[id] = (inventoryResolutionRevisions[id] ?? 0) + 1;
+      const convertedAssetIds = record.order.assets.filter(asset => newlyConverted.has(asset.address) ||
+        record.convertedAssetIds?.includes(asset.address)).map(asset => asset.address);
+      for (const id of new Set([...accepted, ...newlyConverted])) inventoryResolutionRevisions[id] = (inventoryResolutionRevisions[id] ?? 0) + 1;
       for (const id of accepted) if (proofById.has(id)) inventoryResolutionSlots[id] = proofById.get(id)!.slot;
-      return { ...record, resolvedAssetIds, ownedResolvedAssetIds, inventoryResolutionRevisions, inventoryResolutionSlots };
+      return { ...record, resolvedAssetIds, ownedResolvedAssetIds, convertedAssetIds, inventoryResolutionRevisions, inventoryResolutionSlots };
     }, signal);
   }
 }

@@ -143,7 +143,7 @@ test('inventory slot proofs send known floors and require valid matching ownersh
     onPreorderAssetResolutions: (proofs: unknown) => { observed.push(proofs); } };
   await withFetch((async (_input, init) => {
     assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, expectedAssetIds: options.expectedAssetIds,
-      includePreorderResolutions: true, includePreorderResolutionSlots: true, preorderMinContextSlots: { [assetId]: 250 } });
+      includePreorderResolutions: true, includePreorderResolutionSlots: true, supportsConvertedPreorders: true, preorderMinContextSlots: { [assetId]: 250 } });
     return Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetId], preorderAssetResolutions: resolutions });
   }) as typeof fetch, async () => { assert.deepEqual(await fetchInventory(OWNER, options), []); });
   assert.deepEqual(observed, [resolutions]);
@@ -159,6 +159,27 @@ test('inventory slot proofs send known floors and require valid matching ownersh
 test('a legacy inventory response never becomes a slot proof for a new consumer', async () => {
   await withFetch((async () => Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [OWNER] })) as typeof fetch, async () => {
     assert.deepEqual(await fetchInventory(OWNER, { onPreorderAssetResolutions: () => assert.fail('Legacy receipt has no finalized slot') }), []);
+  });
+});
+
+test('converted preorder proofs preserve hidden ownership and require the matching network visibility', async () => {
+  const proof = { id: OWNER, slot: 300, owned: true, kind: 'dude', visible: false };
+  const observed: unknown[] = [];
+  const response = { ok: true, items: [], resolvedPreorderAssetIds: [OWNER], preorderAssetResolutions: [proof] };
+  await withFetch((async (_input, init) => {
+    const request = JSON.parse(String(init?.body));
+    assert.equal(request.supportsConvertedPreorders, true);
+    assert.equal(request.includePreorderResolutions, true);
+    assert.equal(request.includePreorderResolutionSlots, true);
+    assert.equal(request.includeDevnet, undefined);
+    return Response.json(response);
+  }) as typeof fetch, async () => {
+    assert.deepEqual(await fetchInventory(OWNER, { onPreorderAssetResolutions: value => observed.push(value) }), []);
+  });
+  assert.deepEqual(observed, [[proof]]);
+  await withFetch((async () => Response.json(response)) as typeof fetch, async () => {
+    await assert.rejects(fetchInventory(OWNER, { includeDevnet: true, onPreorderAssetResolutions() {} }), /invalid inventory response/);
+    await assert.rejects(fetchInventory(OWNER, { onResolvedPreorderAssetIds() {} }), /invalid inventory response/);
   });
 });
 

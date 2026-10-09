@@ -32,6 +32,12 @@ or malformed preorder identities. It does not equate Core account count with the
 collection size: compressed receipt mints increase that size too. Before public
 registration, rechecks retain the complete prelaunch coverage requirement.
 
+After the [preorder metadata upgrade](mi_note_preorder_upgrade.md), frozen-manifest
+verification also accepts each ledger-recorded asset's exact `card N` name and
+`fN.json` URI under the matching registered drop. The original asset address and
+card ID must still match the permanent claim. Conversion never changes this
+inventory manifest or makes an excluded ID available for public assignment.
+
 The committed devnet snapshot excludes 22 preordered cards, leaving 1,408 cards
 for exactly 704 two-card packs. It preserves every `clean_card_id`, including
 the eight specials 1401–1408 and high IDs through 1430. Succeeded orders remain

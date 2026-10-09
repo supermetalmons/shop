@@ -88,6 +88,63 @@ test('an ordinary wallet on a devnet route refreshes minted assets and recovers 
   assert.ok(calls.some(call => call.path.endsWith('/pending-open-boxes') && call.body.includeDevnet !== true));
 });
 
+test('converted preorder recovery follows devnet visibility and ignores stale cached Preorder tiles', async t => {
+  const { listPreorderRecoveries, resolvePreorderInventoryAssets, upsertPreorderRecovery } = await import('../src/lib/preorderRecovery.ts');
+  const walletKey = new PublicKey(new Uint8Array(32).fill(36));
+  const owner = walletKey.toBase58();
+  const asset = new PublicKey(new Uint8Array(32).fill(37)).toBase58();
+  await upsertPreorderRecovery({ orderId: 'converted-filter', preorderId: 'mi_note_cards_devnet', buyer: owner,
+    ethereumAddress: null, cardIds: [1], assets: [{ id: 1, address: asset }], status: 'succeeded',
+    expiresAtMs: 1, signature: '1111111111111111111111111111111111111111111111111111111111111111', confirmedSlot: 200 });
+  await resolvePreorderInventoryAssets(owner, [asset], [], undefined, undefined,
+    [{ id: asset, slot: 250, owned: true, kind: 'dude', visible: false }]);
+  const stale: InventoryItem = { id: asset, dropId: 'mi_note_cards_devnet', name: 'Preorder #1', kind: 'preorder', preorderId: 1 };
+  const card: InventoryItem = { id: asset, dropId: 'mi_note_cards_devnet', name: 'card 1', kind: 'dude', dudeId: 1 };
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+  clients.push(client);
+  for (const includeDevnet of [false, true]) {
+    client.setQueryData(['inventory', owner, includeDevnet], includeDevnet ? [] : [stale]);
+    client.setQueryData(['pendingOpenBoxes', owner, includeDevnet], []);
+  }
+  const requests: import('../shared/shopApi.ts').ShopInventoryRequest[] = [];
+  t.mock.method(globalThis, 'fetch', async (_input: unknown, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body));
+    requests.push(request);
+    assert.equal(request.supportsConvertedPreorders, true);
+    assert.equal(request.includeDevnet, true);
+    assert.deepEqual(request.expectedAssetIds, { devnet: [asset] });
+    return Response.json({ ok: true, items: [card], resolvedPreorderAssetIds: [asset],
+      preorderAssetResolutions: [{ id: asset, slot: 251, owned: true, kind: 'dude', visible: true }] });
+  });
+  const wallet = {
+    autoConnect: false, wallets: [], wallet: null, publicKey: walletKey,
+    connecting: false, connected: true, disconnecting: false,
+    select: () => undefined, connect: async () => undefined, disconnect: async () => undefined,
+    sendTransaction: async () => '', signTransaction: undefined, signAllTransactions: undefined,
+    signMessage: undefined, signIn: undefined,
+  };
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client },
+    createElement(WalletContext.Provider, { value: wallet }, children));
+  const seenKinds: string[][] = [];
+  const { result, rerender } = renderHook((includeDevnet: boolean) => {
+    const queries = useShopInventoryQueries(owner, includeDevnet, false);
+    seenKinds.push(queries.inventory.map(item => item.kind));
+    return queries;
+  }, { initialProps: false, wrapper });
+  assert.deepEqual(result.current.inventory, []);
+  assert.equal(requests.length, 0);
+  rerender(true);
+  await waitFor(() => assert.equal(result.current.inventory[0]?.kind, 'dude'));
+  await act(async () => { client.setQueryData(['inventory', owner, true], [stale]); });
+  await waitFor(() => assert.equal(result.current.inventory[0]?.kind, 'dude'));
+  assert.ok(requests.length >= 2);
+  rerender(false);
+  assert.deepEqual(result.current.inventory, []);
+  assert.ok(seenKinds.every(kinds => !kinds.includes('preorder')));
+  assert.deepEqual(listPreorderRecoveries(owner)[0].convertedAssetIds, [asset]);
+  assert.deepEqual(listPreorderRecoveries(owner)[0].ownedResolvedAssetIds, [asset]);
+});
+
 afterEach(() => {
   cleanup();
   setMediaQueryMatches('(max-width: 720px)', false);
@@ -747,7 +804,7 @@ test('a restored disconnected owner retires finalized absence without consuming 
   assert.deepEqual(result.current.inventory.map(item => item.id), [assetAddress]);
   await waitFor(() => assert.equal(bodies.length, 1));
   assert.deepEqual(bodies[0], {
-    owner, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+    owner, includePreorderResolutions: true, includePreorderResolutionSlots: true, supportsConvertedPreorders: true,
     expectedAssetIds: { 'mainnet-beta': [assetAddress] }, preorderMinContextSlots: { [assetAddress]: 240 },
   });
   await act(async () => { response.resolve(Response.json({ ok: true, items: [], resolvedPreorderAssetIds: [assetAddress],

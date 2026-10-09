@@ -111,7 +111,7 @@ export async function fetchInventory(owner: string, options: InventoryFetchOptio
     ...(options.includeDevnet === true ? { includeDevnet: true } : {}),
     ...(hasExpectedAssetIds ? { expectedAssetIds } : {}),
     ...(options.onResolvedPreorderAssetIds || options.onPreorderAssetResolutions ? { includePreorderResolutions: true } : {}),
-    ...(options.onPreorderAssetResolutions ? { includePreorderResolutionSlots: true,
+    ...(options.onPreorderAssetResolutions ? { includePreorderResolutionSlots: true, supportsConvertedPreorders: true,
       ...(options.preorderMinContextSlots && Object.keys(options.preorderMinContextSlots).length ? { preorderMinContextSlots: options.preorderMinContextSlots } : {}),
     } : {}),
   };
@@ -120,7 +120,7 @@ export async function fetchInventory(owner: string, options: InventoryFetchOptio
     requestBody,
     options.signal,
   );
-  if (!isExactShopInventoryResponse(payload)) throw new Error('Shop API returned an invalid inventory response');
+  if (!isExactShopInventoryResponse(payload, requestBody)) throw new Error('Shop API returned an invalid inventory response');
   options.signal?.throwIfAborted();
   if (payload.resolvedPreorderAssetIds) options.onResolvedPreorderAssetIds?.(payload.resolvedPreorderAssetIds);
   if (payload.preorderAssetResolutions) options.onPreorderAssetResolutions?.(payload.preorderAssetResolutions);

@@ -10,6 +10,7 @@ import { MPL_CORE_PROGRAM_ADDRESS } from '../../shared/solanaProgramAddresses.ts
 import { DEPLOYMENT_DROPS, type DeploymentRegistryDrop } from '../../shared/deploymentRegistry.ts';
 import { normalizeDropBase } from '../../shared/deploymentCore.ts';
 import { resolveDropMaxFigureId } from '../../shared/dropFigureIds.ts';
+import { resolveClaimedPreorderAsset } from '../../shared/preorderAssetIdentity.ts';
 import { decodePreorderAssetAccount } from '../../cloud/workers/api/src/preorderTransaction.ts';
 import { queryRemoteCommerceD1, sqlString, type CommerceAuthorityQuery } from './commerceD1Maintenance.ts';
 import { createScriptSolanaConnection } from './solanaRpcEnvironment.ts';
@@ -191,9 +192,11 @@ export function miNotePreorderAssetsFromCollection(
   config: PreorderConfig,
   assets: readonly { address: string; name: string; collection: string; uri: string }[],
   publicDrops: readonly DeploymentRegistryDrop[] = Object.values(DEPLOYMENT_DROPS),
+  knownClaims: readonly PreorderAsset[] = [],
 ): MiNotePreorderChainSnapshot['assets'] {
   const matchingDrops = publicDrops.filter((drop) => drop.dropFamily === 'mi_note_cards' &&
     drop.solanaCluster === config.cluster && drop.collectionMint === config.collection);
+  const claimsByAddress = new Map(knownClaims.map((claim) => [claim.address, claim]));
   const isRegularAsset = (uri: string) => matchingDrops.some((drop) =>
     [drop.metadataBase, ...(drop.metadataBaseAliases ?? [])].some((base) => {
       const prefix = `${normalizeDropBase(base)}/`;
@@ -205,6 +208,9 @@ export function miNotePreorderAssetsFromCollection(
     }));
   return assets.flatMap((asset) => {
     if (asset.collection !== config.collection) throw new Error('Preorder collection scan returned another collection.');
+    const claim = claimsByAddress.get(asset.address);
+    if (claim && matchingDrops.some((publicDrop) => resolveClaimedPreorderAsset({ config, cluster: config.cluster,
+      claim, actual: asset, publicDrop })?.kind === 'dude')) return [{ ...asset, id: claim.id }];
     const id = preorderIdFromMetadataUri(config, asset.uri);
     if (id !== null && asset.name === `Preorder #${id}`) return [{ ...asset, id }];
     if (id === null && isRegularAsset(asset.uri)) return [];
@@ -261,11 +267,12 @@ export async function readMiNotePreorderChain(
     }
     return { address: pubkey.toBase58(), name: decoded.name, collection: decoded.collection, uri: decoded.uri };
   });
+  const complete = options.requireCompleteMembership !== false;
   const known = new Map(expectedAssets.map((asset) => [asset.id, asset.address]));
-  if (miNotePreorderAssetsFromCollection(config, scanned).some((asset) => known.get(asset.id) !== asset.address)) {
+  const convertedClaims = complete ? [] : expectedAssets;
+  if (miNotePreorderAssetsFromCollection(config, scanned, undefined, convertedClaims).some((asset) => known.get(asset.id) !== asset.address)) {
     throw new Error('The collection scan contains an unaccounted preorder identity.');
   }
-  const complete = options.requireCompleteMembership !== false;
   const addresses = [...new Set([...expectedAssets.map((asset) => asset.address), ...(complete ? scanned.map((asset) => asset.address) : [])])];
   if (complete && addresses.length !== coverage.size) {
     throw new Error('Finalized collection coverage is incomplete or includes unaccounted assets.');
@@ -294,7 +301,7 @@ export async function readMiNotePreorderChain(
       verified.push({ address, name: decoded.name, collection: decoded.collection, uri: decoded.uri });
     }
   }
-  const preorders = miNotePreorderAssetsFromCollection(config, verified);
+  const preorders = miNotePreorderAssetsFromCollection(config, verified, undefined, convertedClaims);
   const byAddress = new Map(preorders.map((asset) => [asset.address, asset]));
   if (preorders.length !== expectedAssets.length || expectedAssets.some((asset) => byAddress.get(asset.address)?.id !== asset.id)) {
     throw new Error('Direct finalized preorder identities differ from the succeeded asset records.');
@@ -304,6 +311,7 @@ export async function readMiNotePreorderChain(
 
 function validateChainSnapshot(
   chain: MiNotePreorderChainSnapshot, config: PreorderConfig, expected: readonly PreorderAsset[],
+  allowConverted: boolean,
 ): void {
   if (chain.genesisHash !== MI_NOTE_CLUSTER_GENESIS[config.cluster as keyof typeof MI_NOTE_CLUSTER_GENESIS] ||
     !Number.isSafeInteger(chain.slot) || chain.slot < 0 || chain.assets.length !== expected.length) {
@@ -311,8 +319,8 @@ function validateChainSnapshot(
   }
   const actual = [...chain.assets].sort((left, right) => left.id - right.id);
   if (actual.some((asset, index) => asset.id !== expected[index].id || asset.address !== expected[index].address ||
-    asset.collection !== config.collection || asset.name !== `Preorder #${asset.id}` ||
-    preorderIdFromMetadataUri(config, asset.uri) !== asset.id)) {
+    !resolveClaimedPreorderAsset({ config, cluster: config.cluster, claim: expected[index], actual: asset,
+      publicDrop: allowConverted ? DEPLOYMENT_DROPS[config.preorderId] : undefined }))) {
     throw new Error('Finalized preorder card IDs or asset addresses differ from the permanent claims.');
   }
 }
@@ -334,7 +342,7 @@ async function verifiedMiNoteManifest(
   const snapshot = await readMiNotePreorderSnapshot(dependencies.query, config);
   const { excludedIds, assets } = validateMiNotePreorderSnapshot(snapshot, config, catalog.preorder);
   const chain = await dependencies.chain(config, assets, { requireCompleteMembership });
-  validateChainSnapshot(chain, config, assets);
+  validateChainSnapshot(chain, config, assets, !requireCompleteMembership);
   const fresh = await readMiNotePreorderSnapshot(dependencies.query, config);
   if (miNoteManifestDigest(fresh) !== miNoteManifestDigest(snapshot)) {
     throw new Error('Preorder state changed during chain verification. Prepare a fresh snapshot.');

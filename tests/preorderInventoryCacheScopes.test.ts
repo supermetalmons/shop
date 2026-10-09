@@ -31,7 +31,7 @@ const order = {
   signature: '1111111111111111111111111111111111111111111111111111111111111111', confirmedSlot: 200,
 };
 const canonical: InventoryItem = { id: assetAddress, dropId: config.preorderId, kind: 'preorder', name: 'Preorder #1', preorderId: 1 };
-const storageKey = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${owner}:${order.orderId}`;
+const storageKey = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${owner}:${order.orderId}`;
 const wallet = {
   autoConnect: false, wallets: [], wallet: null, publicKey: walletKey,
   connecting: false, connected: true, disconnecting: false,

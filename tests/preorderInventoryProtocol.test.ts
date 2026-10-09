@@ -28,6 +28,15 @@ test('slot floors require opt-in and a bounded subset of selected asset addresse
   ]) assert.equal(isExactShopInventoryRequest(value), false);
 });
 
+test('converted preorder recovery requires explicit slot-aware client capability', () => {
+  assert.equal(isExactShopInventoryRequest({ ...request, supportsConvertedPreorders: true }), true);
+  for (const value of [
+    { owner, supportsConvertedPreorders: true },
+    { ...request, includePreorderResolutionSlots: undefined, supportsConvertedPreorders: true },
+    ...[false, 1, 'true', null].map(supportsConvertedPreorders => ({ ...request, supportsConvertedPreorders })),
+  ]) assert.equal(isExactShopInventoryRequest(value), false);
+});
+
 test('slot receipts exactly match the legacy IDs and returned preorder ownership', () => {
   const absent = { ok: true, items: [], resolvedPreorderAssetIds: [ids[0]], preorderAssetResolutions: [{ id: ids[0], slot: 250, owned: false }] };
   const owned = { ...absent, items: [item], preorderAssetResolutions: [{ id: ids[0], slot: 251, owned: true }] };
@@ -50,4 +59,33 @@ test('slot receipts exactly match the legacy IDs and returned preorder ownership
     ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '250', undefined].map(slot => ({ ...owned,
       preorderAssetResolutions: [{ id: ids[0], slot, owned: true }] })),
   ]) assert.equal(isExactShopInventoryResponse(value), false);
+});
+
+test('converted proofs distinguish visible cards, filtered ownership and absence', () => {
+  const card = { id: ids[0], dropId: 'mi_note_cards_devnet', name: 'card 1', kind: 'dude', dudeId: 1 };
+  const proof = { id: ids[0], slot: 251, owned: true, kind: 'dude', visible: true };
+  const visible = { ok: true, items: [card], resolvedPreorderAssetIds: [ids[0]], preorderAssetResolutions: [proof] };
+  const hidden = { ...visible, items: [], preorderAssetResolutions: [{ ...proof, visible: false }] };
+  const absent = { ...hidden, preorderAssetResolutions: [{ ...proof, owned: false, visible: false }] };
+  const capable = { supportsConvertedPreorders: true as const, includeDevnet: true };
+  assert.equal(isExactShopInventoryResponse(visible, capable), true);
+  assert.equal(isExactShopInventoryResponse(hidden, { ...capable, includeDevnet: false }), true);
+  assert.equal(isExactShopInventoryResponse(absent, capable), true);
+  assert.equal(isExactShopInventoryResponse(hidden, capable), false);
+  assert.equal(isExactShopInventoryResponse(visible, {}), false);
+  assert.equal(isExactShopInventoryResponse(hidden, {}), false);
+  for (const value of [
+    { ...visible, items: [] },
+    { ...visible, items: [item] },
+    { ...visible, items: [card, card] },
+    { ...visible, items: [{ ...card, dudeId: undefined }] },
+    { ...hidden, items: [card] },
+    { ...absent, items: [card] },
+    { ...visible, preorderAssetResolutions: [{ ...proof, owned: false }] },
+    { ...visible, preorderAssetResolutions: [{ ...proof, visible: undefined }] },
+    { ...visible, preorderAssetResolutions: [{ ...proof, visible: 'true' }] },
+    { ...visible, preorderAssetResolutions: [{ ...proof, kind: 'preorder' }] },
+    { ...visible, preorderAssetResolutions: [{ ...proof, extra: true }] },
+    { ...visible, preorderAssetResolutions: [{ id: ids[0], slot: 251, owned: true }] },
+  ]) assert.equal(isExactShopInventoryResponse(value, capable), false);
 });

@@ -15,6 +15,7 @@ export type InventoryQueryLoadOptions = {
   useRecentExpectedAssets: boolean;
   usePreorderRecovery?: boolean;
   acknowledgedPreorderAssetIds?: ReadonlySet<string>;
+  acknowledgedConvertedAssetIds?: ReadonlySet<string>;
   commitInventory?: (items: InventoryItem[]) => void;
 };
 
@@ -37,8 +38,8 @@ const defaultDependencies: InventoryQueryDependencies = {
 const preorderExpectedCursors = new Map<string, number>();
 
 function preorderExpectedAssets(owner: string, records: ReturnType<typeof listPreorderRecoveries>, recent?: ShopExpectedAssetIds,
-  acknowledgedAssetIds?: ReadonlySet<string>) {
-  const assets = unresolvedPreorderInventoryAssets(records, acknowledgedAssetIds);
+  acknowledgedAssetIds?: ReadonlySet<string>, scope: Pick<InventoryQueryLoadOptions, 'includeDevnet' | 'acknowledgedConvertedAssetIds'> = { includeDevnet: true }) {
+  const assets = unresolvedPreorderInventoryAssets(records, acknowledgedAssetIds, { ...scope, recheckResolved: true });
   const expected: ShopExpectedAssetIds = {};
   const seen = new Set<string>();
   const add = (cluster: keyof ShopExpectedAssetIds, id: string) => {
@@ -85,12 +86,13 @@ export async function loadInventoryQuery(
 ) {
   const recoverPreorders = options.usePreorderRecovery ?? options.useRecentExpectedAssets;
   const preorders = recoverPreorders ? dependencies.listPreorders?.(owner) ?? [] : [];
-  const preorderCount = unresolvedPreorderInventoryAssets(preorders, options.acknowledgedPreorderAssetIds).length;
+  const preorderCount = unresolvedPreorderInventoryAssets(preorders, options.acknowledgedPreorderAssetIds,
+    { ...options, recheckResolved: true }).length;
   const recentLimit = Math.max(Math.floor(SHOP_EXPECTED_ASSET_IDS_MAX / 2), SHOP_EXPECTED_ASSET_IDS_MAX - preorderCount);
   const selection = options.useRecentExpectedAssets
     ? dependencies.prepare(owner, options.includeDevnet, { maxEntries: recentLimit })
     : undefined;
-  const expected = preorderExpectedAssets(owner, preorders, selection?.expectedAssetIds, options.acknowledgedPreorderAssetIds);
+  const expected = preorderExpectedAssets(owner, preorders, selection?.expectedAssetIds, options.acknowledgedPreorderAssetIds, options);
   const selectedIds = new Set(Object.values(expected.expectedAssetIds ?? {}).flat());
   const preorderMinContextSlots = Object.fromEntries(preorders.flatMap(record => record.order.assets.flatMap(({ address }) => {
     const slot = record.inventoryResolutionSlots?.[address];

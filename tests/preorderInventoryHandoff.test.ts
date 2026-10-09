@@ -56,12 +56,18 @@ test('eighteen finalized preorders remain visible until collection search catche
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec(`CREATE TABLE commerce_preorder_orders (
-    buyer TEXT, preorder_id TEXT, status TEXT, confirmed_slot INTEGER, assets_json TEXT, created_at_ms INTEGER
+    order_id TEXT PRIMARY KEY, buyer TEXT, preorder_id TEXT, cluster TEXT, collection TEXT,
+    status TEXT, confirmed_slot INTEGER, assets_json TEXT, created_at_ms INTEGER
+  ); CREATE TABLE commerce_preorder_claims (
+    cluster TEXT, collection TEXT, card_id INTEGER, order_id TEXT REFERENCES commerce_preorder_orders(order_id),
+    PRIMARY KEY (cluster, collection, card_id)
   )`);
   for (const asset of assets) {
-    database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?)')
-      .run(owner, config.preorderId, 'succeeded', 200, JSON.stringify([asset]), asset.id);
-    await upsertPreorderRecovery({ orderId: `handoff-${String(asset.id).padStart(2, '0')}`, preorderId: config.preorderId,
+    const orderId = `handoff-${String(asset.id).padStart(2, '0')}`;
+    database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(orderId, owner, config.preorderId, config.cluster, config.collection, 'succeeded', 200, JSON.stringify([asset]), asset.id);
+    database.prepare('INSERT INTO commerce_preorder_claims VALUES (?, ?, ?, ?)').run(config.cluster, config.collection, asset.id, orderId);
+    await upsertPreorderRecovery({ orderId, preorderId: config.preorderId,
       buyer: owner, ethereumAddress: null, cardIds: [asset.id], assets: [asset], status: 'succeeded',
       confirmedSlot: 200, expiresAtMs: 1, signature: SIGNATURE });
   }
@@ -84,7 +90,7 @@ test('eighteen finalized preorders remain visible until collection search catche
     prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
     fetchInventory: async (_owner, options) => {
       expectedBatches.push(options.expectedAssetIds?.['mainnet-beta'] ?? []);
-      const response = await handleRequest(request('/inventory', { owner, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+      const response = await handleRequest(request('/inventory', { owner, includePreorderResolutions: true, includePreorderResolutionSlots: true, supportsConvertedPreorders: true,
         ...(options.preorderMinContextSlots ? { preorderMinContextSlots: options.preorderMinContextSlots } : {}),
         ...(options.expectedAssetIds ? { expectedAssetIds: options.expectedAssetIds } : {}) }),
       env({ commerceDb: sqliteD1Database(database) }), quietDependencies(providerFetch));
@@ -110,7 +116,8 @@ test('eighteen finalized preorders remain visible until collection search catche
   }
   assert.equal(unresolvedPreorderInventoryAssets(listPreorderRecoveries(owner)).length, 0);
   assert.equal((await load()).length, 18);
-  assert.deepEqual(expectedBatches.at(-1), []);
+  assert.ok(expectedBatches.every(batch => batch.length <= 15));
+  assert.deepEqual(new Set(expectedBatches.slice(-2).flat()), new Set(assets.map(asset => asset.address)));
 });
 
 test('older finalized negative proofs reject stale indexing until a new account read verifies transfer back', async (t) => {
@@ -123,12 +130,18 @@ test('older finalized negative proofs reject stale indexing until a new account 
   const database = new DatabaseSync(':memory:');
   t.after(() => database.close());
   database.exec(`CREATE TABLE commerce_preorder_orders (
-    buyer TEXT, preorder_id TEXT, status TEXT, confirmed_slot INTEGER, assets_json TEXT, created_at_ms INTEGER
+    order_id TEXT PRIMARY KEY, buyer TEXT, preorder_id TEXT, cluster TEXT, collection TEXT,
+    status TEXT, confirmed_slot INTEGER, assets_json TEXT, created_at_ms INTEGER
+  ); CREATE TABLE commerce_preorder_claims (
+    cluster TEXT, collection TEXT, card_id INTEGER, order_id TEXT REFERENCES commerce_preorder_orders(order_id),
+    PRIMARY KEY (cluster, collection, card_id)
   )`);
   for (const asset of assets) {
-    database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?)')
-      .run(owner, config.preorderId, 'succeeded', 200, JSON.stringify([asset]), asset.id);
-    await upsertPreorderRecovery({ orderId: `negative-handoff-${String(asset.id).padStart(2, '0')}`, preorderId: config.preorderId,
+    const orderId = `negative-handoff-${String(asset.id).padStart(2, '0')}`;
+    database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(orderId, owner, config.preorderId, config.cluster, config.collection, 'succeeded', 200, JSON.stringify([asset]), asset.id);
+    database.prepare('INSERT INTO commerce_preorder_claims VALUES (?, ?, ?, ?)').run(config.cluster, config.collection, asset.id, orderId);
+    await upsertPreorderRecovery({ orderId, preorderId: config.preorderId,
       buyer: owner, ethereumAddress: null, cardIds: [asset.id], assets: [asset], status: 'succeeded',
       confirmedSlot: 200, expiresAtMs: 1, signature: SIGNATURE });
   }
@@ -139,6 +152,7 @@ test('older finalized negative proofs reject stale indexing until a new account 
   let accountFailure: 'none' | 'error' | 'stale' = 'none';
   let accountReads: string[][] = [];
   let expectedIds: string[] = [];
+  const selectedIds = new Set<string>();
   const providerFetch: ProviderFetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body));
     if (body.method === 'getMultipleAccounts') {
@@ -163,8 +177,10 @@ test('older finalized negative proofs reject stale indexing until a new account 
       prepare: () => ({ commit() {} }), reconcile() {}, listPreorders: listPreorderRecoveries, resolvePreorders: resolvePreorderInventoryAssets,
       fetchInventory: async (_owner, options) => {
         expectedIds = options.expectedAssetIds?.['mainnet-beta'] ?? [];
+        assert.ok(expectedIds.length <= 15);
+        for (const id of expectedIds) selectedIds.add(id);
         accountReads = [];
-        const response = await handleRequest(request('/inventory', { owner, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+        const response = await handleRequest(request('/inventory', { owner, includePreorderResolutions: true, includePreorderResolutionSlots: true, supportsConvertedPreorders: true,
           ...(options.preorderMinContextSlots ? { preorderMinContextSlots: options.preorderMinContextSlots } : {}),
           ...(options.expectedAssetIds ? { expectedAssetIds: options.expectedAssetIds } : {}) }),
         env({ commerceDb: sqliteD1Database(database) }), quietDependencies(providerFetch));
@@ -176,22 +192,33 @@ test('older finalized negative proofs reject stale indexing until a new account 
     });
   };
   await load();
-  assert.deepEqual(expectedIds, [assets[0].address]);
+  assert.ok(expectedIds.includes(assets[0].address));
   assert.equal(visible().some(item => item.id === assets[0].address), false);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await load();
+    assert.equal(visible().some(item => item.id === assets[0].address), false);
+  }
+  assert.deepEqual(selectedIds, new Set(assets.map(asset => asset.address)));
+  accountFailure = 'error';
   await load();
-  assert.equal(accountReads.flat().includes(assets[0].address), false);
   assert.equal(inventory.some(item => item.id === assets[0].address), true);
   assert.equal(visible().some(item => item.id === assets[0].address), false);
   transferredBack = true;
   for (const failure of ['error', 'stale'] as const) {
     accountFailure = failure;
-    await load();
-    assert.deepEqual(expectedIds, [assets[0].address]);
-    assert.equal(visible().some(item => item.id === assets[0].address), false);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await load();
+      assert.equal(visible().some(item => item.id === assets[0].address), false);
+      if (expectedIds.includes(assets[0].address)) break;
+    }
+    assert.ok(expectedIds.includes(assets[0].address));
   }
   accountFailure = 'none';
-  await load();
-  assert.deepEqual(expectedIds, [assets[0].address]);
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await load();
+    if (expectedIds.includes(assets[0].address)) break;
+  }
+  assert.ok(expectedIds.includes(assets[0].address));
   assert.equal(accountReads.flat().includes(assets[0].address), true);
   assert.equal(visible().some(item => item.id === assets[0].address), true);
 });

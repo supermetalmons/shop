@@ -1,0 +1,293 @@
+{
+  "version": 1,
+  "preorderId": "mi_note_cards_devnet",
+  "cluster": "devnet",
+  "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "collection": "65JF5n29WqB5Z7YsHQXLAPvgsytHRZDixKzqSq2D1RMv",
+  "coreProgram": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+  "mintConfig": "8Cb6FqM1ymyULJZ6htwJAHH8n4pbMMqMz2yfDLLSicPY",
+  "operationsConfig": "FdHqdSLxUDenJki3eHXBVf6m49h5nnyM5jNreTHzUS6d",
+  "batchSize": 4,
+  "preparedAt": "2026-10-09T16:46:02.995Z",
+  "sourceSlot": 509243511,
+  "source": {
+    "inventoryPath": "releases/mi-note-cards-devnet/inventory.json",
+    "inventorySha256": "198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d",
+    "preorderSnapshotSha256": "475d5f3e127c22cac54eeacde3e062220506b28e293e878e7836718171515116",
+    "catalogSha256": "d1e36dd02f94976540545fc71fd79b65cc8f3827d66c8f01882f86b894f5bd3a",
+    "dropSha256": "4c61ae5db47bd97fe7690d5d0165ba11e1a1acc8695a79e2b51895395e860b9a",
+    "deploymentSha256": "c4d47ad8379d62047abf9d1047a1b4aab43a12fa0571cf55a670241931c4fe4c",
+    "targetMetadataSha256": "d80b910091a58ad8924530a8a2df54d127523b8d265928328105245518647c41",
+    "collectionConfigSha256": "27a92b3a2c46e53c0ca5a9a9f9c60b83e9357d61021a29de320d8d0144db9971",
+    "inventoryGeneration": "238fd2ea-b62b-454a-9a65-97968204d60c",
+    "programsSha256": "3406dc21bbd5c37a47d74ab4ccee55ba4be838a7a89d6912b8a5580c5ecfcb8d"
+  },
+  "assets": [
+    {
+      "id": 1,
+      "address": "6Cdi4vzgrQMHQgvbyhMQioMHqyiUm8PGRDeNt2y25RBP",
+      "original": {
+        "name": "Preorder #1",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/1.json"
+      },
+      "target": {
+        "name": "card 1",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f1.json"
+      }
+    },
+    {
+      "id": 2,
+      "address": "DyQeyp1V3yrCdvyYMRG9geyRYYNGpaTgWnwWoYytLi8Z",
+      "original": {
+        "name": "Preorder #2",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/2.json"
+      },
+      "target": {
+        "name": "card 2",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f2.json"
+      }
+    },
+    {
+      "id": 4,
+      "address": "EGCnAzrvXPkAP14pEnkg74aP99YECPR5WJ9Lxy6gyHL7",
+      "original": {
+        "name": "Preorder #4",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/4.json"
+      },
+      "target": {
+        "name": "card 4",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f4.json"
+      }
+    },
+    {
+      "id": 5,
+      "address": "CAadkhH7kakyRLod47QaTRFm7517bsw7ytarhAaY7NpJ",
+      "original": {
+        "name": "Preorder #5",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/5.json"
+      },
+      "target": {
+        "name": "card 5",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f5.json"
+      }
+    },
+    {
+      "id": 6,
+      "address": "7FNpYbB7q3xA4MghZ1QCYti3uFGNv2EsEKNKTS31Qtbw",
+      "original": {
+        "name": "Preorder #6",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/6.json"
+      },
+      "target": {
+        "name": "card 6",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f6.json"
+      }
+    },
+    {
+      "id": 7,
+      "address": "7RqLGY3saUeWdCmEaQmpNrz1obEVKEDau3CmhGJwQyVP",
+      "original": {
+        "name": "Preorder #7",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/7.json"
+      },
+      "target": {
+        "name": "card 7",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f7.json"
+      }
+    },
+    {
+      "id": 8,
+      "address": "CiCZ8MY4Hr2z7KEE74FmeuKHEyxoQwRRjnHwXZtzG1wm",
+      "original": {
+        "name": "Preorder #8",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/8.json"
+      },
+      "target": {
+        "name": "card 8",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f8.json"
+      }
+    },
+    {
+      "id": 9,
+      "address": "HD2MvoixnyrWigRVrbKJvduwRQPqSAQPH8snZDZr2H5t",
+      "original": {
+        "name": "Preorder #9",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/9.json"
+      },
+      "target": {
+        "name": "card 9",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f9.json"
+      }
+    },
+    {
+      "id": 10,
+      "address": "CgGNVM2py5rKeLAyAbEUT4T3HWH1HFHMQ4h7NobN11ob",
+      "original": {
+        "name": "Preorder #10",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/10.json"
+      },
+      "target": {
+        "name": "card 10",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f10.json"
+      }
+    },
+    {
+      "id": 12,
+      "address": "5zrM6DRWwDTL3J4Vpi7z4kz2qLDLcq9TakV1eoNq56m7",
+      "original": {
+        "name": "Preorder #12",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/12.json"
+      },
+      "target": {
+        "name": "card 12",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f12.json"
+      }
+    },
+    {
+      "id": 15,
+      "address": "59Ew4ErU6R5VtjcWVLZFyr3C5mhHQodhdB5XbvTYoVBy",
+      "original": {
+        "name": "Preorder #15",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/15.json"
+      },
+      "target": {
+        "name": "card 15",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f15.json"
+      }
+    },
+    {
+      "id": 17,
+      "address": "BxVXJVq62xCAXe94oqvnzc96uFmAG4hHBXsEtFfULK5H",
+      "original": {
+        "name": "Preorder #17",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/17.json"
+      },
+      "target": {
+        "name": "card 17",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f17.json"
+      }
+    },
+    {
+      "id": 142,
+      "address": "GuM3c5sPs6ceBncZ9X7SZf7P6SKrVhFh9Hnt6u6gBNec",
+      "original": {
+        "name": "Preorder #142",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/142.json"
+      },
+      "target": {
+        "name": "card 142",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f142.json"
+      }
+    },
+    {
+      "id": 192,
+      "address": "FFJdjxLANPgNbTET6weSJH8uqMKCEqk6SbnZ2AKorjAc",
+      "original": {
+        "name": "Preorder #192",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/192.json"
+      },
+      "target": {
+        "name": "card 192",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f192.json"
+      }
+    },
+    {
+      "id": 269,
+      "address": "CZYWBMXoQMtQ9dwnAFxoNW7p9p9iPrpPQgkfc6rqmUYS",
+      "original": {
+        "name": "Preorder #269",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/269.json"
+      },
+      "target": {
+        "name": "card 269",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f269.json"
+      }
+    },
+    {
+      "id": 583,
+      "address": "8V48WhT7nxnjYsoZT2GnAjFydYxa9DQEtTN55g4kxW9g",
+      "original": {
+        "name": "Preorder #583",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/583.json"
+      },
+      "target": {
+        "name": "card 583",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f583.json"
+      }
+    },
+    {
+      "id": 610,
+      "address": "BmSqkBd4Wpsbt3aYcWpxe4vunBEv6LbfJfvUAUKi5aLy",
+      "original": {
+        "name": "Preorder #610",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/610.json"
+      },
+      "target": {
+        "name": "card 610",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f610.json"
+      }
+    },
+    {
+      "id": 848,
+      "address": "HxWZ6wdmKqgtNSWQJxuk9L2TM9SApyHXXYtNtWC22B1V",
+      "original": {
+        "name": "Preorder #848",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/848.json"
+      },
+      "target": {
+        "name": "card 848",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f848.json"
+      }
+    },
+    {
+      "id": 1237,
+      "address": "72b8pqEBbW1swJwJuC6daTTfQtqB2HyZVhX9NgbQLsPW",
+      "original": {
+        "name": "Preorder #1237",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/1237.json"
+      },
+      "target": {
+        "name": "card 1237",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f1237.json"
+      }
+    },
+    {
+      "id": 1247,
+      "address": "5nBJtkp6p8WLjhtYKi3924kv5wfSrfQ94A5JzsSa8Stx",
+      "original": {
+        "name": "Preorder #1247",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/1247.json"
+      },
+      "target": {
+        "name": "card 1247",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f1247.json"
+      }
+    },
+    {
+      "id": 1285,
+      "address": "AeFgypN6QFkP1v5AQHeL7Lwiuxbk4xjk63RiTCpHNaBS",
+      "original": {
+        "name": "Preorder #1285",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/1285.json"
+      },
+      "target": {
+        "name": "card 1285",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f1285.json"
+      }
+    },
+    {
+      "id": 1301,
+      "address": "A4edymTbTo3gSjxkdHbKuSQZwZiGvSo63hpf9S1x88dk",
+      "original": {
+        "name": "Preorder #1301",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/json/1301.json"
+      },
+      "target": {
+        "name": "card 1301",
+        "uri": "https://cdn.lil.org/nft/mi_note_cards/json/pre/f1301.json"
+      }
+    }
+  ],
+  "sha256": "796605c202d6af3bac8044933583fede204ac0bab45eedae84470880594b3071"
+}

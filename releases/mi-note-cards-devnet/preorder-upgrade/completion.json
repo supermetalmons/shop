@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-09T17:02:43.228Z",
+  "preorderId": "mi_note_cards_devnet",
+  "cluster": "devnet",
+  "migrationManifestSha256": "796605c202d6af3bac8044933583fede204ac0bab45eedae84470880594b3071",
+  "complete": true,
+  "finalizedCheck": {
+    "mode": "check",
+    "complete": true,
+    "preorderId": "mi_note_cards_devnet",
+    "cluster": "devnet",
+    "manifestSha256": "796605c202d6af3bac8044933583fede204ac0bab45eedae84470880594b3071",
+    "totalAssets": 22,
+    "remainingAssets": 0,
+    "convertedAssets": 22,
+    "finalizedSlot": 509247129,
+    "eligiblePublicCards": 1408,
+    "availablePublicCards": 1400,
+    "assignedPublicCards": 8,
+    "journalPresent": true,
+    "historicalPreservationVerified": 6,
+    "pendingPreservationVerified": false
+  },
+  "independentChainVerification": {
+    "verifiedAt": "2026-10-09T17:01:38Z",
+    "finalizedReadSlot": 509247427,
+    "targetAssets": 22,
+    "currentOwnersPreserved": true,
+    "collectionMembershipPreserved": true,
+    "updateAuthoritiesPreserved": true,
+    "pluginsPreserved": true,
+    "sequenceTransitionsVerified": true,
+    "collectionFingerprintSha256": "08ff013415b19a20b22faea56826b6fa0eadd26d252f0d984336f44fd9571ab5",
+    "collectionCountersExcludedFromFingerprint": true,
+    "transactions": [
+      {
+        "cardIds": [
+          1,
+          2,
+          4,
+          5
+        ],
+        "signature": "3urTqEgW8Npw7uyrZPyavjFPojp8gRtCqEHLSPAich6PYYjHXA3MkNRX1DhJ4SeQ8uEkPsburieBqyTLfVRki9u1",
+        "finalizedTransactionSlot": 509245409,
+        "journalPreservationVerifiedAtSlot": 509245481,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 182880
+      },
+      {
+        "cardIds": [
+          6,
+          7,
+          8,
+          9
+        ],
+        "signature": "2dLCQfjGxF7tdG4UyWEaYh8GP5xatQ4598FF6f6NaExQnhBS3W5k55eMs22C4quEyk82fthzz34bfJwtpmexMtfE",
+        "finalizedTransactionSlot": 509245600,
+        "journalPreservationVerifiedAtSlot": 509245672,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 182880
+      },
+      {
+        "cardIds": [
+          10,
+          12,
+          15,
+          17
+        ],
+        "signature": "3pCQxGGfoWf64yDjtzVFevvpvqs7qiEL1m3UbZURELia8RHvvrNW3DjQGMJkjQFdaTSXKmpSUf9dDsiqRKQQNtKp",
+        "finalizedTransactionSlot": 509245788,
+        "journalPreservationVerifiedAtSlot": 509245863,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 182880
+      },
+      {
+        "cardIds": [
+          142,
+          192,
+          269,
+          583
+        ],
+        "signature": "2CXvJQM1V666ae99w2AwYPKxDcvgRAsDx4j2ksuLV8kaRbYYrAJK42fbLFQpgmYsKPBokVjTMt5hv43M9DDHmWjN",
+        "finalizedTransactionSlot": 509245980,
+        "journalPreservationVerifiedAtSlot": 509246051,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 182880
+      },
+      {
+        "cardIds": [
+          610,
+          848,
+          1237,
+          1247
+        ],
+        "signature": "32azr6MnsuYD1evLUVF3o1LWhHcfQKtQ9jsnxMWsAUUwAjeoJRc9QKoNqUi7zPTEQJ7R6njo3KZhaUQnfFteRsoV",
+        "finalizedTransactionSlot": 509246172,
+        "journalPreservationVerifiedAtSlot": 509246245,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 182880
+      },
+      {
+        "cardIds": [
+          1285,
+          1301
+        ],
+        "signature": "2PtLnwaTHmuW5oncYcBJJCLJpcsAyipVkuUCymZdqMReCLxmJnnicZ8ibzMhs2Wmi7bqmtCeSYMN6GJ2QNfG3oHq",
+        "finalizedTransactionSlot": 509246374,
+        "journalPreservationVerifiedAtSlot": 509246461,
+        "succeeded": true,
+        "exactSavedSignedMessage": true,
+        "metadataOnly": true,
+        "feeLamports": 5000,
+        "assetRentRefundLamports": 91440
+      }
+    ],
+    "totalFeeLamports": 30000,
+    "totalAssetRentRefundLamports": 1005840,
+    "authorityNetRefundLamports": 975840
+  },
+  "frozenInventory": {
+    "sha256": "198e6c6421cbca20ab3ebec25e7efca07c5fa62072bf8e12dce65e6fbf75242d",
+    "preorderSnapshotSha256": "475d5f3e127c22cac54eeacde3e062220506b28e293e878e7836718171515116",
+    "generation": "238fd2ea-b62b-454a-9a65-97968204d60c",
+    "excludedCards": 22,
+    "eligibleCards": 1408,
+    "availableCards": 1400,
+    "assignedCards": 8,
+    "frozenManifestVerified": true,
+    "originalOrdersAndClaimsPreserved": true,
+    "inventoryConserved": true
+  },
+  "currentSmokeFingerprint": {
+    "finalizedReadSlot": 509247244,
+    "count": 22,
+    "sha256": "b11f06e546bdc344e52e6d27778b109fcaa34e7869805d99249d7c7b283a9c2f",
+    "historicalSmokeAndFrozenManifestFilesUnchanged": true,
+    "newSmokeTransactionsSent": false
+  },
+  "liveInventory": {
+    "report": "api-verification.json",
+    "targetAssets": 22,
+    "requestMatrixPassed": 8,
+    "convertedCardsVisibleWithDevnetEnabled": true,
+    "convertedCardsHiddenWithDevnetDisabled": true,
+    "legacyResolutionProofsOmitted": true
+  },
+  "programUpgradesPerformed": false,
+  "mainnetWritesPerformed": false
+}

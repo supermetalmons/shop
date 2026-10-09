@@ -100,7 +100,8 @@
     "generate:commerce-schema": "node --import tsx scripts/generateCommerceSchema.ts --write",
     "check:commerce-schema": "node --import tsx scripts/generateCommerceSchema.ts --check",
     "generate:db": "npm run generate:preorder-catalog && npm run generate:commerce-schema",
-    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema"
+    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema",
+    "upgrade-mi-note-preorders": "node --import tsx scripts/upgrade-mi-note-preorders.ts"
   },
   "repository": {
     "type": "git",

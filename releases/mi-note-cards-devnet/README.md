@@ -85,3 +85,33 @@ the verified smoke result as passed.
 Mainnet activation is outside this rehearsal. No physical shipping or email order
 was created. Mi Note customs defaults remain unconfigured until measured card
 weight and the USD declared value are supplied.
+
+## Later preorder metadata upgrade
+
+The separate [preorder upgrade runbook](../../scripts/docs/mi_note_preorder_upgrade.md)
+converts the 22 existing devnet assets to their corresponding regular card names
+and metadata. Its records belong in `preorder-upgrade/`. This later operation
+preserves the frozen inventory, permanent exclusions, and original rehearsal
+evidence above; future smoke fingerprints use the assets' current metadata.
+
+The [reviewed manifest](preorder-upgrade/manifest.json) identifies all 22 assets.
+The [unsigned preview](preorder-upgrade/preview.json) passed all six batches:
+30,000 lamports in total fees and a 1,005,840-lamport account rent refund.
+[Compatibility evidence](preorder-upgrade/compatibility.json) records the API-first
+deployment, frontend deployment, and live checks before conversion.
+
+All 22 conversions completed in six finalized transactions on October 9, 2026.
+The [journal](preorder-upgrade/journal.json) preserves the exact signed messages
+and per-batch preservation checks. The [completion report](preorder-upgrade/completion.json)
+independently verifies those messages and the assets at finalized slot
+`509247427`: names and URIs match the targets, while owners, collection,
+update authorities, and plugins are preserved. Actual fees and rent refunds
+matched the preview.
+
+The [live inventory checks](preorder-upgrade/api-verification.json) cover all 22
+cards with devnet visibility enabled and disabled, for capable and legacy
+clients. The frozen manifest still validates with the same 22 exclusions and
+generation; public inventory was conserved at 1,400 available plus 8 assigned
+cards. The future-smoke fingerprint reader accepts the converted assets, while
+the historical smoke record remains unchanged. No program upgrade or mainnet
+write was performed.

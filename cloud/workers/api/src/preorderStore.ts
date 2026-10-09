@@ -1,4 +1,4 @@
-import type { PreorderOrder } from '../../../../shared/preorders.js';
+import { PREORDER_CONFIGS, type PreorderOrder } from '../../../../shared/preorders.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
 
@@ -62,15 +62,26 @@ export async function listPreorderInventoryAssets(
 ): Promise<PreorderInventoryAsset[]> {
   type Row = { preorder_id: string; assets_json: string; status: 'submitted' | 'succeeded'; confirmed_slot: number | null };
   const expected = [...new Set(expectedAddresses)].slice(0, 15);
-  const eligible = "buyer = ? AND (status = 'succeeded' OR (status = 'submitted' AND confirmed_slot IS NOT NULL))";
+  const scopes = PREORDER_CONFIGS.filter(config => config.enabled);
+  const scope = scopes.map(() => '(preorder.preorder_id = ? AND preorder.cluster = ? AND preorder.collection = ?)').join(' OR ') || '0';
+  const scopeValues = scopes.flatMap(config => [config.preorderId, config.cluster, config.collection]);
+  const columns = `preorder.preorder_id, preorder.status, preorder.confirmed_slot,
+    (SELECT COALESCE(json_group_array(json_object('id', claim.card_id, 'address', json_extract(asset.value, '$.address'))), '[]')
+      FROM json_each(preorder.assets_json) AS asset JOIN commerce_preorder_claims AS claim
+        ON claim.order_id = preorder.order_id AND claim.cluster = preorder.cluster AND claim.collection = preorder.collection
+          AND claim.card_id = json_extract(asset.value, '$.id')
+      WHERE json_type(asset.value, '$.id') = 'integer' AND json_type(asset.value, '$.address') = 'text') AS assets_json`;
   const [recent, requested] = await Promise.all([
-    db.prepare(`SELECT preorder_id, assets_json, status, confirmed_slot FROM commerce_preorder_orders
-      WHERE ${eligible} ORDER BY created_at_ms DESC LIMIT 15`).bind(buyer).all<Row>(),
-    expected.length ? db.prepare(`SELECT preorder_id, assets_json, status, confirmed_slot FROM commerce_preorder_orders
-      WHERE ${eligible} AND EXISTS (
-        SELECT 1 FROM json_each(assets_json) AS asset JOIN json_each(?) AS expected
+    db.prepare(`SELECT ${columns} FROM commerce_preorder_orders AS preorder
+      WHERE (${scope}) AND preorder.buyer = ? AND
+        (preorder.status = 'succeeded' OR (preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL))
+      ORDER BY preorder.created_at_ms DESC LIMIT 15`).bind(...scopeValues, buyer).all<Row>(),
+    expected.length ? db.prepare(`SELECT ${columns} FROM commerce_preorder_orders AS preorder
+      WHERE (${scope}) AND (preorder.status = 'succeeded' OR
+        (preorder.buyer = ? AND preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL)) AND EXISTS (
+        SELECT 1 FROM json_each(preorder.assets_json) AS asset JOIN json_each(?) AS expected
           ON json_extract(asset.value, '$.address') = expected.value
-      ) LIMIT 15`).bind(buyer, JSON.stringify(expected)).all<Row>() : Promise.resolve({ results: [] as Row[] }),
+      ) LIMIT 15`).bind(...scopeValues, buyer, JSON.stringify(expected)).all<Row>() : Promise.resolve({ results: [] as Row[] }),
   ]);
   const assets = (rows: Row[]) => rows.flatMap((row) => (JSON.parse(row.assets_json) as PreorderOrder['assets'])
     .map((asset) => ({ ...asset, preorderId: row.preorder_id, status: row.status, confirmedSlot: row.confirmed_slot })));

@@ -34,10 +34,12 @@ export function useInventory(ownerOverride?: string, options?: UseInventoryOptio
       useRecentExpectedAssets,
       usePreorderRecovery: options?.usePreorderRecovery ?? useRecentExpectedAssets,
       acknowledgedPreorderAssetIds: new Set(queryClient.getQueryData<InventoryItem[]>(queryKey)?.map((item) => item.id)),
+      acknowledgedConvertedAssetIds: new Set(queryClient.getQueryData<InventoryItem[]>(queryKey)?.filter(item => item.kind === 'dude').map(item => item.id)),
       commitInventory: (items) => queryClient.setQueryData(queryKey, items),
     }),
     refetchInterval: 45_000,
   });
   const acknowledgedPreorderAssetIds = useMemo(() => new Set(query.data?.map((item) => item.id)), [query.data]);
-  return { ...query, acknowledgedPreorderAssetIds };
+  const acknowledgedConvertedAssetIds = useMemo(() => new Set(query.data?.filter(item => item.kind === 'dude').map(item => item.id)), [query.data]);
+  return { ...query, acknowledgedPreorderAssetIds, acknowledgedConvertedAssetIds };
 }
