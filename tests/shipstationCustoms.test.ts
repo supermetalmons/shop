@@ -8,17 +8,12 @@ import {
   shipStationPhysicalProductQuantity,
 } from '../shared/shipstationCustoms.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
-import { resolveAppRoute } from '../src/routes.ts';
 
-test('the ShipStation customs catalog covers deployed mainnet families except the held Mi Note launch', () => {
+test('the ShipStation customs catalog contains every mainnet-deployed drop family', () => {
   const deployedFamilies = Array.from(new Set(
     Object.values(DEPLOYMENT_DROPS).filter(drop => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropFamily),
   )).sort();
   for (const family of deployedFamilies) {
-    if (family === 'mi_note_cards') {
-      assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming', 'Mi Note customs defaults must be configured before removing its launch hold');
-      continue;
-    }
     assert.ok(SHIPSTATION_CUSTOMS_CATALOG[family], `${family} requires customs defaults before mainnet fulfillment`);
   }
   assert.deepEqual(SHIPSTATION_CUSTOMS_CATALOG, {
@@ -62,6 +57,14 @@ test('the ShipStation customs catalog covers deployed mainnet families except th
       sku: 'card-nft-2',
       unitValueUsd: 14.67,
     },
+    mi_note_cards: {
+      contentDescription: 'Printed collectible art card',
+      description: 'Printed collectible art card',
+      harmonizedTariffCode: '4911.99',
+      netWeightOunces: 0.2,
+      sku: 'mi-note-card',
+      unitValueUsd: 14.67,
+    },
     clear_cards: {
       contentDescription: 'Printed plastic collectible card',
       description: 'Printed plastic collectible card',
@@ -94,10 +97,17 @@ test('physical customs quantities expand boxes and count loose products individu
 });
 
 for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
-  test(`${dropId} does not fabricate automatic customs values before physical product details are configured`, () => {
-    assert.equal(shipStationCustomsCatalogEntry(dropId), undefined);
-    assert.equal(buildShipStationCustomsDeclaration(dropId, 1, 0), undefined);
-    assert.equal(buildShipStationCustomsDeclaration(dropId, 0, 2), undefined);
+  test(`${dropId} uses Card NFT 2 customs defaults with two-card pack quantities`, () => {
+    assert.deepEqual(shipStationCustomsCatalogEntry(dropId), { ...SHIPSTATION_CUSTOMS_CATALOG.card_nft_2, sku: 'mi-note-card' });
+    const pack = buildShipStationCustomsDeclaration(dropId, 1, 0)!;
+    assert.equal(pack.product.quantity, 2);
+    assert.deepEqual(pack.product.value, { amount: 14.67, currency: 'usd' });
+    assert.deepEqual(pack.product.weight, { value: 0.2, unit: 'ounce' });
+    assert.equal(pack.product.harmonized_tariff_code, '4911.99');
+    assert.equal(pack.totalNetWeightOunces, 0.4);
+    assert.equal(pack.minimumPackageWeightOunces, 1.4);
+    assert.deepEqual(buildShipStationCustomsDeclaration(dropId, 0, 2), pack);
+    assert.equal(buildShipStationCustomsDeclaration(dropId, 2, 1)!.product.quantity, 5);
   });
 }
 

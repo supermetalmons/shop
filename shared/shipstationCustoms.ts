@@ -54,6 +54,14 @@ export const SHIPSTATION_CUSTOMS_CATALOG: Readonly<
     sku: 'card-nft-2',
     unitValueUsd: 14.67,
   }),
+  mi_note_cards: Object.freeze({
+    contentDescription: 'Printed collectible art card',
+    description: 'Printed collectible art card',
+    harmonizedTariffCode: '4911.99',
+    netWeightOunces: 0.2,
+    sku: 'mi-note-card',
+    unitValueUsd: 14.67,
+  }),
   clear_cards: Object.freeze({
     contentDescription: 'Printed plastic collectible card',
     description: 'Printed plastic collectible card',

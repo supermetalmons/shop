@@ -1,5 +1,34 @@
 # Mi Note Cards mainnet deployment
 
+Mainnet minting and unpacking are live. The [activation record](activation.json)
+contains the finalized `start_mint` transaction
+`35ocZGdLTAmK9cWuA83QPS9YmVKQ7VgxbQ9PX8jmqiRBCnBwyW9SMeBkBjcwR89n7naevZdxWTFz62oLF1NhUNdR`.
+It activated mint configuration A at slot `455004277`. Operations configuration B
+keeps its mint flag off and its two-card opening functionality enabled; starting
+its separate mint would expose additional public supply and is not part of this drop.
+
+The [launch verification](launch-verification.json) records a finalized snapshot
+with 201 of 627 packs minted and a conserved inventory of 1,234 available plus
+20 assigned cards. All 176 preorder IDs remain permanently excluded. Every
+preorder was converted in 44 finalized batches; 174 remain live and two were
+subsequently burned. See the [completed conversion](preorder-upgrade/README.md).
+
+The public page offers packs at 0.5 SOL with a 15-pack transaction limit, the
+latest committed interactive card/unpacking UI, and interaction sounds. API
+version `cd590fcf-3304-4d5b-a328-da706334334e` and frontend version
+`1d5cc7ce-0612-41c7-b814-143ab9396b4c` each serve 100% of traffic. The live frontend
+bundle matches the local build. Mi Note customs use the Card NFT 2 defaults:
+0.2 oz and USD 14.67 per card, tariff code `4911.99`, and SKU `mi-note-card`.
+Existing shipping fees and payment recipients are unchanged.
+
+Activation reads and simulations retry temporary minimum-slot lag while retaining
+the same request and finalized floor. Simulations also require the context slot
+of their blockhash. Known Core burn tombstones are accepted only when rechecking
+an exactly registered frozen manifest; their card IDs remain excluded. Receipt
+capacity checks allow legitimate preorder redemptions before pack sales begin.
+
+## Initial deployment with sales closed
+
 Status recorded on 2026-10-09: mainnet setup is finalized, inventory is initialized,
 and the API and frontend are published with sales closed. Both configs remain
 unstarted with zero minted packs, and all 176 preorder NFTs retain their original
@@ -56,8 +85,9 @@ permanently excluded, including after a later metadata conversion.
 | Mint | `mi_note_cards` | `5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF` | 627 | 0 |
 | Operations | `mi_note_cards_operations` | `7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY` | 715 | 2 |
 
-Both configs must remain unstarted with zero minted packs. Operations capacity
-permits card IDs through 1430; it does not represent additional public packs.
+At initial deployment both configs remained unstarted with zero minted packs.
+Only mint configuration A was later activated. Operations capacity permits card
+IDs through 1430; it does not represent additional public packs.
 The registry exposes one logical drop with two cards per pack and a 15-pack
 transaction limit. Stripe and discounted minting remain disabled.
 
@@ -74,7 +104,7 @@ preserving the authority delegate, metadata, royalties, and BubblegumV2 plugin.
 | Mint proceeds | `8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM` | 50% |
 | Shop delivery/redemption SOL fees | `8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM` | 100% |
 
-Both normal and disabled-discount prices are 500,000,000 lamports. A future pack
+Both normal and disabled-discount prices are 500,000,000 lamports. Each pack
 purchase transfers 250,000,000 lamports to each mint recipient. Existing shipping
 prices and the collection's 500-bps royalties are unchanged.
 
@@ -91,7 +121,15 @@ with depth 14, buffer 64, and canopy 0. Its TreeConfig is
 configs and the delivery receiver.
 
 Use the [mainnet deployment runbook](../../scripts/docs/mi_note_drop_deployment.md#mainnet-setup-with-sales-closed).
-The mainnet route has an explicit hold: `/mi_note_cards` continues to show
-**Soon / Notify Me** even after registry publication. No wallet, including the
-admin, receives purchase controls on that route. Activation, removal of this
-route hold, preorder conversion, and physical fulfillment setup are separate work.
+The initial deployment retained an explicit **Soon / Notify Me** route hold.
+The subsequent launch removed that hold, enabled mint configuration A, and
+published the approved physical customs settings. The original deployment
+records above remain unchanged as historical evidence.
+
+## Later preorder metadata conversion
+
+The separate [preorder conversion](preorder-upgrade/README.md) tracks the
+completed update of the 176 existing NFTs to their regular-card names and
+mainnet metadata URIs. Conversion ran while both configs were stopped and
+preserved this deployment evidence and every permanent public-inventory exclusion. Its manifest, execution
+journal, and verification records live in `preorder-upgrade/`.

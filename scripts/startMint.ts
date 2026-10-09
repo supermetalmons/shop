@@ -309,10 +309,16 @@ export async function runStartMint(
         persist();
       }
     };
-    const simulate = async (transaction: VersionedTransaction, signed: boolean) => {
-      const simulated = await connection.simulateTransaction(transaction, { sigVerify: signed, commitment: 'finalized', minContextSlot: state.slot,
+    const latestBlockhash = async () => {
+      const latest = await connection.getLatestBlockhashAndContext({ commitment: 'finalized', minContextSlot: state.slot });
+      if (!Number.isSafeInteger(latest.context.slot) || latest.context.slot < state.slot) throw new Error('Activation blockhash context is stale.');
+      return latest;
+    };
+    const simulate = async (transaction: VersionedTransaction, signed: boolean, minimumSlot = state.slot) => {
+      const simulated = await connection.simulateTransaction(transaction, { sigVerify: signed, commitment: 'finalized', minContextSlot: minimumSlot,
         accounts: { encoding: 'base64', addresses: addresses.map((address) => address.toBase58()) } });
-      if (simulated.value.err) throw new Error('start_mint simulation failed; no new transaction was sent.');
+      if (!Number.isSafeInteger(simulated.context.slot) || simulated.context.slot < minimumSlot) throw new Error('Activation simulation context is stale.');
+      if (simulated.value.err) throw new Error(`start_mint simulation failed (${JSON.stringify(simulated.value.err)}); no new transaction was sent.`);
       if (!simulated.value.accounts) throw new Error('start_mint simulation omitted role state.');
       const expected = validateAccounts(simulated.value.accounts.map(simulationAccount), simulated.context.slot);
       if (!expected.started) throw new Error('start_mint simulation did not activate configuration A.');
@@ -383,8 +389,8 @@ export async function runStartMint(
     } else {
       if (journal.attempts.some((attempt) => attempt.status === 'signed')) throw new Error('An unresolved activation attempt must be reconciled before fresh signing.');
       if (migrated) persist();
-      const previewBlockhash = await connection.getLatestBlockhash({ commitment: 'finalized', minContextSlot: state.slot });
-      await simulate(buildMintActivationTransaction(identity, previewBlockhash.blockhash), false);
+      const previewBlockhash = await latestBlockhash();
+      await simulate(buildMintActivationTransaction(identity, previewBlockhash.value.blockhash), false, previewBlockhash.context.slot);
       if (!await confirm(`Permanently enable minting for ${drop.dropId} on ${drop.solanaCluster}? Type y: `)) {
         return { dropId: drop.dropId, cluster: drop.solanaCluster, active: false, alreadyActive: false, activationPath };
       }
@@ -394,9 +400,10 @@ export async function runStartMint(
         alreadyActive = true;
         recordActive();
       } else {
-        const latest = await connection.getLatestBlockhash({ commitment: 'finalized', minContextSlot: state.slot });
+        const blockhashResult = await latestBlockhash();
+        const latest = blockhashResult.value;
         const transaction = buildMintActivationTransaction(identity, latest.blockhash);
-        await simulate(transaction, false);
+        await simulate(transaction, false, blockhashResult.context.slot);
         if (await connection.getBlockHeight('finalized') > latest.lastValidBlockHeight) {
           throw new Error('Refreshed activation expired during simulation; no transaction was signed. Rerun to simulate a fresh attempt.');
         }

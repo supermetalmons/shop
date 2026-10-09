@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "dropId": "mi_note_cards",
+  "cluster": "mainnet-beta",
+  "programId": "7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU",
+  "mintConfig": "5XNpnLR2Z8mSuPSB9yh9ozdSWbb2PDVA1L8UUjXMa3nF",
+  "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "operationsConfig": "7Eivdi78jrvCtLQ4H9HmkdUDKnq4QhY1xfsJbTsDWfrY",
+  "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+  "createdAt": "2026-10-09T21:14:44.786Z",
+  "status": "active",
+  "attempts": [
+    {
+      "signature": "35ocZGdLTAmK9cWuA83QPS9YmVKQ7VgxbQ9PX8jmqiRBCnBwyW9SMeBkBjcwR89n7naevZdxWTFz62oLF1NhUNdR",
+      "blockhash": "Gpebtk3PRg9zKFG7KjGjCenRgsyMxRyPyBt1bHuBqvwK",
+      "lastValidBlockHeight": 433041638,
+      "transactionBase64": "AWgtLz4652/2riudrsjmFonS0eY9SF5DBxlfPi4iAmamXr9+ieUPs3usbwoZUMpPoCwhkqXKuyXldyc5B+cn3QyAAQABAwsdJKTMCq8WsWuTpUonBbzM+YSUNEB+42+W7ZAKIBN5QzbZJvrJL4BR8DW9+jSBMFKuELpCKy1KrzkD9W5oALBczZ5T7JS5j/bXEPeuoKWPyHz6dfJnHzuEZQpSjCrbAesUHkCUuesSvFlwB8Ej1+tsAADcj6pXHhX8tFTUx7JiAQICAQAI+yqnBGq+g9YA",
+      "status": "finalized",
+      "signedAt": "2026-10-09T21:15:19.015Z",
+      "finalizedSlot": 455004277,
+      "resolvedAt": "2026-10-09T21:15:45.077Z"
+    }
+  ],
+  "activeState": {
+    "slot": 455004365,
+    "verifiedAt": "2026-10-09T21:15:45.077Z"
+  }
+}

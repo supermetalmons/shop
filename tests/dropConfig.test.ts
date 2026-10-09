@@ -22,26 +22,21 @@ import {
 } from '../src/lib/dropConfig.ts';
 import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
-test('Mi Note mainnet stays upcoming while devnet uses its registered drop without a preorder gallery', () => {
-  for (const [path, cluster, kind] of [
-    ['/mi_note_cards', 'mainnet-beta', 'upcoming'],
-    ['/mi_note_cards_devnet', 'devnet', 'drop'],
+test('Mi Note mainnet and devnet use their registered drops without a preorder gallery', () => {
+  for (const [path, cluster, dropId] of [
+    ['/mi_note_cards', 'mainnet-beta', 'mi_note_cards'],
+    ['/mi_note_cards_devnet', 'devnet', 'mi_note_cards_devnet'],
   ] as const) {
     for (const pathname of [path, `${path}/`]) {
       const route = resolveAppRoute({ pathname, search: '?from=drop', hash: '#preview' });
-      assert.equal(route.kind, kind);
+      assert.equal(route.kind, 'drop');
       assert.equal(route.path, path);
       assert.equal(route.shopPath, path);
       assert.equal(route.preorderId, null);
       assert.equal(route.walletCluster, cluster);
-      if (kind === 'upcoming') {
-        assert.equal(route.drop, null);
-        assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
-      } else {
-        assert.equal(route.drop, FRONTEND_DROPS.mi_note_cards_devnet);
-        assert.equal(route.drop?.itemsPerBox, 2);
-        assert.equal(route.upcoming, null);
-      }
+      assert.equal(route.drop, FRONTEND_DROPS[dropId]);
+      assert.equal(route.drop?.itemsPerBox, 2);
+      assert.equal(route.upcoming, null);
       assert.equal(route.replacementHref, null);
     }
   }
@@ -177,7 +172,7 @@ test('the route resolver keeps the complete WIP table in one exported definition
   ]);
 });
 
-test('Mi Note Cards WIP stays separate from its upcoming drop page', () => {
+test('Mi Note Cards WIP stays separate from its public drop page', () => {
   const route = resolveAppRoute({ pathname: '/mi_note_cards/wip/' });
   assert.equal(route.kind, 'wip');
   assert.equal(route.path, '/mi_note_cards/wip');
@@ -188,7 +183,7 @@ test('Mi Note Cards WIP stays separate from its upcoming drop page', () => {
   assert.equal(route.upcoming, null);
   assert.equal(route.walletCluster, 'mainnet-beta');
   assert.equal(route.replacementHref, null);
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'drop');
 });
 
 test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi Note pages', () => {
@@ -209,7 +204,7 @@ test('Mi Note Cards demo WIP stays separate from the devnet drop and existing Mi
   assert.equal(resolveFrontendDropByPath('/mi_note_cards_devnet/wip'), null);
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'drop');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).walletCluster, 'devnet');
-  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'upcoming');
+  assert.equal(resolveAppRoute({ pathname: '/mi_note_cards' }).kind, 'drop');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards/wip' }).wipExperience, 'mi_note_cards');
 });
 

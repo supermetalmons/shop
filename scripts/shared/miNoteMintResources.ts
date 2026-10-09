@@ -4,6 +4,7 @@ import {
 } from '@solana/web3.js';
 import { isDeepStrictEqual } from 'node:util';
 import type { DeploymentRegistryDrop } from '../../shared/deploymentRegistry.ts';
+import { resolveDropMaxFigureId } from '../../shared/dropFigureIds.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS, MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS, MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS, SPL_NOOP_PROGRAM_ADDRESS,
@@ -114,8 +115,9 @@ export async function verifyMiNoteMintResources(args: {
   const tree = decodeReceiptTreeState({ merkleTreeData: merkle.data, treeConfigData: treeConfig.data });
   if (tree.maxDepth !== 14 || tree.maxBufferSize !== 64 || tree.version !== 1 || !tree.authority.equals(treeConfigKey) ||
     tree.creator.toBase58() !== config.authority || tree.delegate.toBase58() !== config.authority ||
-    tree.totalCapacity !== 2 ** 14 || tree.numMinted > tree.totalCapacity || !args.mintStarted && tree.numMinted !== 0 || tree.isPublic) {
-    throw new Error('Activation receipt tree must be private, correctly controlled, and unused before the first activation.');
+    tree.totalCapacity !== 2 ** 14 || tree.numMinted > tree.totalCapacity || tree.isPublic ||
+    !args.mintStarted && tree.totalCapacity - tree.numMinted < drop.maxSupply + resolveDropMaxFigureId(drop)) {
+    throw new Error('Activation receipt tree must be private, correctly controlled, and have capacity for all pack and card receipts.');
   }
   if (!lookup || lookup.executable || !lookup.owner.equals(AddressLookupTableProgram.programId)) {
     throw new Error('Activation lookup table is missing or has the wrong owner.');

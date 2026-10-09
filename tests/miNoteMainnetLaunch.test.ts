@@ -59,19 +59,21 @@ const { ShopPurchaseSection } = await import('../src/shop/ui/ShopPurchaseSection
 afterEach(cleanup);
 after(() => dom.window.close());
 
-test('registered mainnet remains an announcement while backend and inventory retain its config', () => {
+test('mainnet purchase routing uses the 627-pack mint config while operations cover all card IDs', () => {
   assert.equal(getFrontendDrop(mainnetDrop.dropId)?.maxSupply, 627);
   assert.equal(getApiDrop(mainnetDrop.dropId)?.operationsConfig?.maxSupply, 715);
   for (const pathname of ['/mi_note_cards', '/mi_note_cards/', '/mi_note_cards///']) {
     const route = resolveAppRoute({ pathname, search: '?from=drop', hash: '#preview' });
-    assert.equal(route.kind, 'upcoming');
+    assert.equal(route.kind, 'drop');
     assert.equal(route.path, '/mi_note_cards');
     assert.equal(route.walletCluster, 'mainnet-beta');
-    assert.equal(route.drop, null);
-    assert.equal(route.upcoming?.dropFamily, 'mi_note_cards');
+    assert.equal(route.drop?.dropId, mainnetDrop.dropId);
+    assert.equal(route.drop?.priceSol, 0.5);
+    assert.equal(route.drop?.maxSupply, 627);
+    assert.equal(route.upcoming, null);
     assert.equal(route.preorderId, null);
     assert.equal(route.replacementHref, null);
-    assert.equal(resolveFrontendDropByPath(pathname, { drops: [getFrontendDrop(mainnetDrop.dropId)!] }), null);
+    assert.equal(resolveFrontendDropByPath(pathname, { drops: [getFrontendDrop(mainnetDrop.dropId)!] })?.dropId, mainnetDrop.dropId);
   }
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards_devnet' }).kind, 'drop');
   assert.equal(resolveAppRoute({ pathname: '/mi_note_cards/wip' }).kind, 'wip');
@@ -83,34 +85,34 @@ for (const [label, wallet] of [
   ['ordinary', new PublicKey(new Uint8Array(32).fill(71)).toBase58()],
   ['admin', 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz'],
 ] as const) {
-  test(`registered mainnet exposes Soon without purchase controls for ${label} wallets`, () => {
+  test(`mainnet exposes the same 0.5 SOL purchase controls for ${label} wallets`, () => {
     const route = resolveAppRoute({ pathname: '/mi_note_cards' });
     const { result } = renderHook(() => useShopDrop(route));
     const drop = result.current;
-    assert.equal(drop.routeDrop, null);
-    assert.equal(drop.routeConnection, null);
-    assert.equal(shouldFetchMintProgress(drop.routeDrop), false);
+    assert.equal(drop.routeDrop?.dropId, mainnetDrop.dropId);
+    assert.ok(drop.routeConnection);
+    assert.equal(shouldFetchMintProgress(drop.routeDrop), true);
     assert.equal(drop.routeStripePaymentVisible, false);
     assert.equal(drop.requireKnownDropConfig(mainnetDrop.dropId, 'inventory').dropId, mainnetDrop.dropId);
     for (const action of ['mint', 'discount mint', 'Stripe payment']) {
-      assert.throws(() => drop.requireRouteDrop(action), /requires an explicit drop route/);
+      assert.equal(drop.requireRouteDrop(action).dropId, mainnetDrop.dropId);
     }
-    const unexpectedPurchase = () => { throw new Error('Prelaunch purchase must stay unavailable'); };
+    const unexpectedPurchase = () => { throw new Error('Rendering must not initiate a purchase'); };
     const markup = renderToStaticMarkup(createElement(ShopPurchaseSection, {
       ...drop,
       minting: false,
       discountMinting: false,
       stripePaymentLoading: false,
       successfulMintToken: 0,
-      discountAvailable: true,
-      discountRemainingCount: 1,
+      discountAvailable: false,
+      discountRemainingCount: 0,
       handleMint: unexpectedPurchase,
       handleDiscountMint: unexpectedPurchase,
       handleStripePayment: unexpectedPurchase,
       packStatusDropId: null,
       packStatusBreakdown: undefined,
       packStatusDisplayLabels: undefined,
-      effectiveMintStats: undefined,
+      effectiveMintStats: { minted: 0, total: 627, remaining: 627, maxPerTx: 15, priceLamports: 500_000_000 },
       connectedWallet: wallet,
       publicKey: wallet ? new PublicKey(wallet) : null,
       walletBusy: false,
@@ -120,11 +122,12 @@ for (const [label, wallet] of [
     const container = document.createElement('div');
     container.innerHTML = markup;
     const view = within(container);
-    assert.ok(view.getByText('Soon'));
-    assert.ok(view.getByRole('button', { name: 'Notify Me' }));
-    assert.equal(container.querySelector('form'), null);
-    assert.equal(view.queryByRole('slider'), null);
-    assert.equal(view.queryByRole('button', { name: /Mint|Checkout|Pay|Discount/i }), null);
+    assert.equal(view.queryByText('Soon'), null);
+    assert.equal(view.queryByRole('button', { name: 'Notify Me' }), null);
+    assert.ok(container.querySelector('form'));
+    assert.equal(view.getByRole('slider', { name: 'Mint quantity' }).getAttribute('max'), '15');
+    assert.ok(view.getByRole('button', { name: /Mint.*0\.5 SOL/i }));
+    assert.equal(view.queryByRole('button', { name: /Checkout|Pay|Discount/i }), null);
   });
 }
 

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T21:20:02.536Z",
+  "cluster": "mainnet-beta",
+  "dropId": "mi_note_cards",
+  "activationSignature": "35ocZGdLTAmK9cWuA83QPS9YmVKQ7VgxbQ9PX8jmqiRBCnBwyW9SMeBkBjcwR89n7naevZdxWTFz62oLF1NhUNdR",
+  "activationFinalizedSlot": 455004277,
+  "verifiedSlot": 455005494,
+  "mint": {
+    "started": true,
+    "minted": 201,
+    "maxSupply": 627,
+    "priceSol": 0.5
+  },
+  "operations": {
+    "started": false,
+    "minted": 0,
+    "itemsPerBox": 2,
+    "openingEnabled": true
+  },
+  "inventory": {
+    "manifestSha256": "8ad3227f34d47f475ea57586c5ead0c158ff705ad40e37fff7733f2517e716af",
+    "excludedPreorderIds": 176,
+    "eligibleCards": 1254,
+    "status": {
+      "dropId": "mi_note_cards",
+      "ready": true,
+      "configMatches": true,
+      "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+      "available": 1234,
+      "assigned": 20,
+      "orphanAssignments": 0
+    }
+  },
+  "preorders": {
+    "historicallyConverted": 176,
+    "liveConverted": 174,
+    "burnedAfterConversion": [
+      {
+        "id": 698,
+        "address": "6DMt936MznQv2UkeYpkigjBXC6LgPZMVoKTpxSvAqxEk"
+      },
+      {
+        "id": 1092,
+        "address": "6sGcw2KGRywGDAGBHzDBanrscJ5Ez58LPEA1VFiqyxiU"
+      }
+    ]
+  },
+  "application": {
+    "apiVersion": "cd590fcf-3304-4d5b-a328-da706334334e",
+    "apiDeploymentId": "de844ca6-b337-4552-aaeb-0ea3298fceca",
+    "frontendVersion": "1d5cc7ce-0612-41c7-b814-143ab9396b4c",
+    "frontendDeploymentId": "0c8091e5-d505-4def-bd5d-09dc6ff4c5cd",
+    "apiTraffic": 100,
+    "frontendTraffic": 100,
+    "frontendBundle": "/assets/index-BQg_v1QS.js",
+    "frontendBundleMatchesLocalBuild": true,
+    "health": {
+      "ok": true
+    }
+  },
+  "files": {
+    "activationSha256": "190442990fc1b6e9085fb013621d332b18f13c42d723ae09763d213bfd4ab9c3",
+    "upgradeManifestSha256": "3047643bf0a7b2757d06b3c10c49ed0cff9025e90c5e7bb9d33a3f79291f996f",
+    "upgradeJournalSha256": "3acdf45796c62a5cefcaa8fa6379e154fa2e7bf06791b1cd75e0f46be128ce0d",
+    "upgradeExecutionVerificationSha256": "94dcb8b421b20f7d77fbd5e3413780661d992907563cef3dd8556b4d2154e64d"
+  },
+  "onchainTransactionsSentDuringVerification": 0,
+  "checks": {
+    "repositoryTests": {
+      "passed": 3340,
+      "failed": 0
+    },
+    "apiTests": {
+      "passed": 2253,
+      "failed": 0
+    },
+    "typecheckFrontend": "passed",
+    "typecheckApi": "passed",
+    "typecheckTools": "passed",
+    "diffWhitespace": "passed"
+  }
+}

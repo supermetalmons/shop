@@ -162,7 +162,6 @@ export function resolveFrontendDropByPath(
 ): FrontendDropConfig | null {
   const normalizedPath = normalizePathname(pathname);
   if (normalizedPath === '/') return null;
-  if (normalizedPath === '/mi_note_cards') return null;
 
   const upcomingRoute = resolveUpcomingDropRouteByPath(normalizedPath);
 

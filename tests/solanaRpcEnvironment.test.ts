@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { createScriptSolanaConnection, resolveScriptSolanaRpcUrl, scriptSolanaRpcHost } from '../scripts/shared/solanaRpcEnvironment.ts';
 
 function fixture(t: TestContext) {
@@ -114,4 +115,51 @@ test('RPC error payloads and thrown transport errors redact URLs and API keys', 
   await assert.rejects(connection.getGenesisHash(), safe);
   t.mock.method(globalThis, 'fetch', async () => { throw new Error(`Transport failed for ${endpoint}`); });
   await assert.rejects(connection.getGenesisHash(), safe);
+});
+
+for (const operation of ['read', 'simulate'] as const) {
+  test(`minimum-slot lag retries the identical ${operation} request and preserves finality`, async t => {
+    const root = fixture(t);
+    const bodies: string[] = [];
+    t.mock.method(globalThis, 'fetch', async (_input: unknown, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.params[1].minContextSlot, 123);
+      assert.equal(body.params[1].commitment, 'finalized');
+      return Response.json({ jsonrpc: '2.0', id: body.id, ...(bodies.length < 3
+        ? { error: { code: -32016, message: 'Minimum context slot has not been reached' } }
+        : { result: { context: { slot: 125 }, value: operation === 'read' ? [null] : { err: null, logs: [] } } }) });
+    });
+    const connection = createScriptSolanaConnection({ cluster: 'devnet', root, env: {} });
+    if (operation === 'read') {
+      assert.equal((await connection.getMultipleAccountsInfoAndContext([PublicKey.default], {
+        commitment: 'finalized', minContextSlot: 123,
+      })).context.slot, 125);
+    } else {
+      const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: PublicKey.default,
+        recentBlockhash: PublicKey.default.toBase58(), instructions: [] }).compileToV0Message());
+      assert.equal((await connection.simulateTransaction(transaction, {
+        commitment: 'finalized', minContextSlot: 123, sigVerify: false,
+      })).context.slot, 125);
+    }
+    assert.equal(bodies.length, 3);
+    assert.equal(new Set(bodies).size, 1);
+  });
+}
+
+test('minimum-slot retries stop after four reads and never retry a transaction submission', async t => {
+  const root = fixture(t);
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    calls.push(body.method);
+    return Response.json({ jsonrpc: '2.0', id: body.id,
+      error: { code: -32016, message: 'Minimum context slot has not been reached' } });
+  });
+  const connection = createScriptSolanaConnection({ cluster: 'devnet', root, env: {} });
+  await assert.rejects(connection.getLatestBlockhash({ commitment: 'finalized', minContextSlot: 123 }), /Minimum context slot/);
+  assert.deepEqual(calls, Array(4).fill('getLatestBlockhash'));
+  calls.length = 0;
+  await assert.rejects(connection.sendRawTransaction(Buffer.from([1])), /Minimum context slot/);
+  assert.deepEqual(calls, ['sendTransaction']);
 });

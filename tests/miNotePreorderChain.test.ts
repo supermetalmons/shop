@@ -98,6 +98,47 @@ test('frozen verification still rejects observed unknown preorder identities', a
     { requireCompleteMembership: false }), /unaccounted preorder identity/);
 });
 
+test('registered verification retains burned claims without returning them to public inventory', async t => {
+  const fixture = chainFixture(t);
+  const claim = fixture.expected.at(-1)!;
+  fixture.accounts.get(claim.address)!.data = Buffer.from([0]);
+  fixture.state.size -= 1;
+  const result = await readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection,
+    { requireCompleteMembership: false });
+  assert.equal(result.assets.length, 21);
+  assert.deepEqual(result.burnedAssets, [claim]);
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection), /coverage is incomplete/);
+  fixture.state.size += 1;
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection), /missing or is not a valid Core asset/);
+  for (const data of [Buffer.alloc(0), Buffer.from([0, 0]), Buffer.from([1])]) {
+    fixture.accounts.get(claim.address)!.data = data;
+    await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection,
+      { requireCompleteMembership: false }), /missing or is not a valid Core asset/);
+  }
+  fixture.accounts.get(claim.address)!.data = Buffer.from([0]);
+  fixture.accounts.get(claim.address)!.owner = PublicKey.default;
+  await assert.rejects(readMiNotePreorderChain(fixture.config, fixture.expected, fixture.connection,
+    { requireCompleteMembership: false }), /missing or is not a valid Core asset/);
+});
+
+test('burned claims remain excluded only when verifying the exact registered frozen manifest', async t => {
+  const fixture = miNoteManifestFixture();
+  const manifest = await fixture.manifest();
+  const dropId = manifest.sourcePreorder.preorderId;
+  const previous = DEPLOYMENT_DROPS[dropId];
+  t.after(() => { DEPLOYMENT_DROPS[dropId] = previous; });
+  DEPLOYMENT_DROPS[dropId] = { ...miNoteDropFixture(), maxSupply: manifest.packCount,
+    inventoryManifest: { sha256: manifest.sha256, cardIds: manifest.eligibleCardIds } };
+  const burned = fixture.chain.assets.pop()!;
+  fixture.chain.burnedAssets = [{ id: burned.id, address: burned.address }];
+  await verifyMiNoteDropManifest(manifest, fixture.dependencies);
+  assert.ok(manifest.excludedCardIds.includes(burned.id));
+  assert.equal(manifest.eligibleCardIds.includes(burned.id), false);
+  await assert.rejects(prepareMiNoteDropManifest(dropId, fixture.dependencies), /does not match the permanent claims/);
+  fixture.chain.burnedAssets[0].id += 1;
+  await assert.rejects(verifyMiNoteDropManifest(manifest, fixture.dependencies), /asset addresses differ/);
+});
+
 test('registered verification retains converted claims while preparation requires original metadata', async (t) => {
   const fixture = chainFixture(t);
   const claim = fixture.expected[0];

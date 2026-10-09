@@ -101,6 +101,9 @@ async function fixture(t: TestContext, dual = true) {
     const lastValidBlockHeight = state.height + 100; blockhashes.set(blockhash, lastValidBlockHeight);
     return { blockhash, lastValidBlockHeight };
   });
+  t.mock.method(connection, 'getLatestBlockhashAndContext', async options => ({
+    context: { slot: state.slot }, value: await connection.getLatestBlockhash(options),
+  }));
   t.mock.method(connection, 'getBlockHeight', async () => state.height);
   t.mock.method(connection, 'getEpochInfo', async () => ({ epoch: 1, slotIndex: 1, slotsInEpoch: 1000, absoluteSlot: state.slot, blockHeight: state.height }));
   t.mock.method(connection, 'isBlockhashValid', async (hash) => ({ context: { slot: state.slot }, value: state.height <= (blockhashes.get(hash) ?? 0) }));
@@ -263,6 +266,23 @@ test('activation verifies finalized collection, receipt and lookup resources aga
   assert.equal(f.state.sends.length, 1);
 });
 
+test('activation simulation waits for the blockhash context when it is newer than the account read', async t => {
+  const f = await fixture(t);
+  const latest = f.connection.getLatestBlockhashAndContext.bind(f.connection);
+  const simulate = f.connection.simulateTransaction.bind(f.connection);
+  t.mock.method(f.connection, 'getLatestBlockhashAndContext', async options => {
+    const result = await latest(options);
+    return { ...result, context: { slot: f.state.slot + 2 } };
+  });
+  t.mock.method(f.connection, 'simulateTransaction', async (transaction: VersionedTransaction, options) => {
+    assert.equal(options?.minContextSlot, f.state.slot + 2);
+    const result = await simulate(transaction, options);
+    return { ...result, context: { slot: f.state.slot + 2 } };
+  });
+  assert.equal((await f.run()).active, true);
+  assert.equal(f.state.sends.length, 1);
+});
+
 test('activation accepts an approved preserved delegate regardless of list order', async (t) => {
   const f = await fixture(t);
   const delegates = [f.payer.publicKey.toBase58(), Keypair.generate().publicKey.toBase58(),
@@ -311,7 +331,7 @@ for (const [name, mutate] of Object.entries({
   'wrong receipt creator': r => r.treeConfig.fill(0, 8, 40),
   'wrong receipt delegate': r => r.treeConfig.fill(0, 40, 72),
   'public receipt tree': r => { r.treeConfig[88] = 1; },
-  'used receipt tree before first activation': r => r.treeConfig.writeBigUInt64LE(3n, 80),
+  'receipt tree without room for remaining receipts': r => r.treeConfig.writeBigUInt64LE(16383n, 80),
   'missing lookup table': (r, f) => r.accounts.delete(f.drop.deliveryLookupTable!),
   'wrong lookup table owner': (r, f) => { r.accounts.get(f.drop.deliveryLookupTable!)!.owner = SystemProgram.programId; },
   'wrong lookup table authority': r => r.lookup.fill(0, 22, 54),
@@ -328,6 +348,14 @@ for (const [name, mutate] of Object.entries({
     assert.deepEqual(f.state.sends, []);
   });
 }
+
+test('activation permits preorder receipts when capacity remains for every pack and card', async t => {
+  const f = await fixture(t);
+  const resources = resourceFixture(t, f);
+  resources.treeConfig.writeBigUInt64LE(3n, 80);
+  assert.equal((await f.run()).active, true);
+  assert.equal(f.state.sends.length, 1);
+});
 
 test('losing B delegation during key entry prevents activation submission', async (t) => {
   const f = await fixture(t);

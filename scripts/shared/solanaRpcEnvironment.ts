@@ -18,6 +18,10 @@ const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ATTEMPTS = 4;
 const ATTEMPT_TIMEOUT_MS = 20_000;
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const CONTEXT_RETRY_METHODS = new Set([
+  'getAccountInfo', 'getMultipleAccounts', 'getProgramAccounts', 'getLatestBlockhash',
+  'getBlockHeight', 'getEpochInfo', 'isBlockhashValid', 'simulateTransaction',
+]);
 
 function text(value: string | undefined): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -148,6 +152,13 @@ export function createScriptSolanaConnection(options: ScriptSolanaRpcOptions): C
           const body = await readRpcBody(response, host);
           let payload: unknown;
           try { payload = JSON.parse(body); } catch { throw new ScriptSolanaRpcError(`Solana RPC returned invalid JSON from ${host}.`); }
+          if (payload && typeof payload === 'object' && 'error' in payload &&
+            payload.error && typeof payload.error === 'object' && 'code' in payload.error &&
+            payload.error.code === -32016 && attempt + 1 < MAX_ATTEMPTS && typeof init?.body === 'string' &&
+            CONTEXT_RETRY_METHODS.has(JSON.parse(init.body).method)) {
+            await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+            continue;
+          }
           let changed = false;
           const sanitize = (packet: unknown) => {
             if (!packet || typeof packet !== 'object' || Array.isArray(packet) || !('error' in packet)) return packet;

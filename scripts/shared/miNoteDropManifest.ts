@@ -47,6 +47,7 @@ export type MiNotePreorderChainSnapshot = {
   genesisHash: string;
   slot: number;
   assets: (PreorderAsset & { name: string; collection: string; uri: string })[];
+  burnedAssets?: PreorderAsset[];
 };
 
 export type MiNoteDropManifest = Readonly<{
@@ -290,6 +291,8 @@ export async function readMiNotePreorderChain(
     throw new Error('Finalized collection coverage is incomplete or includes unaccounted assets.');
   }
   const verified: { address: string; name: string; collection: string; uri: string }[] = [];
+  const claimedByAddress = new Map(expectedAssets.map(asset => [asset.address, asset]));
+  const burnedAssets: PreorderAsset[] = [];
   let slot = result.context.slot;
   for (let offset = 0; offset < Math.max(1, addresses.length); offset += 99) {
     const batch = addresses.slice(offset, offset + 99);
@@ -306,6 +309,12 @@ export async function readMiNotePreorderChain(
     }
     for (const [index, address] of batch.entries()) {
       const account = direct.value[index + 1];
+      const claim = claimedByAddress.get(address);
+      if (!complete && claim && account && !account.executable && account.owner.toBase58() === MPL_CORE_PROGRAM_ADDRESS &&
+        account.data.length === 1 && account.data[0] === 0) {
+        burnedAssets.push(claim);
+        continue;
+      }
       const decoded = account && decodePreorderAssetAccount(account.data);
       if (!account || !decoded || account.executable || account.owner.toBase58() !== MPL_CORE_PROGRAM_ADDRESS) {
         throw new Error('A recorded or scanned Mi Note asset is missing or is not a valid Core asset.');
@@ -314,11 +323,12 @@ export async function readMiNotePreorderChain(
     }
   }
   const preorders = miNotePreorderAssetsFromCollection(config, verified, undefined, convertedClaims);
-  const byAddress = new Map(preorders.map((asset) => [asset.address, asset]));
-  if (preorders.length !== expectedAssets.length || expectedAssets.some((asset) => byAddress.get(asset.address)?.id !== asset.id)) {
+  const covered = [...preorders, ...burnedAssets];
+  const byAddress = new Map(covered.map((asset) => [asset.address, asset]));
+  if (covered.length !== expectedAssets.length || expectedAssets.some((asset) => byAddress.get(asset.address)?.id !== asset.id)) {
     throw new Error('Direct finalized preorder identities differ from the succeeded asset records.');
   }
-  return { genesisHash, slot, assets: preorders };
+  return { genesisHash, slot, assets: preorders, ...(burnedAssets.length ? { burnedAssets } : {}) };
 }
 
 function validateChainSnapshot(
@@ -326,12 +336,13 @@ function validateChainSnapshot(
   allowConverted: boolean,
 ): void {
   if (chain.genesisHash !== MI_NOTE_CLUSTER_GENESIS[config.cluster as keyof typeof MI_NOTE_CLUSTER_GENESIS] ||
-    !Number.isSafeInteger(chain.slot) || chain.slot < 0 || chain.assets.length !== expected.length) {
+    !Number.isSafeInteger(chain.slot) || chain.slot < 0 || chain.assets.length + (chain.burnedAssets?.length ?? 0) !== expected.length ||
+    !allowConverted && Boolean(chain.burnedAssets?.length)) {
     throw new Error('Finalized preorder collection does not match the permanent claims.');
   }
-  const actual = [...chain.assets].sort((left, right) => left.id - right.id);
-  if (actual.some((asset, index) => asset.id !== expected[index].id || asset.address !== expected[index].address ||
-    !resolveClaimedPreorderAsset({ config, cluster: config.cluster, claim: expected[index], actual: asset,
+  const actual = [...chain.assets, ...(chain.burnedAssets ?? [])].sort((left, right) => left.id - right.id);
+  if (actual.some((asset, index) => asset.id !== expected[index].id || asset.address !== expected[index].address) ||
+    chain.assets.some(asset => !resolveClaimedPreorderAsset({ config, cluster: config.cluster, claim: asset, actual: asset,
       publicDrop: allowConverted ? DEPLOYMENT_DROPS[config.preorderId] : undefined }))) {
     throw new Error('Finalized preorder card IDs or asset addresses differ from the permanent claims.');
   }
@@ -371,7 +382,7 @@ async function verifiedMiNoteManifest(
     packCount: eligibleCardIds.length / 2, maxFigureId: catalog.all.at(-1)!,
     catalogSha256: miNoteManifestDigest(catalogText), preorderSnapshotSha256: miNoteManifestDigest(snapshot),
     excludedCardIds: excludedIds, eligibleCardIds, verifiedAt: dependencies.now().toISOString(),
-    chain: { commitment: 'finalized', genesisHash: chain.genesisHash, slot: chain.slot, assetCount: chain.assets.length },
+    chain: { commitment: 'finalized', genesisHash: chain.genesisHash, slot: chain.slot, assetCount: chain.assets.length + (chain.burnedAssets?.length ?? 0) },
   };
   return { ...content, sha256: miNoteManifestDigest(content) };
 }

@@ -88,24 +88,19 @@ test('pageshow restores the current route while irrelevant URL changes retain it
   assert.equal(view.result.current, current);
 });
 
-for (const [path, cluster, kind] of [
-  ['/mi_note_cards', 'mainnet-beta', 'upcoming'],
-  ['/mi_note_cards_devnet', 'devnet', 'drop'],
+for (const [path, cluster, dropId] of [
+  ['/mi_note_cards', 'mainnet-beta', 'mi_note_cards'],
+  ['/mi_note_cards_devnet', 'devnet', 'mi_note_cards_devnet'],
 ] as const) {
-  test(`${path} loads and remounts as ${kind} without replacing its URL`, () => {
+  test(`${path} loads and remounts as a registered drop without replacing its URL`, () => {
     const href = `https://mons.shop${path}/?from=drop#preview`;
     window.history.replaceState({ retained: true }, '', href);
     for (let load = 0; load < 2; load += 1) {
       const view = renderHook(useAppRoute);
-      assert.equal(view.result.current.kind, kind);
+      assert.equal(view.result.current.kind, 'drop');
       assert.equal(view.result.current.preorderId, null);
-      if (kind === 'upcoming') {
-        assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
-        assert.equal(view.result.current.drop, null);
-      } else {
-        assert.equal(view.result.current.drop?.dropId, 'mi_note_cards_devnet');
-        assert.equal(view.result.current.upcoming, null);
-      }
+      assert.equal(view.result.current.drop?.dropId, dropId);
+      assert.equal(view.result.current.upcoming, null);
       assert.equal(view.result.current.walletCluster, cluster);
       assert.equal(window.location.href, href);
       assert.deepEqual(window.history.state, { retained: true });
@@ -114,12 +109,13 @@ for (const [path, cluster, kind] of [
   });
 }
 
-test('custom navigation and browser history switch between upcoming mainnet and registered devnet', async () => {
+test('custom navigation and browser history switch between registered mainnet and devnet drops', async () => {
   const view = renderHook(useAppRoute);
   act(() => navigate('/mi_note_cards'));
-  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.kind, 'drop');
   assert.equal(view.result.current.preorderId, null);
-  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+  assert.equal(view.result.current.drop?.dropId, 'mi_note_cards');
+  assert.equal(view.result.current.upcoming, null);
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
   act(() => navigate('/mi_note_cards_devnet'));
   assert.equal(view.result.current.kind, 'drop');
@@ -133,9 +129,10 @@ test('custom navigation and browser history switch between upcoming mainnet and 
     window.history.back();
     await navigated;
   });
-  assert.equal(view.result.current.kind, 'upcoming');
+  assert.equal(view.result.current.kind, 'drop');
   assert.equal(view.result.current.preorderId, null);
-  assert.equal(view.result.current.upcoming?.dropFamily, 'mi_note_cards');
+  assert.equal(view.result.current.drop?.dropId, 'mi_note_cards');
+  assert.equal(view.result.current.upcoming, null);
   assert.equal(view.result.current.walletCluster, 'mainnet-beta');
 
   await act(async () => {

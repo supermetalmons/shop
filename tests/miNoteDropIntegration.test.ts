@@ -21,9 +21,12 @@ function asset(uri: string) {
   };
 }
 
-test('one registered devnet drop activates only its own route and preserves the mainnet announcement', () => {
+test('registered Mi Note drops use their own mainnet and devnet configurations', () => {
   const mainnet = resolveAppRoute({ pathname: '/mi_note_cards' });
-  assert.equal(mainnet.kind, 'upcoming');
+  assert.equal(mainnet.kind, 'drop');
+  assert.equal(mainnet.drop?.dropId, 'mi_note_cards');
+  assert.equal(mainnet.drop?.maxSupply, 627);
+  assert.equal(mainnet.drop?.priceSol, 0.5);
   assert.equal(mainnet.walletCluster, 'mainnet-beta');
   assert.equal(mainnet.preorderId, null);
   for (const pathname of ['/mi_note_cards_devnet', '/mi_note_cards_devnet/']) {
