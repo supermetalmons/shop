@@ -5,11 +5,6 @@ import { createElement, useLayoutEffect, useRef, useState } from 'react';
 import type WipInteractiveCard from '../src/components/WipInteractiveCard.tsx';
 import type { DrifCardConfig } from '../src/drifCards.ts';
 import { MI_NOTE_CARDS_DEFAULT } from '../src/lib/miNoteCardEffects.ts';
-import {
-  DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS,
-  miNoteCardCssEffectStyle,
-  normalizeMiNoteCardCssEffectSettings,
-} from '../src/lib/miNoteCardCssEffects.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 type CardProps = Parameters<typeof WipInteractiveCard>[0];
@@ -22,7 +17,7 @@ type AssetInstance = {
   setState: (state: AssetState) => void;
 };
 
-const { dom, setMediaQueryMatches } = setupFrontendDom();
+const { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const cardInstances: CardInstance[] = [];
 const assetInstances: AssetInstance[] = [];
@@ -79,7 +74,6 @@ imports.deregister();
 
 beforeEach(() => {
   window.localStorage.clear();
-  setMediaQueryMatches('(max-width: 760px)', false);
   cardInstances.length = 0;
   assetInstances.length = 0;
   window.history.replaceState(null, '', '/mi_note_cards_devnet/wip');
@@ -91,6 +85,32 @@ afterEach(() => {
 });
 after(() => { Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
+test('saved tuning drafts cannot add controls or override the fixed card effect', t => {
+  const key = 'mons.shop:mi_note_cards_devnet:wip:css-effect:v1';
+  const saved = JSON.stringify({ version: 1, effect: 'MI_NOTE_CARDS_DEFAULT', renderer: 'css', settings: {
+    glare: { strength: 0, blendMode: 'hard-light' },
+    shine: { strength: 0.96, brightness: 2.96, contrast: 5, saturation: 2.73 },
+  } });
+  window.localStorage.setItem(key, saved);
+  const read = t.mock.method(dom.window.Storage.prototype, 'getItem');
+  const view = render(createElement(MiNoteCardsDemoWipApp));
+  assert.equal(read.mock.callCount(), 0);
+  assert.equal(view.queryByRole('complementary', { name: 'MI card effect tuning' }), null);
+  assert.equal(view.queryByRole('slider'), null);
+  assert.equal(view.queryByRole('checkbox'), null);
+  assert.equal(view.queryByRole('combobox'), null);
+  assert.equal(view.queryByRole('button', { name: 'Copy JSON' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Reset' }), null);
+  const content = view.container.querySelector('.mi-note-demo__content') as HTMLElement;
+  assert.equal(content.style.length, 0);
+  assert.equal(card().props.card.effect, MI_NOTE_CARDS_DEFAULT);
+  assert.equal(card().props.interactionMode, 'normal');
+  assert.equal('holdPoseOnLeave' in card().props, false);
+  assert.equal(window.localStorage.getItem(key), saved);
+  assert.ok(view.getByRole('spinbutton', { name: 'Card ID' }));
+  assert.ok(view.getByRole('button', { name: 'Close Mi Note Cards demo' }));
+});
+
 function card() {
   const instance = cardInstances.at(-1);
   assert.ok(instance?.mounted);
@@ -101,6 +121,12 @@ function assets() {
   const instance = assetInstances.at(-1);
   assert.ok(instance?.mounted);
   return instance;
+}
+
+function pointer(target: HTMLElement, type: string, pointerType = 'touch') {
+  const event = new dom.window.MouseEvent(type, { bubbles: true });
+  Object.defineProperty(event, 'pointerType', { value: pointerType });
+  fireEvent(target, event);
 }
 
 function assertCard(id: number) {
@@ -127,7 +153,7 @@ test('devnet starts with a random card and a fixed default effect without a pick
     assert.equal(input.max, '1430');
     assert.equal(input.step, '1');
     assert.equal(input.value, String(id));
-    assert.equal(view.queryByRole('combobox', { name: 'Effect', exact: true }), null);
+    assert.equal(view.queryByRole('combobox'), null);
     assertCard(id);
     random = 0.25;
     view.rerender(createElement(MiNoteCardsDemoWipApp));
@@ -189,65 +215,47 @@ test('loading waits for the card image and Retry retains the chosen ID and defau
   assert.equal(card().props.interactive, true);
 });
 
-test('CSS tuning and Hold changes preserve the loaded card and keep settings through ID edits and Retry', t => {
+for (const [endEvent, action] of [['pointerup', 'release'], ['pointercancel', 'cancellation']]) {
+  test(`touch ${action} settles the demo card until the next press without reloading it`, t => {
+    t.mock.method(Math, 'random', () => 0);
+    const view = render(createElement(MiNoteCardsDemoWipApp));
+    act(() => assets().setState({ ready: true, error: null }));
+    act(() => card().props.onImageReadyChange?.(true));
+    const initialCard = card();
+    const initialAssets = assets();
+    const target = view.getByLabelText('Inspect Mi Note Card #1');
+
+    pointer(target, 'pointerdown');
+    assert.equal(card().props.interactionMode, 'normal');
+    pointer(target, endEvent);
+    assert.equal(card().props.interactionMode, 'settling');
+    assert.equal(card().props.interactive, true);
+    pointer(target, 'pointermove');
+    pointer(target, 'pointerover');
+    assert.equal(card().props.interactionMode, 'settling');
+
+    pointer(target, 'pointerdown');
+    assert.equal(card().props.interactionMode, 'normal');
+    assert.equal(card().props.interactive, true);
+    assert.equal(card(), initialCard);
+    assert.equal(assets(), initialAssets);
+    assert.equal(initialAssets.retryCount, 0);
+    assert.equal(view.queryByRole('status'), null);
+  });
+}
+
+test('mouse hover reactivates a settled demo card and mouse release keeps it interactive', t => {
   t.mock.method(Math, 'random', () => 0);
   const view = render(createElement(MiNoteCardsDemoWipApp));
   act(() => assets().setState({ ready: true, error: null }));
   act(() => card().props.onImageReadyChange?.(true));
-  const initialCard = card();
-  const initialAssets = assets();
-  const style = (view.container.querySelector('.mi-note-demo__content') as HTMLElement).style;
-  const tuned = normalizeMiNoteCardCssEffectSettings({
-    ...DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS,
-    glare: { ...DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS.glare, strength: 0.25 },
-  });
-  const assertStyle = (settings = tuned) => {
-    for (const [key, value] of Object.entries(miNoteCardCssEffectStyle(settings))) {
-      assert.equal(style.getPropertyValue(key), String(value));
-    }
-  };
-  fireEvent.change(view.getByRole('slider', { name: 'Glare strength', exact: true }), { target: { value: '0.25' } });
-  assertStyle();
-  assert.equal(card(), initialCard);
-  assert.equal(assets(), initialAssets);
-  assert.equal(card().props.interactive, true);
-  assert.equal(card().props.holdPoseOnLeave, true);
-  fireEvent.click(view.getByRole('checkbox', { name: 'Hold last pose', exact: true }));
-  assert.equal(card().props.holdPoseOnLeave, false);
-  assert.equal(card(), initialCard);
-  assert.equal(assets(), initialAssets);
-  assert.equal(card().props.interactive, true);
-  fireEvent.change(view.getByRole('spinbutton', { name: 'Card ID', exact: true }), { target: { value: '2' } });
-  assert.equal(initialCard.mounted, false);
-  assertCard(2);
-  assertStyle();
-  act(() => assets().setState({ ready: false, error: new Error('Missing card') }));
-  fireEvent.click(view.getByRole('button', { name: 'Retry', exact: true }));
-  assertCard(2);
-  assertStyle();
-  const retriedCard = card();
-  fireEvent.click(view.getByRole('button', { name: 'Reset', exact: true }));
-  assertStyle(DEFAULT_MI_NOTE_CARD_CSS_EFFECT_SETTINGS);
-  assert.equal(card(), retriedCard);
-});
+  const target = view.getByLabelText('Inspect Mi Note Card #1');
 
-test('the narrow-screen panel starts collapsed and preserves edits when reopened', () => {
-  setMediaQueryMatches('(max-width: 760px)', true);
-  const view = render(createElement(MiNoteCardsDemoWipApp));
-  const toggle = view.getByRole('button', { name: /^CSS effect/ });
-  const root = view.getByRole('dialog', { name: 'Mi Note Cards demo' });
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-  assert.equal(root.classList.contains('mi-note-demo--panel-open'), false);
-  assert.equal(view.queryByRole('slider', { name: 'Glare strength', exact: true }), null);
-  const initialCard = card();
-  fireEvent.click(toggle);
-  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(root.classList.contains('mi-note-demo--panel-open'), true);
-  fireEvent.change(view.getByRole('slider', { name: 'Glare strength', exact: true }), { target: { value: '0.31' } });
-  fireEvent.click(toggle);
-  fireEvent.click(toggle);
-  assert.equal((view.getByRole('slider', { name: 'Glare strength', exact: true }) as HTMLInputElement).value, '0.31');
-  assert.equal(card(), initialCard);
-  assert.ok(view.getByRole('spinbutton', { name: 'Card ID', exact: true }));
-  assert.ok(view.getByRole('button', { name: 'Close Mi Note Cards demo' }));
+  pointer(target, 'pointerup');
+  assert.equal(card().props.interactionMode, 'settling');
+  pointer(target, 'pointerover', 'mouse');
+  assert.equal(card().props.interactionMode, 'normal');
+  pointer(target, 'pointerup', 'mouse');
+  assert.equal(card().props.interactionMode, 'normal');
+  assert.equal(card().props.interactive, true);
 });

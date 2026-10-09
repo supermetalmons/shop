@@ -52,7 +52,6 @@ type DrifEffectCardProps = {
   disableGlow?: boolean;
   preserveTransformOnCardChange?: boolean;
   interactionMode?: DrifEffectCardInteractionMode;
-  holdPoseOnLeave?: boolean;
   preloadCards?: readonly DrifCardConfig[];
   imageLoading?: 'lazy' | 'eager';
 };
@@ -193,7 +192,6 @@ export default function DrifEffectCard({
   disableGlow = false,
   preserveTransformOnCardChange = false,
   interactionMode = 'normal',
-  holdPoseOnLeave = false,
   preloadCards,
   imageLoading = 'lazy',
 }: DrifEffectCardProps) {
@@ -213,11 +211,6 @@ export default function DrifEffectCard({
   } | null>(null);
   const interactTimerRef = useRef<number | null>(null);
   const interactingRef = useRef(false);
-  const holdPoseOnLeaveRef = useRef(holdPoseOnLeave);
-  const poseHeldRef = useRef(false);
-  const initialHeldPoseAppliedRef = useRef(false);
-  const pointerCancelledRef = useRef(false);
-  holdPoseOnLeaveRef.current = holdPoseOnLeave;
   const visibleRef = useRef(typeof document === 'undefined' ? true : document.visibilityState === 'visible');
   const springsRef = useRef({
     rotate: createSpring<SpringVec2>({ x: 0, y: 0 }, { stiffness: 0.066, damping: 0.25 }),
@@ -368,8 +361,6 @@ export default function DrifEffectCard({
       };
 
       clearInteractTimer();
-      poseHeldRef.current = false;
-      pointerCancelledRef.current = false;
       hoverWakeArmedRef.current = false;
       interactingRef.current = true;
       setInteracting(true);
@@ -429,7 +420,6 @@ export default function DrifEffectCard({
 
   const interactEnd = useCallback(
     (delay = 500) => {
-      poseHeldRef.current = false;
       clearInteractTimer();
       if (springUpdateRafRef.current !== null) {
         cancelAnimationFrame(springUpdateRafRef.current);
@@ -464,7 +454,6 @@ export default function DrifEffectCard({
   );
 
   const settleTransformToNeutral = useCallback(() => {
-    poseHeldRef.current = false;
     clearInteractTimer();
     if (springUpdateRafRef.current !== null) {
       cancelAnimationFrame(springUpdateRafRef.current);
@@ -500,55 +489,12 @@ export default function DrifEffectCard({
     ensureSpringLoop();
   }, [clearInteractTimer, ensureSpringLoop]);
 
-  const holdCurrentPose = useCallback(() => {
-    clearInteractTimer();
-    if (springUpdateRafRef.current !== null) {
-      cancelAnimationFrame(springUpdateRafRef.current);
-      springUpdateRafRef.current = null;
-    }
-    if (animationFrameRef.current !== null) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-    pendingSpringUpdateRef.current = null;
-    hoverWakeArmedRef.current = false;
-    pointerCancelledRef.current = false;
-    interactingRef.current = false;
-    setInteracting(false);
-    const springs = springsRef.current;
-    setSpringTarget(springs.rotate, springs.rotate.current, { hard: true });
-    setSpringTarget(springs.glare, springs.glare.current, { hard: true });
-    setSpringTarget(springs.background, springs.background.current, { hard: true });
-    poseHeldRef.current = true;
-  }, [clearInteractTimer]);
-
-  const finishInteraction = useCallback((delay = 500) => {
-    if (holdPoseOnLeaveRef.current && !pointerCancelledRef.current && visibleRef.current) {
-      holdCurrentPose();
-    } else {
-      interactEnd(delay);
-    }
-  }, [holdCurrentPose, interactEnd]);
-
   const reset = useCallback(() => {
-    poseHeldRef.current = false;
-    pointerCancelledRef.current = true;
     interactEnd(0);
     const springs = springsRef.current;
     setSpringTarget(springs.rotate, { x: 0, y: 0 }, { hard: true });
-    if (holdPoseOnLeaveRef.current) {
-      clearInteractTimer();
-      if (animationFrameRef.current !== null) {
-        cancelAnimationFrame(animationFrameRef.current);
-        animationFrameRef.current = null;
-      }
-      interactingRef.current = false;
-      setInteracting(false);
-      setSpringTarget(springs.glare, { x: 50, y: 50, o: 0 }, { hard: true });
-      setSpringTarget(springs.background, { x: 50, y: 50 }, { hard: true });
-    }
     applyStylesFromSprings();
-  }, [applyStylesFromSprings, clearInteractTimer, interactEnd]);
+  }, [applyStylesFromSprings, interactEnd]);
 
   const markImageLoaded = useCallback(() => {
     if (preserveTransformOnCardChange) {
@@ -582,7 +528,6 @@ export default function DrifEffectCard({
 
   useEffect(() => {
     if (preserveTransformOnCardChange) return;
-    initialHeldPoseAppliedRef.current = false;
     setLoading(!useLoadingImage);
     setFinalImageReady(false);
     setDisplayImageSrc(useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc);
@@ -660,19 +605,18 @@ export default function DrifEffectCard({
 
   useEffect(() => {
     const interactiveReady = interactive && finalImageReady && !settling;
-    if (enableInteractiveUnlockWake && !holdPoseOnLeave && interactiveReady && !interactiveReadyRef.current) {
+    if (enableInteractiveUnlockWake && interactiveReady && !interactiveReadyRef.current) {
       hoverWakeArmedRef.current = true;
     }
-    if (!enableInteractiveUnlockWake || holdPoseOnLeave || !interactiveReady) {
+    if (!enableInteractiveUnlockWake || !interactiveReady) {
       hoverWakeArmedRef.current = false;
     }
     interactiveReadyRef.current = interactiveReady;
-  }, [enableInteractiveUnlockWake, finalImageReady, holdPoseOnLeave, interactive, settling]);
+  }, [enableInteractiveUnlockWake, finalImageReady, interactive, settling]);
 
   useEffect(() => {
     if (
       !enableInteractiveUnlockWake ||
-      holdPoseOnLeave ||
       !interactive ||
       settling ||
       !finalImageReady ||
@@ -745,42 +689,12 @@ export default function DrifEffectCard({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, holdPoseOnLeave, interactive, settling, setPointerFromPercent]);
+  }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, interactive, settling, setPointerFromPercent]);
 
   const interactiveEnabled = interactive && finalImageReady && !settling;
 
   useEffect(() => {
-    if (!holdPoseOnLeave) {
-      if (poseHeldRef.current) settleTransformToNeutral();
-      return;
-    }
-    if (!interactiveEnabled || !visibleRef.current || initialHeldPoseAppliedRef.current) return;
-    initialHeldPoseAppliedRef.current = true;
-    const springs = springsRef.current;
-    setSpringTarget(springs.rotate, { x: 0, y: 0 }, { hard: true });
-    setSpringTarget(springs.glare, { x: 50, y: 50, o: 1 }, { hard: true });
-    setSpringTarget(springs.background, { x: 50, y: 50 }, { hard: true });
-    applyStylesFromSprings();
-    holdCurrentPose();
-  }, [applyStylesFromSprings, holdCurrentPose, holdPoseOnLeave, interactiveEnabled, settleTransformToNeutral]);
-
-  useEffect(() => {
-    if (!holdPoseOnLeave) return;
-    const handleFocus = (event: FocusEvent) => {
-      if (
-        interactiveReadyRef.current && visibleRef.current && !pointerCancelledRef.current &&
-        event.target instanceof Node && !cardRef.current?.contains(event.target)
-      ) {
-        holdCurrentPose();
-      }
-    };
-    document.addEventListener('focusin', handleFocus);
-    return () => document.removeEventListener('focusin', handleFocus);
-  }, [holdCurrentPose, holdPoseOnLeave]);
-
-  useEffect(() => {
     if (interactive) return;
-    poseHeldRef.current = false;
     clearInteractTimer();
     interactingRef.current = false;
     setInteracting(false);
@@ -866,15 +780,9 @@ export default function DrifEffectCard({
           className="drif-effect-card__rotator"
           onPointerEnter={interactiveEnabled ? interact : undefined}
           onPointerMove={interactiveEnabled ? interact : undefined}
-          onPointerLeave={interactiveEnabled ? () => finishInteraction() : undefined}
-          onPointerUp={interactiveEnabled && holdPoseOnLeave ? event => {
-            if (event.pointerType !== 'mouse') finishInteraction();
-          } : undefined}
-          onPointerCancel={interactiveEnabled ? () => {
-            pointerCancelledRef.current = true;
-            interactEnd();
-          } : undefined}
-          onBlur={interactiveEnabled ? () => finishInteraction(0) : undefined}
+          onPointerLeave={interactiveEnabled ? () => interactEnd() : undefined}
+          onPointerCancel={interactiveEnabled ? () => interactEnd() : undefined}
+          onBlur={interactiveEnabled ? () => interactEnd(0) : undefined}
           onClick={interactiveEnabled ? onClick : undefined}
           aria-label={ariaLabel}
           aria-disabled={interactiveEnabled ? undefined : true}

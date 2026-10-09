@@ -9,7 +9,7 @@ const buildUrl = (pathname: string): string => {
   return normalizePathname(pathname.startsWith('/') ? pathname : `/${pathname}`);
 };
 
-export const getNormalizedPathname = (pathname = window.location.pathname): string =>
+const getNormalizedPathname = (pathname = window.location.pathname): string =>
   normalizePathname(pathname);
 
 export const navigate = (pathname: string, options?: { replace?: boolean }): void => {

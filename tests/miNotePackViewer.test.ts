@@ -140,15 +140,26 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
   return model;
 }
 const models: TestModel[] = [];
-const surfaces: ReturnType<typeof createTestSurface>[] = [];
+type TestSurface = ReturnType<typeof createMiNoteCardMaterial> & {
+  card: DrifCardConfig;
+  ready: Promise<void>;
+  resolveReady: () => void;
+  rejectReady: (error: Error) => void;
+  effectReadiness: Map<string, Promise<void>>;
+  effects: DrifCardConfig['effect'][];
+  updates: number;
+  disposed: boolean;
+  disposeCalls: number;
+};
+const surfaces: TestSurface[] = [];
 let deferSurfaceReady = false;
-function createTestSurface(card: DrifCardConfig) {
+function createTestSurface(card: DrifCardConfig): TestSurface {
   const actual = createMiNoteCardMaterial(card, { loadTexture: async () => new THREE.Texture() });
   let resolveReady!: () => void;
   let rejectReady!: (error: Error) => void;
   const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
   if (!deferSurfaceReady) resolveReady();
-  const surface = {
+  const surface: TestSurface = {
     card,
     material: actual.material,
     ready, resolveReady, rejectReady,
@@ -259,7 +270,8 @@ function harness(
   const cardReadyChanges: boolean[] = [];
   const cardErrors: (Error | null)[] = [];
   const errors: Error[] = [];
-  let cards: readonly [DrifCardConfig, DrifCardConfig] = [
+  type TestCard = Extract<DrifCardConfig, { foilSrc: string; textureSrc: string }>;
+  let cards: readonly [TestCard, TestCard] = [
     { imageSrc: '/card-a.png', textureSrc: '/mask-a.png', foilSrc: '/foil-a.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
     { imageSrc: '/card-b.png', textureSrc: '/mask-b.png', foilSrc: '/foil-b.png', effect: DRIF_EFFECTS['swshp-SWSH179'] },
   ] as const;
@@ -316,6 +328,10 @@ function harness(
     },
     reset() { view.rerender(createElement(Harness, { key: ++generation, effectSettings, inspectSticker })); },
   };
+}
+
+function currentState(run: { state: MiNoteRevealState }): MiNoteRevealState {
+  return run.state;
 }
 
 async function makeReady(model = models.at(-1)!) {
@@ -883,7 +899,7 @@ for (const reducedMotion of [false, true]) {
         else advanceFrames();
         assertLayers(index);
         act(() => run.controls.current!.returnCard());
-        for (let frame = 0; run.state.cardStage === 'returning' && frame < 80; frame += 1) {
+        for (let frame = 0; currentState(run).cardStage === 'returning' && frame < 80; frame += 1) {
           advanceFrame(17);
           assertLayers(index);
         }
@@ -1028,7 +1044,7 @@ test('the final sealed tap sparkles stop when peeling finishes and later folder 
   assert.equal(run.state.stage, 'seal-peeling');
   assert.equal(sparkles.visible, true);
 
-  for (let count = 0; run.state.stage !== 'interactive' && count < 40; count += 1) advanceFrame();
+  for (let count = 0; currentState(run).stage !== 'interactive' && count < 40; count += 1) advanceFrame();
   assert.equal(run.state.stage, 'interactive');
   assert.equal(sparkles.visible, false);
   assert.equal(sparkles.geometry.drawRange.count, 0);
@@ -1591,7 +1607,7 @@ test('reduced motion can stop and restart folder idle during inspection without 
   settle();
   assertSquareOpen(model);
   act(() => run.controls.current!.returnCard());
-  for (let count = 0; run.state.cardStage === 'returning' && count < 20; count += 1) {
+  for (let count = 0; currentState(run).cardStage === 'returning' && count < 20; count += 1) {
     advanceFrame(16.67);
     assertSquareOpen(model);
   }
