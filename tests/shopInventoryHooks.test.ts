@@ -283,6 +283,35 @@ test('a single preorder can be viewed while its Soon button keeps shipping disab
   }
 });
 
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} offers View only for a valid card in the bottom selection panel`, () => {
+    const inventory: InventoryItem[] = [box('mi-pack', dropId, '704'),
+      { id: 'mi-card', dropId, name: 'Card 1430', kind: 'dude', dudeId: 1430 },
+      { id: 'invalid-card', dropId, name: 'Invalid card', kind: 'dude', dudeId: 1431, image: 'https://example.com/card.webp' }];
+    const { result } = renderHook(() => useInventoryHarness({ options: sourceOptions({ inventory }) }));
+    let viewed = 0;
+    const props = () => ({
+      ...result.current.selection, clearSelection: result.current.state.clearSelection,
+      handleViewSelectedItem: () => { viewed += 1; }, handleOpenSelectedBox: () => {}, handleOpenShip: () => {},
+      startOpenLoading: null, openActionProgressForDropId: () => 'Opening', openActionLabelForDropId: () => 'Open',
+    });
+    act(() => result.current.state.replaceSelection(['mi-pack']));
+    const panel = render(createElement(ShopSelectionBar, props()));
+    assert.equal(panel.queryByRole('button', { name: 'View' }), null);
+    assert.equal(result.current.selection.selectedViewableItem, null);
+    act(() => result.current.state.replaceSelection(['mi-card']));
+    panel.rerender(createElement(ShopSelectionBar, props()));
+    fireEvent.click(panel.getByRole('button', { name: 'View' }));
+    assert.equal(result.current.selection.selectedViewableItem?.id, 'mi-card');
+    assert.equal(viewed, 1);
+    for (const ids of [['mi-card', 'mi-pack'], ['invalid-card']]) {
+      act(() => result.current.state.replaceSelection(ids));
+      panel.rerender(createElement(ShopSelectionBar, props()));
+      assert.equal(panel.queryByRole('button', { name: 'View' }), null);
+    }
+  });
+}
+
 test('wallet hydration preserves each account and late hidden-asset updates stay with the captured wallet', () => {
   const now = Date.now();
   persistHiddenAssets('wallet-a', new Set(['hidden-a']));

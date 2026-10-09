@@ -44,6 +44,8 @@ function fixture() {
 
 const cardViewers = [
   { viewerMode: 'poncho-card', dropId: 'poncho_drifella' },
+  { viewerMode: 'poncho-card', dropId: 'mi_note_cards' },
+  { viewerMode: 'poncho-card', dropId: 'mi_note_cards_devnet' },
   { viewerMode: 'clear-card', dropId: 'clear_cards' },
   { viewerMode: 'clear-pack', dropId: 'clear_cards' },
 ] as const;
@@ -111,7 +113,8 @@ test('invalid card identities and mismatched renderers leave selection and prese
   const { result } = renderHook(useShopReveal, { initialProps: options });
   act(() => {
     assert.equal(openCardViewer(result.current, cardViewers[0], 0), false);
-    assert.equal(openCardViewer(result.current, cardViewers[1], 193), false);
+    assert.equal(openCardViewer(result.current, { viewerMode: 'clear-card', dropId: 'clear_cards' }, 193), false);
+    assert.equal(openCardViewer(result.current, { viewerMode: 'poncho-card', dropId: 'mi_note_cards' }, 1431), false);
     assert.equal(openCardViewer(result.current, { viewerMode: 'clear-card', dropId: 'poncho_drifella' }), false);
     assert.equal(openCardViewer(result.current, { viewerMode: 'poncho-card', dropId: 'clear_cards' }), false);
   });
@@ -119,6 +122,41 @@ test('invalid card identities and mismatched renderers leave selection and prese
   assert.equal(calls.cleared, 0);
   assert.deepEqual(calls.toasts, []);
 });
+
+for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} updates an unresolved pack preview when inventory learns its ID`, () => {
+    const { options } = fixture();
+    const pack: InventoryItem = { id: 'pack', dropId, name: 'Pack', kind: 'box' };
+    const { result, rerender } = renderHook(useShopReveal, { initialProps: { ...options, inventory: [pack] } });
+    act(() => result.current.viewItem(pack));
+    assert.equal(result.current.revealOverlay?.packMediaId, undefined);
+    assert.equal(result.current.revealOverlay?.image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp');
+    rerender({ ...options, inventory: [{ ...pack, boxId: '9', name: 'Pack 9' }] });
+    assert.equal(result.current.revealOverlay?.packMediaId, 9);
+    assert.equal(result.current.revealOverlay?.image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/9.webp');
+    assert.equal(result.current.revealOverlay?.name, 'Pack 9');
+  });
+
+  test(`${dropId} inventory View opens the assigned CSS card and the matching sealed pack without commerce actions`, () => {
+    const { options, calls } = fixture();
+    const card: InventoryItem = { id: 'card', dropId, name: 'Card 1430', kind: 'dude', dudeId: 1430 };
+    const pack: InventoryItem = { id: 'pack', dropId, name: 'Pack 704', kind: 'box', boxId: '704' };
+    const { result } = renderHook(useShopReveal, { initialProps: options });
+    act(() => result.current.viewItem(card));
+    assert.equal(result.current.revealOverlay?.viewerMode, 'poncho-card');
+    assert.equal(result.current.presentation.interactiveViewerCard?.imageSrc, 'https://cdn.lil.org/nft/mi_note_cards/fronts/1430.webp');
+    assert.equal(result.current.presentation.interactiveViewerCard?.effect.source, 'mi_note_cards');
+    act(() => result.current.discardRevealOverlay());
+    act(() => result.current.viewItem(pack));
+    assert.equal(result.current.revealOverlay?.viewerMode, 'mi-note-pack');
+    assert.equal(result.current.revealOverlay?.packMediaId, 2);
+    assert.equal(result.current.revealOverlay?.revealedIds, undefined);
+    assert.equal(result.current.presentation.revealOverlayCanRenderMiNotePack3d, true);
+    assert.equal(result.current.presentation.revealOverlayCanRenderClearCard3d, false);
+    assert.equal(result.current.revealOverlay?.image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp');
+    assert.equal(calls.cleared, 2);
+  });
+}
 
 const receipt: InventoryItem = {
   id: 'receipt-a', dropId: 'clear_cards', kind: 'certificate', name: 'Receipt A', image: 'https://example.com/receipt.webp',

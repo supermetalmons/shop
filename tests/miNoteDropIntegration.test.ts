@@ -105,8 +105,8 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     }
     assert.equal(mintPanelPreviewImage(dropId), 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/1.webp');
     const content = resolveDropContent(dropId);
-    assert.equal(content.reveal.mode, 'static');
-    assert.equal(content.reveal.renderer, 'default');
+    assert.equal(content.reveal.mode, 'animated');
+    assert.equal(content.reveal.renderer, 'mi_note_pack_3d');
     assert.equal(content.figures.revealPresentation, 'metadata_stills');
   });
 }

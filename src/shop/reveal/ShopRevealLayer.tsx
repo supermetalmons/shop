@@ -1,5 +1,6 @@
 import { BackgroundBlurPortal } from '../../components/BackgroundBlurLayer';
 import ClearCardRevealOverlay from '../../components/ClearCardRevealOverlay';
+import MiNotePackRevealOverlay from '../../components/MiNotePackRevealOverlay';
 import { InteractiveCardPackRevealOverlay, PonchoCardViewerOverlay } from '../../components/PonchoRevealOverlay';
 import { getInteractiveCardPackRevealSequenceForDropId } from '../../lib/interactiveCardPackReveal';
 import { ReceiptImageViewerOverlay } from './ReceiptImageViewerOverlay';
@@ -24,6 +25,7 @@ export function ShopRevealLayer({ reveal, suspended: revealOverlaySuspended, rec
   const {
     revealOverlayUsesPonchoViewer, revealOverlayUsesReceiptImage,
     revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack,
+    revealOverlayCanRenderMiNotePack3d,
     revealOverlayStyle, interactiveViewerCard, revealOverlayClearCardViewerMode,
     clearCardRevealId, revealOverlayUsesClearCardViewer, interactiveRevealCards,
     revealOverlayContainerLabel,
@@ -56,6 +58,26 @@ export function ShopRevealLayer({ reveal, suspended: revealOverlaySuspended, rec
         {...receiptControls}
         onDismiss={handleRevealOverlayDismiss}
         onTransitionEnd={handleRevealOverlayTransitionEnd}
+      />
+    ) : revealOverlayCanRenderMiNotePack3d ? (
+      <MiNotePackRevealOverlay
+        key={`${revealOverlay.dropId}:${revealOverlay.id}:${revealOverlay.viewerMode || 'unpack'}`}
+        overlayStyle={revealOverlayStyle}
+        active={revealOverlayActive}
+        closing={revealOverlayClosing}
+        suspended={revealOverlaySuspended}
+        viewerOnly={revealOverlay.viewerMode === 'mi-note-pack'}
+        phase={revealOverlay.phase}
+        packMediaId={revealOverlay.packMediaId}
+        revealedIds={revealOverlay.revealedIds}
+        loadingImageSrc={revealOverlay.image}
+        boxName={revealOverlay.name}
+        onRequestReveal={revealOverlay.viewerMode ? undefined : handlePonchoOverlayRequestReveal}
+        onBeforeAdvance={revealOverlay.viewerMode ? undefined : ensureRevealOverlayAdvanceAllowed}
+        onDismiss={handleRevealOverlayDismiss}
+        onTransitionEnd={handleRevealOverlayTransitionEnd}
+        onRevealCompleteChange={revealOverlay.viewerMode ? undefined : updateAssetGatedRevealComplete}
+        onDismissReadyChange={revealOverlay.viewerMode ? undefined : updateClearCardDismissReady}
       />
     ) : revealOverlayCanRenderClearCard3d ? (
       <ClearCardRevealOverlay

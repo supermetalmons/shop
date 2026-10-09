@@ -1,6 +1,7 @@
 import { MI_NOTE_CARD_COUNT, sampleMiNoteCardId, sampleMiNoteIndex } from './miNoteCards.ts';
 
 export const MI_NOTE_OPEN_TAPS = 4;
+export const MI_NOTE_INVENTORY_OPEN_TAPS = 3;
 
 export const MI_NOTE_PACK_VARIANTS = [
   { id: 'cobalt-blue', name: 'Cobalt Blue', color: '#3559B7' },
@@ -56,11 +57,31 @@ function unlockWhenReady(state: MiNoteRevealState): MiNoteRevealState {
 }
 
 export function reduceMiNoteReveal(state: MiNoteRevealState, event: MiNoteRevealEvent): MiNoteRevealState {
+  return reduceMiNoteRevealWithReadiness(state, event, MI_NOTE_OPEN_TAPS, false);
+}
+
+export function reduceMiNoteInventoryReveal(state: MiNoteRevealState, event: MiNoteRevealEvent): MiNoteRevealState {
+  return reduceMiNoteRevealWithReadiness(state, event, MI_NOTE_INVENTORY_OPEN_TAPS, true);
+}
+
+export function miNoteRevealCardIds(ids: readonly number[] | undefined): readonly [number, number] | undefined {
+  if (ids?.length !== 2 || ids[0] === ids[1]) return undefined;
+  if (ids.some(id => !Number.isSafeInteger(id) || id < 1 || id > MI_NOTE_CARD_COUNT)) return undefined;
+  return [ids[0], ids[1]];
+}
+
+function reduceMiNoteRevealWithReadiness(
+  state: MiNoteRevealState,
+  event: MiNoteRevealEvent,
+  minimumTaps: number,
+  requireReadyToUnseal: boolean,
+): MiNoteRevealState {
   switch (event.type) {
     case 'activate':
       if (state.stage === 'sealed') {
         const taps = state.taps + 1;
-        return { ...state, taps, stage: taps === MI_NOTE_OPEN_TAPS ? 'seal-peeling' : 'sealed' };
+        const canUnseal = taps >= minimumTaps && (!requireReadyToUnseal || state.ready);
+        return { ...state, taps, stage: canUnseal ? 'seal-peeling' : 'sealed' };
       }
       if (state.stage !== 'interactive' || state.selectedCard !== null) return state;
       return { ...state, folderPose: state.folderPose === 1 ? event.leaf ?? 0 : 1 };

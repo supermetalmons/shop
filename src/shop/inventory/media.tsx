@@ -27,6 +27,31 @@ export function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string; }>(i
   return trailing.length ? [...leading, ...trailing] : [...leading];
 }
 
+export function prioritizeMiNoteCardsFamily<T extends Pick<InventoryItem, 'dropId' | 'kind'>>(items: readonly T[]): T[] {
+  const packs: T[] = [];
+  const cards: T[] = [];
+  const receipts: T[] = [];
+  const remaining: T[] = [];
+  items.forEach((item) => {
+    if (isDropFamily(item.dropId, 'mi_note_cards')) {
+      if (item.kind === 'box') {
+        packs.push(item);
+        return;
+      }
+      if (item.kind === 'dude') {
+        cards.push(item);
+        return;
+      }
+      if (item.kind === 'certificate') {
+        receipts.push(item);
+        return;
+      }
+    }
+    remaining.push(item);
+  });
+  return [...packs, ...cards, ...receipts, ...remaining];
+}
+
 export function FigureTileImage(props: {
   dropId: string;
   figureId: number;

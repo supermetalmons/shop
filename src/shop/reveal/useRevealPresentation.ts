@@ -31,7 +31,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     figureMetadataByKey, figureReferenceForDropId, requireKnownDropConfig,
   } = options;
   const {
-    usesInteractiveCardPackRevealForDropId, usesClearCard3dRevealForDropId,
+    usesInteractiveCardPackRevealForDropId, usesClearCard3dRevealForDropId, usesMiNotePack3dRevealForDropId,
     revealMediaStartForDropId, playRevealSoundForDropId, preloadRevealVideos,
     boxImageForDropId, revealFrameSequenceForDropId, revealMediaBaseForDropId,
   } = assets;
@@ -57,6 +57,10 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
       !revealOverlayUsesPonchoViewer &&
       !revealOverlayUsesReceiptImage &&
       usesClearCard3dRevealForDropId(revealOverlay.dropId),
+  );
+  const revealOverlayCanRenderMiNotePack3d = Boolean(
+    revealOverlay && !revealOverlayUsesPonchoViewer && !revealOverlayUsesReceiptImage &&
+      usesMiNotePack3dRevealForDropId(revealOverlay.dropId),
   );
   const revealOverlayUsesPonchoLayout = Boolean(
     revealOverlayUsesPonchoViewer || revealOverlayHasInteractiveCardPackRenderer,
@@ -122,6 +126,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     if (
       revealOverlayCanRenderInteractiveCardPack ||
       revealOverlayCanRenderClearCard3d ||
+      revealOverlayCanRenderMiNotePack3d ||
       !revealOverlay?.revealedIds?.length
     ) {
       return [];
@@ -159,6 +164,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     revealOverlayContent.figures.revealPresentation,
     revealOverlayCanRenderInteractiveCardPack,
     revealOverlayCanRenderClearCard3d,
+    revealOverlayCanRenderMiNotePack3d,
   ]);
   const revealMediaIds = useMemo(
     () =>
@@ -178,17 +184,17 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
       revealSoundPlayedRef.current = null;
       return;
     }
-    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d) return;
+    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d || revealOverlayCanRenderMiNotePack3d) return;
     if (!showRevealOutcome) return;
     if (revealSoundPlayedRef.current === revealOverlay.id) return;
     revealSoundPlayedRef.current = revealOverlay.id;
     playRevealSoundForDropId(revealOverlay.dropId);
-  }, [playRevealSoundForDropId, revealOverlay, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack, showRevealOutcome]);
+  }, [playRevealSoundForDropId, revealOverlay, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderMiNotePack3d, revealOverlayCanRenderInteractiveCardPack, showRevealOutcome]);
 
   const revealMetadataTargets = useMemo(() => {
-    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d || !revealOverlay?.revealedIds?.length) return [];
+    if (revealOverlayCanRenderInteractiveCardPack || revealOverlayCanRenderClearCard3d || revealOverlayCanRenderMiNotePack3d || !revealOverlay?.revealedIds?.length) return [];
     return revealOverlay.revealedIds.map((figureId) => ({ dropId: revealOverlay.dropId, figureId }));
-  }, [revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderInteractiveCardPack]);
+  }, [revealOverlay?.dropId, revealOverlay?.revealedIds, revealOverlayCanRenderClearCard3d, revealOverlayCanRenderMiNotePack3d, revealOverlayCanRenderInteractiveCardPack]);
   useFigureMetadataTargets(revealMetadataTargets);
 
   const revealMediaStyle = useMemo(() => {
@@ -238,6 +244,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     revealOverlayStyle,
     revealOverlayCanRenderInteractiveCardPack,
     revealOverlayCanRenderClearCard3d,
+    revealOverlayCanRenderMiNotePack3d,
     showRevealOutcome,
     revealOverlayStage,
     revealMediaItems,

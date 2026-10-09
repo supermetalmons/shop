@@ -1,7 +1,7 @@
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { calculateDeliveryLamports, canDeliverItemKind } from '../../../shared/shipping.ts';
-import type { FrontendDeploymentConfig } from '../../config/deployment';
+import { isDropFamily, type FrontendDeploymentConfig } from '../../config/deployment';
 import { canAdminIrlRedeemSelection } from '../../lib/adminIrlRedeem';
 import { clearCardModelUrl } from '../../lib/clearCardModels';
 import { dropAssetCount } from '../../../shared/dropLabels.ts';
@@ -236,7 +236,7 @@ export function useShopInventorySelection({
     if (item.kind !== 'dude') return null;
     if (typeof item.dudeId !== 'number') return null;
     if (
-      usesInteractiveCardPackRevealForDropId(item.dropId) &&
+      (usesInteractiveCardPackRevealForDropId(item.dropId) || isDropFamily(item.dropId, 'mi_note_cards')) &&
       getInteractiveCardPackCardByFigureId(item.dropId, item.dudeId)
     ) {
       return item;

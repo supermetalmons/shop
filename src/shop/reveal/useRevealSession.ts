@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { InventoryItem, PendingOpenBox } from '../../types';
+import { usesMiNotePack3dRevealFlow } from '../../config/dropsExtraContent';
 import { useOverlayScrollLock } from '../../hooks/useOverlayScrollLock';
 import {
   runDeferredOverlayActions,
@@ -15,7 +16,7 @@ import {
 import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
 import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS } from './sounds';
 import type { PonchoRevealDismissReadySource } from '../../components/PonchoRevealOverlay';
-import type { EarlyClearCardRevealGate, RevealOverlayState, ViewerOverlayInput } from './types';
+import type { EarlyPackRevealGate, RevealOverlayState, ViewerOverlayInput } from './types';
 import type { ShopRevealOptions } from './contracts';
 import type { RevealAssets } from './useRevealAssets';
 
@@ -49,9 +50,9 @@ export function useRevealSession({
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const revealOverlayOpen = Boolean(revealOverlay);
-  const freezeClearCardUnpackingPage = Boolean(
+  const freezePackUnpackingPage = Boolean(
     revealOverlay && revealOverlay.viewerMode === undefined &&
-    usesClearCard3dRevealForDropId(revealOverlay.dropId)
+    (usesClearCard3dRevealForDropId(revealOverlay.dropId) || usesMiNotePack3dRevealFlow(revealRendererForDropId(revealOverlay.dropId)))
   );
   const revealOverlayRafRef = useRef<number | null>(null);
   const revealOverlayResizeRafRef = useRef<number | null>(null);
@@ -66,7 +67,7 @@ export function useRevealSession({
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
   const presentationLoadingRef = useRef(Boolean(revealLoading || startOpenLoading));
   presentationLoadingRef.current = Boolean(revealLoading || startOpenLoading);
-  const earlyClearCardRevealGateRef = useRef<EarlyClearCardRevealGate | null>(null);
+  const earlyPackRevealGateRef = useRef<EarlyPackRevealGate | null>(null);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const revealOverlaySessionRef = useRef(0);
@@ -275,6 +276,7 @@ export function useRevealSession({
       overlay.viewerMode === 'poncho-card' ||
       overlay.viewerMode === 'clear-card' ||
       overlay.viewerMode === 'clear-pack' ||
+      overlay.viewerMode === 'mi-note-pack' ||
       overlay.viewerMode === 'receipt-image'
     ) return true;
     if (usesAssetGatedRevealForDropId(overlay.dropId)) {
@@ -443,7 +445,7 @@ export function useRevealSession({
   useOverlayScrollLock({
     active: revealOverlayOpen,
     escapeEnabled: !walletModalVisible && !receiptTransferOpen,
-    freezePage: freezeClearCardUnpackingPage,
+    freezePage: freezePackUnpackingPage,
     onEscape: handleRevealOverlayEscape,
   });
 
@@ -516,7 +518,7 @@ export function useRevealSession({
     inventoryView, pendingOpenBoxesView, revealOverlayOpen,
     setInventorySnapshot, setPendingOpenSnapshot,
     ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,
-    openSelectedLockRef, openSelectedBoxIdRef, earlyClearCardRevealGateRef,
+    openSelectedLockRef, openSelectedBoxIdRef, earlyPackRevealGateRef,
     revealOverlayRef, revealOverlaySessionRef, revealLoadingRequestCounterRef,
     revealLoadingRequestIdRef, revealSubmissionReconciliationAbortControllerRef,
     revealDismissLockedUntilRef, revealOverlayClosingRef,

@@ -4,6 +4,7 @@ import {
   usesAssetGatedRevealFlow,
   usesClearCard3dRevealFlow,
   usesInteractiveCardPackRevealFlow,
+  usesMiNotePack3dRevealFlow,
 } from '../../config/dropsExtraContent';
 import { joinDropAssetUrl, resolveBoxMediaIdForDrop } from '../../lib/dropContent';
 import { soundPlayer } from '../../lib/SoundPlayer';
@@ -71,13 +72,17 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
     (dropId?: string) => usesAssetGatedRevealFlow(revealRendererForDropId(dropId)),
     [revealRendererForDropId],
   );
+  const usesMiNotePack3dRevealForDropId = useCallback(
+    (dropId?: string) => usesMiNotePack3dRevealFlow(revealRendererForDropId(dropId)),
+    [revealRendererForDropId],
+  );
   const resolveInteractiveCardPackMediaIdForBox = useCallback(
     (dropId?: string, boxId?: string | number) => {
-      if (!usesInteractiveCardPackRevealForDropId(dropId)) return undefined;
+      if (!usesInteractiveCardPackRevealForDropId(dropId) && !usesMiNotePack3dRevealForDropId(dropId)) return undefined;
       const dropConfig = getDropConfig(dropId);
       return resolveBoxMediaIdForDrop(dropConfig || dropId, boxId) || undefined;
     },
-    [getDropConfig, usesInteractiveCardPackRevealForDropId],
+    [getDropConfig, usesInteractiveCardPackRevealForDropId, usesMiNotePack3dRevealForDropId],
   );
   const revealSoundUrlsForDropId = useCallback(
     (dropId?: string) => {
@@ -390,6 +395,7 @@ export function useRevealAssets({ getDropConfig, getDropContent }: Pick<RevealDr
     revealRendererForDropId,
     usesInteractiveCardPackRevealForDropId,
     usesClearCard3dRevealForDropId,
+    usesMiNotePack3dRevealForDropId,
     usesAssetGatedRevealForDropId,
     resolveInteractiveCardPackMediaIdForBox,
     revealSoundUrlsForDropId,

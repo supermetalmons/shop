@@ -36,7 +36,7 @@ export type RevealOverlayState = {
   revealedIds?: number[];
   packMediaId?: number;
   interactiveRevealCardId?: number;
-  viewerMode?: 'poncho-card' | 'clear-card' | 'clear-pack' | 'receipt-image';
+  viewerMode?: 'poncho-card' | 'clear-card' | 'clear-pack' | 'mi-note-pack' | 'receipt-image';
   imageViewerSize?: ImageViewerSize;
   receiptImages?: ReceiptViewerImage[];
   adminIrlRedeemReceipt?: InventoryItem;
@@ -48,12 +48,12 @@ export type RevealOverlayState = {
 
 export type ViewerOverlayInput = Pick<RevealOverlayState,
   'id' | 'dropId' | 'name' | 'image' | 'originRect' | 'targetRect' |
-  'revealedIds' | 'viewerFigureId' | 'imageViewerSize' | 'receiptImages' | 'adminIrlRedeemReceipt'
+  'revealedIds' | 'packMediaId' | 'viewerFigureId' | 'imageViewerSize' | 'receiptImages' | 'adminIrlRedeemReceipt'
 > & {
   viewerMode: NonNullable<RevealOverlayState['viewerMode']>;
 };
 
-export type EarlyClearCardRevealGate = {
+export type EarlyPackRevealGate = {
   boxAssetId: string;
   dropId: string;
   owner: string | undefined;

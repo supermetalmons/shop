@@ -21,7 +21,11 @@ import {
   InventoryItem,
   InventoryPreviewVideo
 } from '../../types';
-import { boxDisplayImageForInventoryItem, moveLittleSwagBoxesFamilyToEnd } from './media';
+import {
+  boxDisplayImageForInventoryItem,
+  moveLittleSwagBoxesFamilyToEnd,
+  prioritizeMiNoteCardsFamily,
+} from './media';
 import { EMPTY_INVENTORY, EMPTY_LOCAL_MINTED_BOXES } from './stateSupport';
 import type { ShopInventorySource, ShopInventoryViews } from './useShopInventorySource';
 
@@ -252,19 +256,21 @@ export function useShopInventoryView({
       else if (item.kind === 'dude') dudes.push(item);
       else if (item.kind === 'preorder') preorders.push(item);
     });
-    return [
+    return prioritizeMiNoteCardsFamily([
       ...pendingRevealItems,
       ...localMintedItems,
       ...moveLittleSwagBoxesFamilyToEnd(boxes),
       ...moveLittleSwagBoxesFamilyToEnd(dudes),
       ...preorders,
-    ];
+    ]);
   }, [visibleInventory, pendingRevealIds, pendingRevealItems, localMintedItems]);
 
   const inventoryIndex = useMemo(() => new Map(inventoryItems.map((item) => [item.id, item])), [inventoryItems]);
 
   const receiptItems = useMemo(
-    () => moveLittleSwagBoxesFamilyToEnd(visibleInventory.filter((item) => item.kind === 'certificate')),
+    () => prioritizeMiNoteCardsFamily(
+      moveLittleSwagBoxesFamilyToEnd(visibleInventory.filter((item) => item.kind === 'certificate')),
+    ),
     [visibleInventory],
   );
 

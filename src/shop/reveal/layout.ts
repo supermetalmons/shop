@@ -1,6 +1,7 @@
 import {
   usesClearCard3dRevealFlow,
   usesInteractiveCardPackRevealFlow,
+  usesMiNotePack3dRevealFlow,
   type DropRevealRenderer
 } from '../../config/dropsExtraContent';
 import {
@@ -98,6 +99,9 @@ function calcRevealTargetRectForRenderer(
   revealRenderer: DropRevealRenderer | undefined,
   aspectRatio: number,
 ): OverlayRect {
+  if (usesMiNotePack3dRevealFlow(revealRenderer)) {
+    return { left: 0, top: 0, width: viewportWidth, height: viewportHeight };
+  }
   if (usesInteractiveCardPackRevealFlow(revealRenderer)) {
     return calcPonchoDrifellaRevealTargetRect(viewportWidth, viewportHeight);
   }

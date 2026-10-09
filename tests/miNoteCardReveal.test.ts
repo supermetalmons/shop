@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MI_NOTE_OPEN_TAPS,
+  MI_NOTE_INVENTORY_OPEN_TAPS,
   MI_NOTE_PACK_VARIANTS,
   createMiNoteRevealState,
   reduceMiNoteReveal,
+  reduceMiNoteInventoryReveal,
+  miNoteRevealCardIds,
   sampleMiNotePack,
   type MiNoteRevealEvent,
   type MiNoteRevealState,
@@ -79,6 +82,46 @@ test('mi note sampling reaches every card in both positions', () => {
 });
 
 const openingTaps: readonly MiNoteRevealEvent[] = Array.from({ length: 4 }, () => ({ type: 'activate' }));
+
+test('inventory packs require three taps plus ready cards and never peel automatically when readiness arrives', () => {
+  assert.equal(MI_NOTE_INVENTORY_OPEN_TAPS, 3);
+  let state = createMiNoteRevealState();
+  for (let tap = 0; tap < 100; tap += 1) {
+    state = reduceMiNoteInventoryReveal(state, { type: 'activate' });
+    assert.equal(state.stage, 'sealed');
+    assert.equal(state.folderPose, 0);
+  }
+  assert.equal(state.taps, 100);
+  state = reduceMiNoteInventoryReveal(state, { type: 'ready', ready: true });
+  assert.equal(state.stage, 'sealed');
+  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'folder-pose', pose: 1 }), state);
+  state = reduceMiNoteInventoryReveal(state, { type: 'activate' });
+  assert.equal(state.stage, 'seal-peeling');
+  assert.equal(state.folderPose, 0);
+  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'activate' }), state);
+  state = reduceMiNoteInventoryReveal(state, { type: 'seal-finished' });
+  assert.equal(state.stage, 'interactive');
+  assert.equal(state.folderPose, 0);
+  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'activate' }).folderPose, 1);
+});
+
+test('already prepared inventory cards still require three taps and a lost readiness gate keeps the seal intact', () => {
+  let state = reduceMiNoteInventoryReveal(createMiNoteRevealState(), { type: 'ready', ready: true });
+  for (let tap = 1; tap < 3; tap += 1) {
+    state = reduceMiNoteInventoryReveal(state, { type: 'activate' });
+    assert.equal(state.stage, 'sealed');
+  }
+  const waiting = reduceMiNoteInventoryReveal(state, { type: 'ready', ready: false });
+  assert.equal(reduceMiNoteInventoryReveal(waiting, { type: 'activate' }).stage, 'sealed');
+  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'activate' }).stage, 'seal-peeling');
+});
+
+test('Mi Note live reveals accept only the complete pair of assigned card IDs', () => {
+  assert.deepEqual(miNoteRevealCardIds([1430, 1]), [1430, 1]);
+  for (const ids of [undefined, [], [1], [1, 2, 3], [1, 1], [0, 1], [1431, 1], [1.5, 2], [NaN, 2]]) {
+    assert.equal(miNoteRevealCardIds(ids), undefined);
+  }
+});
 const openEvents: readonly MiNoteRevealEvent[] = [
   ...openingTaps,
   { type: 'seal-finished' },

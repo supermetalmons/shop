@@ -1,4 +1,4 @@
-import { useCallback, type TransitionEvent } from 'react';
+import { useCallback, useEffect, type TransitionEvent } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { isDropFamily } from '../../config/deployment';
 import {
@@ -10,6 +10,7 @@ import { revealDudes, revealDudesSubmissionUnknownDetails } from '../../api/comm
 import { buildStartOpenBoxTxWithPending, fetchBoxMinterConfig } from '../../lib/boxMinter';
 import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import { normalizeBoxDisplayImage } from '../../lib/dropContent';
+import { fetchMiNotePackId } from '../../lib/miNotePackIdentity';
 import { soundPlayer } from '../../lib/SoundPlayer';
 import { preloadPonchoDrifellaCardAssets, type PonchoDrifellaRevealRequestStatus } from '../../lib/ponchoDrifellaReveal';
 import {
@@ -40,7 +41,7 @@ import { isUserRejectedError } from '../commerce/transactionSupport';
 import type { InventoryItem } from '../../types';
 import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
 import { pickRandomSoundUrl } from './sounds';
-import type { EarlyClearCardRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
+import type { EarlyPackRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
 import { useRevealAssets } from './useRevealAssets';
 import { useRevealSession } from './useRevealSession';
@@ -74,7 +75,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     revealOverlay, setRevealOverlay, revealOverlayClosing,
     setInventorySnapshot, setPendingOpenSnapshot,
     ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,
-    openSelectedLockRef, openSelectedBoxIdRef, earlyClearCardRevealGateRef,
+    openSelectedLockRef, openSelectedBoxIdRef, earlyPackRevealGateRef,
     revealOverlayRef, revealOverlaySessionRef, revealLoadingRequestCounterRef,
     revealLoadingRequestIdRef, revealSubmissionReconciliationAbortControllerRef,
     revealDismissLockedUntilRef, revealOverlayClosingRef,
@@ -83,6 +84,35 @@ export function useShopReveal(options: ShopRevealOptions) {
     closeRevealOverlay, dismissRevealOverlay,
     canDismissAssetGatedRevealOverlay, startAutoOpening, presentRevealOverlay, presentViewerOverlay,
   } = session;
+  useEffect(() => {
+    if (!revealOverlay || revealOverlayClosing || options.suspended || revealOverlay.packMediaId ||
+      (revealOverlay.viewerMode && revealOverlay.viewerMode !== 'mi-note-pack') ||
+      !isDropFamily(revealOverlay.dropId, 'mi_note_cards')) return;
+    const { id, dropId } = revealOverlay;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const resolveIdentity = async () => {
+      try {
+        const item = inventory.find(item => item.id === id && item.dropId === dropId && item.kind === 'box');
+        const boxId = resolveInteractiveCardPackMediaIdForBox(dropId, item?.boxId)
+          ? item?.boxId
+          : await fetchMiNotePackId(getDropConnection(dropId), requireKnownDropConfig(dropId, 'pack identity'), id);
+        if (cancelled) return;
+        const packMediaId = resolveInteractiveCardPackMediaIdForBox(dropId, boxId);
+        if (packMediaId) {
+          setRevealOverlay(previous => previous?.id === id && previous.dropId === dropId && !previous.packMediaId
+            ? { ...previous, packMediaId, name: item?.name || previous.name, image: normalizeBoxDisplayImage({ dropId, boxId }) }
+            : previous);
+          return;
+        }
+      } catch {}
+      if (!cancelled) retry = setTimeout(() => { void resolveIdentity(); }, 3000);
+    };
+    void resolveIdentity();
+    return () => { cancelled = true; clearTimeout(retry); };
+  }, [inventory, revealOverlay, revealOverlayClosing, options.suspended, getDropConnection, requireKnownDropConfig,
+    resolveInteractiveCardPackMediaIdForBox, setRevealOverlay]);
+
   const openRevealOverlay = (
     item: InventoryItem,
     rect: DOMRect,
@@ -157,12 +187,12 @@ export function useShopReveal(options: ShopRevealOptions) {
       dropId: item.dropId,
     });
     setStartOpenLoading(item.id);
-    let earlyRevealGate: EarlyClearCardRevealGate | null = null;
+    let earlyRevealGate: EarlyPackRevealGate | null = null;
     try {
       const targetDrop = requireKnownDropConfig(item.dropId, `inventory item ${item.id}`);
       const targetConnection = getDropConnection(targetDrop.dropId);
       const cfg = await fetchBoxMinterConfig(targetConnection, targetDrop, 'operations');
-      const enablesEarlyPackInteraction = isDropFamily(targetDrop, 'clear_cards');
+      const enablesEarlyPackInteraction = isDropFamily(targetDrop, 'clear_cards') || isDropFamily(targetDrop, 'mi_note_cards');
       if (enablesEarlyPackInteraction) {
         let settleConfirmation!: (confirmed: boolean) => void;
         const confirmation = new Promise<boolean>((resolve) => {
@@ -177,7 +207,7 @@ export function useShopReveal(options: ShopRevealOptions) {
           confirmation,
           settleConfirmation,
         };
-        earlyClearCardRevealGateRef.current = earlyRevealGate;
+        earlyPackRevealGateRef.current = earlyRevealGate;
       }
       const sendOnce = async () => {
         const { tx, pendingPda } = await buildStartOpenBoxTxWithPending(
@@ -235,8 +265,8 @@ export function useShopReveal(options: ShopRevealOptions) {
       }
       dismissRevealOverlay();
     } finally {
-      if (earlyClearCardRevealGateRef.current === earlyRevealGate) {
-        earlyClearCardRevealGateRef.current = null;
+      if (earlyPackRevealGateRef.current === earlyRevealGate) {
+        earlyPackRevealGateRef.current = null;
       }
       setStartOpenLoading(null);
     }
@@ -447,6 +477,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       revealOverlay.viewerMode === 'poncho-card' ||
       revealOverlay.viewerMode === 'clear-card' ||
       revealOverlay.viewerMode === 'clear-pack' ||
+      revealOverlay.viewerMode === 'mi-note-pack' ||
       revealOverlay.viewerMode === 'receipt-image'
     ) {
       closeRevealOverlay();
@@ -577,7 +608,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       clearSelection?: boolean;
     },
   ) => {
-    if (!usesInteractiveCardPackRevealForDropId(dropId)) return false;
+    if (!usesInteractiveCardPackRevealForDropId(dropId) && !isDropFamily(dropId, 'mi_note_cards')) return false;
     if (revealOverlayRef.current || revealLoading) return false;
     if (startOpenLoading) return false;
     if (typeof window === 'undefined') return false;
@@ -691,6 +722,27 @@ export function useShopReveal(options: ShopRevealOptions) {
     startOpenLoading,
     usesClearCard3dRevealForDropId,
   ]);
+
+  const openMiNotePackViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
+    if (item.kind !== 'box' || !isDropFamily(item.dropId, 'mi_note_cards')) return false;
+    if (revealOverlayRef.current || revealLoading || startOpenLoading || typeof window === 'undefined') return false;
+    const targetRect = calcRevealTargetRectForRendererInViewport(
+      revealRendererForDropId(item.dropId), boxAspectRatioForDropId(item.dropId),
+    );
+    const opened = presentViewerOverlay({
+      id: item.id,
+      dropId: item.dropId,
+      name: item.name,
+      image: normalizeBoxDisplayImage({ dropId: item.dropId, boxId: item.boxId, imageRaw: item.image }),
+      originRect: originRect ? toRevealOverlayRect(originRect) : targetRect,
+      targetRect,
+      viewerMode: 'mi-note-pack',
+      packMediaId: resolveInteractiveCardPackMediaIdForBox(item.dropId, item.boxId),
+    });
+    if (opened) clearInventorySelection();
+    return opened;
+  }, [boxAspectRatioForDropId, clearInventorySelection, presentViewerOverlay, revealLoading,
+    revealRendererForDropId, resolveInteractiveCardPackMediaIdForBox, startOpenLoading]);
 
   const openImageViewer = useCallback((
     item: ReceiptViewerSource,
@@ -806,6 +858,10 @@ export function useShopReveal(options: ShopRevealOptions) {
       return;
     }
     if (selectedViewableItem.kind === 'box') {
+      if (isDropFamily(selectedViewableItem.dropId, 'mi_note_cards')) {
+        openMiNotePackViewer(selectedViewableItem, originRect);
+        return;
+      }
       openClearCardModelViewer({
         overlayId: selectedViewableItem.id,
         dropId: selectedViewableItem.dropId,
@@ -848,12 +904,13 @@ export function useShopReveal(options: ShopRevealOptions) {
     openClearCardModelViewer,
     openImageViewer,
     openInteractiveCardViewer,
+    openMiNotePackViewer,
     usesClearCard3dRevealForDropId,
   ]);
 
   const handlePonchoOverlayRequestReveal = useCallback(() => {
     if (!revealOverlay) return 'retry' as const;
-    const earlyRevealGate = earlyClearCardRevealGateRef.current;
+    const earlyRevealGate = earlyPackRevealGateRef.current;
     if (
       earlyRevealGate?.boxAssetId === revealOverlay.id &&
       earlyRevealGate.dropId === revealOverlay.dropId

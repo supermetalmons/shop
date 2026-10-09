@@ -5,6 +5,7 @@ import {
 } from '../config/dropMediaDefaults.ts';
 import { isDropFamily, normalizeDropId, type FrontendDropConfig } from '../config/deployment.ts';
 import { cardNft2AssetUrl, isCardNft2CommonCardId, normalizeCardNft2CardId } from '../../shared/cardNft2Assets.ts';
+import { createMiNoteCard, MI_NOTE_CARD_COUNT } from './miNoteCards.ts';
 
 const INTERACTIVE_CARD_PACK_PUNCH_VARIANT_COUNT = 3;
 const INTERACTIVE_CARD_PACK_PUNCH_FRAME_COUNT = 3;
@@ -249,6 +250,11 @@ export function getInteractiveCardPackCardByFigureId(
   dropId: string | undefined,
   figureId: number,
 ): DrifCardConfig | undefined {
+  if (isDropFamily(dropId, 'mi_note_cards')) {
+    return Number.isSafeInteger(figureId) && figureId >= 1 && figureId <= MI_NOTE_CARD_COUNT
+      ? createMiNoteCard(figureId)
+      : undefined;
+  }
   if (isDropFamily(dropId, 'card_nft_2')) {
     return getCardNft2CardByFigureId(figureId);
   }

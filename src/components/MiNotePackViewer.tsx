@@ -15,7 +15,7 @@ import {
 } from '../lib/miNotePackModel';
 import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '../lib/miNotePackMotion';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
-import type { MiNoteFolderPose, MiNoteRevealEvent, MiNoteRevealState } from '../lib/miNoteCardReveal';
+import { MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
 
 export type MiNotePackControls = {
@@ -35,12 +35,13 @@ type MiNotePackViewerProps = {
   sizeScale?: number;
   effectSettings?: MiNoteStickerEffectSettings;
   inspectSticker?: boolean;
-  cards: readonly [DrifCardConfig, DrifCardConfig];
+  cards?: readonly [DrifCardConfig, DrifCardConfig];
   cardEffect: DrifCardConfig['effect'];
   onCardsReadyChange: (ready: boolean) => void;
   onCardsError: (error: Error | null) => void;
   state: MiNoteRevealState;
   interactionEnabled: boolean;
+  activationEnabled?: boolean;
   onReadyChange: (ready: boolean) => void;
   onError: (error: Error) => void;
   onEvent: (event: MiNoteRevealEvent) => void;
@@ -92,6 +93,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let sealTime = 0;
     let sealStarted = false;
     let sealFinished = false;
+    let packReadyPending = false;
+    let cardsReadyPending: (() => void) | null = null;
     const idlePitch = { value: 0.055, phase: Math.PI / 2, amplitude: 0.055, openAmplitude: 0.004, openOffset: -0.012, frequency: 0.45 };
     const idleYaw = { value: -0.12, phase: -Math.PI / 2, amplitude: 0.12, openAmplitude: 0, openOffset: 0, frequency: 0.32 };
     const idleRoll = { value: -0.016, phase: -Math.PI / 2, amplitude: 0.016, openAmplitude: 0, openOffset: 0, frequency: 0.55 };
@@ -123,6 +126,16 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       currentProps.current.onError(error instanceof Error ? error : new Error('Unable to display the pack.'));
       return;
     }
+    const fail = (error: Error) => {
+      if (disposed || failed) return;
+      failed = true;
+      cancelAnimationFrame(frameId);
+      frameId = 0;
+      currentProps.current.onReadyChange(false);
+      currentProps.current.onCardsReadyChange(false);
+      currentProps.current.onError(error);
+    };
+    renderer.debug.onShaderError = () => fail(new Error('Unable to render this pack. Please retry.'));
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -162,7 +175,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     effectSettingsRef.current = model.setSealEffectSettings;
     let lastSealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
     const cardGeometry = createMiNoteCardGeometry();
-    const cards = props.cards.map((config, index) => {
+    const createCard = (config: DrifCardConfig, index: number) => {
       const anchor = new THREE.Group();
       const home = new THREE.Vector3((index === 0 ? -1 : 1) * (MI_NOTE_LEAF_WIDTH / 2 - 0.015), -0.005, 0.0057);
       anchor.position.copy(home);
@@ -175,17 +188,36 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const parent = index === 0 ? model.left : model.right;
       parent.add(anchor);
       return { anchor, mesh, surface, parent, home, assetKey: cardAssetKey(config) };
-    });
+    };
+    const cards: ReturnType<typeof createCard>[] = [];
     let cardEffectRequest = 0;
     let activeCardEffect: DrifCardConfig['effect'] | undefined;
     cardAppearanceRef.current = (configs, effect) => {
       if (disposed || failed) return;
+      if (!configs) {
+        cardEffectRequest += 1;
+        cards.splice(0).forEach(({ anchor, surface }) => {
+          surface.dispose();
+          anchor.removeFromParent();
+        });
+        selected = null;
+        cardPath = null;
+        activeCardEffect = undefined;
+        currentProps.current.onCardsReadyChange(false);
+        return;
+      }
       let assetsChanged = false;
-      cards.forEach((card, index) => {
-        const assetKey = cardAssetKey(configs[index]);
+      configs.forEach((config, index) => {
+        const card = cards[index];
+        if (!card) {
+          cards.push(createCard(config, index));
+          assetsChanged = true;
+          return;
+        }
+        const assetKey = cardAssetKey(config);
         if (card.assetKey === assetKey) return;
         const previous = card.surface;
-        card.surface = createMiNoteCardMaterial(configs[index]);
+        card.surface = createMiNoteCardMaterial(config);
         card.mesh.material = card.surface.material;
         card.mesh.visible = false;
         card.assetKey = assetKey;
@@ -197,14 +229,25 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const request = ++cardEffectRequest;
       currentProps.current.onCardsError(null);
       currentProps.current.onCardsReadyChange(false);
+      const isCurrent = () => !disposed && !failed && request === cardEffectRequest
+        && currentProps.current.cardEffect === effect
+        && currentProps.current.cards?.every((card, index) => cardAssetKey(card) === cards[index]?.assetKey);
       void Promise.all(cards.map(({ surface }) => surface.setEffect(effect))).then(() => {
-        if (disposed || failed || request !== cardEffectRequest) return;
+        if (!isCurrent()) return;
+        const textures = new Set<THREE.Texture>();
+        cards.forEach(({ surface }) => Object.values(surface.material.uniforms).forEach(({ value }) => {
+          if (value instanceof THREE.Texture) textures.add(value);
+        }));
+        textures.forEach(texture => renderer.initTexture(texture));
         cards.forEach(({ mesh }) => { mesh.visible = true; });
         renderer.compile(scene, camera);
-        currentProps.current.onCardsReadyChange(true);
+        if (!isCurrent()) return;
+        cardsReadyPending = () => {
+          if (isCurrent()) currentProps.current.onCardsReadyChange(true);
+        };
         invalidate();
       }).catch((error: unknown) => {
-        if (disposed || failed || request !== cardEffectRequest) return;
+        if (!isCurrent()) return;
         currentProps.current.onCardsError(error instanceof Error ? error : new Error('Unable to load the cards.'));
       });
     };
@@ -239,6 +282,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       && ['sealed', 'interactive'].includes(currentProps.current.state.stage)
       && currentProps.current.state.selectedCard === null;
     const selectCard = (index: 0 | 1) => {
+      if (!cards[index]) return;
       const state = currentProps.current.state;
       if (currentProps.current.interactionEnabled && state.selectedCard === index && state.cardStage === 'returning') {
         input.cancel();
@@ -258,7 +302,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       invalidate();
     };
     const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
-      if (!canNavigate() || drag || outerFlip) return;
+      if (currentProps.current.activationEnabled === false || !canNavigate() || drag || outerFlip) return;
       input.cancel();
       if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
         const worldPerPixel = 2 * Math.abs(camera.position.z - point.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / height;
@@ -463,7 +507,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       model.setSealVerticalPosition(currentProps.current.verticalPosition ?? MI_NOTE_STAR_VERTICAL_DEFAULT);
       model.setSealSizeScale(currentProps.current.sizeScale ?? currentProps.current.star.sizeScale);
       if (state.taps !== taps) {
-        for (let count = taps + 1; count <= state.taps; count += 1) recoil.velocity += 1.6 + count * 0.65;
+        for (let count = taps + 1; count <= state.taps; count += 1) recoil.velocity += 1.6 + Math.min(count, MI_NOTE_OPEN_TAPS) * 0.65;
         taps = state.taps;
       }
       if (state.stage === 'seal-peeling' && !sealStarted) {
@@ -486,7 +530,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       }
       fold.value = THREE.MathUtils.clamp(fold.value, 0, 2);
       const canLiftCard = state.cardStage === 'lifting' && state.selectedCard !== null && selected === null
-        && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015;
+        && Boolean(cards[state.selectedCard]) && !outerFlip && !drag && Math.abs(fold.value - 1) < 0.015;
       if (canLiftCard) {
         fold.value = 1;
         fold.velocity = 0;
@@ -602,7 +646,19 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       scene.updateMatrixWorld(true);
       camera.updateMatrixWorld(true);
       cards.forEach(({ mesh, surface }) => { if (mesh.visible) surface.update(mesh, camera); });
-      renderer.render(scene, camera);
+      try {
+        renderer.render(scene, camera);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error('Unable to render this pack.'));
+      }
+      if (failed) return;
+      if (packReadyPending) {
+        packReadyPending = false;
+        currentProps.current.onReadyChange(true);
+      }
+      const reportCardsReady = cardsReadyPending;
+      cardsReadyPending = null;
+      reportCardsReady?.();
       if (moving) invalidate();
       else lastTime = 0;
     }
@@ -627,10 +683,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     };
     const handleContextLost = (event: Event) => {
       event.preventDefault();
-      failed = true;
-      currentProps.current.onReadyChange(false);
-      currentProps.current.onCardsReadyChange(false);
-      currentProps.current.onError(new Error('The pack display was interrupted. Please retry.'));
+      fail(new Error('The pack display was interrupted. Please retry.'));
     };
     const handleVisibility = () => {
       handleBlur();
@@ -653,12 +706,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     void model.ready.then(() => {
       if (disposed || failed) return;
       renderer.compile(scene, camera);
-      currentProps.current.onReadyChange(true);
+      if (failed) return;
+      packReadyPending = true;
       invalidate();
     }).catch((error: unknown) => {
-      if (disposed) return;
-      failed = true;
-      currentProps.current.onError(error instanceof Error ? error : new Error('Unable to load the pack.'));
+      fail(error instanceof Error ? error : new Error('Unable to load the pack.'));
     });
 
     return () => {

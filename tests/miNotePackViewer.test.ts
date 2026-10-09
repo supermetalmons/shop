@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { DRIF_EFFECTS, CARD_NFT_2_NEUTRAL_CARD_EFFECT, type DrifCardConfig } from '../src/drifCards.ts';
 import type { MiNotePackControls } from '../src/components/MiNotePackViewer.tsx';
 import { createMiNoteCardMaterial } from '../src/lib/miNoteCardMaterial.ts';
-import { createMiNoteRevealState, reduceMiNoteReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
+import { createMiNoteRevealState, reduceMiNoteReveal, reduceMiNoteInventoryReveal, type MiNoteRevealEvent, type MiNoteRevealState } from '../src/lib/miNoteCardReveal.ts';
 import { MI_NOTE_CARD_HEIGHT, MI_NOTE_CARD_WIDTH, MI_NOTE_LEAF_WIDTH, sampleMiNoteFolderPose } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS, type MiNotePackStar } from '../src/lib/miNotePackStars.ts';
 import { MI_NOTE_STAR_VERTICAL_DEFAULT } from '../src/lib/miNoteStarFolds.ts';
@@ -48,17 +48,25 @@ class FakeWebGLRenderer {
   camera: THREE.PerspectiveCamera | null = null;
   disposed = false;
   pixelRatio = 1;
+  initializedTextures: THREE.Texture[] = [];
+  debug: { onShaderError?: () => void } = {};
+  shaderFailure: 'compile' | 'render' | null = null;
   sizeChanges: { width: number; height: number; pixelRatio: number }[] = [];
   setClearColor() {}
   setDrawingBufferSize(width: number, height: number, pixelRatio: number) {
     this.pixelRatio = pixelRatio;
     this.sizeChanges.push({ width, height, pixelRatio });
   }
-  compile() { assert.equal(this.disposed, false); }
+  compile() {
+    assert.equal(this.disposed, false);
+    if (this.shaderFailure === 'compile') this.debug.onShaderError?.();
+  }
+  initTexture(texture: THREE.Texture) { this.initializedTextures.push(texture); }
   render(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     assert.equal(this.disposed, false);
     this.scene = scene;
     this.camera = camera;
+    if (this.shaderFailure === 'render') this.debug.onShaderError?.();
   }
   dispose() { this.disposed = true; }
   forceContextLoss() {}
@@ -263,6 +271,7 @@ function harness(
   initialState = createMiNoteRevealState(),
   interactionEnabled = true,
   initialLayout: { star?: MiNotePackStar; verticalPosition?: number; sizeScale?: number } = { verticalPosition: 0.5, sizeScale: 1 },
+  options: { cardsAvailable?: boolean; activationEnabled?: boolean; inventoryReveal?: boolean } = {},
 ) {
   const controls = { current: null as MiNotePackControls | null };
   const events: MiNoteRevealEvent[] = [];
@@ -283,14 +292,16 @@ function harness(
   let inspectSticker = false;
   let verticalPosition = initialLayout.verticalPosition;
   let sizeScale = initialLayout.sizeScale;
+  let cardsAvailable = options.cardsAvailable ?? true;
   function Harness({ effectSettings, inspectSticker }: { effectSettings: MiNoteStickerEffectSettings; inspectSticker: boolean }) {
-    const [current, dispatch] = useReducer(reduceMiNoteReveal, initialState);
+    const [current, dispatch] = useReducer(options.inventoryReveal ? reduceMiNoteInventoryReveal : reduceMiNoteReveal, initialState);
     state = current;
     return createElement(MiNotePackViewer, {
       color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
-      cards, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); }, state: current, interactionEnabled, controlsRef: controls,
+      cards: cardsAvailable ? cards : undefined, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); },
+      state: current, interactionEnabled, activationEnabled: options.activationEnabled, controlsRef: controls,
       onEvent(event) { events.push(event); dispatch(event); },
-      onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready }); },
+      onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready: ready && (!options.inventoryReveal || cardsAvailable) }); },
       onError(error) { errors.push(error); },
       onCardsError(error) { cardErrors.push(error); },
       onBackgroundTap() {},
@@ -301,6 +312,10 @@ function harness(
     view, controls, events, readyChanges, cardReadyChanges, cardErrors, errors,
     get state() { return state; },
     get cards() { return cards; },
+    setCardsAvailable(value: boolean) {
+      cardsAvailable = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
     count(type: MiNoteRevealEvent['type']) { return events.filter(event => event.type === type).length; },
     setCards(next: typeof cards) {
       cards = next;
@@ -1031,6 +1046,28 @@ test('sealed pack sparkles appear only for accepted pointer taps and fade while 
   advanceFrames();
   assert.equal(sparkles.visible, false);
   assert.equal(frames.size, 1);
+});
+
+test('live packs keep a bounded recoil on every mouse and touch tap while assigned cards are loading', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness(undefined, true, undefined, { inventoryReveal: true, cardsAvailable: false });
+  await makeReady();
+  const model = models[0];
+  const pointer = pointerControls(run);
+  let fourthTapScale = 1;
+  for (let count = 1; count <= 20; count += 1) {
+    pointer.tap(count % 2 ? 'mouse' : 'touch');
+    advanceFrame();
+    assert.equal(run.state.taps, count);
+    assert.equal(run.state.stage, 'sealed');
+    assert.equal(model.sealStarts, 0);
+    assert.ok(model.group.scale.x < 1 && model.group.scale.x > 0.96);
+    if (count === 4) fourthTapScale = model.group.scale.x;
+    if (count > 4) assert.ok(Math.abs(model.group.scale.x - fourthTapScale) < 1e-8);
+    assert.equal(tapSparkles().visible, true);
+    advanceFrames();
+    assert.equal(model.group.scale.x, 1);
+  }
 });
 
 test('the final sealed tap sparkles stop when peeling finishes and later folder taps stay clear', async () => {
@@ -2257,6 +2294,64 @@ test('both GPU surfaces must finish loading before cards become visible or repor
   meshes.forEach(mesh => assert.equal(mesh.visible, true));
   surfaces.forEach(surface => assert.equal(surface.effects.at(-1), DRIF_EFFECTS['swsh6-196']));
   assert.deepEqual(run.errors, []);
+});
+
+test('a sealed pack accepts its assigned cards later without recreating the pack and uploads their textures before readiness', async () => {
+  deferSurfaceReady = true;
+  const run = harness(createMiNoteRevealState(), true, {}, { cardsAvailable: false });
+  await makeReady();
+  const model = models[0];
+  assert.equal(surfaces.length, 0);
+  assert.equal(run.cardReadyChanges.includes(true), false);
+  run.setCardsAvailable(true);
+  assert.equal(models.length, 1);
+  assert.equal(models[0], model);
+  assert.equal(surfaces.length, 2);
+  await act(async () => { surfaces[0].resolveReady(); await surfaces[0].ready; });
+  assert.equal(run.cardReadyChanges.includes(true), false);
+  await act(async () => { surfaces[1].resolveReady(); await surfaces[1].ready; });
+  assert.equal(run.cardReadyChanges.includes(true), false);
+  settle();
+  assert.equal(run.cardReadyChanges.at(-1), true);
+  for (const surface of surfaces) {
+    for (const name of ['uFront', 'uMask', 'uGrain']) {
+      assert.ok(renderers[0].initializedTextures.includes(surface.material.uniforms[name].value));
+    }
+  }
+  run.setCardsAvailable(false);
+  assert.equal(run.cardReadyChanges.at(-1), false);
+  assert.ok(surfaces.every(surface => surface.disposed));
+  assert.equal(model.left.children.length, 0);
+  assert.equal(model.right.children.length, 0);
+});
+
+for (const stage of ['compile', 'render'] as const) {
+  test(`a card shader failure during ${stage} keeps readiness false and exposes a retryable viewer error`, async () => {
+    const run = harness(createMiNoteRevealState(), true, {}, { cardsAvailable: false });
+    await makeReady();
+    renderers[0].shaderFailure = stage;
+    run.setCardsAvailable(true);
+    await act(async () => {});
+    settle();
+    assert.equal(run.cardReadyChanges.includes(true), false);
+    assert.equal(run.readyChanges.at(-1), false);
+    assert.equal(run.errors.length, 1);
+    assert.match(run.errors[0].message, /retry/i);
+    assert.equal(models[0].sealStarts, 0);
+  });
+}
+
+test('closed-pack viewing disables activation but preserves sealed 3D rotation without loading card assets', async () => {
+  const run = harness(createMiNoteRevealState(), true, {}, { cardsAvailable: false, activationEnabled: false });
+  await makeReady();
+  for (let tap = 0; tap < 10; tap += 1) act(() => run.controls.current?.activate());
+  assert.equal(run.count('activate'), 0);
+  assert.equal(models[0].sealStarts, 0);
+  assert.equal(surfaces.length, 0);
+  act(() => run.controls.current?.navigate(1));
+  settle();
+  assert.equal(run.state.folderPose, 2);
+  assert.equal(run.state.stage, 'sealed');
 });
 
 for (const outcome of ['ready', 'failure'] as const) {

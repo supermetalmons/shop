@@ -35,7 +35,7 @@ import {
 import { isDropFamily, normalizeDropId, type MediaMapConfig } from './deployment.ts';
 
 export type DropRevealMode = 'animated' | 'static';
-export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack' | 'clear_card_3d';
+export type DropRevealRenderer = 'default' | 'poncho_drifella' | 'interactive_card_pack' | 'clear_card_3d' | 'mi_note_pack_3d';
 export type DropBoxInventoryImagePathMode = 'file' | 'folder_initial';
 export type DropCertificateBoxInventoryImagePathMode = 'file' | 'receipt_file' | 'receipt_pack_file';
 export type DropFigureRevealPresentation = 'videos' | 'metadata_stills';
@@ -72,8 +72,12 @@ export function usesClearCard3dRevealFlow(renderer: DropRevealRenderer | undefin
   return renderer === 'clear_card_3d';
 }
 
+export function usesMiNotePack3dRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
+  return renderer === 'mi_note_pack_3d';
+}
+
 export function usesAssetGatedRevealFlow(renderer: DropRevealRenderer | undefined): boolean {
-  return usesInteractiveCardPackRevealFlow(renderer) || usesClearCard3dRevealFlow(renderer);
+  return usesInteractiveCardPackRevealFlow(renderer) || usesClearCard3dRevealFlow(renderer) || usesMiNotePack3dRevealFlow(renderer);
 }
 
 const INTERACTIVE_CARD_PACK_REVEAL_RENDERERS = new Set<DropRevealRenderer>([
@@ -227,6 +231,10 @@ const MI_NOTE_CARDS_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   mintPanel: {
     previewImageUrl: MI_NOTE_CARDS_PACK_PREVIEW_IMAGE_URL,
     aspectRatio: MI_NOTE_CARDS_PACK_PREVIEW_ASPECT_RATIO,
+  },
+  reveal: {
+    mode: 'animated',
+    renderer: 'mi_note_pack_3d',
   },
   figures: {
     fulfillmentAspectRatio: 5 / 7,
