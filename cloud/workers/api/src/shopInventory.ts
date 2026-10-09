@@ -847,6 +847,7 @@ export async function handlePost(
       : error instanceof ProviderFailure
         ? error.kind
         : 'unavailable';
+    metrics.inventoryFailureKind = kind;
     return result(
       publicJsonResponse(
         { ok: false, error: kind === 'timeout' || kind === 'deadline' ? 'provider-timeout' : 'provider-unavailable' },

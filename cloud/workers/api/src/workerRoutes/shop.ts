@@ -175,6 +175,9 @@ export const shopRoutes: readonly ExactWorkerRoute[] = [
       expectedAssetIds: metrics.expectedAssetIds,
       expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,
       expectedAssetResolved: metrics.expectedAssetResolved,
+      ...(metrics.inventoryFailureKind ? { inventoryFailureKind: metrics.inventoryFailureKind } : {}),
+      ...(metrics.inventoryRateLimitRetries ? { inventoryRateLimitRetries: metrics.inventoryRateLimitRetries } : {}),
+      ...(metrics.inventoryProviderFailure ? { inventoryProviderFailure: metrics.inventoryProviderFailure } : {}),
     }),
   ),
   exactRoute(

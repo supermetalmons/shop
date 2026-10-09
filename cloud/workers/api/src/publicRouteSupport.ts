@@ -76,6 +76,15 @@ export type WorkerRequestMetrics = RpcRequestMetrics & {
   expectedAssetIds: number;
   expectedAssetRecoveryFailures: number;
   expectedAssetResolved: number;
+  inventoryFailureKind?: string;
+  inventoryRateLimitRetries?: number;
+  inventoryProviderFailure?: {
+    method: string;
+    stage: 'fetch' | 'http' | 'body' | 'rpc';
+    reason: string;
+    status?: number;
+    rpcCode?: number;
+  };
 };
 
 export function publicJsonResponse(body: unknown, status: number, headers?: HeadersInit): Response {

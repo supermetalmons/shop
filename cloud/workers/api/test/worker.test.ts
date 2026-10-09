@@ -3838,7 +3838,7 @@ test('transient provider errors retry once and provider deadlines return 504', a
   const retrying: ProviderFetch = async (_input, init) => {
     attempts += 1;
     const body = JSON.parse(String(init?.body));
-    if (attempts === 1) return new Response('rate limited', { status: 429 });
+    if (attempts === 1) return new Response('temporarily unavailable', { status: 503 });
     const collection = body.params?.grouping?.[1];
     return rpcCursorSearchResult(body, [unknownAsset(`sentinel-${collection}`, collection)]);
   };
@@ -4819,4 +4819,53 @@ test('slot-floor inventory requests allow bounded 2 KiB bodies while legacy requ
   const invalid = await handleRequest(request('/inventory', { ...body, preorderMinContextSlots: { [assetId('not-selected-floor')]: 250 } }),
     env(), quietDependencies(async () => { throw new Error('Invalid floor must not reach provider'); }));
   assert.equal(invalid.status, 400);
+});
+
+test('inventory failure diagnostics retain safe provider codes without payloads or credentials', async () => {
+  for (const [stage, providerFetch, expected] of [
+    ['http', async () => new Response('private-provider-detail', { status: 403 }), { status: 403 }],
+    ['rpc', async (_input: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      return rpcError(body.id, -32000, 'private-provider-detail');
+    }, { status: 200, rpcCode: -32000 }],
+    ['body', async () => new Response('private-provider-detail', { status: 200 }), { status: 200 }],
+    ['fetch', async () => { throw new Error('private-provider-detail'); }, {}],
+  ] as const) {
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(request('/inventory', { owner: OWNER }), env({ apiKey: 'private-provider-key' }), {
+      ...quietDependencies(providerFetch), log: entry => logs.push(entry),
+    });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+    assert.equal(logs[0]?.inventoryFailureKind, 'unavailable');
+    assert.deepEqual(logs[0]?.inventoryProviderFailure, {
+      method: 'searchAssets', stage, reason: stage === 'fetch' ? 'transport' : 'unavailable', ...expected,
+    });
+    const encoded = JSON.stringify(logs);
+    assert.equal(encoded.includes('private-provider-detail'), false);
+    assert.equal(encoded.includes('private-provider-key'), false);
+    assert.equal(encoded.includes(OWNER), false);
+  }
+});
+
+test('exhausted inventory throttling does not amplify requests with an ungrouped fallback', async () => {
+  let groupedCalls = 0;
+  let ungroupedCalls = 0;
+  const logs: Record<string, unknown>[] = [];
+  const response = await handleRequest(request('/inventory'), env(), {
+    ...quietDependencies(async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (!body.params?.grouping) ungroupedCalls += 1;
+      if (body.params?.grouping?.[1] === CARD_COLLECTION) {
+        groupedCalls += 1;
+        return new Response(null, { status: 429 });
+      }
+      return rpcCursorSearchResult(body, []);
+    }), log: entry => logs.push(entry),
+  });
+  assert.equal(response.status, 502);
+  assert.equal(groupedCalls, 4);
+  assert.equal(ungroupedCalls, 0);
+  assert.equal(logs[0]?.inventoryFailureKind, 'rate-limit');
+  assert.equal(logs[0]?.inventoryRateLimitRetries, 3);
 });

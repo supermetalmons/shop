@@ -9,7 +9,7 @@ import type { WorkerDependencies, WorkerRequestMetrics } from './publicRouteSupp
 
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
-type ProviderFailureKind = 'asset-not-found' | 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit';
+type ProviderFailureKind = 'asset-not-found' | 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit' | 'rate-limit';
 
 type InventoryProviderDependencies = Pick<WorkerDependencies,
   | 'expectedAssetRecoveryTimeoutMs'
@@ -114,6 +114,7 @@ export type ProviderContext = {
   inventoryCursorPages: number;
   inventoryProviderCalls: number;
   providerReadGate: ProviderReadGate;
+  rateLimitUntil?: number;
 };
 
 async function readBoundedJsonResponse(
@@ -181,6 +182,15 @@ function retryDelayMs(dependencies: Pick<WorkerDependencies, 'randomUint32'>, re
   return 100 + (dependencies.randomUint32() % 151);
 }
 
+function rateLimitDelayMs(dependencies: Pick<WorkerDependencies, 'randomUint32'>, attempt: number, response?: Response): number {
+  const header = response?.headers.get('Retry-After')?.trim();
+  const retryAfter = header ? Number(header) : NaN;
+  if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(60_000, retryAfter * 1000);
+  const retryDate = header ? Date.parse(header) : NaN;
+  if (Number.isFinite(retryDate)) return Math.min(60_000, Math.max(0, retryDate - Date.now()));
+  return Math.min(4000, 1000 * 2 ** attempt) + dependencies.randomUint32() % 251;
+}
+
 export async function heliusRpc<T>(
   context: ProviderContext,
   cluster: SolanaCluster,
@@ -195,9 +205,22 @@ export async function heliusRpc<T>(
     signal?: AbortSignal;
   } = {},
 ): Promise<T> {
-  const maxAttempts = options.maxAttempts ?? 2;
+  let maxAttempts = options.maxAttempts ?? 2;
   const signal = options.signal ?? context.signal;
+  const rateLimited = (attempt: number, response?: Response) => {
+    if (options.maxAttempts === undefined) maxAttempts = 4;
+    context.rateLimitUntil = Math.max(context.rateLimitUntil ?? 0,
+      performance.now() + rateLimitDelayMs(context.dependencies, attempt, response));
+    if (attempt + 1 < maxAttempts) {
+      context.metrics.inventoryRateLimitRetries = (context.metrics.inventoryRateLimitRetries ?? 0) + 1;
+      return true;
+    }
+    return false;
+  };
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (signal.aborted) throw signal.reason;
+    const cooldown = (context.rateLimitUntil ?? 0) - performance.now();
+    if (cooldown > 0) await context.dependencies.sleep(cooldown, signal);
     if (signal.aborted) throw signal.reason;
     if (options.inventoryCall) {
       if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
@@ -210,6 +233,8 @@ export async function heliusRpc<T>(
       options.attemptTimeoutMs ?? context.dependencies.providerAttemptTimeoutMs,
     );
     let response: Response | undefined;
+    let stage: 'fetch' | 'http' | 'body' | 'rpc' = 'fetch';
+    let rpcCode: number | undefined;
     const startedAt = performance.now();
     try {
       context.metrics.upstreamCalls += 1;
@@ -224,6 +249,12 @@ export async function heliusRpc<T>(
         },
       ), attemptScope.signal);
       if (!response.ok) {
+        stage = 'http';
+        if (response.status === 429) {
+          await cancelResponseBody(response);
+          if (rateLimited(attempt, response)) continue;
+          throw new ProviderFailure('rate-limit');
+        }
         const retryable = TRANSIENT_HTTP_STATUSES.has(response.status);
         const failure = new ProviderFailure(
           response.status === 408 || response.status === 504 ? 'timeout' : 'unavailable',
@@ -235,6 +266,7 @@ export async function heliusRpc<T>(
         continue;
       }
       const successfulResponse = response;
+      stage = 'body';
       attemptScope.pauseTimeout();
       const payload = await context.providerReadGate.run(attemptScope.signal, () => {
         attemptScope.resumeTimeout();
@@ -248,9 +280,16 @@ export async function heliusRpc<T>(
       });
       if (attemptScope.signal.aborted) throw attemptScope.signal.reason;
       if (!payload || typeof payload !== 'object') throw new ProviderFailure('unavailable');
+      stage = 'rpc';
       const rpc = payload as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown };
       if (rpc.jsonrpc !== '2.0' || rpc.id !== requestId) throw new ProviderFailure('unavailable');
       if (rpc.error) {
+        if (typeof rpc.error === 'object' && rpc.error !== null && 'code' in rpc.error &&
+          typeof rpc.error.code === 'number' && Number.isSafeInteger(rpc.error.code)) rpcCode = rpc.error.code;
+        if (rpcCode === 429) {
+          if (rateLimited(attempt, successfulResponse)) continue;
+          throw new ProviderFailure('rate-limit');
+        }
         if (options.assetBatchNotFoundIsRecoverable && isAssetBatchNotFoundRpcError(rpc.error)) {
           throw new ProviderFailure('asset-not-found');
         }
@@ -264,6 +303,12 @@ export async function heliusRpc<T>(
       return rpc.result as T;
     } catch (error) {
       if (signal.aborted && error === signal.reason) throw error;
+      if (!signal.aborted) context.metrics.inventoryProviderFailure = {
+        method, stage,
+        reason: error instanceof ProviderFailure ? error.kind : attemptScope.timedOut() ? 'timeout' : 'transport',
+        ...(response ? { status: response.status } : {}),
+        ...(rpcCode === undefined ? {} : { rpcCode }),
+      };
       if (error instanceof ProviderFailure) throw error;
       if (attemptScope.timedOut()) {
         if (attempt + 1 < maxAttempts) continue;
