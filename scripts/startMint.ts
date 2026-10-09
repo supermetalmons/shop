@@ -121,7 +121,8 @@ export async function verifyTwoConfigMintReadiness(
 ): Promise<void> {
   if (!drop.operationsConfig || drop.solanaCluster === 'testnet') throw new Error('Unsupported two-config activation.');
   const [{ verifyTwoConfigGateForDeployment }, { parseMiNoteDropManifest, verifyMiNoteDropManifest },
-    { verifyMiNoteInventoryDrop }, { runDudeInventoryControl }, { verifyMiNoteMintResources }, { loadPreorderCollectionConfig }] = await Promise.all([
+    { verifyMiNoteInventoryDrop }, { runDudeInventoryControl }, { verifyMiNoteMintResources, resolveMiNoteCollectionDelegates },
+    { loadPreorderCollectionConfig }] = await Promise.all([
     import('./verify-two-config-programs.ts'), import('./shared/miNoteDropManifest.ts'),
     import('./shared/miNoteInventoryPreflight.ts'), import('./ops/dudeInventoryControl.ts'),
     import('./shared/miNoteMintResources.ts'), import('./shared/preorderCollectionConfig.ts'),
@@ -136,8 +137,11 @@ export async function verifyTwoConfigMintReadiness(
   const state = await verifyMiNoteInventoryDrop(drop.dropId, manifest, options);
   const root = options.root ?? ROOT;
   const { config: collectionConfig } = await loadPreorderCollectionConfig({ root, collectionId: drop.dropId });
+  const recordPath = path.join(root, 'releases', drop.dropId.replaceAll('_', '-'), 'deployment.json');
+  const approvedCollectionDelegates = await resolveMiNoteCollectionDelegates(
+    JSON.parse(readFileSync(recordPath, 'utf8')), drop, collectionConfig.authority);
   await verifyMiNoteMintResources({ drop, collectionConfig, mintStarted: state.mintStarted, minimumSlot: state.slot,
-    connection: createScriptSolanaConnection({ cluster: drop.solanaCluster, root, explicitUrl: options.rpcUrl }) });
+    approvedCollectionDelegates, connection: createScriptSolanaConnection({ cluster: drop.solanaCluster, root, explicitUrl: options.rpcUrl }) });
   const report = await runDudeInventoryControl(['status', '--drop', drop.dropId]);
   if (!('drops' in report)) throw new Error('Initialize the approved inventory before enabling minting.');
   const inventory = report.drops.find((entry) => entry.dropId === drop.dropId);

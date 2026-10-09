@@ -712,6 +712,26 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
       finalizedSlot = Math.max(finalizedSlot, state.slot);
     }
     const row = buildDeploymentRow(context, manifest, journal.lookupTable!.address);
+    const collectionState = await connection.getMultipleAccountsInfoAndContext([new PublicKey(plan.collection)], {
+      commitment: 'finalized', minContextSlot: finalizedSlot,
+    });
+    if (!Number.isSafeInteger(collectionState.context.slot) || collectionState.context.slot < finalizedSlot ||
+      collectionState.value.length !== 1 || !validateStepAccounts('delegates', collectionState.value, context, journal)) {
+      throw new Error('Cannot record collection delegates without current finalized state.');
+    }
+    finalizedSlot = collectionState.context.slot;
+    const collectionDelegates = inspectCollection(collectionState.value[0], plan, collectionConfig, journal.collection).delegates.sort();
+    const previousRecordSource = existsSync(recordPath) ? readFileSync(recordPath, 'utf8') : undefined;
+    const previousRecord = previousRecordSource === undefined ? undefined : JSON.parse(previousRecordSource);
+    if (previousRecordSource !== undefined) {
+      if (!previousRecord || !isDeepStrictEqual(previousRecord.plan, plan) || !isDeepStrictEqual(previousRecord.drop, row)) {
+        throw new Error('A different public deployment record already exists.');
+      }
+      const { resolveMiNoteCollectionDelegates } = await import('./shared/miNoteMintResources.ts');
+      if (!isDeepStrictEqual(await resolveMiNoteCollectionDelegates(previousRecord, row, plan.authority), collectionDelegates)) {
+        throw new Error('Collection delegates differ from the approved deployment baseline.');
+      }
+    }
     registry = await deps.readRegistry(registryPath);
     if (registry.drops[plan.dropId] && !isDeepStrictEqual(registry.drops[plan.dropId], row)) throw new Error('An existing registry row conflicts with the finalized deployment.');
     const nextContent = renderDeploymentRegistryFileFromSource({ filePath: registryPath, existingContent: registry.sourceContent,
@@ -727,12 +747,14 @@ export async function runTwoConfigDropDeployment(args: TwoConfigDeploymentArgs &
       throw new Error(`Finalized registry row could not be verified (${fields.join(', ')}); preserve the journal.`);
     }
     journal.finalizedSlot = finalizedSlot; persist();
-    const record = { version: 1, plan, drop: row, finalizedSlot, deployedAt: journal.createdAt,
+    const record = { version: 1, plan, drop: row, finalizedSlot, deployedAt: journal.createdAt, collectionDelegates,
       transactions: journal.transactions, gate: gate.gate, preorderMetadataPreserved: true, mintStarted: false };
-    if (existsSync(recordPath)) {
-      const previous = JSON.parse(readFileSync(recordPath, 'utf8'));
-      if (!isDeepStrictEqual(previous.plan, plan) || !isDeepStrictEqual(previous.drop, row)) throw new Error('A different public deployment record already exists.');
-    } else writeDurableJson(recordPath, record);
+    if (previousRecordSource === undefined) writeDurableJson(recordPath, record);
+    else if (!Object.hasOwn(previousRecord, 'collectionDelegates')) {
+      writeDurableJson(recordPath, { ...previousRecord, collectionDelegates }, previousRecordSource);
+    } else if (readFileSync(recordPath, 'utf8') !== previousRecordSource) {
+      throw new Error('Public deployment record changed while in use.');
+    }
     deps.log(`Both roles and receipts are finalized. Registry and public record saved. Mint remains stopped. ${recordPath}`);
     return { plan, ready: true, recordPath };
   } finally {

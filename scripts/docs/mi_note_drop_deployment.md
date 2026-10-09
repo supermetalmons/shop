@@ -76,6 +76,12 @@ one receipt tree and a lookup table containing both PDAs; and verifies finalized
 state before committing the single logical registry row. Tree settings are depth
 14, buffer 64, canopy 0. No additional public drop row represents operations.
 
+The public deployment record preserves the finalized delegate set. Activation
+requires that exact approved set, including both config PDAs. Older records use
+their validated authority-signed delegate transaction, or the authority and both
+config PDAs when no delegate transaction was needed. A retry cannot silently
+expand an existing approved baseline.
+
 Recovery journals are in `.cache/two-config-deployments/<cluster>/`. Preserve
 them after interruption and rerun the same command. It reconciles signed
 transactions and account state before retrying; do not delete journals to bypass

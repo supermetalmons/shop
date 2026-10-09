@@ -137,6 +137,7 @@ export function validatePreorderCollectionAccount(args: {
   config: PreparedPreorderCollectionConfig;
   account: AccountInfo<Buffer> | null;
   collectionMint?: string;
+  approvedCollectionDelegates?: readonly string[];
 }): void {
   const { config, account } = args;
   if (!account || account.executable || !account.owner.equals(CORE_PROGRAM)) {
@@ -169,7 +170,7 @@ export function validatePreorderCollectionAccount(args: {
   ) throw new Error('Preorder collection royalties mismatch');
   const delegates = decodeMplCoreCollectionUpdateDelegates(data);
   const registered = DEPLOYMENT_DROPS[config.collectionId];
-  const allowedDelegates = new Set([config.authority]);
+  const allowedDelegates = new Set([config.authority, ...(args.approvedCollectionDelegates ?? [])]);
   if (registered?.solanaCluster === config.solanaCluster && registered.collectionMint === args.collectionMint) {
     if (registered.boxMinterConfigPda) allowedDelegates.add(registered.boxMinterConfigPda);
     if (registered.operationsConfig) allowedDelegates.add(registered.operationsConfig.boxMinterConfigPda);

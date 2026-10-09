@@ -164,7 +164,7 @@ async function fixture(t: TestContext, dual = true) {
   return { root, drop, payer, connection, state, statuses, dependencies, options, run, manifestPath, activationPath, registryPath };
 }
 
-function resourceFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>) {
+function resourceFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, approvedCollectionDelegates?: readonly string[]) {
   const { drop, payer } = f;
   const config = preparePreorderCollectionConfig({ ...NEW_PREORDER_COLLECTION,
     collectionId: drop.dropId, isMainnet: false, authority: payer.publicKey.toBase58() }, drop.dropId);
@@ -224,7 +224,7 @@ function resourceFixture(t: TestContext, f: Awaited<ReturnType<typeof fixture>>)
   f.dependencies.verifyReadiness = async (...args) => {
     await verify(...args);
     await verifyMiNoteMintResources({ connection: f.connection, drop, collectionConfig: config,
-      mintStarted: f.state.started, minimumSlot: f.state.slot });
+      mintStarted: f.state.started, minimumSlot: f.state.slot, approvedCollectionDelegates });
   };
   return resources;
 }
@@ -261,6 +261,34 @@ test('activation verifies finalized collection, receipt and lookup resources aga
   assert.ok(resources.reads >= 2);
   assert.equal(f.state.sends.length, 1);
 });
+
+test('activation accepts an approved preserved delegate regardless of list order', async (t) => {
+  const f = await fixture(t);
+  const delegates = [f.payer.publicKey.toBase58(), Keypair.generate().publicKey.toBase58(),
+    f.drop.boxMinterConfigPda!, f.drop.operationsConfig!.boxMinterConfigPda];
+  const resources = resourceFixture(t, f, [...delegates].reverse());
+  resources.accounts.set(f.drop.collectionMint, resources.collection(delegates));
+  assert.equal((await f.run()).active, true);
+  assert.equal(f.state.sends.length, 1);
+  assert.ok(resources.reads >= 2);
+});
+
+for (const drift of ['unapproved extra', 'unexpected extra', 'missing preserved', 'missing B'] as const) {
+  test(`activation rejects ${drift} delegation even with a preserved-delegate baseline`, async (t) => {
+    const f = await fixture(t);
+    const required = [f.payer.publicKey.toBase58(), f.drop.boxMinterConfigPda!, f.drop.operationsConfig!.boxMinterConfigPda];
+    const preserved = Keypair.generate().publicKey.toBase58();
+    const approved = drift === 'unapproved extra' ? undefined
+      : drift === 'missing B' ? [...required.slice(0, 2), preserved] : [...required, preserved];
+    const delegates = drift === 'unexpected extra' ? [...approved!, Keypair.generate().publicKey.toBase58()]
+      : drift === 'missing preserved' ? required : approved ?? [...required, preserved];
+    const resources = resourceFixture(t, f, approved);
+    resources.accounts.set(f.drop.collectionMint, resources.collection(delegates));
+    await assert.rejects(f.run());
+    assert.equal(f.state.prompts, 0);
+    assert.deepEqual(f.state.sends, []);
+  });
+}
 
 for (const [name, mutate] of Object.entries({
   'missing A delegate': (r, f) => r.accounts.set(f.drop.collectionMint, r.collection([f.payer.publicKey.toBase58(), f.drop.operationsConfig!.boxMinterConfigPda])),

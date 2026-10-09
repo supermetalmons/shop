@@ -14,6 +14,7 @@ import { getPreorderConfig, PREORDER_PAYMENT_RECIPIENTS } from '../shared/preord
 import { defineNewDropConfig } from '../scripts/shared/newDropConfig.ts';
 import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
 import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/shared/miNoteDropManifest.ts';
+import { resolveMiNoteCollectionDelegates } from '../scripts/shared/miNoteMintResources.ts';
 import { readDeploymentDropRegistry } from '../scripts/shared/deploymentRegistry.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
 import { bubblegumTreeConfigPda, decodeMplCoreCollectionUpdateDelegates } from '../scripts/deploy-all-onchain.ts';
@@ -349,9 +350,11 @@ test('write workflow journals every signed transaction before broadcast and comm
   assert.ok(journal.transactions.every((entry: TwoConfigJournalTransaction) => entry.status === 'finalized'));
   assert.equal(journalSource.includes(bs58.encode(f.payer.secretKey)), false);
   assert.equal(journalSource.includes(JSON.stringify([...f.payer.secretKey])), false);
-  assert.equal(JSON.parse(readFileSync(result.recordPath, 'utf8')).mintStarted, false);
+  const record = JSON.parse(readFileSync(result.recordPath, 'utf8'));
+  assert.equal(record.mintStarted, false);
   const delegates = decodeMplCoreCollectionUpdateDelegates(f.accounts.get(f.plan.collection)!.data)!;
   assert.deepEqual(delegates.delegates.map(key => key.toBase58()), [f.plan.authority, f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda]);
+  assert.deepEqual(record.collectionDelegates, delegates.delegates.map(key => key.toBase58()).sort());
   await f.run();
   assert.equal(f.state.sends.length, 5);
 });
@@ -415,9 +418,32 @@ test('delegates added during approval stop signing and are preserved by a fresh 
   assert.deepEqual(f.state.sends, []);
   assert.deepEqual(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions, []);
   f.state.afterConfirmation = undefined;
-  assert.equal((await f.run()).ready, true);
+  const result = await f.run();
+  assert.equal(result.ready, true);
+  const expected = [f.plan.authority, added.toBase58(), f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda];
   assert.deepEqual(decodeMplCoreCollectionUpdateDelegates(f.accounts.get(f.plan.collection)!.data)!.delegates.map(key => key.toBase58()),
-    [f.plan.authority, added.toBase58(), f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda]);
+    expected);
+  const recordSource = readFileSync(result.recordPath, 'utf8');
+  const record = JSON.parse(recordSource);
+  const drop = (await readDeploymentDropRegistry(f.registryPath)).drops[f.plan.dropId];
+  assert.deepEqual(record.collectionDelegates, expected.sort());
+  assert.deepEqual(await resolveMiNoteCollectionDelegates(record, drop, f.plan.authority), expected);
+  await assert.rejects(resolveMiNoteCollectionDelegates({ ...record, collectionDelegates: [...expected, expected[0]] }, drop, f.plan.authority));
+  await assert.rejects(resolveMiNoteCollectionDelegates({ ...record, plan: { ...record.plan, manifestSha256: '0'.repeat(64) } }, drop, f.plan.authority));
+  delete record.collectionDelegates;
+  assert.deepEqual(await resolveMiNoteCollectionDelegates(record, drop, f.plan.authority), expected);
+  const tampered = structuredClone(record);
+  const delegateTransaction = tampered.transactions.find((entry: TwoConfigJournalTransaction) => entry.step === 'delegates');
+  const bytes = Buffer.from(delegateTransaction.transactionBase64, 'base64');
+  bytes[5] ^= 1;
+  delegateTransaction.transactionBase64 = bytes.toString('base64');
+  await assert.rejects(resolveMiNoteCollectionDelegates(tampered, drop, f.plan.authority));
+  assert.deepEqual(await resolveMiNoteCollectionDelegates({ ...record, transactions: [] }, drop, f.plan.authority),
+    [f.plan.authority, f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda].sort());
+  f.accounts.set(f.plan.collection, account(collectionBytes(f.payer.publicKey,
+    [...expected.map(value => new PublicKey(value)), Keypair.generate().publicKey]), MPL_CORE_PROGRAM_ADDRESS));
+  await assert.rejects(f.run(), /delegate/i);
+  assert.equal(readFileSync(result.recordPath, 'utf8'), recordSource);
 });
 
 test('recovery cannot resend a signed update that removes a delegate added during approval', async t => {
