@@ -101,7 +101,7 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
 });
 
 for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
-  test(`${dropId} shipment tiles and expanded previews use clean pack and card images`, async () => {
+  test(`${dropId} shipment cards open the interactive viewer while packs keep image previews`, async () => {
     const drop = getFrontendDrop(dropId)!;
     const record = await loadFigureMetadata(dropId, 1430);
     assert.ok(record);
@@ -109,6 +109,7 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       [figureMetadataCacheKey(dropId, 1430)]: record,
     };
     const opened: Array<Parameters<Parameters<typeof ShopShipmentsSection>[0]['openImageViewer']>> = [];
+    const cards: Array<Parameters<Parameters<typeof ShopShipmentsSection>[0]['openInteractiveCardViewer']>[0]> = [];
     const view = render(createElement(ShopShipmentsSection, {
       shipmentHistory: {
         orders: [], hasMore: false, loadingMore: false, fetching: false, error: null,
@@ -116,7 +117,7 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       },
       openClearCardModelViewer: () => undefined,
       openImageViewer: (...args) => { opened.push(args); return true; },
-      openInteractiveCardViewer: () => undefined,
+      openInteractiveCardViewer: input => { cards.push(input); return true; },
       usesClearCard3dRevealForDropId: () => false,
       usesInteractiveCardPackRevealForDropId: () => false,
       shipmentsSectionReady: true,
@@ -137,8 +138,17 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     assert.deepEqual(view.getAllByRole('img').map(image => image.getAttribute('src')), expectedImages);
     const tiles = view.getAllByRole('button', { name: /^View / });
     fireEvent.click(tiles[0]);
+    fireEvent.click(tiles[1]);
     fireEvent.keyDown(tiles[1], { key: 'Enter' });
-    assert.deepEqual(opened.map(args => args[0].image), expectedImages);
+    fireEvent.keyDown(tiles[1], { key: ' ' });
+    assert.deepEqual(opened.map(args => args[0].image), [expectedImages[0]]);
+    assert.equal(cards.length, 3);
+    for (const card of cards) {
+      assert.equal(card.dropId, dropId);
+      assert.equal(card.figureId, 1430);
+      assert.equal(card.overlayId, `shipment:${dropId}:7:dude:1430:1`);
+      assert.equal(card.image, expectedImages[1]);
+    }
   });
 }
 

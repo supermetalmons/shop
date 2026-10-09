@@ -8,6 +8,7 @@ import {
 } from '../../../shared/fulfillmentTracking.ts';
 import {
   getFrontendDrop,
+  isDropFamily,
   type FrontendDeploymentConfig
 } from '../../config/deployment';
 import { clearCardModelUrl } from '../../lib/clearCardModels';
@@ -138,7 +139,7 @@ export function ShopShipmentsSection({
               : undefined;
             const primarySrc = mediaId ? joinDropAssetUrl(figureMediaBase, `${mediaId}.webp`) : undefined;
             const canViewInteractiveCard =
-              usesInteractiveCardPackRevealForDropId(order.dropId) &&
+              (usesInteractiveCardPackRevealForDropId(order.dropId) || isDropFamily(order.dropId, 'mi_note_cards')) &&
               Boolean(getInteractiveCardPackCardByFigureId(order.dropId, item.refId));
             const canViewClearCardModel =
               usesClearCard3dRevealForDropId(order.dropId) &&
