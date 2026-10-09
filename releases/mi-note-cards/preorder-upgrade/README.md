@@ -24,6 +24,15 @@ later burns do not undo the completed conversion or return either ID to the
 public pool. The live pack inventory was conserved at 1,234 available plus 20
 assigned cards in its original generation.
 
+The [live API verification](api-verification.json) checked all 174 surviving
+cards across 56 current holders: 236 requests and 696 asset checks, covering
+current and legacy clients with devnet visibility both enabled and disabled.
+Converted cards appeared once with their correct ordinary-card identity; burned
+cards did not reappear. The audit also exposed provider throttling, addressed in
+the subsequent [inventory reliability fix](../inventory-reliability-verification.json).
+The [final review](../postlaunch-review.json) confirms zero pending preorder
+orders, zero dangling claims, and the unchanged permanent exclusion set.
+
 ## Execution history
 
 The [journal](journal.json) retains 45 signed attempts: 44 finalized and one
@@ -31,9 +40,14 @@ expired without landing. Seven batches converted the first 28 cards before the
 expired attempt. The remaining 148 cards then completed through the same manifest
 and journal, with no replacement of uncertain transactions.
 
-The [unsigned preview](preview.json) simulated all 44 batches. It estimated
-220,000 lamports in transaction fees and 11,623,040 lamports of released account
-rent. These are preview estimates, not independently audited final balance totals.
+The [unsigned preview](preview.json) simulated all 44 batches. The independent
+[transaction verification](transactions-verification.json) now confirms the
+exact signed messages and final balances: 220,000 lamports in fees,
+11,623,040 lamports of released account rent, and an 11,403,040-lamport net
+authority credit. No other accounts changed balances. It also confirms the
+expired attempt remains absent from finalized transaction history with an
+invalid blockhash. Transaction slots are recorded separately from the later
+finalized verification slots retained in the original journal.
 The [resume preflight](resume-preflight.json) and
 [automatic recovery check](automatic-recovery.json) preserve the intermediate
 28-converted / 148-remaining checkpoint. Their counts are historical.

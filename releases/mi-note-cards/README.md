@@ -15,7 +15,7 @@ subsequently burned. See the [completed conversion](preorder-upgrade/README.md).
 
 The public page offers packs at 0.5 SOL with a 15-pack transaction limit, the
 latest committed interactive card/unpacking UI, and interaction sounds. API
-version `cd590fcf-3304-4d5b-a328-da706334334e` and frontend version
+version `fa62bc8a-1eea-45f5-825e-7b26fb0e58ec` and frontend version
 `1d5cc7ce-0612-41c7-b814-143ab9396b4c` each serve 100% of traffic. The live frontend
 bundle matches the local build. Mi Note customs use the Card NFT 2 defaults:
 0.2 oz and USD 14.67 per card, tariff code `4911.99`, and SKU `mi-note-card`.
@@ -26,6 +26,26 @@ the same request and finalized floor. Simulations also require the context slot
 of their blockhash. Known Core burn tombstones are accepted only when rechecking
 an exactly registered frozen manifest; their card IDs remain excluded. Receipt
 capacity checks allow legitimate preorder redemptions before pack sales begin.
+
+The [post-launch review](postlaunch-review.json) closes the deferred reconciliation
+and verification work. All 174 surviving converted cards passed 696 live asset
+checks across current and legacy clients and both devnet filters. No pending
+preorder orders or dangling claims remain. The complete release checks passed,
+including 5,672 tests across the repository, API, runtime, and on-chain suites.
+
+The audit found Helius throttling on inventory reads. The
+[deployed fix](inventory-reliability-verification.json) uses bounded backoff,
+shares a cooldown within each request, and avoids broader fallback queries when
+rate-limited. Twenty-four repeated large-wallet requests and eight card/proof
+checks passed without client retries after deployment. The original launch
+snapshot retains its earlier API version as historical evidence.
+
+Metaplex Core was upgraded on both clusters after the initial program snapshot;
+the mainnet upgrade at slot `455005931` followed mint activation. Our mint program
+is unchanged. The [new attestation](postlaunch-attestation.json) and
+[binary gate](postlaunch-gate-result.json) verify minting, opening, redemption,
+and payment behavior against the current deployed dependencies. Original
+deployment and migration records remain intact.
 
 ## Initial deployment with sales closed
 

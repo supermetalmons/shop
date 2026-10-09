@@ -38,6 +38,12 @@ verification also accepts each ledger-recorded asset's exact `card N` name and
 card ID must still match the permanent claim. Conversion never changes this
 inventory manifest or makes an excluded ID available for public assignment.
 
+If a recorded asset is later burned, a registered frozen-manifest recheck accepts
+only the exact one-byte Core-owned burn tombstone at that recorded address.
+It reports the burned claim separately from live assets and keeps its card ID
+excluded. Missing accounts, wrong owners, malformed data, and a new manifest
+preparation still fail closed. A later redemption never replenishes public stock.
+
 The committed devnet snapshot excludes 22 preordered cards, leaving 1,408 cards
 for exactly 704 two-card packs. It preserves every `clean_card_id`, including
 the eight specials 1401–1408 and high IDs through 1430. Succeeded orders remain

@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T22:03:49.322416+00:00",
+  "scope": "Mi Note mainnet launch completion audit",
+  "result": "passed-with-separate-preexisting-finding",
+  "preorders": {
+    "historicallyConverted": 176,
+    "currentLiveConverted": 174,
+    "burnedAfterConversion": [
+      {
+        "id": 698,
+        "address": "6DMt936MznQv2UkeYpkigjBXC6LgPZMVoKTpxSvAqxEk"
+      },
+      {
+        "id": 1092,
+        "address": "6sGcw2KGRywGDAGBHzDBanrscJ5Ez58LPEA1VFiqyxiU"
+      }
+    ],
+    "ownersChecked": 56,
+    "liveApiRequests": 236,
+    "liveAssetChecks": 696,
+    "devnetFilters": [
+      false,
+      true
+    ],
+    "convertedPreorderCapabilities": [
+      false,
+      true
+    ],
+    "requestRetries": 101,
+    "ordersByStatus": [
+      {
+        "status": "cancelled",
+        "count": 34
+      },
+      {
+        "status": "expired",
+        "count": 7
+      },
+      {
+        "status": "succeeded",
+        "count": 102
+      }
+    ],
+    "permanentClaims": {
+      "claims": 176,
+      "unique_cards": 176
+    },
+    "pendingOrders": 0,
+    "danglingClaims": 0,
+    "exactSourceAndTargetMetadataFingerprintsVerified": true,
+    "originalMigrationAndActivationRecordsUnchanged": true,
+    "retriedApiRequests": 64
+  },
+  "inventory": {
+    "checkedAt": "2026-10-09T21:42:16.585Z",
+    "mode": "rows",
+    "paused": false,
+    "active": true,
+    "revision": 23,
+    "documentsRevision": 1209,
+    "drops": [
+      {
+        "dropId": "mi_note_cards",
+        "ready": true,
+        "configMatches": true,
+        "generation": "7433c586-999d-471e-90f0-f90bea35b3ef",
+        "available": 1144,
+        "assigned": 110,
+        "orphanAssignments": 0
+      }
+    ]
+  },
+  "reveals": {
+    "checkedAt": "2026-10-09T21:30:36.006Z",
+    "statusCounts": [
+      {
+        "status": "confirmed",
+        "count": 43
+      }
+    ],
+    "stalePending": 0
+  },
+  "databaseChecks": {
+    "commerce": "passed",
+    "ops": "passed",
+    "packStatus": "passed",
+    "commerceNotificationFailures": [],
+    "packStatusOutbox": {
+      "validationError": null,
+      "groups": [
+        {
+          "state": "completed",
+          "count": 7,
+          "oldest_pending_at_ms": null,
+          "oldest_due_at_ms": null
+        }
+      ],
+      "failures": []
+    },
+    "notificationOutbox": {
+      "validationError": null,
+      "groups": [
+        {
+          "family": "ready",
+          "state": "queued",
+          "count": 14,
+          "oldest_pending_at_ms": null,
+          "oldest_pending_age_ms": null,
+          "expired_claims": 0
+        },
+        {
+          "family": "shipped",
+          "state": "queued",
+          "count": 32,
+          "oldest_pending_at_ms": null,
+          "oldest_pending_age_ms": null,
+          "expired_claims": 0
+        }
+      ],
+      "failures": []
+    },
+    "deliveryRecovery": {
+      "validationError": null,
+      "recordsChecked": 558,
+      "legacyMetadataCount": 0
+    }
+  },
+  "checks": {
+    "rootTests": 3340,
+    "apiTests": 2260,
+    "frontendWorkerTests": 4,
+    "apiRuntimeTests": 31,
+    "onchainUnitTests": 35,
+    "deployedBinaryTests": 2,
+    "typechecks": "passed",
+    "generatedCatalogSchemaAndWorkerTypes": "passed",
+    "deadCode": "passed",
+    "apiDryRunAndBundle": "passed",
+    "apiStartupProfile": "passed",
+    "frontendBuildAndBundle": "passed",
+    "postfixApiRuntimeMemoryTest": "passed"
+  },
+  "liveUi": {
+    "mainnet": {
+      "mintPriceSol": 0.5,
+      "maxPacksPerTransaction": 15,
+      "mintButtonEnabled": true,
+      "remainingSupplyLoaded": true,
+      "consoleErrors": 0,
+      "consoleWarnings": 0
+    },
+    "devnet": {
+      "mintPriceSol": 0.25,
+      "remainingSupplyLoaded": true,
+      "consoleErrors": 0,
+      "consoleWarnings": 0
+    },
+    "walletSigningPerformed": false,
+    "latestCommittedUiIncluded": true,
+    "separateUncommittedMainCheckoutEditPreserved": true
+  },
+  "application": {
+    "api": {
+      "version": "fa62bc8a-1eea-45f5-825e-7b26fb0e58ec",
+      "trafficPercentage": 100,
+      "deploymentId": "2d724de2-fe82-4bd2-bb8c-59b66a2aa191"
+    },
+    "frontend": {
+      "version": "1d5cc7ce-0612-41c7-b814-143ab9396b4c",
+      "trafficPercentage": 100,
+      "deploymentId": "0c8091e5-d505-4def-bd5d-09dc6ff4c5cd"
+    }
+  },
+  "onchainResourcesAndPayments": {
+    "version": 1,
+    "checkedAt": "2026-10-09T21:32:17.391Z",
+    "cluster": "mainnet-beta",
+    "collectionAndDelegatesVerified": true,
+    "receiptTreeVerified": true,
+    "lookupTableVerified": true,
+    "resourceSlotFloor": 455008907,
+    "mintPaymentSamples": [
+      {
+        "signature": "5zxGbd6Kc9Az7tm7cZorqbVvutykUXQZgh9ACi9p2qsbu2nYFQjYjnnShU9gtonaq8Ey7etpKopnHYPfnuLyR5kS",
+        "slot": 455008404,
+        "quantity": 1,
+        "proceeds": [
+          {
+            "recipient": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+            "lamports": 250000000
+          },
+          {
+            "recipient": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+            "lamports": 250000000
+          }
+        ]
+      },
+      {
+        "signature": "4x7QKR7PxtsQ72z9QRCKW5dNandJFbg7gf54k3g9pffEXhqX5fukyD4NM3ufQy2WN4kLbfTgjoEf6TSYY7yBq9tv",
+        "slot": 455007965,
+        "quantity": 1,
+        "proceeds": [
+          {
+            "recipient": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+            "lamports": 250000000
+          },
+          {
+            "recipient": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+            "lamports": 250000000
+          }
+        ]
+      },
+      {
+        "signature": "5ka4sHKtLVNYrhV4yHPp2hF1uQbBZseovCJpXjTABDRkmSYi7FuPVps8HZSJqeTXExzhyEb1ne2vTMVmhiCgg7GW",
+        "slot": 455007340,
+        "quantity": 1,
+        "proceeds": [
+          {
+            "recipient": "BmV4TRHUfMZcaa6iZA4tSGf6ACGoLLsYEHcC55AEKAYf",
+            "lamports": 250000000
+          },
+          {
+            "recipient": "8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM",
+            "lamports": 250000000
+          }
+        ]
+      }
+    ],
+    "onchainTransactionsSent": 0
+  },
+  "deployedDependencies": {
+    "ourMintProgramUnchanged": true,
+    "changesSinceInitialGate": [
+      {
+        "cluster": "devnet",
+        "program": "mpl_core",
+        "programId": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+        "previousDeploymentSlot": 508467871,
+        "currentDeploymentSlot": 509311714,
+        "previousSha256": "6d9c16f05e3326652b40ff928a3e49c6db671318c031e952e4fc183109cc0888",
+        "currentSha256": "7e033fd24ce189d9e7dc2600152c6c88ce80d662deeeb7ecc64f0c8437867cf7"
+      },
+      {
+        "cluster": "mainnet-beta",
+        "program": "mpl_core",
+        "programId": "CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d",
+        "previousDeploymentSlot": 454236352,
+        "currentDeploymentSlot": 455005931,
+        "previousSha256": "30dce56b6b70ea524a3882ef7bc73936b9ae6ff3c3ea5cfee709ea935e710bf2",
+        "currentSha256": "51d41542456639a01820c747e72b9d3b4ca258930a5bbb7e78db0cda133dc209"
+      }
+    ],
+    "currentGateStatus": "passed",
+    "bothClustersPassedFreshBinaryTests": true,
+    "originalAttestationRetained": true,
+    "localGateCacheRefreshed": true
+  },
+  "separatePreexistingFindings": [
+    {
+      "dropId": "card_nft_2",
+      "status": "processing",
+      "lastUpdatedAt": "2026-10-09T02:23:59.206000000Z",
+      "attempts": 76,
+      "errorCode": "failed-precondition",
+      "summary": "One pre-existing Card NFT 2 delivery cannot issue receipts and remains processing. It predates this launch and was not modified by the Mi Note audit."
+    }
+  ],
+  "actions": {
+    "productionTransactionsSent": 0,
+    "orderOrInventoryCleanupWrites": 0,
+    "applicationDeploymentNeeded": false,
+    "apiDeploymentsPerformed": [
+      "f6dbdbff-a265-44fe-a5d2-4cd940e4e6c8",
+      "fa62bc8a-1eea-45f5-825e-7b26fb0e58ec"
+    ],
+    "frontendDeploymentNeeded": false,
+    "runtimeFixDeployed": true
+  },
+  "evidence": {
+    "convertedInventory": "preorder-upgrade/api-verification.json",
+    "migrationTransactions": "preorder-upgrade/transactions-verification.json",
+    "currentProgramAttestation": "postlaunch-attestation.json",
+    "currentBinaryGate": "postlaunch-gate-result.json",
+    "inventoryReliability": "inventory-reliability-verification.json"
+  },
+  "inventoryReliability": {
+    "status": "fixed-and-deployed",
+    "cause": "Helius HTTP 429 rate limits were retried too quickly and could trigger a broader fallback query.",
+    "evidence": "inventory-reliability-verification.json",
+    "postfixStressRequestsPassed": 24,
+    "postfixContractRequestsPassed": 8,
+    "postfixClientRetries": 0
+  },
+  "baseSourceCommit": "f7ab8a580ff1f05a731ee668708ed65e1c7f967a",
+  "reviewedRuntimeSourceSha256": {
+    "cloud/workers/api/src/publicRouteSupport.ts": "81c939cc051132534e02bffb0b5198c805f161956ee5196c0c1df2469755f241",
+    "cloud/workers/api/src/shopInventory.ts": "053d83da51b6fec3be51ab63ac7183e76008f6d7202d4a04d39e7ed23cf38e01",
+    "cloud/workers/api/src/shopInventoryProvider.ts": "847da4cee34c75c78daf3cd455df4a4157093c015d7e6610f1727182a2e5aa5c",
+    "cloud/workers/api/src/workerRoutes/shop.ts": "a83d2d4f4c7481a350e345fe788d5c3acf826f2ffa8b0c0386dbdc769f85729c"
+  },
+  "runtimeFixCommit": "069446a3",
+  "remainingMiNoteActions": []
+}

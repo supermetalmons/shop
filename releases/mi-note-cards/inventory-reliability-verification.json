@@ -1,0 +1,376 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T22:03:49.322416+00:00",
+  "diagnosis": {
+    "upstreamMethod": "searchAssets",
+    "upstreamHttpStatus": 429,
+    "clientHttpStatus": 502,
+    "beforeFixStressRequests": 10,
+    "beforeFixStressFailures": 2,
+    "initialInventoryAuditRequests": 236,
+    "initialAuditRequestsNeedingRetry": 64,
+    "initialAuditOuterRetries": 101
+  },
+  "fix": {
+    "maxDefaultRateLimitAttempts": 4,
+    "backoffMilliseconds": [
+      1000,
+      2000,
+      4000
+    ],
+    "jitterMaximumMilliseconds": 250,
+    "retryAfterRespected": true,
+    "cooldownSharedWithinRequest": true,
+    "ungroupedFallbackOnThrottling": false,
+    "explicitRecoveryAttemptLimitsRetained": true,
+    "requestDeadlineAndProviderBudgetsRetained": true,
+    "slotFloorsRetained": true,
+    "diagnosticsExcludeCredentialsWalletsAndProviderPayloads": true
+  },
+  "deployedApiVersion": "fa62bc8a-1eea-45f5-825e-7b26fb0e58ec",
+  "deployedApiTrafficPercentage": 100,
+  "liveVerification": {
+    "stressRequests": 24,
+    "stressFailures": 0,
+    "clientRetries": 0,
+    "contractAndOwnershipProofRequests": 8,
+    "contractAssetChecks": 64,
+    "providerRetriesObservedInCapturedSuccessfulRequests": 38,
+    "capturedWorkerRequests": 17,
+    "stressResults": [
+      {
+        "index": 0,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 1242,
+        "items": 727
+      },
+      {
+        "index": 1,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 1474,
+        "items": 727
+      },
+      {
+        "index": 2,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 905,
+        "items": 727
+      },
+      {
+        "index": 3,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 1441,
+        "items": 727
+      },
+      {
+        "index": 4,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 3917,
+        "items": 727
+      },
+      {
+        "index": 5,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 9865,
+        "items": 727
+      },
+      {
+        "index": 6,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 9639,
+        "items": 727
+      },
+      {
+        "index": 7,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 6662,
+        "items": 727
+      },
+      {
+        "index": 8,
+        "round": 1,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 5655,
+        "items": 727
+      },
+      {
+        "index": 9,
+        "round": 1,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 4810,
+        "items": 727
+      },
+      {
+        "index": 10,
+        "round": 1,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 4731,
+        "items": 727
+      },
+      {
+        "index": 11,
+        "round": 1,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 4764,
+        "items": 727
+      },
+      {
+        "index": 12,
+        "round": 1,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 5500,
+        "items": 727
+      },
+      {
+        "index": 13,
+        "round": 1,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 5713,
+        "items": 727
+      },
+      {
+        "index": 14,
+        "round": 1,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 5913,
+        "items": 727
+      },
+      {
+        "index": 15,
+        "round": 1,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 5198,
+        "items": 727
+      },
+      {
+        "index": 16,
+        "round": 2,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 4362,
+        "items": 727
+      },
+      {
+        "index": 17,
+        "round": 2,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 5907,
+        "items": 727
+      },
+      {
+        "index": 18,
+        "round": 2,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 5963,
+        "items": 727
+      },
+      {
+        "index": 19,
+        "round": 2,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 3748,
+        "items": 727
+      },
+      {
+        "index": 20,
+        "round": 2,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 3833,
+        "items": 727
+      },
+      {
+        "index": 21,
+        "round": 2,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 5762,
+        "items": 727
+      },
+      {
+        "index": 22,
+        "round": 2,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 5782,
+        "items": 727
+      },
+      {
+        "index": 23,
+        "round": 2,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 6927,
+        "items": 727
+      }
+    ],
+    "contractResults": [
+      {
+        "index": 0,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 1014,
+        "items": 727
+      },
+      {
+        "index": 1,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 2619,
+        "items": 727
+      },
+      {
+        "index": 2,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 2949,
+        "items": 727
+      },
+      {
+        "index": 3,
+        "round": 0,
+        "includeDevnet": false,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 3396,
+        "items": 727
+      },
+      {
+        "index": 4,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 4943,
+        "items": 727
+      },
+      {
+        "index": 5,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": false,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 4727,
+        "items": 727
+      },
+      {
+        "index": 6,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 15,
+        "status": 200,
+        "durationMs": 6629,
+        "items": 727
+      },
+      {
+        "index": 7,
+        "round": 0,
+        "includeDevnet": true,
+        "capable": true,
+        "assets": 1,
+        "status": 200,
+        "durationMs": 7659,
+        "items": 727
+      }
+    ]
+  },
+  "tests": {
+    "apiTestsPassed": 2260,
+    "targetedTestsPassed": 209,
+    "runtimeMemoryTestPassed": true,
+    "apiTypecheck": "passed",
+    "toolsTypecheck": "passed",
+    "apiBundle": "passed",
+    "deadCode": "passed"
+  },
+  "productionTransactionsSent": 0,
+  "orderOrInventoryMutationsPerformed": false
+}

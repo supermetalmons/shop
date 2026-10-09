@@ -1,0 +1,727 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-09T21:30:37.875Z",
+  "cluster": "mainnet-beta",
+  "manifestSha256": "162e9dfaafe8baf21fc752a62d8406d3d789e05a314b8c278ab9b0e772a917d8",
+  "finalizedBatches": 44,
+  "uniqueCards": 176,
+  "totals": {
+    "feeLamports": 220000,
+    "assetRentDeltaLamports": -11623040,
+    "authorityDeltaLamports": 11403040
+  },
+  "expiredAttempt": {
+    "signature": "4wpjV1DQYGkK1pKLeAQZMGjQwZi3zogAu6C8knKtNXb1rGsaAxJEC6W2LSA4ZrqpQL1HWqsCrgHbXyeq94R4cxJJ",
+    "statusAbsent": true,
+    "blockhashInvalid": true,
+    "currentFinalizedBlockHeight": 433045699,
+    "lastValidBlockHeight": 433005650
+  },
+  "batches": [
+    {
+      "signature": "28waHa5ivonJdBrQhkiehXd3JLwX9Bz4SMaAbvSPLnWDq6rAbSFJCoRYMd6jeN6dKPxsBe37qCVd9joRLhCXa9Zz",
+      "transactionSlot": 454964684,
+      "journalVerificationSlot": 454964896,
+      "cardIds": [
+        5,
+        31,
+        45,
+        52
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454964896
+    },
+    {
+      "signature": "2Fnp3qAL7bJn4K8CzWcTnE5KbTT3tJPUVU78mcTnr2MVfXQDMcstohwdEJe6iSko5bfQh2MhJpbZCwDrxFPMHk7d",
+      "transactionSlot": 454965229,
+      "journalVerificationSlot": 454965492,
+      "cardIds": [
+        71,
+        73,
+        75,
+        87
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454965492
+    },
+    {
+      "signature": "JggdHqkrxe1AeSrG7N2oAYUSHEAyaWDZG1zi2mNP3gFMDzFcJmzvUSBrBdQmEZHyZvAg93MnQJ72ZaHtuFDzkma",
+      "transactionSlot": 454965873,
+      "journalVerificationSlot": 454966058,
+      "cardIds": [
+        129,
+        141,
+        155,
+        173
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454966058
+    },
+    {
+      "signature": "4hgCjzS4VkTQtcC87Hu9w1Q6mAGUyG3oCPMhD6phgwZqzJFcFcxhziVxxzEsqH4ixomU5TToWSSru7xSj4sW5AQd",
+      "transactionSlot": 454966369,
+      "journalVerificationSlot": 454966545,
+      "cardIds": [
+        190,
+        213,
+        218,
+        240
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454966545
+    },
+    {
+      "signature": "2KWKaK5gVZoKRtjB29XXUcksf476NRSwCmwLH2WuMpiAUHCrdGCja2a2LdXkpNbe8N3iWr2QguAsTK9kDeAPN2V4",
+      "transactionSlot": 454966840,
+      "journalVerificationSlot": 454967016,
+      "cardIds": [
+        276,
+        328,
+        331,
+        351
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454967016
+    },
+    {
+      "signature": "5NrM6EWULba228mWH7EtMYcR9QeUYDCQU4p639UxqeGgx8kEAzj9QFNQnN7tbAHZXse263ZFy1ggRHhwuXLXmkbh",
+      "transactionSlot": 454967314,
+      "journalVerificationSlot": 454967479,
+      "cardIds": [
+        426,
+        470,
+        484,
+        558
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454967479
+    },
+    {
+      "signature": "2Uj9bFd9Td9NDtQdJWoDHDJYGZkV9oegHQYKqRv1ai49RjoKEqTBYRZryboeX6W1e2X2PLU5rTdsedT5xoJ4MT7P",
+      "transactionSlot": 454967768,
+      "journalVerificationSlot": 454968010,
+      "cardIds": [
+        569,
+        570,
+        576,
+        578
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454968010
+    },
+    {
+      "signature": "5qaK5RTuEWp6sPAZxnavGtYZV1XDpwk9j1zUFwnKBR7Kfnxxw3w1MCQEU3xY17PghqxZ7cjYUnBWRoApoMED1d1U",
+      "transactionSlot": 454980494,
+      "journalVerificationSlot": 454980666,
+      "cardIds": [
+        579,
+        593,
+        600,
+        603
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454980666
+    },
+    {
+      "signature": "3iKC9eCbyiK5tPmqnXcovejtpuAa3h2fPB5HyRusCCozBCwEKA8q7f1RYeYmDHuQkFbTHk9QxFFZ2EJDVSkbDS2k",
+      "transactionSlot": 454980957,
+      "journalVerificationSlot": 454981155,
+      "cardIds": [
+        605,
+        606,
+        607,
+        611
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454981155
+    },
+    {
+      "signature": "RY9LTi2eGpQXK8gF2aYtFxWLX7qyDBtG7nhN7zhcSQuH34e41VGeAwRfL291GPNb2ZoS8bWsv7349MHrWCfTF5V",
+      "transactionSlot": 454981507,
+      "journalVerificationSlot": 454981708,
+      "cardIds": [
+        612,
+        613,
+        618,
+        628
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454981708
+    },
+    {
+      "signature": "2CVBFGFxrehJgqPZH1k8NJ7Fy7XDYKvAbhryiFC4XB2Bi7dqDA2TAzxHYSVJpyHp6zPw2vfsdzLKtVcjyoaLgyD5",
+      "transactionSlot": 454982038,
+      "journalVerificationSlot": 454982195,
+      "cardIds": [
+        660,
+        674,
+        698,
+        717
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454982195
+    },
+    {
+      "signature": "2QWSvMy7Fuk1JP34FWS3A4bWyD8e7iLkoB9Qg1jHJP6QkSuxpiQYg2tqQHgFteGxakodonYvPFWiLEMEuWkvbzi2",
+      "transactionSlot": 454982476,
+      "journalVerificationSlot": 454982633,
+      "cardIds": [
+        738,
+        741,
+        753,
+        782
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454982633
+    },
+    {
+      "signature": "5GRe1wP3Hy9MWSCphJ9VWDVkEtyR8asNrxuDhrU3guorxbKef7iRakpCdmqM29iSRmMqKnKWJHS1LfU1gAEDVa7C",
+      "transactionSlot": 454982906,
+      "journalVerificationSlot": 454983075,
+      "cardIds": [
+        795,
+        799,
+        814,
+        835
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454983075
+    },
+    {
+      "signature": "58CgdcVeNXTgz3wjNjWukEotU588TdR45WEe43QcPziy2CF4Rn3p4kqfTaHWkAoN4kNmtFRwDYeuqBeUzSMdBGSn",
+      "transactionSlot": 454983370,
+      "journalVerificationSlot": 454983539,
+      "cardIds": [
+        837,
+        841,
+        852,
+        872
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454983539
+    },
+    {
+      "signature": "wigWYowgf7WzVti4hd4Sj76cJzPqUUQt9yLE1kqtu2GzXLpDtECwkMibEJjm1UhvfyM6JQJNtALjPNo1kDEoEXp",
+      "transactionSlot": 454983835,
+      "journalVerificationSlot": 454984014,
+      "cardIds": [
+        873,
+        881,
+        883,
+        885
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454984014
+    },
+    {
+      "signature": "V4quurHUjvifyeDMssWKbpz2VsJ9L8dQTkC4y4cY82vwLJ1MGFTWTPo5AXnoQz2MuWszAdWbjew7EmUR6344kSn",
+      "transactionSlot": 454984307,
+      "journalVerificationSlot": 454984477,
+      "cardIds": [
+        886,
+        888,
+        894,
+        896
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454984477
+    },
+    {
+      "signature": "5s4HhoC4My841ekmjWx2ZQvjWG7U5aM8LN7hUQr1N3qpG4XC2CtaihvCXpk6xjRD5Kwrhj7CeFiQSKoyQ6ViWpYK",
+      "transactionSlot": 454984768,
+      "journalVerificationSlot": 454984927,
+      "cardIds": [
+        907,
+        915,
+        928,
+        949
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454984927
+    },
+    {
+      "signature": "37qoZHmDshzoRq5D5QGgQX25Mezr7rLJDv397Z9kqmcmvBYs8kMRohThdu8ePJAwaKtkopwR75rPjwTZuZCY8AXC",
+      "transactionSlot": 454985206,
+      "journalVerificationSlot": 454985361,
+      "cardIds": [
+        957,
+        972,
+        987,
+        988
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454985361
+    },
+    {
+      "signature": "5mwzhQRsYHYpLgHqbMWJdG2mHPZP6LYSv13RAsiJVvcb1b7ciKQ4i2QXrC9st1PhvDX4i7MJGTmTTzHM2Kb2MQLC",
+      "transactionSlot": 454985647,
+      "journalVerificationSlot": 454985822,
+      "cardIds": [
+        989,
+        993,
+        999,
+        1006
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454985822
+    },
+    {
+      "signature": "44CyC4J4yp95m5HzJfFYTe9zuMPKEZ39ir7qq5TVZXa7rHZ7tcbmp13FzRrF6WZmC8co7puHHaWi1fukfRvaRw3F",
+      "transactionSlot": 454986090,
+      "journalVerificationSlot": 454986259,
+      "cardIds": [
+        1027,
+        1044,
+        1087,
+        1092
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454986259
+    },
+    {
+      "signature": "3tT8QGHRPaKDXJK7gP5LXuzxZ8VGGfmyQXYp7RdH3XoqVmPyPAHSGots4nFijQiNpr6p919V1ii5cRzPKLmAXY1g",
+      "transactionSlot": 454986564,
+      "journalVerificationSlot": 454986720,
+      "cardIds": [
+        1097,
+        1098,
+        1101,
+        1102
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454986720
+    },
+    {
+      "signature": "3CkwTFpbq1HHdPAGEnMvkubMj8qqzcBXTktzkHBXomGLqCEQprgbzsHPpyLA8SBQWrAfTTUPuxT1brxZKd8YrkQ",
+      "transactionSlot": 454987007,
+      "journalVerificationSlot": 454987184,
+      "cardIds": [
+        1114,
+        1117,
+        1119,
+        1123
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454987184
+    },
+    {
+      "signature": "2LsPgJtKK6DBQ1nerPCUmWSAG8YeA39usaARXePXkSrMn4R1msGuZmVWvozCjzx5vm9baNQq1xx8wQ7WZs97mfzC",
+      "transactionSlot": 454987480,
+      "journalVerificationSlot": 454987655,
+      "cardIds": [
+        1126,
+        1127,
+        1133,
+        1134
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454987655
+    },
+    {
+      "signature": "65DUipPVE6wwrmz98tqG94fauEJ1PceZxabrXfeqvcxNDUYeUXdRoMbAf5Y7ERxMTFNWmHQRouMbSwoZX3vRtFNs",
+      "transactionSlot": 454987956,
+      "journalVerificationSlot": 454988133,
+      "cardIds": [
+        1137,
+        1138,
+        1140,
+        1143
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454988133
+    },
+    {
+      "signature": "2o82MbaEPCJQjLvi2NPTfusSujHUMazTxvCWkKzNzygGYgmkUhNRTanspeZnrgjtAvxsErcgpdhQaYS1pwN5qAyx",
+      "transactionSlot": 454988443,
+      "journalVerificationSlot": 454988606,
+      "cardIds": [
+        1145,
+        1147,
+        1152,
+        1155
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454988606
+    },
+    {
+      "signature": "3TccYKEsKBGe5nJPgAJ6vMSkn7VvX2TwHk1jEcw9pwCpGcdZRQBuK8do78Cr7cJpHGbT6V9RQ1ZepgFU2xThiiXP",
+      "transactionSlot": 454988883,
+      "journalVerificationSlot": 454989056,
+      "cardIds": [
+        1163,
+        1165,
+        1168,
+        1181
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454989056
+    },
+    {
+      "signature": "3nZV3NDJx638uPCrLDPhFNkpe4bNouZLkzqUE5iH2JiyyBpy95CufV4ZdFGP5W2PbeWtuox4d6tpKhJsHALRS2sE",
+      "transactionSlot": 454989349,
+      "journalVerificationSlot": 454989500,
+      "cardIds": [
+        1189,
+        1197,
+        1199,
+        1207
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454989500
+    },
+    {
+      "signature": "5ffYMhq99q8PYmh9CHT4qHxpagB5aZhr4pPQ8oZZGYGunxLh35qXpa5BVLtMMxrMC76TN7Gsn1MCb1Y4N1W1LERe",
+      "transactionSlot": 454989769,
+      "journalVerificationSlot": 454989939,
+      "cardIds": [
+        1209,
+        1212,
+        1214,
+        1215
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454989939
+    },
+    {
+      "signature": "4o5vpBTRSDrGJEagxMKzkvWFX5BnSm97BboC7ctiv2waSmuX4DQV6Yj7UWn6dvbQi6dY1jTynedLaZfDF65Qt2pG",
+      "transactionSlot": 454990237,
+      "journalVerificationSlot": 454990404,
+      "cardIds": [
+        1219,
+        1227,
+        1232,
+        1233
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454990404
+    },
+    {
+      "signature": "zaZsmWHfsC1o5ch4DaVRUEViAVsCQSWEDL4vUkY8FiTFCyHtF2dVqTsYieEzRD3LGZYS822d4QvWFtM8A4qY5mA",
+      "transactionSlot": 454990700,
+      "journalVerificationSlot": 454990883,
+      "cardIds": [
+        1236,
+        1245,
+        1247,
+        1250
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454990883
+    },
+    {
+      "signature": "q9z3jAPC2U9PjJN4Z9DqjJjHZERQ8zLw2Rkcg4n3SESrQss6dSRMw31jm61Rdxz2KL4tsThxu7wHHFoS55Vysx8",
+      "transactionSlot": 454991203,
+      "journalVerificationSlot": 454991367,
+      "cardIds": [
+        1251,
+        1252,
+        1254,
+        1260
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454991367
+    },
+    {
+      "signature": "4m7UCdGSxJikRnG5URBAwdRN7VVcJ1nT8oyVt6cCzfGPmtYvDaZDogkwcNtjAHXT3JCMVm1HF9RVMviQEBSHPErJ",
+      "transactionSlot": 454991649,
+      "journalVerificationSlot": 454991820,
+      "cardIds": [
+        1265,
+        1270,
+        1275,
+        1278
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454991820
+    },
+    {
+      "signature": "2HE67s9YcYL8wq4t3sJyJ1jYx53U3RwTAJkeFmqUqMgAPm5iAG1hrMhowpdvSQy1aNyJKBwtmBaJVacPuFQjFwD1",
+      "transactionSlot": 454992113,
+      "journalVerificationSlot": 454992263,
+      "cardIds": [
+        1279,
+        1283,
+        1285,
+        1287
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454992263
+    },
+    {
+      "signature": "aKL9AZTbFPERW1QQptFfnnkRMHYi36c6JKGWYZDfaP4USGneNi8Ui3W7gLPhduSk1kTSzx2uzYfp4gmKETV3NVd",
+      "transactionSlot": 454992529,
+      "journalVerificationSlot": 454992705,
+      "cardIds": [
+        1288,
+        1292,
+        1297,
+        1298
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454992705
+    },
+    {
+      "signature": "2CrPVVJoDnhEjumN6pfALqd7pA8WBGquj1wJaWPMp45fYMbH9PHQLCYLJsrb1UdN28hpKzbekZKjxhgiP7hZC8kT",
+      "transactionSlot": 454993008,
+      "journalVerificationSlot": 454993174,
+      "cardIds": [
+        1300,
+        1303,
+        1304,
+        1308
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454993174
+    },
+    {
+      "signature": "iXVetaAwKUs7DHYyDBaeRrjVXhGHiGtd5cDw3Gvd7v9o8NbFibeaK8CbCNdSUbuiSWPGXoxHbD8QNaSGGQCccFi",
+      "transactionSlot": 454993466,
+      "journalVerificationSlot": 454993630,
+      "cardIds": [
+        1314,
+        1318,
+        1320,
+        1326
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454993630
+    },
+    {
+      "signature": "323CaSqrZpsuownUjJXuJBVRGyZ6beWctDrDuUJgq4bLoW3GhNwNYoe1Cm8ncWUcik8bqU8LhLy2Nz43sTvejnn7",
+      "transactionSlot": 454993913,
+      "journalVerificationSlot": 454994080,
+      "cardIds": [
+        1327,
+        1341,
+        1342,
+        1343
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454994080
+    },
+    {
+      "signature": "aN4iEVvdW9ZZgRaaK676F66ukEDmxSSsmFKRz2x5AQEgVPru3n9gYanGfedZYBLiscrTrEgZTFEyg7xVdLBkjDx",
+      "transactionSlot": 454994360,
+      "journalVerificationSlot": 454994516,
+      "cardIds": [
+        1344,
+        1348,
+        1349,
+        1350
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454994516
+    },
+    {
+      "signature": "5deUkoEaA1cLMJUS41tovxY5enWYX6VSny6BqinXVpoUfvzJjFTnQhiAGGodaovh8regPTQebHFEYFaLUsi8BLSP",
+      "transactionSlot": 454994812,
+      "journalVerificationSlot": 454994971,
+      "cardIds": [
+        1351,
+        1352,
+        1353,
+        1354
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454994971
+    },
+    {
+      "signature": "3y6FWCgCeysFXiFdjaGY6wQQiEKQwdDHTXdhi4cNwhd8PVinqbcB1m2kxo8RbFarzYS3JLnARLBqZPbAZZRvhTkM",
+      "transactionSlot": 454995260,
+      "journalVerificationSlot": 454995437,
+      "cardIds": [
+        1359,
+        1361,
+        1362,
+        1368
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454995437
+    },
+    {
+      "signature": "ub3KS8WGywR276CjRt99Cs2AGoQLGnBw1vDEZDmxYJgcLQUcr7KEsiSnf5fzCvcaruHgpk9MbDHk6xPvENpLvDG",
+      "transactionSlot": 454995744,
+      "journalVerificationSlot": 454995906,
+      "cardIds": [
+        1369,
+        1372,
+        1373,
+        1375
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454995906
+    },
+    {
+      "signature": "5M322Y7aAM1HEA5QBoQurpc1pUJjj47Yjh6x73C3ZJvB5gX1TuHYMXWSkr7tzivZkeHxBdYH6wx9EN8MqVTsecNn",
+      "transactionSlot": 454996190,
+      "journalVerificationSlot": 454996364,
+      "cardIds": [
+        1379,
+        1382,
+        1383,
+        1384
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454996364
+    },
+    {
+      "signature": "Nswx6Z3nJJdiDh3rj7aah4piLdHzPipPGnTBrm9jyLuiZQsTxsuRfnyoHQ2pURVtLg4kXBv3Ma5MEgaA5pc4i8X",
+      "transactionSlot": 454996669,
+      "journalVerificationSlot": 454996837,
+      "cardIds": [
+        1385,
+        1388,
+        1389,
+        1394
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454996837
+    },
+    {
+      "signature": "2HRA3u5d5Vnm8S72e4YApwUcRGty1FK9XmkBiq1A3i5o2e4jGiT5m7YiiS3KwASbB4UYuGvJp1X44cUW8TSSgfG3",
+      "transactionSlot": 454997136,
+      "journalVerificationSlot": 454997304,
+      "cardIds": [
+        1414,
+        1423,
+        1424,
+        1425
+      ],
+      "feeLamports": 5000,
+      "assetRentDeltaLamports": -264160,
+      "authorityDeltaLamports": 259160,
+      "exactSignedMessage": true,
+      "preservationVerifiedAtSlot": 454997304
+    }
+  ],
+  "onchainTransactionsSent": 0
+}
