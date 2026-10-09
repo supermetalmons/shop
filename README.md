@@ -99,6 +99,12 @@ Preorders are closed on both Solana mainnet and devnet. `/mi_note_cards` and
 with the same pack showcase, **Soon**, and **Notify Me**. Each route keeps its
 own network and URL; their WIP routes remain separate.
 
+Metadata for the upcoming public `mi_note_cards` family drop is hosted at
+`https://cdn.lil.org/nft/mi_note_cards/json/pre/`: 1,430 cards, 627 two-card packs,
+and matching receipts. See [the public-drop metadata release record](releases/mi-note-cards-mainnet/README.md)
+for the exact CDN paths and preorder ID mapping. Generated item JSON copies are
+no longer stored locally in this repository.
+
 Both configurations in `shared/preorders.ts` have `checkoutEnabled: false`
 while keeping `enabled: true` for inventory recognition and recovery. The API
 rejects new preparations and initial submissions of prepared orders with HTTP
