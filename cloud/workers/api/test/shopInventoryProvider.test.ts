@@ -16,8 +16,27 @@ function fixture(t: TestContext, providerFetch: ProviderFetch) {
     providerResponseBodyBytes: 0, inventoryCandidates: 0, inventoryCursorPages: 0, inventoryProviderCalls: 0,
     providerReadGate: new ProviderReadGate(),
   };
-  return { context, controller, delays };
+  return { context, controller, delays, advance: (milliseconds: number) => { now += milliseconds; } };
 }
+
+test('an extended shared cooldown delays the request until the new deadline', async t => {
+  let sentAt = 0;
+  const f = fixture(t, async (_input, init) => {
+    sentAt = performance.now();
+    return Response.json({ jsonrpc: '2.0', id: JSON.parse(String(init?.body)).id, result: [] });
+  });
+  f.context.rateLimitUntil = 2000;
+  f.context.dependencies.sleep = async (delay, signal) => {
+    signal.throwIfAborted();
+    f.delays.push(delay);
+    f.advance(delay);
+    if (f.delays.length === 1) f.context.rateLimitUntil = 3000;
+  };
+  await heliusRpc(f.context, 'mainnet-beta', 'searchAssets', {}, { inventoryCall: true });
+  assert.deepEqual(f.delays, [1000, 1000]);
+  assert.equal(sentAt, 3000);
+  assert.equal(f.context.inventoryProviderCalls, 1);
+});
 
 test('inventory rate limiting retries the same cursor with exponential backoff and bounded calls', async t => {
   const requests: { id: string; params: unknown }[] = [];

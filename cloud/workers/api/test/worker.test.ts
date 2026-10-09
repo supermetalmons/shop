@@ -4848,7 +4848,9 @@ test('inventory failure diagnostics retain safe provider codes without payloads 
   }
 });
 
-test('exhausted inventory throttling does not amplify requests with an ungrouped fallback', async () => {
+test('exhausted inventory throttling does not amplify requests with an ungrouped fallback', async t => {
+  let now = 1000;
+  t.mock.method(performance, 'now', () => now);
   let groupedCalls = 0;
   let ungroupedCalls = 0;
   const logs: Record<string, unknown>[] = [];
@@ -4861,7 +4863,7 @@ test('exhausted inventory throttling does not amplify requests with an ungrouped
         return new Response(null, { status: 429 });
       }
       return rpcCursorSearchResult(body, []);
-    }), log: entry => logs.push(entry),
+    }), sleep: async delay => { now += delay; }, log: entry => logs.push(entry),
   });
   assert.equal(response.status, 502);
   assert.equal(groupedCalls, 4);

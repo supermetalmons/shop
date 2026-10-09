@@ -219,9 +219,12 @@ export async function heliusRpc<T>(
   };
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (signal.aborted) throw signal.reason;
-    const cooldown = (context.rateLimitUntil ?? 0) - performance.now();
-    if (cooldown > 0) await context.dependencies.sleep(cooldown, signal);
-    if (signal.aborted) throw signal.reason;
+    for (;;) {
+      const cooldown = (context.rateLimitUntil ?? 0) - performance.now();
+      if (cooldown <= 0) break;
+      await context.dependencies.sleep(cooldown, signal);
+      if (signal.aborted) throw signal.reason;
+    }
     if (options.inventoryCall) {
       if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
         throw new ProviderFailure('limit');
