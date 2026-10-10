@@ -10,12 +10,15 @@ import {
   getInteractiveCardPackRevealFigureIds,
 } from '../../lib/interactiveCardPackReveal';
 import { clearCardModelUrl } from '../../lib/clearCardModels';
+import { getMiNotePackPreviewOriginRect, getMiNotePackPreviewRect } from '../../lib/miNotePackPreviewLayout';
+import packRenderSetups from '../../lib/miNotePackRenderSetups.json';
 import { resolveRevealFrameSrc } from '../../lib/revealFrameSequence';
 import {
   PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
   getRevealOverlayViewport as getOverlayViewport,
   ponchoDrifellaRevealOverlayStyleVars,
   revealOverlayStyleVars,
+  sameRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
 import type { ShopRevealOptions } from './contracts';
 import type { RevealOverlayState } from './types';
@@ -90,6 +93,14 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     const figureId = revealOverlay.revealedIds[0];
     return clearCardModelUrl(figureId) ? figureId : undefined;
   }, [revealOverlay?.revealedIds, revealOverlayHasClearCard3dRenderer]);
+  const revealOriginRect = useMemo(() => {
+    if (!revealOverlay || !revealOverlayCanRenderMiNotePack3d ||
+      sameRevealOverlayRect(revealOverlay.originRect, revealOverlay.targetRect)) return revealOverlay?.originRect;
+    const setups = Object.values(packRenderSetups.setups);
+    const setup = setups.find(entry => entry.packId === revealOverlay.packMediaId) ?? setups[0];
+    const previewRect = getMiNotePackPreviewRect(setup, revealOverlay.targetRect.width, revealOverlay.targetRect.height);
+    return getMiNotePackPreviewOriginRect(revealOverlay.originRect, revealOverlay.targetRect, previewRect);
+  }, [revealOverlay, revealOverlayCanRenderMiNotePack3d]);
   const revealOverlayStyle: CSSProperties | undefined = revealOverlay
     ? (revealOverlayUsesPonchoLayout
         ? ponchoDrifellaRevealOverlayStyleVars({
@@ -100,7 +111,7 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
             cardCount: interactiveRevealCards.length || PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
           })
         : revealOverlayStyleVars({
-            originRect: revealOverlay.originRect,
+            originRect: revealOriginRect ?? revealOverlay.originRect,
             targetRect: revealOverlay.targetRect,
             mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
           })) as CSSProperties

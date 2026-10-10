@@ -86,6 +86,7 @@ async function mount(overrides: Partial<OverlayProps> = {}) {
 }
 
 function ready(cardsReady = false) {
+  fireEvent.transitionEnd(document.querySelector('.reveal-overlay__frame')!, { propertyName: 'transform' });
   act(() => { viewer().props.onReadyChange(true); viewer().props.onCardsReadyChange(cardsReady); });
 }
 
@@ -108,6 +109,41 @@ test('an unresolved pack keeps its placeholder until the correct 3D variant is a
   await waitFor(() => assert.ok(instances.at(-1)?.mounted));
   assert.equal(viewer().props.color, '#20866C');
   assert.equal(viewer().props.star.id, 'supermetal');
+});
+
+test('the same preview survives the 3D handoff and returns when the viewer fails', async () => {
+  const h = await mount({ viewerOnly: true, loadingImageSrc: '/pack.webp' });
+  const image = h.view.container.querySelector('.mi-note-pack-overlay__fallback img');
+  const stage = h.view.container.querySelector('.mi-note-wip__stage');
+  assert.ok(image);
+  assert.equal(stage?.getAttribute('aria-hidden'), 'true');
+  ready();
+  assert.equal(h.view.container.querySelector('.mi-note-pack-overlay__fallback img'), image);
+  assert.equal(stage?.getAttribute('aria-hidden'), 'false');
+  act(() => viewer().props.onError(new Error('WebGL context lost')));
+  assert.equal(h.view.container.querySelector('.mi-note-pack-overlay__fallback img'), image);
+  assert.equal(stage?.getAttribute('aria-hidden'), 'true');
+  assert.ok(h.view.getByRole('button', { name: 'Retry loading pack' }));
+});
+
+test('preview crossfades do not bubble into the overlay close transition', async () => {
+  let transitions = 0;
+  const h = await mount({ onTransitionEnd: () => { transitions += 1; } });
+  fireEvent.transitionEnd(h.view.container.querySelector('.mi-note-pack-overlay__fallback')!, { propertyName: 'opacity' });
+  fireEvent.transitionEnd(h.view.container.querySelector('.mi-note-wip__stage')!, { propertyName: 'opacity' });
+  assert.equal(transitions, 0);
+  fireEvent.transitionEnd(h.view.container.querySelector('.reveal-overlay__frame')!, { propertyName: 'opacity' });
+  assert.equal(transitions, 1);
+});
+
+test('a cached 3D viewer waits for inventory growth before replacing the preview', async () => {
+  const h = await mount();
+  act(() => viewer().props.onReadyChange(true));
+  assert.equal(viewer().props.previewVisible, true);
+  assert.equal(viewer().props.interactionEnabled, false);
+  fireEvent.transitionEnd(h.view.container.querySelector('.reveal-overlay__frame')!, { propertyName: 'transform' });
+  assert.equal(viewer().props.previewVisible, false);
+  assert.equal(viewer().props.interactionEnabled, true);
 });
 
 test('live taps stay sealed until the assigned pair and both rendered card assets are ready', async () => {

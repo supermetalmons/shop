@@ -8,6 +8,8 @@ import type { ShopRevealOptions } from '../src/shop/reveal/contracts.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
+import { getMiNotePackPreviewRect } from '../src/lib/miNotePackPreviewLayout.ts';
+import packRenderSetups from '../src/lib/miNotePackRenderSetups.json';
 
 const { dom } = setupFrontendDom();
 Object.defineProperty(globalThis, 'DOMRect', { configurable: true, value: dom.window.DOMRect });
@@ -84,6 +86,51 @@ function packAccount(dropId: string) {
 }
 
 for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  for (const mode of ['pending', 'viewer'] as const) {
+    test(`${dropId} ${mode} entrance maps the static pack to its contained inventory image`, async t => {
+      const f = fixture(dropId);
+      const origin = new DOMRect(43, 218, 180, 160);
+      const inventoryItem = document.createElement('article');
+      inventoryItem.dataset.inventoryId = f.pack.id;
+      inventoryItem.innerHTML = '<div class="inventory__media"><img class="inventory__image"></div>';
+      document.body.append(inventoryItem);
+      t.after(() => inventoryItem.remove());
+      t.mock.method(inventoryItem.querySelector('img')!, 'getBoundingClientRect', () => origin);
+      const { result } = renderHook(useShopReveal, { initialProps: f.options });
+      await act(async () => {
+        if (mode === 'pending') await result.current.openPendingReveal(f.pack, origin);
+        else result.current.viewItem(f.pack);
+      });
+      const overlay = result.current.revealOverlay!;
+      const style = result.current.presentation.revealOverlayStyle as Record<string, string>;
+      assert.deepEqual(overlay.originRect, { left: origin.left, top: origin.top, width: origin.width, height: origin.height });
+      assert.deepEqual(overlay.targetRect, { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight });
+      const setup = Object.values(packRenderSetups.setups).find(entry => entry.packId === overlay.packMediaId)!;
+      const preview = getMiNotePackPreviewRect(setup, overlay.targetRect.width, overlay.targetRect.height);
+      const scaleX = Number(style['--reveal-start-scale-x']);
+      const scaleY = Number(style['--reveal-start-scale-y']);
+      const near = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 0.00001, `${actual} != ${expected}`);
+      near(scaleX, scaleY);
+      near(overlay.targetRect.left + parseFloat(style['--reveal-start-x']) + preview.left * scaleX, 73);
+      near(overlay.targetRect.top + parseFloat(style['--reveal-start-y']) + preview.top * scaleY, 218);
+      near(preview.width * scaleX, 120);
+      near(preview.height * scaleY, 160);
+    });
+  }
+
+  test(`${dropId} a pack viewer without an inventory element keeps an identity entrance`, () => {
+    const f = fixture(dropId);
+    const { result } = renderHook(useShopReveal, { initialProps: f.options });
+    act(() => result.current.viewItem(f.pack));
+    const overlay = result.current.revealOverlay!;
+    const style = result.current.presentation.revealOverlayStyle as Record<string, string>;
+    assert.deepEqual(overlay.originRect, overlay.targetRect);
+    assert.equal(style['--reveal-start-x'], '0px');
+    assert.equal(style['--reveal-start-y'], '0px');
+    assert.equal(style['--reveal-start-scale-x'], '1');
+    assert.equal(style['--reveal-start-scale-y'], '1');
+  });
+
   test(`${dropId} resumes a pending pack with no owned inventory or saved numeric ID`, async t => {
     const read = t.mock.method(Connection.prototype, 'getAccountInfo', async () => packAccount(dropId));
     const f = fixture(dropId);

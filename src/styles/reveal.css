@@ -397,38 +397,36 @@
   overflow: visible;
 }
 
-.mi-note-pack-overlay .reveal-overlay__frame {
-  transform: none;
-  opacity: 0;
-  transition: opacity 260ms ease;
-}
-
-.mi-note-pack-overlay.reveal-overlay--active .reveal-overlay__frame {
-  opacity: 1;
-}
-
-.mi-note-pack-overlay.reveal-overlay--closing .reveal-overlay__frame {
-  opacity: 0;
-}
-
 .mi-note-pack-overlay .mi-note-wip__stage {
   bottom: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mi-note-pack-overlay__frame--ready .mi-note-wip__stage {
+  opacity: 1;
+  visibility: visible;
 }
 
 .mi-note-pack-overlay__fallback {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 68%;
-  height: 52%;
+  opacity: 1;
+  transition: opacity 220ms cubic-bezier(0.4, 0, 0.2, 1) 30ms;
   pointer-events: none;
 }
 
+.mi-note-pack-overlay__frame--ready .mi-note-pack-overlay__fallback {
+  opacity: 0;
+}
+
 .mi-note-pack-overlay__fallback img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  transform-origin: 0 0;
+  transition: transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .mi-note-pack-overlay__retry {
@@ -1231,6 +1229,13 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mi-note-pack-overlay .mi-note-wip__stage,
+  .mi-note-pack-overlay__fallback,
+  .mi-note-pack-overlay__fallback img {
+    transition-duration: 1ms;
+    transition-delay: 0ms;
+  }
+
   .background-blur-layer--open > .background-blur-layer__viewport {
     transition-duration: 1ms;
   }

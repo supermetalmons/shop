@@ -292,7 +292,7 @@ function harness(
   initialState = createMiNoteRevealState(),
   interactionEnabled = true,
   initialLayout: { star?: MiNotePackStar; verticalPosition?: number; sizeScale?: number } = { verticalPosition: 0.5, sizeScale: 1 },
-  options: { cardsAvailable?: boolean; activationEnabled?: boolean; inventoryReveal?: boolean; rejectActivation?: boolean } = {},
+  options: { cardsAvailable?: boolean; activationEnabled?: boolean; inventoryReveal?: boolean; rejectActivation?: boolean; previewVisible?: boolean } = {},
 ) {
   const controls = { current: null as MiNotePackControls | null };
   const events: MiNoteRevealEvent[] = [];
@@ -314,13 +314,14 @@ function harness(
   let verticalPosition = initialLayout.verticalPosition;
   let sizeScale = initialLayout.sizeScale;
   let cardsAvailable = options.cardsAvailable ?? true;
+  let previewVisible = options.previewVisible;
   function Harness({ effectSettings, inspectSticker }: { effectSettings: MiNoteStickerEffectSettings; inspectSticker: boolean }) {
     const [current, dispatch] = useReducer(options.inventoryReveal ? reduceMiNoteInventoryReveal : reduceMiNoteReveal, initialState);
     state = current;
     return createElement(MiNotePackViewer, {
       color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
       cards: cardsAvailable ? cards : undefined, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); },
-      state: current, interactionEnabled, activationEnabled: options.activationEnabled, controlsRef: controls,
+      state: current, interactionEnabled, activationEnabled: options.activationEnabled, previewVisible, controlsRef: controls,
       onEvent(event) { events.push(event); if (event.type !== 'activate' || !options.rejectActivation) dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready: ready && (!options.inventoryReveal || cardsAvailable) }); },
       onError(error) { errors.push(error); },
@@ -333,6 +334,10 @@ function harness(
     view, controls, events, readyChanges, cardReadyChanges, cardErrors, errors,
     get state() { return state; },
     get cards() { return cards; },
+    setPreviewVisible(value: boolean) {
+      previewVisible = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
     setCardsAvailable(value: boolean) {
       cardsAvailable = value;
       view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
@@ -594,6 +599,29 @@ test('hover begins at the static render angle without quickly steering toward ne
   packPose(model).slice(0, 3).forEach((angle, axis) => {
     assert.ok(Math.abs(angle - start[axis]) < 0.0005);
   });
+});
+
+test('a slow preview handoff preserves the initial pose and resumes floating without changing the camera or scale', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness(createMiNoteRevealState(), true, undefined, { previewVisible: true });
+  advanceFrame();
+  const model = models[0];
+  const initialPose = packPose(model);
+  const camera = renderers[0].camera!;
+  const cameraPosition = camera.position.toArray();
+  const projection = camera.projectionMatrix.toArray();
+  time += 30000;
+  await makeReady();
+  assert.deepEqual(packPose(model), initialPose);
+  assert.deepEqual(initialPose.slice(0, 3), [0.055, -0.12, -0.016]);
+  assert.deepEqual(camera.position.toArray(), cameraPosition);
+  assert.deepEqual(camera.projectionMatrix.toArray(), projection);
+  act(() => run.setPreviewVisible(false));
+  advanceFrames(10);
+  assert.notDeepEqual(packPose(model), initialPose);
+  assert.deepEqual(camera.position.toArray(), cameraPosition);
+  assert.deepEqual(camera.projectionMatrix.toArray(), projection);
+  assert.deepEqual(model.group.scale.toArray(), [1, 1, 1]);
 });
 
 test('closing before opening finishes continues gently from the visible pose', async () => {

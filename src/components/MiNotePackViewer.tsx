@@ -42,6 +42,7 @@ type MiNotePackViewerProps = {
   onCardsError: (error: Error | null) => void;
   state: MiNoteRevealState;
   interactionEnabled: boolean;
+  previewVisible?: boolean;
   activationEnabled?: boolean;
   onReadyChange: (ready: boolean) => void;
   onError: (error: Error) => void;
@@ -580,7 +581,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         else moving = true;
       }
       const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
-      const idleAdvancing = !reducedMotion.matches && !drag;
+      const idleAdvancing = !reducedMotion.matches && !drag && !currentProps.current.previewVisible;
       if (!drag || reducedMotion.matches) {
         moving = spring(idleStrength, reducedMotion.matches ? 0 : 1, 16, dt, reducedMotion.matches) || moving;
       }
@@ -788,7 +789,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     cardAppearanceRef.current(props.cards, props.cardEffect);
     invalidateRef.current();
   }, [props.cards, props.cardEffect]);
-  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker]);
+  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker, props.previewVisible]);
   useEffect(() => {
     effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
     invalidateRef.current();

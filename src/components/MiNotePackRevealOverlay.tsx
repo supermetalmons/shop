@@ -1,5 +1,5 @@
 import {
-  Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState,
+  Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type CSSProperties, type KeyboardEvent, type ReactNode, type TransitionEvent,
 } from 'react';
 import type { MiNotePackControls } from './MiNotePackViewer';
@@ -15,6 +15,7 @@ import {
 import { MI_NOTE_PACK_STARS } from '../lib/miNotePackStars';
 import { normalizeMiNoteStickerEffectSettings } from '../lib/miNoteStickerEffects';
 import packRenderSetups from '../lib/miNotePackRenderSetups.json';
+import { getMiNotePackPreviewRect, getMiNotePackPreviewTransform } from '../lib/miNotePackPreviewLayout';
 import type { RevealRequestStatus } from '../shop/reveal';
 import { ModalFocusScope } from './ModalFocusScope';
 import '../styles/mi-note-wip.css';
@@ -55,6 +56,12 @@ export default function MiNotePackRevealOverlay({
   onDismiss, onTransitionEnd, onRevealCompleteChange, onDismissReadyChange,
 }: MiNotePackRevealOverlayProps) {
   const controlsRef = useRef<MiNotePackControls | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
+  const [entered, setEntered] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  );
   const requestStateRef = useRef<'idle' | 'pending' | 'sent'>('idle');
   const requestGenerationRef = useRef(0);
   const [Viewer, setViewer] = useState(createViewer);
@@ -79,11 +86,45 @@ export default function MiNotePackRevealOverlay({
   const setup = useMemo(() => Object.values(packRenderSetups.setups).find(entry => entry.packId === packMediaId), [packMediaId]);
   const star = MI_NOTE_PACK_STARS.find(entry => entry.id === setup?.sticker.id);
   const ready = Boolean(setup && cards && viewerReady && cardStatus.key === cardKey && cardStatus.ready && !error);
-  const interactionEnabled = Boolean(setup && viewerReady && !error && !closing && !suspended && (viewerOnly || phase === 'ready'));
+  const interactionEnabled = Boolean(setup && active && entered && viewerReady && !error && !closing && !suspended && (viewerOnly || phase === 'ready'));
   const dismissReady = viewerOnly || !setup || state.stage === 'interactive' || Boolean(error) || requestFailed;
   const effectSettings = useMemo(() => normalizeMiNoteStickerEffectSettings(setup?.sticker.effectSettings), [setup]);
   const fallbackImage = setup && loadingImageSrc ? loadingImageSrc : MI_NOTE_CARDS_PACK_PLACEHOLDER_IMAGE_URL;
-  const showFallback = !setup || !viewerReady || Boolean(error);
+  const fallbackPresentation = useMemo(() => {
+    const preset = setup ?? Object.values(packRenderSetups.setups)[0];
+    return {
+      rect: getMiNotePackPreviewRect(preset, frameSize.width, frameSize.height),
+      transform: getMiNotePackPreviewTransform(preset, frameSize.width, frameSize.height, reducedMotion),
+    };
+  }, [setup, frameSize, reducedMotion]);
+  const showFallback = !active || !entered || !setup || !viewerReady || Boolean(error);
+
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = () => setReducedMotion(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    if (!active) { setEntered(false); return; }
+    const timeout = window.setTimeout(() => setEntered(true), reducedMotion ? 0 : 520);
+    return () => window.clearTimeout(timeout);
+  }, [active, reducedMotion]);
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const resize = () => {
+      const width = Math.max(1, frame.clientWidth);
+      const height = Math.max(1, frame.clientHeight);
+      setFrameSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
+    };
+    resize();
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(resize);
+    observer?.observe(frame);
+    return () => observer?.disconnect();
+  }, []);
 
   useEffect(() => {
     setState(previous => reduceMiNoteInventoryReveal(previous, { type: 'ready', ready }));
@@ -194,15 +235,22 @@ export default function MiNotePackRevealOverlay({
       data-card-stage={state.cardStage}
     >
       <div className="reveal-overlay__backdrop" onClick={dismiss} />
-      <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd} onClick={event => {
+      <div ref={frameRef} className={`reveal-overlay__frame${showFallback ? '' : ' mi-note-pack-overlay__frame--ready'}`} onTransitionEnd={event => {
+        if (event.target !== event.currentTarget) return;
+        if (event.propertyName === 'transform' && active && !closing) setEntered(true);
+        onTransitionEnd?.(event);
+      }} onClick={event => {
         if (showFallback && event.target === event.currentTarget) dismiss();
       }}>
-        {showFallback && <div className="mi-note-pack-overlay__fallback">
-          <img src={fallbackImage} alt="" aria-hidden draggable={false} />
+        <div className="mi-note-pack-overlay__fallback" style={fallbackPresentation.rect}>
+          <img src={fallbackImage} alt="" aria-hidden draggable={false} style={{
+            transform: active ? fallbackPresentation.transform : undefined,
+            transition: entered ? 'none' : undefined,
+          }} />
           {error && <button type="button" className="mi-note-pack-overlay__retry" aria-label="Retry loading pack"
             disabled={closing || suspended} onClick={retryViewer} />}
-        </div>}
-        {setup && star && <div className="mi-note-wip__stage" style={{ visibility: showFallback ? 'hidden' : 'visible' }}>
+        </div>
+        {setup && star && <div className="mi-note-wip__stage" aria-hidden={showFallback}>
           <MiNoteViewerBoundary key={attempt} onError={setViewerError}>
             <Suspense fallback={null}>
               <Viewer
@@ -218,6 +266,7 @@ export default function MiNotePackRevealOverlay({
                 cardEffect={MI_NOTE_CARDS_DEFAULT}
                 state={state}
                 interactionEnabled={interactionEnabled}
+                previewVisible={showFallback}
                 activationEnabled={!viewerOnly}
                 onReadyChange={setViewerReady}
                 onCardsReadyChange={handleCardsReady}
