@@ -235,7 +235,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
   group.add(flipRoot);
   flipRoot.add(book);
   book.add(left, right);
-  const pockets: { geometry: THREE.PlaneGeometry; lip: THREE.TubeGeometry; lipBase: Float32Array; center: number }[] = [];
+  const pockets: THREE.PlaneGeometry[] = [];
 
   const sheet = (leaf: THREE.Group, side: number) => {
     const center = side * MI_NOTE_LEAF_WIDTH / 2;
@@ -273,19 +273,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     const pocket = new THREE.Mesh(pocketGeometry, foldedStock);
     pocket.position.set(center, -HEIGHT / 2 + POCKET_HEIGHT / 2, 0);
     leaf.add(pocket);
-    const lipPoints: THREE.Vector3[] = [];
-    for (let i = 0; i <= 24; i += 1) {
-      const edge = pocketInsideEdge(i / 24);
-      const x = side * edge.x;
-      lipPoints.push(new THREE.Vector3(x, edge.y, pocketDepth(x - center, edge.y, POCKET_BOW)));
-    }
-    for (let i = 1; i <= 40; i += 1) {
-      const x = side * THREE.MathUtils.lerp(0.15, MI_NOTE_LEAF_WIDTH, i / 40);
-      lipPoints.push(new THREE.Vector3(x, POCKET_TOP, pocketDepth(x - center, POCKET_TOP, POCKET_BOW)));
-    }
-    const lip = own(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(lipPoints), 96, 0.00045, 4, false));
-    leaf.add(new THREE.Mesh(lip, stock));
-    pockets.push({ geometry: pocketGeometry, lip, lipBase: Float32Array.from(lip.attributes.position.array), center });
+    pockets.push(pocketGeometry);
     const bottom = new THREE.Mesh(own(new THREE.BoxGeometry(MI_NOTE_LEAF_WIDTH, 0.003, 0.004)), stock);
     bottom.position.set(center, -HEIGHT / 2 + 0.0015, 0.0038);
     leaf.add(bottom);
@@ -349,21 +337,13 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     spinePositions.needsUpdate = true;
     spineGeometry.computeVertexNormals();
     const bow = 0.0003 + (POCKET_BOW - 0.0003) * pose.spread;
-    for (const pocket of pockets) {
-      const position = pocket.geometry.attributes.position;
+    for (const geometry of pockets) {
+      const position = geometry.attributes.position;
       for (let i = 0; i < position.count; i += 1) {
         position.setZ(i, pocketDepth(position.getX(i), position.getY(i) - HEIGHT / 2 + POCKET_HEIGHT / 2, bow));
       }
       position.needsUpdate = true;
-      pocket.geometry.computeVertexNormals();
-      const lip = pocket.lip.attributes.position;
-      for (let i = 0; i < lip.count; i += 1) {
-        const x = pocket.lipBase[i * 3] - pocket.center;
-        const y = pocket.lipBase[i * 3 + 1];
-        lip.setZ(i, pocket.lipBase[i * 3 + 2] + pocketDepth(x, y, bow) - pocketDepth(x, y, POCKET_BOW));
-      }
-      lip.needsUpdate = true;
-      pocket.lip.computeVertexNormals();
+      geometry.computeVertexNormals();
     }
   };
   setFolderPhase(0);
