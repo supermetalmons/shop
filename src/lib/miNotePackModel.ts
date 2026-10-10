@@ -202,6 +202,22 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     bumpScale: 0.00055,
   });
   const paper = new THREE.MeshStandardMaterial({ color: 0xf1eedf, roughness: 1, bumpMap: fiber, bumpScale: 0.00045 });
+  paper.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <bumpmap_pars_fragment>', THREE.ShaderChunk.bumpmap_pars_fragment
+        .replace('vec2 dHdxy_fwd()', 'vec2 dHdxy_fwd(out float paperFiber)')
+        .replace('float Hll = bumpScale * texture2D( bumpMap, vBumpMapUv ).x;', `
+          paperFiber = texture2D( bumpMap, vBumpMapUv ).x;
+          float Hll = bumpScale * paperFiber;
+        `))
+      .replace('#include <normal_fragment_maps>', `
+        float paperFiber;
+        vec2 paperGradient = dHdxy_fwd(paperFiber);
+        normal = perturbNormalArb(-vViewPosition, normal, paperGradient, faceDirection);
+        diffuseColor.rgb *= 1.0 + (paperFiber * 255.0 - 133.5) * (0.04 / 31.0);
+      `);
+  };
+  paper.customProgramCacheKey = () => 'mi-note-paper-v2';
   const cutEdge = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(0xf1eedf), 0.35), roughness: 1 });
   const foldedStock = stock.clone();
   foldedStock.side = THREE.DoubleSide;
