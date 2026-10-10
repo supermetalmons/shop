@@ -27,19 +27,16 @@ import {
 } from '../src/lib/fulfillmentAccess.ts';
 
 const ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const ALL_DROP_IDS = [
-  'little_swag_boxes',
-  'poncho_drifella',
-  'drifella_shirt',
-  'little_swag_hoodies',
-  ...CARD_FULFILLMENT_DROP_IDS,
-  ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-];
+const MAINNET_SHIPPER_WALLET = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
+const ALL_DROP_IDS = Object.keys(DEPLOYMENT_DROPS);
+const MAINNET_DROP_IDS = Object.values(DEPLOYMENT_DROPS)
+  .filter((drop) => drop.solanaCluster === 'mainnet-beta')
+  .map((drop) => drop.dropId)
+  .sort();
 const ADMIN_ONLY_DROP_ID = 'card_nft_binder_devnet';
 const SHIPPER_BINDER_DROP_IDS = CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.filter(
   (dropId) => dropId !== ADMIN_ONLY_DROP_ID,
 );
-const ALL_SHIPPER_DROP_IDS = ALL_DROP_IDS.filter((dropId) => dropId !== ADMIN_ONLY_DROP_ID);
 const LIMITED_SHIPPER_WALLET = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
 const FULFILLMENT_ONLY_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const ADDITIONAL_DEVNET_INVENTORY_WALLET = '8cC8yaEuoTRfmxEopJ9ttUq8JoKR6QkNnm7UqUXPymDw';
@@ -66,7 +63,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
   assert.deepEqual(
     SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, [...dropIds]]),
     [
-      ['8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', ALL_SHIPPER_DROP_IDS],
+      [MAINNET_SHIPPER_WALLET, MAINNET_DROP_IDS],
       [
         LIMITED_SHIPPER_WALLET,
         [
@@ -76,7 +73,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
           ...SHIPPER_BINDER_DROP_IDS,
         ],
       ],
-      [FULFILLMENT_ONLY_WALLET, ALL_SHIPPER_DROP_IDS],
+      [FULFILLMENT_ONLY_WALLET, MAINNET_DROP_IDS],
     ],
   );
   assert.deepEqual(STAFF_WALLET_ADDRESSES, [
@@ -147,9 +144,33 @@ test('frontend allowed-drop lists retain caller and configured array references'
     ...SHIPPER_BINDER_DROP_IDS,
   ]);
 
-  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), ALL_SHIPPER_DROP_IDS);
+  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), MAINNET_DROP_IDS);
   assert.deepEqual(listAllowedFulfillmentDropIds('11111111111111111111111111111111', ALL_DROP_IDS), []);
   assert.deepEqual(listAllowedFulfillmentDropIds(undefined, ALL_DROP_IDS), []);
+});
+
+test('designated fulfillment wallets see every mainnet drop with matching API access', () => {
+  const admins = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
+  const shipperGrants = new Map(
+    SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, new Set(dropIds)]),
+  );
+  for (const wallet of [MAINNET_SHIPPER_WALLET, FULFILLMENT_ONLY_WALLET, ADMIN_WALLET]) {
+    const visibleDropIds = listAllowedFulfillmentDropIds(wallet, ALL_DROP_IDS);
+    assert.ok(visibleDropIds.includes('mi_note_cards'), wallet);
+    for (const dropId of MAINNET_DROP_IDS) {
+      assert.ok(visibleDropIds.includes(dropId), `${wallet}: ${dropId}`);
+      assert.equal(walletHasFulfillmentDropAccess(wallet, dropId, admins, shipperGrants), true);
+      assert.equal(walletCanViewSensitiveFulfillmentAddress(wallet, dropId, admins, shipperGrants),
+        wallet !== ADMIN_WALLET);
+    }
+    if (wallet === ADMIN_WALLET) continue;
+    for (const dropId of [...ALL_DROP_IDS.filter((id) => !MAINNET_DROP_IDS.includes(id)), 'unknown_drop']) {
+      assert.equal(visibleDropIds.includes(dropId), false);
+      assert.equal(walletHasFulfillmentDropAccess(wallet, dropId, admins, shipperGrants), false);
+    }
+  }
+  assert.equal(listAllowedFulfillmentDropIds(LIMITED_SHIPPER_WALLET, ALL_DROP_IDS).includes('mi_note_cards'), false);
+  assert.equal(walletHasFulfillmentDropAccess(LIMITED_SHIPPER_WALLET, 'mi_note_cards', admins, shipperGrants), false);
 });
 
 test('sensitive fulfillment addresses remain visible only to an authorized non-admin shipper', () => {

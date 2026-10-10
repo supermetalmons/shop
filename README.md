@@ -387,6 +387,13 @@ challenge once. Active challenges are reused, while Cloudflare Worker bindings
 rate-limit challenge and signature requests without storing caller counters in
 D1.
 
+Fulfillment access for `8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM` and
+`kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx` automatically includes every
+drop registered with `solanaCluster: 'mainnet-beta'`. The dashboard and API use
+the same grants. `A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz` retains
+admin access to all registered drops. New mainnet drops need no additional
+fulfillment access configuration for these wallets.
+
 ## Cloudflare deployment
 
 Use the repository's pinned Wrangler. Authenticate interactively with native
@@ -722,6 +729,11 @@ reconciliation, and Stripe fulfillment queues, each with a dead-letter queue.
 The shared five-minute scheduled trigger recovers Stripe fulfillment,
 pack-status projections, and ready-to-ship notification work. Do not disable
 the schedule to control one subsystem.
+
+Ready-to-ship fulfillment notifications go to `fulfillment@mons.shop` for every
+drop registered with `solanaCluster: 'mainnet-beta'`, including new drops by
+default. Devnet and unknown drops do not notify fulfillment. Buyer notifications
+and the admin IRL redemption exclusion retain their existing behavior.
 
 Each `scheduled_reconciliation_job` log reports `attempted`, `completed`,
 `deferred`, `skipped`, and `failed`. Counts refer to orders or operations, or

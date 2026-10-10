@@ -36,17 +36,17 @@ const CARD_NFT_BINDER_SHIPPER_DROP_IDS: readonly string[] = Object.freeze(
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.filter((dropId) => dropId !== 'card_nft_binder_devnet'),
 );
 
+const MAINNET_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
+  Object.values(DEPLOYMENT_DROPS)
+    .filter((drop) => drop.solanaCluster === 'mainnet-beta')
+    .map((drop) => drop.dropId)
+    .sort(),
+);
+
 export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig[] = Object.freeze([
   Object.freeze({
     wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-    dropIds: Object.freeze([
-      'little_swag_boxes',
-      'poncho_drifella',
-      'drifella_shirt',
-      'little_swag_hoodies',
-      ...CARD_FULFILLMENT_DROP_IDS,
-      ...CARD_NFT_BINDER_SHIPPER_DROP_IDS,
-    ]),
+    dropIds: MAINNET_FULFILLMENT_DROP_IDS,
   }),
   Object.freeze({
     wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
@@ -59,14 +59,7 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
   }),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: Object.freeze([
-      'little_swag_boxes',
-      'poncho_drifella',
-      'drifella_shirt',
-      'little_swag_hoodies',
-      ...CARD_FULFILLMENT_DROP_IDS,
-      ...CARD_NFT_BINDER_SHIPPER_DROP_IDS,
-    ]),
+    dropIds: MAINNET_FULFILLMENT_DROP_IDS,
   }),
 ]);
 

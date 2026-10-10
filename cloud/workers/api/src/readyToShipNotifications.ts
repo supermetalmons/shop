@@ -9,10 +9,6 @@ import {
   planReadyToShipOrderNotifications,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
 } from './notifications.js';
-import {
-  CARD_FULFILLMENT_DROP_IDS,
-  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-} from '../../../../shared/fulfillmentAccess.js';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
@@ -42,18 +38,10 @@ type ReadyNotificationPlanOptions = {
   nowMs?: number;
 };
 
-const SHIPPER_READY_TO_SHIP_DROP_IDS = new Set([
-  'little_swag_boxes',
-  'poncho_drifella',
-  'drifella_shirt',
-  'little_swag_hoodies',
-  ...CARD_FULFILLMENT_DROP_IDS,
-  ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-]);
 const SHIPPER_READY_TO_SHIP_RECIPIENTS = ['fulfillment@mons.shop'] as const;
 
 function shipperReadyToShipRecipients(dropId: string): string[] {
-  return SHIPPER_READY_TO_SHIP_DROP_IDS.has(dropId)
+  return DEPLOYMENT_DROPS[dropId]?.solanaCluster === 'mainnet-beta'
     ? [...SHIPPER_READY_TO_SHIP_RECIPIENTS]
     : [];
 }

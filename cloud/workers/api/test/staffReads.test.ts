@@ -76,6 +76,39 @@ test('staff wallet resolution preserves cancellation before reading delivery-ord
   assert.equal(reads, 0);
 });
 
+test('Mi Note fulfillment is visible to the designated mainnet operators without granting other wallets access', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('mi_note_cards', '7'),
+    data: { dropId: 'mi_note_cards', deliveryId: 7, owner: OWNER, status: 'ready_to_ship', items: [] },
+  });
+  const cases = [
+    { wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', dropId: 'mi_note_cards', status: 200 },
+    { wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx', dropId: 'mi_note_cards', status: 200 },
+    { wallet: ADMIN, dropId: 'mi_note_cards', status: 200 },
+    { wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', dropId: 'mi_note_cards', status: 403 },
+    { wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', dropId: 'mi_note_cards_devnet', status: 403 },
+    { wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx', dropId: 'mi_note_cards_devnet', status: 403 },
+  ];
+  for (const { wallet, dropId, status } of cases) {
+    const result = await handleStaffReadRequest(
+      tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId }),
+      { COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: '' },
+      FULFILLMENT_ORDERS_PATH,
+      {},
+      d1StaffDependencies(async () => assert.fail('Unexpected provider request'), {
+        verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+      }),
+    );
+    assert.equal(result.response.status, status, `${wallet}: ${dropId}`);
+    if (status === 200) {
+      const payload = await result.response.json() as { orders: Array<{ dropId: string; deliveryId: number }> };
+      assert.deepEqual(payload.orders.map((order) => [order.dropId, order.deliveryId]), [['mi_note_cards', 7]]);
+    }
+  }
+});
+
 test('fulfillment adds only matching dispute history without exposing Stripe IDs or changing orders', async () => {
   const harness = createCommerceD1Harness();
   await recordStripeChargeback(harness.db, {

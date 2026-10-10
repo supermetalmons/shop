@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import { createReadyToShipNotificationIntent, createReadyToShipNotificationJobs,
   readyToShipNotificationMarker, planReadyToShipNotifications } from '../src/readyToShipNotifications.ts';
@@ -43,4 +44,36 @@ test('ready notification planning keeps optional recipients and ignored sources'
   assert.equal(createReadyToShipNotificationIntent({ ...options, parentPath: 'drops/clear_cards_devnet_v2/deliveryOrders/7',
     dropId: 'clear_cards_devnet_v2', after: { ...readyOrder, addressSnapshot: {} } }), null);
   assert.deepEqual(planReadyToShipNotifications({ ...options, before: readyOrder }), []);
+});
+
+test('every registered mainnet drop sends ready-to-ship notifications to fulfillment by default', async (t) => {
+  for (const drop of Object.values(DEPLOYMENT_DROPS).filter((drop) => drop.solanaCluster === 'mainnet-beta')) {
+    await t.test(drop.dropId, async () => {
+      const pending = planReadyToShipNotifications({ ...options, dropId: drop.dropId });
+      assert.deepEqual(pending.map((entry) => entry.kind), ['buyer_order_received', 'shipper_ready_to_ship']);
+      const jobs = await createReadyToShipNotificationJobs({
+        order: readyOrder, deliveryId: 7, dropId: drop.dropId, pending,
+      });
+      assert.deepEqual(jobs.map(({ kind, recipients }) => ({ kind, recipients })), [
+        { kind: 'buyer_order_received', recipients: ['buyer@example.com'] },
+        { kind: 'shipper_ready_to_ship', recipients: ['fulfillment@mons.shop'] },
+      ]);
+      assert.equal(jobs[1].context?.dropId, drop.dropId);
+      assert.ok(jobs[1].text.includes(`https://mons.shop/fulfillment?dropId=${drop.dropId}`));
+    });
+  }
+});
+
+test('devnet and unknown drops never notify fulfillment while keeping buyer notifications', () => {
+  const dropIds = Object.values(DEPLOYMENT_DROPS)
+    .filter((drop) => drop.solanaCluster === 'devnet')
+    .map((drop) => drop.dropId);
+  for (const dropId of [...dropIds, 'unknown_drop']) {
+    assert.deepEqual(planReadyToShipNotifications({ ...options, dropId }).map((entry) => entry.kind),
+      ['buyer_order_received'], dropId);
+    assert.equal(createReadyToShipNotificationIntent({
+      ...options, dropId, parentPath: `drops/${dropId}/deliveryOrders/7`,
+      after: { ...readyOrder, addressSnapshot: {} },
+    }), null, dropId);
+  }
 });
