@@ -79,12 +79,15 @@ type CardDismissSwipe = {
 
 const CARD_FRONT_CLEARANCE = 0.05;
 const UNSEAL_TAP_DELAY_MS = 500;
+const PACK_HOVER_PITCH = THREE.MathUtils.degToRad(12);
+const PACK_HOVER_YAW = THREE.MathUtils.degToRad(8);
 
 function cardAssetKey(card: DrifCardConfig) {
   return JSON.stringify([card.imageSrc, card.foilSrc, card.textureSrc]);
 }
 
 function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
+  if (motion.value === target && motion.velocity === 0) return false;
   const offset = motion.value - target;
   const impulse = motion.velocity + frequency * offset;
   const decay = Math.exp(-frequency * dt);
@@ -293,6 +296,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const tiltX: Motion = { value: 0, velocity: 0 };
     const tiltY: Motion = { value: 0, velocity: 0 };
     const tiltTarget = new THREE.Vector2();
+    const packTiltX: Motion = { value: 0, velocity: 0 };
+    const packTiltY: Motion = { value: 0, velocity: 0 };
+    const packTiltTarget = new THREE.Vector2();
+    let packHoverSettling = false;
     const projectedCenter = new THREE.Vector3();
     const projectedCorner = new THREE.Vector3();
     let inspectingPointer: number | null = null;
@@ -447,6 +454,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     }, {
       onStart(event) {
         if (!currentProps.current.interactionEnabled) return false;
+        if (event.pointerType !== 'mouse') {
+          packHoverSettling = false;
+          packTiltTarget.set(0, 0);
+        }
         const state = currentProps.current.state;
         tapHit = hit(event);
         tapCard = state.selectedCard;
@@ -626,6 +637,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         if (movement.cancelled) {
           tapHit = null;
           tapCard = null;
+          packHoverSettling = false;
+          packTiltTarget.set(0, 0);
         }
         drag = null;
         if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
@@ -660,19 +673,50 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       else tiltTarget.set(-THREE.MathUtils.clamp(y, -1, 1) * 0.24, -THREE.MathUtils.clamp(x, -1, 1) * 0.3);
       invalidate();
     }
+    const canHoverPack = () => currentProps.current.interactionEnabled
+      && !currentProps.current.previewVisible && !currentProps.current.inspectSticker && !reducedMotion.matches
+      && currentProps.current.state.selectedCard === null && selected === null
+      && (currentProps.current.state.stage === 'sealed' || isMiNoteFolderInteractive(currentProps.current.state));
+    const updatePackHover = (event: PointerEvent) => {
+      if (!event.isPrimary || event.pointerType === 'touch' || drag || cardDrag?.active) return;
+      const cardSelected = currentProps.current.state.selectedCard !== null;
+      const packHit = cardSelected ? null : hit(event);
+      const cursor = cardSelected ? 'pointer' : packHit ? 'grab' : '';
+      if (host.style.cursor !== cursor) host.style.cursor = cursor;
+      if (event.pointerType !== 'mouse') return;
+      const hoverEnabled = canHoverPack();
+      const hovering = packHit !== null && hoverEnabled;
+      packHoverSettling = hoverEnabled && !hovering;
+      const pitch = hovering ? pointer.y * PACK_HOVER_PITCH : 0;
+      const yaw = hovering ? -pointer.x * PACK_HOVER_YAW : 0;
+      if (packTiltTarget.x === pitch && packTiltTarget.y === yaw) return;
+      packTiltTarget.set(pitch, yaw);
+      invalidate();
+    };
     const handlePointerDown = (event: PointerEvent) => input.onPointerDown(event);
+    const handlePointerUp = (event: PointerEvent) => {
+      input.onPointerUp(event);
+      updatePackHover(event);
+    };
     const handlePointerMove = (event: PointerEvent) => {
       input.onPointerMove(event);
+      updatePackHover(event);
       if (event.isPrimary && event.pointerType === 'mouse') aimCard(event);
-      if (!drag && !cardDrag?.active) host.style.cursor = currentProps.current.state.selectedCard !== null ? 'pointer' : hit(event) ? 'grab' : '';
     };
-    const resetTilt = () => { tiltTarget.set(0, 0); invalidate(); };
-    const handlePointerLeave = () => { if (inspectingPointer === null) resetTilt(); };
+    const resetTilt = (settlePack = false) => {
+      packHoverSettling = settlePack && canHoverPack();
+      if (tiltTarget.lengthSq() === 0 && packTiltTarget.lengthSq() === 0) return;
+      tiltTarget.set(0, 0);
+      packTiltTarget.set(0, 0);
+      invalidate();
+    };
+    const handlePointerLeave = () => { if (inspectingPointer === null) resetTilt(true); };
     const handleBlur = () => { input.cancel(); resetTilt(); };
     host.addEventListener('pointerdown', handlePointerDown);
+    host.addEventListener('pointerenter', updatePackHover);
     host.addEventListener('pointermove', handlePointerMove);
     host.addEventListener('pointerleave', handlePointerLeave);
-    host.addEventListener('pointerup', input.onPointerUp);
+    host.addEventListener('pointerup', handlePointerUp);
     host.addEventListener('pointercancel', input.onPointerCancel);
     host.addEventListener('lostpointercapture', input.onLostPointerCapture);
     window.addEventListener('blur', handleBlur);
@@ -680,8 +724,8 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     const applyPackPose = () => {
       const closed = THREE.MathUtils.smoothstep(Math.abs(fold.value - 1), 0, 1);
       model.group.rotation.set(
-        idlePitch.value,
-        idleYaw.value,
+        idlePitch.value + packTiltX.value,
+        idleYaw.value + packTiltY.value,
         idleRoll.value + recoil.value * 0.08 * closed,
       );
       model.group.position.y = idleHeight.value;
@@ -764,6 +808,16 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           : (Math.sin(motion.phase) * amplitude + motion.openOffset * (1 - closed)) * idleStrength.value;
       }
       moving = idleAdvancing || moving;
+      const hoverEnabled = canHoverPack();
+      if (!hoverEnabled) {
+        packHoverSettling = state.selectedCard !== null || selected !== null;
+        packTiltTarget.set(0, 0);
+      }
+      if (!drag || !hoverEnabled) {
+        const frequency = packHoverSettling ? 3 : 10;
+        moving = spring(packTiltX, packTiltTarget.x, frequency, dt, reducedMotion.matches) || moving;
+        moving = spring(packTiltY, packTiltTarget.y, frequency, dt, reducedMotion.matches) || moving;
+      }
       applyPackPose();
       const sealAngle = model.right.rotation.y + model.flipRoot.rotation.y;
       const angleDelta = Math.atan2(Math.sin(sealAngle - lastSealAngle), Math.cos(sealAngle - lastSealAngle));
@@ -940,9 +994,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       reducedMotion.removeEventListener('change', invalidate);
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       host.removeEventListener('pointerdown', handlePointerDown);
+      host.removeEventListener('pointerenter', updatePackHover);
       host.removeEventListener('pointermove', handlePointerMove);
       host.removeEventListener('pointerleave', handlePointerLeave);
-      host.removeEventListener('pointerup', input.onPointerUp);
+      host.removeEventListener('pointerup', handlePointerUp);
       host.removeEventListener('pointercancel', input.onPointerCancel);
       host.removeEventListener('lostpointercapture', input.onLostPointerCapture);
       window.removeEventListener('blur', handleBlur);

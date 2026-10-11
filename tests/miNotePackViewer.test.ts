@@ -632,6 +632,57 @@ test('hover begins at the static render angle without quickly steering toward ne
   });
 });
 
+test('touch hover and secondary pointers avoid picking while touch taps still activate once', async (t) => {
+  const run = harness();
+  await makeReady();
+  const pointer = pointerControls(run);
+  const picking = t.mock.method(THREE.Raycaster.prototype, 'intersectObjects');
+  for (const type of ['pointerenter', 'pointermove', 'pointerup']) {
+    pointer.dispatch(type, 450, 350, 'touch');
+    pointer.dispatch(type, 450, 350, 'mouse', { isPrimary: false });
+  }
+  assert.equal(picking.mock.callCount(), 0);
+  pointer.tap('touch');
+  assert.equal(picking.mock.callCount(), 1);
+  assert.equal(run.state.taps, 1);
+  assert.equal(run.count('activate'), 1);
+});
+
+test('mouse hover shares cursor picking, tilts the pack, and settles on leaving', async (t) => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const model = models[0];
+  const picking = t.mock.method(THREE.Raycaster.prototype, 'intersectObjects');
+  pointer.dispatch('pointerenter', 520, 200);
+  assert.equal(pointer.host.style.cursor, 'grab');
+  assert.equal(picking.mock.callCount(), 1);
+  pointer.dispatch('pointermove', 530, 210);
+  assert.equal(picking.mock.callCount(), 2);
+  advanceFrames(25);
+  assert.ok(model.group.rotation.x > 0.04);
+  assert.ok(model.group.rotation.y < -0.01);
+  pointer.dispatch('pointermove', 0, 0);
+  assert.equal(pointer.host.style.cursor, '');
+  pointer.dispatch('pointerleave', 0, 0);
+  advanceFrames(80);
+  assertCalmOpen(model);
+});
+
+test('pen hover retains cursor feedback without tilting the pack', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.dispatch('pointerenter', 520, 200, 'pen');
+  assert.equal(pointer.host.style.cursor, 'grab');
+  advanceFrames(25);
+  assertCalmOpen(models[0]);
+  pointer.dispatch('pointermove', 0, 0, 'pen');
+  assert.equal(pointer.host.style.cursor, '');
+});
+
 test('a slow preview handoff preserves the initial pose and resumes floating without changing the camera or scale', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness(createMiNoteRevealState(), true, undefined, { previewVisible: true });
