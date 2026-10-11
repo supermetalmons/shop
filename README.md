@@ -476,6 +476,10 @@ journals and leases. Broad recovery requests must explicitly send `cursor: null`
 for the first page. Cached clients that omit it receive a refresh error;
 targeted recovery requests retain their existing contract.
 
+Receipt retries recognize both missing assets and MPL Core's one-byte burned
+accounts. Existing automatic website recovery resumes interrupted batches with
+only the unprocessed assets, preventing repeat burns and duplicate receipts.
+
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
 correct the problem, and rerun the same command. The currently deployed Worker

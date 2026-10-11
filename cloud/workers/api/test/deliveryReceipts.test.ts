@@ -18,7 +18,7 @@ import {
   isDeferredWorkRegistrationError,
 } from './deferredWork.ts';
 import bs58 from 'bs58';
-import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, type VersionedTransactionResponse } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, type VersionedTransaction, type VersionedTransactionResponse } from '@solana/web3.js';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
@@ -1021,7 +1021,7 @@ test('receipt wallet binding preserves the error that wins an abort race', async
   );
 });
 
-test('receipt submission recovery confirms only when every asset account is absent', async () => {
+test('receipt submission recovery accepts only complete consumed-asset evidence', async () => {
   const pending = {
     signature: SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
@@ -1029,15 +1029,22 @@ test('receipt submission recovery confirms only when every asset account is abse
     assetIds: [Keypair.generate().publicKey.toBase58(), Keypair.generate().publicKey.toBase58()],
   };
   const account = { owner: PublicKey.default, executable: false, lamports: 1, data: Buffer.alloc(0) };
+  const tombstone = { ...account, owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS), data: Buffer.from([0]) };
   for (const { accounts, expected } of [
     { accounts: [null, null], expected: 'confirmed' },
+    { accounts: [tombstone, tombstone], expected: 'confirmed' },
+    { accounts: [null, tombstone], expected: 'confirmed' },
     { accounts: [null, account], expected: 'unresolved' },
     { accounts: [null, { ...account, data: Buffer.alloc(1) }], expected: 'unresolved' },
+    { accounts: [null, { ...tombstone, executable: true }], expected: 'unresolved' },
+    { accounts: [null, { ...tombstone, data: Buffer.from([0, 0]) }], expected: 'unresolved' },
+    { accounts: [null, { ...tombstone, data: Buffer.from([1]) }], expected: 'unresolved' },
+    { accounts: [null, { ...tombstone, data: Buffer.alloc(0) }], expected: 'unresolved' },
   ]) {
     const connection = {
       getMultipleAccountsInfo: async (addresses, config) => {
         assert.deepEqual(addresses.map((address) => address.toBase58()), pending.assetIds);
-        assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } });
+        assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } });
         return accounts;
       },
       getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
@@ -1045,6 +1052,20 @@ test('receipt submission recovery confirms only when every asset account is abse
     } satisfies Pick<Connection, 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
     assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(connection, pending), expected);
   }
+  for (const accounts of [[], [null], [null, null, null], Array(2)]) {
+    await assert.rejects(deliveryReceiptTestHooks.probePendingReceiptSubmission({
+      getMultipleAccountsInfo: async () => accounts,
+      getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
+      isBlockhashValid: async () => assert.fail('incomplete response reached blockhash probe'),
+    }, pending), /incomplete asset accounts/);
+  }
+  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission({
+    getMultipleAccountsInfo: async () => assert.fail('failed signature reached account evidence'),
+    getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [{
+      slot: 1, confirmations: null, err: { InstructionError: [0, { Custom: 6 }] }, confirmationStatus: 'finalized',
+    }] }),
+    isBlockhashValid: async () => assert.fail('failed signature reached blockhash probe'),
+  }, pending), 'expired');
 });
 
 test('receipt confirmation polling accepts rooted legacy signature statuses', async () => {
@@ -1873,4 +1894,190 @@ test('leased receipt issuance rejects a parent changed during signature verifica
   assert.equal(after?.state.leaseId, null);
   assert.equal((after?.order.data.receiptRecovery as Record<string, unknown>).lastErrorCode, 'aborted');
   await h.deferred.drain();
+});
+
+test('receipt item selection skips only absent assets and exact Core tombstones', () => {
+  const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
+  const asset = Keypair.generate().publicKey.toBase58();
+  const order = parseDeliveryOrderReceiptView({ items: [{ assetId: asset, kind: 'dude', refId: 9649 }] });
+  const tombstone = {
+    owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS), executable: false, lamports: 1, data: Buffer.from([0]),
+  };
+  for (const consumed of [null, tombstone]) {
+    assert.deepEqual(deliveryReceiptTestHooks.pendingReceiptItems(order, [asset], [consumed], runtime), []);
+  }
+  for (const present of [
+    { ...tombstone, owner: PublicKey.default },
+    { ...tombstone, executable: true },
+    { ...tombstone, data: Buffer.alloc(0) },
+    { ...tombstone, data: Buffer.from([0, 0]) },
+    { ...tombstone, data: Buffer.from([1]) },
+    { ...tombstone, data: Buffer.from([1, 0]) },
+  ]) {
+    assert.deepEqual(deliveryReceiptTestHooks.pendingReceiptItems(order, [asset], [present], runtime).map(item => item.assetId), [asset]);
+  }
+  assert.throws(() => deliveryReceiptTestHooks.pendingReceiptItems(order, [asset], [], runtime), /incomplete asset accounts/);
+});
+
+async function partialReceiptRecoveryHarness(t: TestContext) {
+  const signer = Keypair.generate();
+  const assets = Array.from({ length: 4 }, () => Keypair.generate().publicKey);
+  const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
+  const [deliveryPda] = deriveDeliveryPda(runtime, 7);
+  const native = await nativeDeliveryContext({
+    dropId: runtime.dropId, deliveryId: 7, owner: OWNER, status: 'processing', deliveryLamports: 10,
+    deliveryPda: deliveryPda.toBase58(), receiptTxs: [SIGNATURE],
+    itemIds: assets.map(asset => asset.toBase58()),
+    items: assets.map((asset, index) => ({ assetId: asset.toBase58(), kind: 'dude', refId: 9646 + index })),
+  });
+  t.after(() => native.harness.database.close());
+  native.context.nowMs = Date.now();
+  const deferred = createDeferredWorkCollector();
+  const environment = env({ COMMERCE_DB: native.harness.db, COSIGNER_SECRET: bs58.encode(signer.secretKey) });
+  const provider = { apiKey: 'test-key', fetch: async () => assert.fail('unexpected provider HTTP'), signal: native.context.signal };
+  const coreOwner = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
+  const account = (data: Buffer, owner = coreOwner) => ({ data, owner, executable: false, lamports: 1, rentEpoch: 0 });
+  const sent: VersionedTransaction[] = [];
+  let fourthBurned = false;
+  let closed = false;
+  let beforeAssetRead: (() => Promise<void>) | undefined;
+  t.mock.method(Connection.prototype, 'getMultipleAccountsInfo', async (keys: PublicKey[], config: unknown) => {
+    if (keys[0].equals(runtime.collectionMint)) {
+      return [account(Buffer.concat([Buffer.from([5]), Buffer.alloc(48)])), account(configData(signer, runtime.dropId), runtime.boxMinterProgramId)];
+    }
+    assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } });
+    await beforeAssetRead?.();
+    return keys.map(key => {
+      const index = assets.findIndex(asset => asset.equals(key));
+      assert.notEqual(index, -1);
+      return account(index < 3 || fourthBurned ? Buffer.from([0]) : Buffer.from([1, 0]));
+    });
+  });
+  t.mock.method(Connection.prototype, 'getAccountInfoAndContext', async (key: PublicKey) => {
+    assert.equal(key.toBase58(), deliveryPda.toBase58());
+    if (closed) return { context: { slot: 1 }, value: null };
+    const data = Buffer.alloc(50);
+    Buffer.from('2b0f869afad50393', 'hex').copy(data, 0);
+    new PublicKey(OWNER).toBuffer().copy(data, 8);
+    data.writeBigUInt64LE(10n, 40);
+    data.writeUInt16LE(4, 48);
+    return { context: { slot: 1 }, value: account(data, runtime.boxMinterProgramId) };
+  });
+  t.mock.method(Connection.prototype, 'getLatestBlockhashAndContext', async () => ({
+    context: { slot: 1 }, value: { blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 123 },
+  }));
+  t.mock.method(Connection.prototype, 'getSignatureStatuses', async () => ({ context: { slot: 1 }, value: [{
+    slot: 1, confirmations: null, err: null, confirmationStatus: 'finalized',
+  }] }));
+  t.mock.method(Connection.prototype, 'sendTransaction', async (transaction: VersionedTransaction) => {
+    const message = transaction.message;
+    const burns = message.compiledInstructions.filter(ix => message.staticAccountKeys[ix.programIdIndex].equals(coreOwner));
+    if (burns.length) {
+      assert.equal(fourthBurned, false);
+      assert.equal(burns.length, 1);
+      assert.equal(message.staticAccountKeys[burns[0].accountKeyIndexes[0]].toBase58(), assets[3].toBase58());
+      const mint = message.compiledInstructions.find(ix => Buffer.from(ix.data).subarray(0, 8).equals(Buffer.from('c7c2556f92996a77', 'hex')));
+      assert.ok(mint);
+      assert.equal(message.staticAccountKeys[mint.accountKeyIndexes[2]].toBase58(), OWNER);
+      assert.deepEqual(Buffer.from(mint.data).subarray(8), Buffer.concat([u32LE(0), u32LE(1), Buffer.from([0xb1, 0x25])]));
+      fourthBurned = true;
+    } else {
+      assert.equal(fourthBurned, true);
+      assert.equal(closed, false);
+      assert.ok(message.compiledInstructions.some(ix => Buffer.from(ix.data).subarray(0, 8).equals(Buffer.from('ae641ab98ea5f208', 'hex'))));
+      closed = true;
+    }
+    sent.push(transaction);
+    return bs58.encode(transaction.signatures[0]);
+  });
+  return {
+    ...native, deferred, sent, environment, provider,
+    setBeforeAssetRead: (callback: () => Promise<void>) => { beforeAssetRead = callback; },
+    recover: (body: Parameters<typeof deliveryReceiptTestHooks.recoverReceiptsRequest>[0] = { cursor: null }) =>
+      deliveryReceiptTestHooks.recoverReceiptsRequest(body, { kind: 'anonymous', authSubject: 'auth-uid' },
+        environment, native.context, provider, deferred.defer),
+  };
+}
+
+test('owner recovery pages complete only the remaining fourth receipt and repeat safely', async (t) => {
+  const h = await partialReceiptRecoveryHarness(t);
+  const recovered = await h.recover();
+  assert.equal(recovered.attempted, 1);
+  assert.equal(recovered.recovered, 1);
+  assert.equal(recovered.results[0].outcome, 'recovered');
+  assert.equal(recovered.walletRecovery.remainingProcessing, 0);
+  const stored = await readRecoveryDocument(h.context, requireCommerceKey('drops/card_nft_2/deliveryOrders/7'));
+  assert.equal(stored?.data.status, 'ready_to_ship');
+  assert.equal(stored?.data.receiptsMinted, 4);
+  assert.deepEqual(stored?.data.receiptTxs, [SIGNATURE, bs58.encode(h.sent[0].signatures[0])]);
+  assert.equal(stored?.data.closeDeliveryTx, bs58.encode(h.sent[1].signatures[0]));
+  assert.equal(h.sent.length, 2);
+  assert.equal((await h.recover()).attempted, 0);
+  const readyRetry = await h.recover({ dropId: 'card_nft_2', deliveryId: 7 });
+  assert.equal(readyRetry.attempted, 0);
+  assert.equal(readyRetry.results[0].outcome, 'recovered');
+  assert.equal(h.sent.length, 2);
+  await h.deferred.drain();
+});
+
+test('concurrent owner recovery pages and targeted retries share the same receipt lease', async (t) => {
+  const h = await partialReceiptRecoveryHarness(t);
+  let entered!: () => void;
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { entered = resolve; });
+  const resume = new Promise<void>(resolve => { release = resolve; });
+  h.setBeforeAssetRead(async () => { entered(); await resume; });
+  const first = h.recover();
+  await blocked;
+  const duplicatePage = await h.recover();
+  assert.equal(duplicatePage.attempted, 0);
+  assert.equal(duplicatePage.results[0].outcome, 'not_eligible');
+  const ownerRetry = await h.recover({ dropId: 'card_nft_2', deliveryId: 7, force: true });
+  assert.equal(ownerRetry.attempted, 0);
+  assert.equal(ownerRetry.results[0].outcome, 'lease_active');
+  release();
+  assert.equal((await first).results[0].outcome, 'recovered');
+  assert.equal(h.sent.length, 2);
+  await h.deferred.drain();
+});
+
+test('ambiguous send and confirmation timeouts recognize consumed Core accounts', async (t) => {
+  for (const sendFails of [false, true]) {
+    await t.test(sendFails ? 'send timeout' : 'confirmation timeout', async (child) => {
+      let nowMs = 1_000;
+      child.mock.method(Date, 'now', () => { nowMs += 30_000; return nowMs; });
+      const signer = Keypair.generate();
+      const asset = Keypair.generate().publicKey;
+      const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
+      const settled: string[] = [];
+      let signature = '';
+      const connection = {
+        getLatestBlockhashAndContext: async () => ({ context: { slot: 1 }, value: {
+          blockhash: Keypair.generate().publicKey.toBase58(), lastValidBlockHeight: 123,
+        } }),
+        sendTransaction: async (transaction: VersionedTransaction) => {
+          signature = bs58.encode(transaction.signatures[0]);
+          if (sendFails) throw new Error('connection interrupted');
+          return signature;
+        },
+        getTransaction: async () => null,
+        getMultipleAccountsInfo: async (keys: PublicKey[], config: unknown) => {
+          assert.deepEqual(keys.map(key => key.toBase58()), [asset.toBase58()]);
+          assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } });
+          return [{ owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS), data: Buffer.from([0]), executable: false, lamports: 1 }];
+        },
+      } as unknown as Connection;
+      const result = await deliveryReceiptTestHooks.sendReceiptBatch({
+        connection, runtime, signer, owner: new PublicKey(OWNER), coreCollection: runtime.collectionMint,
+        batch: [{ asset, kind: 'dude', refId: 9649 }], signal: new AbortController().signal,
+        lifecycle: {
+          prepare: async () => undefined,
+          reconcile: async () => assert.fail('consumed assets reached fallback reconciliation'),
+          settle: async (_pending, outcome) => { settled.push(outcome); },
+        },
+      });
+      assert.equal(result, signature);
+      assert.deepEqual(settled, ['confirmed']);
+    });
+  }
 });

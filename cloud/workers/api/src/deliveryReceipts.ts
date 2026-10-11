@@ -48,6 +48,7 @@ import type {
   RecoverDeliveryOrdersResult,
 } from '../../../../shared/contracts.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
 import {
   isNonZeroBase58Bytes,
 } from '../../../../shared/solanaRpcProxy.js';
@@ -564,6 +565,7 @@ function pendingReceiptItems(
   infos: readonly (AccountInfo<Buffer> | null)[],
   runtime: DeliveryRuntime,
 ): Array<{ assetId: string; asset: PublicKey; kind: 'box' | 'dude'; refId: number }> {
+  assertCompleteReceiptAssetAccounts(infos, targetAssetIds.length);
   const storedItems = order.items;
   const byAssetId = new Map<string, DeliveryOrderReceiptView['items'][number]>();
   for (const item of storedItems) {
@@ -571,7 +573,7 @@ function pendingReceiptItems(
   }
   const pending: Array<{ assetId: string; asset: PublicKey; kind: 'box' | 'dude'; refId: number }> = [];
   for (let index = 0; index < targetAssetIds.length; index += 1) {
-    if (!infos[index]) continue;
+    if (isConsumedReceiptAsset(infos[index])) continue;
     const assetId = targetAssetIds[index];
     const stored = byAssetId.get(assetId);
     const kind = stored?.kind;
@@ -594,6 +596,28 @@ function pendingReceiptItems(
     pending.push({ assetId, asset: new PublicKey(assetId), kind, refId });
   }
   return pending;
+}
+
+function isConsumedReceiptAsset(info: AccountInfo<Buffer> | null): boolean {
+  return info === null || (info.executable === false && info.owner.toBase58() === MPL_CORE_PROGRAM_ADDRESS &&
+    info.data.length === 1 && info.data[0] === 0);
+}
+
+function assertCompleteReceiptAssetAccounts(infos: readonly (AccountInfo<Buffer> | null)[], expected: number): void {
+  if (infos.length !== expected || Array.from(infos).some((info) => info === undefined)) {
+    throw new DeliveryReceiptError('unavailable', 'Receipt provider returned incomplete asset accounts.');
+  }
+}
+
+async function fetchReceiptAssetAccounts(
+  connection: Pick<Connection, 'getMultipleAccountsInfo'>,
+  assets: PublicKey[],
+): Promise<(AccountInfo<Buffer> | null)[]> {
+  const infos = await connection.getMultipleAccountsInfo(assets, {
+    commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
+  });
+  assertCompleteReceiptAssetAccounts(infos, assets.length);
+  return infos;
 }
 
 async function sendReceiptBatch(args: {
@@ -692,11 +716,10 @@ async function sendReceiptBatch(args: {
           await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
           continue;
         }
-        const postInfos = await args.connection.getMultipleAccountsInfo(
+        const postInfos = await fetchReceiptAssetAccounts(args.connection,
           args.batch.map((item) => item.asset),
-          { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
         );
-        if (postInfos.every((info) => !info)) {
+        if (postInfos.every(isConsumedReceiptAsset)) {
           await args.lifecycle.settle(pendingSubmission, 'confirmed');
           return signature;
         }
@@ -723,11 +746,10 @@ async function sendReceiptBatch(args: {
         submissionMayHaveLanded = false;
         await args.lifecycle.settle(pendingSubmission, 'expired');
       } else {
-        const postInfos = await args.connection.getMultipleAccountsInfo(
+        const postInfos = await fetchReceiptAssetAccounts(args.connection,
           args.batch.map((item) => item.asset),
-          { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
         );
-        if (postInfos.every((info) => !info)) {
+        if (postInfos.every(isConsumedReceiptAsset)) {
           await args.lifecycle.settle(pendingSubmission, 'confirmed');
           return signature;
         }
@@ -962,10 +984,7 @@ async function issueVerifiedReceipts(
     ),
   };
   const assetKeys = verified.targetAssetIds.map((assetId) => canonicalPublicKey(assetId, 'delivery asset id'));
-  const infos = await connection.getMultipleAccountsInfo(assetKeys, {
-    commitment: 'confirmed',
-    dataSlice: { offset: 0, length: 0 },
-  });
+  const infos = await fetchReceiptAssetAccounts(connection, assetKeys);
   const pending = pendingReceiptItems(parseDeliveryOrderReceiptView(document.data), verified.targetAssetIds, infos, runtime);
   const alreadyProcessed = verified.targetAssetIds.length - pending.length;
   const receiptTxs = confirmedReceiptTransactions(document.data);
@@ -1104,11 +1123,10 @@ async function probePendingReceiptSubmission(
     signature: pending.signature,
     blockhash: pending.blockhash,
     hasLanded: async () => {
-      const infos = await connection.getMultipleAccountsInfo(
+      const infos = await fetchReceiptAssetAccounts(connection,
         pending.assetIds.map((assetId) => new PublicKey(assetId)),
-        { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
       );
-      return infos.every((info) => !info);
+      return infos.every(isConsumedReceiptAsset);
     },
   });
 }
