@@ -45,6 +45,11 @@ const DROP_X_PROFILES: readonly DropXProfileConfig[] = [
     href: 'https://x.com/gucci4mycat',
     dropFamily: 'clear_cards',
   },
+  {
+    handle: '@bis__cut',
+    href: 'https://x.com/bis__cut/status/2108671889459867891',
+    dropFamily: 'mi_note_cards',
+  },
 ];
 
 export function resolveDropXProfile(dropId?: string): DropXProfile | null {
