@@ -1,4 +1,4 @@
-export type PackPointerEvent = Pick<PointerEvent, 'pointerId' | 'pointerType' | 'isPrimary' | 'button' | 'clientX' | 'clientY' | 'preventDefault'>;
+export type PackPointerEvent = Pick<PointerEvent, 'pointerId' | 'pointerType' | 'isPrimary' | 'button' | 'clientX' | 'clientY' | 'timeStamp' | 'preventDefault'>;
 type PackClickEvent = Pick<MouseEvent, 'detail' | 'preventDefault'>;
 
 type PointerMovement = {

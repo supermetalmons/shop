@@ -12,6 +12,7 @@ function pointer(overrides: Partial<PointerEvent> = {}) {
     button: 0,
     clientX: 100,
     clientY: 100,
+    timeStamp: 1000,
     preventDefault() {},
     ...overrides,
   };

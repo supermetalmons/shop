@@ -314,6 +314,7 @@ function harness(
   let verticalPosition = initialLayout.verticalPosition;
   let sizeScale = initialLayout.sizeScale;
   let cardsAvailable = options.cardsAvailable ?? true;
+  let activationEnabled = options.activationEnabled;
   let previewVisible = options.previewVisible;
   function Harness({ effectSettings, inspectSticker }: { effectSettings: MiNoteStickerEffectSettings; inspectSticker: boolean }) {
     const [current, dispatch] = useReducer(options.inventoryReveal ? reduceMiNoteInventoryReveal : reduceMiNoteReveal, initialState);
@@ -321,7 +322,7 @@ function harness(
     return createElement(MiNotePackViewer, {
       color: '#3559b7', star, foldPosition: 0.573, rotationOffsetDegrees: 0, verticalPosition, sizeScale, effectSettings, inspectSticker,
       cards: cardsAvailable ? cards : undefined, cardEffect, onCardsReadyChange(ready) { cardReadyChanges.push(ready); },
-      state: current, interactionEnabled, activationEnabled: options.activationEnabled, previewVisible, controlsRef: controls,
+      state: current, interactionEnabled, activationEnabled, previewVisible, controlsRef: controls,
       onEvent(event) { events.push(event); if (event.type !== 'activate' || !options.rejectActivation) dispatch(event); },
       onReadyChange(ready) { readyChanges.push(ready); dispatch({ type: 'ready', ready: ready && (!options.inventoryReveal || cardsAvailable) }); },
       onError(error) { errors.push(error); },
@@ -334,6 +335,14 @@ function harness(
     view, controls, events, readyChanges, cardReadyChanges, cardErrors, errors,
     get state() { return state; },
     get cards() { return cards; },
+    setInteractionEnabled(value: boolean) {
+      interactionEnabled = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
+    setActivationEnabled(value: boolean) {
+      activationEnabled = value;
+      view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
+    },
     setPreviewVisible(value: boolean) {
       previewVisible = value;
       view.rerender(createElement(Harness, { key: generation, effectSettings, inspectSticker }));
@@ -398,6 +407,7 @@ function pointerControls(run: ReturnType<typeof harness>) {
       pointerId: { value: overrides.pointerId ?? 1 },
       pointerType: { value: pointerType },
       isPrimary: { value: overrides.isPrimary ?? true },
+      timeStamp: { value: overrides.timeStamp ?? time },
     });
     act(() => host.dispatchEvent(event));
   };
@@ -438,6 +448,24 @@ function assertHome(home: ReturnType<typeof homeFor>) {
 
 function cardScreenPosition(home: ReturnType<typeof homeFor>) {
   const point = home.anchor.getWorldPosition(new THREE.Vector3()).project(renderers.at(-1)!.camera!);
+  return [(point.x + 1) * viewportWidth / 2, (1 - point.y) * viewportHeight / 2] as const;
+}
+
+function cardScreenBounds(home: ReturnType<typeof homeFor>, object: THREE.Object3D = home.anchor) {
+  const points = [-1, 1].flatMap(x => [-1, 1].map(y => {
+    const point = object.localToWorld(new THREE.Vector3(x * MI_NOTE_CARD_WIDTH / 2, y * MI_NOTE_CARD_HEIGHT / 2, 0))
+      .project(renderers.at(-1)!.camera!);
+    return { x: (point.x + 1) * viewportWidth / 2, y: (1 - point.y) * viewportHeight / 2 };
+  }));
+  return {
+    left: Math.min(...points.map(point => point.x)), right: Math.max(...points.map(point => point.x)),
+    top: Math.min(...points.map(point => point.y)), bottom: Math.max(...points.map(point => point.y)),
+  };
+}
+
+function cardGrabPosition(home: ReturnType<typeof homeFor>, index: 0 | 1) {
+  const point = home.anchor.localToWorld(new THREE.Vector3((index === 0 ? -1 : 1) * MI_NOTE_CARD_WIDTH / 4, MI_NOTE_CARD_HEIGHT * 0.3, 0));
+  point.project(renderers.at(-1)!.camera!);
   return [(point.x + 1) * viewportWidth / 2, (1 - point.y) * viewportHeight / 2] as const;
 }
 
@@ -2021,6 +2049,857 @@ test('GPU close-up tilts with the pointer, ignores drags as taps, and settles af
   assertHome(home);
 });
 
+for (const reducedMotion of [false, true]) {
+  for (const rate of [60, 120]) {
+    for (const releaseImmediately of [false, true]) {
+      test(`a fast pull ${releaseImmediately ? 'released before rendering' : 'held at full distance'} follows click timing at ${rate} Hz with ${reducedMotion ? 'reduced' : 'normal'} motion`, async () => {
+        setMediaQueryMatches('(prefers-reduced-motion: reduce)', reducedMotion);
+        const initialState = { ...createMiNoteRevealState(), stage: 'interactive' as const, ready: true, taps: 4, folderPose: 1 as const };
+        const clicked = harness(initialState, true, undefined, { previewVisible: true });
+        await makeReady();
+        const clickHome = homeFor(models.at(-1)!, 0);
+        const poses: { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }[] = [];
+        act(() => clicked.controls.current!.selectCard(0));
+        for (let count = 0; clicked.state.cardStage === 'lifting' && count < 100; count += 1) {
+          advanceFrame(1000 / rate);
+          poses.push({ position: clickHome.anchor.position.clone(), quaternion: clickHome.anchor.quaternion.clone(), scale: clickHome.anchor.scale.clone() });
+        }
+        assert.equal(clicked.state.cardStage, 'inspecting');
+        clicked.view.unmount();
+
+        const dragged = harness(initialState, true, undefined, { previewVisible: true });
+        await makeReady();
+        const pointer = pointerControls(dragged);
+        const home = homeFor(models.at(-1)!, 0);
+        const [x, y] = cardGrabPosition(home, 0);
+        pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+        pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1016 });
+        if (releaseImmediately) pointer.dispatch('pointerup', x, y - 260, 'touch', { timeStamp: 1016 });
+        assertHome(home);
+        for (const [index, pose] of poses.entries()) {
+          advanceFrame(1000 / rate);
+          assert.ok(home.anchor.position.distanceTo(pose.position) < 1e-8, `Card position must follow click timing on frame ${index}`);
+          assert.ok(home.anchor.quaternion.angleTo(pose.quaternion) < 1e-7);
+          assert.ok(home.anchor.scale.distanceTo(pose.scale) < 1e-8);
+          if (index < poses.length - 1) assert.equal(dragged.state.cardStage, 'lifting');
+        }
+        if (!releaseImmediately) {
+          assert.equal(dragged.state.cardStage, 'lifting');
+          assert.equal(dragged.count('card-lifted'), 0);
+          pointer.dispatch('pointerup', x, y - 260, 'touch', { timeStamp: 2000 });
+        }
+        settle();
+        assert.equal(dragged.state.cardStage, 'inspecting');
+        assert.equal(dragged.count('card-lifted'), 1);
+      });
+    }
+  }
+}
+
+for (const rate of [120, 240]) {
+  test(`incremental pulls cannot finish before a click at ${rate} Hz with reduced motion`, async () => {
+    const initialState = { ...createMiNoteRevealState(), stage: 'interactive' as const, ready: true, taps: 4, folderPose: 1 as const };
+    const clicked = harness(initialState, true, undefined, { previewVisible: true });
+    await makeReady();
+    act(() => clicked.controls.current!.selectCard(0));
+    let clickFrames = 0;
+    while (clicked.state.cardStage === 'lifting' && clickFrames < 100) {
+      advanceFrame(1000 / rate);
+      clickFrames += 1;
+    }
+    assert.equal(clicked.state.cardStage, 'inspecting');
+    clicked.view.unmount();
+
+    const dragged = harness(initialState, true, undefined, { previewVisible: true });
+    await makeReady();
+    const pointer = pointerControls(dragged);
+    const [x, y] = cardGrabPosition(homeFor(models.at(-1)!, 0), 0);
+    const pixelsPerFrame = 16.8 * 120 / rate;
+    const pullFrames = Math.ceil(210 / pixelsPerFrame);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    for (let frame = 1; frame <= pullFrames; frame += 1) {
+      pointer.dispatch('pointermove', x, y - frame * pixelsPerFrame, 'touch');
+      advanceFrame(1000 / rate);
+    }
+    pointer.dispatch('pointerup', x, y - pullFrames * pixelsPerFrame, 'touch');
+    let dragFrames = pullFrames;
+    while (dragged.state.cardStage === 'lifting' && dragFrames < 100) {
+      advanceFrame(1000 / rate);
+      dragFrames += 1;
+    }
+    assert.equal(dragged.state.cardStage, 'inspecting');
+    assert.equal(dragged.count('card-lifted'), 1);
+    assert.ok(dragFrames >= clickFrames, 'Resuming an idle drag must not grant extra animation time');
+  });
+}
+
+test('a held pull stays idle and resumes without credit for the paused time', async () => {
+  const initialState = { ...createMiNoteRevealState(), stage: 'interactive' as const, ready: true, taps: 4, folderPose: 1 as const };
+  const clicked = harness(initialState, true, undefined, { previewVisible: true });
+  await makeReady();
+  const clickHome = homeFor(models.at(-1)!, 0);
+  const clickStart = clickHome.anchor.getWorldPosition(new THREE.Vector3());
+  act(() => clicked.controls.current!.selectCard(0));
+  advanceFrame(16.67);
+  const clickStep = clickHome.anchor.getWorldPosition(new THREE.Vector3()).distanceTo(clickStart);
+  clicked.view.unmount();
+
+  const dragged = harness(initialState, true, undefined, { previewVisible: true });
+  await makeReady();
+  const pointer = pointerControls(dragged);
+  const home = homeFor(models.at(-1)!, 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch');
+  pointer.dispatch('pointermove', x, y - 9, 'touch');
+  settle();
+  const heldPosition = home.anchor.getWorldPosition(new THREE.Vector3());
+  time += 1000;
+  assert.equal(frames.size, 0);
+  pointer.dispatch('pointermove', x, y - 260, 'touch');
+  advanceFrame(1000 / 120);
+  const resumedStep = home.anchor.getWorldPosition(new THREE.Vector3()).distanceTo(heldPosition);
+  assert.ok(resumedStep > 0 && resumedStep <= clickStep + 1e-8, 'Resuming may advance by at most one initial click frame');
+  pointer.dispatch('pointerup', x, y - 260, 'touch');
+  settle();
+  assert.equal(dragged.state.cardStage, 'inspecting');
+  assert.equal(dragged.count('card-lifted'), 1);
+});
+
+test('reversing a fast pull moves the card back before it catches up to the outward target', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 }, true, undefined, { previewVisible: true });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+  pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1016 });
+  advanceFrame(1000 / 60);
+  advanceFrame(1000 / 60);
+  const raisedPosition = home.anchor.position.clone();
+  pointer.dispatch('pointermove', x, y - 240, 'touch', { timeStamp: 1050 });
+  advanceFrame(1000 / 60);
+  assert.ok(home.anchor.position.y < raisedPosition.y);
+  pointer.dispatch('pointerup', x, y - 240, 'touch', { timeStamp: 1100 });
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(run.count('card-lifted'), 0);
+  assertHome(home);
+});
+
+test('reversing upward follows the finger before the card catches up to its downward target', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 }, true, undefined, { previewVisible: true });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+  pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1016 });
+  for (let count = 0; count < 8; count += 1) advanceFrame(1000 / 60);
+  pointer.dispatch('pointermove', x, y, 'touch', { timeStamp: 1150 });
+  advanceFrame(1000 / 60);
+  const returningPosition = home.anchor.position.clone();
+  pointer.dispatch('pointermove', x, y - 26, 'touch', { timeStamp: 1167 });
+  advanceFrame(1000 / 60);
+  assert.ok(home.anchor.position.y > returningPosition.y);
+  pointer.dispatch('pointercancel', x, y - 26, 'touch', { timeStamp: 1200 });
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assertHome(home);
+});
+
+test('tiny reverse release jitter before rendering preserves a fast full pull', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 }, true, undefined, { previewVisible: true });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+  pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1016 });
+  pointer.dispatch('pointerup', x, y - 258, 'touch', { timeStamp: 1020 });
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(run.count('card-lifted'), 1);
+});
+
+for (const pointerType of ['mouse', 'touch', 'pen']) {
+  test(`${pointerType} pulls follow the full card path and stay reversible until release`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const index = pointerType === 'touch' ? 1 : 0;
+    const homes = [homeFor(models[0], 0), homeFor(models[0], 1)];
+    const home = homes[index];
+    const originalSurfaces = [...surfaces];
+    const originalRenderers = [...renderers];
+    const [x, y] = cardGrabPosition(home, index);
+    pointer.dispatch('pointerdown', x, y, pointerType);
+    pointer.dispatch('pointermove', x, y - 80, pointerType);
+    advanceFrames(4);
+    const risingPosition = home.anchor.position.clone();
+    pointer.dispatch('pointermove', x, y - 160, pointerType);
+    advanceFrames(4);
+    assert.ok(!home.anchor.position.equals(risingPosition));
+    const beyondSummit = home.anchor.position.clone();
+    advanceFrames(20);
+    assert.ok(home.anchor.position.equals(beyondSummit));
+    assert.equal(run.state.cardStage, 'lifting');
+    assert.equal(run.count('card-lifted'), 0);
+    pointer.dispatch('pointermove', x, y - 80, pointerType);
+    advanceFrames(4);
+    assert.ok(home.anchor.position.distanceTo(risingPosition) < 1e-8);
+    pointer.dispatch('pointermove', x, y - 260, pointerType);
+    advanceFrames(20);
+    assert.equal(run.state.cardStage, 'lifting');
+    assert.equal(run.count('card-lifted'), 0);
+    assert.ok(pointer.captured.has(1));
+    assertHome(homes[1 - index]);
+    pointer.dispatch('pointerup', x, y - 260, pointerType);
+    settle();
+    assert.equal(run.state.selectedCard, index);
+    assert.equal(run.state.folderPose, 1);
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('card-lifted'), 1);
+    assert.equal(pointer.captured.size, 0);
+    pointer.tap(pointerType, ...cardScreenPosition(home));
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-returned'), 1);
+    homes.forEach(assertHome);
+    assert.deepEqual(surfaces, originalSurfaces);
+    assert.deepEqual(renderers, originalRenderers);
+    assert.equal(sounds.filter(sound => sound === 'cardPullout').length, 1);
+    assert.equal(sounds.filter(sound => sound === 'cardPutback').length, 1);
+  });
+}
+
+test('vertical close-up drags keep tilting the card without moving it back toward the pocket', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const card = cardLayout(home);
+  act(() => run.controls.current!.selectCard(0));
+  advanceFrames();
+  const position = home.anchor.position.clone();
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    for (const direction of [-1, 1]) {
+      const [x, y] = cardScreenPosition(home);
+      pointer.dispatch('pointerdown', x, y, pointerType);
+      pointer.dispatch('pointermove', x, y + direction * 100, pointerType);
+      advanceFrames(20);
+      assert.equal(Math.sign(card.mesh.rotation.x), -direction);
+      assert.ok(home.anchor.position.equals(position));
+      assert.equal(run.state.cardStage, 'inspecting');
+      pointer.dispatch('pointerup', x, y + direction * 100, pointerType);
+      advanceFrames(20);
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.equal(run.count('card-returned'), 0);
+      assert.equal(pointer.captured.size, 0);
+      if (pointerType !== 'mouse') assert.equal(card.mesh.rotation.x, 0);
+    }
+  }
+});
+
+for (const pointerType of ['mouse', 'touch', 'pen']) {
+  for (const direction of [-1, 1]) {
+    test(`${pointerType} returns an inspected card only on release of a pronounced ${direction < 0 ? 'upward' : 'downward'} swipe`, async () => {
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+      await makeReady();
+      if (pointerType === 'touch') resizeViewport(319, 700);
+      const pointer = pointerControls(run);
+      const home = homeFor(models[0], 0);
+      act(() => run.controls.current!.selectCard(0));
+      settle();
+      const originalSurfaces = [...surfaces];
+      const originalRenderers = [...renderers];
+      const position = home.anchor.position.clone();
+      const [x, y] = cardScreenPosition(home);
+      const bounds = cardScreenBounds(home);
+      const endY = direction < 0 ? bounds.top - 30 : bounds.bottom + 30;
+      pointer.dispatch('pointerdown', x, y, pointerType, { timeStamp: 1000 });
+      for (const fraction of [0.25, 0.5, 0.75, 1]) {
+        pointer.dispatch('pointermove', x, y + (endY - y) * fraction, pointerType, { timeStamp: 1000 + 160 * fraction });
+        advanceFrames(2);
+        assert.equal(run.state.cardStage, 'inspecting');
+        assert.ok(home.anchor.position.equals(position));
+      }
+      assert.equal(run.count('return-card'), 0);
+      pointer.dispatch('pointerup', x, endY, pointerType, { timeStamp: 1180 });
+      settle();
+      assert.equal(run.state.cardStage, 'pocket');
+      assert.equal(run.count('return-card'), 1);
+      assert.equal(run.count('card-returned'), 1);
+      assert.equal(pointer.captured.size, 0);
+      assertHome(home);
+      assert.deepEqual(surfaces, originalSurfaces);
+      assert.deepEqual(renderers, originalRenderers);
+      assert.equal(sounds.filter(sound => sound === 'cardPutback').length, 1);
+    });
+  }
+}
+
+for (const scenario of ['short edge crossing', 'inside card', 'slow', 'low speed', 'long hold', 'paused release', 'diagonal', 'horizontal detour', 'backtracking', 'background origin'] as const) {
+  test(`inspection ${scenario} gestures do not dismiss the card`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    for (const direction of [-1, 1]) {
+      const [centerX, centerY] = cardScreenPosition(home);
+      const bounds = cardScreenBounds(home);
+      const edge = direction < 0 ? bounds.top : bounds.bottom;
+      let startX = centerX;
+      let startY = centerY;
+      let endX = centerX;
+      let endY = edge + direction * 30;
+      let moveTime = 1140;
+      let releaseTime = 1180;
+      if (scenario === 'short edge crossing') startY = edge - direction * 10;
+      if (scenario === 'inside card') {
+        startY = (direction < 0 ? bounds.bottom : bounds.top) + direction * 12;
+        endY = edge - direction * 12;
+      }
+      if (scenario === 'slow') { moveTime = 1500; releaseTime = 1520; }
+      if (scenario === 'low speed') { startY = edge - direction * 180; moveTime = 1290; releaseTime = 1300; }
+      if (scenario === 'long hold') { moveTime = 2100; releaseTime = 2120; }
+      if (scenario === 'paused release') releaseTime = 2200;
+      if (scenario === 'diagonal') endX += Math.abs(endY - startY) * 0.5;
+      if (scenario === 'background origin') startX = endX = bounds.left - 30;
+      pointer.dispatch('pointerdown', startX, startY, 'touch', { timeStamp: 1000 });
+      if (scenario === 'horizontal detour') {
+        pointer.dispatch('pointermove', startX + Math.abs(endY - startY) * 0.5, startY, 'touch', { timeStamp: 1040 });
+      }
+      if (scenario === 'backtracking') {
+        pointer.dispatch('pointermove', startX, startY + (endY - startY) * 0.75, 'touch', { timeStamp: 1040 });
+        pointer.dispatch('pointermove', startX, startY + (endY - startY) * 0.4, 'touch', { timeStamp: 1080 });
+      }
+      pointer.dispatch('pointermove', endX, endY, 'touch', { timeStamp: moveTime });
+      pointer.dispatch('pointerup', endX, endY, 'touch', { timeStamp: releaseTime });
+      settle();
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.equal(run.count('return-card'), 0);
+      assert.equal(pointer.captured.size, 0);
+    }
+  });
+}
+
+for (const direction of [-1, 1]) {
+  test(`a fast ${direction < 0 ? 'upward' : 'downward'} gesture released on the tilted card cannot dismiss it past its original edge`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    resizeViewport(1400, 1200);
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const card = cardLayout(home);
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const [x, y] = cardScreenPosition(home);
+    const flatBounds = cardScreenBounds(home);
+    pointer.dispatch('pointermove', x, direction < 0 ? flatBounds.bottom - 1 : flatBounds.top + 1);
+    advanceFrames();
+    const initialBounds = cardScreenBounds(home, card.mesh);
+    const endY = direction < 0 ? initialBounds.top - 25 : initialBounds.bottom + 25;
+    const started = time;
+    pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: started });
+    pointer.dispatch('pointermove', x, endY, 'touch', { timeStamp: started + 10 });
+    for (let frame = 0; frame < 15; frame += 1) advanceFrame(1000 / 60);
+    const tiltedBounds = cardScreenBounds(home, card.mesh);
+    assert.equal(Math.sign(card.mesh.rotation.x), -direction);
+    assert.ok(direction < 0 ? endY > tiltedBounds.top : endY < tiltedBounds.bottom);
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(x / viewportWidth * 2 - 1, 1 - endY / viewportHeight * 2), renderers.at(-1)!.camera!);
+    assert.ok(raycaster.intersectObject(card.mesh).length > 0);
+    pointer.dispatch('pointerup', x, endY, 'touch', { timeStamp: time });
+    advanceFrames();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('return-card'), 0);
+    assert.equal(pointer.captured.size, 0);
+  });
+}
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidden', 'disabled', 'activation disabled'] as const) {
+  test(`a pronounced inspection swipe interrupted by ${cancellation} stays open and ignores stale release`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    settle();
+    const [x, y] = cardScreenPosition(home);
+    const endY = cardScreenBounds(home).bottom + 30;
+    pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+    pointer.dispatch('pointermove', x, endY, 'touch', { timeStamp: 1140 });
+    if (cancellation === 'blur') act(() => window.dispatchEvent(new window.Event('blur')));
+    else if (cancellation === 'hidden') {
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+    } else if (cancellation === 'disabled') act(() => run.setInteractionEnabled(false));
+    else if (cancellation === 'activation disabled') act(() => run.setActivationEnabled(false));
+    else pointer.dispatch(cancellation, x, endY, 'touch', { timeStamp: 1150 });
+    settle();
+    if (cancellation === 'disabled') act(() => run.setInteractionEnabled(true));
+    if (cancellation === 'activation disabled') act(() => run.setActivationEnabled(true));
+    pointer.dispatch('pointerup', x, endY, 'touch', { timeStamp: 1180 });
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('return-card'), 0);
+    assert.equal(pointer.captured.size, 0);
+  });
+}
+
+test('partial card pulls return on release and can follow the finger back into the pocket before release', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  for (const reversing of [false, true]) {
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    pointer.dispatch('pointermove', x, y - (reversing ? 80 : 30), 'touch');
+    advanceFrames(4);
+    const raisedY = home.anchor.getWorldPosition(new THREE.Vector3()).y;
+    if (reversing) {
+      pointer.dispatch('pointermove', x, y, 'touch');
+      advanceFrames(4);
+      assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).y < raisedY);
+    }
+    pointer.dispatch('pointerup', x, y - (reversing ? 0 : 30), 'touch');
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-lifted'), 0);
+    assert.equal(pointer.captured.size, 0);
+    assertHome(home);
+  }
+});
+
+for (const [rate, distance] of [[60, 50], [120, 50], [240, 50], [120, 40]]) {
+  for (const releaseJitter of [0, 1, 2]) {
+    test(`short ${distance}px extraction flicks finish at ${rate} Hz with ${releaseJitter}px reverse release jitter`, async () => {
+      const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+      await makeReady();
+      const pointer = pointerControls(run);
+      const home = homeFor(models[0], 0);
+      const [x, y] = cardGrabPosition(home, 0);
+      const steps = rate * distance / 600;
+      pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+      for (let step = 1; step <= steps; step += 1) {
+        pointer.dispatch('pointermove', x, y - distance * step / steps, 'touch', { timeStamp: 1000 + step * 1000 / rate });
+      }
+      pointer.dispatch('pointerup', x, y - distance + releaseJitter, 'touch', { timeStamp: 1000 + (steps + 1) * 1000 / rate });
+      settle();
+      assert.equal(run.state.cardStage, 'inspecting');
+      assert.equal(run.count('card-lifted'), 1);
+    });
+  }
+}
+
+for (const reverseDistance of [8, 9]) {
+  test(`${reverseDistance}px of accumulated reversal ${reverseDistance === 8 ? 'preserves' : 'cancels'} a short extraction flick`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+    pointer.dispatch('pointermove', x, y - 50, 'touch', { timeStamp: 1060 });
+    pointer.dispatch('pointermove', x, y - 47, 'touch', { timeStamp: 1064 });
+    pointer.dispatch('pointermove', x, y - 44, 'touch', { timeStamp: 1068 });
+    pointer.dispatch('pointerup', x, y - 50 + reverseDistance, 'touch', { timeStamp: 1072 });
+    settle();
+    assert.equal(run.state.cardStage, reverseDistance === 8 ? 'inspecting' : 'pocket');
+    assert.equal(run.count('card-lifted'), reverseDistance === 8 ? 1 : 0);
+    if (reverseDistance === 9) assertHome(home);
+  });
+}
+
+for (const releaseJitter of [1, 2]) {
+  test(`short downward flicks cancel a raised card with ${releaseJitter}px reverse release jitter`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+    pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1400 });
+    settle();
+    for (let step = 1; step <= 10; step += 1) {
+      pointer.dispatch('pointermove', x, y - 260 + step * 5, 'touch', { timeStamp: 1400 + step * 1000 / 120 });
+    }
+    pointer.dispatch('pointerup', x, y - 210 - releaseJitter, 'touch', { timeStamp: 1400 + 11 * 1000 / 120 });
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-lifted'), 0);
+    assertHome(home);
+  });
+}
+
+test('a paused short pull with small release movement no longer counts as a flick', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+  pointer.dispatch('pointermove', x, y - 50, 'touch', { timeStamp: 1060 });
+  pointer.dispatch('pointerup', x, y - 51, 'touch', { timeStamp: 2060 });
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(run.count('card-lifted'), 0);
+  assertHome(home);
+});
+
+test('reverse jitter during a pause cannot keep a short extraction flick alive', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+  pointer.dispatch('pointermove', x, y - 50, 'touch', { timeStamp: 1060 });
+  pointer.dispatch('pointermove', x, y - 49, 'touch', { timeStamp: 1100 });
+  pointer.dispatch('pointermove', x, y - 48, 'touch', { timeStamp: 1140 });
+  pointer.dispatch('pointerup', x, y - 47, 'touch', { timeStamp: 1180 });
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(run.count('card-lifted'), 0);
+  assertHome(home);
+});
+
+for (const reverseDistance of [2, 50]) {
+  test(`${reverseDistance === 2 ? 'tiny release jitter preserves' : 'a deliberate reverse flick cancels'} a full card pull`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+    pointer.dispatch('pointermove', x, y - 260, 'touch', { timeStamp: 1400 });
+    advanceFrames(4);
+    pointer.dispatch('pointerup', x, y - 260 + reverseDistance, 'touch', { timeStamp: 1400 + 1000 / 240 });
+    settle();
+    assert.equal(run.state.cardStage, reverseDistance === 2 ? 'inspecting' : 'pocket');
+    assert.equal(run.count('card-lifted'), reverseDistance === 2 ? 1 : 0);
+    if (reverseDistance !== 2) assertHome(home);
+  });
+}
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidden'] as const) {
+  test(`a vertical card drag interrupted by ${cancellation} restores its source and ignores stale release`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 1);
+    for (const fromPocket of [true, false]) {
+      if (!fromPocket) {
+        act(() => run.controls.current!.selectCard(1));
+        settle();
+      }
+      const [x, y] = fromPocket ? cardGrabPosition(home, 1) : cardScreenPosition(home);
+      const endY = y + (fromPocket ? -40 : 150);
+      pointer.dispatch('pointerdown', x, y, 'touch');
+      pointer.dispatch('pointermove', x, endY, 'touch');
+      advanceFrames(4);
+      assert.ok(pointer.captured.has(1));
+      if (cancellation === 'blur') {
+        act(() => window.dispatchEvent(new window.Event('blur')));
+      } else if (cancellation === 'hidden') {
+        act(() => {
+          Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+          document.dispatchEvent(new window.Event('visibilitychange'));
+        });
+        assert.equal(frames.size, 0);
+        act(() => {
+          Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+          document.dispatchEvent(new window.Event('visibilitychange'));
+        });
+      } else pointer.dispatch(cancellation, x, endY, 'touch');
+      settle();
+      assert.equal(pointer.captured.size, 0);
+      assert.equal(run.state.cardStage, fromPocket ? 'pocket' : 'inspecting');
+      if (fromPocket) assertHome(home);
+      const finished = run.state;
+      const eventCount = run.events.length;
+      pointer.dispatch('pointerup', x, endY, 'touch');
+      act(() => pointer.host.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 })));
+      settle();
+      assert.equal(run.state, finished);
+      assert.equal(run.events.length, eventCount);
+    }
+  });
+}
+
+for (const cancellation of ['pointercancel', 'lostpointercapture', 'blur', 'hidden', 'disabled'] as const) {
+  test(`a full held pull returns after ${cancellation} and ignores its stale release`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    pointer.dispatch('pointermove', x, y - 260, 'touch');
+    advanceFrames(4);
+    if (cancellation === 'blur') {
+      act(() => window.dispatchEvent(new window.Event('blur')));
+    } else if (cancellation === 'hidden') {
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+      act(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+        document.dispatchEvent(new window.Event('visibilitychange'));
+      });
+    } else if (cancellation === 'disabled') {
+      act(() => run.setInteractionEnabled(false));
+    } else pointer.dispatch(cancellation, x, y - 260, 'touch');
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-lifted'), 0);
+    assert.equal(run.count('card-returned'), 1);
+    assert.equal(pointer.captured.size, 0);
+    if (cancellation === 'disabled') act(() => run.setInteractionEnabled(true));
+    pointer.dispatch('pointerup', x, y + 260, 'touch');
+    act(() => pointer.host.dispatchEvent(new window.MouseEvent('click', { bubbles: true, detail: 1 })));
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-returned'), 1);
+  });
+}
+
+test('release-only upward movement extracts a card without treating ordinary close-up movement as dismissal', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y);
+  pointer.dispatch('pointerup', x, y - 180);
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(run.count('card-lifted'), 1);
+  const [returnX, returnY] = cardScreenPosition(home);
+  pointer.dispatch('pointerdown', returnX, returnY);
+  pointer.dispatch('pointerup', returnX, returnY + 180);
+  settle();
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(run.count('card-returned'), 0);
+  assert.equal(pointer.captured.size, 0);
+});
+
+test('suspending interaction cancels a held card drag without another movement and ignores its later release', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  for (const fromPocket of [true, false]) {
+    if (!fromPocket) {
+      act(() => run.controls.current!.selectCard(0));
+      settle();
+    }
+    const [x, y] = fromPocket ? cardGrabPosition(home, 0) : cardScreenPosition(home);
+    const endY = y + (fromPocket ? -40 : 120);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    pointer.dispatch('pointermove', x, endY, 'touch');
+    advanceFrames(4);
+    assert.ok(pointer.captured.has(1));
+    act(() => run.setInteractionEnabled(false));
+    settle();
+    assert.equal(pointer.captured.size, 0);
+    assert.equal(run.state.cardStage, fromPocket ? 'pocket' : 'inspecting');
+    if (fromPocket) assertHome(home);
+    act(() => run.setInteractionEnabled(true));
+    settle();
+    const eventCount = run.events.length;
+    pointer.dispatch('pointerup', x, endY, 'touch');
+    settle();
+    assert.equal(run.events.length, eventCount);
+    assert.equal(run.state.cardStage, fromPocket ? 'pocket' : 'inspecting');
+  }
+});
+
+test('disabling activation before release cancels active card pulls and rejects pending pulls without waiting for a frame', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  for (const active of [false, true]) {
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    if (active) {
+      pointer.dispatch('pointermove', x, y - 40, 'touch');
+      advanceFrames(4);
+      assert.equal(run.state.selectedCard, 0);
+    }
+    act(() => run.setActivationEnabled(false));
+    pointer.dispatch('pointerup', x, y - 40, 'touch');
+    assert.equal(pointer.captured.size, 0);
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('card-lifted'), 0);
+    assertHome(home);
+    act(() => run.setActivationEnabled(true));
+    settle();
+  }
+});
+
+test('disabling activation cancels an inspection press before release without dismissing the card', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  act(() => run.controls.current!.selectCard(0));
+  settle();
+  for (const moved of [false, true]) {
+    const [x, y] = cardScreenPosition(home);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    if (moved) pointer.dispatch('pointermove', x, y + 120, 'touch');
+    act(() => run.setActivationEnabled(false));
+    pointer.dispatch('pointerup', x, y + (moved ? 120 : 0), 'touch');
+    assert.equal(pointer.captured.size, 0);
+    settle();
+    assert.equal(run.state.cardStage, 'inspecting');
+    assert.equal(run.count('card-returned'), 0);
+    act(() => run.setActivationEnabled(true));
+    settle();
+  }
+});
+
+test('vertical background drags do not select cards and horizontal drags on cards still fold the folder', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const homes = [homeFor(models[0], 0), homeFor(models[0], 1)];
+  pointer.dispatch('pointerdown', 5, 5, 'touch');
+  pointer.dispatch('pointermove', 5, -150, 'touch');
+  pointer.dispatch('pointerup', 5, -150, 'touch');
+  settle();
+  assert.equal(run.state.selectedCard, null);
+  assert.equal(run.state.folderPose, 1);
+  const [x, y] = cardGrabPosition(homes[0], 0);
+  pointer.dispatch('pointerdown', x, y, 'touch');
+  pointer.dispatch('pointermove', x + 180, y, 'touch');
+  pointer.dispatch('pointerup', x + 180, y, 'touch');
+  settle();
+  assert.equal(run.state.selectedCard, null);
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.count('select-card'), 0);
+  homes.forEach(assertHome);
+});
+
+test('a horizontal folder drag started on a card cannot become a card drag when its direction changes', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 0);
+  const [x, y] = cardGrabPosition(home, 0);
+  pointer.dispatch('pointerdown', x, y, 'touch');
+  pointer.dispatch('pointermove', x + 7, y, 'touch');
+  advanceFrames(2);
+  pointer.dispatch('pointermove', x + 6, y - 12, 'touch');
+  advanceFrames(2);
+  assert.equal(run.count('select-card'), 0);
+  assert.equal(run.state.selectedCard, null);
+  pointer.dispatch('pointermove', x + 180, y - 12, 'touch');
+  pointer.dispatch('pointerup', x + 180, y - 12, 'touch');
+  settle();
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.count('select-card'), 0);
+  assert.equal(sounds.filter(sound => sound === 'folderDragStart').length, 1);
+  assert.equal(sounds.filter(sound => sound === 'folderDragEnd').length, 1);
+  assert.equal(pointer.captured.size, 0);
+  assertHome(home);
+});
+
+test('a held partial pull remains in front of its pocket after resize and can still return', async () => {
+  const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  const home = homeFor(models[0], 1);
+  const [x, y] = cardGrabPosition(home, 1);
+  pointer.dispatch('pointerdown', x, y, 'touch');
+  pointer.dispatch('pointermove', x, y - 40, 'touch');
+  advanceFrames(4);
+  act(() => {
+    viewportWidth = 319;
+    viewportHeight = 700;
+    observers.forEach(observer => observer.callback());
+  });
+  advanceFrames(12);
+  const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(home.parent.getWorldQuaternion(new THREE.Quaternion()));
+  const pocketDepth = home.parent.localToWorld(home.position.clone()).dot(normal);
+  assert.ok(home.anchor.getWorldPosition(new THREE.Vector3()).dot(normal) >= pocketDepth - 1e-8);
+  assert.equal(run.count('card-lifted'), 0);
+  assert.equal(run.count('card-returned'), 0);
+  pointer.dispatch('pointermove', x, y, 'touch');
+  pointer.dispatch('pointerup', x, y, 'touch');
+  settle();
+  assert.equal(run.state.cardStage, 'pocket');
+  assert.equal(pointer.captured.size, 0);
+  assertHome(home);
+});
+
+for (const direction of [-1, 1]) {
+  test(`a ${direction < 0 ? 'upward' : 'downward'} drag cannot take over an automatic card transition`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    act(() => run.controls.current!.selectCard(0));
+    for (const lifting of [true, false]) {
+      if (!lifting) act(() => run.controls.current!.returnCard());
+      advanceFrames(2);
+      const [x, y] = cardScreenPosition(home);
+      pointer.dispatch('pointerdown', x, y, 'touch', { timeStamp: 1000 });
+      pointer.dispatch('pointermove', x, y + direction * 400, 'touch', { timeStamp: 1120 });
+      advanceFrames(20);
+      assert.equal(run.state.cardStage, lifting ? 'inspecting' : 'pocket');
+      pointer.dispatch('pointerup', x, y + direction * 400, 'touch', { timeStamp: 1180 });
+      advanceFrames(20);
+      assert.equal(run.state.cardStage, lifting ? 'inspecting' : 'pocket');
+      assert.equal(pointer.captured.size, 0);
+    }
+    assertHome(home);
+  });
+}
+
+for (const distance of [40, 260]) {
+  test(`Escape returns a ${distance < 260 ? 'partial' : 'full held'} card pull and ignores its stale release`, async () => {
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4, folderPose: 1 });
+    await makeReady();
+    const pointer = pointerControls(run);
+    const home = homeFor(models[0], 0);
+    const [x, y] = cardGrabPosition(home, 0);
+    pointer.dispatch('pointerdown', x, y, 'touch');
+    pointer.dispatch('pointermove', x, y - distance, 'touch');
+    advanceFrames(4);
+    assert.equal(run.state.selectedCard, 0);
+    act(() => { assert.equal(run.controls.current!.escape(), true); });
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(pointer.captured.size, 0);
+    const selections = run.count('select-card');
+    pointer.dispatch('pointerup', x, y - distance, 'touch');
+    settle();
+    assert.equal(run.state.cardStage, 'pocket');
+    assert.equal(run.count('select-card'), selections);
+    assertHome(home);
+  });
+}
+
 for (const [position, x] of [['outside', 870], ['inside', 530]] as const) {
   test(`releasing an inspection mouse drag ${position} the card preserves the matching hover tilt`, async () => {
     setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
@@ -2574,6 +3453,14 @@ test('closed-pack viewing disables activation but preserves sealed 3D rotation w
   settle();
   assert.equal(run.state.folderPose, 2);
   assert.equal(run.state.stage, 'sealed');
+  const pointer = pointerControls(run);
+  pointer.dispatch('pointerdown');
+  pointer.dispatch('pointermove', viewportWidth / 2 - 260, viewportHeight / 2);
+  pointer.dispatch('pointerup', viewportWidth / 2 - 260, viewportHeight / 2);
+  settle();
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.count('activate'), 0);
+  assert.equal(surfaces.length, 0);
 });
 
 for (const outcome of ['ready', 'failure'] as const) {
