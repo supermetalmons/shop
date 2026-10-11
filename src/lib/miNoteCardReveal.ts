@@ -50,6 +50,10 @@ export function createMiNoteRevealState(): MiNoteRevealState {
   return { stage: 'sealed', ready: false, taps: 0, folderPose: 0, selectedCard: null, cardStage: 'pocket' };
 }
 
+export function isMiNoteFolderInteractive(state: MiNoteRevealState): boolean {
+  return state.stage === 'interactive' || (state.stage === 'seal-peeling' && state.ready);
+}
+
 function unlockWhenReady(state: MiNoteRevealState): MiNoteRevealState {
   return state.stage === 'unsealed' && state.ready
     ? { ...state, stage: 'interactive' }
@@ -83,7 +87,7 @@ function reduceMiNoteRevealWithReadiness(
         const canUnseal = taps >= minimumTaps && (!requireReadyToUnseal || state.ready);
         return { ...state, taps, stage: canUnseal ? 'seal-peeling' : 'sealed' };
       }
-      if (state.stage !== 'interactive' || state.selectedCard !== null) return state;
+      if (!isMiNoteFolderInteractive(state) || state.selectedCard !== null) return state;
       return { ...state, folderPose: state.folderPose === 1 ? event.leaf ?? 0 : 1 };
     case 'seal-finished':
       return state.stage === 'seal-peeling' ? unlockWhenReady({ ...state, stage: 'unsealed' }) : state;
@@ -94,14 +98,14 @@ function reduceMiNoteRevealWithReadiness(
       if (
         state.folderPose === event.pose ||
         state.selectedCard !== null ||
-        (state.stage !== 'interactive' && (state.stage !== 'sealed' || event.pose === 1))
+        (!isMiNoteFolderInteractive(state) && (state.stage !== 'sealed' || event.pose === 1))
       ) return state;
       return { ...state, folderPose: event.pose };
     case 'select-card':
       if (state.cardStage === 'returning' && state.selectedCard === event.index) {
         return { ...state, cardStage: 'lifting' };
       }
-      if (state.stage !== 'interactive' || !state.ready || state.folderPose !== 1 || state.selectedCard !== null) {
+      if (!isMiNoteFolderInteractive(state) || !state.ready || state.folderPose !== 1 || state.selectedCard !== null) {
         return state;
       }
       return { ...state, selectedCard: event.index, cardStage: 'lifting' };

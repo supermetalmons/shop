@@ -7,6 +7,7 @@ import { MI_NOTE_CARDS_DEFAULT } from './lib/miNoteCardEffects';
 import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteIndex } from './lib/miNoteCards';
 import {
   createMiNoteRevealState,
+  isMiNoteFolderInteractive,
   MI_NOTE_OPEN_TAPS,
   reduceMiNoteReveal,
   sampleMiNotePack,
@@ -48,7 +49,8 @@ function MiNotePackOpening({
 
   useEffect(() => dispatch({ type: 'ready', ready }), [ready]);
 
-  const openingLocked = state.stage === 'seal-peeling' || state.stage === 'unsealed';
+  const folderInteractive = isMiNoteFolderInteractive(state);
+  const openingLocked = state.stage !== 'sealed' && !folderInteractive;
   const note = error
     ? 'Unable to load this pack.'
     : !viewerReady
@@ -115,7 +117,7 @@ function MiNotePackOpening({
               disabled={!viewerReady || Boolean(error) || openingLocked}
               onClick={() => controlsRef.current?.activate()}
             >{packLabel}</button>
-            {state.stage === 'interactive' && state.folderPose === 1 && ready && cards.map((_, index) => (
+            {folderInteractive && state.folderPose === 1 && ready && cards.map((_, index) => (
               <button
                 key={index}
                 type="button"

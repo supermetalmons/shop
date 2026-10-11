@@ -98,7 +98,7 @@ test('inventory packs require three taps plus ready cards and never peel automat
   state = reduceMiNoteInventoryReveal(state, { type: 'activate' });
   assert.equal(state.stage, 'seal-peeling');
   assert.equal(state.folderPose, 0);
-  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'activate' }), state);
+  assert.equal(reduceMiNoteInventoryReveal(state, { type: 'activate' }).folderPose, 1);
   state = reduceMiNoteInventoryReveal(state, { type: 'seal-finished' });
   assert.equal(state.stage, 'interactive');
   assert.equal(state.folderPose, 0);
@@ -141,7 +141,7 @@ test('four taps peel the seal and a separate activation opens the folder', () =>
   state = reduceMiNoteReveal(state, { type: 'activate' });
   assert.equal(state.stage, 'seal-peeling');
   assert.equal(state.taps, 4);
-  assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+  assert.equal(reduceMiNoteReveal(state, { type: 'activate' }).folderPose, 1);
   state = reduceMiNoteReveal(state, { type: 'seal-finished' });
   assert.equal(state.stage, 'interactive');
   assert.equal(state.folderPose, 0);
@@ -151,7 +151,7 @@ test('four taps peel the seal and a separate activation opens the folder', () =>
   assert.equal(state.taps, 4);
 });
 
-test('peeling and readiness unlock either closed cover without opening it in either completion order', () => {
+test('readiness unlocks either closed cover during or after peeling without opening it automatically', () => {
   const completions: MiNoteRevealEvent[] = [{ type: 'seal-finished' }, { type: 'ready', ready: true }];
   for (const pose of [0, 2] as const) {
     for (const order of [completions, [...completions].reverse()]) {
@@ -159,13 +159,52 @@ test('peeling and readiness unlock either closed cover without opening it in eit
       state = reduceMiNoteReveal(state, order[0]);
       assert.notEqual(state.stage, 'interactive');
       assert.equal(state.folderPose, pose);
-      assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
-      assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
+      if (state.ready) {
+        assert.equal(reduceMiNoteReveal(state, { type: 'activate' }).folderPose, 1);
+        assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }).folderPose, 1);
+      } else {
+        assert.equal(reduceMiNoteReveal(state, { type: 'activate' }), state);
+        assert.equal(reduceMiNoteReveal(state, { type: 'folder-pose', pose: 1 }), state);
+      }
       state = reduceMiNoteReveal(state, order[1]);
       assert.equal(state.stage, 'interactive');
       assert.equal(state.folderPose, pose);
       state = reduceMiNoteReveal(state, { type: 'activate' });
       assert.equal(state.folderPose, 1);
+    }
+  }
+});
+
+test('ready peeling accepts folder and card actions without skipping or resetting the seal lifecycle', () => {
+  for (const [reduce, taps] of [[reduceMiNoteReveal, MI_NOTE_OPEN_TAPS], [reduceMiNoteInventoryReveal, MI_NOTE_INVENTORY_OPEN_TAPS]] as const) {
+    for (const pose of [0, 2] as const) {
+      let state = reduce(createMiNoteRevealState(), { type: 'ready', ready: true });
+      state = reduce(state, { type: 'folder-pose', pose });
+      for (let tap = 0; tap < taps; tap += 1) state = reduce(state, { type: 'activate' });
+      for (const event of [{ type: 'activate' }, { type: 'folder-pose', pose: 1 }] as const) {
+        const opened = reduce(state, event);
+        assert.equal(opened.stage, 'seal-peeling');
+        assert.equal(opened.folderPose, 1);
+        assert.equal(opened.taps, taps);
+        const closed = reduce(opened, { type: 'activate', leaf: pose });
+        assert.equal(closed.folderPose, pose);
+        assert.equal(closed.stage, 'seal-peeling');
+        const selected = reduce(opened, { type: 'select-card', index: 1 });
+        assert.equal(selected.cardStage, 'lifting');
+        assert.equal(selected.selectedCard, 1);
+        assert.equal(reduce(selected, { type: 'activate' }), selected);
+        assert.equal(reduce(selected, { type: 'folder-pose', pose }), selected);
+        const finished = reduce(selected, { type: 'seal-finished' });
+        assert.deepEqual(finished, { ...selected, stage: 'interactive' });
+        assert.equal(reduce(finished, { type: 'seal-finished' }), finished);
+      }
+      state = reduce(state, { type: 'ready', ready: false });
+      for (const event of [{ type: 'activate' }, { type: 'folder-pose', pose: 1 }, { type: 'select-card', index: 0 }] as const) {
+        assert.equal(reduce(state, event), state);
+      }
+      state = reduce(state, { type: 'ready', ready: true });
+      assert.equal(state.stage, 'seal-peeling');
+      assert.equal(reduce(state, { type: 'activate' }).folderPose, 1);
     }
   }
 });

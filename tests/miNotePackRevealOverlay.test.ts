@@ -178,11 +178,10 @@ test('live taps stay sealed until the assigned pair and both rendered card asset
   assert.equal(viewer().props.state.stage, 'seal-peeling');
   assert.equal(viewer().props.state.folderPose, 0);
   emit({ type: 'folder-pose', pose: 1 });
-  assert.equal(viewer().props.state.folderPose, 0);
+  assert.equal(viewer().props.state.folderPose, 1);
   emit({ type: 'seal-finished' });
   assert.equal(viewer().props.state.stage, 'interactive');
-  assert.equal(viewer().props.state.folderPose, 0);
-  activate();
+  assert.equal(viewer().props.state.folderPose, 1);
   fireEvent.click(h.view.getByRole('button', { name: 'View left card' }));
   emit({ type: 'card-lifted' });
   assert.equal(viewer().props.state.cardStage, 'inspecting');
@@ -196,6 +195,46 @@ test('live taps stay sealed until the assigned pair and both rendered card asset
   fireEvent.keyDown(h.view.getByTestId('mi-note-viewer'), { key: 'Escape' });
   assert.deepEqual(h.dismissed, [true]);
   assert.equal(requests, 1);
+});
+
+test('live accessible folder and card actions work during peeling while completion waits for the sticker', async () => {
+  const h = await mount({ revealedIds: [1, 2] });
+  ready(true);
+  for (let tap = 0; tap < 3; tap += 1) activate();
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
+  assert.equal(h.completed.at(-1), false);
+  const open = h.view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement;
+  assert.equal(open.disabled, false);
+  fireEvent.click(open);
+  assert.equal(viewer().props.state.folderPose, 1);
+  fireEvent.click(h.view.getByRole('button', { name: 'View right card' }));
+  assert.equal(viewer().props.state.selectedCard, 1);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
+  assert.equal(h.completed.at(-1), false);
+  emit({ type: 'seal-finished' });
+  assert.equal(viewer().props.state.stage, 'interactive');
+  assert.equal(viewer().props.state.selectedCard, 1);
+  assert.equal(h.completed.at(-1), true);
+});
+
+test('live peeling folder actions stay gated when card readiness is lost', async () => {
+  const h = await mount({ revealedIds: [1, 2] });
+  ready(true);
+  for (let tap = 0; tap < 3; tap += 1) activate();
+  const open = h.view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement;
+  act(() => viewer().props.onCardsReadyChange(false));
+  assert.equal(open.disabled, true);
+  fireEvent.click(open);
+  activate();
+  emit({ type: 'folder-pose', pose: 1 });
+  assert.equal(viewer().props.state.folderPose, 0);
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
+  act(() => viewer().props.onCardsReadyChange(true));
+  assert.equal(open.disabled, false);
+  fireEvent.click(open);
+  assert.equal(viewer().props.state.folderPose, 1);
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
 });
 
 test('prepared cards still need three fresh activations and held keys do not count as taps', async () => {

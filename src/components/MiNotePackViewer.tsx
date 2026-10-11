@@ -15,7 +15,7 @@ import {
 } from '../lib/miNotePackModel';
 import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '../lib/miNotePackMotion';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
-import { MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
+import { isMiNoteFolderInteractive, MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
 import { playMiNotePackSound, preloadMiNotePackSounds, unlockMiNotePackSounds, type MiNotePackSound } from '../lib/miNotePackSounds';
 
@@ -78,6 +78,7 @@ type CardDismissSwipe = {
 };
 
 const CARD_FRONT_CLEARANCE = 0.05;
+const UNSEAL_TAP_DELAY_MS = 500;
 
 function cardAssetKey(card: DrifCardConfig) {
   return JSON.stringify([card.imageSrc, card.foilSrc, card.textureSrc]);
@@ -118,6 +119,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     let taps = props.state.taps;
     let sealTime = 0;
     let sealStarted = false;
+    let sealStartedAt: number | null = null;
     let sealFinished = false;
     let packReadyPending = false;
     let cardsReadyPending: (() => void) | null = null;
@@ -317,8 +319,15 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       invalidate();
     };
     const canNavigate = () => currentProps.current.interactionEnabled
-      && ['sealed', 'interactive'].includes(currentProps.current.state.stage)
+      && (currentProps.current.state.stage === 'sealed' || isMiNoteFolderInteractive(currentProps.current.state))
       && currentProps.current.state.selectedCard === null && !cardDrag?.active;
+    const isUnsealTapWindow = () => sealStartedAt === null
+      ? currentProps.current.state.stage === 'seal-peeling'
+      : performance.now() - sealStartedAt < UNSEAL_TAP_DELAY_MS;
+    const hitPack = (count: number) => {
+      recoil.velocity += 1.6 + Math.min(count, MI_NOTE_OPEN_TAPS) * 0.65;
+      playSound('folderTap');
+    };
     const selectCard = (index: 0 | 1) => {
       if (!cards[index]) return;
       const state = currentProps.current.state;
@@ -329,7 +338,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         invalidate();
         return;
       }
-      if (!canNavigate() || state.stage !== 'interactive' || !state.ready || drag) return;
+      if (!canNavigate() || !isMiNoteFolderInteractive(state) || !state.ready || drag) return;
       if (soundEnabled()) void unlockMiNotePackSounds();
       input.cancel();
       setPose(1);
@@ -343,15 +352,24 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       invalidate();
     };
     const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
-      if (currentProps.current.activationEnabled === false || !canNavigate() || drag) return;
+      const state = currentProps.current.state;
+      if (currentProps.current.activationEnabled === false || !currentProps.current.interactionEnabled
+        || state.selectedCard !== null || cardDrag?.active || drag) return;
+      const feedbackOnly = state.folderPose !== 1 && isUnsealTapWindow();
+      if (!feedbackOnly && !canNavigate()) return;
       void unlockMiNotePackSounds();
       input.cancel();
-      if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
+      if (point && (state.stage === 'sealed' || feedbackOnly) && !reducedMotion.matches) {
         const worldPerPixel = 2 * Math.abs(camera.position.z - point.z) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / height;
         tapSparkles.burst(point, worldPerPixel);
       }
-      if (currentProps.current.state.stage === 'interactive') {
-        playSound(currentProps.current.state.folderPose === 1 ? 'folderClose' : 'folderOpen');
+      if (feedbackOnly) {
+        hitPack(state.taps + 1);
+        invalidate();
+        return;
+      }
+      if (isMiNoteFolderInteractive(state)) {
+        playSound(state.folderPose === 1 ? 'folderClose' : 'folderOpen');
       }
       dispatch({ type: 'activate', leaf });
       invalidate();
@@ -378,13 +396,13 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           returnCard();
           return true;
         }
-        if (drag || outerFlip || state.stage === 'seal-peeling' || state.stage === 'unsealed') return true;
-        if (state.stage === 'interactive' && (state.folderPose === 1 || Math.abs(fold.value - state.folderPose) > 0.015)) {
+        if (drag || outerFlip) return true;
+        if (isMiNoteFolderInteractive(state) && (state.folderPose === 1 || Math.abs(fold.value - state.folderPose) > 0.015)) {
           input.cancel();
           setPose(0);
           return true;
         }
-        return false;
+        return state.stage === 'seal-peeling' || state.stage === 'unsealed';
       },
     };
     currentProps.current.controlsRef.current = controls;
@@ -432,11 +450,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const state = currentProps.current.state;
         tapHit = hit(event);
         tapCard = state.selectedCard;
-        if (state.stage === 'seal-peeling' || state.stage === 'unsealed') return false;
+        if (state.selectedCard === null && state.stage !== 'sealed' && !isMiNoteFolderInteractive(state) && !isUnsealTapWindow()) return false;
         host.focus({ preventScroll: true });
         host.setPointerCapture(event.pointerId);
         const cardIndex = tapHit?.object.userData.card;
-        if ((cardIndex === 0 || cardIndex === 1) && state.stage === 'interactive' && state.ready
+        if ((cardIndex === 0 || cardIndex === 1) && isMiNoteFolderInteractive(state) && state.ready
           && currentProps.current.activationEnabled !== false && state.folderPose === 1 && !outerFlip
           && Math.abs(fold.value - 1) < 0.015 && state.selectedCard === null) {
           cardDrag = {
@@ -475,13 +493,15 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         return true;
       },
       onMove(event, movement) {
+        const state = currentProps.current.state;
         if (!currentProps.current.interactionEnabled || failed
+          || (state.selectedCard === null && state.stage !== 'sealed' && !isMiNoteFolderInteractive(state)
+            && (movement.moved || !isUnsealTapWindow()))
           || ((cardDrag?.active || inspectingPointer !== null) && currentProps.current.activationEnabled === false)) {
           input.cancel();
           return;
         }
         if (cardDrag && !cardDrag.active && movement.moved && Math.hypot(movement.deltaX, movement.deltaY) > 8) {
-          const state = currentProps.current.state;
           const vertical = Math.abs(movement.deltaY) > Math.abs(movement.deltaX) * 1.2;
           if (vertical && movement.deltaY < 0 && state.selectedCard === null && state.ready && currentProps.current.activationEnabled !== false) {
             cardDrag.active = true;
@@ -548,7 +568,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           } else if (closed && (currentProps.current.state.stage === 'sealed' || (phase === 0 ? deltaX > 0 : deltaX < 0))) {
             beginFlip(Math.sign(deltaX), true);
             if (outerFlip) drag.mode = 'flip';
-          } else if (currentProps.current.state.stage === 'interactive') {
+          } else if (isMiNoteFolderInteractive(currentProps.current.state)) {
             drag.mode = 'fold';
           }
           if (drag.mode !== 'pending') cardDrag = null;
@@ -688,13 +708,13 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       model.setSealSizeScale(currentProps.current.sizeScale ?? currentProps.current.star.sizeScale);
       if (state.taps !== taps) {
         for (let count = taps + 1; count <= state.taps; count += 1) {
-          recoil.velocity += 1.6 + Math.min(count, MI_NOTE_OPEN_TAPS) * 0.65;
-          playSound('folderTap');
+          hitPack(count);
         }
         taps = state.taps;
       }
       if (state.stage === 'seal-peeling' && !sealStarted) {
         sealStarted = true;
+        sealStartedAt = now;
         model.startSealPeel();
         playSound('stickerUnseal');
       }
@@ -759,7 +779,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         }
         moving = !reducedMotion.matches || !finished || moving;
       }
-      if (reducedMotion.matches || sealFinished) tapSparkles.clear();
+      if (reducedMotion.matches || state.folderPose === 1 || state.selectedCard !== null) tapSparkles.clear();
       else moving = tapSparkles.update(dt, pixelRatio) || moving;
 
       const aspect = width / height;

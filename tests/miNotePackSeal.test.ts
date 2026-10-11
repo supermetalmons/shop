@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import * as THREE from 'three';
 import { createMiNotePackSeal } from '../src/lib/miNotePackSeal.ts';
+import { MI_NOTE_LEAF_WIDTH, sampleMiNoteFolderPose } from '../src/lib/miNotePackModel.ts';
 import { MI_NOTE_PACK_STARS } from '../src/lib/miNotePackStars.ts';
 import { DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS, type MiNoteStickerEffectSettings } from '../src/lib/miNoteStickerEffects.ts';
 
@@ -250,7 +251,7 @@ test('fold adjustment updates a stationary seal and hit bounds without replacing
   assert.equal((positions as THREE.BufferAttribute).version, version);
 });
 
-test('peeling, flutter, and live tuning reuse the existing sticker resources without texture uploads', async (t) => {
+test('early opening, peeling, flutter, and live tuning reuse the existing sticker resources without texture uploads', async (t) => {
   let artworkWrites = 0;
   const requests = setupArtwork(t, undefined, () => { artworkWrites += 1; });
   const { seal, parent, pivot, mesh } = await createSeal(t, 0.573);
@@ -279,7 +280,7 @@ test('peeling, flutter, and live tuning reuse the existing sticker resources wit
 
   seal.start();
   for (const [index, elapsed] of [0.1, 0.7, 1.2, 3.6, 8].entries()) {
-    seal.update(elapsed, false, index % 2 === 0 ? 1 : -1);
+    seal.update(elapsed, false, index % 2 === 0 ? 1 : -1, index === 0 ? 0.1 : 0);
     seal.setFoldPosition(0.4 + index * 0.1);
     seal.setRotationOffsetDegrees(-8 + index * 4);
     seal.setVerticalPosition(0.3 + index * 0.1);
@@ -658,6 +659,80 @@ test('peeling starts continuously and keeps valid geometry through the completed
       assert.ok(Array.from(attribute.array).every(Number.isFinite));
     }
     assertBoundsMatchVertices(geometry);
+  }
+});
+
+test('opening pushes a peeling sticker clear immediately and closing cannot stick it back down', async (t) => {
+  setupArtwork(t);
+  for (const star of MI_NOTE_PACK_STARS) {
+    const { seal, mesh, pivot } = await createSeal(t, star.foldPosition, star.rotationOffsetDegrees, 0.0018, {
+      star, sizeScale: star.sizeScale,
+    });
+    const original = mesh.geometry.attributes.position.array.slice();
+    assert.equal(seal.update(0, false, 0, 1), false);
+    assert.deepEqual(mesh.geometry.attributes.position.array, original);
+    seal.start();
+    seal.update(0, false, 0, 1e-8);
+    assert.ok(mesh.geometry.attributes.position.array.every((value, index) => Math.abs(value - original[index]) < 1e-6));
+    assert.equal(seal.update(0.01, false, 0, 0.05), false);
+    const pushed = mesh.geometry.attributes.position.array.slice();
+    assert.notDeepEqual(pushed, original);
+    const positionVersion = (mesh.geometry.attributes.position as THREE.BufferAttribute).version;
+    assert.equal(seal.update(0.01, false, 0, 0), false);
+    assert.deepEqual(mesh.geometry.attributes.position.array, pushed);
+    assert.equal((mesh.geometry.attributes.position as THREE.BufferAttribute).version, positionVersion);
+    assert.equal(seal.update(0.02, false, 0, 1), true);
+    const released = mesh.geometry.attributes.position.array.slice();
+    assert.equal(seal.update(0.02, false, 0, 0), true);
+    assert.deepEqual(mesh.geometry.attributes.position.array, released);
+    assert.equal(pivot.visible, true);
+    for (const attribute of [mesh.geometry.attributes.position, mesh.geometry.attributes.normal, mesh.geometry.attributes.uv]) {
+      assert.ok(Array.from(attribute.array).every(Number.isFinite));
+    }
+    assertBoundsMatchVertices(mesh.geometry);
+    assertAdhesiveRemainsAttached(mesh, pivot, star.foldPosition, star.rotationOffsetDegrees, star.sizeScale);
+  }
+});
+
+test('early opening keeps production stickers clear of the opposite cover from either closed side', async (t) => {
+  setupArtwork(t);
+  for (const star of MI_NOTE_PACK_STARS) {
+    for (const closedPose of [0, 2]) {
+      const { seal, parent, mesh } = await createSeal(t, star.foldPosition, star.rotationOffsetDegrees, 0.0018, { star, sizeScale: star.sizeScale });
+      const oppositeCover = new THREE.Group();
+      const positions = mesh.geometry.attributes.position;
+      const indices = mesh.geometry.index!;
+      const points = Array.from({ length: positions.count }, () => new THREE.Vector3());
+      const toCover = new THREE.Matrix4();
+      seal.start();
+      for (const opening of [0.00001, 0.0001, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2]) {
+        seal.update(0, false, 0, opening);
+        const pose = sampleMiNoteFolderPose(closedPose === 0 ? opening : 2 - opening);
+        parent.rotation.y = -pose.backAngle;
+        parent.position.copy(pose.rightPosition);
+        oppositeCover.rotation.y = pose.frontAngle;
+        oppositeCover.position.copy(pose.leftPosition);
+        parent.updateMatrixWorld(true);
+        oppositeCover.updateMatrixWorld(true);
+        toCover.copy(oppositeCover.matrixWorld).invert().multiply(mesh.matrixWorld);
+        points.forEach((point, index) => point.fromBufferAttribute(positions, index).applyMatrix4(toCover));
+        let intersections = 0;
+        for (let index = 0; index < indices.count; index += 3) {
+          for (let edge = 0; edge < 3; edge += 1) {
+            const a = points[indices.getX(index + edge)];
+            const b = points[indices.getX(index + (edge + 1) % 3)];
+            const distanceA = a.z + 0.0018 / 2;
+            const distanceB = b.z + 0.0018 / 2;
+            if (distanceA * distanceB >= 0) continue;
+            const fraction = distanceA / (distanceA - distanceB);
+            const x = THREE.MathUtils.lerp(a.x, b.x, fraction);
+            const y = THREE.MathUtils.lerp(a.y, b.y, fraction);
+            if (x >= -MI_NOTE_LEAF_WIDTH && x <= 0 && Math.abs(y) <= 1.82 / 2) intersections += 1;
+          }
+        }
+        assert.equal(intersections, 0, `${star.id}, closed side ${closedPose}, opening ${opening}`);
+      }
+    }
   }
 });
 

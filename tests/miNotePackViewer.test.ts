@@ -19,6 +19,7 @@ const { act, cleanup, render } = await import('@testing-library/react');
 const frames = new Map<number, FrameRequestCallback>();
 let nextFrameId = 0;
 let time = 1000;
+Object.defineProperty(performance, 'now', { configurable: true, value: () => time });
 let viewportWidth = 900;
 let viewportHeight = 700;
 const requestFrame = (callback: FrameRequestCallback) => {
@@ -85,6 +86,7 @@ type TestModel = {
   resolveReady: () => void;
   phase: number;
   sealStarts: number;
+  sealDuration: number;
   sealUpdates: { elapsed: number; reduced: boolean; motion: number }[];
   sealEffectSettings: MiNoteStickerEffectSettings[];
   sealVerticalPosition: number;
@@ -117,6 +119,7 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
     group, flipRoot, book, left, right, ready, resolveReady,
     phase: 0,
     sealStarts: 0,
+    sealDuration: 0.2,
     sealUpdates: [] as TestModel['sealUpdates'],
     sealEffectSettings: [] as MiNoteStickerEffectSettings[],
     sealVerticalPosition: verticalPosition,
@@ -140,7 +143,7 @@ function createTestModel({ star, verticalPosition = MI_NOTE_STAR_VERTICAL_DEFAUL
     startSealPeel() { model.sealStarts += 1; },
     updateSeal(elapsed: number, reduced: boolean, motion: number) {
       model.sealUpdates.push({ elapsed, reduced, motion });
-      return reduced || elapsed >= 0.2;
+      return reduced || elapsed >= model.sealDuration;
     },
     dispose() { model.disposed = true; group.removeFromParent(); },
   };
@@ -878,6 +881,7 @@ test('viewport changes preserve card layout and projection in the folder and aft
   }
   act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
   settle();
+  time += 500;
   act(() => run.controls.current!.activate());
   settle();
   assert.equal(model.phase, 1);
@@ -1290,6 +1294,267 @@ for (const inventoryReveal of [false, true]) {
   });
 }
 
+for (const inventoryReveal of [false, true]) {
+  for (const pointerType of ['mouse', 'touch']) {
+    for (const folderPose of [0, 2] as const) {
+      test(`${inventoryReveal ? 'inventory' : 'wip'} ${pointerType} taps hit cover ${folderPose} until 500ms after peeling starts`, async () => {
+        setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+        const run = harness({ ...createMiNoteRevealState(), taps: inventoryReveal ? 2 : 3, folderPose }, true, undefined, { inventoryReveal });
+        await makeReady();
+        const model = models[0];
+        const pointer = pointerControls(run);
+        pointer.tap(pointerType);
+        assert.equal(run.state.stage, 'seal-peeling');
+        assert.equal(model.sealStarts, 0);
+
+        pointer.tap(pointerType);
+        assert.equal(run.state.stage, 'seal-peeling');
+        assert.equal(run.state.folderPose, folderPose);
+        assert.equal(run.count('activate'), 1);
+        assert.equal(run.state.taps, inventoryReveal ? 3 : 4);
+        assert.equal(pointer.captured.size, 0);
+        advanceFrame(16.67);
+        assert.equal(model.sealStarts, 1);
+        assert.equal(model.phase, folderPose);
+        assert.equal(run.count('seal-finished'), 0);
+        assert.equal(sounds.filter(sound => sound === 'folderTap').length, 2);
+        assert.equal(tapSparkles().visible, true);
+
+        advanceFrames(9);
+        advanceFrame(49);
+        assert.equal(run.state.stage, 'interactive');
+        pointer.tap(pointerType);
+        assert.equal(run.state.folderPose, folderPose);
+        assert.equal(run.count('activate'), 1);
+        assert.equal(run.state.taps, inventoryReveal ? 3 : 4);
+        assert.equal(sounds.filter(sound => sound === 'folderTap').length, 3);
+        advanceFrame(1);
+        assert.equal(tapSparkles().visible, true);
+        assert.ok(tapSparkles().geometry.drawRange.count > 0);
+        assert.equal(run.state.folderPose, folderPose);
+
+        pointer.tap(pointerType);
+        assert.equal(run.state.folderPose, 1);
+        assert.equal(run.count('activate'), 2);
+        advanceFrames();
+        assert.equal(run.state.stage, 'interactive');
+        assert.equal(model.phase, 1);
+        assert.equal(run.count('seal-finished'), 1);
+        assert.equal(model.sealStarts, 1);
+        assert.equal(sounds.filter(sound => sound === 'stickerUnseal').length, 1);
+        assert.equal(sounds.filter(sound => sound === 'folderOpen').length, 1);
+      });
+
+      test(`${inventoryReveal ? 'inventory' : 'wip'} ${pointerType} drag opens cover ${folderPose} while its sticker peels`, async () => {
+        setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+        const run = harness({ ...createMiNoteRevealState(), taps: inventoryReveal ? 2 : 3, folderPose }, true, undefined, { inventoryReveal });
+        await makeReady();
+        const model = models[0];
+        const pointer = pointerControls(run);
+        pointer.tap(pointerType);
+        advanceFrame(16.67);
+        const endX = folderPose === 0 ? 190 : 710;
+        pointer.dispatch('pointerdown', 450, 350, pointerType);
+        pointer.dispatch('pointermove', endX, 350, pointerType);
+        advanceFrame(16.67);
+        assert.equal(run.state.stage, 'seal-peeling');
+        assert.ok(model.phase > 0 && model.phase < 2);
+        assert.equal(model.flipRoot.rotation.y, 0);
+        pointer.dispatch('pointerup', endX, 350, pointerType);
+        assert.equal(run.state.folderPose, 1);
+        assert.equal(run.count('activate'), 1);
+        assert.equal(pointer.captured.size, 0);
+        advanceFrames();
+        assert.equal(run.state.stage, 'interactive');
+        assert.equal(model.phase, 1);
+        assert.equal(run.count('seal-finished'), 1);
+        assert.equal(model.sealStarts, 1);
+        assert.equal(sounds.filter(sound => sound === 'folderDragStart').length, 1);
+        assert.equal(sounds.filter(sound => sound === 'folderDragEnd').length, 1);
+      });
+    }
+  }
+}
+
+test('tap feedback during unsealing adds particles, a pack hit, and the sealed tap sound without advancing the reveal', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), stage: 'seal-peeling', taps: 4 });
+  const model = models[0];
+  await act(async () => { model.resolveReady(); await model.ready; });
+  advanceFrame(16.67);
+  const pointer = pointerControls(run);
+  const sparkles = tapSparkles();
+  assert.equal(model.group.scale.x, 1);
+  assert.equal(sparkles.visible, false);
+  assert.deepEqual(sounds, ['stickerUnseal']);
+
+  pointer.tap();
+  advanceFrame(16.67);
+
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.state.taps, 4);
+  assert.equal(run.count('activate'), 0);
+  assert.equal(model.sealStarts, 1);
+  assert.ok(model.group.scale.x < 1);
+  assert.equal(sparkles.visible, true);
+  assert.ok(sparkles.geometry.drawRange.count > 0);
+  assert.deepEqual(sounds, ['stickerUnseal', 'folderTap']);
+});
+
+test('reduced motion preserves the 500ms hit window and sound without particles or pack recoil', async () => {
+  const run = harness({ ...createMiNoteRevealState(), taps: 3 });
+  await makeReady();
+  const model = models[0];
+  const pointer = pointerControls(run);
+  pointer.tap();
+  advanceFrame(16);
+  const sealStartedAt = time;
+  settle();
+  assert.equal(run.state.stage, 'interactive');
+  pointer.tap();
+  settle();
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(model.group.scale.x, 1);
+  assert.equal(tapSparkles().visible, false);
+  assert.equal(tapSparkles().geometry.drawRange.count, 0);
+  assert.equal(frames.size, 0);
+
+  time = sealStartedAt + 499;
+  pointer.tap();
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.state.taps, 4);
+  assert.equal(run.count('activate'), 1);
+  assert.equal(sounds.filter(sound => sound === 'folderTap').length, 3);
+
+  time += 1;
+  pointer.tap();
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(run.count('activate'), 2);
+  settle();
+  assert.equal(model.phase, 1);
+  assert.equal(sounds.filter(sound => sound === 'folderOpen').length, 1);
+  assert.equal(sounds.filter(sound => sound === 'stickerUnseal').length, 1);
+});
+
+test('the initial tap window leaves closing and card actions available after an immediate opening drag', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), taps: 3 });
+  await makeReady();
+  const pointer = pointerControls(run);
+  pointer.tap();
+  advanceFrame(16.67);
+  pointer.dispatch('pointerdown', 450, 350);
+  pointer.dispatch('pointermove', 190, 350);
+  pointer.dispatch('pointerup', 190, 350);
+  assert.equal(run.state.folderPose, 1);
+  act(() => run.controls.current!.activate());
+  assert.equal(run.state.folderPose, 0);
+  act(() => run.controls.current!.activate());
+  assert.equal(run.state.folderPose, 0);
+  assert.equal(run.count('activate'), 2);
+  act(() => run.controls.current!.selectCard(0));
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(run.state.selectedCard, 0);
+  act(() => run.controls.current!.returnCard());
+  assert.equal(run.state.cardStage, 'returning');
+  assert.equal(run.count('activate'), 2);
+});
+
+for (const pointerType of ['mouse', 'touch']) {
+  test(`rapid ${pointerType} taps reverse opening during the peel without restarting or losing completion`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), taps: 3 });
+    await makeReady();
+    const model = models[0];
+    model.sealDuration = 1;
+    const pointer = pointerControls(run);
+    pointer.tap(pointerType);
+    advanceFrame(16.67);
+    advanceFrames(10);
+    for (const pose of [1, 0, 1, 0, 1]) {
+      pointer.tap(pointerType);
+      assert.equal(run.state.folderPose, pose);
+      advanceFrame(16.67);
+      assert.equal(run.state.stage, 'seal-peeling');
+      assert.ok(Number.isFinite(model.phase));
+      assert.equal(model.sealStarts, 1);
+      assert.equal(run.count('seal-finished'), 0);
+    }
+    advanceFrames();
+    assert.equal(run.state.stage, 'interactive');
+    assert.equal(run.state.folderPose, 1);
+    assert.equal(model.phase, 1);
+    assert.equal(model.sealStarts, 1);
+    assert.equal(run.count('seal-finished'), 1);
+    assert.equal(sounds.filter(sound => sound === 'stickerUnseal').length, 1);
+    assert.equal(sounds.filter(sound => sound === 'folderOpen').length, 3);
+    assert.equal(sounds.filter(sound => sound === 'folderClose').length, 2);
+  });
+
+  test(`${pointerType} cannot open a peeling folder before asset readiness is reported`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), taps: 3 });
+    advanceFrames();
+    const model = models[0];
+    const pointer = pointerControls(run);
+    pointer.tap(pointerType);
+    assert.equal(run.state.stage, 'seal-peeling');
+    assert.equal(run.state.ready, false);
+
+    pointer.tap(pointerType);
+    pointer.dispatch('pointerdown', 450, 350, pointerType);
+    pointer.dispatch('pointermove', 190, 350, pointerType);
+    pointer.dispatch('pointerup', 190, 350, pointerType);
+    assert.equal(run.count('activate'), 1);
+    assert.equal(run.state.folderPose, 0);
+    assert.equal(model.phase, 0);
+    assert.equal(pointer.captured.size, 0);
+
+    await act(async () => { model.resolveReady(); await model.ready; });
+    advanceFrame(16.67);
+    assert.equal(run.state.ready, true);
+    assert.equal(run.state.stage, 'seal-peeling');
+    pointer.tap(pointerType);
+    assert.equal(run.count('activate'), 1);
+    assert.equal(run.state.folderPose, 0);
+    assert.equal(sounds.filter(sound => sound === 'folderTap').length, 3);
+    advanceFrames(10);
+    pointer.tap(pointerType);
+    assert.equal(run.count('activate'), 2);
+    assert.equal(run.state.folderPose, 1);
+    advanceFrames();
+    assert.equal(run.state.stage, 'interactive');
+    assert.equal(model.phase, 1);
+    assert.equal(model.sealStarts, 1);
+    assert.equal(run.count('seal-finished'), 1);
+  });
+}
+
+test('card selection during the peel opens the folder and preserves the selection when peeling finishes', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+  const run = harness({ ...createMiNoteRevealState(), taps: 2 }, true, undefined, { inventoryReveal: true });
+  await makeReady();
+  const model = models[0];
+  act(() => run.controls.current!.activate());
+  act(() => run.controls.current!.selectCard(1));
+  assert.equal(run.state.stage, 'seal-peeling');
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(run.state.selectedCard, 1);
+  assert.equal(run.state.cardStage, 'lifting');
+  advanceFrame(16.67);
+  assert.equal(model.sealStarts, 1);
+  advanceFrames();
+  assert.equal(run.state.stage, 'interactive');
+  assert.equal(run.state.folderPose, 1);
+  assert.equal(run.state.selectedCard, 1);
+  assert.equal(run.state.cardStage, 'inspecting');
+  assert.equal(run.count('seal-finished'), 1);
+  assert.equal(run.count('card-lifted'), 1);
+  assert.equal(models.length, 1);
+  assert.equal(renderers.length, 1);
+  assert.equal(surfaces.length, 2);
+});
+
 test('demo taps play one hit each, the peel plays once, and click toggles use folder sounds', async () => {
   const run = harness();
   await makeReady();
@@ -1305,6 +1570,7 @@ test('demo taps play one hit each, the peel plays once, and click toggles use fo
   assert.deepEqual(sounds, ['folderTap', 'folderTap', 'folderTap', 'folderTap', 'stickerUnseal']);
   assert.equal(soundUnlocks, 4);
   assert.equal(run.state.stage, 'interactive');
+  time += 500;
   act(() => run.controls.current!.activate());
   settle();
   assert.equal(sounds.at(-1), 'folderOpen');
@@ -1459,7 +1725,7 @@ test('rejected activation, pointer cancellation, and blocked interactions produc
   assert.deepEqual(sounds, []);
 });
 
-test('the final sealed tap sparkles stop when peeling finishes and later folder taps stay clear', async () => {
+test('the final sealed tap sparkles fade after peeling finishes and later folder taps stay clear', async () => {
   setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
   const run = harness({ ...createMiNoteRevealState(), taps: 3 });
   await makeReady();
@@ -1472,6 +1738,8 @@ test('the final sealed tap sparkles stop when peeling finishes and later folder 
 
   for (let count = 0; currentState(run).stage !== 'interactive' && count < 40; count += 1) advanceFrame();
   assert.equal(run.state.stage, 'interactive');
+  assert.equal(sparkles.visible, true);
+  advanceFrames(20);
   assert.equal(sparkles.visible, false);
   assert.equal(sparkles.geometry.drawRange.count, 0);
 
@@ -1723,6 +1991,7 @@ test('reduced motion unseals once and returns a selected card to its original po
   assert.ok(model.sealUpdates.every(update => update.reduced));
   assert.equal(run.count('seal-finished'), 1);
 
+  time += 500;
   act(() => run.controls.current!.activate());
   settle();
   assert.equal(model.phase, 1);
@@ -1804,6 +2073,7 @@ test('late readiness keeps the peeled pack closed on its back until the next act
   assert.equal(run.state.stage, 'interactive');
   assert.equal(run.state.folderPose, 2);
   assert.equal(model.phase, 2);
+  time += 500;
   act(() => run.controls.current!.activate());
   settle();
   assert.equal(model.phase, 1);
@@ -1863,6 +2133,7 @@ test('narrow viewports leave room for the attached sticker beyond the open pack 
   await makeReady();
   act(() => { for (let count = 0; count < 4; count += 1) run.controls.current!.activate(); });
   settle();
+  time += 500;
   act(() => run.controls.current!.activate());
   settle();
   assert.equal(models[0].phase, 1);

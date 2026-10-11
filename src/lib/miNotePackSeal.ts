@@ -12,6 +12,7 @@ const PROFILE_SEGMENTS = [56, 64, 40];
 const WIDTH_SEGMENTS = PROFILE_SEGMENTS.reduce((total, count) => total + count, 0);
 const HEIGHT_SEGMENTS = 48;
 const PEEL_DURATION = 1.2;
+const PEEL_RELEASE_OPENING = 0.2;
 const ARTWORK_TIMEOUT_MS = 30_000;
 
 function sealPoint(distance: number, angle: number, radius: number, curvature: number) {
@@ -471,12 +472,16 @@ export function createMiNotePackSeal({
       started = true;
       onInvalidate?.();
     },
-    update(elapsedSeconds: number, reducedMotion: boolean, motion = 0) {
+    update(elapsedSeconds: number, reducedMotion: boolean, motion = 0, opening = 0) {
       if (disposed) return true;
       if (!started) return false;
       const elapsed = Math.max(0, elapsedSeconds);
-      finished ||= reducedMotion || elapsed >= PEEL_DURATION;
-      const progress = finished ? 1 : Math.min(1, elapsed / PEEL_DURATION);
+      const progress = finished || reducedMotion ? 1 : Math.max(
+        lastProgress,
+        Math.min(1, elapsed / PEEL_DURATION),
+        Math.cbrt(THREE.MathUtils.clamp(opening / PEEL_RELEASE_OPENING, 0, 1)),
+      );
+      finished ||= progress === 1;
       const release = THREE.MathUtils.smoothstep(progress, 0.65, 1);
       const flutter = reducedMotion ? 0 : release * (
         Math.sin(elapsed * 4.2) * 0.11 + Math.sin(elapsed * 7.1 + 0.8) * 0.035

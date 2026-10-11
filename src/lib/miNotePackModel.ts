@@ -370,7 +370,7 @@ export function createMiNotePackModel({ color, star, foldPosition, rotationOffse
     setSealSizeScale: (value: number) => seal.setSizeScale(value),
     setSealEffectSettings: (value: MiNoteStickerEffectSettings) => seal.setEffectSettings(value),
     startSealPeel: () => seal.start(),
-    updateSeal: (elapsedSeconds: number, reducedMotion: boolean, motion = 0) => seal.update(elapsedSeconds, reducedMotion, motion),
+    updateSeal: (elapsedSeconds: number, reducedMotion: boolean, motion = 0) => seal.update(elapsedSeconds, reducedMotion, motion, 1 - Math.abs(lastPhase - 1)),
     dispose() {
       if (disposed) return;
       disposed = true;

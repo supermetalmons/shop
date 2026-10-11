@@ -227,10 +227,11 @@ test('pack color and sticker are random on load and reset without appearance pic
   }
 });
 
-test('peeling leaves the ready pack closed until the next click opens it', () => {
+test('ready peeling leaves the pack closed but immediately accepts folder and card actions', () => {
   const view = render(createElement(MiNoteCardsWipApp));
-  peelSeal(view);
-  assert.equal(viewer().props.state.stage, 'interactive');
+  makeReady();
+  for (let tap = 0; tap < 4; tap += 1) emit({ type: 'activate' });
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
   assert.equal(viewer().props.state.folderPose, 0);
   const open = view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement;
   assert.equal(open.disabled, false);
@@ -238,8 +239,37 @@ test('peeling leaves the ready pack closed until the next click opens it', () =>
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   fireEvent.click(open);
   assert.equal(viewer().props.state.folderPose, 1);
-  assert.equal(viewer().calls.filter(call => call === 'activate').length, 5);
+  assert.equal(viewer().calls.filter(call => call === 'activate').length, 1);
   assert.equal(view.getByRole('button', { name: 'Close Mi Note Cards folder' }).getAttribute('aria-expanded'), 'true');
+  assert.ok(view.getByRole('button', { name: 'View left card' }));
+  fireEvent.click(view.getByRole('button', { name: 'View left card' }));
+  assert.equal(viewer().props.state.selectedCard, 0);
+  assert.equal(viewer().props.state.cardStage, 'lifting');
+  assert.equal(viewer().props.state.stage, 'seal-peeling');
+  emit({ type: 'seal-finished' });
+  assert.equal(viewer().props.state.stage, 'interactive');
+  assert.equal(viewer().props.state.folderPose, 1);
+  assert.equal(viewer().props.state.selectedCard, 0);
+});
+
+test('peeling folder actions follow late and lost card readiness', () => {
+  const view = render(createElement(MiNoteCardsWipApp));
+  makeReady(false);
+  for (let tap = 0; tap < 4; tap += 1) emit({ type: 'activate' });
+  const open = view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement;
+  assert.equal(open.disabled, true);
+  assert.equal(open.getAttribute('aria-busy'), 'true');
+  fireEvent.click(open);
+  emit({ type: 'folder-pose', pose: 1 });
+  assert.equal(viewer().props.state.folderPose, 0);
+  for (const ready of [true, false, true]) {
+    act(() => viewer().props.onCardsReadyChange(ready));
+    assert.equal(open.disabled, !ready);
+    assert.equal(open.getAttribute('aria-busy'), String(!ready));
+    assert.equal(viewer().props.state.stage, 'seal-peeling');
+  }
+  fireEvent.click(open);
+  assert.equal(viewer().props.state.folderPose, 1);
   assert.ok(view.getByRole('button', { name: 'View left card' }));
 });
 

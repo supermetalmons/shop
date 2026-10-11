@@ -9,7 +9,7 @@ import { MI_NOTE_CARDS_DEFAULT } from '../lib/miNoteCardEffects';
 import { MI_NOTE_CARDS_PACK_PLACEHOLDER_IMAGE_URL } from '../config/dropMediaDefaults';
 import { createMiNoteCard } from '../lib/miNoteCards';
 import {
-  createMiNoteRevealState, miNoteRevealCardIds, MI_NOTE_INVENTORY_OPEN_TAPS,
+  createMiNoteRevealState, isMiNoteFolderInteractive, miNoteRevealCardIds, MI_NOTE_INVENTORY_OPEN_TAPS,
   reduceMiNoteInventoryReveal, type MiNoteRevealEvent,
 } from '../lib/miNoteCardReveal';
 import { MI_NOTE_PACK_STARS } from '../lib/miNotePackStars';
@@ -211,7 +211,8 @@ export default function MiNotePackRevealOverlay({
       controlsRef.current?.activate();
     }
   };
-  const openingLocked = state.stage === 'seal-peeling' || state.stage === 'unsealed';
+  const folderInteractive = isMiNoteFolderInteractive(state);
+  const openingLocked = state.stage !== 'sealed' && !folderInteractive;
   const tapsRemaining = Math.max(0, MI_NOTE_INVENTORY_OPEN_TAPS - state.taps);
   const packLabel = state.stage === 'sealed'
     ? tapsRemaining > 0
@@ -292,7 +293,7 @@ export default function MiNotePackRevealOverlay({
           </> : state.selectedCard === null ? <>
             <button type="button" aria-expanded={state.folderPose === 1} disabled={!interactionEnabled || openingLocked}
               onClick={() => controlsRef.current?.activate()}>{packLabel}</button>
-            {state.stage === 'interactive' && state.folderPose === 1 && ready && cardIds?.map((id, index) => (
+            {folderInteractive && state.folderPose === 1 && ready && cardIds?.map((id, index) => (
               <button key={index} type="button" aria-description={`Mi Note Card #${id}`}
                 onClick={() => controlsRef.current?.selectCard(index as 0 | 1)}>View {index === 0 ? 'left' : 'right'} card</button>
             ))}
