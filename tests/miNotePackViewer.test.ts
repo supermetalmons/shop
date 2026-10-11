@@ -1148,6 +1148,148 @@ test('live packs keep a bounded recoil on every mouse and touch tap while assign
   assert.deepEqual(sounds, Array(20).fill('folderTap'));
 });
 
+for (const pointerType of ['mouse', 'touch']) {
+  for (const mode of ['wip', 'inventory', 'inventory-loading'] as const) {
+    for (const distance of [80, 200]) {
+      test(`${mode} accepts an immediate ${pointerType} tap while a rotation drag ${distance === 80 ? 'rolls back' : 'completes'}`, async () => {
+        setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+        const run = harness(undefined, true, undefined, {
+          inventoryReveal: mode !== 'wip', cardsAvailable: mode !== 'inventory-loading',
+        });
+        await makeReady();
+        const model = models[0];
+        const pointer = pointerControls(run);
+        pointer.dispatch('pointerdown', 450, 350, pointerType);
+        pointer.dispatch('pointermove', 450 + distance, 350, pointerType);
+        advanceFrame(16.67);
+        assert.notEqual(model.flipRoot.rotation.y, 0);
+        pointer.dispatch('pointerup', 450 + distance, 350, pointerType);
+        assert.equal(run.count('activate'), 0);
+        assert.equal(run.state.taps, 0);
+
+        pointer.tap(pointerType);
+        assert.equal(run.count('activate'), 1);
+        assert.equal(run.state.taps, 1);
+        advanceFrame(16.67);
+        assert.notEqual(model.flipRoot.rotation.y, 0);
+        assert.equal(tapSparkles().visible, true);
+        assert.ok(model.group.scale.x < 1);
+        assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd', 'folderTap']);
+        advanceFrames();
+        assert.equal(model.flipRoot.rotation.y, 0);
+        assert.equal(model.phase, distance === 80 ? 0 : 2);
+        assert.equal(run.state.folderPose, model.phase);
+        assert.equal(run.state.stage, 'sealed');
+      });
+    }
+  }
+
+  test(`an unmoved ${pointerType} press and tap preserve rotation settling frame for frame`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const trajectories: number[][] = [];
+    for (const press of [false, true]) {
+      time = 1000;
+      const run = harness();
+      await makeReady();
+      const model = models.at(-1)!;
+      const pointer = pointerControls(run);
+      pointer.dispatch('pointerdown', 450, 350, pointerType);
+      pointer.dispatch('pointermove', 650, 350, pointerType);
+      advanceFrame(16.67);
+      pointer.dispatch('pointerup', 650, 350, pointerType);
+      advanceFrame(16.67);
+      const trajectory: number[] = [];
+      if (press) pointer.dispatch('pointerdown', 450, 350, pointerType);
+      for (let frame = 0; frame < 12; frame += 1) {
+        if (press && frame === 3) pointer.dispatch('pointerup', 450, 350, pointerType);
+        advanceFrame(16.67);
+        trajectory.push(model.flipRoot.rotation.y, model.phase);
+      }
+      assert.equal(run.state.taps, press ? 1 : 0);
+      trajectories.push(trajectory);
+      run.view.unmount();
+    }
+    assert.deepEqual(trajectories[1], trajectories[0]);
+  });
+
+  test(`an immediate interactive ${pointerType} tap opens the folder after its rotation settles`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), stage: 'interactive', ready: true, taps: 4 });
+    await makeReady();
+    const model = models[0];
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown', 450, 350, pointerType);
+    pointer.dispatch('pointermove', 650, 350, pointerType);
+    advanceFrame(16.67);
+    pointer.dispatch('pointerup', 650, 350, pointerType);
+    assert.equal(run.count('activate'), 0);
+    pointer.tap(pointerType);
+    assert.equal(run.count('activate'), 1);
+    assert.equal(run.state.folderPose, 1);
+    assert.notEqual(model.flipRoot.rotation.y, 0);
+    advanceFrames();
+    assert.equal(run.state.folderPose, 1);
+    assert.equal(model.flipRoot.rotation.y, 0);
+    assertOpenFold(model);
+    assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd', 'folderOpen']);
+  });
+
+  test(`a ${pointerType} movement can re-grab a settling rotation without activating the pack`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness();
+    await makeReady();
+    const model = models[0];
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown', 450, 350, pointerType);
+    pointer.dispatch('pointermove', 650, 350, pointerType);
+    advanceFrame(16.67);
+    pointer.dispatch('pointerup', 650, 350, pointerType);
+    advanceFrame(16.67);
+    assert.equal(model.phase, 2);
+    pointer.dispatch('pointerdown', 450, 350, pointerType);
+    pointer.dispatch('pointermove', 270, 350, pointerType);
+    advanceFrame(16.67);
+    assert.equal(model.phase, 0);
+    const heldAngle = model.flipRoot.rotation.y;
+    advanceFrames(3);
+    assert.equal(model.flipRoot.rotation.y, heldAngle);
+    pointer.dispatch('pointerup', 270, 350, pointerType);
+    advanceFrames();
+    assert.equal(run.count('activate'), 0);
+    assert.equal(run.state.taps, 0);
+    assert.equal(run.state.folderPose, 0);
+    assert.equal(model.phase, 0);
+    assert.equal(model.flipRoot.rotation.y, 0);
+    assert.deepEqual(sounds, ['folderDragStart', 'folderDragEnd', 'folderDragStart', 'folderDragEnd']);
+  });
+}
+
+for (const inventoryReveal of [false, true]) {
+  test(`${inventoryReveal ? 'inventory' : 'wip'} can peel on the final tap before rotation settles without losing its back pose`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+    const run = harness({ ...createMiNoteRevealState(), taps: inventoryReveal ? 2 : 3 }, true, undefined, { inventoryReveal });
+    await makeReady();
+    const model = models[0];
+    const pointer = pointerControls(run);
+    pointer.dispatch('pointerdown', 450, 350);
+    pointer.dispatch('pointermove', 650, 350);
+    advanceFrame(16.67);
+    pointer.dispatch('pointerup', 650, 350);
+    pointer.tap();
+    assert.equal(run.count('activate'), 1);
+    assert.equal(run.state.stage, 'seal-peeling');
+    advanceFrame(16.67);
+    assert.equal(model.sealStarts, 1);
+    assert.notEqual(model.flipRoot.rotation.y, 0);
+    advanceFrames();
+    assert.equal(run.state.stage, 'interactive');
+    assert.equal(run.state.folderPose, 2);
+    assert.equal(model.phase, 2);
+    assert.equal(model.flipRoot.rotation.y, 0);
+    assert.equal(sounds.filter(sound => sound === 'stickerUnseal').length, 1);
+  });
+}
+
 test('demo taps play one hit each, the peel plays once, and click toggles use folder sounds', async () => {
   const run = harness();
   await makeReady();

@@ -313,6 +313,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       fold.value = from;
       fold.velocity = 0;
       outerFlip = { from, to: from === 0 ? 2 : 0, direction, value: 0, velocity: 0, target: 1, dragging };
+      if (!dragging) setPose(outerFlip.to);
       invalidate();
     };
     const canNavigate = () => currentProps.current.interactionEnabled
@@ -328,7 +329,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         invalidate();
         return;
       }
-      if (!canNavigate() || state.stage !== 'interactive' || !state.ready || drag || outerFlip) return;
+      if (!canNavigate() || state.stage !== 'interactive' || !state.ready || drag) return;
       if (soundEnabled()) void unlockMiNotePackSounds();
       input.cancel();
       setPose(1);
@@ -342,7 +343,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       invalidate();
     };
     const activate = (leaf?: 0 | 2, point?: THREE.Vector3) => {
-      if (currentProps.current.activationEnabled === false || !canNavigate() || drag || outerFlip) return;
+      if (currentProps.current.activationEnabled === false || !canNavigate() || drag) return;
       void unlockMiNotePackSounds();
       input.cancel();
       if (point && currentProps.current.state.stage === 'sealed' && !reducedMotion.matches) {
@@ -469,11 +470,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           aimCard(event);
           return true;
         }
-        if (outerFlip) {
-          outerFlip.dragging = true;
-          outerFlip.velocity = 0;
-        }
-        drag = { hit: tapHit, phase: fold.value, outerStart: outerFlip?.value ?? 0, mode: outerFlip ? 'flip' : 'pending', soundStarted: false };
+        drag = { hit: tapHit, phase: fold.value, outerStart: 0, mode: 'pending', soundStarted: false };
         fold.velocity = 0;
         return true;
       },
@@ -540,9 +537,15 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         const { deltaX, deltaY, moved } = movement;
         const previousPosition = outerFlip?.value ?? fold.value;
         if (drag.mode === 'pending' && moved && Math.abs(deltaX) > Math.abs(deltaY)) {
+          drag.phase = fold.value;
           const phase = Math.round(drag.phase);
           const closed = Math.abs(drag.phase - phase) < 0.015 && (phase === 0 || phase === 2);
-          if (closed && (currentProps.current.state.stage === 'sealed' || (phase === 0 ? deltaX > 0 : deltaX < 0))) {
+          if (outerFlip) {
+            outerFlip.dragging = true;
+            outerFlip.velocity = 0;
+            drag.outerStart = outerFlip.value;
+            drag.mode = 'flip';
+          } else if (closed && (currentProps.current.state.stage === 'sealed' || (phase === 0 ? deltaX > 0 : deltaX < 0))) {
             beginFlip(Math.sign(deltaX), true);
             if (outerFlip) drag.mode = 'flip';
           } else if (currentProps.current.state.stage === 'interactive') {
@@ -591,10 +594,11 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           if (movement.cancelled || event.pointerType !== 'mouse') tiltTarget.set(0, 0);
           else aimCard(event);
         }
-        if (outerFlip) {
+        if (drag?.mode === 'flip' && outerFlip) {
           outerFlip.dragging = false;
           outerFlip.target = Math.round(outerFlip.value);
           outerFlip.velocity = 0;
+          setPose(outerFlip.target === 1 ? outerFlip.to : outerFlip.from);
         } else if (drag?.mode === 'fold') {
           setPose(Math.round(fold.value) as MiNoteFolderPose);
           fold.velocity = 0;
@@ -703,7 +707,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         if (!flip.dragging && flip.value === flip.target) {
           model.flipRoot.rotation.y = 0;
           outerFlip = null;
-          setPose(fold.value as MiNoteFolderPose);
+          moving = fold.value !== state.folderPose || moving;
         }
       } else if (!drag) {
         moving = spring(fold, state.folderPose, 16, dt, reducedMotion.matches) || moving;
