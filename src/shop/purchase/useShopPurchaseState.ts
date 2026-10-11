@@ -40,6 +40,7 @@ export function useShopPurchaseState({ routeDrop, routeConnection }: PurchaseSta
   return {
     activeDiscountVersion, activeDiscountScope, activeDiscountAllowance,
     shouldFetchMintStats, mintStats, refetchStats,
+    mintStatsReady: Boolean(routeDrop?.forceSoldOut || mintStats),
     packStatusDropId, packStatusDisplayLabels, packStatusBreakdown,
   };
 }

@@ -74,8 +74,35 @@
   min-width: 0;
 }
 
-.mint-panel__remaining--hidden {
-  opacity: 0;
+.mint-panel__availability {
+  white-space: nowrap;
+}
+
+.mint-panel__availability,
+.mint-panel__label-text,
+.mint-panel__submit-quantity {
+  font-variant-numeric: tabular-nums;
+}
+
+.mint-panel__remaining-count {
+  display: inline-block;
+  text-align: right;
+}
+
+.mint-panel__digit-placeholder {
+  position: relative;
+  display: inline-block;
+  width: 1ch;
+  height: 0.75em;
+}
+
+.mint-panel__digit-placeholder::after {
+  content: '';
+  position: absolute;
+  inset: 0 0.15ch;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.18;
 }
 
 .mint-panel__preview {

@@ -7,6 +7,7 @@ import { dropAssetCount } from '../../../shared/dropLabels.ts';
 
 export interface MintPanelFormOptions {
   stats?: MintStats;
+  statsReady?: boolean;
   onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
   solanaMintVisible?: boolean;
   busy: boolean;
@@ -70,7 +71,7 @@ function formatStripeUsdAmountCents(value: number): string {
 }
 
 export function useMintPanelForm({
-  stats, onMint, solanaMintVisible = true, busy, onError, boxNamePrefix,
+  stats, statsReady = Boolean(stats), onMint, solanaMintVisible = true, busy, onError, boxNamePrefix,
   priceSol, discountPriceSol, maxSupply, maxPerTx,
   discountAvailable, discountMaxQuantity, onDiscountMint, discountBusy,
   onStripePaymentClick, stripePaymentVisible, stripePaymentBusy,
@@ -81,7 +82,7 @@ export function useMintPanelForm({
   const total = stats?.total ?? maxSupply;
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
   const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
-  const remainingReady = REMAINING_OVERRIDE !== null || Boolean(stats);
+  const remainingReady = REMAINING_OVERRIDE !== null || statsReady;
   const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
   const sizeSelection = mintSelection?.kind === 'size' ? mintSelection : undefined;
   const sizeOptions = sizeSelection?.options ?? [];

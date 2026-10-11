@@ -109,6 +109,7 @@ for (const [label, wallet] of [
       handleMint: unexpectedPurchase,
       handleDiscountMint: unexpectedPurchase,
       handleStripePayment: unexpectedPurchase,
+      mintStatsReady: false,
       packStatusDropId: null,
       packStatusBreakdown: undefined,
       packStatusDisplayLabels: undefined,

@@ -403,7 +403,9 @@ test('drop title and accessible X profile stay grouped separately from availabil
   assert.equal(profile.getAttribute('href'), 'https://x.com/bis__cut/status/2082471519683326394');
   const titleGroup = title.closest('.mint-panel__price');
   assert.ok(titleGroup?.contains(profile));
-  assert.equal(titleGroup.contains(view.getByText('15 / 15 left')), false);
+  const availability = view.container.querySelector('.mint-panel__availability');
+  assert.equal(availability?.textContent, '15 / 15 left');
+  assert.equal(titleGroup.contains(availability), false);
 });
 
 test('announcements expose their profile and notification action without purchase props or controls', () => {

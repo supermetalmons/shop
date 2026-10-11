@@ -27,7 +27,8 @@ type ShopPurchaseSectionProps = Pick<ReturnType<typeof useShopPurchaseActions>,
   | 'handleDiscountMint'
   | 'handleStripePayment'
 > & Pick<ReturnType<typeof useShopPurchaseState>,
-  'packStatusDropId'
+  'mintStatsReady'
+  | 'packStatusDropId'
   | 'packStatusBreakdown'
   | 'packStatusDisplayLabels'
 > & {
@@ -57,6 +58,7 @@ export function ShopPurchaseSection({
   handleMint,
   handleDiscountMint,
   handleStripePayment,
+  mintStatsReady,
   packStatusDropId,
   packStatusBreakdown,
   packStatusDisplayLabels,
@@ -98,6 +100,7 @@ export function ShopPurchaseSection({
     <MintPanel
       mode="purchase"
       stats={effectiveMintStats}
+      statsReady={mintStatsReady}
       onMint={handleMint}
       walletActionBusy={walletActionBusy}
       solanaMintVisible={!routeStripeOnly}

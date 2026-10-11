@@ -308,11 +308,20 @@ function PurchaseMintPanel({
         <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
           <div className="mint-panel__info">
             <MintPanelTitle title={title} dropId={dropId} />
-            <div
-              className={remainingReady ? 'mint-panel__remaining' : 'mint-panel__remaining mint-panel__remaining--hidden'}
-              aria-hidden={!remainingReady}
-            >
-              <span>{remaining} / {total} left</span>
+            <div className="mint-panel__remaining mint-panel__availability">
+              <span
+                className="mint-panel__remaining-count"
+                style={{ minWidth: `${String(total).length}ch` }}
+              >
+                {remainingReady ? remaining : (
+                  <span role="status" aria-label="Loading availability">
+                    {Array.from(String(total), (_, index) => (
+                      <span key={index} className="mint-panel__digit-placeholder" aria-hidden="true" />
+                    ))}
+                  </span>
+                )}
+              </span>
+              <span> / {total} left</span>
             </div>
           </div>
           <form
