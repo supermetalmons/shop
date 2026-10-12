@@ -618,7 +618,7 @@ export function useShopReveal(options: ShopRevealOptions) {
 
     preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
 
-    const targetRect = calcInteractiveCardViewerTargetRectInViewport(dropId);
+    const targetRect = calcInteractiveCardViewerTargetRectInViewport();
     const resolvedOriginRect = originRect
       ? calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(

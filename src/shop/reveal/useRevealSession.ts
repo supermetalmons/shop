@@ -460,7 +460,7 @@ export function useRevealSession({
           const viewport = getOverlayViewport();
           const nextTarget =
             prev.viewerMode === 'poncho-card'
-              ? calcInteractiveCardViewerTargetRectInViewport(prev.dropId, viewport)
+              ? calcInteractiveCardViewerTargetRectInViewport(viewport)
               : prev.viewerMode === 'receipt-image'
                 ? calcReceiptViewerTargetRectInViewport(
                     prev.targetRect.width / Math.max(1, prev.targetRect.height),
