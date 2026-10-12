@@ -583,7 +583,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           } else if (isMiNoteFolderInteractive(currentProps.current.state)) {
             drag.mode = 'fold';
           }
-          if (drag.mode !== 'pending') cardDrag = null;
+          if (drag.mode !== 'pending') {
+            cardDrag = null;
+            host.style.cursor = 'grabbing';
+          }
         }
         const distance = Math.max(145, Math.min(280, width * 0.4));
         if (drag.mode === 'flip' && outerFlip) {
@@ -641,6 +644,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
           packHoverSettling = false;
           packTiltTarget.set(0, 0);
         }
+        if (drag && drag.mode !== 'pending') host.style.cursor = 'pointer';
         drag = null;
         if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
         if (swipe && !movement.cancelled && !disposed && !failed) {
@@ -682,8 +686,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       if (!event.isPrimary || event.pointerType === 'touch' || drag || cardDrag?.active) return;
       const cardSelected = currentProps.current.state.selectedCard !== null;
       const packHit = cardSelected ? null : hit(event);
-      const cursor = cardSelected ? 'pointer' : packHit ? 'grab' : '';
-      if (host.style.cursor !== cursor) host.style.cursor = cursor;
+      if (host.style.cursor !== 'pointer') host.style.cursor = 'pointer';
       if (event.pointerType !== 'mouse') return;
       const hoverEnabled = canHoverPack();
       const hovering = packHit !== null && hoverEnabled;

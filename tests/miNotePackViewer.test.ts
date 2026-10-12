@@ -656,7 +656,7 @@ test('mouse hover shares cursor picking, tilts the pack, and settles on leaving'
   const model = models[0];
   const picking = t.mock.method(THREE.Raycaster.prototype, 'intersectObjects');
   pointer.dispatch('pointerenter', 520, 200);
-  assert.equal(pointer.host.style.cursor, 'grab');
+  assert.equal(pointer.host.style.cursor, 'pointer');
   assert.equal(picking.mock.callCount(), 1);
   pointer.dispatch('pointermove', 530, 210);
   assert.equal(picking.mock.callCount(), 2);
@@ -664,7 +664,7 @@ test('mouse hover shares cursor picking, tilts the pack, and settles on leaving'
   assert.ok(model.group.rotation.x > 0.04);
   assert.ok(model.group.rotation.y < -0.01);
   pointer.dispatch('pointermove', 0, 0);
-  assert.equal(pointer.host.style.cursor, '');
+  assert.equal(pointer.host.style.cursor, 'pointer');
   pointer.dispatch('pointerleave', 0, 0);
   advanceFrames(80);
   assertCalmOpen(model);
@@ -676,11 +676,11 @@ test('pen hover retains cursor feedback without tilting the pack', async () => {
   await makeReady();
   const pointer = pointerControls(run);
   pointer.dispatch('pointerenter', 520, 200, 'pen');
-  assert.equal(pointer.host.style.cursor, 'grab');
+  assert.equal(pointer.host.style.cursor, 'pointer');
   advanceFrames(25);
   assertCalmOpen(models[0]);
   pointer.dispatch('pointermove', 0, 0, 'pen');
-  assert.equal(pointer.host.style.cursor, '');
+  assert.equal(pointer.host.style.cursor, 'pointer');
 });
 
 test('a slow preview handoff preserves the initial pose and resumes floating without changing the camera or scale', async () => {

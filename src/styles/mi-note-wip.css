@@ -19,6 +19,7 @@
 .mi-note-wip__renderer {
   pointer-events: auto;
   touch-action: none;
+  cursor: pointer;
   outline: none;
 }
 
