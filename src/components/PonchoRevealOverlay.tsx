@@ -1497,6 +1497,8 @@ export function PonchoCardViewerOverlay({
   onTransitionEnd,
 }: PonchoCardViewerOverlayProps) {
   const interactionSuspended = closing || suspended;
+  const cardPointerOriginsRef = useRef(new Map<number, boolean>());
+  const cardClickOriginRef = useRef(false);
 
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
@@ -1512,7 +1514,23 @@ export function PonchoCardViewerOverlay({
         suspended ? ' reveal-overlay--suspended' : ''
       }`}
       style={overlayStyle}
-      onClick={() => {
+      onPointerDownCapture={(event) => {
+        if (!event.isPrimary || event.button !== 0) return;
+        cardPointerOriginsRef.current.set(
+          event.pointerId,
+          event.target instanceof Element && Boolean(event.target.closest('.wip-reveal__card-item')),
+        );
+      }}
+      onPointerUpCapture={(event) => {
+        if (!event.isPrimary || event.button !== 0) return;
+        cardClickOriginRef.current = cardPointerOriginsRef.current.get(event.pointerId) ?? false;
+        cardPointerOriginsRef.current.delete(event.pointerId);
+      }}
+      onPointerCancelCapture={(event) => {
+        cardPointerOriginsRef.current.delete(event.pointerId);
+      }}
+      onClick={(event) => {
+        if (event.detail > 0 && cardClickOriginRef.current) return;
         if (!interactionSuspended) onDismiss?.();
       }}
       onContextMenu={(evt) => evt.preventDefault()}
@@ -1532,6 +1550,8 @@ export function PonchoCardViewerOverlay({
                     card={card}
                     interactive={!suspended}
                     loadingImageSrc={loadingImageSrc}
+                    onActivate={interactionSuspended ? undefined : onDismiss}
+                    ariaLabel="Close card viewer"
                     showEffectAtRest
                   />
                 </div>

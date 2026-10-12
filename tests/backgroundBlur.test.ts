@@ -624,28 +624,28 @@ test('Poncho viewer suspends card controls and dismissal while preserving closin
   const props = { active: true, closing: false, card, onDismiss: () => { dismissals += 1; } };
   const view = render(createElement(PonchoCardViewerOverlay, props));
   const dialog = view.getByRole('dialog', { name: 'Card viewer' });
-  const control = view.getByRole('button', { name: 'Revealed card' });
+  const control = view.getByRole('button', { name: 'Close card viewer' });
   fireEvent.load(view.getByRole('img', { name: 'Revealed card' }));
   assert.equal(control.getAttribute('aria-disabled'), null);
   assert.equal(control.tabIndex, 0);
   fireEvent.click(control);
-  assert.equal(dismissals, 0);
-  fireEvent.click(dialog);
   assert.equal(dismissals, 1);
+  fireEvent.click(dialog);
+  assert.equal(dismissals, 2);
 
   view.rerender(createElement(PonchoCardViewerOverlay, { ...props, suspended: true }));
   assert.equal(control.getAttribute('aria-disabled'), 'true');
   assert.equal(control.tabIndex, -1);
   assert.equal(dialog.hasAttribute('inert'), true);
   fireEvent.click(dialog);
-  assert.equal(dismissals, 1);
+  assert.equal(dismissals, 2);
 
   view.rerender(createElement(PonchoCardViewerOverlay, { ...props, closing: true }));
   assert.equal(control.getAttribute('aria-disabled'), null);
   assert.equal(control.tabIndex, 0);
   assert.equal(dialog.hasAttribute('inert'), true);
   fireEvent.click(dialog);
-  assert.equal(dismissals, 1);
+  assert.equal(dismissals, 2);
 });
 
 test('Clear Card lighting uses native backdrop blur instead of Firefox live capture', () => {

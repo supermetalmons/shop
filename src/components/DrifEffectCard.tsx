@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
+import { createMiNoteCardInput } from '../lib/miNoteCardInput';
 import {
   DRIF_GRAIN_URL,
   DRIF_GLITTER_URL,
@@ -46,6 +47,7 @@ type DrifEffectCardProps = {
   imageAlt?: string;
   loadingImageSrc?: string;
   onClick?: () => void;
+  onActivate?: () => void;
   onImageReadyChange?: (ready: boolean) => void;
   interactive?: boolean;
   enableInteractiveUnlockWake?: boolean;
@@ -187,6 +189,7 @@ export default function DrifEffectCard({
   imageAlt = '',
   loadingImageSrc,
   onClick,
+  onActivate,
   onImageReadyChange,
   interactive = true,
   enableInteractiveUnlockWake = false,
@@ -233,6 +236,30 @@ export default function DrifEffectCard({
   const showingLoadingImage = displayImageSrc !== card.imageSrc;
   const settling = interactionMode === 'settling';
   const cardIdentityKey = useMemo(() => drifCardIdentityKey(card), [card]);
+  const activationEnabled = Boolean(onActivate) && interactive && !settling;
+  const activationStateRef = useRef({ enabled: activationEnabled, onActivate });
+  const activationInput = useMemo(() => createMiNoteCardInput(() => {
+    const state = activationStateRef.current;
+    if (state.enabled && visibleRef.current) state.onActivate?.();
+  }, {
+    onStart: () => activationStateRef.current.enabled && visibleRef.current,
+  }), []);
+
+  useLayoutEffect(() => {
+    activationStateRef.current = { enabled: activationEnabled, onActivate };
+  }, [activationEnabled, onActivate]);
+
+  useLayoutEffect(() => {
+    if (!activationEnabled) {
+      activationInput.cancel();
+      return;
+    }
+    window.addEventListener('blur', activationInput.cancel);
+    return () => {
+      window.removeEventListener('blur', activationInput.cancel);
+      activationInput.cancel();
+    };
+  }, [activationEnabled, activationInput, cardIdentityKey]);
 
   const canUseHoverWake = useCallback(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
@@ -695,6 +722,7 @@ export default function DrifEffectCard({
   }, [canUseHoverWake, enableInteractiveUnlockWake, finalImageReady, interactive, settling, setPointerFromPercent]);
 
   const interactiveEnabled = interactive && finalImageReady && !settling;
+  const buttonEnabled = interactiveEnabled || activationEnabled;
 
   useEffect(() => {
     if (interactive) return;
@@ -726,6 +754,7 @@ export default function DrifEffectCard({
   useEffect(() => {
     const handleVisibilityChange = () => {
       visibleRef.current = document.visibilityState === 'visible';
+      activationInput.cancel();
       reset();
     };
 
@@ -733,7 +762,7 @@ export default function DrifEffectCard({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [reset]);
+  }, [activationInput, reset]);
 
   useEffect(() => {
     return () => {
@@ -782,14 +811,29 @@ export default function DrifEffectCard({
           type="button"
           className="drif-effect-card__rotator"
           onPointerEnter={interactiveEnabled ? interact : undefined}
-          onPointerMove={interactiveEnabled ? interact : undefined}
-          onPointerLeave={interactiveEnabled ? () => interactEnd() : undefined}
-          onPointerCancel={interactiveEnabled ? () => interactEnd() : undefined}
-          onBlur={interactiveEnabled ? () => interactEnd(0) : undefined}
-          onClick={interactiveEnabled ? onClick : undefined}
+          onPointerDown={activationEnabled ? activationInput.onPointerDown : undefined}
+          onPointerMove={(event) => {
+            activationInput.onPointerMove(event);
+            if (interactiveEnabled) interact(event);
+          }}
+          onPointerUp={activationEnabled ? activationInput.onPointerUp : undefined}
+          onPointerLeave={(event) => {
+            activationInput.onPointerCancel(event);
+            if (interactiveEnabled) interactEnd();
+          }}
+          onPointerCancel={(event) => {
+            activationInput.onPointerCancel(event);
+            if (interactiveEnabled) interactEnd();
+          }}
+          onLostPointerCapture={activationInput.onLostPointerCapture}
+          onBlur={() => {
+            activationInput.cancel();
+            if (interactiveEnabled) interactEnd(0);
+          }}
+          onClick={activationEnabled ? activationInput.onClick : interactiveEnabled ? onClick : undefined}
           aria-label={ariaLabel}
-          aria-disabled={interactiveEnabled ? undefined : true}
-          tabIndex={interactiveEnabled ? 0 : -1}
+          aria-disabled={buttonEnabled ? undefined : true}
+          tabIndex={buttonEnabled ? 0 : -1}
         >
           <div className="drif-effect-card__back" aria-hidden="true" />
           <div className="drif-effect-card__front">
