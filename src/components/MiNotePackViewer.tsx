@@ -14,6 +14,7 @@ import {
   MI_NOTE_POCKET_TOP,
 } from '../lib/miNotePackModel';
 import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '../lib/miNotePackMotion';
+import { MI_NOTE_CARD_CLOSEUP_MAX_HEIGHT_RATIO, MI_NOTE_CARD_CLOSEUP_MAX_WIDTH_RATIO } from '../lib/revealOverlayLayout';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
 import { isMiNoteFolderInteractive, MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
@@ -843,7 +844,10 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const aspect = width / height;
       const closedHeight = Math.max(1.82 / 0.52, MI_NOTE_LEAF_WIDTH / (aspect * 0.68));
       const openHeight = Math.max(1.82 / 0.52, (MI_NOTE_LEAF_WIDTH * 2 + 0.32) / (aspect * 0.86));
-      const selectedHeight = Math.max(MI_NOTE_CARD_HEIGHT * 1.28 / 0.66, MI_NOTE_CARD_WIDTH * 1.28 / (aspect * 0.72));
+      const selectedHeight = Math.max(
+        MI_NOTE_CARD_HEIGHT * 1.28 / MI_NOTE_CARD_CLOSEUP_MAX_HEIGHT_RATIO,
+        MI_NOTE_CARD_WIDTH * 1.28 / (aspect * MI_NOTE_CARD_CLOSEUP_MAX_WIDTH_RATIO),
+      );
       const inspectSticker = currentProps.current.inspectSticker && state.selectedCard === null;
       stickerFocus.set(0, 0, 0);
       if (inspectSticker) model.getSealFocus(stickerFocus);

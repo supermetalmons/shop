@@ -597,6 +597,11 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   contain: none;
 }
 
+.poncho-card-viewer-overlay .drif-effect-card[data-source='mi_note_cards'] .drif-effect-card__translater,
+.poncho-card-viewer-overlay .drif-effect-card[data-source='mi_note_cards'] .drif-effect-card__rotator {
+  perspective: max(600px, calc(var(--reveal-target-height) * 2));
+}
+
 @keyframes wip-pack-discard {
   0% {
     opacity: 1;

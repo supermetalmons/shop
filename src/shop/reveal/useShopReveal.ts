@@ -25,8 +25,6 @@ import {
   calcAspectLockedRevealOriginRect,
   calcContainedMediaRevealOriginRect,
   calcClearCardRevealTargetRect,
-  calcPonchoDrifellaAbsoluteCardRect,
-  calcPonchoDrifellaRevealTargetRectInViewport,
   getRevealOverlayViewport as getOverlayViewport,
   offsetRevealOverlayRectForViewport,
   toRevealOverlayRect,
@@ -40,7 +38,7 @@ import {
 import { isUserRejectedError } from '../commerce/transactionSupport';
 import { persistCompletedReveal } from '../persistedState';
 import type { InventoryItem } from '../../types';
-import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
+import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
 import { pickRandomSoundUrl } from './sounds';
 import type { EarlyPackRevealGate, ImageViewerSize, ReceiptViewerImage, ReceiptViewerSource, RevealOverlayState } from './types';
 import type { ShopRevealOptions } from './contracts';
@@ -620,9 +618,7 @@ export function useShopReveal(options: ShopRevealOptions) {
 
     preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
 
-    const targetRect = calcPonchoDrifellaAbsoluteCardRect(
-      calcPonchoDrifellaRevealTargetRectInViewport(),
-    );
+    const targetRect = calcInteractiveCardViewerTargetRectInViewport(dropId);
     const resolvedOriginRect = originRect
       ? calcAspectLockedRevealOriginRect(originRect, targetRect)
       : new DOMRect(

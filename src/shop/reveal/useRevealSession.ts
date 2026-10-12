@@ -8,12 +8,10 @@ import {
   type DeferredOverlayActionKind,
 } from '../../lib/deferredOverlayActions';
 import {
-  calcPonchoDrifellaAbsoluteCardRect,
-  calcPonchoDrifellaRevealTargetRectInViewport,
   getRevealOverlayViewport as getOverlayViewport,
   sameRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
-import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
+import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
 import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS } from './sounds';
 import type { PonchoRevealDismissReadySource } from '../../components/PonchoRevealOverlay';
 import type { EarlyPackRevealGate, RevealOverlayState, ViewerOverlayInput } from './types';
@@ -462,9 +460,7 @@ export function useRevealSession({
           const viewport = getOverlayViewport();
           const nextTarget =
             prev.viewerMode === 'poncho-card'
-              ? calcPonchoDrifellaAbsoluteCardRect(
-                  calcPonchoDrifellaRevealTargetRectInViewport(viewport),
-                )
+              ? calcInteractiveCardViewerTargetRectInViewport(prev.dropId, viewport)
               : prev.viewerMode === 'receipt-image'
                 ? calcReceiptViewerTargetRectInViewport(
                     prev.targetRect.width / Math.max(1, prev.targetRect.height),

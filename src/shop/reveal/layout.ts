@@ -1,3 +1,4 @@
+import { isDropFamily } from '../../config/deployment';
 import {
   usesClearCard3dRevealFlow,
   usesInteractiveCardPackRevealFlow,
@@ -6,11 +7,36 @@ import {
 } from '../../config/dropsExtraContent';
 import {
   calcClearCardRevealTargetRect,
+  calcPonchoDrifellaAbsoluteCardRect,
   calcPonchoDrifellaRevealTargetRect,
+  calcPonchoDrifellaRevealTargetRectInViewport,
   getRevealOverlayViewport as getOverlayViewport,
+  MI_NOTE_CARD_CLOSEUP_MAX_HEIGHT_RATIO,
+  MI_NOTE_CARD_CLOSEUP_MAX_WIDTH_RATIO,
   offsetRevealOverlayRectForViewport
 } from '../../lib/revealOverlayLayout';
 import { ImageViewerSize, OverlayRect } from './types';
+
+export function calcInteractiveCardViewerTargetRectInViewport(
+  dropId: string | undefined,
+  viewport = getOverlayViewport(),
+): OverlayRect {
+  if (!isDropFamily(dropId, 'mi_note_cards')) {
+    return calcPonchoDrifellaAbsoluteCardRect(calcPonchoDrifellaRevealTargetRectInViewport(viewport));
+  }
+  const aspectRatio = 5 / 7;
+  const width = Math.max(1, Math.min(
+    viewport.width * MI_NOTE_CARD_CLOSEUP_MAX_WIDTH_RATIO,
+    viewport.height * MI_NOTE_CARD_CLOSEUP_MAX_HEIGHT_RATIO * aspectRatio,
+  ));
+  const height = width / aspectRatio;
+  return offsetRevealOverlayRectForViewport({
+    left: (viewport.width - width) / 2,
+    top: (viewport.height - height) / 2,
+    width,
+    height,
+  }, viewport);
+}
 
 function calcRevealTargetRect(viewportWidth: number, viewportHeight: number, aspectRatio: number): OverlayRect {
   const maxWidth = viewportWidth * 0.65;

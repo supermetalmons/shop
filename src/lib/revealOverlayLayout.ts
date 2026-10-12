@@ -86,6 +86,9 @@ const PONCHO_DRIFELLA_CARD_FRAME_RECT = Object.freeze<PonchoDrifellaFrameRect>({
 
 const CLEAR_CARD_ASPECT_RATIO = 1 / 1.4;
 
+export const MI_NOTE_CARD_CLOSEUP_MAX_WIDTH_RATIO = 0.72;
+export const MI_NOTE_CARD_CLOSEUP_MAX_HEIGHT_RATIO = 0.66;
+
 export function calcClearCardRevealTargetRect(
   viewportWidth: number,
   viewportHeight: number,
