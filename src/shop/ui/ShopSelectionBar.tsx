@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { FaBoxOpen, FaPlane } from 'react-icons/fa6';
 import {
   BackgroundLayerPortal
@@ -29,10 +29,55 @@ type ShopSelectionBarProps = Pick<ShopInventorySelection,
 
 type SelectionPanelProps = Pick<ShopSelectionBarProps, 'selectedCount' | 'selectedPreview' | 'selectedOverflow' | 'clearSelection'>;
 
+function FittedSelectionPanel({ children }: { children: ReactNode }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    let frame = 0;
+    let cancelled = false;
+
+    const fits = () => {
+      const style = window.getComputedStyle(panel);
+      const contentWidth = Array.from(panel.children).reduce((width, child) => width + child.getBoundingClientRect().width, 0);
+      const availableWidth = panel.getBoundingClientRect().width - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth);
+      return contentWidth + parseFloat(style.columnGap) + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) <= availableWidth + 0.01;
+    };
+    const update = () => {
+      frame = 0;
+      delete panel.dataset.density;
+      if (fits()) return;
+      panel.dataset.density = 'tight';
+      if (fits()) return;
+      panel.dataset.density = 'compact';
+    };
+    const schedule = () => {
+      if (!cancelled && !frame) frame = window.requestAnimationFrame(update);
+    };
+
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    observer?.observe(panel);
+    panel.querySelectorAll('.selection-panel__preview, .selection-panel__actions, button').forEach((element) => observer?.observe(element));
+    window.addEventListener('resize', schedule);
+    void document.fonts?.ready.then(schedule);
+
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      observer?.disconnect();
+      window.removeEventListener('resize', schedule);
+    };
+  });
+
+  return <div ref={panelRef} className="selection-panel selection-panel--inventory">{children}</div>;
+}
+
 function SelectionPanel({ selectedCount, selectedPreview, selectedOverflow, clearSelection, children }: SelectionPanelProps & { children: ReactNode }) {
   return selectedCount ? (
     <BackgroundLayerPortal>
-      <div className="selection-panel">
+      <FittedSelectionPanel>
         <div className="selection-panel__left">
           <div className="selection-panel__preview">
             {selectedPreview.map(({ item, previewImage }, idx) => {
@@ -71,7 +116,7 @@ function SelectionPanel({ selectedCount, selectedPreview, selectedOverflow, clea
           <button type="button" className="quiet" onClick={clearSelection}>Cancel</button>
           {children}
         </div>
-      </div>
+      </FittedSelectionPanel>
     </BackgroundLayerPortal>
   ) : null;
 }
