@@ -8,6 +8,7 @@ import { isKeyboardShortcutTarget } from '../lib/focusTrap';
 import { MI_NOTE_CARDS_DEFAULT } from '../lib/miNoteCardEffects';
 import { MI_NOTE_CARDS_PACK_PLACEHOLDER_IMAGE_URL } from '../config/dropMediaDefaults';
 import { createMiNoteCard } from '../lib/miNoteCards';
+import { playMiNoteClosingParticles } from '../lib/miNoteClosingParticles';
 import {
   createMiNoteRevealState, isMiNoteFolderInteractive, miNoteRevealCardIds, MI_NOTE_INVENTORY_OPEN_TAPS,
   reduceMiNoteInventoryReveal, type MiNoteRevealEvent,
@@ -57,6 +58,7 @@ export default function MiNotePackRevealOverlay({
   onDismiss, onTransitionEnd, onRevealCompleteChange, onDismissReadyChange,
 }: MiNotePackRevealOverlayProps) {
   const controlsRef = useRef<MiNotePackControls | null>(null);
+  const closingParticlesPlayedRef = useRef(false);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
   const [entered, setEntered] = useState(false);
@@ -101,6 +103,12 @@ export default function MiNotePackRevealOverlay({
     Boolean(active && entered && setup && viewerReady && !error), `${packMediaId}:${attempt}`,
   );
   const interactionEnabled = !showFallback && !closing && !suspended && (viewerOnly || phase === 'ready');
+
+  useEffect(() => {
+    if (!closing || suspended || viewerOnly || !cardIds || error || state.stage !== 'interactive' || closingParticlesPlayedRef.current) return;
+    closingParticlesPlayedRef.current = true;
+    playMiNoteClosingParticles();
+  }, [cardIds, closing, error, state.stage, suspended, viewerOnly]);
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');

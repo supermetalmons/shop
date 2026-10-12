@@ -5,6 +5,7 @@ import type { DrifCardConfig } from './drifCards';
 import { isKeyboardShortcutTarget } from './lib/focusTrap';
 import { MI_NOTE_CARDS_DEFAULT } from './lib/miNoteCardEffects';
 import { createMiNoteCard, MI_NOTE_CARD_COUNT, sampleMiNoteIndex } from './lib/miNoteCards';
+import { playMiNoteClosingParticles } from './lib/miNoteClosingParticles';
 import {
   createMiNoteRevealState,
   isMiNoteFolderInteractive,
@@ -175,7 +176,10 @@ export default function MiNoteCardsWipApp() {
   });
   const [focused, setFocused] = useState(false);
   const controlsRef = useRef<MiNotePackControls | null>(null);
-  const handleClose = useCallback(() => navigate('/'), []);
+  const handleClose = useCallback(() => {
+    navigate('/');
+    playMiNoteClosingParticles();
+  }, []);
   const handleEscape = useCallback(() => {
     if (!controlsRef.current?.escape()) handleClose();
   }, [handleClose]);
