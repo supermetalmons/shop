@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QueryClient } from '@tanstack/react-query';
 import { CARD_NFT_2_PACK_BASE_URL } from '../../src/config/dropMediaDefaults.ts';
+import { FRONTEND_DROPS } from '../../src/config/deployment.ts';
+import { isOpenableBoxMinterItemsPerBox } from '../../shared/boxMinterProtocol.ts';
 import {
   SHOP_API_MAX_RESPONSE_ITEMS,
   SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
@@ -142,6 +144,62 @@ test('inventory client serializes expected asset IDs by cluster without changing
         devnet: [devnetAsset],
       },
     });
+  });
+});
+
+for (const drop of Object.values(FRONTEND_DROPS).filter(drop => isOpenableBoxMinterItemsPerBox(drop.itemsPerBox))) {
+  test(`${drop.dropId} pending packs use the same artwork as unopened inventory`, async () => {
+    const metadata = { name: 'Pack #184', boxId: '184', rawImage: 'https://metadata.example/pack.webp' };
+    const pending = {
+      dropId: drop.dropId, pendingPda: 'pending', boxAssetId: 'pack',
+      dudeAssetIds: Array.from({ length: drop.itemsPerBox }, (_, index) => `dude-${index}`),
+      ...metadata,
+    };
+    await withFetch(async (input, init) => {
+      if (String(input).endsWith('/pending-open-boxes')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, includeDevnet: true, includeBoxMetadata: true });
+        return Response.json({ ok: true, items: [pending] });
+      }
+      return Response.json({ ok: true, items: [{ id: 'pack', dropId: drop.dropId, kind: 'box', ...metadata }] });
+    }, async () => {
+      const [unopened] = await fetchInventory(OWNER, { includeDevnet: true });
+      const [opening] = await fetchPendingOpenBoxes(OWNER, { includeDevnet: true });
+      assert.ok(opening.image);
+      assert.equal(opening.image, unopened.image);
+      assert.equal(opening.boxId, unopened.boxId);
+      assert.equal(opening.name, unopened.name);
+      assert.equal(Object.hasOwn(opening, 'rawImage'), false);
+      if (drop.dropFamily === 'mi_note_cards') assert.equal(opening.image.includes('placeholder'), false);
+    });
+  });
+}
+
+test('pending metadata requests remain compatible with an older API', async () => {
+  const pending = { dropId: 'mi_note_cards', pendingPda: 'pending', boxAssetId: 'pack', dudeAssetIds: ['left', 'right'] };
+  let requests = 0;
+  await withFetch(async (_input, init) => {
+    requests += 1;
+    const body = JSON.parse(String(init?.body));
+    if (requests === 1) {
+      assert.equal(body.includeBoxMetadata, true);
+      return Response.json({ ok: false, error: 'invalid-request' }, { status: 400 });
+    }
+    assert.deepEqual(body, { owner: OWNER, includeDevnet: true });
+    return Response.json({ ok: true, items: [pending] });
+  }, async () => {
+    assert.deepEqual(await fetchPendingOpenBoxes(OWNER, { includeDevnet: true }), [pending]);
+    assert.equal(requests, 2);
+  });
+});
+
+test('pending metadata requests do not disguise provider failures as legacy API responses', async () => {
+  let requests = 0;
+  await withFetch(async () => {
+    requests += 1;
+    return Response.json({ ok: false, error: 'provider-unavailable' }, { status: 502 });
+  }, async () => {
+    await assert.rejects(fetchPendingOpenBoxes(OWNER), /provider-unavailable/);
+    assert.equal(requests, 1);
   });
 });
 

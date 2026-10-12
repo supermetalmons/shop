@@ -95,6 +95,9 @@ export interface PendingOpenBox {
   boxAssetId: string;
   dudeAssetIds: string[];
   createdSlot?: number;
+  name?: string;
+  boxId?: string;
+  image?: string;
 }
 
 export interface MintStats {

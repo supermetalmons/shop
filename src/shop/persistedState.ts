@@ -12,6 +12,7 @@ export type LocalPendingReveal = {
 export type ShopStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
 
 export const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
+export const RECENT_REVEALS_LIMIT = 10;
 
 function browserStorage(): ShopStorage | null {
   if (typeof window === 'undefined') return null;
@@ -125,6 +126,17 @@ export function persistRecentReveals(
   try {
     storage.setItem(recentRevealKey(wallet), JSON.stringify(ids));
   } catch {}
+}
+
+export function persistCompletedReveal(
+  wallet: string,
+  boxId: string,
+  storage: ShopStorage | null = browserStorage(),
+): void {
+  if (!storage) return;
+  persistRecentReveals(wallet, [boxId, ...loadRecentReveals(wallet, storage).filter((id) => id !== boxId)]
+    .slice(0, RECENT_REVEALS_LIMIT), storage);
+  persistPendingReveals(wallet, loadPendingReveals(wallet, storage).filter((entry) => entry.id !== boxId), storage);
 }
 
 export function discountUsedVersion(

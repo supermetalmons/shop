@@ -26,7 +26,9 @@ export type ShopInventoryRequest = ShopApiBaseRequest & {
   preorderMinContextSlots?: Record<string, number>;
 };
 
-export type ShopPendingOpenBoxesRequest = ShopApiBaseRequest;
+export type ShopPendingOpenBoxesRequest = ShopApiBaseRequest & {
+  includeBoxMetadata?: true;
+};
 
 type LegacyShopApiAttribute = {
   trait_type: string;
@@ -80,6 +82,9 @@ export type ShopPendingOpenBox = {
   boxAssetId: string;
   dudeAssetIds: string[];
   createdSlot?: number;
+  name?: string;
+  boxId?: string;
+  rawImage?: string;
 };
 
 export type ShopInventoryResponse = {
@@ -175,7 +180,8 @@ export function isExactShopInventoryRequest(value: unknown): value is ShopInvent
 }
 
 export function isExactShopPendingOpenBoxesRequest(value: unknown): value is ShopPendingOpenBoxesRequest {
-  return isRecord(value) && isExactShopApiBaseRequest(value);
+  return isRecord(value) && isExactShopApiBaseRequest(value, ['includeBoxMetadata']) &&
+    (value.includeBoxMetadata === undefined || value.includeBoxMetadata === true);
 }
 
 function isExactLegacyShopApiAttribute(value: unknown): value is LegacyShopApiAttribute {
@@ -220,7 +226,7 @@ function isExactShopPendingOpenBox(value: unknown): value is ShopPendingOpenBox 
   if (!isRecord(value) || !hasExactKeys(
     value,
     ['dropId', 'pendingPda', 'boxAssetId', 'dudeAssetIds'],
-    ['createdSlot'],
+    ['createdSlot', 'name', 'boxId', 'rawImage'],
   )) return false;
   if (
     typeof value.dropId !== 'string' ||
@@ -234,6 +240,11 @@ function isExactShopPendingOpenBox(value: unknown): value is ShopPendingOpenBox 
     value.dudeAssetIds.length > SHOP_PENDING_OPEN_MAX_DUDE_ASSET_IDS ||
     !value.dudeAssetIds.every((id) => typeof id === 'string' && id.length > 0)
   ) return false;
+  if (value.name !== undefined && !isShopApiStringWithinUtf8Limit(value.name, SHOP_INVENTORY_NAME_MAX_UTF8_BYTES)) return false;
+  if (value.boxId !== undefined &&
+    (!isShopApiStringWithinUtf8Limit(value.boxId, SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES) || value.boxId.length === 0)) return false;
+  if (value.rawImage !== undefined &&
+    (!isShopApiStringWithinUtf8Limit(value.rawImage, SHOP_INVENTORY_RAW_IMAGE_MAX_UTF8_BYTES) || value.rawImage.length === 0)) return false;
   return value.createdSlot === undefined ||
     (Number.isSafeInteger(value.createdSlot) && Number(value.createdSlot) >= 0);
 }

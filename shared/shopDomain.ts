@@ -371,12 +371,19 @@ export function resolvePendingOpenDropId(entry: PendingOpenRecordCandidate, asse
   return drop?.itemsPerBox === dudeCount ? dropId : null;
 }
 
-export function toShopPendingOpenBox(entry: PendingOpenRecordCandidate, dropId: string): ShopPendingOpenBox {
+export function toShopPendingOpenBox(entry: PendingOpenRecordCandidate, dropId: string, asset?: DasAsset): ShopPendingOpenBox {
+  const item = asset ? transformShopInventoryItem(asset, entry.solanaCluster) : null;
+  const metadata = item?.id === entry.boxAssetId && item.kind === 'box' && item.dropId === dropId ? item : null;
   return {
     dropId,
     pendingPda: entry.pendingPda,
     boxAssetId: entry.boxAssetId,
     dudeAssetIds: entry.dudeAssetIds,
     ...(entry.createdSlot != null ? { createdSlot: entry.createdSlot } : {}),
+    ...(metadata ? {
+      name: metadata.name,
+      ...(metadata.boxId ? { boxId: metadata.boxId } : {}),
+      ...(metadata.rawImage ? { rawImage: metadata.rawImage } : {}),
+    } : {}),
   };
 }

@@ -10,6 +10,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
 import { getMiNotePackPreviewRect } from '../src/lib/miNotePackPreviewLayout.ts';
 import packRenderSetups from '../src/lib/miNotePackRenderSetups.json';
+import { loadPendingReveals, loadRecentReveals, persistPendingReveals } from '../src/shop/persistedState.ts';
 
 const { dom } = setupFrontendDom();
 Object.defineProperty(globalThis, 'DOMRect', { configurable: true, value: dom.window.DOMRect });
@@ -47,7 +48,7 @@ imports.deregister();
 const { soundPlayer } = await import('../src/lib/SoundPlayer.ts');
 mock.method(soundPlayer, 'initializeOnUserInteraction', async () => {});
 mock.method(soundPlayer, 'preloadSound', async () => {});
-afterEach(() => { cleanup(); revealCalls = []; });
+afterEach(() => { cleanup(); revealCalls = []; dom.window.localStorage.clear(); });
 after(() => { mock.restoreAll(); Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
 function fixture(dropId: string) {
@@ -175,6 +176,29 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     });
     await waitFor(() => assert.equal(result.current.revealOverlay, null));
     assert.deepEqual(f.reconciled, [[1401, 1430]]);
+  });
+
+  test(`${dropId} saves completion before a resumed unpacking is visually finished`, async () => {
+    const f = fixture(dropId);
+    const wallet = owner.toBase58();
+    persistPendingReveals(wallet, [{ ...f.pack, createdAt: Date.now() }]);
+    f.options.pendingOpenBoxes = [{ dropId, pendingPda: 'pending', boxAssetId: assetId, dudeAssetIds: ['left', 'right'] }];
+    const { result, unmount } = renderHook(useShopReveal, { initialProps: f.options });
+    await act(async () => { await result.current.openPendingReveal(f.pack, new DOMRect(0, 0, 100, 140)); });
+    await act(async () => { await result.current.handlePonchoOverlayRequestReveal(); });
+
+    assert.deepEqual(loadPendingReveals(wallet), []);
+    assert.deepEqual(loadRecentReveals(wallet), [assetId]);
+    assert.equal(result.current.revealOverlay?.phase, 'ready');
+    assert.deepEqual(result.current.revealOverlay?.revealedIds, [1401, 1430]);
+    assert.equal(result.current.presentation.revealOverlayCanRenderMiNotePack3d, true);
+    assert.deepEqual(f.reconciled, []);
+    act(() => result.current.handleRevealOverlayDismiss());
+    assert.ok(result.current.revealOverlay);
+
+    unmount();
+    assert.deepEqual(loadPendingReveals(wallet), []);
+    assert.deepEqual(loadRecentReveals(wallet), [assetId]);
   });
 }
 

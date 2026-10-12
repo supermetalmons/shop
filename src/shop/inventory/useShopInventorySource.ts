@@ -44,11 +44,12 @@ import {
   persistHiddenAssets,
   persistPendingReveals,
   persistRecentReveals,
+  RECENT_REVEALS_LIMIT,
   type LocalPendingReveal
 } from '../persistedState';
 import { startPostActionInventoryPolling } from '../postActionPolling';
 import { RevealOverlayState } from '../reveal/types';
-import { LOCAL_PENDING_GRACE_MS, RECENT_REVEALS_LIMIT, pendingRevealListEqual } from './stateSupport';
+import { LOCAL_PENDING_GRACE_MS, pendingRevealListEqual } from './stateSupport';
 import type { ShopInventoryQueries } from './useShopInventoryQueries';
 
 export type ShopInventoryViews = {
@@ -78,6 +79,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   const [localPendingReveals, setLocalPendingReveals] = useState<LocalPendingReveal[]>(() =>
     loadPendingReveals(localAccountWallet),
   );
+  const [optimisticPendingRevealIds, setOptimisticPendingRevealIds] = useState<ReadonlySet<string>>(() => new Set());
   const [recentRevealedBoxes, setRecentRevealedBoxes] = useState<string[]>(() => loadRecentReveals(localAccountWallet));
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [localRevealedDudeKeys, setLocalRevealedDudeKeys] = useState<string[]>([]);
@@ -108,6 +110,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
     pendingRevealHydrationWalletRef.current = hydrationWallet;
     recentRevealHydrationWalletRef.current = hydrationWallet;
     setLocalPendingReveals(loadPendingReveals(localAccountWallet));
+    setOptimisticPendingRevealIds(new Set());
     setRecentRevealedBoxes(loadRecentReveals(localAccountWallet).slice(0, RECENT_REVEALS_LIMIT));
     setLocalMintedBoxes([]);
 
@@ -143,6 +146,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   const addLocalPendingReveal = (item: InventoryItem) => {
     if (!connectedWallet || isViewerMode) return;
     const now = Date.now();
+    setOptimisticPendingRevealIds((prev) => new Set([...prev, item.id]));
     setLocalPendingReveals((prev) => {
       const nextEntry: LocalPendingReveal = {
         id: item.id,
@@ -282,15 +286,16 @@ export function useShopInventorySource(options: InventorySourceOptions) {
       nextMap.set(id, {
         id,
         createdAt: existing?.createdAt || now,
-        dropId: existing?.dropId || entry.dropId || match?.dropId,
-        name: existing?.name || match?.name,
-        image: existing?.image || match?.image,
-        boxId: existing?.boxId || match?.boxId,
+        dropId: entry.dropId || existing?.dropId || match?.dropId,
+        name: entry.name || existing?.name || match?.name,
+        image: entry.image || existing?.image || match?.image,
+        boxId: entry.boxId || existing?.boxId || match?.boxId,
       });
     });
     localPendingReveals.forEach((entry) => {
       if (recentSet.has(entry.id)) return;
       if (onchainIds.has(entry.id)) return;
+      if (!optimisticPendingRevealIds.has(entry.id)) return;
       if (now - entry.createdAt > LOCAL_PENDING_GRACE_MS) return;
       nextMap.set(entry.id, entry);
     });
@@ -370,7 +375,7 @@ export function useShopInventorySource(options: InventorySourceOptions) {
   }
   return {
     queries: options,
-    hiddenAssets, localPendingReveals, recentRevealedBoxes, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey,
+    hiddenAssets, localPendingReveals, optimisticPendingRevealIds, recentRevealedBoxes, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey,
     actions: { addLocalPendingReveal, addLocalMintedBoxes, removeLocalPendingReveal, rememberRecentReveal, addLocalRevealedDudes, hideAssetsForWallet, markAssetsHidden, unhideAssetsForWallet },
     maintenance: { reconcilePendingReveals, reconcileMintedBoxes, pruneExpiredMintedBoxes, refreshMintedExpectations, reconcileRevealedFigures },
   };
@@ -379,13 +384,14 @@ export type ShopInventorySource = ReturnType<typeof useShopInventorySource>;
 export function useShopInventoryMaintenance(source: ShopInventorySource, views: ShopInventoryViews) {
   const { inventoryView, pendingOpenBoxesView, revealOverlay } = views;
   const { owner, isViewerMode, inventoryFetched, pendingOpenBoxesSuccess, refetchInventory } = source.queries;
-  const { recentRevealedBoxes, localPendingReveals, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey } = source;
+  const { recentRevealedBoxes, localPendingReveals, optimisticPendingRevealIds, localMintedBoxes, localRevealedDudeKeys, figureMetadataByKey } = source;
   useEffect(() => source.maintenance.reconcilePendingReveals(views), [
     owner,
     isViewerMode,
     pendingOpenBoxesView,
     pendingOpenBoxesSuccess,
     localPendingReveals,
+    optimisticPendingRevealIds,
     recentRevealedBoxes,
     inventoryView,
     revealOverlay,

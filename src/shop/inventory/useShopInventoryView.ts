@@ -62,6 +62,7 @@ export function useShopInventoryView({
   const {
     hiddenAssets,
     localPendingReveals,
+    optimisticPendingRevealIds,
     recentRevealedBoxes,
     localMintedBoxes,
     localRevealedDudeKeys,
@@ -185,10 +186,10 @@ export function useShopInventoryView({
       if (entry.boxAssetId) ids.add(entry.boxAssetId);
     });
     localPendingFiltered.forEach((entry) => {
-      if (entry.id) ids.add(entry.id);
+      if (entry.id && optimisticPendingRevealIds.has(entry.id)) ids.add(entry.id);
     });
     return ids;
-  }, [pendingOpenBoxesFiltered, localPendingFiltered]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, optimisticPendingRevealIds]);
 
   const shouldPreloadBoxFramesInitial =
     pendingRevealIds.size > 0 || localMintedItems.length > 0 || inventoryView.some((item) => item.kind === 'box');
@@ -205,18 +206,18 @@ export function useShopInventoryView({
       seen.add(id);
       const match = inventoryById.get(id);
       const localMatch = localById.get(id);
-      const itemDropId = localMatch?.dropId || entry.dropId || match?.dropId || routeDrop?.dropId || '';
+      const itemDropId = entry.dropId || localMatch?.dropId || match?.dropId || routeDrop?.dropId || '';
       if (!itemDropId) return;
-      const boxId = localMatch?.boxId || match?.boxId;
+      const boxId = entry.boxId || localMatch?.boxId || match?.boxId;
       pendingItems.push({
         id,
         dropId: itemDropId,
-        name: localMatch?.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
+        name: entry.name || localMatch?.name || match?.name || boxReferenceForDropId(itemDropId, shortAddress(id)),
         kind: 'box',
         boxId,
         image: normalizeBoxDisplayImage({
           dropId: itemDropId,
-          imageRaw: localMatch?.image || match?.image,
+          imageRaw: entry.image || localMatch?.image || match?.image,
           boxId,
         }),
       });
@@ -224,7 +225,7 @@ export function useShopInventoryView({
     const localSorted = [...localPendingFiltered].sort((a, b) => b.createdAt - a.createdAt);
     localSorted.forEach((entry) => {
       const id = entry.id;
-      if (!id || seen.has(id)) return;
+      if (!id || seen.has(id) || !optimisticPendingRevealIds.has(id)) return;
       seen.add(id);
       const match = inventoryById.get(id);
       const itemDropId = entry.dropId || match?.dropId || routeDrop?.dropId || '';
@@ -244,7 +245,7 @@ export function useShopInventoryView({
       });
     });
     return moveLittleSwagBoxesFamilyToEnd(pendingItems);
-  }, [pendingOpenBoxesFiltered, localPendingFiltered, inventoryView, routeDrop?.dropId, boxReferenceForDropId]);
+  }, [pendingOpenBoxesFiltered, localPendingFiltered, optimisticPendingRevealIds, inventoryView, routeDrop?.dropId, boxReferenceForDropId]);
 
   const inventoryItems = useMemo(() => {
     const boxes: typeof visibleInventory = [];

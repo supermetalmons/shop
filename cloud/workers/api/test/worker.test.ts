@@ -18,7 +18,9 @@ import {
 } from '../../../../shared/shopDomain.ts';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { BOX_MINTER_MAX_ITEMS_PER_BOX, BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX } from '../../../../shared/boxMinterProtocol.ts';
-import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
+import { SHOP_EXPECTED_ASSET_IDS_MAX, type ShopPendingOpenBox } from '../../../../shared/shopApi.ts';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.ts';
+import { dropPathsFromBase } from '../../../../shared/deploymentCore.ts';
 import { getPreorderConfig, preorderMetadataUri } from '../../../../shared/preorders.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
@@ -3940,6 +3942,173 @@ function unmatchedPendingDudeCount(drops: readonly { itemsPerBox: number }[]): n
   assert.ok(count, 'The legacy fallback fixture requires an unmatched openable card count');
   return count;
 }
+
+function pendingMetadataFixture(dropId: string) {
+  const config = DEPLOYMENT_DROPS[dropId];
+  const scope = listShopPendingOpenProgramScopes(true).find(scope => scope.drops.some(drop => drop.dropId === dropId))!;
+  const drop = scope.drops.find(drop => drop.dropId === dropId)!;
+  const box = PublicKey.findProgramAddressSync([Buffer.from(dropId), Buffer.from('metadata-box')], PublicKey.default)[0];
+  const pending = PublicKey.findProgramAddressSync([Buffer.from('open'), box.toBuffer()], new PublicKey(scope.boxMinterProgramId))[0];
+  const dudes = Array.from({ length: drop.itemsPerBox }, (_, index) =>
+    PublicKey.findProgramAddressSync([box.toBuffer(), Buffer.from([index])], PublicKey.default)[0]);
+  const paths = dropPathsFromBase(config.metadataBase, config.metadataPathFormat);
+  return {
+    scope, drop,
+    record: { pubkey: pending.toBase58(), account: { data: [buildPendingRecord(new PublicKey(OWNER), box, dudes,
+      drop.boxMinterConfigPda ? new PublicKey(drop.boxMinterConfigPda) : undefined), 'base64'] } },
+    asset: {
+      id: box.toBase58(), interface: 'MplCoreAsset', burnt: false, ownership: { owner: PublicKey.default.toBase58() },
+      grouping: [{ group_key: 'collection', group_value: drop.collectionMint }],
+      content: { json_uri: `${paths.boxesJsonBase}9.json`, metadata: { name: `${dropId} pack #9` },
+        links: { image: `https://images.example/${dropId}/9.webp` } },
+    },
+  };
+}
+
+test('pending box metadata is opt-in and batches both Mi Note networks with ordinary and legacy drops', async () => {
+  const fixtures = ['mi_note_cards', 'mi_note_cards_devnet', 'card_nft_2', 'little_swag_boxes'].map(pendingMetadataFixture);
+  for (const includeBoxMetadata of [false, true]) {
+    const batches: string[][] = [];
+    const providerFetch: ProviderFetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body));
+      const cluster = new URL(String(input)).hostname === 'devnet.helius-rpc.com' ? 'devnet' : 'mainnet-beta';
+      const scoped = fixtures.filter(fixture => fixture.drop.solanaCluster === cluster);
+      if (body.method === 'getProgramAccounts') {
+        return rpcResult(body.id, scoped.filter(fixture => fixture.scope.boxMinterProgramId === body.params[0]).map(fixture => fixture.record));
+      }
+      assert.equal(body.method, 'getAssetBatch');
+      batches.push(body.params.ids);
+      assert.deepEqual(new Set(body.params.ids), new Set(scoped.map(fixture => fixture.asset.id)));
+      return rpcResult(body.id, scoped.map(fixture => fixture.asset));
+    };
+    const response = await handleRequest(request('/pending-open-boxes', {
+      owner: OWNER, includeDevnet: true, ...(includeBoxMetadata ? { includeBoxMetadata: true } : {}),
+    }), env(), quietDependencies(providerFetch));
+    assert.equal(response.status, 200);
+    const payload = await response.json() as { items: ShopPendingOpenBox[] };
+    assert.equal(payload.items.length, fixtures.length);
+    assert.equal(batches.length, includeBoxMetadata ? 2 : 0);
+    for (const fixture of fixtures) {
+      const item = payload.items.find(item => item.boxAssetId === fixture.asset.id)!;
+      assert.equal(item.dropId, fixture.drop.dropId);
+      if (includeBoxMetadata) {
+        assert.equal(item.boxId, '9');
+        assert.equal(item.name, fixture.asset.content.metadata.name);
+        assert.equal(item.rawImage, fixture.asset.content.links.image);
+      } else {
+        assert.deepEqual(Object.keys(item).sort(), ['boxAssetId', 'createdSlot', 'dropId', 'dudeAssetIds', 'pendingPda']);
+      }
+    }
+  }
+});
+
+test('unavailable or mismatched optional box metadata keeps authoritative pending opens visible', async context => {
+  const fixture = pendingMetadataFixture('mi_note_cards');
+  for (const scenario of ['missing', 'other-drop', 'other-asset', 'unavailable', 'timeout'] as const) {
+    await context.test(scenario, async () => {
+      let metadataCalls = 0;
+      const providerFetch: ProviderFetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.method === 'getProgramAccounts') return rpcResult(body.id,
+          body.params[0] === fixture.scope.boxMinterProgramId ? [fixture.record] : []);
+        assert.equal(body.method, 'getAssetBatch');
+        metadataCalls += 1;
+        if (scenario === 'unavailable') return new Response('', { status: 503 });
+        if (scenario === 'timeout') return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        });
+        const asset = scenario === 'other-drop'
+          ? { ...pendingMetadataFixture('card_nft_2').asset, id: fixture.asset.id }
+          : scenario === 'other-asset' ? { ...fixture.asset, id: PublicKey.default.toBase58() } : null;
+        return rpcResult(body.id, asset ? [asset] : []);
+      };
+      const response = await handleRequest(request('/pending-open-boxes', { owner: OWNER, includeBoxMetadata: true }), env(), {
+        ...quietDependencies(providerFetch), expectedAssetRecoveryTimeoutMs: 5,
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { items: ShopPendingOpenBox[] };
+      assert.equal(payload.items.length, 1);
+      assert.equal(payload.items[0].boxAssetId, fixture.asset.id);
+      assert.equal(payload.items[0].dropId, fixture.drop.dropId);
+      assert.equal(payload.items[0].boxId, undefined);
+      assert.equal(payload.items[0].name, undefined);
+      assert.equal(metadataCalls, 1);
+    });
+  }
+});
+
+test('pending metadata still respects the overall provider deadline and response size budget', async context => {
+  const fixture = pendingMetadataFixture('mi_note_cards');
+  for (const scenario of ['deadline', 'response-size'] as const) {
+    await context.test(scenario, async () => {
+      const providerFetch: ProviderFetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (scenario === 'deadline') return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        });
+        if (body.method === 'getProgramAccounts') return rpcResult(body.id,
+          body.params[0] === fixture.scope.boxMinterProgramId ? [fixture.record] : []);
+        assert.equal(body.method, 'getAssetBatch');
+        return rpcResult(body.id, [fixture.asset]);
+      };
+      const response = await handleRequest(request('/pending-open-boxes', { owner: OWNER, includeBoxMetadata: true }), env(), {
+        ...quietDependencies(providerFetch),
+        ...(scenario === 'deadline' ? { providerTimeoutMs: 5, expectedAssetRecoveryTimeoutMs: 1000 }
+          : { inventoryMaxResponseBodyBytes: 200 }),
+      });
+      assert.equal(response.status, scenario === 'deadline' ? 504 : 502);
+      assert.deepEqual(await response.json(), { ok: false, error: scenario === 'deadline' ? 'provider-timeout' : 'provider-unavailable' });
+    });
+  }
+});
+
+test('optional pending metadata yields the remaining request budget to authoritative pending rows', async context => {
+  const fixture = pendingMetadataFixture('mi_note_cards');
+  for (const scanDelayMs of [0, 125]) {
+    await context.test(`scan delay ${scanDelayMs}ms`, async () => {
+      let metadataCalls = 0;
+      const providerFetch: ProviderFetch = async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.method === 'getProgramAccounts') {
+          await new Promise(resolve => setTimeout(resolve, scanDelayMs));
+          return rpcResult(body.id, body.params[0] === fixture.scope.boxMinterProgramId ? [fixture.record] : []);
+        }
+        assert.equal(body.method, 'getAssetBatch');
+        metadataCalls += 1;
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        });
+      };
+      const response = await handleRequest(request('/pending-open-boxes', { owner: OWNER, includeBoxMetadata: true }), env(), {
+        ...quietDependencies(providerFetch), providerTimeoutMs: 200, expectedAssetRecoveryTimeoutMs: 1000,
+      });
+      assert.equal(response.status, 200);
+      const payload = await response.json() as { items: ShopPendingOpenBox[] };
+      assert.equal(payload.items.length, 1);
+      assert.equal(payload.items[0].boxAssetId, fixture.asset.id);
+      assert.equal(payload.items[0].boxId, undefined);
+      assert.equal(metadataCalls, scanDelayMs === 0 ? 1 : 0);
+    });
+  }
+});
+
+test('optional pending display metadata does not weaken required legacy drop resolution', async () => {
+  const fixture = pendingMetadataFixture('card_nft_2');
+  const count = unmatchedPendingDudeCount(fixture.scope.drops);
+  const dudes = Array.from({ length: count }, (_, index) => new PublicKey(new Uint8Array(32).fill(index + 1)));
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getProgramAccounts') return rpcResult(body.id,
+      body.params[0] === fixture.scope.boxMinterProgramId ? [{ ...fixture.record, account: {
+        data: [buildPendingRecord(new PublicKey(OWNER), new PublicKey(fixture.asset.id), dudes), 'base64'],
+      } }] : []);
+    assert.equal(body.method, 'getAssetBatch');
+    return new Response('', { status: 503 });
+  };
+  const response = await handleRequest(request('/pending-open-boxes', { owner: OWNER, includeBoxMetadata: true }), env(), quietDependencies(providerFetch));
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+});
 
 test('pending opens keep valid legacy rows while omitting count-mismatched and non-openable records', async () => {
   const owner = new PublicKey(OWNER);

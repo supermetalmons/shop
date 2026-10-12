@@ -6,9 +6,20 @@ import {
   listUniqueInventoryCollectionScopes,
   resolveInventoryAssetDropId,
   resolvePendingOpenDropId,
+  toShopPendingOpenBox,
+  transformShopInventoryItem,
   type InventoryDropResolutionCandidate,
   type PendingOpenRecordCandidate,
 } from '../shared/shopDomain.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
+import { dropPathsFromBase } from '../shared/deploymentCore.ts';
+import {
+  isExactShopPendingOpenBoxesRequest,
+  isExactShopPendingOpenBoxesResponse,
+  SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
+  SHOP_INVENTORY_NAME_MAX_UTF8_BYTES,
+  SHOP_INVENTORY_RAW_IMAGE_MAX_UTF8_BYTES,
+} from '../shared/shopApi.ts';
 
 const LITTLE_SWAG_BOXES_COLLECTION = '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr';
 const PONCHO_DRIFELLA_COLLECTION = 'JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH';
@@ -61,6 +72,77 @@ test('pending-open resolution requires the selected drop to match the placeholde
   assert.equal(resolvePendingOpenDropId(entry(sharedScope.drops, 1)), 'clear_cards');
   assert.equal(resolvePendingOpenDropId(entry([cardDrop, littleSwagDrop], 3), cardAsset), 'card_nft_2');
   assert.equal(resolvePendingOpenDropId(entry([cardDrop, shirtDrop], 2), shirtAsset), null);
+});
+
+test('pending boxes reuse ordinary box metadata for every configured openable drop', () => {
+  for (const scope of listShopPendingOpenProgramScopes(true)) {
+    for (const drop of scope.drops.filter(drop => drop.itemsPerBox > 0)) {
+      const config = DEPLOYMENT_DROPS[drop.dropId];
+      const paths = dropPathsFromBase(config.metadataBase, config.metadataPathFormat);
+      const entry: PendingOpenRecordCandidate = {
+        solanaCluster: scope.solanaCluster, pendingPda: 'pending', boxAssetId: 'box',
+        dudeAssetIds: Array.from({ length: drop.itemsPerBox }, (_, index) => `dude-${index}`),
+        candidateDrops: scope.drops, createdSlot: 123,
+        ...(drop.boxMinterConfigPda ? { configPda: drop.boxMinterConfigPda } : {}),
+      };
+      const asset = {
+        id: entry.boxAssetId, interface: 'MplCoreAsset', burnt: false, ownership: { owner: 'vault' },
+        grouping: [{ group_key: 'collection', group_value: drop.collectionMint }],
+        content: { json_uri: `${paths.boxesJsonBase}9.json`, metadata: { name: `${drop.dropId} pack #9` },
+          links: { image: 'https://images.example/9.webp' } },
+      };
+      const ordinary = transformShopInventoryItem(asset, scope.solanaCluster);
+      assert.ok(ordinary, drop.dropId);
+      assert.equal(ordinary.kind, 'box', drop.dropId);
+      const pending = toShopPendingOpenBox(entry, drop.dropId, asset);
+      assert.equal(pending.name, ordinary.name, drop.dropId);
+      assert.equal(pending.boxId, ordinary.boxId, drop.dropId);
+      assert.equal(pending.rawImage, ordinary.rawImage, drop.dropId);
+      assert.equal(pending.boxId, '9', drop.dropId);
+    }
+  }
+});
+
+test('unrelated, non-box, or burned metadata cannot change pending box identity or display', () => {
+  const drop = shopDropById('card_nft_2')!;
+  const entry: PendingOpenRecordCandidate = {
+    solanaCluster: drop.solanaCluster, pendingPda: 'pending', boxAssetId: 'box',
+    dudeAssetIds: ['one', 'two', 'three'], candidateDrops: [drop],
+  };
+  const asset = {
+    id: 'box', burnt: false, grouping: [{ group_key: 'collection', group_value: drop.collectionMint }],
+    content: { json_uri: `${drop.metadataBase}/b9.json`, metadata: { name: 'Pack #9' } },
+  };
+  const unchanged = toShopPendingOpenBox(entry, drop.dropId);
+  for (const invalid of [
+    { ...asset, id: 'another-box' },
+    { ...asset, burnt: true },
+    { ...asset, content: { json_uri: `${drop.metadataBase}/f9.json`, metadata: { name: 'Card #9' } } },
+    { ...asset, grouping: [{ group_key: 'collection', group_value: LITTLE_SWAG_BOXES_COLLECTION }],
+      content: { json_uri: 'https://cdn.lil.org/nft/little_swag_boxes/boxes/9.json', metadata: { name: 'Box #9' } } },
+  ]) assert.deepEqual(toShopPendingOpenBox(entry, drop.dropId, invalid), unchanged);
+});
+
+test('pending display metadata requires an explicit supported request flag and bounded response strings', () => {
+  assert.equal(isExactShopPendingOpenBoxesRequest({ owner: 'owner' }), true);
+  assert.equal(isExactShopPendingOpenBoxesRequest({ owner: 'owner', includeBoxMetadata: true }), true);
+  for (const flag of [false, null, 1, 'true']) {
+    assert.equal(isExactShopPendingOpenBoxesRequest({ owner: 'owner', includeBoxMetadata: flag }), false);
+  }
+  const pending = { dropId: 'card_nft_2', pendingPda: 'pending', boxAssetId: 'box', dudeAssetIds: ['one', 'two', 'three'] };
+  for (const [field, maximum] of [
+    ['name', SHOP_INVENTORY_NAME_MAX_UTF8_BYTES],
+    ['boxId', SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES],
+    ['rawImage', SHOP_INVENTORY_RAW_IMAGE_MAX_UTF8_BYTES],
+  ] as const) {
+    const valid = '🧩'.repeat(maximum / 4);
+    assert.equal(isExactShopPendingOpenBoxesResponse({ ok: true, items: [{ ...pending, [field]: valid }] }), true, field);
+    assert.equal(isExactShopPendingOpenBoxesResponse({ ok: true, items: [{ ...pending, [field]: `${valid}x` }] }), false, field);
+    assert.equal(isExactShopPendingOpenBoxesResponse({ ok: true, items: [{ ...pending, [field]: 9 }] }), false, field);
+  }
+  for (const field of ['boxId', 'rawImage']) {
+    assert.equal(isExactShopPendingOpenBoxesResponse({ ok: true, items: [{ ...pending, [field]: '' }] }), false, field);
+  }
 });
 
 test('shared receipt collections resolve drops by metadata base and share one query scope', () => {

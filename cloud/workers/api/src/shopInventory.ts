@@ -72,6 +72,7 @@ import {
 const HELIUS_BATCH_LIMIT = 1000;
 
 const PROVIDER_CONCURRENCY = 3;
+const PENDING_METADATA_RESPONSE_RESERVE_MS = 100;
 
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
 
@@ -733,6 +734,7 @@ async function mergeExpectedInventoryItems(
 async function fetchPendingOpenBoxes(
   context: ProviderContext,
   requestBody: ShopPendingOpenBoxesRequest,
+  deadlineAt: number,
 ): Promise<ShopPendingOpenBoxesResponse> {
   const scopes = listShopPendingOpenProgramScopes(requestBody.includeDevnet === true);
   const rows = (await mapConcurrent(scopes, PROVIDER_CONCURRENCY, (scope) =>
@@ -751,14 +753,39 @@ async function fetchPendingOpenBoxes(
     const ids = Array.from(new Set(unresolved.filter((entry) => entry.solanaCluster === cluster).map((entry) => entry.boxAssetId)));
     assetsByCluster.set(cluster, await fetchAssetBatch(context, cluster, ids));
   });
+  const metadataTimeoutMs = Math.min(context.dependencies.expectedAssetRecoveryTimeoutMs,
+    deadlineAt - performance.now() - PENDING_METADATA_RESPONSE_RESERVE_MS);
+  if (requestBody.includeBoxMetadata && metadataTimeoutMs > 0) {
+    const resolved = records.filter(entry => resolvePendingOpenDropId(entry) !== null);
+    const clusters = Array.from(new Set(resolved.map(entry => entry.solanaCluster)));
+    const metadataScope = createAttemptScope(context.signal, metadataTimeoutMs);
+    try {
+      await mapConcurrent(clusters, PROVIDER_CONCURRENCY, async (cluster) => {
+        try {
+          const ids = Array.from(new Set(resolved.filter(entry => entry.solanaCluster === cluster).map(entry => entry.boxAssetId)));
+          const metadata = await fetchAssetBatch(context, cluster, ids, {
+            signal: metadataScope.signal,
+            attemptTimeoutMs: metadataTimeoutMs,
+            maxAttempts: 1,
+            inventoryCall: true,
+          });
+          const assets = assetsByCluster.get(cluster) ?? new Map<string, DasAsset>();
+          for (const [id, asset] of metadata) assets.set(id, asset);
+          assetsByCluster.set(cluster, assets);
+        } catch {
+          context.signal.throwIfAborted();
+        }
+      });
+    } finally {
+      metadataScope.dispose();
+    }
+  }
   const items = records.flatMap((entry) => {
     const resolvedWithoutAsset = resolvePendingOpenDropId(entry);
-    if (resolvedWithoutAsset) return [toShopPendingOpenBox(entry, resolvedWithoutAsset)];
-    if (entry.configPda) return [];
     const asset = assetsByCluster.get(entry.solanaCluster)?.get(entry.boxAssetId);
-    const dropId = resolvePendingOpenDropId(entry, asset);
+    const dropId = resolvedWithoutAsset || (!entry.configPda ? resolvePendingOpenDropId(entry, asset) : null);
     if (!dropId) return [];
-    return [toShopPendingOpenBox(entry, dropId)];
+    return [toShopPendingOpenBox(entry, dropId, requestBody.includeBoxMetadata ? asset : undefined)];
   });
   items.sort((left, right) => Number(right.createdSlot || 0) - Number(left.createdSlot || 0));
   return { ok: true, items };
@@ -804,6 +831,7 @@ export async function handlePost(
       requestBody.includeDevnet === true,
     );
   }
+  const deadlineAt = performance.now() + dependencies.providerTimeoutMs;
   const deadline = createRequestDeadline(request, {
     timeoutMs: dependencies.providerTimeoutMs,
     timeoutMessage: 'Shop provider request timed out',
@@ -824,17 +852,14 @@ export async function handlePost(
   try {
     const body = parsedRequest.kind === 'inventory'
       ? await fetchInventory(context, parsedRequest.body, env.COMMERCE_DB)
-      : await fetchPendingOpenBoxes(context, parsedRequest.body);
+      : await fetchPendingOpenBoxes(context, parsedRequest.body, deadlineAt);
     request.signal.throwIfAborted();
     const valid = parsedRequest.kind === 'inventory'
       ? dependencies.validateInventoryResponse(body, parsedRequest.body)
       : dependencies.validatePendingOpenBoxesResponse(body);
     if (!valid) throw new ProviderFailure('unavailable');
     const text = JSON.stringify(body);
-    if (
-      pathname === '/inventory' &&
-      utf8ByteLength(text) > dependencies.inventoryMaxResponseBodyBytes
-    ) throw new ProviderFailure('limit');
+    if (utf8ByteLength(text) > dependencies.inventoryMaxResponseBodyBytes) throw new ProviderFailure('limit');
     return result(
       new Response(text, { status: 200, headers: BASE_HEADERS }),
       requestBody.includeDevnet === true,

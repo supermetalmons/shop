@@ -6,8 +6,9 @@ beforeEach(context => { if ('after' in context) installBrowserLocks(context); })
 import { createElement, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
-import { getFrontendDrop, isDropFamily } from '../src/config/deployment.ts';
-import { resolveDropContent } from '../src/lib/dropContent.ts';
+import { FRONTEND_DROPS, getFrontendDrop, isDropFamily } from '../src/config/deployment.ts';
+import { normalizeBoxDisplayImage, resolveDropContent } from '../src/lib/dropContent.ts';
+import { isOpenableBoxMinterItemsPerBox } from '../shared/boxMinterProtocol.ts';
 import { hasDevnetInventoryAccess } from '../src/lib/fulfillmentAccess.ts';
 import { figureMetadataCacheKey, getFigureMetadataSnapshot, loadFigureMetadata } from '../src/lib/figureMetadata.ts';
 import type { InventoryItem, PendingOpenBox } from '../src/types.ts';
@@ -431,6 +432,71 @@ test('an open reveal defers pending and minted reconciliation until its frozen s
   assert.equal(result.current.view.inventoryItems.some((item) => item.id === optimisticId), false);
 });
 
+test('reloading a completed unpack never shows its saved pending tile and clears it after verification', () => {
+  const saved = { id: 'completed-pack', dropId: 'mi_note_cards_devnet', createdAt: Date.now() };
+  persistPendingReveals('wallet-a', [saved]);
+  const options = sourceOptions({ pendingOpenBoxesSuccess: false });
+  const renderedIds: string[][] = [];
+  const { result, rerender } = renderHook((props: InventoryHarnessProps) => {
+    const current = useInventoryHarness(props);
+    renderedIds.push(current.view.inventoryItems.map(item => item.id));
+    return current;
+  }, { initialProps: { options } });
+  assert.deepEqual(result.current.source.localPendingReveals.map(entry => entry.id), [saved.id]);
+  assert.deepEqual(loadPendingReveals('wallet-a').map(entry => entry.id), [saved.id]);
+  assert.deepEqual(result.current.view.inventoryItems, []);
+
+  rerender({ options: { ...options, pendingOpenBoxesSuccess: true } });
+
+  assert.deepEqual(result.current.source.localPendingReveals, []);
+  assert.deepEqual(loadPendingReveals('wallet-a'), []);
+  assert.equal(result.current.view.pendingRevealIds.size, 0);
+  assert.ok(renderedIds.every(ids => !ids.includes(saved.id)));
+});
+
+test('a failed pending read preserves saved pack metadata for a later verified resume', () => {
+  const saved = {
+    id: 'restored-pack', dropId: 'mi_note_cards_devnet', createdAt: Date.now() - 5 * 60_000,
+    name: 'Mi Note pack #704', boxId: '704', image: 'https://images.example/saved-pack.webp',
+  };
+  persistPendingReveals('wallet-a', [saved]);
+  const options = sourceOptions({ pendingOpenBoxesSuccess: false });
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+  assert.deepEqual(result.current.source.localPendingReveals, [saved]);
+  assert.deepEqual(loadPendingReveals('wallet-a'), [saved]);
+  assert.deepEqual(result.current.view.inventoryItems, []);
+
+  const pending: PendingOpenBox = {
+    dropId: saved.dropId, pendingPda: 'pending', boxAssetId: saved.id, dudeAssetIds: ['left', 'right'],
+  };
+  rerender({ options: { ...options, pendingOpenBoxesSuccess: true, pendingOpenBoxes: [pending] } });
+
+  assert.equal(result.current.view.inventoryItems.length, 1);
+  assert.equal(result.current.view.pendingRevealIds.has(saved.id), true);
+  assert.equal(result.current.view.inventoryItems[0].name, saved.name);
+  assert.equal(result.current.view.inventoryItems[0].boxId, saved.boxId);
+  assert.equal(result.current.view.inventoryItems[0].image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp');
+  assert.deepEqual(loadPendingReveals('wallet-a'), [saved]);
+});
+
+test('an opening started in this session keeps its pending tile while the chain read catches up', () => {
+  const pack = box('opening-pack', 'mi_note_cards_devnet', '704');
+  const options = sourceOptions();
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+  act(() => result.current.source.actions.addLocalPendingReveal(pack));
+  rerender({ options: { ...options, pendingOpenBoxes: [] } });
+
+  assert.deepEqual(result.current.view.inventoryItems.map(item => item.id), [pack.id]);
+  assert.equal(result.current.view.pendingRevealIds.has(pack.id), true);
+  assert.deepEqual(loadPendingReveals('wallet-a').map(entry => entry.id), [pack.id]);
+
+  rerender({ options: { ...options, owner: 'wallet-b', connectedWallet: 'wallet-b', localAccountWallet: 'wallet-b' } });
+  rerender({ options });
+
+  assert.deepEqual(result.current.view.inventoryItems, []);
+  assert.deepEqual(loadPendingReveals('wallet-a'), []);
+});
+
 test('an unresolved minted pack stays represented once until its authoritative box ID arrives', () => {
   const baseline = [box('existing', 'card_nft_2', '1')];
   const options = sourceOptions({ inventory: baseline });
@@ -473,6 +539,49 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
       'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp');
   });
 }
+
+for (const drop of Object.values(FRONTEND_DROPS).filter(drop => isOpenableBoxMinterItemsPerBox(drop.itemsPerBox))) {
+  test(`${drop.dropId} recovers pending artwork without owned inventory or local history`, () => {
+    const image = normalizeBoxDisplayImage({ dropId: drop.dropId, boxId: '184', imageRaw: 'https://metadata.example/pack.webp' });
+    const pending: PendingOpenBox = {
+      dropId: drop.dropId, pendingPda: 'pending', boxAssetId: 'opening-pack',
+      dudeAssetIds: Array.from({ length: drop.itemsPerBox }, (_, index) => `dude-${index}`),
+      name: 'Pack #184', boxId: '184', image,
+    };
+    const options = sourceOptions({ pendingOpenBoxes: [pending] });
+    const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+    const item = result.current.view.inventoryItems[0];
+    assert.equal(result.current.view.inventoryItems.length, 1);
+    assert.equal(item.dropId, drop.dropId);
+    assert.equal(item.boxId, '184');
+    assert.equal(item.name, pending.name);
+    assert.equal(item.image, image);
+    assert.equal(loadPendingReveals('wallet-a')[0].boxId, '184');
+
+    const { name: _name, boxId: _boxId, image: _image, ...withoutMetadata } = pending;
+    rerender({ options: { ...options, pendingOpenBoxes: [withoutMetadata] } });
+    assert.equal(result.current.view.inventoryItems[0].boxId, '184');
+    assert.equal(result.current.view.inventoryItems[0].image, image);
+  });
+}
+
+test('pending pack metadata replaces a saved placeholder and uses the authoritative pack identity', () => {
+  persistPendingReveals('wallet-a', [{
+    id: 'opening-pack', createdAt: Date.now(), dropId: 'mi_note_cards_devnet', name: 'Pending pack',
+    image: 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp',
+  }]);
+  const pending: PendingOpenBox = {
+    dropId: 'mi_note_cards_devnet', pendingPda: 'pending', boxAssetId: 'opening-pack', dudeAssetIds: ['left', 'right'],
+  };
+  const options = sourceOptions({ pendingOpenBoxes: [pending] });
+  const { result, rerender } = renderHook(useInventoryHarness, { initialProps: { options } });
+  assert.equal(result.current.view.inventoryItems[0].image,
+    'https://cdn.lil.org/nft/mi_note_cards/packs/clean/placeholder.webp');
+  rerender({ options: { ...options, pendingOpenBoxes: [{ ...pending, boxId: '704', name: 'Pack #704' }] } });
+  assert.equal(result.current.view.inventoryItems[0].name, 'Pack #704');
+  assert.equal(result.current.view.inventoryItems[0].image, 'https://cdn.lil.org/nft/mi_note_cards/packs/clean/2.webp');
+  assert.equal(loadPendingReveals('wallet-a')[0].boxId, '704');
+});
 
 test('selection excludes pending delivery/reveal items, follows drop rules and prunes vanished assets', () => {
   const items: InventoryItem[] = [

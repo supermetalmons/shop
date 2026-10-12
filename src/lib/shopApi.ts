@@ -32,6 +32,12 @@ export type InventoryFetchOptions = DropFetchOptions & {
   preorderMinContextSlots?: Record<string, number>;
 };
 
+class ShopApiResponseError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(`Shop API request failed: ${code}`);
+  }
+}
+
 async function requestShopApi(
   pathname: string,
   init: RequestInit,
@@ -57,7 +63,7 @@ async function requestShopApi(
     }
     if (!response.ok) {
       const code = isExactShopApiErrorResponse(payload) ? payload.error : `http-${response.status}`;
-      throw new Error(`Shop API request failed: ${code}`);
+      throw new ShopApiResponseError(response.status, code);
     }
     return payload;
   } finally {
@@ -128,13 +134,24 @@ export async function fetchInventory(owner: string, options: InventoryFetchOptio
 }
 
 export async function fetchPendingOpenBoxes(owner: string, options: DropFetchOptions = {}): Promise<PendingOpenBox[]> {
-  const payload = await postShopApi(
-    '/pending-open-boxes',
-    options.includeDevnet === true ? { owner, includeDevnet: true } : { owner },
-    options.signal,
-  );
+  const requestBody: ShopPendingOpenBoxesRequest = {
+    owner,
+    ...(options.includeDevnet === true ? { includeDevnet: true } : {}),
+  };
+  let payload: unknown;
+  try {
+    payload = await postShopApi('/pending-open-boxes', { ...requestBody, includeBoxMetadata: true }, options.signal);
+  } catch (error) {
+    if (!(error instanceof ShopApiResponseError) || error.status !== 400 || error.code !== 'invalid-request') throw error;
+    payload = await postShopApi('/pending-open-boxes', requestBody, options.signal);
+  }
   if (!isExactShopPendingOpenBoxesResponse(payload)) throw new Error('Shop API returned an invalid pending-open response');
-  return payload.items;
+  return payload.items.map(({ rawImage, ...item }) => ({
+    ...item,
+    ...(item.boxId || rawImage ? {
+      image: normalizeBoxDisplayImage({ dropId: item.dropId, boxId: item.boxId, imageRaw: rawImage }),
+    } : {}),
+  }));
 }
 
 export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Promise<PackStatusBreakdown | null> {

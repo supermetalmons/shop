@@ -38,6 +38,7 @@ import {
   type RevealOverlayPhase,
 } from '../reveal';
 import { isUserRejectedError } from '../commerce/transactionSupport';
+import { persistCompletedReveal } from '../persistedState';
 import type { InventoryItem } from '../../types';
 import { calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport, getRenderedImagePreview } from './layout';
 import { pickRandomSoundUrl } from './sounds';
@@ -314,6 +315,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       });
       if (revealResult.status === 'stale') return 'resolved';
       const resp = revealResult.response;
+      persistCompletedReveal(walletAddress, boxAssetId);
       const clearCardId = usesClearCard3dFlow
         ? clearCardModelIdFromRevealResult(resp?.dudeIds)
         : undefined;
