@@ -9,8 +9,17 @@ import type { MiNoteRevealEvent } from '../src/lib/miNoteCardReveal.ts';
 import type { RevealRequestStatus } from '../src/shop/reveal.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const frames = new Map<number, FrameRequestCallback>();
+let nextFrameId = 0;
+for (const target of [globalThis, window]) {
+  Object.defineProperty(target, 'requestAnimationFrame', { configurable: true, value: (callback: FrameRequestCallback) => {
+    frames.set(++nextFrameId, callback);
+    return nextFrameId;
+  } });
+  Object.defineProperty(target, 'cancelAnimationFrame', { configurable: true, value: (id: number) => frames.delete(id) });
+}
 type ViewerProps = Parameters<typeof MiNotePackViewer>[0];
 type OverlayProps = Parameters<typeof MiNotePackRevealOverlay>[0];
 type ViewerInstance = { props: ViewerProps; mounted: boolean };
@@ -61,8 +70,15 @@ const imports = registerHooks({
   },
 });
 const { default: Overlay } = await import('../src/components/MiNotePackRevealOverlay.tsx');
-beforeEach(() => { instances.length = 0; });
-afterEach(() => { cleanup(); assert.ok(instances.every(instance => !instance.mounted)); });
+beforeEach(() => {
+  instances.length = 0;
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
+});
+afterEach(() => {
+  cleanup();
+  assert.equal(frames.size, 0);
+  assert.ok(instances.every(instance => !instance.mounted));
+});
 after(() => { imports.deregister(); Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
 function viewer() {
@@ -88,6 +104,21 @@ async function mount(overrides: Partial<OverlayProps> = {}) {
 function ready(cardsReady = false) {
   fireEvent.transitionEnd(document.querySelector('.reveal-overlay__frame')!, { propertyName: 'transform' });
   act(() => { viewer().props.onReadyChange(true); viewer().props.onCardsReadyChange(cardsReady); });
+  presentModel();
+}
+
+function advanceFrame() {
+  act(() => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach(callback => callback(performance.now()));
+  });
+}
+
+function presentModel() {
+  act(() => viewer().props.onFrameRendered?.());
+  advanceFrame();
+  advanceFrame();
 }
 
 function activate() { act(() => viewer().props.controlsRef.current?.activate()); }
@@ -142,8 +173,58 @@ test('a cached 3D viewer waits for inventory growth before replacing the preview
   assert.equal(viewer().props.previewVisible, true);
   assert.equal(viewer().props.interactionEnabled, false);
   fireEvent.transitionEnd(h.view.container.querySelector('.reveal-overlay__frame')!, { propertyName: 'transform' });
+  assert.equal(viewer().props.previewVisible, true);
+  assert.equal(viewer().props.interactionEnabled, false);
+  presentModel();
   assert.equal(viewer().props.previewVisible, false);
   assert.equal(viewer().props.interactionEnabled, true);
+});
+
+for (const reducedMotion of [false, true]) {
+  test(`the pack image covers loading and the first visible model frame (reduced motion: ${reducedMotion})`, async () => {
+    setMediaQueryMatches('(prefers-reduced-motion: reduce)', reducedMotion);
+    const h = await mount({ loadingImageSrc: '/pack.webp' });
+    const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
+    const image = h.view.container.querySelector('.mi-note-pack-overlay__fallback img');
+    act(() => viewer().props.onFrameRendered?.());
+    fireEvent.transitionEnd(frame, { propertyName: 'transform' });
+    assert.equal(frame.classList.contains('static-to-model--visible'), false);
+    act(() => viewer().props.onReadyChange(true));
+    assert.equal(frame.classList.contains('static-to-model--visible'), true);
+    advanceFrame();
+    advanceFrame();
+    assert.equal(frame.classList.contains('static-to-model--presented'), false);
+    assert.equal(viewer().props.interactionEnabled, false);
+    act(() => viewer().props.onFrameRendered?.());
+    advanceFrame();
+    assert.equal(frame.classList.contains('static-to-model--presented'), false);
+    advanceFrame();
+    assert.equal(frame.classList.contains('static-to-model--presented'), true);
+    assert.equal(viewer().props.interactionEnabled, true);
+    assert.equal(h.view.container.querySelector('.mi-note-pack-overlay__fallback img'), image);
+  });
+}
+
+test('an interrupted handoff keeps the fallback and waits for a fresh frame after recovery', async () => {
+  const h = await mount();
+  const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
+  fireEvent.transitionEnd(frame, { propertyName: 'transform' });
+  act(() => viewer().props.onReadyChange(true));
+  act(() => viewer().props.onFrameRendered?.());
+  advanceFrame();
+  act(() => viewer().props.onReadyChange(false));
+  advanceFrame();
+  assert.equal(frame.classList.contains('static-to-model--visible'), false);
+  assert.equal(frame.classList.contains('static-to-model--presented'), false);
+  act(() => viewer().props.onReadyChange(true));
+  advanceFrame();
+  advanceFrame();
+  assert.equal(frame.classList.contains('static-to-model--presented'), false);
+  presentModel();
+  assert.equal(frame.classList.contains('static-to-model--presented'), true);
+  act(() => viewer().props.onError(new Error('Context lost')));
+  assert.equal(frame.classList.contains('static-to-model--visible'), false);
+  assert.equal(frame.classList.contains('static-to-model--presented'), false);
 });
 
 test('live taps stay sealed until the assigned pair and both rendered card assets are ready', async () => {

@@ -273,6 +273,7 @@ type ClearCardThreeViewerProps = {
   initiallyRevealed: boolean;
   ariaLabel?: string;
   onStatusChange: (status: ViewerStatus) => void;
+  onFrameRendered?: () => void;
   onCardModelLoadStatusChange?: (status: ClearCardModelLoadStatus) => void;
   onStageChange?: (stage: ClearCardDisplayStage) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -626,6 +627,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       initiallyRevealed,
       ariaLabel,
       onStatusChange,
+      onFrameRendered,
       onCardModelLoadStatusChange,
       onStageChange,
       onPackHit,
@@ -635,6 +637,8 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
   ) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const cardOnly = !packModelUrl;
+    const readyRef = useRef(ready);
+    const onFrameRenderedRef = useRef(onFrameRendered);
     const requestRenderRef = useRef<(() => void) | null>(null);
     const applyRenderQualityForStageRef = useRef<
       ((stage: ClearCardDisplayStage) => void) | null
@@ -727,6 +731,12 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       applyRenderQualityForStageRef.current?.(stageRef.current);
       requestRenderRef.current?.();
     }, [renderQualityByStage]);
+
+    useEffect(() => {
+      readyRef.current = ready;
+      onFrameRenderedRef.current = onFrameRendered;
+      if (ready) requestRenderRef.current?.();
+    }, [onFrameRendered, ready]);
 
     useImperativeHandle(
       ref,
@@ -2357,6 +2367,13 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
           syncTransmissionBackdrop(stageRef.current, lightingConfigRef.current);
           renderer.render(scene, camera);
         }
+        if (
+          readyRef.current &&
+          displayModelReady() &&
+          ((packGroup.visible && packReady) || (cardGroup.visible && cardReady))
+        ) {
+          onFrameRenderedRef.current?.();
+        }
 
         const tiltUnsettled =
           !rotationInteractionActive &&
@@ -3081,7 +3098,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     return (
       <canvas
         ref={canvasRef}
-        className={`clear-card-wip__canvas${
+        className={`clear-card-wip__canvas static-to-model__model${
           unrestrictedMovement || axisLockedOrbit
             ? ' clear-card-wip__canvas--unrestricted'
             : ''

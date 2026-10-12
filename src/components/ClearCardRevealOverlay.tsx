@@ -33,6 +33,7 @@ import {
 } from '../lib/clearCardReveal';
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
 import { useDarkColorScheme } from '../hooks/useDarkColorScheme';
+import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
 import { resolveClearCardRevealRenderQuality } from '../lib/clearCardCanvas';
 import { ModalFocusScope } from './ModalFocusScope';
 
@@ -129,6 +130,10 @@ export default function ClearCardRevealOverlay({
   }, [darkMode, loadingImageSrc]);
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
+  const { modelVisible, fallbackVisible, onModelFrame } = useStaticToModelHandoff(
+    active && packReady,
+    `${resetKey}:${viewerMode || 'unpack'}:${viewerAttempt}`,
+  );
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
   const viewerOnly = Boolean(viewerMode);
   const renderQualityByStage = useMemo(
@@ -202,7 +207,7 @@ export default function ClearCardRevealOverlay({
     const objectHit = viewerRef.current?.isClientPointOnObject(event.clientX, event.clientY);
     const fallbackImage = fallbackImageRef.current;
     const fallbackHit = Boolean(
-      !packReady &&
+      fallbackVisible &&
       fallbackImage &&
       isClearCardFallbackImagePoint(
         event,
@@ -213,7 +218,7 @@ export default function ClearCardRevealOverlay({
     if (shouldProtectClearCardOverlayClick(objectHit, fallbackHit)) {
       event.stopPropagation();
     }
-  }, [packReady]);
+  }, [fallbackVisible]);
 
   const handleRetryCard = useCallback(() => {
     setCardLoadStatus('loading');
@@ -242,7 +247,7 @@ export default function ClearCardRevealOverlay({
             : 'Clear card unboxing'
       }
       suspended={closing || suspended}
-      focusKey={`${viewerStatus}:${cardLoadStatus}:${displayStage}`}
+      focusKey={`${viewerStatus}:${cardLoadStatus}:${displayStage}:${fallbackVisible}`}
       className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
       style={overlayStyle}
       onContextMenu={(event) => event.preventDefault()}
@@ -256,7 +261,7 @@ export default function ClearCardRevealOverlay({
         onTransitionEnd={onTransitionEnd}
       >
         <div
-          className={`clear-card-reveal-overlay__viewport${packReady ? ' clear-card-reveal-overlay__viewport--ready' : ''}`}
+          className={`clear-card-reveal-overlay__viewport static-to-model${modelVisible ? ' static-to-model--visible' : ''}${fallbackVisible ? '' : ' static-to-model--presented'}`}
           aria-busy={
             viewerStatus !== 'error' && (!packReady || cardLoadStatus === 'loading')
           }
@@ -265,7 +270,7 @@ export default function ClearCardRevealOverlay({
             {resolvedLoadingImageSrc ? (
               <img
                 ref={fallbackImageRef}
-                className={`clear-card-reveal-overlay__fallback${
+                className={`clear-card-reveal-overlay__fallback static-to-model__fallback${
                   viewerMode === 'card'
                     ? ' clear-card-reveal-overlay__fallback--card-viewer'
                     : ''
@@ -283,7 +288,7 @@ export default function ClearCardRevealOverlay({
               <Suspense fallback={null}>
                 <ClearCardThreeViewer
                   ref={viewerRef}
-                  ready={packReady}
+                  ready={modelVisible}
                   cardModelUrl={cardModelUrl}
                   packModelUrl={viewerMode === 'card' ? undefined : DEFAULT_CLEAR_PACK_MODEL_URL}
                   lightingConfig={lightingConfig}
@@ -292,7 +297,7 @@ export default function ClearCardRevealOverlay({
                   axisLockedOrbit={false}
                   snapBackOnRelease={freeMovementEnabled}
                   interactionFrameRateMode="adaptive"
-                  interactionEnabled={(viewerOnly || phase === 'ready') && !closing && !suspended}
+                  interactionEnabled={!fallbackVisible && (viewerOnly || phase === 'ready') && !closing && !suspended}
                   interactionBounds="parent"
                   pointerActivationEnabled={!freeMovementEnabled}
                   keyboardActivationEnabled={!viewerOnly && displayStage === 'pack'}
@@ -310,6 +315,7 @@ export default function ClearCardRevealOverlay({
                           : `Interactive 3D ${boxName} unpacking`
                   }
                   onStatusChange={setViewerStatus}
+                  onFrameRendered={onModelFrame}
                   onCardModelLoadStatusChange={setCardLoadStatus}
                   onStageChange={setDisplayStage}
                   onPackHit={handlePackHit}

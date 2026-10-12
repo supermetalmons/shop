@@ -45,6 +45,7 @@ type MiNotePackViewerProps = {
   previewVisible?: boolean;
   activationEnabled?: boolean;
   onReadyChange: (ready: boolean) => void;
+  onFrameRendered?: () => void;
   onError: (error: Error) => void;
   onEvent: (event: MiNoteRevealEvent) => void;
   onBackgroundTap: () => void;
@@ -924,6 +925,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const reportCardsReady = cardsReadyPending;
       cardsReadyPending = null;
       reportCardsReady?.();
+      currentProps.current.onFrameRendered?.();
       if (moving) invalidate();
       else lastTime = 0;
     }
@@ -1018,7 +1020,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
     cardAppearanceRef.current(props.cards, props.cardEffect);
     invalidateRef.current();
   }, [props.cards, props.cardEffect]);
-  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker, props.previewVisible, props.interactionEnabled, props.activationEnabled]);
+  useEffect(() => invalidateRef.current(), [props.state, props.foldPosition, props.rotationOffsetDegrees, props.verticalPosition, props.sizeScale, props.inspectSticker, props.previewVisible, props.interactionEnabled, props.activationEnabled, props.onFrameRendered]);
   useEffect(() => {
     effectSettingsRef.current(props.effectSettings ?? DEFAULT_MI_NOTE_STICKER_EFFECT_SETTINGS);
     invalidateRef.current();

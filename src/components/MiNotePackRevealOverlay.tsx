@@ -18,6 +18,7 @@ import packRenderSetups from '../lib/miNotePackRenderSetups.json';
 import { getMiNotePackPreviewRect, getMiNotePackPreviewTransform } from '../lib/miNotePackPreviewLayout';
 import type { RevealRequestStatus } from '../shop/reveal';
 import { ModalFocusScope } from './ModalFocusScope';
+import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
 import '../styles/mi-note-wip.css';
 
 function createViewer() {
@@ -86,7 +87,6 @@ export default function MiNotePackRevealOverlay({
   const setup = useMemo(() => Object.values(packRenderSetups.setups).find(entry => entry.packId === packMediaId), [packMediaId]);
   const star = MI_NOTE_PACK_STARS.find(entry => entry.id === setup?.sticker.id);
   const ready = Boolean(setup && cards && viewerReady && cardStatus.key === cardKey && cardStatus.ready && !error);
-  const interactionEnabled = Boolean(setup && active && entered && viewerReady && !error && !closing && !suspended && (viewerOnly || phase === 'ready'));
   const dismissReady = viewerOnly || !setup || state.stage === 'interactive' || Boolean(error) || requestFailed;
   const effectSettings = useMemo(() => normalizeMiNoteStickerEffectSettings(setup?.sticker.effectSettings), [setup]);
   const fallbackImage = setup && loadingImageSrc ? loadingImageSrc : MI_NOTE_CARDS_PACK_PLACEHOLDER_IMAGE_URL;
@@ -97,7 +97,10 @@ export default function MiNotePackRevealOverlay({
       transform: getMiNotePackPreviewTransform(preset, frameSize.width, frameSize.height, reducedMotion),
     };
   }, [setup, frameSize, reducedMotion]);
-  const showFallback = !active || !entered || !setup || !viewerReady || Boolean(error);
+  const { modelVisible, fallbackVisible: showFallback, onModelFrame } = useStaticToModelHandoff(
+    Boolean(active && entered && setup && viewerReady && !error), `${packMediaId}:${attempt}`,
+  );
+  const interactionEnabled = !showFallback && !closing && !suspended && (viewerOnly || phase === 'ready');
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -236,14 +239,14 @@ export default function MiNotePackRevealOverlay({
       data-card-stage={state.cardStage}
     >
       <div className="reveal-overlay__backdrop" onClick={dismiss} />
-      <div ref={frameRef} className={`reveal-overlay__frame${showFallback ? '' : ' mi-note-pack-overlay__frame--ready'}`} onTransitionEnd={event => {
+      <div ref={frameRef} className={`reveal-overlay__frame static-to-model${modelVisible ? ' static-to-model--visible' : ''}${showFallback ? '' : ' static-to-model--presented'}`} onTransitionEnd={event => {
         if (event.target !== event.currentTarget) return;
         if (event.propertyName === 'transform' && active && !closing) setEntered(true);
         onTransitionEnd?.(event);
       }} onClick={event => {
         if (showFallback && event.target === event.currentTarget) dismiss();
       }}>
-        <div className="mi-note-pack-overlay__fallback" style={fallbackPresentation.rect}>
+        <div className="mi-note-pack-overlay__fallback static-to-model__fallback" style={fallbackPresentation.rect}>
           <img src={fallbackImage} alt="" aria-hidden draggable={false} style={{
             transform: active ? fallbackPresentation.transform : undefined,
             transition: entered ? 'none' : undefined,
@@ -251,7 +254,7 @@ export default function MiNotePackRevealOverlay({
           {error && <button type="button" className="mi-note-pack-overlay__retry" aria-label="Retry loading pack"
             disabled={closing || suspended} onClick={retryViewer} />}
         </div>
-        {setup && star && <div className="mi-note-wip__stage" aria-hidden={showFallback}>
+        {setup && star && <div className="mi-note-wip__stage static-to-model__model" aria-hidden={!modelVisible}>
           <MiNoteViewerBoundary key={attempt} onError={setViewerError}>
             <Suspense fallback={null}>
               <Viewer
@@ -270,6 +273,7 @@ export default function MiNotePackRevealOverlay({
                 previewVisible={showFallback}
                 activationEnabled={!viewerOnly}
                 onReadyChange={setViewerReady}
+                onFrameRendered={onModelFrame}
                 onCardsReadyChange={handleCardsReady}
                 onCardsError={handleCardsError}
                 onError={setViewerError}
