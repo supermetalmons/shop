@@ -3,6 +3,7 @@ import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
 import { createMiNoteCard } from '../src/lib/miNoteCards.ts';
+import { getInteractiveCardPackCardByFigureId } from '../src/lib/interactiveCardPackReveal.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -15,6 +16,7 @@ const imports = registerHooks({
   },
 });
 const { default: DrifEffectCard } = await import('../src/components/DrifEffectCard.tsx');
+const { PonchoCardViewerOverlay } = await import('../src/components/PonchoRevealOverlay.tsx');
 imports.deregister();
 
 const card = createMiNoteCard(1);
@@ -87,7 +89,7 @@ function elements(container: HTMLElement) {
 }
 
 function pose(element: HTMLElement) {
-  return ['--pointer-x', '--pointer-y', '--card-opacity', '--rotate-x', '--rotate-y', '--background-x', '--background-y']
+  return ['--pointer-x', '--pointer-y', '--card-interaction-opacity', '--rotate-x', '--rotate-y', '--background-x', '--background-y']
     .map(property => element.style.getPropertyValue(property));
 }
 
@@ -97,7 +99,8 @@ test('cards start unlit and settle normally after leaving', () => {
   runTimers();
   runFrames(10);
   fireEvent.load(image);
-  assert.equal(element.style.getPropertyValue('--card-opacity'), '0');
+  assert.equal(element.style.getPropertyValue('--card-interaction-opacity'), '0');
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
   pointer(button, 'pointermove');
   runFrames(8);
   pointer(button, 'pointerup', 'touch');
@@ -130,4 +133,77 @@ test('disabling interaction cancels pending animation and resets the pose withou
   pointer(button, 'pointermove');
   runFrames(8);
   assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+});
+
+for (const dropId of ['mi_note_cards', 'poncho_drifella', 'card_nft_2']) {
+  test(`${dropId} viewer keeps its idle effect through interaction, suspension, and visibility resets`, () => {
+    const viewerCard = getInteractiveCardPackCardByFigureId(dropId, 1)!;
+    const props = { card: viewerCard, active: true, closing: false };
+    const view = render(createElement(PonchoCardViewerOverlay, props));
+    const { button, element, image } = elements(view.container);
+    fireEvent.load(image);
+    runTimers();
+    runFrames(1000);
+
+    const assertIdle = () => {
+      assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+      assert.deepEqual(pose(element), ['50%', '50%', '0', '0deg', '0deg', '50%', '50%']);
+      assert.equal(element.classList.contains('interacting'), false);
+      assert.equal(frames.size, 0);
+      assert.equal(timers.size, 0);
+    };
+
+    assertIdle();
+    for (const end of ['pointerout', 'pointercancel', 'blur']) {
+      pointer(button, 'pointermove', end === 'pointercancel' ? 'touch' : 'mouse');
+      runFrames(8);
+      assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+      if (end === 'blur') fireEvent.blur(button);
+      else pointer(button, end);
+      runTimers();
+      runFrames(1000);
+      assertIdle();
+    }
+
+    pointer(button, 'pointermove');
+    runFrames(8);
+    view.rerender(createElement(PonchoCardViewerOverlay, { ...props, suspended: true }));
+    assertIdle();
+    assert.equal(view.container.querySelector('img'), image);
+    view.rerender(createElement(PonchoCardViewerOverlay, props));
+    assertIdle();
+
+    pointer(button, 'pointermove');
+    runFrames(8);
+    fireEvent(document, new dom.window.Event('visibilitychange'));
+    runTimers();
+    runFrames(1000);
+    assertIdle();
+  });
+}
+
+test('viewer applies idle effects only when the clean card replaces its static preview', (t) => {
+  const preloadedImages: HTMLImageElement[] = [];
+  t.mock.method(globalThis, 'Image', function () {
+    const image = document.createElement('img');
+    preloadedImages.push(image);
+    return image;
+  });
+  const props = { card, active: true, closing: false, loadingImageSrc: 'https://example.com/static.webp' };
+  const view = render(createElement(PonchoCardViewerOverlay, props));
+  const { element, image } = elements(view.container);
+  assert.equal(image.src, props.loadingImageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+  fireEvent.load(preloadedImages[0]);
+  assert.equal(image.src, card.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+
+  const nextCard = createMiNoteCard(2);
+  const nextPreview = 'https://example.com/static-2.webp';
+  view.rerender(createElement(PonchoCardViewerOverlay, { ...props, card: nextCard, loadingImageSrc: nextPreview }));
+  assert.equal(image.src, nextPreview);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+  fireEvent.load(preloadedImages[1]);
+  assert.equal(image.src, nextCard.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
 });

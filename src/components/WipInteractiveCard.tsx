@@ -7,6 +7,7 @@ export default function WipInteractiveCard({
   loadingImageSrc,
   onImageReadyChange,
   wakeOnInteractiveUnlock = true,
+  showEffectAtRest = false,
   interactionMode = 'normal',
   ariaLabel = 'Revealed card',
   imageAlt = 'Revealed card',
@@ -16,6 +17,7 @@ export default function WipInteractiveCard({
   loadingImageSrc?: string;
   onImageReadyChange?: (ready: boolean) => void;
   wakeOnInteractiveUnlock?: boolean;
+  showEffectAtRest?: boolean;
   interactionMode?: DrifEffectCardInteractionMode;
   ariaLabel?: string;
   imageAlt?: string;
@@ -29,6 +31,7 @@ export default function WipInteractiveCard({
       onImageReadyChange={onImageReadyChange}
       disableGlow
       enableInteractiveUnlockWake={wakeOnInteractiveUnlock}
+      showEffectAtRest={showEffectAtRest}
       interactive={interactive}
       interactionMode={interactionMode}
       imageLoading="eager"

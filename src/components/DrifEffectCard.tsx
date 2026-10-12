@@ -50,6 +50,7 @@ type DrifEffectCardProps = {
   interactive?: boolean;
   enableInteractiveUnlockWake?: boolean;
   disableGlow?: boolean;
+  showEffectAtRest?: boolean;
   preserveTransformOnCardChange?: boolean;
   interactionMode?: DrifEffectCardInteractionMode;
   preloadCards?: readonly DrifCardConfig[];
@@ -168,7 +169,7 @@ function toCssVars(glare: SpringVec3, rotate: SpringVec2, background: SpringVec2
     ['--pointer-from-center' as never]: String(pointerFromCenter),
     ['--pointer-from-top' as never]: String(glare.y / 100),
     ['--pointer-from-left' as never]: String(glare.x / 100),
-    ['--card-opacity' as never]: String(Math.min(glare.o, 0.99)),
+    ['--card-interaction-opacity' as never]: String(Math.min(glare.o, 0.99)),
     ['--rotate-x' as never]: `${rotate.x}deg`,
     ['--rotate-y' as never]: `${rotate.y}deg`,
     ['--rotate-delta' as never]: '0deg',
@@ -190,6 +191,7 @@ export default function DrifEffectCard({
   interactive = true,
   enableInteractiveUnlockWake = false,
   disableGlow = false,
+  showEffectAtRest = false,
   preserveTransformOnCardChange = false,
   interactionMode = 'normal',
   preloadCards,
@@ -264,10 +266,11 @@ export default function DrifEffectCard({
   const cardStyle = useMemo<React.CSSProperties>(
     () => ({
       ...staticCardStyle,
+      ['--card-idle-opacity' as never]: showEffectAtRest && !showingLoadingImage ? '0.99' : '0',
       ...(card.textureSrc ? { ['--mask' as never]: `url(${card.textureSrc})` } : {}),
       ...(card.foilSrc ? { ['--foil' as never]: `url(${card.foilSrc})` } : {}),
     }),
-    [card.foilSrc, card.textureSrc, staticCardStyle],
+    [card.foilSrc, card.textureSrc, showEffectAtRest, showingLoadingImage, staticCardStyle],
   );
 
   const applyStylesFromSprings = useCallback(() => {

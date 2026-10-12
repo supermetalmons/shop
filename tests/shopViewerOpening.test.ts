@@ -44,6 +44,7 @@ function fixture() {
 
 const cardViewers = [
   { viewerMode: 'poncho-card', dropId: 'poncho_drifella' },
+  { viewerMode: 'poncho-card', dropId: 'card_nft_2' },
   { viewerMode: 'poncho-card', dropId: 'mi_note_cards' },
   { viewerMode: 'poncho-card', dropId: 'mi_note_cards_devnet' },
   { viewerMode: 'clear-card', dropId: 'clear_cards' },

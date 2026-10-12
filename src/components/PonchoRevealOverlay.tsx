@@ -1532,6 +1532,7 @@ export function PonchoCardViewerOverlay({
                     card={card}
                     interactive={!suspended}
                     loadingImageSrc={loadingImageSrc}
+                    showEffectAtRest
                   />
                 </div>
               </div>

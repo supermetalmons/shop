@@ -141,7 +141,9 @@ header.top--shop.top--drif .top__backdrop {
   --pointer-x: 50%;
   --pointer-y: 50%;
   --card-scale: 1;
-  --card-opacity: 0;
+  --card-interaction-opacity: 0;
+  --card-idle-opacity: 0;
+  --card-opacity: max(var(--card-interaction-opacity), var(--card-idle-opacity));
   --translate-x: 0px;
   --translate-y: 0px;
   --rotate-x: 0deg;
