@@ -670,6 +670,11 @@
   text-align: left;
 }
 
+.mint-panel__submit--reveal-locked:disabled {
+  opacity: 1;
+  cursor: pointer;
+}
+
 .mint-panel__stripe {
   width: 100%;
   min-width: 200px;

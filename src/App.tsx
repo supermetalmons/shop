@@ -433,6 +433,7 @@ function App({ route, suspended = false }: AppProps) {
             handleMint={actionHandlers.handleMint}
             handleDiscountMint={actionHandlers.handleDiscountMint}
             walletActionBusy={walletActionBusy}
+            revealActionBusy={pendingAction?.key === 'open-box' || pendingAction?.key === 'pending-reveal' || pendingAction?.key === 'reveal'}
             minting={purchaseActions.minting || pendingAction?.key === 'mint'}
             discountMinting={purchaseActions.discountMinting || pendingAction?.key === 'discount'}
             effectiveMintStats={effectiveMintStats}

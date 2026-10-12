@@ -42,6 +42,7 @@ type ShopPurchaseSectionProps = Pick<ReturnType<typeof useShopPurchaseActions>,
   publicKey: PublicKey | null;
   walletBusy: boolean;
   walletActionBusy?: boolean;
+  revealActionBusy?: boolean;
   showToast: (message: string) => void;
   handleOpenNotify: () => void;
   routeStripePaymentVisible: boolean;
@@ -72,6 +73,7 @@ export function ShopPurchaseSection({
   publicKey,
   walletBusy,
   walletActionBusy = false,
+  revealActionBusy = false,
   showToast,
   handleOpenNotify,
   routeStripePaymentVisible,
@@ -103,6 +105,7 @@ export function ShopPurchaseSection({
       statsReady={mintStatsReady}
       onMint={handleMint}
       walletActionBusy={walletActionBusy}
+      revealActionBusy={revealActionBusy}
       solanaMintVisible={!routeStripeOnly}
       busy={minting}
       onError={showToast}

@@ -42,6 +42,7 @@ type MintPanelPresentationProps = {
 type PurchaseMintPanelProps = MintPanelPresentationProps & MintPanelFormOptions & {
   mode: 'purchase';
   walletActionBusy?: boolean;
+  revealActionBusy?: boolean;
   receiptPoolId?: string;
   onNotifyNextDrops?: () => void;
 };
@@ -251,6 +252,7 @@ function MintPanelTerminalFooter({
 function PurchaseMintPanel({
   title, boxMedia, renderPreviewPrimary, previewPrimaryKey, dropId, receiptPoolId, onNotifyNextDrops,
   showPackStatusInfo, packStatusBreakdown, walletActionBusy = false, packStatusDisplayLabels,
+  revealActionBusy = false,
   ...formOptions
 }: PurchaseMintPanelProps) {
   const form = useMintPanelForm(formOptions);
@@ -436,6 +438,7 @@ function PurchaseMintPanel({
             submitBusy={form.submitBusy}
             disabled={form.actionsDisabled}
             walletActionBusy={walletActionBusy}
+            revealActionBusy={revealActionBusy}
             useDiscountMint={form.useDiscountMint}
             showQuantitySlider={showQuantitySlider}
             quantityLabel={quantityLabel}
