@@ -30,6 +30,7 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
     const { shared } = MI_NOTE_PACK_RENDER_REGISTRY;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const models = new Map<string, PackModel>();
+    const readyStars = new Set<string>();
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera();
     let renderer: THREE.WebGLRenderer | undefined;
@@ -41,6 +42,8 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
     let intersecting = true;
     let pageActive = true;
     let frameId = 0;
+    let modelTask: ReturnType<typeof setTimeout> | undefined;
+    let pendingStars = MI_NOTE_PACK_STARS.length;
     let lastTime: number | null = null;
     let elapsed = 0;
     let fadeElapsed = 0;
@@ -65,6 +68,7 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
       if (disposed) return;
       disposed = true;
       pause();
+      clearTimeout(modelTask);
       resizeObserver?.disconnect();
       intersectionObserver?.disconnect();
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -94,9 +98,9 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
       else if (rendered) fadeElapsed += dt;
       const motion = sampleMiNotePackShowcase(reducedMotion.matches ? 0 : elapsed, baseRotation[1]);
       if (motion.variantId !== currentSetup.variantId) {
-        const candidates = MI_NOTE_PACK_STARS.filter(star => star.id !== currentSetup.sticker.id);
+        const candidates = MI_NOTE_PACK_STARS.filter(star => readyStars.has(star.id) && star.id !== currentSetup.sticker.id);
         const star = candidates[Math.floor(Math.random() * candidates.length)];
-        currentSetup = getMiNotePackRenderSetup(motion.variantId, star.id)!;
+        currentSetup = getMiNotePackRenderSetup(motion.variantId, star?.id ?? currentSetup.sticker.id)!;
       }
       const model = models.get(currentSetup.sticker.id)!;
       try {
@@ -172,13 +176,65 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
     }
     function handleMotionPreference() {
       elapsed = 0;
-      currentSetup = setup;
+      currentSetup = readyStars.has(setup.sticker.id)
+        ? setup
+        : getMiNotePackRenderSetup('cobalt-blue', currentSetup.sticker.id)!;
       pause();
       schedule();
     }
     function handleContextLost(event: Event) {
       event.preventDefault();
       fail();
+    }
+
+    function loadModel(index: number) {
+      if (disposed || !renderer) return;
+      const star = MI_NOTE_PACK_STARS[index];
+      try {
+        const starSetup = getMiNotePackRenderSetup('cobalt-blue', star.id)!;
+        const model = createMiNotePackModel({
+          color: starSetup.color,
+          star,
+          foldPosition: starSetup.sticker.foldPosition,
+          rotationOffsetDegrees: starSetup.sticker.rotationOffsetDegrees,
+          verticalPosition: starSetup.sticker.verticalPosition,
+          sizeScale: starSetup.sticker.sizeScale,
+          effectSettings: starSetup.sticker.effectSettings,
+        });
+        models.set(star.id, model);
+        void model.ready.then(() => {
+          if (disposed || !renderer) return;
+          pendingStars -= 1;
+          try {
+            renderer.compile(model.group, camera, scene);
+            if (shaderFailed) {
+              fail();
+              return;
+            }
+            readyStars.add(star.id);
+            if (!assetsReady) currentSetup = starSetup;
+            assetsReady = true;
+            schedule();
+          } catch {
+            fail();
+          }
+        }, () => {
+          if (disposed) return;
+          pendingStars -= 1;
+          models.delete(star.id);
+          model.dispose();
+          if (!pendingStars && !readyStars.size) fail();
+        });
+        applyMiNotePackRenderPose(model, starSetup);
+        applyMiNotePackTextureQuality(model.group, renderer, shared);
+        model.group.visible = false;
+        scene.add(model.group);
+        if (index + 1 < MI_NOTE_PACK_STARS.length) {
+          modelTask = setTimeout(() => loadModel(index + 1), 0);
+        }
+      } catch {
+        fail();
+      }
     }
 
     setVisible(false);
@@ -208,38 +264,7 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
       reducedMotion.addEventListener('change', handleMotionPreference);
       resize();
       if (disposed) return dispose;
-      const loaded = MI_NOTE_PACK_STARS.map((star) => {
-        const starSetup = getMiNotePackRenderSetup('cobalt-blue', star.id)!;
-        const model = createMiNotePackModel({
-          color: starSetup.color,
-          star,
-          foldPosition: starSetup.sticker.foldPosition,
-          rotationOffsetDegrees: starSetup.sticker.rotationOffsetDegrees,
-          verticalPosition: starSetup.sticker.verticalPosition,
-          sizeScale: starSetup.sticker.sizeScale,
-          effectSettings: starSetup.sticker.effectSettings,
-        });
-        const ready = model.ready.catch(fail);
-        models.set(star.id, model);
-        applyMiNotePackRenderPose(model, starSetup);
-        applyMiNotePackTextureQuality(model.group, renderer!, shared);
-        scene.add(model.group);
-        return ready;
-      });
-      void Promise.all(loaded).then(() => {
-        if (disposed || !renderer) return;
-        try {
-          renderer.compile(scene, camera);
-          if (shaderFailed) {
-            fail();
-            return;
-          }
-          assetsReady = true;
-          schedule();
-        } catch {
-          fail();
-        }
-      });
+      loadModel(0);
     } catch {
       fail();
     }

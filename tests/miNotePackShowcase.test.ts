@@ -208,10 +208,20 @@ function harness() {
   return { view, events, host: view.container.firstElementChild as HTMLElement };
 }
 
-async function makeReady(selected = models) {
+async function loadModels() {
   await act(async () => {
-    selected.forEach(model => model.resolveReady());
-    await Promise.all(selected.map(model => model.ready));
+    for (let index = 0; index < 3; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  });
+}
+
+async function makeReady(selected?: TestModel[]) {
+  await loadModels();
+  await act(async () => {
+    const pending = selected ?? models;
+    pending.forEach(model => model.resolveReady());
+    await Promise.all(pending.map(model => model.ready));
   });
 }
 
@@ -235,7 +245,7 @@ function lastPose() {
   return { star: frame.model.star, color: frame.color, rotation: frame.rotation, position: frame.position, scale: frame.scale };
 }
 
-test('the image stays active until all stickers load and the first rendered pack finishes fading in', async (t) => {
+test('models load in separate tasks and the first ready sticker can display while the others are pending', async (t) => {
   const listeners: { target: HTMLElement; type: string }[] = [];
   const addEventListener = HTMLElement.prototype.addEventListener;
   t.mock.method(HTMLElement.prototype, 'addEventListener', function(this: HTMLElement, type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) {
@@ -244,6 +254,9 @@ test('the image stays active until all stickers load and the first rendered pack
   });
   const run = harness();
   assert.equal(renderers.length, 1);
+  assert.equal(models.length, 1);
+  assert.equal(renderers[0].compiled, false);
+  await loadModels();
   assert.equal(models.length, 3);
   assert.deepEqual(models.map(model => model.star), ['blush', 'zombie', 'supermetal']);
   assert.deepEqual(run.events, ['loading']);
@@ -251,10 +264,7 @@ test('the image stays active until all stickers load and the first rendered pack
   assert.equal(run.host.hasAttribute('tabindex'), false);
   assert.equal(run.host.querySelectorAll('button, a, input, [tabindex]').length, 0);
   assert.deepEqual(listeners.filter(listener => listener.target === run.host), []);
-  await makeReady(models.slice(0, 2));
-  assert.equal(frames.size, 0);
-  assert.equal(renderers[0].compiled, false);
-  await makeReady(models.slice(2));
+  await makeReady(models.slice(0, 1));
   assert.equal(renderers[0].compiled, true);
   advanceFrame();
   assert.equal(run.host.dataset.visible, 'true');
@@ -263,6 +273,37 @@ test('the image stays active until all stickers load and the first rendered pack
   for (let index = 0; index < 12; index += 1) advanceFrame();
   assert.deepEqual(run.events, ['loading']);
   finishHandoff(run);
+});
+
+test('a slow first sticker does not block other ready packs and late stickers join the animation', async (t) => {
+  const run = harness();
+  await loadModels();
+  await makeReady([models[1]]);
+  finishHandoff(run);
+  assert.equal(run.host.dataset.packId, '2');
+  for (let index = 0; index < 180; index += 1) advanceFrame();
+  assert.ok(renderers[0].rendered.every(frame => frame.model === models[1]));
+  assert.ok(new Set(renderers[0].rendered.map(frame => frame.color)).size > 1);
+
+  await makeReady([models[0]]);
+  t.mock.method(Math, 'random', () => 0);
+  for (let index = 0; index < 60; index += 1) advanceFrame();
+  assert.ok(renderers[0].rendered.some(frame => frame.model === models[0]));
+  assert.deepEqual(run.events, ['loading', 'ready']);
+});
+
+test('one unavailable sticker does not remove an already visible showcase', async () => {
+  const run = harness();
+  await makeReady([models[0]]);
+  finishHandoff(run);
+  await act(async () => models[1].rejectReady(new Error('Sticker unavailable')));
+  assert.equal(models[1].disposed, true);
+  await makeReady([models[2]]);
+  for (let index = 0; index < 120; index += 1) advanceFrame();
+  assert.equal(run.host.dataset.visible, 'true');
+  assert.equal(renderers[0].disposed, false);
+  assert.ok(renderers[0].rendered.every(frame => frame.model !== models[1]));
+  assert.deepEqual(run.events, ['loading', 'ready']);
 });
 
 test('colors cycle blue, green, yellow with random stickers that change every turn using the same models', async (t) => {
@@ -418,7 +459,8 @@ for (const point of ['constructor', 'model', 'texture', 'compile', 'render', 'sh
     if (point === 'constructor' || point === 'model') failure = point;
     const run = harness();
     if (point === 'texture') {
-      await act(async () => { models[1].rejectReady(new Error('Sticker unavailable')); });
+      await loadModels();
+      await act(async () => { models.forEach(model => model.rejectReady(new Error('Sticker unavailable'))); });
     } else if (point !== 'constructor' && point !== 'model') {
       if (point === 'compile' || point === 'render' || point === 'shader-compile' || point === 'shader-render') failure = point;
       await makeReady();
@@ -460,9 +502,10 @@ for (const phase of ['at the fade boundary', 'after handoff']) {
 test('unmounting during texture loading cancels work and ignores late readiness', async () => {
   const run = harness();
   const pending = [...models];
-  await makeReady(pending.slice(0, 1));
   await act(async () => run.view.unmount());
   await act(async () => pending.forEach(model => model.resolveReady()));
+  await loadModels();
+  assert.equal(models.length, 1);
   assert.deepEqual(run.events, ['loading']);
   assert.equal(renderers[0].compiled, false);
   assert.equal(renderers[0].rendered.length, 0);
