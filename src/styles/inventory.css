@@ -129,7 +129,7 @@
 }
 
 .inventory__item--receipt .inventory__image {
-  border: 1px solid rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--receipt-outline-color);
   border-radius: 0;
   width: 88%;
   height: 88%;

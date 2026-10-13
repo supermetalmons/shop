@@ -655,6 +655,11 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   opacity: 1;
 }
 
+.inventory__item--receipt,
+.receipt-viewer-overlay--receipt {
+  --receipt-outline-color: rgba(0, 0, 0, 0.22);
+}
+
 .receipt-viewer-overlay .reveal-overlay__frame {
   overflow: visible;
   background: transparent;
@@ -709,6 +714,16 @@ button.clear-card-reveal-overlay__retry:focus-visible {
 .receipt-viewer-overlay__image--placeholder {
   border-style: dashed;
   background: rgba(255, 255, 255, 0.12);
+}
+
+.receipt-viewer-overlay--receipt img.receipt-viewer-overlay__image {
+  box-shadow: 0 0 0 calc(1px / var(--reveal-start-scale-x)) transparent;
+  transition: box-shadow 260ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.receipt-viewer-overlay--receipt.reveal-overlay--closing img.receipt-viewer-overlay__image {
+  box-shadow: 0 0 0 calc(1px / var(--reveal-start-scale-x))
+    var(--receipt-return-outline-color, var(--receipt-outline-color));
 }
 
 .receipt-viewer-overlay--preorder img.receipt-viewer-overlay__image {
@@ -1208,8 +1223,9 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (prefers-color-scheme: dark) {
-  .inventory__item--receipt .inventory__image {
-    border-color: rgba(255, 255, 255, 0.18);
+  .inventory__item--receipt,
+  .receipt-viewer-overlay--receipt {
+    --receipt-outline-color: rgba(255, 255, 255, 0.18);
   }
 
   .inventory__item--pending {
@@ -1265,6 +1281,7 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   }
 
   .reveal-overlay--viewer.reveal-overlay--closing .reveal-overlay__frame,
+  .receipt-viewer-overlay--receipt img.receipt-viewer-overlay__image,
   .poncho-card-viewer-overlay .drif-effect-card.no-glow .drif-effect-card__rotator,
   .poncho-card-viewer-overlay.reveal-overlay--closing .drif-effect-card.no-glow .drif-effect-card__rotator {
     transition-duration: 1ms;

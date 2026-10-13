@@ -506,13 +506,22 @@ export function useShopReveal(options: ShopRevealOptions) {
 
   const handleRevealOverlayTransitionEnd = useCallback(
     (evt: TransitionEvent<HTMLDivElement>) => {
-      if (evt.target !== evt.currentTarget) return;
-      const closingProperty = revealOverlay?.viewerMode && revealOverlayCloseMode === 'return' ? 'transform' : 'opacity';
-      if (evt.propertyName !== closingProperty) return;
       if (!revealOverlayClosing) return;
+      const returningReceipt = revealOverlay?.viewerMode === 'receipt-image' &&
+        revealOverlay.imageViewerSize === 'receipt' && revealOverlayCloseMode === 'return';
+      const outlineImage = returningReceipt
+        ? evt.currentTarget.querySelector<HTMLImageElement>('img.receipt-viewer-overlay__image:not([hidden])')
+        : null;
+      if (outlineImage) {
+        if (evt.propertyName !== 'box-shadow' || evt.target !== outlineImage) return;
+      } else {
+        if (evt.target !== evt.currentTarget) return;
+        const closingProperty = revealOverlay?.viewerMode && revealOverlayCloseMode === 'return' ? 'transform' : 'opacity';
+        if (evt.propertyName !== closingProperty) return;
+      }
       finalizeRevealOverlayDismissal();
     },
-    [finalizeRevealOverlayDismissal, revealOverlay?.viewerMode, revealOverlayCloseMode, revealOverlayClosing],
+    [finalizeRevealOverlayDismissal, revealOverlay?.viewerMode, revealOverlay?.imageViewerSize, revealOverlayCloseMode, revealOverlayClosing],
   );
 
   const openPreparingOverlayForBox = useCallback(

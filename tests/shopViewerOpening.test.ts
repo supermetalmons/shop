@@ -7,7 +7,7 @@ import type { ShopRevealController } from '../src/shop/reveal/useShopReveal.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 Object.defineProperty(globalThis, 'DOMRect', { configurable: true, value: dom.window.DOMRect });
 const { act, cleanup, renderHook } = await import('@testing-library/react');
 const { useShopReveal } = await import('../src/shop/reveal/useShopReveal.ts');
@@ -71,6 +71,7 @@ function checkViewerDismissal(
   t: TestContext,
   open: (controller: ShopRevealController, origin: DOMRect, sourceElement: HTMLElement) => void,
   changeBeforeDismiss?: 'resize' | 'source-removed' | 'source-media-resized',
+  receiptImageState: 'visible' | 'failed' | 'missing' = 'visible',
 ) {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
@@ -121,7 +122,11 @@ function checkViewerDismissal(
 
   const frame = document.createElement('div');
   const child = document.createElement('div');
+  const receiptImage = document.createElement('img');
+  receiptImage.className = 'receipt-viewer-overlay__image';
+  receiptImage.hidden = receiptImageState === 'failed';
   frame.append(child);
+  if (receiptImageState !== 'missing') frame.append(receiptImage);
   const endTransition = (target: HTMLElement, propertyName: string) => act(() => {
     result.current.handleRevealOverlayTransitionEnd({
       target,
@@ -149,10 +154,13 @@ function checkViewerDismissal(
     '--reveal-close-transform': 'none',
     '--reveal-close-opacity': '0',
     '--reveal-close-transition': 'transform 220ms ease, opacity 220ms ease',
+    '--receipt-return-outline-color': 'transparent',
   } : style;
   const closingVisibility = changeBeforeDismiss ? '' : 'hidden';
-  const completionProperty = changeBeforeDismiss ? 'opacity' : 'transform';
-  const ignoredProperty = changeBeforeDismiss ? 'transform' : 'opacity';
+  const waitsForOutline = !changeBeforeDismiss && receiptImageState === 'visible' &&
+    overlay.viewerMode === 'receipt-image' && overlay.imageViewerSize === 'receipt';
+  const completionProperty = changeBeforeDismiss ? 'opacity' : waitsForOutline ? 'box-shadow' : 'transform';
+  const ignoredProperty = changeBeforeDismiss || waitsForOutline ? 'transform' : 'opacity';
   assert.equal(result.current.revealOverlayClosing, true);
   assert.equal(sourceElement.style.visibility, closingVisibility);
   assert.equal(result.current.revealOverlay, overlay);
@@ -175,7 +183,7 @@ function checkViewerDismissal(
     assert.equal(result.current.inventoryView, inventory);
     assert.equal(sourceElement.style.visibility, closingVisibility);
   }
-  endTransition(frame, completionProperty);
+  endTransition(waitsForOutline ? receiptImage : frame, completionProperty);
   assert.equal(result.current.revealOverlay, null);
   assert.equal(result.current.revealOverlayClosing, false);
   assert.equal(result.current.revealOverlayActive, false);
@@ -316,12 +324,24 @@ for (const size of ['receipt', 'shipment', 'shipment-figure', 'preorder'] as con
   });
 }
 
-test('receipt viewing keeps its grid source hidden until dismissal finishes', (t) => {
+test('receipt viewing waits for its outline when the return transform finishes first', (t) => {
   checkViewerDismissal(t, (controller, origin, sourceElement) => {
     sourceElement.dataset.inventoryId = receipt.id;
     assert.equal(controller.openReceiptImageViewer(receipt, origin), true);
   });
 });
+
+for (const imageState of ['failed', 'missing'] as const) {
+  for (const reducedMotion of [false, true]) {
+    test(`${imageState} receipt images dismiss on frame completion${reducedMotion ? ' with reduced motion' : ''}`, (t) => {
+      setMediaQueryMatches('(prefers-reduced-motion: reduce)', reducedMotion);
+      t.after(() => setMediaQueryMatches('(prefers-reduced-motion: reduce)', false));
+      checkViewerDismissal(t, (controller, origin, sourceElement) => {
+        assert.equal(controller.openImageViewer(receipt, origin, { sourceElement }), true);
+      }, undefined, imageState);
+    });
+  }
+}
 
 test('a receipt fades in place when its source is removed before dismissal', (t) => {
   checkViewerDismissal(t, (controller, origin, sourceElement) => {

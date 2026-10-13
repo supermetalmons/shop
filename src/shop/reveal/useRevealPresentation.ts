@@ -121,6 +121,7 @@ export function useRevealPresentation({ options, assets, revealOverlay, revealOv
           '--reveal-close-transform': 'none',
           '--reveal-close-opacity': '0',
           '--reveal-close-transition': 'transform 220ms ease, opacity 220ms ease',
+          '--receipt-return-outline-color': 'transparent',
         } : {}),
       } as CSSProperties
     : undefined;
