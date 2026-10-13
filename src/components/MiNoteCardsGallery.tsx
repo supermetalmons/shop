@@ -20,7 +20,7 @@ type MiNoteCardsGalleryProps = {
   onAdminSignIn?: () => Promise<void>;
   onCancelPendingSignIn?: () => void;
   showToast?: (message: string) => void;
-  onViewPreordered?: (item: ReceiptViewerSource, originRect: DOMRect | null, aspectRatio?: number) => boolean;
+  onViewPreordered?: (item: ReceiptViewerSource, originRect: DOMRect | null, aspectRatio?: number, sourceElement?: HTMLElement | null) => boolean;
 };
 
 const MI_NOTE_CARDS_BY_ID = new Map(miNoteCatalog.ethereumCollections.flatMap(({ tokens }) => tokens.map((card) => [card.clean_card_id, card] as const)));
@@ -373,9 +373,10 @@ export default function MiNoteCardsGallery({ preorder, wallet, verification, onA
           canViewSelected={true}
           clearSelection={() => setSelectedPreordered(null)}
           handleViewSelectedItem={() => {
-            const image = selectedPreorderedButton.current?.querySelector('img');
+            const sourceElement = selectedPreorderedButton.current;
+            const image = sourceElement?.querySelector('img');
             const aspectRatio = image && image.naturalWidth > 0 && image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : undefined;
-            if (onViewPreordered?.(viewableItem, image?.getBoundingClientRect() ?? null, aspectRatio)) setSelectedPreordered(null);
+            if (onViewPreordered?.(viewableItem, image?.getBoundingClientRect() ?? null, aspectRatio, sourceElement)) setSelectedPreordered(null);
           }}
         />
       )}

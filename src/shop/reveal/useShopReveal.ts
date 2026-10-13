@@ -71,7 +71,7 @@ export function useShopReveal(options: ShopRevealOptions) {
   const session = useRevealSession({ ...options, assets });
   const {
     startOpenLoading, setStartOpenLoading, revealLoading, setRevealLoading,
-    revealOverlay, setRevealOverlay, revealOverlayClosing,
+    revealOverlay, setRevealOverlay, revealOverlayClosing, revealOverlayCloseMode,
     setInventorySnapshot, setPendingOpenSnapshot,
     ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,
     openSelectedLockRef, openSelectedBoxIdRef, earlyPackRevealGateRef,
@@ -506,11 +506,13 @@ export function useShopReveal(options: ShopRevealOptions) {
 
   const handleRevealOverlayTransitionEnd = useCallback(
     (evt: TransitionEvent<HTMLDivElement>) => {
-      if (evt.propertyName !== 'opacity') return;
+      if (evt.target !== evt.currentTarget) return;
+      const closingProperty = revealOverlay?.viewerMode && revealOverlayCloseMode === 'return' ? 'transform' : 'opacity';
+      if (evt.propertyName !== closingProperty) return;
       if (!revealOverlayClosing) return;
       finalizeRevealOverlayDismissal();
     },
-    [finalizeRevealOverlayDismissal, revealOverlayClosing],
+    [finalizeRevealOverlayDismissal, revealOverlay?.viewerMode, revealOverlayCloseMode, revealOverlayClosing],
   );
 
   const openPreparingOverlayForBox = useCallback(
@@ -597,6 +599,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       image,
       figureId,
       originRect,
+      sourceElement,
       clearSelection = false,
     }: {
       overlayId: string;
@@ -605,6 +608,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       image?: string;
       figureId: number;
       originRect?: DOMRect | null;
+      sourceElement?: HTMLElement | null;
       clearSelection?: boolean;
     },
   ) => {
@@ -636,6 +640,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       targetRect,
       viewerMode: 'poncho-card',
       viewerFigureId: figureId,
+      sourceElement,
     });
     if (opened && clearSelection) {
       clearInventorySelection();
@@ -658,6 +663,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       figureId,
       viewerMode,
       originRect,
+      sourceElement,
       clearSelection = false,
     }: {
       overlayId: string;
@@ -667,6 +673,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       figureId?: number;
       viewerMode: 'clear-card' | 'clear-pack';
       originRect?: DOMRect | null;
+      sourceElement?: HTMLElement | null;
       clearSelection?: boolean;
     },
   ) => {
@@ -707,6 +714,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         : undefined,
       viewerMode,
       viewerFigureId: viewerMode === 'clear-card' ? figureId : undefined,
+      sourceElement,
     });
     if (opened && clearSelection) {
       clearInventorySelection();
@@ -721,7 +729,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     usesClearCard3dRevealForDropId,
   ]);
 
-  const openMiNotePackViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null) => {
+  const openMiNotePackViewer = useCallback((item: InventoryItem, originRect?: DOMRect | null, sourceElement?: HTMLElement | null) => {
     if (item.kind !== 'box' || !isDropFamily(item.dropId, 'mi_note_cards')) return false;
     if (revealOverlayRef.current || revealLoading || startOpenLoading || typeof window === 'undefined') return false;
     const targetRect = calcRevealTargetRectForRendererInViewport(
@@ -736,6 +744,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       targetRect,
       viewerMode: 'mi-note-pack',
       packMediaId: resolveInteractiveCardPackMediaIdForBox(item.dropId, item.boxId),
+      sourceElement,
     });
     if (opened) clearInventorySelection();
     return opened;
@@ -755,6 +764,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       receiptImages?: ReceiptViewerImage[];
       adminIrlRedeemReceipt?: InventoryItem;
       allowMissingImage?: boolean;
+      sourceElement?: HTMLElement | null;
     },
   ) => {
     if (revealOverlayRef.current || presentationLoadingRef.current) return false;
@@ -789,6 +799,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       imageViewerSize: options?.size || 'receipt',
       receiptImages: options?.receiptImages,
       adminIrlRedeemReceipt: options?.adminIrlRedeemReceipt,
+      sourceElement: options?.sourceElement,
     }, { inventorySnapshot: options?.inventorySnapshot });
   }, [
     presentViewerOverlay,
@@ -802,6 +813,7 @@ export function useShopReveal(options: ShopRevealOptions) {
       inventorySnapshot?: InventoryItem[];
       allowPlaceholders?: boolean;
       adminIrlRedeemReceipt?: InventoryItem;
+      sourceElement?: HTMLElement | null;
     },
   ) => {
     const receiptImages = items.filter((item) => item.id && item.dropId);
@@ -827,6 +839,7 @@ export function useShopReveal(options: ShopRevealOptions) {
           ? options.adminIrlRedeemReceipt
           : undefined,
       allowMissingImage: options?.allowPlaceholders,
+      sourceElement: options?.sourceElement,
     });
   }, [openImageViewer]);
 
@@ -839,25 +852,27 @@ export function useShopReveal(options: ShopRevealOptions) {
     return openReceiptImageViewerGroup([item], originRect, {
       inventorySnapshot: options?.inventorySnapshot,
       adminIrlRedeemReceipt: item,
+      sourceElement: originRect ? findInventoryElement(item.id) : null,
     });
-  }, [openReceiptImageViewerGroup]);
+  }, [findInventoryElement, openReceiptImageViewerGroup]);
 
   const viewItem = useCallback((selectedViewableItem: InventoryItem) => {
     if (!selectedViewableItem) return;
-    const originRect = findInventoryRect(selectedViewableItem.id);
+    const sourceElement = findInventoryElement(selectedViewableItem.id);
+    const originRect = sourceElement ? getInventoryRevealRect(sourceElement) : null;
     if (selectedViewableItem.kind === 'preorder') {
-      const element = findInventoryElement(selectedViewableItem.id);
-      const preview = element ? getRenderedImagePreview(element, selectedViewableItem.image) : { src: selectedViewableItem.image };
+      const preview = sourceElement ? getRenderedImagePreview(sourceElement, selectedViewableItem.image) : { src: selectedViewableItem.image };
       if (openImageViewer({ ...selectedViewableItem, image: preview.src }, originRect, {
         aspectRatio: preview.aspectRatio,
         size: 'preorder',
         unavailableMessage: 'Preorder image unavailable',
+        sourceElement,
       })) clearInventorySelection();
       return;
     }
     if (selectedViewableItem.kind === 'box') {
       if (isDropFamily(selectedViewableItem.dropId, 'mi_note_cards')) {
-        openMiNotePackViewer(selectedViewableItem, originRect);
+        openMiNotePackViewer(selectedViewableItem, originRect, sourceElement);
         return;
       }
       openClearCardModelViewer({
@@ -867,6 +882,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         image: selectedViewableItem.image,
         viewerMode: 'clear-pack',
         originRect,
+        sourceElement,
         clearSelection: true,
       });
       return;
@@ -882,6 +898,7 @@ export function useShopReveal(options: ShopRevealOptions) {
         figureId,
         viewerMode: 'clear-card',
         originRect,
+        sourceElement,
         clearSelection: true,
       });
       return;
@@ -893,12 +910,12 @@ export function useShopReveal(options: ShopRevealOptions) {
       image: selectedViewableItem.image,
       figureId,
       originRect,
+      sourceElement,
       clearSelection: true,
     });
   }, [
     clearInventorySelection,
     findInventoryElement,
-    findInventoryRect,
     openClearCardModelViewer,
     openImageViewer,
     openInteractiveCardViewer,
@@ -962,13 +979,14 @@ export function useShopReveal(options: ShopRevealOptions) {
     }
   };
 
-  const presentation = useRevealPresentation({ options, assets, revealOverlay });
+  const presentation = useRevealPresentation({ options, assets, revealOverlay, revealOverlayCloseMode });
 
   return {
     revealOverlay,
     revealOverlayOpen: session.revealOverlayOpen,
     revealOverlayActive: session.revealOverlayActive,
     revealOverlayClosing,
+    revealOverlayCloseMode,
     startOpenLoading,
     revealLoading,
     inventoryView: session.inventoryView,

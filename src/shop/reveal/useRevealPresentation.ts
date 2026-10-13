@@ -21,13 +21,14 @@ import {
   sameRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
 import type { ShopRevealOptions } from './contracts';
-import type { RevealOverlayState } from './types';
+import type { RevealOverlayCloseMode, RevealOverlayState } from './types';
 import type { RevealAssets } from './useRevealAssets';
 
-export function useRevealPresentation({ options, assets, revealOverlay }: {
+export function useRevealPresentation({ options, assets, revealOverlay, revealOverlayCloseMode }: {
   options: ShopRevealOptions;
   assets: RevealAssets;
   revealOverlay: RevealOverlayState | null;
+  revealOverlayCloseMode: RevealOverlayCloseMode;
 }) {
   const {
     getDropContent, routeDrop, boxLabelForDropId, figureLabelForDropId,
@@ -102,19 +103,26 @@ export function useRevealPresentation({ options, assets, revealOverlay }: {
     return getMiNotePackPreviewOriginRect(revealOverlay.originRect, revealOverlay.targetRect, previewRect);
   }, [revealOverlay, revealOverlayCanRenderMiNotePack3d]);
   const revealOverlayStyle: CSSProperties | undefined = revealOverlay
-    ? (revealOverlayUsesPonchoLayout
-        ? ponchoDrifellaRevealOverlayStyleVars({
-            originRect: revealOverlay.originRect,
-            targetRect: revealOverlay.targetRect,
-            mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
-            viewport: getOverlayViewport(),
-            cardCount: interactiveRevealCards.length || PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
-          })
-        : revealOverlayStyleVars({
-            originRect: revealOriginRect ?? revealOverlay.originRect,
-            targetRect: revealOverlay.targetRect,
-            mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
-          })) as CSSProperties
+    ? {
+        ...(revealOverlayUsesPonchoLayout
+          ? ponchoDrifellaRevealOverlayStyleVars({
+              originRect: revealOverlay.originRect,
+              targetRect: revealOverlay.targetRect,
+              mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
+              viewport: getOverlayViewport(),
+              cardCount: interactiveRevealCards.length || PONCHO_DRIFELLA_REVEAL_ROW_SLOT_COUNT,
+            })
+          : revealOverlayStyleVars({
+              originRect: revealOriginRect ?? revealOverlay.originRect,
+              targetRect: revealOverlay.targetRect,
+              mode: revealOverlay.viewerMode === 'poncho-card' ? 'poncho-card' : 'default',
+            })),
+        ...(revealOverlayCloseMode === 'fade' ? {
+          '--reveal-close-transform': 'none',
+          '--reveal-close-opacity': '0',
+          '--reveal-close-transition': 'transform 220ms ease, opacity 220ms ease',
+        } : {}),
+      } as CSSProperties
     : undefined;
   const revealOverlayCanRenderInteractiveCardPack = Boolean(
     revealOverlayHasInteractiveCardPackRenderer &&

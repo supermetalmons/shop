@@ -236,7 +236,7 @@ export default function MiNotePackRevealOverlay({
       ariaLabel={`${boxName} ${viewerOnly ? '3D viewer' : 'unboxing'}`}
       focusTarget="scope"
       suspended={closing || suspended}
-      className={`reveal-overlay mi-note-pack-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
+      className={`reveal-overlay mi-note-pack-overlay reveal-overlay--${phase}${viewerOnly ? ' reveal-overlay--viewer' : ''}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}`}
       style={overlayStyle}
       onKeyDown={handleKeyDown}
       onContextMenu={event => event.preventDefault()}

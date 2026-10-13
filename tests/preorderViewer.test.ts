@@ -55,6 +55,7 @@ for (const [width, height] of [[1082, 1600], [1600, 900]]) {
     const { result } = renderHook(() => useShopReveal(options));
     act(() => result.current.viewItem(item));
     const overlay = result.current.revealOverlay!;
+    assert.equal(tile.style.visibility, 'hidden');
     assert.equal(overlay.viewerMode, 'receipt-image');
     assert.equal(overlay.imageViewerSize, 'preorder');
     assert.equal(overlay.image, item.image);
@@ -66,6 +67,7 @@ for (const [width, height] of [[1082, 1600], [1600, 900]]) {
     assert.equal(calls.cleared, 1);
     act(() => result.current.handleRevealOverlayDismiss());
     await waitFor(() => assert.equal(result.current.revealOverlay, null));
+    assert.equal(tile.style.visibility, '');
     assert.deepEqual(calls.toasts, []);
   });
 }

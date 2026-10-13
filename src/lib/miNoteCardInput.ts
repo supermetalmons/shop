@@ -10,13 +10,14 @@ type PointerMovement = {
 };
 
 type InputOptions = {
+  maxTapDurationMs?: number;
   onStart?: (event: PackPointerEvent) => boolean | void;
   onMove?: (event: PackPointerEvent, movement: PointerMovement) => void;
   onEnd?: (event: PackPointerEvent, movement: PointerMovement & { cancelled: boolean }) => void;
 };
 
 export function createMiNoteCardInput(activate: (event?: PackPointerEvent) => void, options: InputOptions = {}) {
-  let pointer: { id: number; startX: number; startY: number; moved: boolean; lastEvent: PackPointerEvent } | null = null;
+  let pointer: { id: number; startX: number; startY: number; startTime: number; moved: boolean; lastEvent: PackPointerEvent } | null = null;
 
   function movement(event: PackPointerEvent): PointerMovement | null {
     if (!pointer || pointer.id !== event.pointerId) return null;
@@ -38,7 +39,7 @@ export function createMiNoteCardInput(activate: (event?: PackPointerEvent) => vo
   return {
     onPointerDown(event: PackPointerEvent) {
       if (pointer || !event.isPrimary || event.button !== 0 || options.onStart?.(event) === false) return;
-      pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, lastEvent: event };
+      pointer = { id: event.pointerId, startX: event.clientX, startY: event.clientY, startTime: event.timeStamp, moved: false, lastEvent: event };
     },
     onPointerMove(event: PackPointerEvent) {
       if (!event.isPrimary) return;
@@ -51,11 +52,12 @@ export function createMiNoteCardInput(activate: (event?: PackPointerEvent) => vo
       if (!position) return;
       event.preventDefault();
       const activePointer = pointer;
+      const withinTapDuration = event.timeStamp - activePointer!.startTime <= (options.maxTapDurationMs ?? Infinity);
       options.onMove?.(event, position);
       if (pointer !== activePointer) return;
       pointer = null;
       options.onEnd?.(event, { ...position, cancelled: false });
-      if (!position.moved) activate(event);
+      if (!position.moved && withinTapDuration) activate(event);
     },
     onPointerCancel(event: PackPointerEvent) {
       if (pointer?.id === event.pointerId) cancel();

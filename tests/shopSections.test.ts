@@ -92,6 +92,7 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   assert.equal(opened[0][0].dropId, drop.dropId);
   assert.equal(opened[0][2]?.size, 'shipment');
   assert.equal(opened[0][2]?.unavailableMessage, 'Shipment image unavailable');
+  for (const args of opened) assert.equal(args[2]?.sourceElement, tile);
 
   view.rerender(createElement(ShopShipmentsSection, { ...props, shipmentsSectionReady: false, shipmentsEmptyContent: 'Loading shipments…' }));
   assert.equal(view.queryByRole('button', { name: /^View / }), null);
@@ -142,12 +143,14 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
     fireEvent.keyDown(tiles[1], { key: 'Enter' });
     fireEvent.keyDown(tiles[1], { key: ' ' });
     assert.deepEqual(opened.map(args => args[0].image), [expectedImages[0]]);
+    assert.equal(opened[0][2]?.sourceElement, tiles[0]);
     assert.equal(cards.length, 3);
     for (const card of cards) {
       assert.equal(card.dropId, dropId);
       assert.equal(card.figureId, 1430);
       assert.equal(card.overlayId, `shipment:${dropId}:7:dude:1430:1`);
       assert.equal(card.image, expectedImages[1]);
+      assert.equal(card.sourceElement, tiles[1]);
     }
   });
 }

@@ -10,11 +10,12 @@ import {
 import {
   getRevealOverlayViewport as getOverlayViewport,
   sameRevealOverlayRect,
+  toRevealOverlayRect,
 } from '../../lib/revealOverlayLayout';
 import { calcInteractiveCardViewerTargetRectInViewport, calcReceiptViewerTargetRectInViewport, calcRevealTargetRectForRendererInViewport } from './layout';
 import { PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS, REVEAL_CLOSE_FALLBACK_MS } from './sounds';
 import type { PonchoRevealDismissReadySource } from '../../components/PonchoRevealOverlay';
-import type { EarlyPackRevealGate, RevealOverlayState, ViewerOverlayInput } from './types';
+import type { EarlyPackRevealGate, RevealOverlayCloseMode, RevealOverlayState, ViewerOverlayInput } from './types';
 import type { ShopRevealOptions } from './contracts';
 import type { RevealAssets } from './useRevealAssets';
 
@@ -43,6 +44,7 @@ export function useRevealSession({
   const [revealOverlay, setRevealOverlay] = useState<RevealOverlayState | null>(null);
   const [revealOverlayActive, setRevealOverlayActive] = useState(false);
   const [revealOverlayClosing, setRevealOverlayClosing] = useState(false);
+  const [revealOverlayCloseMode, setRevealOverlayCloseMode] = useState<RevealOverlayCloseMode>('return');
   const [inventorySnapshot, setInventorySnapshot] = useState<InventoryItem[]>([]);
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
@@ -77,6 +79,19 @@ export function useRevealSession({
   const revealOverlayActiveRef = useRef(false);
   const revealOverlayClosingRef = useRef(false);
   const revealOverlayCloseTimeoutRef = useRef<number | null>(null);
+
+  const sourceElement = revealOverlay?.sourceElement;
+  const hideSource = !revealOverlayClosing || revealOverlayCloseMode === 'return';
+  useLayoutEffect(() => {
+    if (!sourceElement || !hideSource) return;
+    const visibility = sourceElement.style.getPropertyValue('visibility');
+    const priority = sourceElement.style.getPropertyPriority('visibility');
+    sourceElement.style.setProperty('visibility', 'hidden');
+    return () => {
+      if (visibility) sourceElement.style.setProperty('visibility', visibility, priority);
+      else sourceElement.style.removeProperty('visibility');
+    };
+  }, [hideSource, sourceElement]);
 
   useLayoutEffect(() => {
     connectedWalletRef.current = connectedWallet || null;
@@ -246,6 +261,16 @@ export function useRevealSession({
       finalizeRevealOverlayDismissal();
       return;
     }
+    const originSourceRect = overlay.originSourceRect;
+    const currentSourceRect = overlay.sourceElement?.isConnected ? overlay.sourceElement.getBoundingClientRect() : null;
+    setRevealOverlayCloseMode(
+      overlay.viewerMode && originSourceRect && currentSourceRect &&
+      (['left', 'top', 'width', 'height'] as const).every((key) => Math.abs(originSourceRect[key] - currentSourceRect[key]) <= 1) &&
+      (!overlay.originViewport || sameRevealOverlayRect(overlay.originViewport, getOverlayViewport())) &&
+      !sameRevealOverlayRect(overlay.originRect, overlay.targetRect)
+        ? 'return'
+        : 'fade',
+    );
     setRevealOverlayClosing(true);
     clearRevealOverlayCloseTimeout();
     revealOverlayCloseTimeoutRef.current = window.setTimeout(() => {
@@ -323,6 +348,7 @@ export function useRevealSession({
       if (suspendedRef.current) return;
       revealOverlayRef.current = nextOverlay;
       setRevealOverlay(nextOverlay);
+      setRevealOverlayCloseMode('return');
       setRevealOverlayClosing(false);
       setRevealOverlayActive(false);
       cancelRevealOverlayAnimationFrame();
@@ -344,6 +370,8 @@ export function useRevealSession({
       setInventorySnapshot(options?.inventorySnapshot ?? inventory);
       setPendingOpenSnapshot(pendingOpenBoxes);
       presentRevealOverlay({
+        originViewport: getOverlayViewport(),
+        originSourceRect: input.sourceElement ? toRevealOverlayRect(input.sourceElement.getBoundingClientRect()) : undefined,
         phase: 'revealed',
         frame: 1,
         advanceClicks: 0,
@@ -510,7 +538,7 @@ export function useRevealSession({
 
   return {
     startOpenLoading, setStartOpenLoading, revealLoading, setRevealLoading,
-    revealOverlay, setRevealOverlay, revealOverlayActive, revealOverlayClosing,
+    revealOverlay, setRevealOverlay, revealOverlayActive, revealOverlayClosing, revealOverlayCloseMode,
     inventoryView, pendingOpenBoxesView, revealOverlayOpen,
     setInventorySnapshot, setPendingOpenSnapshot,
     ownerRef, connectedWalletRef, suspendedRef, presentationLoadingRef,

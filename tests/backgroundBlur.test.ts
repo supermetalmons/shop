@@ -641,9 +641,10 @@ test('Poncho viewer suspends card controls and dismissal while preserving closin
   assert.equal(dismissals, 2);
 
   view.rerender(createElement(PonchoCardViewerOverlay, { ...props, closing: true }));
-  assert.equal(control.getAttribute('aria-disabled'), null);
-  assert.equal(control.tabIndex, 0);
+  assert.equal(control.getAttribute('aria-disabled'), 'true');
+  assert.equal(control.tabIndex, -1);
   assert.equal(dialog.hasAttribute('inert'), true);
+  fireEvent.click(control);
   fireEvent.click(dialog);
   assert.equal(dismissals, 2);
 });

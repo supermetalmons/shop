@@ -39,7 +39,7 @@ export function ReceiptImageViewerOverlay({
   return (
     <div
       ref={dialogRef}
-      className={`reveal-overlay receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''
+      className={`reveal-overlay reveal-overlay--viewer receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''
         }`}
       role="dialog"
       aria-modal={suspended ? undefined : 'true'}

@@ -55,7 +55,7 @@ function overlay(overrides: Partial<RevealOverlayState> = {}): RevealOverlayStat
   };
 }
 
-function viewerInput(): ViewerOverlayInput {
+function viewerInput(overrides: Partial<ViewerOverlayInput> = {}): ViewerOverlayInput {
   return {
     id: 'receipt-a',
     dropId: 'drop-a',
@@ -63,6 +63,7 @@ function viewerInput(): ViewerOverlayInput {
     originRect: { left: 10, top: 20, width: 30, height: 40 },
     targetRect: { left: 100, top: 100, width: 200, height: 200 },
     viewerMode: 'receipt-image',
+    ...overrides,
   };
 }
 
@@ -185,19 +186,171 @@ for (const override of [undefined, [item('claimed')], []]) {
 
 test('a suspended viewer attempt returns false without changing dismissal readiness or scheduling presentation', () => {
   const clock = scheduler();
+  const sourceElement = document.createElement('button');
+  sourceElement.style.setProperty('visibility', 'visible', 'important');
   const initial = options({ suspended: true, inventory: [item('old')], pendingOpenBoxes: [pending('old')] });
   const { result } = renderHook(useRevealSession, { initialProps: initial });
   act(() => {
     result.current.updateAssetGatedRevealComplete(true);
     result.current.updateClearCardDismissReady(true);
-    assert.equal(result.current.presentViewerOverlay(viewerInput(), { inventorySnapshot: [] }), false);
+    assert.equal(result.current.presentViewerOverlay(viewerInput({ sourceElement }), { inventorySnapshot: [] }), false);
   });
+  assert.equal(sourceElement.style.visibility, 'visible');
+  assert.equal(sourceElement.style.getPropertyPriority('visibility'), 'important');
   assert.equal(result.current.revealOverlay, null);
   assert.equal(result.current.canDismissAssetGatedRevealOverlay({ revealedIds: [1] }), true);
   assert.equal(result.current.inventoryView, initial.inventory);
   assert.equal(result.current.pendingOpenBoxesView, initial.pendingOpenBoxes);
   assert.equal(clock.frames().size, 0);
   assert.equal(clock.timers.size, 0);
+});
+
+for (const completion of ['transition', 'fallback'] as const) {
+  test(`a viewer hides its source until closing finishes by ${completion}`, (t) => {
+    const clock = scheduler();
+    const sourceElement = document.createElement('button');
+    document.body.append(sourceElement);
+    t.after(() => sourceElement.remove());
+    const { result } = renderHook(useRevealSession, { initialProps: options() });
+    act(() => {
+      assert.equal(result.current.presentViewerOverlay(viewerInput({ sourceElement })), true);
+    });
+    assert.equal(result.current.revealOverlayActive, false);
+    assert.equal(sourceElement.style.visibility, 'hidden');
+    act(() => clock.flushFrame());
+    assert.equal(sourceElement.style.visibility, 'hidden');
+    act(() => clock.flushFrame());
+    assert.equal(result.current.revealOverlayActive, true);
+    assert.equal(sourceElement.style.visibility, 'hidden');
+    act(() => result.current.closeRevealOverlay());
+    assert.equal(result.current.revealOverlayClosing, true);
+    assert.equal(result.current.revealOverlayCloseMode, 'return');
+    assert.equal(sourceElement.style.visibility, 'hidden');
+    act(() => {
+      if (completion === 'transition') result.current.finalizeRevealOverlayDismissal();
+      else clock.fireTimer(380);
+    });
+    assert.equal(result.current.revealOverlay, null);
+    assert.equal(sourceElement.style.getPropertyValue('visibility'), '');
+    assert.equal(sourceElement.style.getPropertyPriority('visibility'), '');
+    assert.equal(clock.timers.size, 0);
+  });
+}
+
+for (const reason of ['missing-source', 'identical-geometry'] as const) {
+  test(`a viewer fades with ${reason} and leaves its source visible during closing`, (t) => {
+    const clock = scheduler();
+    const sourceElement = document.createElement('button');
+    sourceElement.style.setProperty('visibility', 'visible', 'important');
+    document.body.append(sourceElement);
+    t.after(() => sourceElement.remove());
+    const input = viewerInput({ sourceElement: reason === 'missing-source' ? undefined : sourceElement });
+    if (reason === 'identical-geometry') input.originRect = { ...input.targetRect };
+    const { result } = renderHook(useRevealSession, { initialProps: options() });
+    act(() => result.current.presentViewerOverlay(input));
+    assert.equal(sourceElement.style.visibility, reason === 'missing-source' ? 'visible' : 'hidden');
+    act(() => clock.flushFrame());
+    act(() => clock.flushFrame());
+    act(() => result.current.closeRevealOverlay());
+    assert.equal(result.current.revealOverlayClosing, true);
+    assert.equal(result.current.revealOverlayCloseMode, 'fade');
+    assert.notEqual(result.current.revealOverlay, null);
+    assert.equal(sourceElement.style.visibility, 'visible');
+    assert.equal(sourceElement.style.getPropertyPriority('visibility'), 'important');
+    act(() => clock.fireTimer(380));
+    assert.equal(result.current.revealOverlay, null);
+    assert.equal(sourceElement.style.visibility, 'visible');
+    assert.equal(clock.timers.size, 0);
+    act(() => result.current.presentViewerOverlay(viewerInput({ sourceElement })));
+    assert.equal(result.current.revealOverlayCloseMode, 'return');
+    assert.equal(sourceElement.style.visibility, 'hidden');
+  });
+}
+
+for (const dimension of ['left', 'top', 'width', 'height'] as const) {
+  test(`a viewer fades when its connected source ${dimension} changes`, (t) => {
+    const clock = scheduler();
+    const sourceElement = document.createElement('button');
+    let sourceRect = { left: 10, top: 20, width: 30, height: 40 };
+    sourceElement.getBoundingClientRect = () => new window.DOMRect(sourceRect.left, sourceRect.top, sourceRect.width, sourceRect.height);
+    document.body.append(sourceElement);
+    t.after(() => sourceElement.remove());
+    const { result } = renderHook(useRevealSession, { initialProps: options() });
+    act(() => result.current.presentViewerOverlay(viewerInput({ sourceElement })));
+    assert.deepEqual(result.current.revealOverlay?.originSourceRect, sourceRect);
+    act(() => clock.flushFrame());
+    act(() => clock.flushFrame());
+    sourceRect = { ...sourceRect, [dimension]: sourceRect[dimension] + 2 };
+    act(() => result.current.closeRevealOverlay());
+    assert.equal(sourceElement.isConnected, true);
+    assert.equal(result.current.revealOverlayClosing, true);
+    assert.equal(result.current.revealOverlayCloseMode, 'fade');
+    assert.equal(sourceElement.style.visibility, '');
+  });
+}
+
+test('a viewer tolerates source bounds rounding within one CSS pixel', (t) => {
+  const clock = scheduler();
+  const sourceElement = document.createElement('button');
+  let sourceRect = new window.DOMRect(10, 20, 30, 40);
+  sourceElement.getBoundingClientRect = () => sourceRect;
+  document.body.append(sourceElement);
+  t.after(() => sourceElement.remove());
+  const { result } = renderHook(useRevealSession, { initialProps: options() });
+  act(() => result.current.presentViewerOverlay(viewerInput({ sourceElement })));
+  act(() => clock.flushFrame());
+  act(() => clock.flushFrame());
+  sourceRect = new window.DOMRect(10.5, 19.5, 31, 39);
+  act(() => result.current.closeRevealOverlay());
+  assert.equal(result.current.revealOverlayCloseMode, 'return');
+  assert.equal(sourceElement.style.visibility, 'hidden');
+});
+
+for (const interruption of ['early-close', 'discard', 'suspension', 'unmount'] as const) {
+  test(`${interruption} restores the source visibility without waiting for an animation`, (t) => {
+    const clock = scheduler();
+    const sourceElement = document.createElement('button');
+    sourceElement.style.setProperty('visibility', 'visible', 'important');
+    document.body.append(sourceElement);
+    t.after(() => sourceElement.remove());
+    const initial = options();
+    const { result, rerender, unmount } = renderHook(useRevealSession, { initialProps: initial });
+    act(() => result.current.presentViewerOverlay(viewerInput({ sourceElement })));
+    assert.equal(sourceElement.style.visibility, 'hidden');
+    if (interruption !== 'early-close') {
+      act(() => clock.flushFrame());
+      act(() => clock.flushFrame());
+      act(() => result.current.closeRevealOverlay());
+      assert.equal(result.current.revealOverlayClosing, true);
+      assert.equal(sourceElement.style.visibility, 'hidden');
+    }
+    if (interruption === 'suspension') rerender({ ...initial, suspended: true });
+    else if (interruption === 'unmount') unmount();
+    else act(() => {
+      if (interruption === 'discard') result.current.discardRevealOverlay();
+      else result.current.closeRevealOverlay();
+    });
+    assert.equal(sourceElement.style.visibility, 'visible');
+    assert.equal(sourceElement.style.getPropertyPriority('visibility'), 'important');
+    assert.equal(clock.frames().size, 0);
+    assert.equal(clock.timers.size, 0);
+  });
+}
+
+test('replacing a viewer restores its old source and preserves the new source inline visibility', () => {
+  scheduler();
+  const firstSource = document.createElement('button');
+  const secondSource = document.createElement('button');
+  secondSource.style.setProperty('visibility', 'collapse');
+  const { result } = renderHook(useRevealSession, { initialProps: options() });
+  act(() => result.current.presentViewerOverlay(viewerInput({ sourceElement: firstSource })));
+  assert.equal(firstSource.style.visibility, 'hidden');
+  act(() => result.current.presentViewerOverlay(viewerInput({ id: 'receipt-b', sourceElement: secondSource })));
+  assert.equal(firstSource.style.getPropertyValue('visibility'), '');
+  assert.equal(secondSource.style.visibility, 'hidden');
+  act(() => result.current.dismissRevealOverlay());
+  assert.equal(secondSource.style.visibility, 'collapse');
+  assert.equal(secondSource.style.getPropertyPriority('visibility'), '');
 });
 
 test('transactional presentation preserves its preparing state during the opening request', () => {

@@ -94,6 +94,13 @@
   opacity: 0;
 }
 
+.reveal-overlay--viewer.reveal-overlay--closing .reveal-overlay__frame {
+  opacity: var(--reveal-close-opacity, 1);
+  transform: var(--reveal-close-transform, translate3d(var(--reveal-start-x), var(--reveal-start-y), 0)
+    scale(var(--reveal-start-scale-x), var(--reveal-start-scale-y)));
+  transition: var(--reveal-close-transition, transform 260ms cubic-bezier(0.4, 0, 0.2, 1));
+}
+
 .reveal-overlay__media {
   position: absolute;
   inset: 0;
@@ -257,6 +264,10 @@
 
 .reveal-overlay--closing .reveal-overlay__media {
   opacity: 0;
+}
+
+.reveal-overlay--viewer.reveal-overlay--closing .reveal-overlay__media {
+  opacity: 1;
 }
 
 .reveal-overlay__media-item {
@@ -602,6 +613,19 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   perspective: max(600px, calc(var(--reveal-target-height) * 2));
 }
 
+.poncho-card-viewer-overlay .drif-effect-card.no-glow .drif-effect-card__rotator {
+  transition: box-shadow 520ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 330ms ease-out;
+}
+
+.poncho-card-viewer-overlay:not(.reveal-overlay--active) .drif-effect-card.no-glow .drif-effect-card__rotator {
+  box-shadow: none;
+}
+
+.poncho-card-viewer-overlay.reveal-overlay--closing .drif-effect-card.no-glow .drif-effect-card__rotator {
+  box-shadow: none;
+  transition: box-shadow 180ms ease-out, opacity 330ms ease-out;
+}
+
 @keyframes wip-pack-discard {
   0% {
     opacity: 1;
@@ -667,17 +691,6 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   grid-template-columns: repeat(var(--receipt-viewer-count), minmax(0, 1fr));
   gap: clamp(10px, 1.6vmin, 22px);
   align-items: center;
-}
-
-.receipt-viewer-overlay--shipment .receipt-viewer-overlay__image-shell {
-  box-sizing: border-box;
-  padding: clamp(8px, 2vmin, 24px);
-}
-
-.receipt-viewer-overlay--shipment-figure .receipt-viewer-overlay__image-shell,
-.receipt-viewer-overlay--preorder .receipt-viewer-overlay__image-shell {
-  box-sizing: border-box;
-  padding: clamp(10px, 2.5vmin, 28px);
 }
 
 .receipt-viewer-overlay__image {
@@ -1248,6 +1261,13 @@ button.wip-reset-btn:focus:not(:focus-visible) {
   .reveal-overlay__media-item,
   .receipt-viewer-overlay__controls {
     transition-duration: 1ms;
+  }
+
+  .reveal-overlay--viewer.reveal-overlay--closing .reveal-overlay__frame,
+  .poncho-card-viewer-overlay .drif-effect-card.no-glow .drif-effect-card__rotator,
+  .poncho-card-viewer-overlay.reveal-overlay--closing .drif-effect-card.no-glow .drif-effect-card__rotator {
+    transition-duration: 1ms;
+    transition-delay: 0ms;
   }
 
   .reveal-overlay__shine::before,

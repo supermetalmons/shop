@@ -23,12 +23,17 @@ export type OverlayRect = { left: number; top: number; width: number; height: nu
 
 export type ImageViewerSize = 'receipt' | 'shipment' | 'shipment-figure' | 'preorder';
 
+export type RevealOverlayCloseMode = 'return' | 'fade';
+
 export type RevealOverlayState = {
   id: string;
   dropId: string;
   name: string;
   image?: string;
   originRect: OverlayRect;
+  originViewport?: OverlayRect;
+  originSourceRect?: OverlayRect;
+  sourceElement?: HTMLElement | null;
   targetRect: OverlayRect;
   phase: RevealOverlayPhase;
   frame: number;
@@ -47,7 +52,7 @@ export type RevealOverlayState = {
 };
 
 export type ViewerOverlayInput = Pick<RevealOverlayState,
-  'id' | 'dropId' | 'name' | 'image' | 'originRect' | 'targetRect' |
+  'id' | 'dropId' | 'name' | 'image' | 'originRect' | 'targetRect' | 'sourceElement' |
   'revealedIds' | 'packMediaId' | 'viewerFigureId' | 'imageViewerSize' | 'receiptImages' | 'adminIrlRedeemReceipt'
 > & {
   viewerMode: NonNullable<RevealOverlayState['viewerMode']>;

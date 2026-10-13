@@ -1508,7 +1508,7 @@ export function PonchoCardViewerOverlay({
     <ModalFocusScope
       ariaLabel={ariaLabel}
       suspended={interactionSuspended}
-      className={`reveal-overlay wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${
+      className={`reveal-overlay reveal-overlay--viewer wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${
         active ? ' reveal-overlay--active' : ''
       }${closing ? ' reveal-overlay--closing' : ''}${
         suspended ? ' reveal-overlay--suspended' : ''
@@ -1549,6 +1549,7 @@ export function PonchoCardViewerOverlay({
                   <WipInteractiveCard
                     card={card}
                     interactive={!suspended}
+                    interactionMode={closing ? 'settling' : 'normal'}
                     loadingImageSrc={loadingImageSrc}
                     onActivate={interactionSuspended ? undefined : onDismiss}
                     ariaLabel="Close card viewer"

@@ -60,6 +60,49 @@ test('mouse, touch and pen activate on release exactly once with the release eve
   }
 });
 
+test('a configured tap duration accepts complete taps but rejects held releases for every pointer type', () => {
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    let activations = 0;
+    const input = createMiNoteCardInput(() => { activations += 1; }, { maxTapDurationMs: 350 });
+    for (const duration of [349, 350, 351, 2000]) {
+      const before = activations;
+      input.onPointerDown(pointer({ pointerType, timeStamp: 1000 }));
+      input.onPointerUp(pointer({ pointerType, timeStamp: 1000 + duration }));
+      input.onClick({ detail: 1, preventDefault() {} });
+      assert.equal(activations, before + (duration <= 350 ? 1 : 0), `${pointerType}: ${duration}ms`);
+    }
+    input.onPointerDown(pointer({ pointerType, timeStamp: 4000 }));
+    input.onPointerUp(pointer({ pointerType, timeStamp: 4200 }));
+    assert.equal(activations, 3, pointerType);
+    input.onClick({ detail: 0, preventDefault() {} });
+    assert.equal(activations, 4, pointerType);
+  }
+});
+
+test('a held release finishes the gesture without activating or treating the hold as cancellation', () => {
+  const events: unknown[] = [];
+  const input = createMiNoteCardInput(() => { events.push('activate'); }, {
+    maxTapDurationMs: 350,
+    onStart() { events.push('start'); },
+    onMove() { events.push('move'); },
+    onEnd(_event, { cancelled }) { events.push(['end', cancelled]); },
+  });
+  input.onPointerDown(pointer({ timeStamp: 1000 }));
+  input.onPointerMove(pointer({ timeStamp: 1300, clientX: 102 }));
+  input.onPointerUp(pointer({ timeStamp: 1400, clientX: 103, clientY: 104 }));
+  input.onLostPointerCapture(pointer());
+  input.onClick({ detail: 1, preventDefault() {} });
+  assert.deepEqual(events, ['start', 'move', 'move', ['end', false]]);
+});
+
+test('input without a tap duration limit preserves held activation', () => {
+  let activations = 0;
+  const input = createMiNoteCardInput(() => { activations += 1; });
+  input.onPointerDown(pointer({ timeStamp: 1000 }));
+  input.onPointerUp(pointer({ timeStamp: 3000 }));
+  assert.equal(activations, 1);
+});
+
 test('five pixels remains a tap while larger movement suppresses activation for every pointer type', () => {
   for (const pointerType of ['mouse', 'touch', 'pen']) {
     let activations = 0;

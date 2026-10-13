@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test, { after, afterEach, mock } from 'node:test';
+import test, { after, afterEach, mock, type TestContext } from 'node:test';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import { resolveDropContent } from '../src/lib/dropContent.ts';
 import type { ShopRevealOptions } from '../src/shop/reveal/contracts.ts';
@@ -56,17 +56,138 @@ function openCardViewer(
   viewer: { viewerMode: typeof cardViewers[number]['viewerMode']; dropId: string },
   figureId = 1,
   originRect?: DOMRect,
+  sourceElement?: HTMLElement,
 ) {
   const input = {
     overlayId: 'asset-a', dropId: viewer.dropId, name: 'Asset A', image: 'https://example.com/card.webp',
-    figureId, originRect, clearSelection: true,
+    figureId, originRect, sourceElement, clearSelection: true,
   };
   return viewer.viewerMode === 'poncho-card'
     ? controller.openInteractiveCardViewer(input)
     : controller.openClearCardModelViewer({ ...input, viewerMode: viewer.viewerMode });
 }
 
+function checkViewerDismissal(
+  t: TestContext,
+  open: (controller: ShopRevealController, origin: DOMRect, sourceElement: HTMLElement) => void,
+  changeBeforeDismiss?: 'resize' | 'source-removed',
+) {
+  let nextFrame = 0;
+  const frames = new Map<number, FrameRequestCallback>();
+  const requestFrame = (callback: FrameRequestCallback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  };
+  const cancelFrame = (id: number) => { frames.delete(id); };
+  t.mock.method(globalThis, 'requestAnimationFrame', requestFrame);
+  t.mock.method(globalThis, 'cancelAnimationFrame', cancelFrame);
+  t.mock.method(window, 'requestAnimationFrame', requestFrame);
+  t.mock.method(window, 'cancelAnimationFrame', cancelFrame);
+  const flushFrame = () => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => callback(0));
+  };
+  const { options } = fixture();
+  const inventory: InventoryItem[] = [{ id: 'source', dropId: 'clear_cards', kind: 'dude', name: 'Source card', dudeId: 1 }];
+  options.inventory = inventory;
+  const { result, rerender } = renderHook(useShopReveal, { initialProps: options });
+  const origin = new DOMRect(10, 20, 120, 160);
+  const sourceElement = document.createElement('article');
+  sourceElement.dataset.inventoryId = 'asset-a';
+  sourceElement.getBoundingClientRect = () => origin;
+  document.body.append(sourceElement);
+  t.after(() => sourceElement.remove());
+  act(() => open(result.current, origin, sourceElement));
+  assert.equal(sourceElement.style.visibility, 'hidden');
+  act(flushFrame);
+  act(flushFrame);
+  assert.equal(result.current.revealOverlayActive, true);
+  const overlay = result.current.revealOverlay!;
+  const style = result.current.presentation.revealOverlayStyle;
+  assert.notDeepEqual(overlay.originRect, overlay.targetRect);
+  assert.ok(Math.abs(overlay.originRect.left + overlay.originRect.width / 2 - (origin.left + origin.width / 2)) < 0.000001);
+  assert.ok(Math.abs(overlay.originRect.top + overlay.originRect.height / 2 - (origin.top + origin.height / 2)) < 0.000001);
+  rerender({ ...options, inventory: [] });
+
+  const frame = document.createElement('div');
+  const child = document.createElement('div');
+  frame.append(child);
+  const endTransition = (target: HTMLElement, propertyName: string) => act(() => {
+    result.current.handleRevealOverlayTransitionEnd({
+      target,
+      currentTarget: frame,
+      propertyName,
+    } as Parameters<ShopRevealController['handleRevealOverlayTransitionEnd']>[0]);
+  });
+  endTransition(frame, 'opacity');
+  assert.equal(result.current.revealOverlay, overlay);
+  const initialWidth = window.innerWidth;
+  t.after(() => { window.innerWidth = initialWidth; });
+  act(() => {
+    if (changeBeforeDismiss === 'resize') {
+      window.innerWidth += 120;
+      window.dispatchEvent(new window.Event('resize'));
+    }
+    if (changeBeforeDismiss === 'source-removed') sourceElement.remove();
+    result.current.handleRevealOverlayDismiss();
+  });
+  const closingStyle = changeBeforeDismiss ? {
+    ...style,
+    '--reveal-close-transform': 'none',
+    '--reveal-close-opacity': '0',
+    '--reveal-close-transition': 'transform 220ms ease, opacity 220ms ease',
+  } : style;
+  const closingVisibility = changeBeforeDismiss ? '' : 'hidden';
+  const completionProperty = changeBeforeDismiss ? 'opacity' : 'transform';
+  const ignoredProperty = changeBeforeDismiss ? 'transform' : 'opacity';
+  assert.equal(result.current.revealOverlayClosing, true);
+  assert.equal(sourceElement.style.visibility, closingVisibility);
+  assert.equal(result.current.revealOverlay, overlay);
+  assert.deepEqual(result.current.presentation.revealOverlayStyle, closingStyle);
+  assert.equal(result.current.inventoryView, inventory);
+
+  if (changeBeforeDismiss) {
+    window.innerWidth = initialWidth;
+    if (!sourceElement.isConnected) document.body.append(sourceElement);
+    rerender({ ...options, inventory: [] });
+    assert.equal(sourceElement.style.visibility, closingVisibility);
+    assert.deepEqual(result.current.presentation.revealOverlayStyle, closingStyle);
+  }
+
+  for (const [target, propertyName] of [[child, completionProperty], [frame, ignoredProperty]] as const) {
+    endTransition(target, propertyName);
+    assert.equal(result.current.revealOverlay, overlay);
+    assert.equal(result.current.revealOverlayClosing, true);
+    assert.deepEqual(result.current.presentation.revealOverlayStyle, closingStyle);
+    assert.equal(result.current.inventoryView, inventory);
+    assert.equal(sourceElement.style.visibility, closingVisibility);
+  }
+  endTransition(frame, completionProperty);
+  assert.equal(result.current.revealOverlay, null);
+  assert.equal(result.current.revealOverlayClosing, false);
+  assert.equal(result.current.revealOverlayActive, false);
+  assert.deepEqual(result.current.inventoryView, []);
+  assert.equal(sourceElement.style.visibility, '');
+}
+
+test('a card fades in place when resized immediately before dismissal', (t) => {
+  checkViewerDismissal(t, (controller, origin, sourceElement) => {
+    assert.equal(openCardViewer(controller, cardViewers[0], 1, origin, sourceElement), true);
+  }, 'resize');
+});
+
 for (const viewer of cardViewers) {
+  test(`${viewer.dropId} ${viewer.viewerMode} keeps its source geometry until the frame finishes closing`, (t) => {
+    checkViewerDismissal(t, (controller) => {
+      controller.viewItem({
+        id: 'asset-a', dropId: viewer.dropId, name: 'Asset A',
+        kind: viewer.viewerMode === 'clear-pack' ? 'box' : 'dude', dudeId: 1,
+      });
+      assert.equal(controller.getCurrentOverlay()?.viewerMode, viewer.viewerMode);
+    });
+  });
+
   test(`${viewer.viewerMode} keeps its payload, default origin, and selection behavior`, () => {
     const { options, calls } = fixture();
     const { result } = renderHook(useShopReveal, { initialProps: options });
@@ -125,6 +246,12 @@ test('invalid card identities and mismatched renderers leave selection and prese
 });
 
 for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
+  test(`${dropId} pack preview keeps its source geometry until the frame finishes closing`, (t) => {
+    checkViewerDismissal(t, (controller) => {
+      controller.viewItem({ id: 'asset-a', dropId, name: 'Pack 704', kind: 'box', boxId: '704' });
+    });
+  });
+
   test(`${dropId} updates an unresolved pack preview when inventory learns its ID`, () => {
     const { options } = fixture();
     const pack: InventoryItem = { id: 'pack', dropId, name: 'Pack', kind: 'box' };
@@ -162,6 +289,34 @@ for (const dropId of ['mi_note_cards', 'mi_note_cards_devnet']) {
 const receipt: InventoryItem = {
   id: 'receipt-a', dropId: 'clear_cards', kind: 'certificate', name: 'Receipt A', image: 'https://example.com/receipt.webp',
 };
+
+test('an image fades in place when resized immediately before dismissal', (t) => {
+  checkViewerDismissal(t, (controller, origin, sourceElement) => {
+    assert.equal(controller.openImageViewer(receipt, origin, { sourceElement }), true);
+  }, 'resize');
+});
+
+for (const size of ['receipt', 'shipment', 'shipment-figure', 'preorder'] as const) {
+  test(`${size} image preview keeps its source geometry until the frame finishes closing`, (t) => {
+    checkViewerDismissal(t, (controller, origin, sourceElement) => {
+      assert.equal(controller.openImageViewer(receipt, origin, { size, sourceElement }), true);
+    });
+  });
+}
+
+test('receipt viewing keeps its grid source hidden until dismissal finishes', (t) => {
+  checkViewerDismissal(t, (controller, origin, sourceElement) => {
+    sourceElement.dataset.inventoryId = receipt.id;
+    assert.equal(controller.openReceiptImageViewer(receipt, origin), true);
+  });
+});
+
+test('a receipt fades in place when its source is removed before dismissal', (t) => {
+  checkViewerDismissal(t, (controller, origin, sourceElement) => {
+    sourceElement.dataset.inventoryId = receipt.id;
+    assert.equal(controller.openReceiptImageViewer(receipt, origin), true);
+  }, 'source-removed');
+});
 
 test('grouped receipts preserve placeholders, empty snapshots, and admin action eligibility', () => {
   const { options, calls } = fixture();

@@ -248,7 +248,7 @@ export default function ClearCardRevealOverlay({
       }
       suspended={closing || suspended}
       focusKey={`${viewerStatus}:${cardLoadStatus}:${displayStage}:${fallbackVisible}`}
-      className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
+      className={`reveal-overlay clear-card-reveal-overlay reveal-overlay--${phase}${viewerOnly ? ' reveal-overlay--viewer' : ''}${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''}`}
       style={overlayStyle}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}

@@ -70,6 +70,7 @@ function pointer(target: Element, type: string, options: Partial<PointerEvent> =
     pointerId: { value: options.pointerId ?? 1 },
     pointerType: { value: options.pointerType ?? 'mouse' },
     isPrimary: { value: options.isPrimary ?? true },
+    timeStamp: { value: options.timeStamp ?? time },
   });
   fireEvent(target, event);
   return event;
@@ -148,6 +149,25 @@ for (const dropId of drops) {
       fireEvent.click(viewer.button, { detail: 2 });
       assert.equal(viewer.dismissals(), 1);
     });
+
+    test(`${dropId} preserves a ${pointerType} corner hold and accepts the next complete tap`, () => {
+      const viewer = mountViewer(dropId);
+      fireEvent.load(viewer.image);
+      const corner = { pointerType, clientX: 90, clientY: 10 };
+      pointer(viewer.button, 'pointerdown', { ...corner, timeStamp: 1000 });
+      assert.equal(viewer.dismissals(), 0);
+      pointer(viewer.button, 'pointerup', { ...corner, timeStamp: 3000 });
+      fireEvent.click(viewer.button, { detail: 1 });
+      fireEvent.click(viewer.dialog, { detail: 1 });
+      assert.equal(viewer.dismissals(), 0);
+
+      pointer(viewer.button, 'pointerdown', { ...corner, timeStamp: 4000 });
+      pointer(viewer.button, 'pointerup', { ...corner, timeStamp: 4350 });
+      fireEvent.click(viewer.button, { detail: 1 });
+      assert.equal(viewer.dismissals(), 1);
+      fireEvent.click(viewer.button, { detail: 0 });
+      assert.equal(viewer.dismissals(), 2);
+    });
   }
 
   test(`${dropId} preview is accessible and dismissible before the clean image loads`, (t) => {
@@ -211,6 +231,21 @@ test('dragging still tilts the card without dismissing it', () => {
   assert.notEqual(viewer.cardElement.style.getPropertyValue('--rotate-x'), '0deg');
   assert.notEqual(viewer.cardElement.style.getPropertyValue('--rotate-y'), '0deg');
   pointer(viewer.button, 'pointerup', { clientX: 90, clientY: 10 });
+  fireEvent.click(viewer.button, { detail: 1 });
+  assert.equal(viewer.dismissals(), 0);
+});
+
+test('a stationary touch hold at a corner keeps the card tilt interaction without dismissing on release', () => {
+  const viewer = mountViewer();
+  fireEvent.load(viewer.image);
+  runTimersAndFrames();
+  const corner = { pointerType: 'touch', clientX: 90, clientY: 10 };
+  pointer(viewer.button, 'pointerover', { ...corner, timeStamp: 1000 });
+  pointer(viewer.button, 'pointerdown', { ...corner, timeStamp: 1000 });
+  runTimersAndFrames();
+  assert.notEqual(viewer.cardElement.style.getPropertyValue('--rotate-x'), '0deg');
+  assert.notEqual(viewer.cardElement.style.getPropertyValue('--rotate-y'), '0deg');
+  pointer(viewer.button, 'pointerup', { ...corner, timeStamp: 3000 });
   fireEvent.click(viewer.button, { detail: 1 });
   assert.equal(viewer.dismissals(), 0);
 });

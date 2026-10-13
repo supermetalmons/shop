@@ -242,6 +242,7 @@ export default function DrifEffectCard({
     const state = activationStateRef.current;
     if (state.enabled && visibleRef.current) state.onActivate?.();
   }, {
+    maxTapDurationMs: 350,
     onStart: () => activationStateRef.current.enabled && visibleRef.current,
   }), []);
 

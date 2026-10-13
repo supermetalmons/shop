@@ -865,9 +865,11 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     assert.deepEqual(calls[0], [{
       id: `${preorderId}:1`, dropId: preorderId, kind: 'preorder', preorderId: 1,
       name: 'Preorder #1', image: 'https://cdn.lil.org/nft/mi_note_cards/preorder/v1/1.webp',
-    }, rect, 1082 / 1600]);
+    }, rect, 1082 / 1600, one]);
     opened = true;
     fireEvent.click(view.getByRole('button', { name: 'View' }));
+    assert.equal(calls[1][3], one);
+    assert.equal(one.isConnected, true);
     assert.equal(document.querySelector('.selection-panel'), null);
     assert.equal(one.getAttribute('aria-pressed'), 'false');
     fireEvent.click(one);

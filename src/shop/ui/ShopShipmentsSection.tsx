@@ -96,6 +96,7 @@ export function ShopShipmentsSection({
                     aspectRatio: previewImage.aspectRatio,
                     size: 'shipment',
                     unavailableMessage: 'Shipment image unavailable',
+                    sourceElement: element,
                   },
                 );
               };
@@ -157,6 +158,7 @@ export function ShopShipmentsSection({
                   figureId: item.refId,
                   viewerMode: 'clear-card',
                   originRect,
+                  sourceElement: element,
                 });
                 return;
               }
@@ -168,6 +170,7 @@ export function ShopShipmentsSection({
                   image: renderedPreviewImage.src,
                   figureId: item.refId,
                   originRect,
+                  sourceElement: element,
                 });
                 return;
               }
@@ -178,6 +181,7 @@ export function ShopShipmentsSection({
                   aspectRatio: renderedPreviewImage.aspectRatio,
                   size: 'shipment-figure',
                   unavailableMessage: 'Shipment image unavailable',
+                  sourceElement: element,
                 },
               );
             };

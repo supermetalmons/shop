@@ -419,8 +419,8 @@ function App({ route, suspended = false }: AppProps) {
                 }}
                 onCancelPendingSignIn={pendingAction?.key === 'preorder' && awaitingActionSignIn ? continuation.cancel : undefined}
                 showToast={statusUiSuspended ? undefined : showToast}
-                onViewPreordered={(item, originRect, aspectRatio) => reveal.openImageViewer(item, originRect, {
-                  size: 'preorder', aspectRatio, unavailableMessage: 'Preorder image unavailable',
+                onViewPreordered={(item, originRect, aspectRatio, sourceElement) => reveal.openImageViewer(item, originRect, {
+                  size: 'preorder', aspectRatio, sourceElement, unavailableMessage: 'Preorder image unavailable',
                 })}
               />
             </Suspense>
