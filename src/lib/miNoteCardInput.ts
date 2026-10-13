@@ -1,4 +1,6 @@
 export type PackPointerEvent = Pick<PointerEvent, 'pointerId' | 'pointerType' | 'isPrimary' | 'button' | 'clientX' | 'clientY' | 'timeStamp' | 'preventDefault'>;
+export const VIEWER_TAP_MAX_DURATION_MS = 350;
+export const VIEWER_TAP_MAX_MOVEMENT_PX = 4;
 type PackClickEvent = Pick<MouseEvent, 'detail' | 'preventDefault'>;
 
 type PointerMovement = {
@@ -11,6 +13,7 @@ type PointerMovement = {
 
 type InputOptions = {
   maxTapDurationMs?: number;
+  maxTapMovementPx?: number;
   onStart?: (event: PackPointerEvent) => boolean | void;
   onMove?: (event: PackPointerEvent, movement: PointerMovement) => void;
   onEnd?: (event: PackPointerEvent, movement: PointerMovement & { cancelled: boolean }) => void;
@@ -23,7 +26,7 @@ export function createMiNoteCardInput(activate: (event?: PackPointerEvent) => vo
     if (!pointer || pointer.id !== event.pointerId) return null;
     const deltaX = event.clientX - pointer.startX;
     const deltaY = event.clientY - pointer.startY;
-    pointer.moved ||= Math.hypot(deltaX, deltaY) > 5;
+    pointer.moved ||= deltaX * deltaX + deltaY * deltaY > (options.maxTapMovementPx ?? 5) ** 2;
     pointer.lastEvent = event;
     return { startX: pointer.startX, startY: pointer.startY, deltaX, deltaY, moved: pointer.moved };
   }

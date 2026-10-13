@@ -34,6 +34,7 @@ import {
 import type { PonchoDrifellaRevealRequestStatus } from '../lib/ponchoDrifellaReveal';
 import { useDarkColorScheme } from '../hooks/useDarkColorScheme';
 import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
+import { useViewerDismissInput } from '../hooks/useViewerDismissInput';
 import { resolveClearCardRevealRenderQuality } from '../lib/clearCardCanvas';
 import { ModalFocusScope } from './ModalFocusScope';
 
@@ -146,6 +147,11 @@ export default function ClearCardRevealOverlay({
     viewerStatus === 'error' || cardLoadStatus === 'error',
   );
   const freeMovementEnabled = isClearCardFreeMovementEnabled(viewerOnly, displayStage);
+  const dismissInput = useViewerDismissInput({
+    enabled: viewerOnly && !closing && !suspended,
+    onDismiss,
+    resetKey: `${resetKey}:${viewerMode}`,
+  });
 
   useEffect(() => {
     requestGenerationRef.current += 1;
@@ -239,6 +245,7 @@ export default function ClearCardRevealOverlay({
 
   return (
     <ModalFocusScope
+      {...(viewerOnly ? dismissInput : {})}
       ariaLabel={
         viewerOnly
           ? `${boxName || (viewerMode === 'pack' ? 'Clear Cards pack' : 'Clear card')} 3D viewer`
@@ -252,12 +259,12 @@ export default function ClearCardRevealOverlay({
       style={overlayStyle}
       onContextMenu={(event) => event.preventDefault()}
       onDragStart={(event) => event.preventDefault()}
-      onClick={handleBackdropClick}
+      onClick={viewerOnly ? undefined : handleBackdropClick}
     >
       <div className="reveal-overlay__backdrop" />
       <div
         className="reveal-overlay__frame clear-card-reveal-overlay__frame"
-        onClick={handleFrameClick}
+        onClick={viewerOnly ? undefined : handleFrameClick}
         onTransitionEnd={onTransitionEnd}
       >
         <div

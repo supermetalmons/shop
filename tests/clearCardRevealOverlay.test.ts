@@ -13,6 +13,9 @@ type ViewerProps = ComponentProps<typeof ClearCardThreeViewer>;
 type OverlayProps = ComponentProps<typeof ClearCardRevealOverlay>;
 type ViewerInstance = { props: ViewerProps; mounted: boolean };
 const instances: ViewerInstance[] = [];
+let objectHit = false;
+let pointerReleases = 0;
+let cardRetries = 0;
 let nextFrameId = 0;
 let frames = new Map<number, FrameRequestCallback>();
 window.requestAnimationFrame = callback => {
@@ -30,8 +33,8 @@ const FakeViewer = forwardRef<ClearCardThreeViewerHandle, ViewerProps>((props, r
   useImperativeHandle(ref, () => ({
     reset() {},
     hit() {},
-    isClientPointOnObject() { return false; },
-    retryCardModel() {},
+    isClientPointOnObject() { return objectHit; },
+    retryCardModel() { cardRetries += 1; },
     async captureSnapshot() { throw new Error('No snapshot'); },
   }), []);
   useLayoutEffect(() => {
@@ -44,6 +47,7 @@ const FakeViewer = forwardRef<ClearCardThreeViewerHandle, ViewerProps>((props, r
     'aria-hidden': !props.ready,
     tabIndex: (props.keyboardActivationEnabled || props.keyboardRotationEnabled) && props.ready && props.interactionEnabled
       ? 0 : undefined,
+    onPointerUp: () => { pointerReleases += 1; },
   });
 });
 
@@ -59,7 +63,13 @@ const imports = registerHooks({
 });
 const { default: Overlay } = await import('../src/components/ClearCardRevealOverlay.tsx');
 
-beforeEach(() => { instances.length = 0; frames.clear(); });
+beforeEach(() => {
+  instances.length = 0;
+  frames.clear();
+  objectHit = false;
+  pointerReleases = 0;
+  cardRetries = 0;
+});
 afterEach(() => {
   cleanup();
   assert.ok(instances.every(instance => !instance.mounted));
@@ -79,6 +89,30 @@ function advanceFrame() {
     frames = new Map();
     pending.forEach(callback => callback(0));
   });
+}
+
+function presentModel() {
+  act(() => viewer().props.onStatusChange('ready'));
+  act(() => viewer().props.onFrameRendered?.());
+  advanceFrame();
+  advanceFrame();
+}
+
+function pointer(target: Element, type: string, options: Partial<PointerEvent> = {}) {
+  const event = new dom.window.MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: options.button ?? 0,
+    clientX: options.clientX ?? 50,
+    clientY: options.clientY ?? 50,
+  });
+  Object.defineProperties(event, {
+    pointerId: { value: options.pointerId ?? 1 },
+    pointerType: { value: options.pointerType ?? 'touch' },
+    isPrimary: { value: options.isPrimary ?? true },
+    timeStamp: { value: options.timeStamp ?? 1000 },
+  });
+  fireEvent(target, event);
 }
 
 async function mount(overrides: Partial<OverlayProps> = {}) {
@@ -191,19 +225,146 @@ test('restored readiness rejects an old frame callback even when the viewer iden
   assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
 });
 
-test('the visible fallback protects clicks while the loaded model awaits presentation', async () => {
+test('unpacking keeps fallback and revealed model clicks protected', async () => {
   const dismissed: boolean[] = [];
-  const h = await mount({ viewerMode: 'pack', onDismiss: () => dismissed.push(true) });
+  const h = await mount({ onDismiss: () => dismissed.push(true) });
   const fallback = h.view.container.querySelector('img')!;
   Object.defineProperties(fallback, { naturalWidth: { value: 100 }, naturalHeight: { value: 100 } });
   fallback.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 } as DOMRect);
   const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
   act(() => viewer().props.onStatusChange('ready'));
+  act(() => viewer().props.onStageChange?.('revealed'));
   fireEvent.click(frame, { clientX: 50, clientY: 50 });
   assert.deepEqual(dismissed, []);
   fireEvent.click(frame, { clientX: 150, clientY: 150 });
   assert.deepEqual(dismissed, [true]);
+  presentModel();
+  objectHit = true;
+  const canvas = h.view.container.querySelector('canvas')!;
+  pointer(canvas, 'pointerdown');
+  pointer(canvas, 'pointerup', { timeStamp: 1200 });
+  fireEvent.click(canvas, { detail: 1 });
+  assert.deepEqual(dismissed, [true]);
 });
+
+for (const viewerMode of ['pack', 'card'] as const) {
+  for (const pointerType of ['mouse', 'touch', 'pen']) {
+    test(`${viewerMode} preview dismisses once on complete ${pointerType} taps before and after model presentation`, async () => {
+      let dismissals = 0;
+      const h = await mount({ viewerMode, cardId: viewerMode === 'card' ? 1 : undefined, onDismiss: () => { dismissals += 1; } });
+      const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
+      const dialog = h.view.getByRole('dialog');
+      pointer(frame, 'pointerdown', { pointerType });
+      assert.equal(dismissals, 0);
+      pointer(frame, 'pointerup', { pointerType, timeStamp: 1350, clientX: 54 });
+      assert.equal(dismissals, 1);
+      fireEvent.click(frame, { detail: 1 });
+      fireEvent.click(dialog, { detail: 1 });
+      assert.equal(dismissals, 1);
+
+      pointer(frame, 'pointerdown', { pointerType });
+      pointer(frame, 'pointerup', { pointerType, timeStamp: 3000 });
+      fireEvent.click(frame, { detail: 1 });
+      fireEvent.click(dialog, { detail: 1 });
+      assert.equal(dismissals, 1);
+
+      presentModel();
+      objectHit = true;
+      const canvas = h.view.container.querySelector('canvas')!;
+      assert.equal(viewer().props.pointerActivationEnabled, false);
+      pointer(canvas, 'pointerdown', { pointerType });
+      assert.equal(dismissals, 1);
+      pointer(canvas, 'pointerup', { pointerType, timeStamp: 1200 });
+      assert.equal(dismissals, 2);
+      assert.equal(pointerReleases, 1, 'The model must still receive release to finish its rotation gesture');
+      fireEvent.click(canvas, { detail: 1 });
+      fireEvent.click(dialog, { detail: 1 });
+      assert.equal(dismissals, 2);
+
+      for (const gesture of ['hold', 'drag-return', 'release-movement', 'diagonal-movement', 'pointercancel', 'lostpointercapture', 'blur']) {
+        pointer(canvas, 'pointerdown', { pointerType });
+        if (gesture === 'drag-return') {
+          pointer(canvas, 'pointermove', { pointerType, clientX: 54.5 });
+          pointer(canvas, 'pointermove', { pointerType });
+        } else if (gesture === 'blur') {
+          fireEvent(window, new dom.window.Event('blur'));
+        } else if (gesture === 'pointercancel' || gesture === 'lostpointercapture') {
+          pointer(canvas, gesture, { pointerType });
+        }
+        pointer(canvas, 'pointerup', {
+          pointerType,
+          timeStamp: gesture === 'hold' ? 1351 : 1200,
+          clientX: gesture === 'release-movement' ? 54.5 : gesture === 'diagonal-movement' ? 53 : 50,
+          clientY: gesture === 'diagonal-movement' ? 54 : 50,
+        });
+        fireEvent.click(canvas, { detail: 1 });
+        fireEvent.click(dialog, { detail: 1 });
+        assert.equal(dismissals, 2, gesture);
+      }
+      pointer(canvas, 'pointerdown', { pointerType });
+      pointer(canvas, 'pointerup', { pointerType, timeStamp: 1200 });
+      assert.equal(dismissals, 3, 'The next complete tap still dismisses');
+    });
+  }
+
+  test(`${viewerMode} preview preserves hold protection when release is retargeted to the backdrop`, async () => {
+    let dismissals = 0;
+    const h = await mount({ viewerMode, onDismiss: () => { dismissals += 1; } });
+    const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
+    const backdrop = h.view.container.querySelector('.reveal-overlay__backdrop')!;
+    pointer(frame, 'pointerdown');
+    presentModel();
+    pointer(backdrop, 'pointerup', { timeStamp: 3000 });
+    fireEvent.click(h.view.getByRole('dialog'), { detail: 1 });
+    assert.equal(dismissals, 0);
+    pointer(backdrop, 'pointerdown');
+    pointer(backdrop, 'pointerup', { timeStamp: 1200 });
+    fireEvent.click(backdrop, { detail: 1 });
+    assert.equal(dismissals, 1);
+  });
+}
+
+test('preview retry controls remain usable without dismissing the viewer', async () => {
+  let dismissals = 0;
+  const h = await mount({ viewerMode: 'card', cardId: 1, onDismiss: () => { dismissals += 1; } });
+  act(() => viewer().props.onStatusChange('error'));
+  const oldViewer = viewer();
+  const retry = h.view.getByRole('button', { name: 'Retry 3D' });
+  pointer(retry, 'pointerdown');
+  pointer(retry, 'pointerup', { timeStamp: 1200 });
+  fireEvent.click(retry, { detail: 1 });
+  await waitFor(() => assert.notEqual(viewer(), oldViewer));
+  assert.equal(dismissals, 0);
+
+  act(() => viewer().props.onCardModelLoadStatusChange?.('error'));
+  const retryCard = h.view.getByRole('button', { name: 'Retry card' });
+  pointer(retryCard, 'pointerdown');
+  pointer(h.view.getByRole('dialog'), 'pointerup', { timeStamp: 1200 });
+  fireEvent.click(h.view.getByRole('dialog'), { detail: 1 });
+  assert.equal(dismissals, 0);
+  pointer(retryCard, 'pointerdown');
+  pointer(retryCard, 'pointerup', { timeStamp: 1200 });
+  fireEvent.click(retryCard, { detail: 1 });
+  assert.equal(cardRetries, 1);
+  assert.equal(dismissals, 0);
+});
+
+for (const flag of ['closing', 'suspended'] as const) {
+  test(`${flag} cancels an in-flight preview tap`, async () => {
+    let dismissals = 0;
+    const h = await mount({ viewerMode: 'pack', onDismiss: () => { dismissals += 1; } });
+    const frame = h.view.container.querySelector('.reveal-overlay__frame')!;
+    pointer(frame, 'pointerdown');
+    h.rerender({ [flag]: true });
+    h.rerender({ [flag]: false });
+    pointer(frame, 'pointerup', { timeStamp: 1200 });
+    fireEvent.click(frame, { detail: 1 });
+    assert.equal(dismissals, 0);
+    pointer(frame, 'pointerdown');
+    pointer(frame, 'pointerup', { timeStamp: 1200 });
+    assert.equal(dismissals, 1);
+  });
+}
 
 test('unmount cancels pending fallback release', async () => {
   const h = await mount();

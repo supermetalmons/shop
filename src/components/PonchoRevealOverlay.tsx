@@ -43,6 +43,7 @@ import {
 } from '../lib/mobileInteractionGuards';
 import { ModalFocusScope } from './ModalFocusScope';
 import WipInteractiveCard from './WipInteractiveCard';
+import { useViewerDismissInput } from '../hooks/useViewerDismissInput';
 
 export type PonchoRevealDismissReadySource = 'card' | 'row';
 
@@ -1497,8 +1498,12 @@ export function PonchoCardViewerOverlay({
   onTransitionEnd,
 }: PonchoCardViewerOverlayProps) {
   const interactionSuspended = closing || suspended;
-  const cardPointerOriginsRef = useRef(new Map<number, boolean>());
-  const cardClickOriginRef = useRef(false);
+  const dismissInput = useViewerDismissInput({
+    enabled: !interactionSuspended,
+    onDismiss,
+    resetKey: card ? drifCardIdentityKey(card) : undefined,
+    ignoreSelector: '.wip-reveal__card-item',
+  });
 
   const stopOverlayDismiss = (evt: SyntheticEvent) => {
     evt.stopPropagation();
@@ -1506,6 +1511,7 @@ export function PonchoCardViewerOverlay({
 
   return (
     <ModalFocusScope
+      {...dismissInput}
       ariaLabel={ariaLabel}
       suspended={interactionSuspended}
       className={`reveal-overlay reveal-overlay--viewer wip-overlay poncho-card-viewer-overlay reveal-overlay--revealed${
@@ -1514,25 +1520,6 @@ export function PonchoCardViewerOverlay({
         suspended ? ' reveal-overlay--suspended' : ''
       }`}
       style={overlayStyle}
-      onPointerDownCapture={(event) => {
-        if (!event.isPrimary || event.button !== 0) return;
-        cardPointerOriginsRef.current.set(
-          event.pointerId,
-          event.target instanceof Element && Boolean(event.target.closest('.wip-reveal__card-item')),
-        );
-      }}
-      onPointerUpCapture={(event) => {
-        if (!event.isPrimary || event.button !== 0) return;
-        cardClickOriginRef.current = cardPointerOriginsRef.current.get(event.pointerId) ?? false;
-        cardPointerOriginsRef.current.delete(event.pointerId);
-      }}
-      onPointerCancelCapture={(event) => {
-        cardPointerOriginsRef.current.delete(event.pointerId);
-      }}
-      onClick={(event) => {
-        if (event.detail > 0 && cardClickOriginRef.current) return;
-        if (!interactionSuspended) onDismiss?.();
-      }}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >

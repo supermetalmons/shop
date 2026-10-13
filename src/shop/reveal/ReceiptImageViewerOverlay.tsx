@@ -4,6 +4,7 @@ import {
 import { FaBoxOpen } from 'react-icons/fa6';
 import { MediaWithFallback } from '../../components/MediaWithFallback';
 import { useModalFocusScope } from '../../components/ModalFocusScope';
+import { useViewerDismissInput } from '../../hooks/useViewerDismissInput';
 import { ReceiptImageViewerOverlayProps, ReceiptViewerImageShellStyle } from './types';
 
 export function ReceiptImageViewerOverlay({
@@ -23,6 +24,7 @@ export function ReceiptImageViewerOverlay({
   onTransitionEnd,
 }: ReceiptImageViewerOverlayProps) {
   const interactionSuspended = closing || suspended;
+  const dismissInput = useViewerDismissInput({ enabled: !interactionSuspended, onDismiss, resetKey: imageSrc });
   const receiptImages = images?.length ? images : [{ key: 'receipt-image', name: alt, image: imageSrc }];
   const multiReceiptClass = receiptImages.length > 1 ? ' receipt-viewer-overlay__image-shell--multi' : '';
   const imageShellStyle: ReceiptViewerImageShellStyle | undefined =
@@ -38,6 +40,7 @@ export function ReceiptImageViewerOverlay({
 
   return (
     <div
+      {...dismissInput}
       ref={dialogRef}
       className={`reveal-overlay reveal-overlay--viewer receipt-viewer-overlay receipt-viewer-overlay--${viewerSize} reveal-overlay--revealed${active ? ' reveal-overlay--active' : ''}${closing ? ' reveal-overlay--closing' : ''}${suspended ? ' reveal-overlay--suspended' : ''
         }`}
@@ -48,9 +51,6 @@ export function ReceiptImageViewerOverlay({
       inert={suspended || undefined}
       tabIndex={-1}
       style={overlayStyle}
-      onClick={() => {
-        if (!interactionSuspended) onDismiss?.();
-      }}
       onContextMenu={(evt) => evt.preventDefault()}
       onDragStart={(evt) => evt.preventDefault()}
     >
@@ -78,6 +78,7 @@ export function ReceiptImageViewerOverlay({
       {explorerHref || transfer || adminIrlRedeem ? (
         <div
           className="receipt-viewer-overlay__controls"
+          data-viewer-dismiss-ignore
           inert={interactionSuspended || undefined}
           onClick={(evt) => evt.stopPropagation()}
         >

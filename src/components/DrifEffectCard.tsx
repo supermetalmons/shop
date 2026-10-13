@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
-import { createMiNoteCardInput } from '../lib/miNoteCardInput';
+import { createMiNoteCardInput, VIEWER_TAP_MAX_DURATION_MS, VIEWER_TAP_MAX_MOVEMENT_PX } from '../lib/miNoteCardInput';
 import {
   DRIF_GRAIN_URL,
   DRIF_GLITTER_URL,
@@ -242,7 +242,8 @@ export default function DrifEffectCard({
     const state = activationStateRef.current;
     if (state.enabled && visibleRef.current) state.onActivate?.();
   }, {
-    maxTapDurationMs: 350,
+    maxTapDurationMs: VIEWER_TAP_MAX_DURATION_MS,
+    maxTapMovementPx: VIEWER_TAP_MAX_MOVEMENT_PX,
     onStart: () => activationStateRef.current.enabled && visibleRef.current,
   }), []);
 

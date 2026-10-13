@@ -123,3 +123,27 @@ test('the preorder image overlay retains failure fallback and click dismissal wi
   fireEvent.click(view.getByRole('dialog'));
   assert.equal(dismissed, 1);
 });
+
+test('image previews preserve held presses and dismiss once on a subsequent tap', () => {
+  let dismissed = 0;
+  const view = render(createElement(ReceiptImageViewerOverlay, {
+    dropId: item.dropId, active: true, closing: false, imageSrc: item.image, alt: item.name,
+    onDismiss: () => { dismissed += 1; },
+  }));
+  const image = view.getByRole('img', { name: item.name });
+  const pointer = (type: string, timeStamp: number) => {
+    const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: 50, clientY: 50 });
+    Object.defineProperties(event, {
+      pointerId: { value: 1 }, pointerType: { value: 'touch' }, isPrimary: { value: true }, timeStamp: { value: timeStamp },
+    });
+    fireEvent(image, event);
+  };
+  pointer('pointerdown', 1000);
+  pointer('pointerup', 3000);
+  fireEvent.click(image, { detail: 1 });
+  assert.equal(dismissed, 0);
+  pointer('pointerdown', 4000);
+  pointer('pointerup', 4100);
+  fireEvent.click(image, { detail: 1 });
+  assert.equal(dismissed, 1);
+});

@@ -55,6 +55,7 @@ import {
 } from './lib/clearCardModelLoadResources';
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 import { releaseObjectGeometryCpuBuffersAfterUpload } from './lib/threeGpuOnlyGeometry';
+import { VIEWER_TAP_MAX_MOVEMENT_PX } from './lib/miNoteCardInput';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -74,7 +75,7 @@ const SPRING_DAMPING = 11;
 const SPRING_EPSILON = 0.0001;
 const UNRESTRICTED_ROTATION_SPEED = Math.PI / 300;
 const KEYBOARD_ROTATION_STEP = THREE.MathUtils.degToRad(12);
-const UNRESTRICTED_DRAG_THRESHOLD_SQ = 16;
+const UNRESTRICTED_DRAG_THRESHOLD_SQ = VIEWER_TAP_MAX_MOVEMENT_PX ** 2;
 const MAX_VERTICAL_ORBIT = THREE.MathUtils.degToRad(45);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 

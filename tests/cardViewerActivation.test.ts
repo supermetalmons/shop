@@ -200,20 +200,20 @@ for (const dropId of drops) {
 }
 
 for (const pointerType of pointerTypes) {
-  test(`${pointerType} taps allow five pixels but reject longer and out-and-back drags`, () => {
+  test(`${pointerType} taps allow four pixels but reject longer and out-and-back drags`, () => {
     const viewer = mountViewer();
     fireEvent.load(viewer.image);
     pointer(viewer.button, 'pointerdown', { pointerType });
-    pointer(viewer.button, 'pointerup', { pointerType, clientX: 53, clientY: 54 });
+    pointer(viewer.button, 'pointerup', { pointerType, clientX: 54 });
     assert.equal(viewer.dismissals(), 1);
 
     pointer(viewer.button, 'pointerdown', { pointerType });
-    pointer(viewer.button, 'pointerup', { pointerType, clientX: 54, clientY: 54 });
+    pointer(viewer.button, 'pointerup', { pointerType, clientX: 53, clientY: 54 });
     fireEvent.click(viewer.button, { detail: 1 });
     assert.equal(viewer.dismissals(), 1);
 
     pointer(viewer.button, 'pointerdown', { pointerType });
-    pointer(viewer.button, 'pointermove', { pointerType, clientX: 56 });
+    pointer(viewer.button, 'pointermove', { pointerType, clientX: 54.5 });
     pointer(viewer.button, 'pointermove', { pointerType });
     pointer(viewer.button, 'pointerup', { pointerType });
     fireEvent.click(viewer.button, { detail: 1 });
@@ -277,7 +277,7 @@ for (const mouseStartsOnCard of [false, true]) {
       pointer(viewer.button, 'pointermove', { clientX: 150 });
       pointer(viewer.button, 'pointerout', { clientX: 150 });
     }
-    pointer(viewer.dialog, 'pointerup', { pointerId: 1, pointerType: 'mouse', clientX: 150 });
+    pointer(viewer.dialog, 'pointerup', { pointerId: 1, pointerType: 'mouse', clientX: mouseStartsOnCard ? 150 : 50 });
     fireEvent.click(viewer.dialog, { detail: 1 });
     assert.equal(viewer.dismissals(), mouseStartsOnCard ? 0 : 1);
 

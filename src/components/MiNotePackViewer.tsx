@@ -49,7 +49,7 @@ type MiNotePackViewerProps = {
   onFrameRendered?: () => void;
   onError: (error: Error) => void;
   onEvent: (event: MiNoteRevealEvent) => void;
-  onBackgroundTap: () => void;
+  onBackgroundTap?: () => void;
   controlsRef: RefObject<MiNotePackControls | null>;
 };
 
@@ -447,7 +447,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
         return;
       }
       if (!tapHit) {
-        currentProps.current.onBackgroundTap();
+        currentProps.current.onBackgroundTap?.();
         return;
       }
       const index = tapHit.object.userData.card;

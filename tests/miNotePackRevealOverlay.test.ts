@@ -348,6 +348,37 @@ test('closed-pack previews rotate but never request cards, peel the sticker, or 
   assert.deepEqual(h.dismissed, [true]);
 });
 
+test('pack preview taps dismiss once while holds and rotation controls keep viewing', async () => {
+  const h = await mount({ viewerOnly: true });
+  ready();
+  const renderer = h.view.getByTestId('mi-note-viewer');
+  assert.equal(viewer().props.onBackgroundTap, undefined);
+  let releases = 0;
+  renderer.addEventListener('pointerup', () => { releases += 1; });
+  const pointer = (target: Element, type: string, timeStamp: number) => {
+    const event = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: 50, clientY: 50 });
+    Object.defineProperties(event, {
+      pointerId: { value: 1 }, pointerType: { value: 'touch' }, isPrimary: { value: true }, timeStamp: { value: timeStamp },
+    });
+    fireEvent(target, event);
+  };
+  pointer(renderer, 'pointerdown', 1000);
+  pointer(renderer, 'pointerup', 3000);
+  fireEvent.click(renderer, { detail: 1 });
+  assert.deepEqual(h.dismissed, []);
+  pointer(renderer, 'pointerdown', 4000);
+  pointer(renderer, 'pointerup', 4100);
+  fireEvent.click(renderer, { detail: 1 });
+  assert.deepEqual(h.dismissed, [true]);
+  assert.equal(releases, 2);
+  const rotate = h.view.getByRole('button', { name: 'Rotate pack right' });
+  pointer(rotate, 'pointerdown', 5000);
+  pointer(rotate, 'pointerup', 5100);
+  fireEvent.click(rotate, { detail: 1 });
+  assert.equal(viewer().props.state.folderPose, 2);
+  assert.deepEqual(h.dismissed, [true]);
+});
+
 test('request failures can retry without duplicate requests or losing the minimum tap gate', async () => {
   let requests = 0;
   const pending = Promise.withResolvers<RevealRequestStatus>();

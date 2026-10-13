@@ -20,6 +20,7 @@ import { getMiNotePackPreviewRect, getMiNotePackPreviewTransform } from '../lib/
 import type { RevealRequestStatus } from '../shop/reveal';
 import { ModalFocusScope } from './ModalFocusScope';
 import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
+import { useViewerDismissInput } from '../hooks/useViewerDismissInput';
 import '../styles/mi-note-wip.css';
 
 function createViewer() {
@@ -103,6 +104,7 @@ export default function MiNotePackRevealOverlay({
     Boolean(active && entered && setup && viewerReady && !error), `${packMediaId}:${attempt}`,
   );
   const interactionEnabled = !showFallback && !closing && !suspended && (viewerOnly || phase === 'ready');
+  const dismissInput = useViewerDismissInput({ enabled: viewerOnly && !closing && !suspended, onDismiss });
 
   useEffect(() => {
     if (!closing || suspended || viewerOnly || !cardIds || error || state.stage !== 'interactive' || closingParticlesPlayedRef.current) return;
@@ -233,6 +235,7 @@ export default function MiNotePackRevealOverlay({
 
   return (
     <ModalFocusScope
+      {...(viewerOnly ? dismissInput : {})}
       ariaLabel={`${boxName} ${viewerOnly ? '3D viewer' : 'unboxing'}`}
       focusTarget="scope"
       suspended={closing || suspended}
@@ -246,13 +249,13 @@ export default function MiNotePackRevealOverlay({
       data-folder-pose={state.folderPose}
       data-card-stage={state.cardStage}
     >
-      <div className="reveal-overlay__backdrop" onClick={dismiss} />
+      <div className="reveal-overlay__backdrop" onClick={viewerOnly ? undefined : dismiss} />
       <div ref={frameRef} className={`reveal-overlay__frame static-to-model${modelVisible ? ' static-to-model--visible' : ''}${showFallback ? '' : ' static-to-model--presented'}`} onTransitionEnd={event => {
         if (event.target !== event.currentTarget) return;
         if (event.propertyName === 'transform' && active && !closing) setEntered(true);
         onTransitionEnd?.(event);
       }} onClick={event => {
-        if (showFallback && event.target === event.currentTarget) dismiss();
+        if (!viewerOnly && showFallback && event.target === event.currentTarget) dismiss();
       }}>
         <div className="mi-note-pack-overlay__fallback static-to-model__fallback" style={fallbackPresentation.rect}>
           <img src={fallbackImage} alt="" aria-hidden draggable={false} style={{
@@ -286,13 +289,13 @@ export default function MiNotePackRevealOverlay({
                 onCardsError={handleCardsError}
                 onError={setViewerError}
                 onEvent={handleEvent}
-                onBackgroundTap={dismiss}
+                onBackgroundTap={viewerOnly ? undefined : dismiss}
                 controlsRef={controlsRef}
               />
             </Suspense>
           </MiNoteViewerBoundary>
         </div>}
-        <div className="mi-note-wip__actions" role="group" aria-label="Pack actions" onKeyDown={event => {
+        <div className="mi-note-wip__actions" data-viewer-dismiss-ignore role="group" aria-label="Pack actions" onKeyDown={event => {
           if (!(event.target instanceof HTMLElement) || !event.target.matches('button')) return;
           if (event.key === 'Enter' && event.repeat) event.preventDefault();
           if (event.key !== ' ') return;
