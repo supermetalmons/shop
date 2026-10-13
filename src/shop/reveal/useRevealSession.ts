@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { InventoryItem, PendingOpenBox } from '../../types';
 import { usesMiNotePack3dRevealFlow } from '../../config/dropsExtraContent';
 import { useOverlayScrollLock } from '../../hooks/useOverlayScrollLock';
+import { getInventoryRevealRect } from '../../lib/inventoryMediaRect';
 import {
   runDeferredOverlayActions,
   type DeferredOverlayAction,
@@ -262,7 +263,7 @@ export function useRevealSession({
       return;
     }
     const originSourceRect = overlay.originSourceRect;
-    const currentSourceRect = overlay.sourceElement?.isConnected ? overlay.sourceElement.getBoundingClientRect() : null;
+    const currentSourceRect = overlay.sourceElement?.isConnected ? getInventoryRevealRect(overlay.sourceElement) : null;
     setRevealOverlayCloseMode(
       overlay.viewerMode && originSourceRect && currentSourceRect &&
       (['left', 'top', 'width', 'height'] as const).every((key) => Math.abs(originSourceRect[key] - currentSourceRect[key]) <= 1) &&
@@ -371,7 +372,7 @@ export function useRevealSession({
       setPendingOpenSnapshot(pendingOpenBoxes);
       presentRevealOverlay({
         originViewport: getOverlayViewport(),
-        originSourceRect: input.sourceElement ? toRevealOverlayRect(input.sourceElement.getBoundingClientRect()) : undefined,
+        originSourceRect: input.sourceElement ? toRevealOverlayRect(getInventoryRevealRect(input.sourceElement)) : undefined,
         phase: 'revealed',
         frame: 1,
         advanceClicks: 0,

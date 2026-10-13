@@ -688,14 +688,13 @@ export function useShopReveal(options: ShopRevealOptions) {
       calcClearCardRevealTargetRect(viewport.width, viewport.height),
       viewport,
     );
+    const preview = sourceElement ? getRenderedImagePreview(sourceElement, image) : undefined;
     const resolvedOriginRect = originRect
-      ? viewerMode === 'clear-pack'
-        ? calcContainedMediaRevealOriginRect(
-            toRevealOverlayRect(originRect),
-            targetRect,
-            boxAspectRatioForDropId(dropId),
-          )
-        : calcAspectLockedRevealOriginRect(originRect, targetRect)
+      ? calcContainedMediaRevealOriginRect(
+          originRect,
+          targetRect,
+          preview?.aspectRatio ?? (viewerMode === 'clear-pack' ? boxAspectRatioForDropId(dropId) : 5 / 7),
+        )
       : new DOMRect(
           targetRect.left,
           targetRect.top,
@@ -777,15 +776,16 @@ export function useShopReveal(options: ShopRevealOptions) {
       return false;
     }
 
+    const preview = options?.sourceElement ? getRenderedImagePreview(options.sourceElement, item.image) : undefined;
     const aspectRatio =
       options?.aspectRatio && Number.isFinite(options.aspectRatio) && options.aspectRatio > 0
         ? options.aspectRatio
-        : originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
+        : preview?.aspectRatio ?? (originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
           ? originRect.width / originRect.height
-          : 1;
+          : 1);
     const targetRect = calcReceiptViewerTargetRectInViewport(aspectRatio, options?.size);
     const resolvedOriginRect = originRect
-      ? calcAspectLockedRevealOriginRect(originRect, targetRect)
+      ? calcContainedMediaRevealOriginRect(originRect, targetRect, aspectRatio)
       : new DOMRect(targetRect.left, targetRect.top, targetRect.width, targetRect.height);
 
     return presentViewerOverlay({
@@ -820,10 +820,11 @@ export function useShopReveal(options: ShopRevealOptions) {
     const firstReceipt = receiptImages[0];
     if (!firstReceipt) return false;
 
-    const singleAspectRatio =
+    const preview = options?.sourceElement ? getRenderedImagePreview(options.sourceElement, firstReceipt.image) : undefined;
+    const singleAspectRatio = preview?.aspectRatio ?? (
       originRect && originRect.height > 0 && Number.isFinite(originRect.width / originRect.height)
         ? originRect.width / originRect.height
-        : 1;
+        : 1);
     return openImageViewer(firstReceipt, originRect, {
       aspectRatio: singleAspectRatio * receiptImages.length,
       size: 'receipt',

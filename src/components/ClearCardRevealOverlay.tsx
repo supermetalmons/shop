@@ -4,6 +4,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -36,6 +37,12 @@ import { useDarkColorScheme } from '../hooks/useDarkColorScheme';
 import { useStaticToModelHandoff } from '../hooks/useStaticToModelHandoff';
 import { useViewerDismissInput } from '../hooks/useViewerDismissInput';
 import { resolveClearCardRevealRenderQuality } from '../lib/clearCardCanvas';
+import {
+  measureClearCardPreviewImage,
+  resolveClearCardPreviewTransform,
+  type ClearCardPreviewImage,
+  type ClearCardPreviewModel,
+} from '../lib/clearCardPreviewLayout';
 import { ModalFocusScope } from './ModalFocusScope';
 
 function createClearCardThreeViewerComponent() {
@@ -115,6 +122,10 @@ export default function ClearCardRevealOverlay({
     createClearCardThreeViewerComponent,
   );
   const [viewerAttempt, setViewerAttempt] = useState(0);
+  const [enteredResetKey, setEnteredResetKey] = useState<string | number | null>(null);
+  const [previewImage, setPreviewImage] = useState<{ src: string; loaded: boolean; frame: ClearCardPreviewImage | null }>();
+  const [previewModel, setPreviewModel] = useState<{ key: string; frame: ClearCardPreviewModel | null }>();
+  const [imageCorsFailure, setImageCorsFailure] = useState<string>();
   const [viewerStatus, setViewerStatus] = useState<ViewerStatus>('loading');
   const [cardLoadStatus, setCardLoadStatus] = useState<ClearCardModelLoadStatus>('idle');
   const [displayStage, setDisplayStage] = useState<ClearCardDisplayStage>(
@@ -131,12 +142,34 @@ export default function ClearCardRevealOverlay({
   }, [darkMode, loadingImageSrc]);
   const cardModelUrl = clearCardModelUrl(cardId);
   const packReady = viewerStatus === 'ready';
+  const viewerOnly = Boolean(viewerMode);
+  const previewKey = `${resetKey}:${viewerMode || 'unpack'}:${viewerAttempt}:${viewerMode === 'card' ? cardModelUrl : ''}`;
+  const calibratePreview = Boolean(viewerOnly && resolvedLoadingImageSrc);
+  const imageFrame = previewImage && previewImage.src === resolvedLoadingImageSrc ? previewImage.frame : undefined;
+  const modelFrame = previewModel?.key === previewKey ? previewModel.frame : undefined;
+  const previewMeasured = !calibratePreview || imageFrame === null || (imageFrame !== undefined && modelFrame !== undefined);
+  const previewTransform = calibratePreview && imageFrame && modelFrame
+    ? resolveClearCardPreviewTransform(imageFrame, modelFrame)
+    : null;
+  const startStyle = overlayStyle as Record<string, string | number | undefined> | undefined;
+  const hasEntryTransform = ([
+    ['--reveal-start-x', 0],
+    ['--reveal-start-y', 0],
+    ['--reveal-start-scale-x', 1],
+    ['--reveal-start-scale-y', 1],
+  ] as const).some(([property, rest]) => {
+    const value = Number.parseFloat(String(startStyle?.[property] ?? rest));
+    return Number.isFinite(value) && value !== rest;
+  });
   const { modelVisible, fallbackVisible, onModelFrame } = useStaticToModelHandoff(
-    active && packReady,
-    `${resetKey}:${viewerMode || 'unpack'}:${viewerAttempt}`,
+    active && enteredResetKey === resetKey && packReady && previewMeasured,
+    `${previewKey}:${resolvedLoadingImageSrc}`,
   );
   const cardReady = Boolean(cardModelUrl && cardLoadStatus === 'ready');
-  const viewerOnly = Boolean(viewerMode);
+  const returningToPreview = Boolean(
+    closing && viewerOnly && previewImage?.src === resolvedLoadingImageSrc && previewImage?.loaded,
+  );
+  const showFallback = fallbackVisible || returningToPreview;
   const renderQualityByStage = useMemo(
     () => resolveClearCardRevealRenderQuality(viewerMode),
     [viewerMode],
@@ -153,6 +186,19 @@ export default function ClearCardRevealOverlay({
     resetKey: `${resetKey}:${viewerMode}`,
   });
 
+  useLayoutEffect(() => {
+    if (!active) {
+      setEnteredResetKey(null);
+      return;
+    }
+    if (!hasEntryTransform || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setEnteredResetKey(resetKey);
+      return;
+    }
+    const timeout = window.setTimeout(() => setEnteredResetKey(resetKey), 520);
+    return () => window.clearTimeout(timeout);
+  }, [active, hasEntryTransform, resetKey]);
+
   useEffect(() => {
     requestGenerationRef.current += 1;
     requestStateRef.current = createClearCardRevealRequestState(Boolean(cardModelUrl));
@@ -161,6 +207,24 @@ export default function ClearCardRevealOverlay({
     setCardLoadStatus(cardModelUrl ? 'loading' : 'idle');
     setDisplayStage(viewerMode === 'card' ? 'revealed' : 'pack');
   }, [resetKey, viewerMode]);
+
+  const handlePreviewFrame = useCallback((frame: ClearCardPreviewModel | null) => {
+    setPreviewModel({ key: previewKey, frame });
+  }, [previewKey]);
+
+  const measurePreviewImage = useCallback(() => {
+    const image = fallbackImageRef.current;
+    if (!image || !resolvedLoadingImageSrc || !calibratePreview) return;
+    let frame: ClearCardPreviewImage | null = null;
+    try {
+      frame = measureClearCardPreviewImage(image);
+    } catch {}
+    setPreviewImage({ src: resolvedLoadingImageSrc, loaded: image.naturalWidth > 0 && image.naturalHeight > 0, frame });
+  }, [calibratePreview, resolvedLoadingImageSrc]);
+
+  useLayoutEffect(() => {
+    if (fallbackImageRef.current?.complete) measurePreviewImage();
+  }, [measurePreviewImage]);
 
   useEffect(() => {
     if (cardModelUrl) requestStateRef.current = 'sent';
@@ -265,24 +329,38 @@ export default function ClearCardRevealOverlay({
       <div
         className="reveal-overlay__frame clear-card-reveal-overlay__frame"
         onClick={viewerOnly ? undefined : handleFrameClick}
-        onTransitionEnd={onTransitionEnd}
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.propertyName === 'transform' && active && !closing) setEnteredResetKey(resetKey);
+          onTransitionEnd?.(event);
+        }}
       >
         <div
-          className={`clear-card-reveal-overlay__viewport static-to-model${modelVisible ? ' static-to-model--visible' : ''}${fallbackVisible ? '' : ' static-to-model--presented'}`}
+          className={`clear-card-reveal-overlay__viewport static-to-model${modelVisible ? ' static-to-model--visible' : ''}${showFallback ? '' : ' static-to-model--presented'}${returningToPreview ? ' clear-card-reveal-overlay__viewport--returning' : ''}`}
           aria-busy={
             viewerStatus !== 'error' && (!packReady || cardLoadStatus === 'loading')
           }
         >
-          <div id="clear-card-reveal-blur-source" className="clear-card-reveal-overlay__visual">
+          <div
+            id="clear-card-reveal-blur-source"
+            className="clear-card-reveal-overlay__visual"
+            style={previewTransform ? {
+              '--clear-card-preview-transform': `translate(${previewTransform.x}px, ${previewTransform.y}px) scale(${previewTransform.scaleX}, ${previewTransform.scaleY})`,
+            } as CSSProperties : undefined}
+          >
             {resolvedLoadingImageSrc ? (
               <img
                 ref={fallbackImageRef}
-                className={`clear-card-reveal-overlay__fallback static-to-model__fallback${
-                  viewerMode === 'card'
-                    ? ' clear-card-reveal-overlay__fallback--card-viewer'
-                    : ''
-                }`}
+                className="clear-card-reveal-overlay__fallback static-to-model__fallback"
+                key={`${resolvedLoadingImageSrc}:${imageCorsFailure === resolvedLoadingImageSrc}`}
+                crossOrigin={calibratePreview && imageCorsFailure !== resolvedLoadingImageSrc ? 'anonymous' : undefined}
                 src={resolvedLoadingImageSrc}
+                onLoad={measurePreviewImage}
+                onError={() => {
+                  if (!calibratePreview) return;
+                  setPreviewImage({ src: resolvedLoadingImageSrc, loaded: false, frame: null });
+                  setImageCorsFailure(resolvedLoadingImageSrc);
+                }}
                 alt=""
                 draggable={false}
                 aria-hidden="true"
@@ -323,6 +401,7 @@ export default function ClearCardRevealOverlay({
                   }
                   onStatusChange={setViewerStatus}
                   onFrameRendered={onModelFrame}
+                  onPreviewFrame={calibratePreview ? handlePreviewFrame : undefined}
                   onCardModelLoadStatusChange={setCardLoadStatus}
                   onStageChange={setDisplayStage}
                   onPackHit={handlePackHit}

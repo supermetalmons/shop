@@ -13,6 +13,7 @@ import {
   offsetRevealOverlayRectForViewport
 } from '../../lib/revealOverlayLayout';
 import { ImageViewerSize, OverlayRect } from './types';
+import { getInventoryMediaImage } from '../../lib/inventoryMediaRect';
 
 export function calcInteractiveCardViewerTargetRectInViewport(
   viewport = getOverlayViewport(),
@@ -103,7 +104,7 @@ export function calcRevealTargetRectForRendererInViewport(
 }
 
 export function getRenderedImagePreview(root: HTMLElement, fallback?: string): { src?: string; aspectRatio?: number; } {
-  const image = root.querySelector<HTMLImageElement>('img.figure-image:not([hidden]), img.inventory__image:not([hidden])');
+  const image = getInventoryMediaImage(root);
   const src = String(image?.currentSrc || image?.src || '').trim();
   const naturalAspectRatio =
     image && image.naturalWidth > 0 && image.naturalHeight > 0

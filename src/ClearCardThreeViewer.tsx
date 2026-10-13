@@ -56,6 +56,7 @@ import {
 import { clearCardModelLoadDecision } from './lib/clearCardModels';
 import { releaseObjectGeometryCpuBuffersAfterUpload } from './lib/threeGpuOnlyGeometry';
 import { VIEWER_TAP_MAX_MOVEMENT_PX } from './lib/miNoteCardInput';
+import { clearCardPreviewPixelBounds, type ClearCardPreviewModel } from './lib/clearCardPreviewLayout';
 
 const DRACO_DECODER_PATH = '/draco/0.185.1/';
 const MAX_PIXEL_RATIO = 2;
@@ -275,6 +276,7 @@ type ClearCardThreeViewerProps = {
   ariaLabel?: string;
   onStatusChange: (status: ViewerStatus) => void;
   onFrameRendered?: () => void;
+  onPreviewFrame?: (frame: ClearCardPreviewModel | null) => void;
   onCardModelLoadStatusChange?: (status: ClearCardModelLoadStatus) => void;
   onStageChange?: (stage: ClearCardDisplayStage) => void;
   onPackHit?: (hitIndex: number) => void;
@@ -629,6 +631,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       ariaLabel,
       onStatusChange,
       onFrameRendered,
+      onPreviewFrame,
       onCardModelLoadStatusChange,
       onStageChange,
       onPackHit,
@@ -640,6 +643,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     const cardOnly = !packModelUrl;
     const readyRef = useRef(ready);
     const onFrameRenderedRef = useRef(onFrameRendered);
+    const onPreviewFrameRef = useRef(onPreviewFrame);
     const requestRenderRef = useRef<(() => void) | null>(null);
     const applyRenderQualityForStageRef = useRef<
       ((stage: ClearCardDisplayStage) => void) | null
@@ -715,6 +719,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       onPackBreakRef.current = onPackBreak;
       onStageChangeRef.current = onStageChange;
       onCardModelLoadStatusChangeRef.current = onCardModelLoadStatusChange;
+      onPreviewFrameRef.current = onPreviewFrame;
       snapBackOnReleaseRef.current = snapBackOnRelease;
       cardModelUrlRef.current = cardModelUrl;
       interactionEnabledRef.current = interactionEnabled;
@@ -1157,6 +1162,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       let renderer: THREE.WebGLRenderer | null = null;
       let snapshotOutputTarget: THREE.WebGLRenderTarget | null = null;
       let snapshotInFlight = false;
+      let previewFrameKey: string | null = null;
       let activePackLoad: ClearCardModelLoadResources | null = null;
       let activeCardLoad: ClearCardModelLoadResources | null = null;
       let environmentRenderTarget: THREE.WebGLRenderTarget | null = null;
@@ -2174,6 +2180,66 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         };
       };
 
+      const measurePreviewFrame = () => {
+        if (!onPreviewFrameRef.current || !renderer || !displayModelReady()) return;
+        const key = `${canvas.clientWidth}:${canvas.clientHeight}:${cardOnly ? activeCardModelUrl : packModelUrl}`;
+        if (previewFrameKey === key) return;
+        previewFrameKey = key;
+        const width = Math.max(1, Math.round(1024 * Math.min(1, cameraAspect)));
+        const height = Math.max(1, Math.round(1024 / Math.max(1, cameraAspect)));
+        const target = new THREE.WebGLRenderTarget(width, height, { depthBuffer: true, stencilBuffer: false });
+        const previousTarget = renderer.getRenderTarget();
+        const previousPivot = pivot.quaternion.clone();
+        const previousScale = packGroup.scale.clone();
+        const previousSparkles = sparklePoints.visible;
+        const previousCracks = crackGroup?.visible;
+        const previousFragments = fragmentsGroup?.visible;
+        let previewFrame: ClearCardPreviewModel | null = null;
+        try {
+          pivot.quaternion.identity();
+          packGroup.scale.setScalar(1);
+          sparklePoints.visible = false;
+          if (crackGroup) crackGroup.visible = false;
+          if (fragmentsGroup) fragmentsGroup.visible = false;
+          snapshotOutputTarget = target;
+          renderer.setRenderTarget(target);
+          renderer.clear();
+          renderer.render(scene, camera);
+          const pixels = new Uint8Array(width * height * 4);
+          renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+          const bounds = clearCardPreviewPixelBounds(pixels, width, height, true);
+          if (bounds) {
+            const canvasStyle = window.getComputedStyle(canvas);
+            const viewportStyle = window.getComputedStyle(viewport);
+            previewFrame = {
+              bounds,
+              canvas: {
+                left: Number.parseFloat(canvasStyle.left) || canvas.offsetLeft,
+                top: Number.parseFloat(canvasStyle.top) || canvas.offsetTop,
+                width: Number.parseFloat(canvasStyle.width) || canvas.clientWidth,
+                height: Number.parseFloat(canvasStyle.height) || canvas.clientHeight,
+              },
+              viewport: {
+                width: Number.parseFloat(viewportStyle.width) || viewport.clientWidth,
+                height: Number.parseFloat(viewportStyle.height) || viewport.clientHeight,
+              },
+            };
+          }
+        } catch {
+          previewFrame = null;
+        } finally {
+          snapshotOutputTarget = null;
+          pivot.quaternion.copy(previousPivot);
+          packGroup.scale.copy(previousScale);
+          sparklePoints.visible = previousSparkles;
+          if (crackGroup) crackGroup.visible = previousCracks ?? false;
+          if (fragmentsGroup) fragmentsGroup.visible = previousFragments ?? false;
+          renderer.setRenderTarget(previousTarget);
+          target.dispose();
+        }
+        onPreviewFrameRef.current(previewFrame);
+      };
+
       const renderFrame = (now: number) => {
         frameId = null;
         if (
@@ -2319,6 +2385,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         } else {
           pivot.rotation.set(tilt.currentX, tilt.currentY, 0);
         }
+        measurePreviewFrame();
         if (
           !shardTransmissionWarmed &&
           packUsesTransmission &&
@@ -2722,6 +2789,7 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       const loadCardModel = (modelUrl: string | undefined, force = false) => {
         if (disposed || !renderer || contextLost) return;
         if (!force && modelUrl && loadedCardModelUrl === modelUrl && cardReady) return;
+        if (cardOnly) previewFrameKey = null;
         const loadDecision = clearCardModelLoadDecision({
           modelUrl,
           hasPackModel: !cardOnly,

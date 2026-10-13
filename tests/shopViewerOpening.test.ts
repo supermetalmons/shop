@@ -70,7 +70,7 @@ function openCardViewer(
 function checkViewerDismissal(
   t: TestContext,
   open: (controller: ShopRevealController, origin: DOMRect, sourceElement: HTMLElement) => void,
-  changeBeforeDismiss?: 'resize' | 'source-removed',
+  changeBeforeDismiss?: 'resize' | 'source-removed' | 'source-media-resized',
 ) {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
@@ -96,6 +96,15 @@ function checkViewerDismissal(
   const sourceElement = document.createElement('article');
   sourceElement.dataset.inventoryId = 'asset-a';
   sourceElement.getBoundingClientRect = () => origin;
+  if (changeBeforeDismiss === 'source-media-resized') {
+    sourceElement.innerHTML = '<div class="inventory__media"><img class="inventory__image" style="object-fit: contain; border: 0; padding: 0"></div>';
+    const image = sourceElement.querySelector('img')!;
+    image.getBoundingClientRect = () => origin;
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 120 },
+      naturalHeight: { value: 160 },
+    });
+  }
   document.body.append(sourceElement);
   t.after(() => sourceElement.remove());
   act(() => open(result.current, origin, sourceElement));
@@ -130,6 +139,9 @@ function checkViewerDismissal(
       window.dispatchEvent(new window.Event('resize'));
     }
     if (changeBeforeDismiss === 'source-removed') sourceElement.remove();
+    if (changeBeforeDismiss === 'source-media-resized') {
+      Object.defineProperty(sourceElement.querySelector('img')!, 'naturalWidth', { value: 80 });
+    }
     result.current.handleRevealOverlayDismiss();
   });
   const closingStyle = changeBeforeDismiss ? {
@@ -318,6 +330,12 @@ test('a receipt fades in place when its source is removed before dismissal', (t)
   }, 'source-removed');
 });
 
+test('an image fades when its displayed media changes inside an unchanged source tile', (t) => {
+  checkViewerDismissal(t, (controller, origin, sourceElement) => {
+    assert.equal(controller.openImageViewer(receipt, origin, { sourceElement }), true);
+  }, 'source-media-resized');
+});
+
 test('grouped receipts preserve placeholders, empty snapshots, and admin action eligibility', () => {
   const { options, calls } = fixture();
   options.inventory = [receipt];
@@ -357,4 +375,29 @@ test('single receipt viewing keeps its admin action and default image size', () 
   assert.equal(overlay.adminIrlRedeemReceipt, receipt);
   assert.deepEqual(overlay.receiptImages, [{ key: receipt.id, name: receipt.name, image: receipt.image }]);
   assert.equal(calls.cleared, 0);
+});
+
+test('image viewers use the loaded artwork aspect ratio for apparel and future drops', () => {
+  const { options } = fixture();
+  const { result } = renderHook(useShopReveal, { initialProps: options });
+  const source = document.createElement('div');
+  source.innerHTML = '<img class="figure-image" style="object-fit: contain; border: 0; padding: 0">';
+  const image = source.querySelector('img')!;
+  const origin = new DOMRect(40, 70, 180, 180);
+  image.getBoundingClientRect = () => origin;
+  for (const [width, height] of [[1585, 1242], [1445, 877], [2400, 600], [600, 2400]]) {
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: width },
+      naturalHeight: { configurable: true, value: height },
+    });
+    act(() => assert.equal(result.current.openImageViewer(receipt, origin, { sourceElement: source }), true));
+    const overlay = result.current.revealOverlay!;
+    assert.ok(Math.abs(overlay.targetRect.width / overlay.targetRect.height - width / height) < 0.01);
+    const scale = overlay.originRect.width / overlay.targetRect.width;
+    const targetPixelScale = Math.min(overlay.targetRect.width / width, overlay.targetRect.height / height);
+    const sourcePixelScale = Math.min(origin.width / width, origin.height / height);
+    assert.ok(Math.abs(width * targetPixelScale * scale - width * sourcePixelScale) < 1e-8);
+    assert.ok(Math.abs(height * targetPixelScale * scale - height * sourcePixelScale) < 1e-8);
+    act(() => result.current.discardRevealOverlay());
+  }
 });

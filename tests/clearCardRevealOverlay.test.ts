@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach } from 'node:test';
-import { createElement, forwardRef, useImperativeHandle, useLayoutEffect, useRef, type ComponentProps } from 'react';
+import { createElement, forwardRef, useImperativeHandle, useLayoutEffect, useRef, type ComponentProps, type CSSProperties } from 'react';
 import type ClearCardThreeViewer from '../src/ClearCardThreeViewer.tsx';
 import type { ClearCardThreeViewerHandle } from '../src/ClearCardThreeViewer.tsx';
 import type ClearCardRevealOverlay from '../src/components/ClearCardRevealOverlay.tsx';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 type ViewerProps = ComponentProps<typeof ClearCardThreeViewer>;
 type OverlayProps = ComponentProps<typeof ClearCardRevealOverlay>;
@@ -18,6 +18,25 @@ let pointerReleases = 0;
 let cardRetries = 0;
 let nextFrameId = 0;
 let frames = new Map<number, FrameRequestCallback>();
+let measureModels = true;
+let imageReadFails = false;
+const modelPreviewFrame = {
+  bounds: { left: 0.2, top: 0.2, width: 0.6, height: 0.6 },
+  canvas: { left: -100, top: -140, width: 600, height: 840 },
+  viewport: { width: 400, height: 560 },
+};
+Object.defineProperty(dom.window.HTMLCanvasElement.prototype, 'getContext', {
+  configurable: true,
+  value: () => ({
+    drawImage() {},
+    getImageData(_x: number, _y: number, width: number, height: number) {
+      if (imageReadFails) throw new Error('Image pixels are unavailable');
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let index = 3; index < data.length; index += 4) data[index] = 255;
+      return { data };
+    },
+  }),
+});
 window.requestAnimationFrame = callback => {
   const id = ++nextFrameId;
   frames.set(id, callback);
@@ -40,6 +59,7 @@ const FakeViewer = forwardRef<ClearCardThreeViewerHandle, ViewerProps>((props, r
   useLayoutEffect(() => {
     instance.mounted = true;
     instances.push(instance);
+    if (measureModels) props.onPreviewFrame?.(modelPreviewFrame);
     return () => { instance.mounted = false; };
   }, []);
   return createElement('canvas', {
@@ -69,6 +89,9 @@ beforeEach(() => {
   objectHit = false;
   pointerReleases = 0;
   cardRetries = 0;
+  measureModels = true;
+  imageReadFails = false;
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', false);
 });
 afterEach(() => {
   cleanup();
@@ -98,6 +121,29 @@ function presentModel() {
   advanceFrame();
 }
 
+const openingStyle = {
+  '--reveal-start-x': '-300px',
+  '--reveal-start-y': '100px',
+  '--reveal-start-scale-x': '0.3',
+  '--reveal-start-scale-y': '0.3',
+} as CSSProperties;
+
+function finishFrameEntry(element: Element) {
+  const event = new dom.window.Event('transitionend', { bubbles: true });
+  Object.defineProperty(event, 'propertyName', { value: 'transform' });
+  fireEvent(element, event);
+}
+
+function loadPreview(container: HTMLElement) {
+  const image = container.querySelector('img');
+  if (!image) return;
+  Object.defineProperties(image, {
+    naturalWidth: { configurable: true, value: 100 },
+    naturalHeight: { configurable: true, value: 140 },
+  });
+  fireEvent.load(image);
+}
+
 function pointer(target: Element, type: string, options: Partial<PointerEvent> = {}) {
   const event = new dom.window.MouseEvent(type, {
     bubbles: true,
@@ -115,7 +161,7 @@ function pointer(target: Element, type: string, options: Partial<PointerEvent> =
   fireEvent(target, event);
 }
 
-async function mount(overrides: Partial<OverlayProps> = {}) {
+async function mount(overrides: Partial<OverlayProps> = {}, loadImage = true) {
   let props: OverlayProps = {
     active: true,
     closing: false,
@@ -127,6 +173,7 @@ async function mount(overrides: Partial<OverlayProps> = {}) {
   };
   const view = render(createElement(Overlay, props));
   await waitFor(() => assert.ok(instances.at(-1)?.mounted));
+  if (loadImage) loadPreview(view.container);
   const viewport = view.container.querySelector('.static-to-model')!;
   return {
     view,
@@ -139,6 +186,21 @@ async function mount(overrides: Partial<OverlayProps> = {}) {
 }
 
 for (const viewerMode of [undefined, 'pack', 'card'] as const) {
+  test(`${viewerMode || 'unpacking'} preserves the source preview throughout frame entry`, async () => {
+    const h = await mount({ viewerMode, cardId: viewerMode === 'card' ? 1 : undefined, overlayStyle: openingStyle });
+    presentModel();
+    assert.equal(viewer().props.ready, false);
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), false);
+    finishFrameEntry(h.view.container.querySelector('img')!);
+    assert.equal(viewer().props.ready, false);
+
+    finishFrameEntry(h.view.container.querySelector('.reveal-overlay__frame')!);
+    assert.equal(viewer().props.ready, true);
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), false);
+    presentModel();
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+  });
+
   test(`${viewerMode || 'unpacking'} keeps the static image until a visible model frame has painted`, async () => {
     const h = await mount({ viewerMode, cardId: viewerMode === 'card' ? 1 : undefined });
     const firstInstance = viewer();
@@ -165,6 +227,127 @@ for (const viewerMode of [undefined, 'pack', 'card'] as const) {
     assert.equal(viewer(), firstInstance);
   });
 }
+
+test('reduced motion presents the model without waiting for an opening transition', async () => {
+  setMediaQueryMatches('(prefers-reduced-motion: reduce)', true);
+  const h = await mount({ viewerMode: 'card', cardId: 1, overlayStyle: openingStyle });
+  presentModel();
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+});
+
+test('opening can finish when the browser does not emit a transition event', async () => {
+  const h = await mount({ viewerMode: 'pack', overlayStyle: openingStyle });
+  act(() => viewer().props.onStatusChange('ready'));
+  assert.equal(viewer().props.ready, false);
+  await waitFor(() => assert.equal(viewer().props.ready, true));
+  presentModel();
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+});
+
+for (const viewerMode of ['pack', 'card'] as const) {
+  test(`${viewerMode} returns to the same contained preview while dismissing`, async () => {
+    const h = await mount({ viewerMode, cardId: viewerMode === 'card' ? 1 : undefined });
+    const preview = h.view.container.querySelector('img');
+    presentModel();
+    h.rerender({ closing: true });
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), false);
+    assert.equal(h.viewport.classList.contains('clear-card-reveal-overlay__viewport--returning'), true);
+    assert.equal(h.view.container.querySelector('img'), preview);
+    assert.equal(viewer().props.interactionEnabled, false);
+    act(() => viewer().props.onFrameRendered?.());
+    advanceFrame();
+    advanceFrame();
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), false);
+  });
+
+  test(`${viewerMode} retains the model during dismissal when both preview requests fail`, async () => {
+    const h = await mount({ viewerMode, cardId: viewerMode === 'card' ? 1 : undefined }, false);
+    fireEvent.error(h.view.container.querySelector('img')!);
+    fireEvent.error(h.view.container.querySelector('img')!);
+    presentModel();
+    h.rerender({ closing: true });
+    assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+    assert.equal(h.viewport.classList.contains('clear-card-reveal-overlay__viewport--returning'), false);
+    assert.equal(viewer().props.ready, true);
+    assert.equal(viewer().props.interactionEnabled, false);
+  });
+}
+
+test('closing an unpacked card keeps the revealed card instead of returning to the pack preview', async () => {
+  const h = await mount();
+  presentModel();
+  act(() => viewer().props.onStageChange?.('revealed'));
+  h.rerender({ closing: true });
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+  assert.equal(h.viewport.classList.contains('clear-card-reveal-overlay__viewport--returning'), false);
+});
+
+test('preview handoff waits for both image and model measurements before revealing a calibrated canvas', async () => {
+  measureModels = false;
+  const h = await mount({ viewerMode: 'card', cardId: 1 }, false);
+  const image = h.view.container.querySelector('img')!;
+  assert.equal(image.crossOrigin, 'anonymous');
+  presentModel();
+  assert.equal(viewer().props.ready, false);
+  loadPreview(h.view.container);
+  presentModel();
+  assert.equal(viewer().props.ready, false);
+  act(() => viewer().props.onPreviewFrame?.(modelPreviewFrame));
+  assert.equal(viewer().props.ready, true);
+  const visual = h.view.container.querySelector<HTMLElement>('.clear-card-reveal-overlay__visual')!;
+  assert.match(visual.style.getPropertyValue('--clear-card-preview-transform'), /^translate\(.+\) scale\(.+\)$/);
+  presentModel();
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+});
+
+test('image read and model measurement failures still allow the viewer to open', async () => {
+  imageReadFails = true;
+  const failedImage = await mount({ viewerMode: 'card', cardId: 1 });
+  presentModel();
+  assert.equal(failedImage.viewport.classList.contains('static-to-model--presented'), true);
+  failedImage.rerender({ closing: true });
+  assert.equal(failedImage.viewport.classList.contains('clear-card-reveal-overlay__viewport--returning'), true);
+  failedImage.view.unmount();
+
+  imageReadFails = false;
+  measureModels = false;
+  const failedModel = await mount({ viewerMode: 'pack' });
+  act(() => viewer().props.onPreviewFrame?.(null));
+  presentModel();
+  assert.equal(failedModel.viewport.classList.contains('static-to-model--presented'), true);
+});
+
+test('a CORS failure retries the original preview without blocking model presentation', async () => {
+  const h = await mount({ viewerMode: 'card', cardId: 1 }, false);
+  const image = h.view.container.querySelector('img')!;
+  fireEvent.error(image);
+  const retry = h.view.container.querySelector('img')!;
+  assert.notEqual(retry, image);
+  assert.equal(retry.src, image.src);
+  assert.equal(retry.getAttribute('crossorigin'), null);
+  presentModel();
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+  loadPreview(h.view.container);
+  presentModel();
+  h.rerender({ closing: true });
+  assert.equal(h.viewport.classList.contains('clear-card-reveal-overlay__viewport--returning'), true);
+});
+
+test('resizing and changing the preview image recalculate alignment without remounting the model', async () => {
+  const h = await mount({ viewerMode: 'card', cardId: 1 });
+  const firstViewer = viewer();
+  presentModel();
+  const visual = h.view.container.querySelector<HTMLElement>('.clear-card-reveal-overlay__visual')!;
+  const before = visual.style.getPropertyValue('--clear-card-preview-transform');
+  act(() => viewer().props.onPreviewFrame?.({ ...modelPreviewFrame, viewport: { width: 600, height: 500 } }));
+  assert.notEqual(visual.style.getPropertyValue('--clear-card-preview-transform'), before);
+  h.rerender({ loadingImageSrc: 'https://example.com/dark-card.webp' });
+  assert.equal(viewer().props.ready, false);
+  loadPreview(h.view.container);
+  presentModel();
+  assert.equal(h.viewport.classList.contains('static-to-model--presented'), true);
+  assert.equal(viewer(), firstViewer);
+});
 
 test('viewer failure cancels the handoff and retry ignores the previous viewer frame', async () => {
   const h = await mount();

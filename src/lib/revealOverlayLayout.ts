@@ -145,21 +145,27 @@ export function toRevealOverlayRect(rect: Readonly<PonchoDrifellaFrameRect>): Po
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
 }
 
+export function calcContainedMediaRect(
+  rect: Readonly<PonchoDrifellaFrameRect>,
+  aspectRatio: number,
+): PonchoDrifellaFrameRect {
+  const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const width = Math.min(rect.width, rect.height * safeAspectRatio);
+  const height = width / safeAspectRatio;
+  return {
+    left: rect.left + (rect.width - width) / 2,
+    top: rect.top + (rect.height - height) / 2,
+    width,
+    height,
+  };
+}
+
 export function calcAspectLockedRevealOriginRect(
   originRect: DOMRect,
   targetRect: Readonly<Pick<PonchoDrifellaFrameRect, 'width' | 'height'>>,
 ): DOMRect {
-  const safeSourceHeight = Math.max(1, originRect.height);
-  const safeTargetWidth = Math.max(1, targetRect.width);
-  const safeTargetHeight = Math.max(1, targetRect.height);
-  const aspectRatio = safeTargetWidth / safeTargetHeight;
-  const width = Math.max(1, safeSourceHeight * aspectRatio);
-  return new DOMRect(
-    originRect.left + (originRect.width - width) / 2,
-    originRect.top,
-    width,
-    safeSourceHeight,
-  );
+  const rect = calcContainedMediaRect(originRect, targetRect.width / Math.max(1, targetRect.height));
+  return new DOMRect(rect.left, rect.top, rect.width, rect.height);
 }
 
 export function calcContainedMediaRevealOriginRect(
@@ -167,37 +173,14 @@ export function calcContainedMediaRevealOriginRect(
   targetRect: Readonly<PonchoDrifellaFrameRect>,
   mediaAspectRatio: number,
 ): PonchoDrifellaFrameRect {
-  const safeOriginWidth = Math.max(1, originRect.width);
-  const safeOriginHeight = Math.max(1, originRect.height);
-  const safeTargetWidth = Math.max(1, targetRect.width);
-  const safeTargetHeight = Math.max(1, targetRect.height);
-  const safeMediaAspectRatio =
-    Number.isFinite(mediaAspectRatio) && mediaAspectRatio > 0 ? mediaAspectRatio : 1;
-  const originContainsByHeight = safeOriginWidth / safeOriginHeight > safeMediaAspectRatio;
-  const originMediaWidth = originContainsByHeight
-    ? safeOriginHeight * safeMediaAspectRatio
-    : safeOriginWidth;
-  const originMediaHeight = originContainsByHeight
-    ? safeOriginHeight
-    : safeOriginWidth / safeMediaAspectRatio;
-  const originMediaLeft = originRect.left + (safeOriginWidth - originMediaWidth) / 2;
-  const originMediaTop = originRect.top + (safeOriginHeight - originMediaHeight) / 2;
-  const targetContainsByHeight = safeTargetWidth / safeTargetHeight > safeMediaAspectRatio;
-  const targetMediaWidth = targetContainsByHeight
-    ? safeTargetHeight * safeMediaAspectRatio
-    : safeTargetWidth;
-  const targetMediaHeight = targetContainsByHeight
-    ? safeTargetHeight
-    : safeTargetWidth / safeMediaAspectRatio;
-  const targetMediaLeft = (safeTargetWidth - targetMediaWidth) / 2;
-  const targetMediaTop = (safeTargetHeight - targetMediaHeight) / 2;
-  const scale = originMediaWidth / targetMediaWidth;
-
+  const originMedia = calcContainedMediaRect(originRect, mediaAspectRatio);
+  const targetMedia = calcContainedMediaRect({ ...targetRect, left: 0, top: 0 }, mediaAspectRatio);
+  const scale = originMedia.width / Math.max(1, targetMedia.width);
   return {
-    left: originMediaLeft - targetMediaLeft * scale,
-    top: originMediaTop - targetMediaTop * scale,
-    width: safeTargetWidth * scale,
-    height: safeTargetHeight * scale,
+    left: originMedia.left - targetMedia.left * scale,
+    top: originMedia.top - targetMedia.top * scale,
+    width: targetRect.width * scale,
+    height: targetRect.height * scale,
   };
 }
 
