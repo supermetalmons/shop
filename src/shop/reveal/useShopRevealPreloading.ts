@@ -1,16 +1,27 @@
 import { useEffect } from 'react';
 import { isDropFamily } from '../../config/deployment';
+import { preloadDrifCardVisualAssets } from '../../lib/drifCardVisualAssets';
+import { getInteractiveCardPackCardByFigureId } from '../../lib/interactiveCardPackReveal';
+import type { InventoryItem } from '../../types';
 import type { ShopRevealController } from './useShopReveal';
 
 export function useShopRevealPreloading(
-  { routeDrop, assets, revealOverlay }: ShopRevealController,
+  { routeDrop, assets, revealOverlay, suspended, usesInteractiveCardPackRevealForDropId }: ShopRevealController,
   shouldPreloadBoxFramesInitial: boolean,
+  selectedViewableItem?: InventoryItem | null,
 ) {
   const {
     dropRevealIsAnimated, preloadBoxFrames, preloadInteractiveCardPackRevealPackAssetsForDropId,
     revealClickMaxForDropId, revealAutoplayStartForDropId, revealFrameCountForDropId,
     autoplayFramePreloadScheduledDropIdRef,
   } = assets;
+  useEffect(() => {
+    if (suspended || selectedViewableItem?.kind !== 'dude' || typeof selectedViewableItem.dudeId !== 'number') return;
+    const { dropId, dudeId } = selectedViewableItem;
+    if (!usesInteractiveCardPackRevealForDropId(dropId) && !isDropFamily(dropId, 'mi_note_cards')) return;
+    const card = getInteractiveCardPackCardByFigureId(dropId, dudeId);
+    if (card) preloadDrifCardVisualAssets(card);
+  }, [selectedViewableItem, suspended, usesInteractiveCardPackRevealForDropId]);
   useEffect(() => {
     if (!routeDrop || !shouldPreloadBoxFramesInitial) return;
     if (!isDropFamily(routeDrop, 'card_nft_2')) {

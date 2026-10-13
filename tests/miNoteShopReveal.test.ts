@@ -7,6 +7,7 @@ import { resolveDropContent } from '../src/lib/dropContent.ts';
 import type { ShopRevealOptions } from '../src/shop/reveal/contracts.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { drifCardVisualAssetsCache } from '../src/lib/drifCardVisualAssets.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
 import { getMiNotePackPreviewRect } from '../src/lib/miNotePackPreviewLayout.ts';
 import packRenderSetups from '../src/lib/miNotePackRenderSetups.json';
@@ -48,7 +49,7 @@ imports.deregister();
 const { soundPlayer } = await import('../src/lib/SoundPlayer.ts');
 mock.method(soundPlayer, 'initializeOnUserInteraction', async () => {});
 mock.method(soundPlayer, 'preloadSound', async () => {});
-afterEach(() => { cleanup(); revealCalls = []; dom.window.localStorage.clear(); });
+afterEach(() => { cleanup(); drifCardVisualAssetsCache.clear(); revealCalls = []; dom.window.localStorage.clear(); });
 after(() => { mock.restoreAll(); Reflect.deleteProperty(globalThis, bridgeKey); dom.window.close(); });
 
 function fixture(dropId: string) {

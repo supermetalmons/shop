@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
+import { DRIF_GLITTER_URL, DRIF_GRAIN_URL } from '../src/drifCards.ts';
+import { normalizeFigureDisplayImage } from '../src/lib/dropContent.ts';
 import { createMiNoteCard } from '../src/lib/miNoteCards.ts';
 import { getInteractiveCardPackCardByFigureId } from '../src/lib/interactiveCardPackReveal.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { mockCardAssetImages } from './helpers/cardAssets.ts';
+import { drifCardVisualAssetsCache, preloadDrifCardVisualAssets } from '../src/lib/drifCardVisualAssets.ts';
 
 const { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
@@ -50,6 +54,7 @@ beforeEach((t: TestContext) => {
 
 afterEach(() => {
   cleanup();
+  drifCardVisualAssetsCache.clear();
   assert.equal(frames.size, 0, 'unmount cancels animation frames');
   assert.equal(timers.size, 0, 'unmount clears interaction timers');
 });
@@ -182,28 +187,235 @@ for (const dropId of ['mi_note_cards', 'poncho_drifella', 'card_nft_2']) {
   });
 }
 
-test('viewer applies idle effects only when the clean card replaces its static preview', (t) => {
-  const preloadedImages: HTMLImageElement[] = [];
-  t.mock.method(globalThis, 'Image', function () {
-    const image = document.createElement('img');
-    preloadedImages.push(image);
-    return image;
-  });
+test('viewer keeps its static preview and interaction locked until every effect layer decodes', async (t) => {
+  const preloadedImages = mockCardAssetImages(t);
   const props = { card, active: true, closing: false, loadingImageSrc: 'https://example.com/static.webp' };
   const view = render(createElement(PonchoCardViewerOverlay, props));
-  const { element, image } = elements(view.container);
-  assert.equal(image.src, props.loadingImageSrc);
-  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
-  fireEvent.load(preloadedImages[0]);
+  const { button, element, image } = elements(view.container);
+  assert.deepEqual(preloadedImages.map((asset) => asset.src), [
+    card.imageSrc, card.textureSrc, DRIF_GRAIN_URL,
+  ]);
+  const assertPreview = () => {
+    assert.equal(image.src, props.loadingImageSrc);
+    assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+    pointer(button, 'pointermove');
+    runFrames(8);
+    assert.deepEqual(pose(element), ['50%', '50%', '0', '0deg', '0deg', '50%', '50%']);
+  };
+  fireEvent.load(image);
+  assertPreview();
+  await act(async () => {
+    preloadedImages[0]!.load();
+    preloadedImages[0]!.resolveDecode();
+  });
+  assertPreview();
+  await act(async () => { preloadedImages.slice(1).forEach((asset) => asset.load()); });
+  assertPreview();
+  for (const asset of preloadedImages.slice(1, -1)) {
+    await act(async () => { asset.resolveDecode(); });
+    assertPreview();
+  }
+  await act(async () => { preloadedImages.at(-1)!.resolveDecode(); });
   assert.equal(image.src, card.imageSrc);
   assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  pointer(button, 'pointermove');
+  runFrames(8);
+  assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+  view.unmount();
+  assert.ok(preloadedImages.every((asset) => asset.src !== '' && !asset.onload && !asset.onerror));
+});
 
+test('inventory preview matching the front waits for all holo effects before becoming interactive', async (t) => {
+  const preloadedImages = mockCardAssetImages(t);
+  const holoCard = getInteractiveCardPackCardByFigureId('card_nft_2', 3)!;
+  const loadingImageSrc = normalizeFigureDisplayImage('card_nft_2', undefined, 3);
+  assert.equal(loadingImageSrc, holoCard.imageSrc);
+  const view = render(createElement(PonchoCardViewerOverlay, {
+    card: holoCard, active: true, closing: false, loadingImageSrc,
+  }));
+  const { button, element, image } = elements(view.container);
+  assert.deepEqual(preloadedImages.map((asset) => asset.src), [
+    holoCard.imageSrc, holoCard.textureSrc, holoCard.foilSrc, DRIF_GLITTER_URL,
+  ]);
+  const assertPreview = () => {
+    assert.equal(image.src, loadingImageSrc);
+    assert.equal(element.classList.contains('loading'), false);
+    assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+    assert.equal(element.style.getPropertyValue('--card-opacity'), '0');
+    pointer(button, 'pointermove');
+    runFrames(8);
+    assert.deepEqual(pose(element), ['50%', '50%', '0', '0deg', '0deg', '50%', '50%']);
+  };
+  fireEvent.load(image);
+  await act(async () => {
+    preloadedImages.forEach((asset) => asset.load());
+    preloadedImages[0]!.resolveDecode();
+  });
+  assertPreview();
+  for (const asset of preloadedImages.slice(1, -1)) {
+    await act(async () => { asset.resolveDecode(); });
+    assertPreview();
+  }
+  await act(async () => { preloadedImages.at(-1)!.resolveDecode(); });
+  assert.equal(image.src, holoCard.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  assert.equal(element.style.getPropertyValue('--card-opacity'), '');
+  pointer(button, 'pointermove');
+  runFrames(8);
+  assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+});
+
+test('switching cards ignores late decodes and waits for changed effect assets with the same front', async (t) => {
+  const preloadedImages = mockCardAssetImages(t);
+  const props = { card, active: true, closing: false, loadingImageSrc: 'https://example.com/static.webp' };
+  const view = render(createElement(PonchoCardViewerOverlay, props));
+  const { button, element, image } = elements(view.container);
+  const firstBatch = [...preloadedImages];
+  firstBatch.forEach((asset) => asset.load());
   const nextCard = createMiNoteCard(2);
   const nextPreview = 'https://example.com/static-2.webp';
   view.rerender(createElement(PonchoCardViewerOverlay, { ...props, card: nextCard, loadingImageSrc: nextPreview }));
+  const secondBatch = preloadedImages.slice(firstBatch.length);
+  assert.ok(firstBatch.every((asset) => asset.src !== ''));
+  await act(async () => { firstBatch.forEach((asset) => asset.resolveDecode()); });
   assert.equal(image.src, nextPreview);
   assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
-  fireEvent.load(preloadedImages[1]);
+  await act(async () => {
+    secondBatch.forEach((asset) => { asset.load(); asset.resolveDecode(); });
+  });
   assert.equal(image.src, nextCard.imageSrc);
   assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  pointer(button, 'pointermove');
+  runFrames(8);
+  assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+
+  const changedCard = { ...nextCard, textureSrc: 'https://example.com/changed-mask.webp' };
+  view.rerender(createElement(PonchoCardViewerOverlay, { ...props, card: changedCard, loadingImageSrc: nextPreview }));
+  const thirdBatch = preloadedImages.slice(firstBatch.length + secondBatch.length);
+  assert.equal(image.src, nextPreview);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+  assert.equal(element.style.getPropertyValue('--card-opacity'), '0');
+  assert.ok(secondBatch.every((asset) => asset.src !== ''));
+  const mask = thirdBatch.find((asset) => asset.src === changedCard.textureSrc)!;
+  assert.ok(mask);
+  await act(async () => {
+    thirdBatch.forEach((asset) => {
+      asset.load();
+      if (asset !== mask) asset.resolveDecode();
+    });
+  });
+  assert.equal(image.src, nextPreview);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+  await act(async () => { mask.resolveDecode(); });
+  assert.equal(image.src, nextCard.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  assert.equal(element.style.getPropertyValue('--card-opacity'), '');
 });
+
+for (const failure of ['load', 'decode']) {
+  test(`an effect ${failure} failure keeps the static preview visible and releases pending assets`, async (t) => {
+    const preloadedImages = mockCardAssetImages(t);
+    const props = { card, active: true, closing: false, loadingImageSrc: 'https://example.com/static.webp' };
+    const view = render(createElement(PonchoCardViewerOverlay, props));
+    const { button, element, image } = elements(view.container);
+    await act(async () => {
+      preloadedImages.slice(0, -1).forEach((asset) => { asset.load(); asset.resolveDecode(); });
+      if (failure === 'load') preloadedImages.at(-1)!.onerror?.();
+      else {
+        preloadedImages.at(-1)!.load();
+        preloadedImages.at(-1)!.rejectDecode(new Error('decode failed'));
+      }
+    });
+    assert.equal(image.src, props.loadingImageSrc);
+    assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+    pointer(button, 'pointermove');
+    runFrames(8);
+    assert.deepEqual(pose(element), ['50%', '50%', '0', '0deg', '0deg', '50%', '50%']);
+    assert.ok(preloadedImages.every((asset) => asset.src === '' && !asset.onload && !asset.onerror));
+  });
+}
+
+test('downloaded assets still wait for decode and pending work is reused after unmount', async (t) => {
+  const preloadedImages = mockCardAssetImages(t, true);
+  const props = { card, active: true, closing: false, loadingImageSrc: 'https://example.com/static.webp' };
+  const view = render(createElement(PonchoCardViewerOverlay, props));
+  const { element, image } = elements(view.container);
+  assert.ok(preloadedImages.every((asset) => asset.decodeCalls === 1));
+  assert.equal(image.src, props.loadingImageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0');
+  await act(async () => { preloadedImages.forEach((asset) => asset.resolveDecode()); });
+  assert.equal(image.src, card.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  view.rerender(createElement(PonchoCardViewerOverlay, { ...props, card: createMiNoteCard(2) }));
+  view.unmount();
+  assert.ok(preloadedImages.every((asset) => asset.src !== ''));
+  const assetCount = preloadedImages.length;
+  const reopened = render(createElement(PonchoCardViewerOverlay, { ...props, card: createMiNoteCard(2) }));
+  assert.equal(preloadedImages.length, assetCount);
+  assert.equal(elements(reopened.container).image.src, props.loadingImageSrc);
+  await act(async () => { preloadedImages.forEach((asset) => asset.resolveDecode()); });
+  assert.equal(elements(reopened.container).image.src, createMiNoteCard(2).imageSrc);
+});
+
+test('preparing a card before mounting is reused and decoded reopen starts ready', async (t) => {
+  const preloadedImages = mockCardAssetImages(t);
+  preloadDrifCardVisualAssets(card);
+  const assetCount = preloadedImages.length;
+  assert.ok(assetCount > 0);
+  const readiness: boolean[] = [];
+  const props = {
+    card, ariaLabel: 'Preview', showEffectAtRest: true, loadingImageSrc: 'https://example.com/static.webp',
+    onImageReadyChange: (ready: boolean) => { readiness.push(ready); },
+  };
+  const first = render(createElement(DrifEffectCard, props));
+  assert.equal(preloadedImages.length, assetCount);
+  assert.equal(elements(first.container).image.src, props.loadingImageSrc);
+  await act(async () => {
+    preloadedImages.forEach((asset) => { asset.load(); asset.resolveDecode(); });
+  });
+  assert.deepEqual(readiness, [false, true]);
+  first.unmount();
+  readiness.length = 0;
+  const reopened = render(createElement(DrifEffectCard, props));
+  const { element, image, button } = elements(reopened.container);
+  assert.deepEqual(readiness, [true]);
+  assert.equal(preloadedImages.length, assetCount);
+  assert.ok(preloadedImages.every((asset) => asset.decodeCalls === 1));
+  assert.equal(image.src, card.imageSrc);
+  assert.equal(element.style.getPropertyValue('--card-idle-opacity'), '0.99');
+  pointer(button, 'pointermove');
+  runFrames(8);
+  assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+});
+
+for (const [change, changedCard] of [
+  ['effect', { ...card, effect: { ...card.effect, id: 'changed-effect' } }],
+  ['mask', { ...card, textureSrc: 'https://example.com/changed-mask.webp' }],
+  ['foil', { ...card, foilSrc: 'https://example.com/changed-foil.webp' }],
+] as const) {
+  test(`cached front remains visible and interactive after ${change} changes without a static preview`, () => {
+    let imageReady = false;
+    const props = {
+      card,
+      ariaLabel: 'Preview',
+      onImageReadyChange: (ready: boolean) => { imageReady = ready; },
+    };
+    const view = render(createElement(DrifEffectCard, props));
+    const { button, element, image } = elements(view.container);
+    Object.defineProperties(image, {
+      complete: { configurable: true, value: true },
+      naturalWidth: { configurable: true, value: 1000 },
+    });
+    fireEvent.load(image);
+    assert.equal(imageReady, true);
+    view.rerender(createElement(DrifEffectCard, { ...props, card: changedCard }));
+    assert.equal(view.container.querySelector('img'), image);
+    assert.equal(image.src, card.imageSrc);
+    assert.equal(element.classList.contains('loading'), false);
+    assert.equal(imageReady, true);
+    assert.equal(button.tabIndex, 0);
+    pointer(button, 'pointermove');
+    runFrames(8);
+    assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
+  });
+}

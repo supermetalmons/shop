@@ -12,7 +12,8 @@ import { getMediaIdForFigureId } from '../../lib/figureMediaMap';
 import { normalizeBoxDisplayImage } from '../../lib/dropContent';
 import { fetchMiNotePackId } from '../../lib/miNotePackIdentity';
 import { soundPlayer } from '../../lib/SoundPlayer';
-import { preloadPonchoDrifellaCardAssets, type PonchoDrifellaRevealRequestStatus } from '../../lib/ponchoDrifellaReveal';
+import type { PonchoDrifellaRevealRequestStatus } from '../../lib/ponchoDrifellaReveal';
+import { preloadDrifCardVisualAssets } from '../../lib/drifCardVisualAssets';
 import {
   getInteractiveCardPackCardByFigureId,
   getInteractiveCardPackRevealFigureIds,
@@ -65,7 +66,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     revealMediaStartForDropId, revealRendererForDropId, boxAspectRatioForDropId,
     resolveInteractiveCardPackMediaIdForBox, revealSoundUrlsForDropId,
     preloadRevealAssetsForPackMedia, preloadInteractiveCardPackRevealCardAssetsForDropId,
-    preloadRevealVideos, ensureSoundReady, ponchoImageCacheRef,
+    preloadRevealVideos, ensureSoundReady,
     playClickSoundForDropId, playRevealSoundForDropId, playCardMotionSoundForDropId,
   } = assets;
   const session = useRevealSession({ ...options, assets });
@@ -629,7 +630,7 @@ export function useShopReveal(options: ShopRevealOptions) {
     const card = getInteractiveCardPackCardByFigureId(dropId, figureId);
     if (!card) return false;
 
-    preloadPonchoDrifellaCardAssets(card, ponchoImageCacheRef.current, { mode: 'warm', priority: 'low' });
+    preloadDrifCardVisualAssets(card);
 
     const targetRect = calcInteractiveCardViewerTargetRectInViewport();
     const resolvedOriginRect = originRect

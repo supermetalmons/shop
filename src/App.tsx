@@ -228,7 +228,7 @@ function App({ route, suspended = false }: AppProps) {
     usesClearCard3dRevealForDropId: reveal.usesClearCard3dRevealForDropId,
     usesInteractiveCardPackRevealForDropId: reveal.usesInteractiveCardPackRevealForDropId,
   });
-  useShopRevealPreloading(reveal, inventory.shouldPreloadBoxFramesInitial);
+  useShopRevealPreloading(reveal, inventory.shouldPreloadBoxFramesInitial, selection.selectedViewableItem);
   const purchaseActions = useShopPurchaseActions({
     ...drop, ...purchaseState,
     connectedWallet, publicKey, walletBusy, authSubject: auth.authSubject,

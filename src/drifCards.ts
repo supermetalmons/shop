@@ -389,7 +389,21 @@ export function getDrifCardAssetSources(card: DrifCardConfig | undefined): strin
 
 export function getDrifCardVisualAssetSources(card: DrifCardConfig | undefined): string[] {
   if (!card) return [];
-  return [...new Set([...getDrifCardAssetSources(card), DRIF_GRAIN_URL, DRIF_GLITTER_URL])];
+  const effect = card.effect.effectKey;
+  const sources = [card.imageSrc, effect === DRIF_EFFECT_KEYS.lightingOnly ? undefined : card.textureSrc];
+  switch (effect) {
+    case DRIF_EFFECT_KEYS.vRegular:
+    case DRIF_EFFECT_KEYS.miNoteCardsDefault:
+      sources.push(DRIF_GRAIN_URL);
+      break;
+    case DRIF_EFFECT_KEYS.trainerFullArt:
+      sources.push(card.foilSrc);
+      break;
+    case DRIF_EFFECT_KEYS.amazingRare:
+      sources.push(card.foilSrc, DRIF_GLITTER_URL);
+      break;
+  }
+  return [...new Set(sources.map(normalizeDrifCardAssetSrc).filter(Boolean))];
 }
 
 const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {

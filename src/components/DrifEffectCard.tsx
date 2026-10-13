@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../drif.css';
+import { useDrifCardVisualAssets } from '../hooks/useDrifCardVisualAssets';
 import { createMiNoteCardInput, VIEWER_TAP_MAX_DURATION_MS, VIEWER_TAP_MAX_MOVEMENT_PX } from '../lib/miNoteCardInput';
 import {
   DRIF_GRAIN_URL,
@@ -226,11 +227,13 @@ export default function DrifEffectCard({
     const next = String(loadingImageSrc || '').trim();
     return next || undefined;
   }, [loadingImageSrc]);
-  const useLoadingImage = Boolean(normalizedLoadingImageSrc && normalizedLoadingImageSrc !== card.imageSrc);
-  const initialDisplayImageSrc = useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc;
-  const [loading, setLoading] = useState(!useLoadingImage);
-  const [finalImageReady, setFinalImageReady] = useState(false);
-  const [displayImageSrc, setDisplayImageSrc] = useState(initialDisplayImageSrc);
+  const hasLoadingImage = Boolean(normalizedLoadingImageSrc);
+  const { ready: visualAssetsReady } = useDrifCardVisualAssets(hasLoadingImage ? card : undefined);
+  const waitingForVisualAssets = hasLoadingImage && !visualAssetsReady;
+  const displayImageSrc = waitingForVisualAssets ? normalizedLoadingImageSrc! : card.imageSrc;
+  const [loading, setLoading] = useState(!hasLoadingImage);
+  const [imageReady, setImageReady] = useState(false);
+  const finalImageReady = hasLoadingImage ? visualAssetsReady : imageReady;
   const [interacting, setInteracting] = useState(false);
   const interactiveReadyRef = useRef(false);
   const showingLoadingImage = displayImageSrc !== card.imageSrc;
@@ -295,11 +298,12 @@ export default function DrifEffectCard({
   const cardStyle = useMemo<React.CSSProperties>(
     () => ({
       ...staticCardStyle,
-      ['--card-idle-opacity' as never]: showEffectAtRest && !showingLoadingImage ? '0.99' : '0',
+      ['--card-opacity' as never]: waitingForVisualAssets ? '0' : undefined,
+      ['--card-idle-opacity' as never]: showEffectAtRest && !waitingForVisualAssets ? '0.99' : '0',
       ...(card.textureSrc ? { ['--mask' as never]: `url(${card.textureSrc})` } : {}),
       ...(card.foilSrc ? { ['--foil' as never]: `url(${card.foilSrc})` } : {}),
     }),
-    [card.foilSrc, card.textureSrc, showEffectAtRest, showingLoadingImage, staticCardStyle],
+    [card.foilSrc, card.textureSrc, showEffectAtRest, waitingForVisualAssets, staticCardStyle],
   );
 
   const applyStylesFromSprings = useCallback(() => {
@@ -535,7 +539,7 @@ export default function DrifEffectCard({
     }
     setLoading(false);
     if (displayImageSrc === card.imageSrc) {
-      setFinalImageReady(true);
+      setImageReady(true);
     }
   }, [card.imageSrc, displayImageSrc, preserveTransformOnCardChange]);
 
@@ -560,53 +564,18 @@ export default function DrifEffectCard({
 
   useEffect(() => {
     if (preserveTransformOnCardChange) return;
-    setLoading(!useLoadingImage);
-    setFinalImageReady(false);
-    setDisplayImageSrc(useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc);
+    setLoading(!hasLoadingImage);
+    setImageReady(false);
     interactingRef.current = false;
     setInteracting(false);
     reset();
-  }, [card.imageSrc, normalizedLoadingImageSrc, preserveTransformOnCardChange, reset, useLoadingImage]);
-
-  useEffect(() => {
-    if (!preserveTransformOnCardChange) return;
-    setDisplayImageSrc(useLoadingImage ? normalizedLoadingImageSrc || card.imageSrc : card.imageSrc);
-  }, [card.imageSrc, normalizedLoadingImageSrc, preserveTransformOnCardChange, useLoadingImage]);
-
-  useEffect(() => {
-    if (!useLoadingImage) return;
-    let cancelled = false;
-    const image = new Image();
-    image.decoding = 'async';
-    const markReady = () => {
-      if (cancelled) return;
-      setFinalImageReady(true);
-      setDisplayImageSrc(card.imageSrc);
-      setLoading(false);
-    };
-    const markFailed = () => {
-      if (cancelled) return;
-      setDisplayImageSrc(card.imageSrc);
-    };
-    image.onload = markReady;
-    image.onerror = markFailed;
-    image.src = card.imageSrc;
-    if (image.complete && image.naturalWidth > 0) {
-      markReady();
-    }
-    return () => {
-      cancelled = true;
-      image.onload = null;
-      image.onerror = null;
-      image.src = '';
-    };
-  }, [card.imageSrc, preserveTransformOnCardChange, useLoadingImage]);
+  }, [cardIdentityKey, normalizedLoadingImageSrc, preserveTransformOnCardChange, reset, hasLoadingImage]);
 
   useEffect(() => {
     const image = imageRef.current;
     if (!image || !image.complete || image.naturalWidth <= 0) return;
     markImageLoaded();
-  }, [displayImageSrc, markImageLoaded]);
+  }, [cardIdentityKey, displayImageSrc, markImageLoaded]);
 
   useEffect(() => {
     applyStylesFromSprings();

@@ -67,7 +67,7 @@ test('preloading deduplicates both cards and waits for every effect layer to dec
   const pending = loadMiNoteCardAssets(cards, { createImage });
   const sources = [...new Set(cards.flatMap(getDrifCardVisualAssetSources))];
   assert.deepEqual(images.map((image) => image.src), sources);
-  assert.equal(images.length, 8);
+  assert.equal(images.length, 5);
   assert.ok(images.every((image) => image.decoding === 'async' && image.fetchPriority === 'high'));
 
   let ready = false;
@@ -80,7 +80,7 @@ test('preloading deduplicates both cards and waits for every effect layer to dec
   images.at(-1)!.decoded.resolve();
   const loaded = await pending;
   assert.equal(ready, true);
-  assert.equal(loaded.images.length, 8);
+  assert.equal(loaded.images.length, 5);
   assert.deepEqual(images.map((image) => image.src), sources);
   assert.ok(images.every((image) => image.decodeCalls === 1));
   loaded.release();

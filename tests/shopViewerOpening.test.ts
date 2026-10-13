@@ -6,6 +6,10 @@ import type { ShopRevealOptions } from '../src/shop/reveal/contracts.ts';
 import type { ShopRevealController } from '../src/shop/reveal/useShopReveal.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { mockCardAssetImages } from './helpers/cardAssets.ts';
+import { drifCardVisualAssetsCache } from '../src/lib/drifCardVisualAssets.ts';
+import { getDrifCardVisualAssetSources } from '../src/drifCards.ts';
+import { useDrifCardVisualAssets } from '../src/hooks/useDrifCardVisualAssets.ts';
 
 const { dom, setMediaQueryMatches } = setupFrontendDom();
 Object.defineProperty(globalThis, 'DOMRect', { configurable: true, value: dom.window.DOMRect });
@@ -14,7 +18,7 @@ const { useShopReveal } = await import('../src/shop/reveal/useShopReveal.ts');
 const { soundPlayer } = await import('../src/lib/SoundPlayer.ts');
 mock.method(soundPlayer, 'initializeOnUserInteraction', async () => {});
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); drifCardVisualAssetsCache.clear(); });
 after(() => { mock.restoreAll(); dom.window.close(); });
 
 function fixture() {
@@ -66,6 +70,27 @@ function openCardViewer(
     ? controller.openInteractiveCardViewer(input)
     : controller.openClearCardModelViewer({ ...input, viewerMode: viewer.viewerMode });
 }
+
+test('opening starts only required card assets and the viewer reuses their pending decode', async (t) => {
+  const images = mockCardAssetImages(t);
+  const { options } = fixture();
+  const { result } = renderHook(useShopReveal, { initialProps: options });
+  act(() => assert.equal(openCardViewer(result.current, cardViewers[2]), true));
+  const card = result.current.presentation.interactiveViewerCard!;
+  assert.deepEqual(images.map((image) => image.src), getDrifCardVisualAssetSources(card));
+  assert.ok(images.every((image) => image.fetchPriority === 'high'));
+  assert.ok(!images.some((image) => image.src === card.foilSrc));
+  const count = images.length;
+  const assets = renderHook(() => useDrifCardVisualAssets(card));
+  assert.equal(images.length, count);
+  await act(async () => {
+    images.forEach((image) => image.load());
+    images.slice(0, -1).forEach((image) => image.resolveDecode());
+  });
+  assert.equal(assets.result.current.ready, false);
+  await act(async () => { images.at(-1)!.resolveDecode(); });
+  assert.equal(assets.result.current.ready, true);
+});
 
 function checkViewerDismissal(
   t: TestContext,

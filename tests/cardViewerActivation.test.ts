@@ -5,6 +5,8 @@ import { createElement } from 'react';
 import { getInteractiveCardPackCardByFigureId } from '../src/lib/interactiveCardPackReveal.ts';
 import { createMiNoteCard } from '../src/lib/miNoteCards.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { mockCardAssetImages } from './helpers/cardAssets.ts';
+import { drifCardVisualAssetsCache } from '../src/lib/drifCardVisualAssets.ts';
 
 const { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
@@ -53,6 +55,7 @@ beforeEach((t: TestContext) => {
 
 afterEach(() => {
   cleanup();
+  drifCardVisualAssetsCache.clear();
   assert.equal(frames.size, 0, 'unmount cancels animation frames');
   assert.equal(timers.size, 0, 'unmount clears interaction timers');
 });
@@ -170,13 +173,8 @@ for (const dropId of drops) {
     });
   }
 
-  test(`${dropId} preview is accessible and dismissible before the clean image loads`, (t) => {
-    const preloadedImages: HTMLImageElement[] = [];
-    t.mock.method(globalThis, 'Image', function () {
-      const image = document.createElement('img');
-      preloadedImages.push(image);
-      return image;
-    });
+  test(`${dropId} preview is accessible and dismissible until every card asset decodes`, async (t) => {
+    const preloadedImages = mockCardAssetImages(t);
     const viewer = mountViewer(dropId, { loadingImageSrc: 'https://example.com/preview.webp' });
     assert.equal(viewer.image.src, viewer.props.loadingImageSrc);
     assert.equal(viewer.button.getAttribute('aria-disabled'), null);
@@ -189,7 +187,9 @@ for (const dropId of drops) {
     assert.equal(viewer.dismissals(), 2);
 
     pointer(viewer.button, 'pointerdown', { pointerType: 'touch' });
-    fireEvent.load(preloadedImages[0]);
+    await act(async () => {
+      preloadedImages.forEach((image) => { image.load(); image.resolveDecode(); });
+    });
     assert.equal(viewer.image.src, viewer.props.card!.imageSrc);
     assert.equal(viewer.view.container.querySelector('button'), viewer.button);
     pointer(viewer.button, 'pointerup', { pointerType: 'touch' });
