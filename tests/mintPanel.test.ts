@@ -152,6 +152,7 @@ test('minting switches between discounted and regular prices as quantity and all
   const discounted: number[] = [];
   const regular: number[] = [];
   const props = panelProps({
+    dropId: 'mi_note_cards',
     discountAvailable: true,
     discountPriceSol: 0.5,
     discountMaxQuantity: 2,
@@ -163,7 +164,7 @@ test('minting switches between discounted and regular prices as quantity and all
 
   fireEvent.change(quantity, { target: { value: '2' } });
   await act(async () => {
-    fireEvent.click(view.getByRole('button', { name: 'Mint with discount for 1 SOL. Regular price 2 SOL.' }));
+    fireEvent.click(view.getByRole('button', { name: 'Mint with discount for 1 SOL. Regular price 2 SOL. 2 packs (4 cards).' }));
   });
   fireEvent.change(quantity, { target: { value: '3' } });
   assert.equal(view.queryByRole('button', { name: /Mint with discount/ }), null);
@@ -172,7 +173,7 @@ test('minting switches between discounted and regular prices as quantity and all
   await act(async () => { fireEvent.click(regularMint); });
 
   fireEvent.change(quantity, { target: { value: '1' } });
-  assert.ok(view.getByRole('button', { name: /Mint with discount for 0.5 SOL/ }));
+  assert.ok(view.getByRole('button', { name: 'Mint with discount for 0.5 SOL. Regular price 1 SOL. 1 pack (2 cards).' }));
   view.rerender(createElement(MintPanel, { ...props, discountMaxQuantity: 0 }));
   assert.equal(view.queryByRole('button', { name: /Mint with discount/ }), null);
   await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint/ })); });

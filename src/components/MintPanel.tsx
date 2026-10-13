@@ -4,7 +4,7 @@ import { LuInfo } from 'react-icons/lu';
 import type { PackStatusBreakdown, PackStatusDisplayLabels } from '../types';
 import { resolveDropSizeGuide } from '../lib/dropSizeGuide';
 import { resolveDropXProfile } from '../lib/dropSocialLinks';
-import { secondaryMarketplaceLinksForDropId } from '../config/deployment';
+import { getFrontendDrop, secondaryMarketplaceLinksForDropId } from '../config/deployment';
 import { useMintPanelForm, type MintPanelFormOptions } from '../shop/purchase/useMintPanelForm';
 import { MintPanelActions } from './MintPanelActions';
 import { MintPreview, type MintPanelBoxMedia, type MintPreviewPrimaryRenderer } from './MintPreview';
@@ -262,6 +262,10 @@ function PurchaseMintPanel({
     sizeBlinkToken, isBlinking, showSizeSelector, showQuantitySlider, showFormControls,
     controlsBusy,
   } = form;
+  const drop = getFrontendDrop(dropId || '');
+  const cardQuantityLabel = drop?.figureNamePrefix === 'card' && drop.itemsPerBox > 0
+    ? dropAssetCount(drop, 'figure', quantity * drop.itemsPerBox)
+    : undefined;
   const formId = 'mint-form';
   const sizeGuide = showSizeSelector ? resolveDropSizeGuide(dropId) : null;
   const [sizeInfoOpen, setSizeInfoOpen] = useState(false);
@@ -417,7 +421,10 @@ function PurchaseMintPanel({
               </div>
             ) : showQuantitySlider ? (
               <label className="mint-panel__label">
-                <span className="mint-panel__label-text muted small">{quantityLabel}</span>
+                <span className="mint-panel__label-text muted small">
+                  {quantityLabel}
+                  {cardQuantityLabel ? <span className="mint-panel__card-quantity"> ({cardQuantityLabel})</span> : null}
+                </span>
                 <input
                   type="range"
                   aria-label="Mint quantity"
@@ -442,6 +449,7 @@ function PurchaseMintPanel({
             useDiscountMint={form.useDiscountMint}
             showQuantitySlider={showQuantitySlider}
             quantityLabel={quantityLabel}
+            cardQuantityLabel={cardQuantityLabel}
             stripePaymentDisplayPriceLabel={form.stripePaymentDisplayPriceLabel}
             totalPriceLabel={form.totalPriceLabel}
             totalDiscountPriceLabel={form.totalDiscountPriceLabel}

@@ -19,6 +19,7 @@ interface MintPanelActionsProps {
   useDiscountMint: boolean;
   showQuantitySlider: boolean;
   quantityLabel: string;
+  cardQuantityLabel?: string;
   stripePaymentDisplayPriceLabel: string | undefined;
   totalPriceLabel: string;
   totalDiscountPriceLabel: string;
@@ -191,7 +192,7 @@ function tighterActionTextFit(a: ActionTextFit, b: ActionTextFit): ActionTextFit
 export function MintPanelActions({
   formId, showStripePaymentButton, showSolanaMintButton, stripePaymentPending,
   submitBusy, disabled, walletActionBusy = false, useDiscountMint, showQuantitySlider, quantityLabel,
-  revealActionBusy = false,
+  revealActionBusy = false, cardQuantityLabel,
   stripePaymentDisplayPriceLabel, totalPriceLabel, totalDiscountPriceLabel, onStripePayment,
 }: MintPanelActionsProps) {
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -202,7 +203,8 @@ export function MintPanelActions({
       ? 'mint-panel__submit mint-panel__submit--discounted'
       : 'mint-panel__submit';
   const submitAriaLabel = useDiscountMint
-    ? `Mint with discount for ${totalDiscountPriceLabel} SOL. Regular price ${totalPriceLabel} SOL.`
+    ? `Mint with discount for ${totalDiscountPriceLabel} SOL. Regular price ${totalPriceLabel} SOL.` +
+      (showQuantitySlider && cardQuantityLabel ? ` ${quantityLabel} (${cardQuantityLabel}).` : '')
     : undefined;
   const ctaStackClassName = showStripePaymentButton && showSolanaMintButton
     ? 'mint-panel__cta-stack mint-panel__cta-stack--with-payment'
@@ -219,6 +221,7 @@ export function MintPanelActions({
     submitBusy,
     useDiscountMint,
     quantityLabel,
+    cardQuantityLabel,
     totalPriceLabel,
     totalDiscountPriceLabel,
   ]);
@@ -289,7 +292,10 @@ export function MintPanelActions({
                 <span className="mint-panel__submit-text" data-mint-action-fit="label">
                   Mint
                   {showQuantitySlider ? (
-                    <span className="mint-panel__submit-quantity"> {quantityLabel}</span>
+                    <span className="mint-panel__submit-quantity">
+                      {' '}{quantityLabel}
+                      {cardQuantityLabel ? <span className="mint-panel__card-quantity"> ({cardQuantityLabel})</span> : null}
+                    </span>
                   ) : null}
                 </span>
                 {useDiscountMint ? (

@@ -842,6 +842,10 @@
   font-weight: 500;
 }
 
+.mint-panel__card-quantity {
+  opacity: 0.7;
+}
+
 .mint-panel__submit-price {
   align-self: baseline;
   min-width: 0;
