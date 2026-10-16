@@ -4,10 +4,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from jobs import CONTRACT, create_job, select_ids, validate_job
-from prepare import snapshot
+import prepare
+from prepare import file_hash, publish_snapshot, snapshot
 
 
 class PreparationTests(unittest.TestCase):
@@ -18,6 +20,7 @@ class PreparationTests(unittest.TestCase):
             'public/icon.svg': '<svg/>',
             'scripts/mi-note-video/package.json': '{"private":true}',
             'scripts/mi-note-video/package-lock.json': '{"lockfileVersion":3}',
+            'scripts/mi-note-video/contract.json': json.dumps(CONTRACT),
             'scripts/mi-note-video/harness.tsx': 'import "../../../shared/scene.ts";',
             'scripts/mi-note-video/tests/example.py': 'ignored',
             'scripts/mi-note-video/node_modules/untrusted.js': 'ignored',
@@ -53,6 +56,84 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'symlinks'):
                 snapshot(Path(temporary) / 'copy', root)
 
+    def test_publish_recovers_incomplete_or_changed_releases_and_reuses_verified_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = base / 'source'
+            self.source(root)
+            staging = base / 'staging'
+            manifest = snapshot(staging, root)
+            release = base / 'releases' / manifest['sourceId']
+            release.mkdir(parents=True)
+            (release / 'partial').write_text('interrupted copy')
+            publish_snapshot(staging, release, manifest)
+            self.assertFalse(staging.exists())
+            preserved = list(release.parent.glob(release.name + '.incomplete-*'))
+            self.assertEqual(len(preserved), 1)
+            self.assertEqual((preserved[0] / 'partial').read_text(), 'interrupted copy')
+            self.assertEqual(json.loads((release / 'source-snapshot.json').read_text()), manifest)
+
+            snapshot(staging, root)
+            publish_snapshot(staging, release, manifest)
+            self.assertTrue(staging.exists())
+            self.assertEqual(len(list(release.parent.iterdir())), 2)
+            (release / 'shared/scene.ts').write_text('corrupted copy')
+            publish_snapshot(staging, release, manifest)
+            self.assertEqual(file_hash(release / 'shared/scene.ts'), manifest['files']['shared/scene.ts'])
+            self.assertEqual(len(list(release.parent.iterdir())), 3)
+
+    def test_interrupted_publication_leaves_no_partial_final_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = base / 'source'
+            self.source(root)
+            staging = base / 'staging'
+            manifest = snapshot(staging, root)
+            release = base / 'releases' / manifest['sourceId']
+            with patch.object(Path, 'rename', side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    publish_snapshot(staging, release, manifest)
+            self.assertFalse(release.exists())
+            publish_snapshot(staging, release, manifest)
+            self.assertEqual(file_hash(release / 'shared/scene.ts'), manifest['files']['shared/scene.ts'])
+
+    def test_preparation_and_job_metadata_use_snapshot_during_checkout_edits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root, state = base / 'source', base / 'state'
+            self.source(root)
+            state.mkdir()
+            contract_hash = file_hash(root / 'scripts/mi-note-video/contract.json')
+            vm = Mock(config={'guestRoot': '/data/render', 'python': '/runtime/python', 'node': '/runtime/node'})
+            transferred_hash = None
+
+            def upload(local, remote):
+                nonlocal transferred_hash
+                transferred_hash = file_hash(local)
+
+            def execute(arguments, **kwargs):
+                if arguments[0] == '/usr/bin/shasum':
+                    return (transferred_hash + ' source.tar\n').encode()
+                if 'npm ci' in arguments[-1]:
+                    (root / 'src/lib/miNoteCards.ts').write_text('export const MI_NOTE_CARD_COUNT = 1431;')
+                    contract = json.loads((root / 'scripts/mi-note-video/contract.json').read_text())
+                    contract['scene']['effectOpacity'] = .98
+                    (root / 'scripts/mi-note-video/contract.json').write_text(json.dumps(contract))
+                return b''
+
+            vm.put.side_effect = upload
+            vm.exec.side_effect = execute
+            with patch.object(prepare, 'snapshot', side_effect=lambda destination: snapshot(destination, root)), \
+                    patch.object(prepare, 'inspect_runtime', return_value={'fixture': True}):
+                prepared = prepare.prepare(vm, state)
+            self.assertEqual(prepared['catalogCount'], 1430)
+            self.assertEqual(prepared['contractSha256'], contract_hash)
+            self.assertNotEqual(file_hash(root / 'scripts/mi-note-video/contract.json'), contract_hash)
+            with patch('jobs.HERE', root / 'scripts/mi-note-video'):
+                job = create_job('fixture', [1], 'sideways-1980', 'breathing-swing', prepared, vm.config)
+            self.assertEqual(job['catalogCount'], 1430)
+            self.assertEqual(job['contractSha256'], contract_hash)
+
     def test_explicit_full_catalog_and_selection(self):
         self.assertEqual(select_ids(all_cards=True, count=1430), list(range(1, 1431)))
         self.assertEqual(select_ids('1375,312,904', count=1430), [312, 904, 1375])
@@ -62,7 +143,7 @@ class PreparationTests(unittest.TestCase):
 
     def test_job_records_explicit_profiles_and_source_identity(self):
         prepared = {'sourceId': 'a' * 64, 'guestSourceRoot': '/data/releases/' + 'a' * 64,
-                    'runtime': {'versions': {'node': '24.22.0'}}, 'catalogCount': 1430}
+                    'runtime': {'versions': {'node': '24.22.0'}}, 'catalogCount': 1430, 'contractSha256': 'b' * 64}
         config = {'guestRoot': '/data/render', 'python': '/runtime/python', 'node': '/runtime/node'}
         for profile in CONTRACT['profiles']:
             for motion in CONTRACT['motions']:

@@ -62,7 +62,7 @@ def create_job(name, ids, profile, motion, prepared, config):
         'ids': select_ids(ids, count=prepared['catalogCount']), 'catalogCount': prepared['catalogCount'], 'profile': profile, 'motion': motion,
         'sourceId': prepared['sourceId'], 'sourceRoot': prepared['guestSourceRoot'],
         'root': root, 'python': config['python'], 'node': config['node'],
-        'runtime': prepared['runtime'], 'contractSha256': hashlib.sha256((HERE / 'contract.json').read_bytes()).hexdigest(),
+        'runtime': prepared['runtime'], 'contractSha256': prepared['contractSha256'],
         'createdAt': now(),
     }
 

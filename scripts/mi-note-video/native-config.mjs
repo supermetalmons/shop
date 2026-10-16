@@ -116,8 +116,8 @@ export function runtimeVersions(python) {
   return {
     node: process.version,
     python: JSON.parse(run(python, ['-c', 'import json,platform;from PIL import Image,features;import numpy;print(json.dumps({"python":platform.python_version(),"pillow":Image.__version__,"littlecms":features.version("littlecms2"),"numpy":numpy.__version__}))'])),
-    ffmpeg: run('ffmpeg', ['-version']).split('\n')[0],
-    ffprobe: run('ffprobe', ['-version']).split('\n')[0],
+    ffmpeg: run(process.env.MI_NOTE_FFMPEG || 'ffmpeg', ['-version']).split('\n')[0],
+    ffprobe: run(process.env.MI_NOTE_FFPROBE || 'ffprobe', ['-version']).split('\n')[0],
     safariDriver: run('/usr/bin/safaridriver', ['--version']),
     colorProfiles: {
       p3: hashFile('/System/Library/ColorSync/Profiles/Display P3.icc'),

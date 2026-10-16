@@ -38,6 +38,23 @@ def file_hash(path):
     return value.hexdigest()
 
 
+def publish_snapshot(staging, release, manifest):
+    release.parent.mkdir(parents=True, exist_ok=True)
+    if release.is_symlink():
+        raise ValueError('Local source release must not be a symlink.')
+    if release.exists():
+        expected = {**manifest['files'], 'source-snapshot.json': file_hash(staging / 'source-snapshot.json')}
+        try:
+            valid = all((release / name).resolve() == release / name and (release / name).is_file()
+                        and file_hash(release / name) == digest for name, digest in expected.items())
+        except OSError:
+            valid = False
+        if valid:
+            return
+        release.rename(release.with_name(release.name + '.incomplete-' + uuid.uuid4().hex))
+    staging.rename(release)
+
+
 def snapshot(destination, root=ROOT):
     destination, root = Path(destination), Path(root)
     destination.mkdir(parents=True, exist_ok=True)
@@ -91,6 +108,8 @@ def prepare(vm, state):
     with tempfile.TemporaryDirectory(prefix='prepare-', dir=state) as temporary:
         staging = Path(temporary) / 'source'
         manifest = snapshot(staging)
+        count = catalog_count(staging)
+        contract_hash = manifest['files']['scripts/mi-note-video/contract.json']
         release = vm.config['guestRoot'].rstrip('/') + '/releases/' + manifest['sourceId']
         archive = Path(temporary) / 'source.tar'
         with tarfile.open(archive, 'w') as stream:
@@ -127,10 +146,9 @@ print(data['sourceId'])'''
         vm.exec(['/bin/sh', '-c', install], timeout=600)
         vm.exec(['/bin/rm', remote_archive])
         local_release = state / 'releases' / manifest['sourceId']
-        if not local_release.exists():
-            local_release.parent.mkdir(exist_ok=True)
-            shutil.copytree(staging, local_release)
+        publish_snapshot(staging, local_release, manifest)
         result = {'version': 1, 'sourceId': manifest['sourceId'], 'guestSourceRoot': release, 'runtime': runtime,
-                  'catalogCount': catalog_count(), 'preparedAt': now(), 'manifestSha256': file_hash(local_release / 'source-snapshot.json')}
+                  'catalogCount': count, 'contractSha256': contract_hash, 'preparedAt': now(),
+                  'manifestSha256': file_hash(local_release / 'source-snapshot.json')}
         atomic_json(state / 'prepared.json', result)
         return result

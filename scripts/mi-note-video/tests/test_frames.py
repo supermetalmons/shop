@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -113,6 +114,42 @@ class FramePreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "exactly 276"):
                 frames.encode_frames(directory, output, "srgb")
             self.assertFalse(output.exists())
+
+    def test_encoding_uses_configured_executables_for_encode_probe_and_decode(self):
+        stream = {
+            "codec_type": "video", "codec_name": "hevc", "codec_tag_string": "hvc1", "width": 2, "height": 2,
+            "pix_fmt": "yuv420p10le", "color_range": "tv", "color_space": "bt709",
+            "color_transfer": "iec61966-2-1", "color_primaries": "smpte432", "avg_frame_rate": "60/1",
+            "nb_frames": "276", "nb_read_frames": "276", "duration": "4.6",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            competing = root / "path-bin"
+            competing.mkdir()
+            for name in ["ffmpeg", "ffprobe"]:
+                executable = competing / name
+                executable.write_text("#!/bin/sh\nexit 99\n")
+                executable.chmod(0o700)
+            configured = {"MI_NOTE_FFMPEG": str(root / "pinned tools/ffmpeg"),
+                          "MI_NOTE_FFPROBE": str(root / "pinned tools/ffprobe")}
+            for label, overrides in [("configured", configured), ("unset", {})]:
+                with self.subTest(environment=label), patch.dict(frames.os.environ, {"PATH": str(competing), **overrides}, clear=True):
+                    self.assertEqual(shutil.which("ffmpeg"), str(competing / "ffmpeg"))
+                    self.assertEqual(shutil.which("ffprobe"), str(competing / "ffprobe"))
+
+                    def subprocess_result(command, **kwargs):
+                        if "-frames:v" in command:
+                            Path(command[-1]).write_bytes(b"mock encoded video")
+                        stdout = json.dumps({"streams": [stream]}) if "-count_frames" in command else ""
+                        return frames.subprocess.CompletedProcess(command, 0, stdout, "")
+
+                    with patch.object(frames, "validate_frames", return_value={}), \
+                            patch.object(frames.subprocess, "run", side_effect=subprocess_result) as run:
+                        result = frames.encode_frames(root, root / f"{label}.mp4", "p3", size=2)
+                    ffmpeg = overrides.get("MI_NOTE_FFMPEG", "ffmpeg")
+                    ffprobe = overrides.get("MI_NOTE_FFPROBE", "ffprobe")
+                    self.assertEqual([call.args[0][0] for call in run.call_args_list], [ffmpeg, ffprobe, ffmpeg])
+                    self.assertTrue(result["fullyDecoded"])
 
     def test_sequence_reuses_transform_and_preserves_numbered_frames(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 2):

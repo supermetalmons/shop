@@ -62,7 +62,7 @@ export function assertJobRuntime(job) {
   const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024 }).trim();
   const paths = { node: process.execPath, python: job.python };
   for (const name of ['ffmpeg', 'ffprobe']) {
-    paths[name] = run('/usr/bin/which', [name]);
+    paths[name] = process.env[`MI_NOTE_${name.toUpperCase()}`] || run('/usr/bin/which', [name]);
     requireValue(isAbsolute(paths[name]) && !paths[name].includes('\n'), `Runtime ${name} executable was not found in PATH.`);
   }
   const versions = JSON.parse(run(job.python, ['-c', 'import json,platform,numpy;from PIL import Image,features;print(json.dumps({"python":platform.python_version(),"pillow":Image.__version__,"numpy":numpy.__version__,"littlecms":features.version("littlecms2")}))']));

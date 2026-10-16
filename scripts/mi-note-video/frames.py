@@ -708,6 +708,8 @@ def encode_frames(directory, output_path, space, size=None):
     output = require_new_output(output_path, ".mp4")
     directory = Path(directory).resolve()
     profile = validate_frames(directory, space, size)
+    ffmpeg = os.environ.get("MI_NOTE_FFMPEG", "ffmpeg")
+    ffprobe = os.environ.get("MI_NOTE_FFPROBE", "ffprobe")
     primaries = "smpte432" if space == "p3" else "bt709"
     codec = "hevc" if space == "p3" else "h264"
     pixel_format = "yuv420p10le" if space == "p3" else "yuv420p"
@@ -719,7 +721,7 @@ def encode_frames(directory, output_path, space, size=None):
     )
     pending = output.with_name(f".{output.stem}.{uuid4().hex}.pending.mp4")
     command = [
-        "ffmpeg", "-hide_banner", "-v", "error", "-xerror", "-n",
+        ffmpeg, "-hide_banner", "-v", "error", "-xerror", "-n",
         "-framerate", str(FPS), "-start_number", "0", "-i", str(directory / "%04d.png"),
         "-map", "0:v:0", "-an", "-frames:v", str(FRAME_COUNT),
         "-vf", filters, "-c:v", "libx265" if space == "p3" else "libx264",
@@ -735,7 +737,7 @@ def encode_frames(directory, output_path, space, size=None):
     try:
         run(command)
         probe = json.loads(run([
-            "ffprobe", "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(pending),
+            ffprobe, "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(pending),
         ]))
         streams = probe.get("streams", [])
         if len(streams) != 1:
@@ -757,7 +759,7 @@ def encode_frames(directory, output_path, space, size=None):
             raise ValueError("Output frame count differs from the requested count")
         if abs(float(stream["duration"]) - FRAME_COUNT / FPS) > 0.001:
             raise ValueError("Output duration differs from the requested duration")
-        run(["ffmpeg", "-v", "error", "-xerror", "-i", str(pending), "-map", "0:v:0", "-f", "null", "-"])
+        run([ffmpeg, "-v", "error", "-xerror", "-i", str(pending), "-map", "0:v:0", "-f", "null", "-"])
         digest = hashlib.sha256(pending.read_bytes()).hexdigest()
         byte_size = pending.stat().st_size
         os.link(pending, output)

@@ -74,8 +74,9 @@ def ready(vm):
 
 def environment(vm, root):
     config = vm.config
-    paths = [str(Path(config[name]).parent) for name in ('node', 'ffmpeg', 'python')]
+    paths = [str(Path(config[name]).parent) for name in ('node', 'ffmpeg', 'ffprobe', 'python')]
     return {'HOME': config['guestHome'], 'TMPDIR': '/private/tmp', 'MI_NOTE_JOB_ROOT': root,
+            'MI_NOTE_FFMPEG': config['ffmpeg'], 'MI_NOTE_FFPROBE': config['ffprobe'],
             'PATH': ':'.join(dict.fromkeys([*paths, '/usr/bin', '/bin', '/usr/sbin', '/sbin']))}
 
 

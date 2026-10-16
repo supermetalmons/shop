@@ -44,7 +44,7 @@ class CLITests(unittest.TestCase):
         self.state = self.root / 'state'
         self.state.mkdir(mode=0o700)
         self.config = {'guestRoot': str(self.root / 'guest'), 'python': '/runtime/python', 'node': '/runtime/node'}
-        self.prepared = {'sourceId': 'a' * 64, 'guestSourceRoot': str(self.root / 'release'), 'runtime': {'versions': {'node': '24.22.0'}}, 'catalogCount': 1430}
+        self.prepared = {'sourceId': 'a' * 64, 'guestSourceRoot': str(self.root / 'release'), 'runtime': {'versions': {'node': '24.22.0'}}, 'catalogCount': 1430, 'contractSha256': 'b' * 64}
         self.job = cli.create_job('fixture', [312, 904], cli.CONTRACT['defaults']['profile'], cli.CONTRACT['defaults']['motion'], self.prepared, self.config)
         self.metadata = {'version': 1, 'job': self.job, 'output': str(self.root / 'output'), 'evidence': str(self.root / 'evidence')}
         self.vm = SimpleNamespace(state=self.state, config=self.config)
@@ -54,6 +54,23 @@ class CLITests(unittest.TestCase):
 
     def status(self, attempt='new', status='complete', **extra):
         return {'jobId': self.job['jobId'], 'sourceId': self.job['sourceId'], 'attempt': attempt, 'status': status, **extra}
+
+    def test_environment_pins_media_executables_despite_competing_path_entries(self):
+        config = {**self.config, 'guestHome': str(self.root / 'home'), 'node': str(self.root / 'node/bin/node')}
+        for name in ('ffmpeg', 'ffprobe'):
+            selected = self.root / name / 'bin' / (name + '-pinned')
+            shadow = self.root / 'node/bin' / name
+            for executable, label in [(selected, 'configured'), (shadow, 'shadowed')]:
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text('#!/bin/sh\nprintf "' + label + '\\n"\n')
+                executable.chmod(0o700)
+            config[name] = str(selected)
+        environment = cli.environment(SimpleNamespace(config=config), self.job['root'])
+        for name in ('ffmpeg', 'ffprobe'):
+            configured = environment['MI_NOTE_' + name.upper()]
+            self.assertEqual(configured, config[name])
+            self.assertEqual(subprocess.check_output([name, '-version'], env=environment, text=True), 'shadowed\n')
+            self.assertEqual(subprocess.check_output([configured, '-version'], env=environment, text=True), 'configured\n')
 
     def test_read_status_ignores_old_terminal_attempt(self):
         for terminal in ['complete', 'failed', 'interrupted']:
