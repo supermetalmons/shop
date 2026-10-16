@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "motions": ["original", "vertical-swing", "breathing-swing"],
+  "defaults": {"profile": "sideways-1980", "motion": "breathing-swing"},
+  "profiles": {
+    "sideways-1980": {"nativeSize": 2970, "deliverySize": 1980, "captureScale": 2.75, "rotationDegrees": 90, "tiles": 1},
+    "upright-2160": {"nativeSize": 3240, "deliverySize": 2160, "captureScale": 3, "rotationDegrees": 0, "tiles": 2}
+  },
+  "scene": {"width": 1080, "height": 1080, "cardWidth": 586.44, "effectOpacity": 0.99, "background": "#000000", "shadow": "none"},
+  "video": {"frameRate": 60, "frames": 276, "duration": 4.6, "space": "p3", "encoder": "libx265", "codec": "hevc", "profile": "Main 10", "tag": "hvc1", "pixelFormat": "yuv420p10le", "crf": 16, "preset": "medium", "keyframeInterval": 60, "colorRange": "tv", "colorSpace": "bt709", "colorTransfer": "iec61966-2-1", "colorPrimaries": "smpte432"},
+  "capture": {"gutterPixels": 32, "seamBandPixels": 128, "antialiasPixels": 2, "blackBorderPixels": 8, "warmupFrames": [0, 69, 138, 207, 275, 0], "controlFrames": [0, 69, 138, 207, 275]},
+  "runtime": {"node": "24.22.0", "python": "3.12.14", "pillow": "12.3.0", "numpy": "2.3.5", "littlecms": "2.19", "ffmpeg": "8.1.2", "ffprobe": "8.1.2"}
+}

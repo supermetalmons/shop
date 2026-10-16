@@ -1,0 +1,23 @@
+import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const directory = dirname(fileURLToPath(import.meta.url));
+const root = resolve(directory, '../..');
+const args = process.argv.slice(2);
+let python = process.env.PYTHON || 'python3';
+let native = false;
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === '--python' && args[index + 1]) { python = args[++index]; native = true; }
+  else throw Error('Usage: test.mjs [--python /path/to/python-with-pinned-requirements]');
+}
+const run = (command, arguments_) => {
+  const result = spawnSync(command, arguments_, { cwd: root, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) process.exit(result.status || 1);
+};
+const nodeTests = readdirSync(join(directory, 'tests')).filter(name => /\.test\.(ts|mjs)$/.test(name)).sort().map(name => join(directory, 'tests', name));
+run(process.execPath, ['--import', 'tsx', '--test', ...nodeTests]);
+const pythonTests = native ? ['test_*.py'] : ['test_vm.py', 'test_cli.py', 'test_prepare.py', 'test_jobs.py', 'test_audit.py'];
+for (const pattern of pythonTests) run(python, ['-m', 'unittest', 'discover', '-s', join(directory, 'tests'), '-p', pattern, '-v']);

@@ -1,0 +1,12 @@
+* { box-sizing: border-box; animation: none !important; transition: none !important; }
+*::before, *::after { animation: none !important; transition: none !important; }
+html, body, #root { margin: 0; padding: 0; width: 100%; min-height: 100%; }
+html { color-scheme: light; background: black; overflow: hidden; scroll-behavior: auto; scrollbar-width: none; }
+body { overflow: hidden; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+#comparison-stage { position: absolute; left: 0; top: 0; overflow: hidden; transform-origin: top left; }
+#comparison-stage[data-capture-rotation="90"] { transform: rotate(90deg); transform-origin: center; }
+html[data-capture-background="black"], html[data-capture-background="black"] body,
+html[data-capture-background="black"] #root, html[data-capture-background="black"] #comparison-stage { background-color: #000000 !important; }
+#comparison-card { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.drif-effect-card { width: 100%; background: transparent; border: none; padding: 0; display: block; }

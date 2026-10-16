@@ -1,0 +1,13 @@
+{
+  "width": 1080,
+  "height": 1080,
+  "frameRate": 60,
+  "frames": 276,
+  "duration": 4.6,
+  "cardWidth": 586.44,
+  "background": "#000000",
+  "cardShadow": "none",
+  "effectOpacity": 0.99,
+  "tilt": true,
+  "lightPath": "orbit"
+}
