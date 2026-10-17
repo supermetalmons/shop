@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { ackMatches, assertJobSources, assertRuntimeMatches, atomicJson, preserveIncomplete, runQueue, validateJob } from '../guest-runner.mjs';
+import { ackMatches, assertJobBackend, assertJobSources, assertPipelinePeers, assertRuntimeMatches, atomicJson, preserveIncomplete, runQueue, validateCaptureRelease, validateJob } from '../guest-runner.mjs';
+import { nativeFramesSha256, sourceHashesSha256 } from '../capture-release.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -60,6 +61,42 @@ test('full pinned catalog is accepted and out-of-catalog or noncanonical IDs are
   assert.equal(validateJob(job).ids.length, 1430);
   for (const ids of [[1, 1], [2, 1], [0], [1431], []]) assert.throws(() => validateJob({ ...job, ids }));
   assert.throws(() => validateJob({ ...job, sourceId: 'short-id' }), /source identity/);
+});
+
+test('execution jobs accept explicit backends without rewriting legacy VM identities', context => {
+  const { job } = fixture(context);
+  const before = structuredClone(job);
+  assert.equal(validateJob(job), job);
+  assert.deepEqual(job, before);
+  for (const backend of ['host', 'vm']) assert.equal(validateJob({ ...job, backend }).backend, backend);
+  for (const backend of ['', 'auto', null, 1]) assert.throws(() => validateJob({ ...job, backend }), /Unsupported native rendering backend/);
+});
+
+test('execution backend is pinned to both its environment and physical hardware', () => {
+  const host = { platform: 'darwin', model: 'Mac14,5' };
+  const vm = { platform: 'darwin', model: 'VirtualMac2,1' };
+  assert.equal(assertJobBackend({}, 'vm', vm), 'vm');
+  assert.equal(assertJobBackend({ backend: 'vm' }, 'vm', vm), 'vm');
+  assert.equal(assertJobBackend({ backend: 'host' }, 'host', host), 'host');
+  assert.throws(() => assertJobBackend({}, 'host', host), /environment differs from the pinned job backend/);
+  assert.throws(() => assertJobBackend({ backend: 'vm' }, 'host', host), /environment differs from the pinned job backend/);
+  assert.throws(() => assertJobBackend({ backend: 'host' }, 'vm', vm), /environment differs from the pinned job backend/);
+  assert.throws(() => assertJobBackend({ backend: 'host' }, 'host', vm), /physical Mac hardware/);
+  assert.throws(() => assertJobBackend({ backend: 'vm' }, 'vm', host), /configured macOS VM/);
+  assert.throws(() => assertJobBackend({ backend: 'host' }, 'auto', host), /Unsupported native rendering backend/);
+});
+
+test('missing backend environment only permits a legacy or explicit VM execution', () => {
+  const previous = process.env.MI_NOTE_RENDER_BACKEND;
+  delete process.env.MI_NOTE_RENDER_BACKEND;
+  try {
+    const vm = { platform: 'darwin', model: 'VirtualMac2,1' };
+    assert.equal(assertJobBackend({}, undefined, vm), 'vm');
+    assert.equal(assertJobBackend({ backend: 'vm' }, undefined, vm), 'vm');
+    assert.throws(() => assertJobBackend({ backend: 'host' }, undefined, vm), /environment differs from the pinned job backend/);
+  } finally {
+    if (previous !== undefined) process.env.MI_NOTE_RENDER_BACKEND = previous;
+  }
 });
 
 test('source inventory, selected contract, and catalog are pinned to immutable bytes', context => {
@@ -212,4 +249,76 @@ test('manifestless initialization preserves both directories and resumes a parti
   preserveIncomplete(unit);
   assert.equal(readFileSync(join(saved, 'capture/sentinel'), 'utf8'), 'capture');
   assert.equal(existsSync(join(unit, 'initialization-recovery.json')), false);
+});
+
+test('pipeline admission permits one exact catalog peer and rejects unrelated or stale owners', context => {
+  const { job } = fixture(context, [1]);
+  const pipeline = { version: 1, catalogJobId: randomUUID(), maxUnfinished: 2 };
+  const selected = { ...job, backend: 'host', pipeline };
+  const peerJob = { ...selected, jobId: randomUUID() };
+  const peer = { pid: 42, started: 'test-start', job: peerJob,
+    owner: { jobId: peerJob.jobId, sourceId: peerJob.sourceId, pid: 42, started: 'test-start' } };
+  assert.doesNotThrow(() => assertPipelinePeers(selected, [peer]));
+  assert.throws(() => assertPipelinePeers(selected, [peer, peer]), /bounded pipeline/);
+  assert.throws(() => assertPipelinePeers(job, [peer]), /bounded pipeline/);
+  assert.throws(() => assertPipelinePeers(selected, [{ ...peer, started: 'replaced-process' }]), /bounded pipeline/);
+  assert.throws(() => assertPipelinePeers(selected, [{ ...peer, job: { ...peerJob, pipeline: { ...pipeline, catalogJobId: randomUUID() } } }]), /bounded pipeline/);
+  assert.throws(() => assertPipelinePeers(selected, [{ ...peer, job: { ...peerJob, sourceId: 'f'.repeat(64) } }]), /bounded pipeline/);
+  assert.equal(validateJob(selected), selected);
+  assert.throws(() => validateJob({ ...selected, backend: 'vm' }), /pipeline execution/);
+  assert.throws(() => validateJob({ ...selected, ids: [1, 2] }), /pipeline execution/);
+});
+
+test('capture release binds every frame and proof and rejects a live owned Safari', context => {
+  const { job } = fixture(context, [1]);
+  job.backend = 'host';
+  job.pipeline = { version: 1, catalogJobId: randomUUID(), maxUnfinished: 2 };
+  const unit = join(job.root, 'cards/1');
+  const path = join(unit, 'capture-complete.json');
+  const manifest = { ownerId: 'owner', preflight: { path: join(unit, 'preflight/approved.json'), sha256: 'a'.repeat(64) },
+    sourceHashes: { 'fixture.py': 'b'.repeat(64) }, nativeFrames: Object.fromEntries(Array.from({ length: 276 }, (_, frame) => [`1:${frame}`, {
+      id: 1, frame, sha256: 'c'.repeat(64), iccSha256: 'd'.repeat(64), stitchReportSha256: 'e'.repeat(64),
+    }])), nativeProofs: { 1: { before: { sha256: 'f'.repeat(64) }, after: { sha256: 'f'.repeat(64) } } },
+    captures: [{ id: 1, method: 'c', repeat: { checks: [{ equal: true, iccEqual: true }] } }],
+    captureWindows: [{ pid: 42, identity: 'owned-Safari' }] };
+  const marker = { version: 1, status: 'capture-complete', jobId: job.jobId, sourceId: job.sourceId,
+    attempt: 'current', cardId: 1, profile: job.profile, motion: job.motion, backend: job.backend, frameCount: 276,
+    safariReleased: true, ownerId: 'owner', runId: 'run', preflight: manifest.preflight,
+    nativeFramesSha256: nativeFramesSha256(manifest.nativeFrames), sourceHashesSha256: sourceHashesSha256(manifest.sourceHashes),
+    before: { sha256: 'f'.repeat(64) }, after: { sha256: 'f'.repeat(64) }, captureWindows: [{ pid: 42, identity: 'owned-Safari' }] };
+  assert.doesNotThrow(() => validateCaptureRelease(job, 'current', path, manifest, marker));
+  manifest.nativeFrames['1:0'].archivePath = '/moved/after/compaction';
+  assert.doesNotThrow(() => validateCaptureRelease(job, 'current', path, manifest, marker));
+  assert.throws(() => validateCaptureRelease(job, 'current', path, manifest, marker, new Map([[42, 'owned-Safari']])), /live Safari/);
+  assert.doesNotThrow(() => validateCaptureRelease(job, 'current', path, manifest, marker, new Map([[42, 'unrelated-reused-PID']])));
+  for (const change of [{ attempt: 'stale' }, { sourceId: '0'.repeat(64) }, { cardId: 2 }, { safariReleased: false },
+    { nativeFramesSha256: '0'.repeat(64) }, { after: { sha256: '0'.repeat(64) } }]) {
+    assert.throws(() => validateCaptureRelease(job, 'current', path, manifest, { ...marker, ...change }));
+  }
+  assert.throws(() => validateCaptureRelease(job, 'current', join(unit, 'other.json'), manifest, marker));
+  delete manifest.nativeFrames['1:275'];
+  assert.throws(() => validateCaptureRelease(job, 'current', path, manifest, marker));
+});
+
+test('healthy pipeline drops duplicate check-resume while recovery retains both checks', async context => {
+  for (const resume of [false, true]) {
+    const { job } = fixture(context, [1]);
+    job.backend = 'host';
+    job.pipeline = { version: 1, catalogJobId: randomUUID(), maxUnfinished: 2 };
+    if (resume) {
+      const output = join(job.root, 'cards/1/output');
+      mkdirSync(output, { recursive: true });
+      atomicJson(join(output, '.render-manifest.json'), {});
+    }
+    const stages = [];
+    const states = [];
+    await assert.rejects(runQueue(job, { saveStatus: value => states.push(structuredClone(value)),
+      stage(name, target, args, released) {
+        stages.push(name);
+        if (name === 'rendering') released({ attempt: 'fixture', path: 'fixture', sha256: 'a'.repeat(64) });
+        if (name === 'auditing') throw Error('Stop at independent audit');
+      }, waitForAck() { throw Error('Unexpected ack'); } }), /Stop at independent audit/);
+    assert.deepEqual(stages, resume ? ['preflight', 'checking-resume', 'rendering', 'verifying', 'auditing'] : ['preflight', 'rendering', 'auditing']);
+    assert.ok(states.some(value => value.status === 'processing' && value.captureReleased));
+  }
 });

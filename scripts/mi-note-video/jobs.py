@@ -80,6 +80,14 @@ def validate_job(job):
         raise ValueError('Invalid immutable card list.')
     if not re.fullmatch('[a-f0-9]{64}', job['sourceId']):
         raise ValueError('Invalid source snapshot identity.')
+    if 'pipeline' in job:
+        pipeline = job['pipeline']
+        if job.get('backend') != 'host' or len(job['ids']) != 1 or not isinstance(pipeline, dict) or set(pipeline) != {'version', 'catalogJobId', 'maxUnfinished'} or type(pipeline.get('version')) is not int or pipeline['version'] != 1 or type(pipeline.get('maxUnfinished')) is not int or pipeline['maxUnfinished'] != 2:
+            raise ValueError('Invalid host pipeline execution contract.')
+        try:
+            uuid.UUID(pipeline['catalogJobId'])
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('Invalid pipeline catalog identity.') from None
     for field in ('root', 'sourceRoot', 'python', 'node'):
         path = Path(job[field])
         if not path.is_absolute() or '..' in path.parts:

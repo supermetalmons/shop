@@ -1,7 +1,8 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import shlex
 import shutil
 import tarfile
@@ -93,7 +94,8 @@ def inspect_runtime(vm):
         versions[name] = line.split()[2]
     for name, expected in CONTRACT['runtime'].items():
         if versions.get(name) != expected:
-            raise ValueError(f'Guest {name} must be {expected}; found {versions.get(name)}.')
+            kind = 'Host' if getattr(vm, 'kind', None) == 'host' else 'Guest'
+            raise ValueError(f'{kind} {name} must be {expected}; found {versions.get(name)}.')
     versions['safari'] = vm.exec(['/usr/bin/safaridriver', '--version']).decode().strip()
     versions['macos'] = vm.exec(['/usr/bin/sw_vers', '-productVersion']).decode().strip()
     executable_hashes = {}
@@ -102,19 +104,36 @@ def inspect_runtime(vm):
     return {'versions': versions, 'executableSha256': executable_hashes}
 
 
-def prepare(vm, state):
-    state = Path(state)
-    runtime = inspect_runtime(vm)
+def verify_snapshot(release, source_id):
+    release = Path(release).absolute()
+    if not re.fullmatch('[a-f0-9]{64}', source_id) or release.resolve() != release:
+        raise ValueError('Invalid frozen source identity or release path.')
+    manifest_path = release / 'source-snapshot.json'
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ValueError('Frozen source manifest is missing or unsafe.')
+    manifest = json.loads(manifest_path.read_text())
+    files = manifest.get('files')
+    if manifest.get('version') != 1 or manifest.get('sourceId') != source_id or not isinstance(files, dict) or digest(files) != source_id:
+        raise ValueError('Frozen source manifest identity differs.')
+    for name, expected in files.items():
+        path = PurePosixPath(name)
+        target = release / name
+        if path.is_absolute() or '..' in path.parts or '\\' in name or not re.fullmatch('[a-f0-9]{64}', str(expected)):
+            raise ValueError('Unsafe frozen source entry.')
+        if target.resolve() != target or not target.is_file() or file_hash(target) != expected:
+            raise ValueError('Frozen source file is missing or changed: ' + name)
+    for required in ('package-lock.json', 'src/lib/miNoteCards.ts', 'scripts/mi-note-video/contract.json'):
+        if required not in files:
+            raise ValueError('Frozen source inventory is incomplete: ' + required)
+    return manifest
+
+
+def transfer_release(vm, state, local_release, manifest, release):
     with tempfile.TemporaryDirectory(prefix='prepare-', dir=state) as temporary:
-        staging = Path(temporary) / 'source'
-        manifest = snapshot(staging)
-        count = catalog_count(staging)
-        contract_hash = manifest['files']['scripts/mi-note-video/contract.json']
-        release = vm.config['guestRoot'].rstrip('/') + '/releases/' + manifest['sourceId']
         archive = Path(temporary) / 'source.tar'
         with tarfile.open(archive, 'w') as stream:
             for name in [*manifest['files'], 'source-snapshot.json']:
-                stream.add(staging / name, arcname=name, recursive=False)
+                stream.add(local_release / name, arcname=name, recursive=False)
         vm.exec(['/bin/mkdir', '-p', vm.config['guestRoot'] + '/incoming', vm.config['guestRoot'] + '/releases'])
         remote_archive = vm.config['guestRoot'] + '/incoming/' + manifest['sourceId'] + '.tar'
         vm.put(archive, remote_archive)
@@ -124,6 +143,7 @@ def prepare(vm, state):
         verifier = '''import hashlib,json,pathlib,sys
 root=pathlib.Path(sys.argv[1]);data=json.loads((root/'source-snapshot.json').read_text())
 assert data['sourceId']==sys.argv[2]
+assert hashlib.sha256(json.dumps(data['files'],sort_keys=True,separators=(',',':')).encode()).hexdigest()==sys.argv[2]
 for name,expected in data['files'].items():
  p=root/name
  assert not pathlib.PurePosixPath(name).is_absolute() and '..' not in pathlib.PurePosixPath(name).parts
@@ -140,15 +160,45 @@ print(data['sourceId'])'''
             shlex.join([vm.config['python'], '-c', verifier, release, manifest['sourceId']]),
         ])
         vm.exec(['/bin/sh', '-c', script], timeout=120)
-        node_dir = str(Path(vm.config['node']).parent)
-        install = 'set -eu\ncd ' + shlex.quote(release) + '\n' + 'export PATH=' + shlex.quote(node_dir + ':/usr/bin:/bin:/usr/sbin:/sbin') + '\n' + 'if [ ! -f .dependencies-ready ]; then npm ci --ignore-scripts --no-audit --no-fund; fi\n' + shlex.join([vm.config['node'], '--input-type=module', '-e', "await import('vite'); await import('tsx/esm/api'); console.log('Renderer dependencies ready')"]) + '\n' + 'touch .dependencies-ready'
-        print('Preparing the pinned renderer dependencies in the VM.', flush=True)
-        vm.exec(['/bin/sh', '-c', install], timeout=600)
         vm.exec(['/bin/rm', remote_archive])
-        local_release = state / 'releases' / manifest['sourceId']
-        publish_snapshot(staging, local_release, manifest)
-        result = {'version': 1, 'sourceId': manifest['sourceId'], 'guestSourceRoot': release, 'runtime': runtime,
-                  'catalogCount': count, 'contractSha256': contract_hash, 'preparedAt': now(),
-                  'manifestSha256': file_hash(local_release / 'source-snapshot.json')}
-        atomic_json(state / 'prepared.json', result)
-        return result
+
+
+def stage_release(vm, state, local_release, manifest):
+    is_host = getattr(vm, 'kind', None) == 'host'
+    release = str(local_release) if is_host else vm.config['guestRoot'].rstrip('/') + '/releases/' + manifest['sourceId']
+    if not is_host:
+        transfer_release(vm, state, local_release, manifest, release)
+    node_dir = str(Path(vm.config['node']).parent)
+    install = 'set -eu\ncd ' + shlex.quote(release) + '\n' + 'export PATH=' + shlex.quote(node_dir + ':/usr/bin:/bin:/usr/sbin:/sbin') + '\n' + 'if [ ! -f .dependencies-ready ]; then npm ci --ignore-scripts --no-audit --no-fund; fi\n' + shlex.join([vm.config['node'], '--input-type=module', '-e', "await import('vite'); await import('tsx/esm/api'); console.log('Renderer dependencies ready')"]) + '\n' + 'if [ ! -f .dependencies-ready ]; then touch .dependencies-ready; fi'
+    print('Preparing the pinned renderer dependencies on the ' + ('host.' if is_host else 'VM.'), flush=True)
+    vm.exec(['/bin/sh', '-c', install], timeout=600)
+    return release
+
+
+def prepare_frozen(vm, state, source_id):
+    state = Path(state).absolute()
+    local_release = state / 'releases' / source_id
+    manifest = verify_snapshot(local_release, source_id)
+    runtime = inspect_runtime(vm)
+    release = stage_release(vm, state, local_release, manifest)
+    verify_snapshot(local_release, source_id)
+    result = {'version': 1, 'sourceId': source_id, 'guestSourceRoot': release, 'runtime': runtime,
+              'catalogCount': catalog_count(local_release), 'contractSha256': manifest['files']['scripts/mi-note-video/contract.json'],
+              'preparedAt': now(), 'manifestSha256': file_hash(local_release / 'source-snapshot.json')}
+    prepared_path = state / ('prepared-host.json' if getattr(vm, 'kind', None) == 'host' else 'prepared.json')
+    if prepared_path.exists():
+        previous = json.loads(prepared_path.read_text())
+        if {key: value for key, value in previous.items() if key != 'preparedAt'} == {key: value for key, value in result.items() if key != 'preparedAt'}:
+            return previous
+    atomic_json(prepared_path, result)
+    return result
+
+
+def prepare(vm, state):
+    state = Path(state).absolute()
+    state.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='prepare-', dir=state) as temporary:
+        staging = Path(temporary) / 'source'
+        manifest = snapshot(staging)
+        publish_snapshot(staging, state / 'releases' / manifest['sourceId'], manifest)
+    return prepare_frozen(vm, state, manifest['sourceId'])

@@ -15,6 +15,8 @@ import tempfile
 import numpy as np
 from PIL import Image, ImageCms, features
 
+from video_validation import verify_certificate
+
 
 CONTRACT = json.loads(Path(__file__).with_name('contract.json').read_text())
 THRESHOLDS = {'wholeImageMAE': 3.0, 'cardInteriorMAE': 6.0, 'absoluteMeanSignedRGB': 1.5,
@@ -236,10 +238,16 @@ def audit(job, card):
     require(len(preparation) == 1 and preparation[0]['icc']['sha256'] == hashlib.sha256(p3_bytes).hexdigest()
             and preparation[0]['resample']['filter'] == 'Lanczos' and preparation[0]['resample']['passes'] == 1
             and preparation[0]['resample']['afterIccConversion'] is True, 'Prepared P3 frame contract changed')
-    ffmpeg = os.environ.get('MI_NOTE_FFMPEG') or shutil.which('ffmpeg')
-    require(ffmpeg, 'FFmpeg is required for independent fidelity auditing')
-    selection = '+'.join(f'eq(n\\,{frame})' for frame in SAMPLES)
-    raw = subprocess.run([ffmpeg, '-v', 'error', '-xerror', '-i', video['output'], '-vf', f'select={selection}', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'yuv420p10le', 'pipe:1'], check=True, capture_output=True, timeout=300).stdout
+    certificate = video.get('decodeCertificate')
+    if certificate:
+        verify_certificate(job, video, certificate['path'], job['sourceRoot'])
+        decoded = read(certificate['path'])
+        raw = b''.join(Path(sample['path']).read_bytes() for sample in decoded['samples'])
+    else:
+        ffmpeg = os.environ.get('MI_NOTE_FFMPEG') or shutil.which('ffmpeg')
+        require(ffmpeg, 'FFmpeg is required for independent fidelity auditing')
+        selection = '+'.join(f'eq(n\\,{frame})' for frame in SAMPLES)
+        raw = subprocess.run([ffmpeg, '-v', 'error', '-xerror', '-i', video['output'], '-vf', f'select={selection}', '-fps_mode', 'passthrough', '-f', 'rawvideo', '-pix_fmt', 'yuv420p10le', 'pipe:1'], check=True, capture_output=True, timeout=300).stdout
     size = profile['deliverySize']
     planes = np.frombuffer(raw, dtype='<u2')
     n, stride = size * size, size * size * 3 // 2
@@ -266,7 +274,8 @@ def audit(job, card):
             'videoSha256': video['sha256'], 'auditSourceSha256': sha(Path(__file__).resolve()), 'thresholds': THRESHOLDS,
             'geometry': geometry, 'nativeFramesVerified': len(SAMPLES), 'sourceViewportsVerified': len(SAMPLES) * profile['tiles'],
             'independentControlsVerified': len(controls), 'iccByteExact': True, 'nativePixelsExact': True,
-            'samples': samples, 'issues': issues, 'passed': not issues}
+            'samples': samples, 'issues': issues, 'passed': not issues,
+            **({'decodeCertificateSha256': certificate['sha256']} if certificate else {})}
 
 
 def main():

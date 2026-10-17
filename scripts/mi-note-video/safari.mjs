@@ -14,6 +14,7 @@ export class Safari {
     this.child.stdin.on('error', error => this.fail(error));
     this.child.on('error', error => this.fail(error));
     this.child.on('close', code => this.fail(new Error(`Safari MCP exited (${code}). Check Safari automation permission; see the renderer README.`)));
+    this.closed = new Promise(resolve => this.child.once('close', resolve));
   }
 
   receive(data) {
@@ -93,7 +94,13 @@ export class Safari {
     throw new Error('Paint did not settle');
   }
 
-  async close() {
+  async close(timeoutMilliseconds = 10_000) {
+    if (this.closing) return this.closing;
+    this.closing = this.closeOwned(timeoutMilliseconds);
+    return this.closing;
+  }
+
+  async closeOwned(timeoutMilliseconds) {
     const results = [];
     for (const tab of this.tabs.reverse()) {
       try { results.push({ handle: tab.handle, closed: await this.call('close_tab', tab, 5000) }); }
@@ -103,6 +110,17 @@ export class Safari {
     this.child.stdin.end();
     this.child.kill();
     this.fail(new Error('Safari MCP closed'));
+    let timer;
+    let escalation;
+    try {
+      await Promise.race([this.closed, new Promise((_, reject) => {
+        escalation = setTimeout(() => this.child.kill('SIGKILL'), timeoutMilliseconds);
+        timer = setTimeout(() => reject(new Error('Owned Safari driver did not stop.')), timeoutMilliseconds + 2000);
+      })]);
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(escalation);
+    }
     return results;
   }
 }

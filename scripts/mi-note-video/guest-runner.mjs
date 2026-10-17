@@ -1,9 +1,11 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { assertNativeBackend, nativeBackend } from './native-config.mjs';
+import { nativeFramesSha256 } from './capture-release.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const contract = JSON.parse(readFileSync(join(directory, 'contract.json'), 'utf8'));
@@ -20,7 +22,18 @@ export function validateJob(job) {
   requireValue(Object.hasOwn(contract.profiles, job.profile) && contract.motions.includes(job.motion), 'Unsupported profile or motion.');
   for (const key of ['root', 'sourceRoot', 'python']) requireValue(typeof job[key] === 'string' && isAbsolute(job[key]) && resolve(job[key]) === job[key], `Invalid ${key}.`);
   requireValue(!within(job.root, job.sourceRoot) && !within(job.sourceRoot, job.root), 'Job data and rendering source must not overlap.');
+  nativeBackend(job.backend);
+  if (Object.hasOwn(job, 'pipeline')) requireValue(job.backend === 'host' && job.ids.length === 1
+    && job.pipeline?.version === 1 && job.pipeline.maxUnfinished === 2
+    && /^[a-f0-9-]{36}$/i.test(job.pipeline.catalogJobId || '')
+    && JSON.stringify(Object.keys(job.pipeline).sort()) === JSON.stringify(['catalogJobId', 'maxUnfinished', 'version']), 'Invalid host pipeline execution contract.');
   return job;
+}
+
+export function assertJobBackend(job, environmentBackend = process.env.MI_NOTE_RENDER_BACKEND, system = {}) {
+  const backend = nativeBackend(job.backend);
+  requireValue(nativeBackend(environmentBackend) === backend, 'Rendering backend environment differs from the pinned job backend.');
+  return assertNativeBackend(backend, system);
 }
 
 export function assertJobSources(job) {
@@ -39,6 +52,11 @@ export function assertJobSources(job) {
   requireValue(ordered['scripts/mi-note-video/contract.json'] === job.contractSha256, 'Source snapshot does not bind the selected contract.');
   const catalog = readFileSync(regular(join(job.sourceRoot, 'src/lib/miNoteCards.ts')), 'utf8').match(/export const MI_NOTE_CARD_COUNT = (\d+);/);
   requireValue(catalog && Number(catalog[1]) === job.catalogCount, 'Job catalog size differs from its source snapshot.');
+  if (job.pipeline) {
+    const capability = read(regular(join(job.sourceRoot, 'scripts/mi-note-video/pipeline.json')));
+    const expected = { version: 1, maxUnfinished: 2, captureRelease: 1, streamProcessing: 1 };
+    requireValue(Object.keys(capability).length === Object.keys(expected).length && Object.entries(expected).every(([key, value]) => capability[key] === value), 'Pinned source does not support the pipeline contract.');
+  }
 }
 
 export function assertRuntimeMatches(expected, actual) {
@@ -77,7 +95,14 @@ export function assertJobRuntime(job) {
 export function atomicJson(path, value) {
   const temporary = `${path}.${randomUUID()}.pending`;
   writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  syncPath(temporary);
   renameSync(temporary, path);
+  syncPath(dirname(path));
+}
+
+function syncPath(path) {
+  const descriptor = openSync(path, 'r');
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
 }
 
 export function ackMatches(ack, ready) {
@@ -102,6 +127,7 @@ function filesUnder(path) {
 
 function validateVideo(job, id, unit, manifest) {
   const profile = contract.profiles[job.profile];
+  requireValue(nativeBackend(manifest.backend) === nativeBackend(job.backend), 'Unit capture backend differs from the pinned job backend.');
   requireValue(manifest.status === 'complete' && manifest.profile === job.profile && manifest.motion === job.motion
     && JSON.stringify(manifest.ids) === JSON.stringify([id]) && manifest.videos.length === 1, 'Unit render identity is incomplete.');
   const video = manifest.videos[0];
@@ -126,7 +152,8 @@ export function prepareReady(job, id, attempt) {
   const approvalPath = join(unit, 'preflight', 'approved.json');
   const manifest = read(regular(manifestPath));
   const approval = read(regular(approvalPath));
-  requireValue(approval.status === 'passed' && approval.identity.profile === job.profile && approval.identity.motion === job.motion
+  requireValue(approval.status === 'passed' && nativeBackend(approval.identity.backend) === nativeBackend(job.backend)
+    && approval.identity.profile === job.profile && approval.identity.motion === job.motion
     && JSON.stringify(approval.identity.ids) === JSON.stringify([id]), 'Unit preflight identity changed.');
   requireValue(manifest.preflight?.path === approvalPath && manifest.preflight.sha256 === hash(approvalPath), 'Render is not bound to the unit preflight.');
   const video = validateVideo(job, id, unit, manifest);
@@ -136,6 +163,14 @@ export function prepareReady(job, id, attempt) {
     && audit.profile === job.profile && audit.motion === job.motion && audit.videoSha256 === video.sha256
     && audit.auditSourceSha256 === hash(regular(join(directory, 'audit.py'))), 'Independent unit audit is missing or differs from the video.');
   const files = new Set([regular(join(job.root, 'job.json')), manifestPath, approvalPath, auditPath]);
+  if (job.pipeline) {
+    requireValue(/^[a-f0-9]{64}$/.test(video.decodeCertificate?.sha256 || '')
+      && audit.decodeCertificateSha256 === video.decodeCertificate.sha256
+      && within(video.decodeCertificate.path || '', join(unit, 'output'))
+      && hash(regular(video.decodeCertificate.path)) === video.decodeCertificate.sha256,
+    'Pipeline video lacks an independently verified decode certificate.');
+    files.add(regular(join(unit, 'capture-complete.json')));
+  }
   for (const name of ['preflight', 'capture', 'output']) for (const path of filesUnder(join(unit, name))) {
     if (path === video.output) continue;
     if (name === 'capture') requireValue(!['raw', 'prepared', 'tiles'].includes(relative(join(unit, name), path).split(sep)[0]), 'Uncompacted working images remain.');
@@ -203,18 +238,36 @@ function processStart(pid) {
   return execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
 }
 
-function assertNoOtherRunner() {
-  const others = execFileSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n').filter(line => {
+function otherRunners() {
+  return execFileSync('/bin/ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split('\n').flatMap(line => {
     const match = line.match(/^\s*(\d+)\s+(.+)$/);
     return match && Number(match[1]) !== process.pid && match[2].includes('/scripts/mi-note-video/guest-runner.mjs --job ')
-      && !match[2].startsWith('/usr/bin/caffeinate ');
+      && !match[2].startsWith('/usr/bin/caffeinate ') && !match[2].includes(' -e ') && !match[2].includes(' --eval ')
+      ? [{ pid: Number(match[1]), command: match[2] }] : [];
   });
-  requireValue(others.length === 0, 'Another rendering job is active in this VM.');
 }
 
-function acquireLock(job, attempt) {
-  const path = join(dirname(dirname(job.root)), 'render.lock');
-  assertNoOtherRunner();
+export function assertPipelinePeers(job, peers) {
+  requireValue(peers.length === 0 || job.pipeline && peers.length < job.pipeline.maxUnfinished
+    && peers.every(peer => peer.job?.pipeline?.catalogJobId === job.pipeline.catalogJobId
+      && peer.job.pipeline.version === 1 && peer.job.pipeline.maxUnfinished === 2
+      && peer.job.backend === 'host' && peer.job.sourceId === job.sourceId
+      && peer.owner.jobId === peer.job.jobId && peer.owner.sourceId === peer.job.sourceId
+      && peer.owner.pid === peer.pid && peer.owner.started === peer.started), 'Another rendering job is active outside this bounded pipeline.');
+}
+
+function assertCompatibleRunners(job) {
+  const peers = otherRunners().map(peer => {
+    const path = peer.command.split('/scripts/mi-note-video/guest-runner.mjs --job ')[1];
+    const other = validateJob(read(regular(path)));
+    const ownerPath = join(dirname(dirname(other.root)), 'execution-locks', other.jobId, 'owner.json');
+    const owner = existsSync(ownerPath) ? read(regular(ownerPath)) : {};
+    return { ...peer, job: other, owner, started: processStart(peer.pid) };
+  });
+  assertPipelinePeers(job, peers);
+}
+
+function acquireLock(job, attempt, path) {
   if (existsSync(path)) {
     let owner;
     try { owner = read(join(path, 'owner.json')); }
@@ -223,14 +276,49 @@ function acquireLock(job, attempt) {
     if (Number.isSafeInteger(owner?.pid) && owner.pid > 0 && typeof owner.started === 'string') {
       try { active = processStart(owner.pid) === owner.started; } catch {}
     }
-    requireValue(!active, 'Another rendering job owns the VM lock.');
-    assertNoOtherRunner();
+    requireValue(!active, 'Another rendering job owns this execution or capture lock.');
     renameSync(path, `${path}.stale-${randomUUID()}`);
   }
-  mkdirSync(path);
+  mkdirSync(dirname(path), { recursive: true });
+  requireValue(realpathSync(dirname(path)) === dirname(path), 'Lock parent contains a symbolic link.');
+  mkdirSync(path, { mode: 0o700 });
   const owner = { pid: process.pid, started: processStart(process.pid), attempt, jobId: job.jobId, sourceId: job.sourceId };
-  writeFileSync(join(path, 'owner.json'), JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
+  atomicJson(join(path, 'owner.json'), owner);
   return { path, owner };
+}
+
+function releaseLock(lock) {
+  const owner = read(regular(join(lock.path, 'owner.json')));
+  requireValue(owner.pid === lock.owner.pid && owner.attempt === lock.owner.attempt && owner.started === lock.owner.started, 'Rendering lock ownership changed.');
+  rmSync(lock.path, { recursive: true });
+  syncPath(dirname(lock.path));
+}
+
+export function validateCaptureRelease(job, attempt, path, manifest, marker, safariProcesses = new Map()) {
+  const unit = join(job.root, 'cards', String(job.ids[0]));
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  requireValue(job.pipeline && path === join(unit, 'capture-complete.json') && marker?.version === 1 && marker.status === 'capture-complete'
+    && marker.jobId === job.jobId && marker.sourceId === job.sourceId && marker.attempt === attempt
+    && marker.cardId === job.ids[0] && marker.profile === job.profile && marker.motion === job.motion
+    && marker.backend === job.backend && marker.frameCount === contract.video.frames && marker.safariReleased === true
+    && marker.ownerId === manifest.ownerId && typeof marker.runId === 'string' && marker.runId.length > 0,
+  'Native capture release identity or ownership changed.');
+  requireValue(marker.preflight?.path === join(unit, 'preflight', 'approved.json') && marker.preflight.sha256 === manifest.preflight?.sha256
+    && marker.sourceHashesSha256 === digest(manifest.sourceHashes) && marker.nativeFramesSha256 === nativeFramesSha256(manifest.nativeFrames), 'Capture release provenance differs from the saved manifest.');
+  for (let frame = 0; frame < contract.video.frames; frame += 1) {
+    const native = manifest.nativeFrames?.[`${job.ids[0]}:${frame}`];
+    requireValue(native?.frame === frame && native.id === job.ids[0] && /^[a-f0-9]{64}$/.test(native.sha256 || ''), 'Capture release is missing a committed native frame.');
+  }
+  const capture = manifest.captures?.find(item => item.id === job.ids[0] && item.method === 'c');
+  requireValue(Object.keys(manifest.nativeFrames).length === contract.video.frames && capture?.repeat?.checks?.length > 0
+    && capture.repeat.checks.every(check => check.equal === true && check.iccEqual === true), 'Capture release lacks exact final rest verification.');
+  for (const label of ['before', 'after']) requireValue(marker[label]?.sha256 === manifest.nativeProofs?.[job.ids[0]]?.[label]?.sha256
+    && /^[a-f0-9]{64}$/.test(marker[label]?.sha256 || ''), 'Capture release is missing exact native controls.');
+  requireValue(Array.isArray(marker.captureWindows) && marker.captureWindows.length > 0
+    && JSON.stringify(marker.captureWindows) === JSON.stringify(manifest.captureWindows)
+    && marker.captureWindows.every(window => Number.isSafeInteger(window.pid) && typeof window.identity === 'string'
+      && safariProcesses.get(window.pid) !== window.identity), 'The released capture still owns a live Safari process.');
+  return marker;
 }
 
 export async function runQueue(job, { stage, waitForAck, saveStatus, attempt = randomUUID() }) {
@@ -264,9 +352,14 @@ export async function runQueue(job, { stage, waitForAck, saveStatus, attempt = r
         const resume = existsSync(join(unit, 'output', '.render-manifest.json'));
         if (resume) { status.status = 'checking-resume'; save(); await stage('checking-resume', 'capture.mjs', [...args, '--check-resume']); }
         status.status = 'rendering'; save();
-        await stage('rendering', 'capture.mjs', [...args, ...(resume ? ['--resume'] : [])]);
-        status.status = 'verifying'; save();
-        await stage('verifying', 'capture.mjs', [...args, '--check-resume']);
+        await stage('rendering', 'capture.mjs', [...args, ...(resume ? ['--resume'] : [])], release => {
+          status.captureReleased = release;
+          status.status = 'processing'; save();
+        });
+        if (!job.pipeline || resume) {
+          status.status = 'verifying'; save();
+          await stage('verifying', 'capture.mjs', [...args, '--check-resume']);
+        }
         status.status = 'auditing'; save();
         await stage('auditing', 'audit.py', ['--job', join(job.root, 'job.json'), '--id', String(id), '--output', join(unit, 'audit.json')]);
         ready = prepareReady(job, id, attempt);
@@ -318,13 +411,16 @@ async function main() {
   const job = validateJob(read(regular(resolve(process.argv[3]))));
   requireValue(resolve(process.argv[3]) === join(job.root, 'job.json') && directory === join(job.sourceRoot, 'scripts/mi-note-video'), 'Runner or job configuration has the wrong source root.');
   assertJobSources(job);
-  requireValue(execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).startsWith('VirtualMac'), 'Rendering requires the VM.');
+  assertJobBackend(job);
   assertJobRuntime(job);
   requireValue(!process.env.MI_NOTE_JOB_ROOT || process.env.MI_NOTE_JOB_ROOT === job.root, 'Job environment differs from its configuration.');
   process.env.MI_NOTE_JOB_ROOT = job.root;
   mkdirSync(join(job.root, 'ack'), { recursive: true });
   const attempt = randomUUID();
-  const lock = acquireLock(job, attempt);
+  assertCompatibleRunners(job);
+  const backendRoot = dirname(dirname(job.root));
+  const executionLock = acquireLock(job, attempt, join(backendRoot, 'execution-locks', job.jobId));
+  let captureLock;
   const statusPath = join(job.root, 'job-status.json');
   let child;
   let interrupted = false;
@@ -338,19 +434,52 @@ async function main() {
       renameSync(statusPath, join(job.root, 'history', `${Date.now()}-${attempt}.json`));
     }
     await runQueue(job, { attempt, saveStatus: value => atomicJson(statusPath, value),
-      stage: async (name, target, args) => {
+      stage: async (name, target, args, onCaptureReleased) => {
         if (interrupted) throw stopped();
+        if (name === 'preflight' && !captureLock) captureLock = acquireLock(job, attempt, join(backendRoot, 'render.lock'));
         assertJobRuntime(job);
+        let stageError;
+        let released = false;
         const code = await new Promise((resolveStage, reject) => {
           const command = target === 'audit.py' ? job.python : process.execPath;
           const invocation = target === 'audit.py' ? [join(directory, target), ...args] : [join(directory, 'entry.mjs'), target, ...args];
-          child = spawn(command, invocation, { cwd: job.sourceRoot, env: process.env, stdio: 'inherit' });
+          const environment = { ...process.env };
+          delete environment.MI_NOTE_CAPTURE_ATTEMPT;
+          delete environment.MI_NOTE_ENCODER_LOCK;
+          if (job.pipeline) {
+            environment.MI_NOTE_ENCODER_LOCK = join(backendRoot, 'encoder.lock');
+            if (name === 'rendering') environment.MI_NOTE_CAPTURE_ATTEMPT = attempt;
+          }
+          child = spawn(command, invocation, { cwd: job.sourceRoot, env: environment,
+            stdio: job.pipeline && name === 'rendering' ? ['ignore', 'inherit', 'inherit', 'ipc'] : 'inherit' });
+          if (job.pipeline && name === 'rendering') child.on('message', message => {
+            try {
+              requireValue(message?.type === 'capture-complete' && !released && captureLock, 'Unexpected or duplicate native capture release.');
+              const path = regular(message.path);
+              const marker = read(path);
+              const manifest = read(regular(join(job.root, 'cards', String(job.ids[0]), 'output', '.render-manifest.json')));
+              const safariProcesses = new Map(execFileSync('/bin/ps', ['-axo', 'pid=,lstart=,command='], { encoding: 'utf8' }).split('\n')
+                .filter(line => line.trim().endsWith('/Safari.app/Contents/MacOS/Safari -ApplePersistenceIgnoreStateQuietly YES --automation'))
+                .map(line => [Number(line.trim().split(/\s+/)[0]), line.trim()]));
+              validateCaptureRelease(job, attempt, path, manifest, marker, safariProcesses);
+              requireValue(hash(regular(marker.preflight.path)) === marker.preflight.sha256, 'Released capture preflight checksum changed.');
+              releaseLock(captureLock);
+              captureLock = undefined;
+              released = true;
+              onCaptureReleased({ path, sha256: hash(path), attempt, releasedAt: new Date().toISOString() });
+            } catch (error) {
+              stageError ||= error;
+              child?.kill('SIGTERM');
+            }
+          });
           child.once('error', reject);
           child.once('close', resolveStage);
         });
         child = undefined;
         if (interrupted) throw stopped();
+        if (stageError) throw stageError;
         requireValue(code === 0, `${name} stopped with ${code}; checkpoints preserved.`);
+        if (job.pipeline && name === 'rendering') requireValue(released, 'Native rendering ended without releasing its capture lease.');
       },
       waitForAck: async ready => {
         const path = join(job.root, 'ack', `${ready.cardId}.json`);
@@ -368,9 +497,8 @@ async function main() {
   } finally {
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);
-    const owner = read(join(lock.path, 'owner.json'));
-    requireValue(owner.pid === lock.owner.pid && owner.attempt === attempt, 'VM rendering lock ownership changed.');
-    rmSync(lock.path, { recursive: true });
+    try { if (captureLock) releaseLock(captureLock); }
+    finally { releaseLock(executionLock); }
   }
 }
 

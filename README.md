@@ -92,11 +92,16 @@ includes capture, resumable checkpoints, image QA, contact sheets, and ZIP64
 publication. Python dependencies are isolated from the shop's production runtime;
 generated captures and reports stay outside version control.
 
-The [Mi Note VM video renderer](scripts/mi-note-video/README.md) preserves three
+The [Mi Note video renderer](scripts/mi-note-video/README.md) preserves three
 approved motions and native 1980-pixel sideways or 2160-pixel upright capture.
 Both produce black, shadowless Display P3 / 10-bit HEVC videos at 60 fps. The
-standalone VM workflow supports selected IDs or the complete catalog, resumable
-per-card checkpoints, verified host collection, and bounded guest storage.
+host and standalone VM backends share verified catalog progress with separate
+native checkpoints. New jobs support background supervision, inclusive resume
+from a verified ID prefix, and either full evidence or compact audit receipts.
+Outputs and stable controls default to private Application Support storage
+outside the worktree. The approved full-catalog recipe is `upright-2160` with
+`breathing-swing`; VM is the default backend, and backend switches require a
+completed interruption. Existing VM jobs and comparison renders remain available.
 Run `npm run render:mi-note-videos -- --help` for its commands. Rendering requires
 an explicit card selection; setup and validation never start a collection.
 

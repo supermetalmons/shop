@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'vite';
 import { tsImport } from 'tsx/esm/api';
 import { Safari } from './safari.mjs';
-import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, assertSourceHashes, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeVM, catalogCount } from './native-config.mjs';
+import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, assertSourceHashes, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeBackend, catalogCount } from './native-config.mjs';
 
 const root = sourceRoot;
 const options = parseOptions(process.argv.slice(2), 'preflight');
@@ -15,7 +15,7 @@ if (options.help) {
   console.log('Native preflight: --profile sideways-1980|upright-2160 --motion original|vertical-swing|breathing-swing --id ID --output DIR --python PATH [--verify-resume]');
   process.exit(0);
 }
-assertNativeVM();
+const backend = assertNativeBackend();
 options.activate = true;
 options.port = 5178;
 const profile = profileFor(options.profile);
@@ -37,7 +37,7 @@ const integer = (value, label) => {
 };
 const sourceHashes = renderingSourceHashes();
 const preset = JSON.parse(readFileSync(join(root, 'scripts/mi-note-video/preset.json'), 'utf8'));
-const identity = { root, profile: options.profile, motion: options.motion, ids: options.ids, nativeSize, deliverySize,
+const identity = { backend, root, profile: options.profile, motion: options.motion, ids: options.ids, nativeSize, deliverySize,
   captureScale, frameCount: 276, frameRate: 60, sourceHashes, versions: runtimeVersions(options.python) };
 let envelope;
 let currentMotion = 'original';
@@ -240,7 +240,7 @@ async function warm(id, rotation, directory, initial) {
 }
 
 function validateApproval(approved) {
-  check(approved.status === 'passed' && JSON.stringify(approved.identity) === JSON.stringify(identity), 'Existing preflight identity changed; use a fresh output directory.');
+  check(approved.status === 'passed' && JSON.stringify({ backend: 'vm', ...approved.identity }) === JSON.stringify(identity), 'Existing preflight identity changed; use a fresh output directory.');
   for (const [path, expected] of Object.entries(approved.evidenceHashes)) check(hash(path) === expected, `Preflight evidence changed: ${path}`);
   check(hash(approved.staticReference.path) === approved.staticReference.sha256
     && hash(approved.nativeStart.path) === approved.nativeStart.sha256, 'Preflight native controls changed.');

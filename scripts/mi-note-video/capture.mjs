@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  appendFileSync, closeSync, constants, copyFileSync, existsSync, mkdirSync,
+  appendFileSync, closeSync, constants, copyFileSync, existsSync, fsyncSync, mkdirSync,
   lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, statfsSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -10,9 +10,13 @@ import { fileURLToPath } from 'node:url';
 import { tsImport } from 'tsx/esm/api';
 import { createServer } from 'vite';
 import { Safari } from './safari.mjs';
+import { FrameWorker } from './frame-worker.mjs';
+import { StreamProcessing } from './stream-processing.mjs';
+import { captureReleaseRecord, confirmOwnedProcessesStopped, releaseCaptureResources, saveCaptureRelease } from './capture-release.mjs';
 import { preparedWorkingFramePattern, recoverInterruptedEncodes } from './encoding-recovery.mjs';
 import { nativePendingFramePattern, recoverUncommittedFrames } from './frame-recovery.mjs';
-import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeVM, catalogCount, assertPreflightBinding } from './native-config.mjs';
+import { recoverNativeCapture } from './captureRecovery.mjs';
+import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeBackend, nativeBackend, catalogCount, assertPreflightBinding } from './native-config.mjs';
 
 const root = sourceRoot;
 const options = parseOptions(process.argv.slice(2), 'capture');
@@ -20,23 +24,22 @@ if (options.help) {
   console.log('Capture one native Mi Note video: --profile sideways-1980|upright-2160 --motion original|vertical-swing|breathing-swing --ids ID --output DIR --cache DIR --preflight approved.json --python PATH [--resume|--check-resume]');
   process.exit(0);
 }
-assertNativeVM();
+const backend = assertNativeBackend();
 const profile = profileFor(options.profile);
 const approval = JSON.parse(readFileSync(options.preflight, 'utf8'));
-if (approval.status !== 'passed' || approval.identity?.root !== root || approval.identity?.profile !== options.profile || approval.identity?.motion !== options.motion
+if (approval.status !== 'passed' || nativeBackend(approval.identity?.backend) !== backend || approval.identity?.root !== root || approval.identity?.profile !== options.profile || approval.identity?.motion !== options.motion
   || JSON.stringify(approval.identity?.ids) !== JSON.stringify(options.ids)) throw new Error('Preflight does not match this profile, motion, and card.');
 for (const [path, expected] of Object.entries(approval.evidenceHashes || {})) {
   if (createHash('sha256').update(readFileSync(path)).digest('hex') !== expected) throw new Error(`Preflight evidence changed: ${path}`);
 }
 Object.assign(options, { nft2Tilt: true, methods: ['d'], compactFrames: true, activateCaptureWindow: true,
   landscapeBlackCapture: profile.rotationDegrees === 90, singleViewportCapture: profile.tiles === 1,
-  staticReference: approval.staticReference.path, pipelineProcessing: false, port: 5179 });
+  staticReference: approval.staticReference.path, pipelineProcessing: true, port: 5179 });
 const gutterPixels = contract.capture.gutterPixels;
 const seamBandPixels = contract.capture.seamBandPixels;
 const nativeRecoveryMilliseconds = 120_000;
 const stitchAttempts = 3;
 const profileSampleInterval = 60;
-const frameHelper = join(root, 'scripts/mi-note-video/frames.py');
 const retainedFrames = contract.capture.controlFrames;
 const harnessPath = '/scripts/mi-note-video/index.html';
 const { nativeScrollQuantum, tileAxisPositions, chooseLandscapeViewport } = await tsImport('./captureGeometry.ts', import.meta.url);
@@ -50,7 +53,6 @@ const methodMapping = { d: { capture: `Safari native compositor at ${captureScal
 const selectedMethods = methodMapping;
 const deliverySpaces = ['p3'];
 const qualitySource = 'scripts/mi-note-video/quality.py';
-const qualityHelper = join(root, qualitySource);
 
 function hash(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -91,6 +93,7 @@ function axisTiles(length, viewport, documentLength, scrollQuantum) {
 }
 
 function assertResumeSettings(previous, current) {
+  if (nativeBackend(previous.backend) !== nativeBackend(current.backend)) throw new Error('Cannot resume: native backend changed.');
   if (JSON.stringify(previous.motionLoop ?? null) !== JSON.stringify(current.motionLoop ?? null)
     || JSON.stringify(previous.motionEnvelope ?? null) !== JSON.stringify(current.motionEnvelope ?? null)) throw new Error('Cannot resume: named motion or its original footprint changed.');
   if ((previous.singleViewportCapture ?? false) !== current.singleViewportCapture) throw new Error('Cannot resume: singleViewportCapture changed.');
@@ -170,32 +173,6 @@ for item in items:
 print(json.dumps({'checked':len(items)}))
 `;
 
-const staticExteriorCheck = `import hashlib,json,sys
-from pathlib import Path
-from PIL import Image
-import numpy as np
-reference=sys.argv[1];paths=json.loads(Path(sys.argv[2]).read_text());bounds=json.loads(sys.argv[3]);size=int(sys.argv[4])
-with Image.open(reference) as image:
-    image.load();profile=image.info.get('icc_profile')
-    if image.size!=(size,size) or image.mode!='RGB' or not profile: raise ValueError('Invalid static reference')
-    reference_pixels=np.asarray(image)
-left,top,right,bottom=bounds
-mask=np.ones((size,size),dtype=bool);mask[top:bottom,left:right]=False
-expected=reference_pixels[mask];checks=[]
-for path in paths:
-    with Image.open(path) as image:
-        image.load()
-        if image.size!=(size,size) or image.mode!='RGB': raise ValueError('Invalid static-check frame: '+path)
-        icc_equal=image.info.get('icc_profile')==profile
-        pixels=np.asarray(image)[mask]
-    different=np.any(expected!=pixels,axis=1);count=int(different.sum())
-    if count:
-        delta=np.abs(expected.astype(np.int16)-pixels.astype(np.int16));maximum=int(delta.max());mean=float(delta.mean())
-    else: maximum=0;mean=0.0
-    checks.append({'path':path,'equal':count==0,'iccEqual':icc_equal,'differentPixels':count,'maxChannelError':maximum,'meanChannelError':mean,'passed':count==0 and icc_equal})
-print(json.dumps({'reference':reference,'iccSha256':hashlib.sha256(profile).hexdigest(),'excludedCardBounds':bounds,'expansionPixels':int(sys.argv[5]),'checks':checks,'passed':all(check['passed'] for check in checks)}))
-`;
-
 async function main() {
   const output = resolve(root, options.output);
   const cache = resolve(root, options.cache);
@@ -217,16 +194,17 @@ async function main() {
   if (preset.width !== 1080 || preset.height !== 1080 || preset.frames !== 276) throw new Error('Unexpected shared scene preset.');
   const versions = runtimeVersions(options.python);
   const currentSourceHashes = renderingSourceHashes();
-  assertPreflightBinding(approval.identity, { root, profile: options.profile, motion: options.motion, ids: options.ids,
+  assertPreflightBinding(approval.identity, { backend, root, profile: options.profile, motion: options.motion, ids: options.ids,
     versions, sourceHashes: currentSourceHashes });
   mkdirSync(output, { recursive: true });
   mkdirSync(cache, { recursive: true });
   for (const directory of ['raw', 'tiles', 'proofs', 'metadata', 'prepared', 'capture-attempts', 'archive']) mkdirSync(join(cache, directory), { recursive: true });
   for (const id of options.ids) mkdirSync(join(cache, 'raw', `${id}c`), { recursive: true });
   const captures = new Map();
+  const processing = new Map();
   const activeChildren = new Set();
   let manifest = {
-    createdAt: new Date().toISOString(), status: 'starting', ids: options.ids, profile: options.profile, motion: options.motion,
+    createdAt: new Date().toISOString(), status: 'starting', backend, ids: options.ids, profile: options.profile, motion: options.motion,
     preflight: { path: options.preflight, sha256: hash(options.preflight) }, preset, methods: selectedMethods,
     output, cache, versions, gutterPixels, captureScale, capturedSize, deliverySize, captures: [], videos: [],
     compactFrames: Boolean(options.compactFrames), singleViewportCapture: Boolean(options.singleViewportCapture),
@@ -278,10 +256,16 @@ async function main() {
   };
   const savedFrames = new Map(options.ids.map(id => [id, new Map()]));
   const savedGeometry = new Map();
-  const saveManifest = () => {
+  const syncPath = path => {
+    const descriptor = openSync(path, 'r');
+    try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
+  };
+  const saveManifest = (durable = false) => {
     const pending = join(output, '.render-manifest.pending.json');
     writeFileSync(pending, JSON.stringify(manifest, null, 2) + '\n');
+    if (durable) syncPath(pending);
     renameSync(pending, join(output, '.render-manifest.json'));
+    if (durable) syncPath(output);
   };
   const assertSources = () => {
     for (const [file, expected] of Object.entries(manifest.sourceHashes)) {
@@ -320,7 +304,8 @@ async function main() {
   let server;
   let nativeIcc;
   let staticReference;
-  let pendingProcessing;
+  let frameWorker;
+  let captureShutdown;
   const checkActive = () => { if (aborted) throw aborted; };
   const stopProcessingChildren = () => {
     for (const child of activeChildren) {
@@ -333,20 +318,28 @@ async function main() {
     .filter(line => line.trim().endsWith('/Safari.app/Contents/MacOS/Safari -ApplePersistenceIgnoreStateQuietly YES --automation'))
     .map(line => [Number(line.trim().split(/\s+/)[0]), line.trim()]));
   const shutdownCapture = async () => {
+    if (captureShutdown) await captureShutdown;
     const ownedSafari = safari;
     const ownedProcess = safariOwnedProcess;
     safari = undefined;
     safariAuxiliary = undefined;
     safariOwnedProcess = undefined;
-    if (ownedSafari) await ownedSafari.close();
-    if (ownedProcess && automationProcesses().get(ownedProcess.pid) === ownedProcess.identity) {
-      try { process.kill(ownedProcess.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-    }
+    captureShutdown = (async () => {
+      try { if (ownedSafari) await ownedSafari.close(); }
+      finally {
+        if (ownedProcess && automationProcesses().get(ownedProcess.pid) === ownedProcess.identity) {
+          try { process.kill(ownedProcess.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+        }
+      }
+      if (ownedProcess) await confirmOwnedProcessesStopped([ownedProcess], automationProcesses);
+    })();
+    try { await captureShutdown; }
+    finally { captureShutdown = undefined; }
   };
   const interrupt = () => {
     aborted ||= new Error('Comparison interrupted; completed files and capture evidence were preserved.');
     stopProcessingChildren();
-    void shutdownCapture();
+    void shutdownCapture().catch(error => { aborted ||= error; });
   };
   process.once('SIGINT', interrupt);
   process.once('SIGTERM', interrupt);
@@ -367,7 +360,11 @@ async function main() {
       else resolveCommand(stdout);
     });
   });
-  const helper = async args => JSON.parse(await run(options.python, [frameHelper, ...args]));
+  const imageHelper = (operation, args, requestOptions) => {
+    checkActive();
+    frameWorker ||= new FrameWorker(options.python, ['-u', join(root, 'scripts/mi-note-video/frame_worker.py')], { activeChildren });
+    return frameWorker.request(operation, args, requestOptions);
+  };
   const readQuality = id => {
     const entry = manifest.qualityReports[id];
     if (!entry) return null;
@@ -379,50 +376,59 @@ async function main() {
         || frame.sha256 !== manifest.nativeFrames[`${id}:${index}`]?.sha256)) throw new Error(`Quality report does not cover the saved frames for card ${id}.`);
     return report;
   };
-  const ensureQuality = async id => {
-    if (readQuality(id)) return;
+  const processingFor = (id, initial) => {
+    if (processing.has(id)) return processing.get(id);
+    if (manifest.videos.some(video => video.id === id && video.method === 'd')) return null;
+    const before = manifest.nativeProofs[id]?.before;
+    if (!before?.path || !before.sha256 || hash(before.path) !== before.sha256) throw new Error('Streaming processing requires a verified native baseline.');
+    const originalPrepared = join(cache, 'prepared', `${id}d`);
+    const prepared = existsSync(originalPrepared) ? join(cache, 'prepared', `${id}d-${runId}`) : originalPrepared;
+    const qualityOutput = join(cache, 'metadata', `${id}c-quality-${runId}.json`);
+    const worker = new FrameWorker(options.python, ['-u', join(root, 'scripts/mi-note-video/processing_worker.py')], { activeChildren });
+    const stream = new StreamProcessing(worker, { cardId: id, nativeSize: capturedSize, size: deliverySize, space: 'p3',
+      before: before.path, beforeSha256: before.sha256, bounds: staticBounds(initial), preparedDirectory: prepared,
+      output: join(output, `${id}.mp4`), certificateDirectory: join(output, `validation-${runId}`) }, {
+      onError: error => { aborted ||= error; stopProcessingChildren(); },
+    });
+    const entry = { stream, prepared, qualityOutput };
+    processing.set(id, entry);
+    return entry;
+  };
+  const finishProcessing = async id => {
+    if (manifest.videos.some(video => video.id === id && video.method === 'd')) {
+      if (!readQuality(id)) throw new Error(`Saved video ${id} lacks its native quality report.`);
+      return;
+    }
+    checkActive();
+    assertSources();
     const capture = captures.get(`${id}c`);
     const proofs = manifest.nativeProofs[id];
-    if (!capture || !proofs?.before || !proofs?.after) throw new Error(`Card ${id} is not ready for full-sequence QA.`);
-    const path = join(cache, 'metadata', `${id}c-quality-${runId}.json`);
-    manifest.status = 'quality-audit';
-    saveManifest();
-    console.log(`Auditing all native colors and detail for card ${id}`);
-    await run(options.python, [qualityHelper, '--frames', capture.raw, '--before', proofs.before.path,
-      '--after', proofs.after.path, '--output', path, '--card-id', String(id), '--card-bounds', JSON.stringify(staticBounds(capture.initial)),
-      ...(options.nft2Tilt ? ['--native-size', String(capturedSize)] : [])]);
-    manifest.qualityReports[id] = { path, sha256: hash(path), helperSha256: manifest.sourceHashes[qualitySource] };
-    readQuality(id);
-    saveManifest();
-  };
-  const encodeCard = async id => {
-    const encodeMethod = async method => {
-      checkActive();
-      assertSources();
-      const capture = captures.get(`${id}c`);
-      const space = methodMapping[method].space;
-      const originalPrepared = join(cache, 'prepared', `${id}${method}`);
-      const prepared = existsSync(originalPrepared) ? join(cache, 'prepared', `${id}${method}-${runId}`) : originalPrepared;
-      manifest.status = 'encoding';
-      saveManifest();
-      console.log(`Preparing ${id}${method} (${space}, ${deliverySize}x${deliverySize})`);
-      const preparation = await helper(['prepare-sequence', '--input', capture.raw, '--output', prepared, '--space', space, '--size', String(deliverySize)]);
-      writeFileSync(join(cache, 'metadata', `${id}${method}-preparation-${runId}.json`), JSON.stringify(preparation, null, 2) + '\n', { flag: 'wx' });
-      console.log(`Encoding ${id}.mp4`);
-      const video = await helper(['encode', '--frames', prepared, '--output', join(output, `${id}.mp4`), '--space', space, '--size', String(deliverySize)]);
-      if (!video.fullyDecoded || video.width !== deliverySize || video.height !== deliverySize || video.frames !== preset.frames) throw new Error(`Video validation is incomplete for ${id}${method}.`);
-      manifest.videos.push({ id, method, prepared, ...video });
-      saveManifest();
-      console.log(`Verified ${id}.mp4 (${manifest.videos.length}/${options.ids.length})`);
-    };
-    const workers = options.methods.filter(method => method !== 'a' && !manifest.videos.some(video => video.id === id && video.method === method)).map(encodeMethod);
-    try { await Promise.all(workers); }
-    catch (error) {
-      aborted ||= error;
-      stopProcessingChildren();
-      await Promise.allSettled(workers);
-      throw error;
+    if (!capture || !proofs?.after) throw new Error(`Card ${id} is not ready for full-sequence QA.`);
+    const entry = processingFor(id, capture.initial);
+    for (let frame = 0; frame < preset.frames; frame += 1) {
+      await entry.stream.enqueue(manifest.nativeFrames[`${id}:${frame}`]);
     }
+    manifest.status = 'finishing-processing';
+    saveManifest();
+    const result = await entry.stream.finish({ after: proofs.after.path, afterSha256: proofs.after.sha256, qualityOutput: entry.qualityOutput }, async quality => {
+      const qualityReport = JSON.parse(readFileSync(entry.qualityOutput, 'utf8'));
+      if (JSON.stringify(qualityReport) !== JSON.stringify(quality.qualityReport)) throw new Error('Streaming quality report changed before its checkpoint.');
+      manifest.qualityReports[id] = { path: entry.qualityOutput, sha256: hash(entry.qualityOutput), helperSha256: manifest.sourceHashes[qualitySource] };
+      readQuality(id);
+      writeFileSync(join(cache, 'metadata', `${id}d-preparation-${runId}.json`), JSON.stringify(quality.preparation, null, 2) + '\n', { flag: 'wx' });
+      syncPath(entry.qualityOutput);
+      syncPath(dirname(entry.qualityOutput));
+      saveManifest(true);
+    });
+    const { video } = result;
+    if (!video?.fullyDecoded || video.width !== deliverySize || video.height !== deliverySize || video.frames !== preset.frames
+      || video.output !== join(output, `${id}.mp4`) || hash(video.output) !== video.sha256) throw new Error(`Video validation is incomplete for ${id}d.`);
+    if (!result.decodeCertificate?.path || !containsPath(output, result.decodeCertificate.path)
+      || hash(result.decodeCertificate.path) !== result.decodeCertificate.sha256) throw new Error('Streaming video decode certificate is missing or changed.');
+    manifest.videos.push({ id, method: 'd', prepared: entry.prepared, ...video, decodeCertificate: result.decodeCertificate });
+    saveManifest();
+    await entry.stream.close();
+    console.log(`Verified ${id}.mp4 (${manifest.videos.length}/${options.ids.length})`);
   };
   const compactCard = async id => {
     if (!options.compactFrames || manifest.compacted[id]?.status === 'complete') return;
@@ -799,7 +805,7 @@ async function main() {
     if (manifest.staticReference?.path) {
       const recorded = manifest.staticReference;
       if (!containsPath(cache, resolve(recorded.path)) || hash(recorded.path) !== recorded.sha256) throw new Error('Copied static reference changed.');
-      const inspected = await helper(['inspect', recorded.path]);
+      const inspected = await imageHelper('inspect', { input: recorded.path });
       if (inspected.width !== capturedSize || inspected.height !== capturedSize || inspected.mode !== 'RGB' || !inspected.icc) throw new Error('Copied static reference has invalid native geometry or ICC.');
       if (recorded.icc?.sha256 && recorded.icc.sha256 !== inspected.icc.sha256) throw new Error('Copied static reference ICC changed.');
       nativeIcc = inspected.icc.sha256;
@@ -808,7 +814,7 @@ async function main() {
     }
     if (!options.staticReference) return;
     const source = resolve(root, options.staticReference);
-    const inspected = await helper(['inspect', source]);
+    const inspected = await imageHelper('inspect', { input: source });
     if (inspected.width !== capturedSize || inspected.height !== capturedSize || inspected.mode !== 'RGB' || !inspected.icc) throw new Error(`Static reference must be an ICC-tagged ${capturedSize}-pixel RGB native proof.`);
     const sha256 = hash(source);
     const destination = join(cache, 'proofs', 'static-reference.png');
@@ -831,8 +837,10 @@ async function main() {
     if (!reference) return null;
     const listPath = join(cache, 'metadata', `static-${label}-${runId}-${randomUUID().slice(0, 8)}-files.json`);
     writeFileSync(listPath, JSON.stringify(files), { flag: 'wx' });
-    return JSON.parse(await run(options.python, ['-c', staticExteriorCheck, reference.path, listPath,
-      JSON.stringify(staticBounds(initial)), String(capturedSize), String(options.landscapeBlackCapture ? Math.ceil(80 * captureScale) : options.nft2Tilt ? 80 * captureScale : 4)]));
+    return imageHelper('static-check', { reference: reference.path, referenceSha256: reference.sha256, filesPath: listPath,
+      bounds: staticBounds(initial), size: capturedSize,
+      expansionPixels: options.landscapeBlackCapture ? Math.ceil(80 * captureScale) : options.nft2Tilt ? 80 * captureScale : 4 },
+    { timeoutMilliseconds: 120_000 + files.length * 2000 });
   };
   const auditNative = async (includeAfter) => {
     const reports = [];
@@ -1035,7 +1043,9 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
       }
       await safari.call('switch_tab', tab);
       if (attempt > 1) await delay(300);
-      if (attempt > 1) await remountCard(id, initial, 'rejected native PNG header');
+      if (attempt > 1) await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size,
+        cause: new Error(`Rejected native PNG header: ${JSON.stringify(actual)}`) },
+      () => remountCard(id, initial, 'rejected native PNG header'));
       const pose = await safariAction(`window.miNoteCaptureComparison.setFrame(${frame})`, id, frame);
       const captureScroll = options.singleViewportCapture ? singleViewportScroll(pose, expectedDimensions) : scroll;
       const snapshot = await safariAction(`window.miNoteCaptureComparison.setScrollPixels(${captureScroll.x},${captureScroll.y})`, id, frame,
@@ -1064,7 +1074,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         const captured = await safariScreenshot({ tab, id, frame, row, col, file: tileFile, initial,
           scroll: { x: grid.xs[col], y: grid.ys[row] }, expectedDimensions: screenshotDimensions });
         if (!nativeIcc) {
-          const inspected = await helper(['inspect', tileFile]);
+          const inspected = await imageHelper('inspect', { input: tileFile });
           if (!inspected.icc) throw new Error('Native Safari screenshot is missing its ICC profile');
           nativeIcc = inspected.icc.sha256;
         }
@@ -1084,8 +1094,8 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         ...(options.landscapeBlackCapture ? { landscapeViewportCapture: true } : {}), captureRotationDegrees: profile.rotationDegrees, backgroundRgb: [0, 0, 0], shadows: false,
         columns: grid.xs.length, rows: grid.ys.length, tiles: records }, null, 2) + '\n', { flag: 'wx' });
       try {
-        const stitched = await helper(['stitch', '--metadata', metadataPath, '--output', file,
-          '--delivery-size', String(deliverySize), '--delivery-spaces', deliverySpaces.join(',')]);
+        const stitched = await imageHelper('stitch', { metadata: metadataPath, output: file,
+          deliverySize, deliverySpaces });
         if (!stitched.passed || stitched.icc?.sha256 !== nativeIcc) throw new Error('Joined frame ICC or seam validation failed.');
         const staticCheck = await checkStatic([file], initial, `${id}-${label}-${attempt}`);
         if (staticCheck && !staticCheck.passed) {
@@ -1100,10 +1110,12 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         writeFileSync(stitchReport, JSON.stringify(stitched, null, 2) + '\n', { flag: 'wx' });
         return { stitched, tiles: records, snapshot: records[0].snapshot, stitchReport };
       } catch (error) {
-        if (!/Tile overlap\/seam QA failed|Static exterior QA failed/.test(error.message) || attempt === stitchAttempts) throw error;
-        writeFileSync(join(cache, 'metadata', `${id}c-${label}-stitch-rejected-${captureRunId}-${attempt}.json`), JSON.stringify({ error: error.message, metadata: metadataPath }) + '\n');
-        console.log(`Safari ${id}c frame ${frame}: retrying complete tile set after failed pixel QA (${attempt}/${stitchAttempts})`);
-        await remountCard(id, initial, 'failed tile-set pixel QA');
+        if (!/Tile overlap\/seam QA failed|Static exterior QA failed/.test(error.message)) throw error;
+        writeFileSync(join(cache, 'metadata', `${id}c-${label}-stitch-rejected-${captureRunId}-${attempt}.json`), JSON.stringify({ error: error.message, metadata: metadataPath }) + '\n', { flag: 'wx' });
+        await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size, cause: error, retryAllowed: attempt < stitchAttempts }, async () => {
+          console.log(`Safari ${id}c frame ${frame}: retrying complete tile set after failed pixel QA (${attempt}/${stitchAttempts})`);
+          await remountCard(id, initial, 'failed tile-set pixel QA');
+        });
       }
     }
     throw new Error('Native frame did not stitch.');
@@ -1244,7 +1256,10 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         saveManifest();
         for (let frame = 0; frame < preset.frames; frame += 1) {
           checkActive();
-          if (savedFrames.get(id).has(frame)) continue;
+          if (savedFrames.get(id).has(frame)) {
+            await processingFor(id, initial)?.stream.enqueue(savedFrames.get(id).get(frame));
+            continue;
+          }
           const label = String(frame).padStart(4, '0');
           const file = join(raw, `${label}.png`);
           const captured = await capture(frame, label, file);
@@ -1255,6 +1270,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
           appendFileSync(join(cache, 'metadata', `${id}c.jsonl`), JSON.stringify({ frame, ...captured.snapshot,
             tileMetadata: captured.stitched.metadata, stitchReport: captured.stitchReport, captureRunId }) + '\n');
           saveManifest();
+          await processingFor(id, initial)?.stream.enqueue(frameRecord);
           if (frame % profileSampleInterval === 0 || frame === preset.frames - 1) profileSamples.push({ path: file, icc: captured.stitched.icc });
           if ((frame + 1) % 24 === 0) console.log(`Safari ${id}c: ${frame + 1}/${preset.frames} joined frames`);
         }
@@ -1302,32 +1318,34 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     }
   };
   const processCard = async id => {
-    const stage = name => {
-      if (!options.pipelineProcessing) return;
-      manifest.processing ||= {};
-      manifest.processing[id] = { stage: name, at: new Date().toISOString() };
-      saveManifest();
-    };
-    stage('quality');
-    await ensureQuality(id);
-    stage('encoding');
-    await encodeCard(id);
-    stage('compacting');
+    await finishProcessing(id);
     await compactCard(id);
-    stage('complete');
   };
-  const drainProcessing = async () => {
-    if (pendingProcessing) {
-      await pendingProcessing;
-      pendingProcessing = undefined;
-    }
+  const releaseCapture = async id => {
     checkActive();
-  };
-  const startProcessing = id => {
-    pendingProcessing = processCard(id).catch(error => {
-      aborted ||= error;
-      stopProcessingChildren();
-    });
+    assertSources();
+    await releaseCaptureResources({ stopSafari: shutdownCapture,
+      stopServer: async () => { if (server) { await server.close(); server = undefined; } },
+      closeWorker: async () => { if (frameWorker) { await frameWorker.close(); frameWorker = undefined; } },
+      identities: manifest.captureWindows || [], processList: automationProcesses });
+    checkActive();
+    manifest.status = 'capture-complete';
+    saveManifest();
+    const attempt = process.env.MI_NOTE_CAPTURE_ATTEMPT;
+    if (attempt) {
+      const jobRoot = process.env.MI_NOTE_JOB_ROOT;
+      if (!jobRoot) throw new Error('Capture release requires its owned job root.');
+      const job = JSON.parse(readFileSync(join(jobRoot, 'job.json'), 'utf8'));
+      if (job.root !== jobRoot || job.sourceRoot !== root || output !== join(jobRoot, 'cards', String(id), 'output')) {
+        throw new Error('Capture release paths differ from its owned job.');
+      }
+      const record = captureReleaseRecord({ manifest, job, attempt, runId, cardId: id });
+      const path = join(dirname(output), 'capture-complete.json');
+      saveCaptureRelease(path, record);
+      if (process.send) await new Promise((resolveMessage, reject) => {
+        process.send({ type: 'capture-complete', path }, error => error ? reject(error) : resolveMessage());
+      });
+    }
   };
   try {
     await seedStaticReference();
@@ -1342,8 +1360,6 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
       checkActive();
       assertSources();
       if (!captures.has(`${id}c`)) {
-        const available = statfsSync(cache);
-        if (pendingProcessing && available.bavail * available.bsize < 12 * 1024 ** 3) await drainProcessing();
         const capacity = captureCapacity();
         if (capacity.availableBytes < 12 * 1024 ** 3) throw new Error('At least 12 GiB available capacity is required before capturing another card.');
         if (motionLoop) {
@@ -1371,12 +1387,9 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
           }
         }
       }
-      if (options.pipelineProcessing) {
-        await drainProcessing();
-        startProcessing(id);
-      } else await processCard(id);
+      await releaseCapture(id);
+      await processCard(id);
     }
-    await drainProcessing();
     await shutdownCapture();
     checkActive();
     assertSources();
@@ -1388,7 +1401,6 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
   } catch (error) {
     aborted ||= error;
     stopProcessingChildren();
-    if (pendingProcessing) await pendingProcessing;
     manifest.status = 'failed';
     manifest.error = aborted.message;
     if (!options.checkResume) saveManifest();
@@ -1396,8 +1408,15 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
   } finally {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
-    await shutdownCapture();
-    await server?.close();
+    try {
+      await Promise.all([...processing.values()].map(entry => entry.stream.close()));
+    } finally {
+      try { await frameWorker?.close(); }
+      finally {
+        try { await shutdownCapture(); }
+        finally { await server?.close(); }
+      }
+    }
   }
 }
 

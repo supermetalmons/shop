@@ -141,6 +141,56 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 select_ids(ids, all_cards, count=1430)
 
+    def test_frozen_host_preparation_reuses_exact_release_without_transfer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root, state = base / 'source', base / 'state'
+            self.source(root)
+            staging = base / 'staging'
+            manifest = snapshot(staging, root)
+            release = state / 'releases' / manifest['sourceId']
+            publish_snapshot(staging, release, manifest)
+            host = Mock(kind='host', config={'guestRoot': str(state / 'host'), 'python': '/runtime/python', 'node': '/runtime/node'})
+            with patch.object(prepare, 'snapshot', side_effect=AssertionError('Must not resnapshot')), \
+                    patch.object(prepare, 'inspect_runtime', return_value={'fixture': True}):
+                first = prepare.prepare_frozen(host, state, manifest['sourceId'])
+                (root / 'shared/scene.ts').write_text('changed checkout')
+                second = prepare.prepare_frozen(host, state, manifest['sourceId'])
+            self.assertEqual(first['sourceId'], second['sourceId'])
+            self.assertEqual(first, second)
+            self.assertEqual(first['guestSourceRoot'], str(release))
+            self.assertTrue((release / 'source-snapshot.json').is_file())
+            self.assertTrue((state / 'prepared-host.json').is_file())
+            host.put.assert_not_called()
+            self.assertFalse(any('/bin/rm' == call.args[0][0] for call in host.exec.call_args_list))
+
+    def test_frozen_preparation_stops_on_corruption_without_repair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root, state = base / 'source', base / 'state'
+            self.source(root)
+            staging = base / 'staging'
+            manifest = snapshot(staging, root)
+            release = state / 'releases' / manifest['sourceId']
+            publish_snapshot(staging, release, manifest)
+            (release / 'shared/scene.ts').write_text('corruption')
+            backend = Mock()
+            with self.assertRaisesRegex(ValueError, 'missing or changed'):
+                prepare.prepare_frozen(backend, state, manifest['sourceId'])
+            backend.exec.assert_not_called()
+            self.assertEqual((release / 'shared/scene.ts').read_text(), 'corruption')
+
+    def test_frozen_manifest_rejects_changed_inventory_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = base / 'source'
+            self.source(root)
+            manifest = snapshot(base / 'release', root)
+            manifest['files']['shared/scene.ts'] = 'a' * 64
+            (base / 'release/source-snapshot.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, 'identity differs'):
+                prepare.verify_snapshot(base / 'release', manifest['sourceId'])
+
     def test_job_records_explicit_profiles_and_source_identity(self):
         prepared = {'sourceId': 'a' * 64, 'guestSourceRoot': '/data/releases/' + 'a' * 64,
                     'runtime': {'versions': {'node': '24.22.0'}}, 'catalogCount': 1430, 'contractSha256': 'b' * 64}

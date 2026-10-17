@@ -2,12 +2,14 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 
 AVAILABLE = importlib.util.find_spec('numpy') is not None and importlib.util.find_spec('PIL') is not None
 if AVAILABLE:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import numpy as np
     from PIL import Image, ImageCms, ImageFilter
     spec = importlib.util.spec_from_file_location('native_unit_audit', Path(__file__).resolve().parents[1] / 'audit.py')

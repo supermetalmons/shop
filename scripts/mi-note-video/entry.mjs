@@ -1,16 +1,16 @@
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Safari } from './safari.mjs';
+import { assertNativeBackend } from './native-config.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const requested = process.argv[2];
 if (!requested) throw new Error('Specify preflight.mjs or capture.mjs.');
 const target = isAbsolute(requested) ? resolve(requested) : resolve(directory, requested);
 if (!['preflight.mjs', 'capture.mjs'].some(name => target === join(directory, name))) throw new Error('Unexpected native renderer entry point.');
-if (!execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).trim().startsWith('VirtualMac')) throw new Error('Native rendering requires the configured macOS VM.');
+assertNativeBackend();
 if (!process.env.MI_NOTE_JOB_ROOT || !isAbsolute(process.env.MI_NOTE_JOB_ROOT)) throw new Error('MI_NOTE_JOB_ROOT must be an absolute job directory.');
 const jobRoot = resolve(process.env.MI_NOTE_JOB_ROOT);
 if (realpathSync(jobRoot) !== jobRoot) throw new Error('Job root must not contain a symbolic link.');

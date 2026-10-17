@@ -19,9 +19,20 @@ export function catalogCount() {
   return count;
 }
 
-export function assertNativeVM() {
-  requireValue(process.platform === 'darwin' && execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).trim().startsWith('VirtualMac'),
-    'Native rendering requires the configured macOS VM.');
+export function nativeBackend(value = 'vm') {
+  requireValue(['host', 'vm'].includes(value), `Unsupported native rendering backend: ${value}`);
+  return value;
+}
+
+export function assertNativeBackend(value = process.env.MI_NOTE_RENDER_BACKEND, system = {}) {
+  const backend = nativeBackend(value);
+  requireValue((system.platform ?? process.platform) === 'darwin', 'Native rendering requires macOS.');
+  const model = system.model ?? execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).trim();
+  requireValue(typeof model === 'string' && model.trim().length > 0, 'Native rendering could not identify the Mac hardware.');
+  const virtual = model.trim().startsWith('VirtualMac');
+  requireValue(backend === 'vm' ? virtual : !virtual,
+    backend === 'vm' ? 'Native VM rendering requires the configured macOS VM.' : 'Native host rendering requires physical Mac hardware.');
+  return backend;
 }
 
 export function profileFor(id) {
@@ -109,6 +120,7 @@ export function assertPreflightBinding(identity, current) {
   for (const key of ['root', 'profile', 'motion', 'ids', 'sourceHashes', 'versions']) {
     requireValue(identity && JSON.stringify(identity[key]) === JSON.stringify(current[key]), `Preflight ${key} differs from the current capture.`);
   }
+  requireValue(nativeBackend(identity.backend) === nativeBackend(current.backend), 'Preflight backend differs from the current capture.');
 }
 
 export function runtimeVersions(python) {

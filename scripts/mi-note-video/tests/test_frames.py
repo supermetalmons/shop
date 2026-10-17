@@ -1,19 +1,35 @@
-import importlib.util
 import hashlib
 import json
+import multiprocessing
+import os
 from pathlib import Path
+import signal
 import shutil
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from concurrent.futures.process import BrokenProcessPool
 from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageCms
 
 
-spec = importlib.util.spec_from_file_location("frames", Path(__file__).resolve().parents[1] / "frames.py")
-frames = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(frames)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import frames
+
+
+def crashed_preparation(input_path, *args):
+    if Path(input_path).stem == "0001":
+        os._exit(23)
+    return frames.prepare_frame(input_path, *args)
+
+
+def tracked_preparation(input_path, output_path, *args):
+    Path(output_path).with_suffix(".worker.json").write_text(json.dumps({"pid": os.getpid(), "group": os.getpgrp()}))
+    return frames.prepare_frame(input_path, output_path, *args)
 
 
 def tile_fixture(directory, columns=1, overlap_extra=0, dimension=256):
@@ -201,6 +217,182 @@ class FramePreparationTests(unittest.TestCase):
             frames.validate_frames(directory, "srgb", size=12)
             with self.assertRaisesRegex(ValueError, "1080x1080"):
                 frames.validate_frames(directory, "srgb")
+
+
+class PreparationSequenceTests(unittest.TestCase):
+    def fixture(self, directory, count=8):
+        source = Path(directory) / "source"
+        source.mkdir()
+        y, x = np.indices((36, 36))
+        for index in range(count):
+            pixels = np.stack([(x * 31 + index * 7) % 256, (y * 19 + index * 29) % 256,
+                               ((x + y) * 23 + index * 11) % 256], axis=2).astype(np.uint8)
+            profile = frames.PROFILE_PATHS["p3" if index % 2 else "srgb"].read_bytes()
+            Image.fromarray(pixels).save(source / f"{index:04d}.png", icc_profile=profile)
+        return source
+
+    def test_parallel_preparation_matches_serial_bytes_reports_and_profile_order(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+            source = self.fixture(directory)
+            originals = {path.name: path.read_bytes() for path in source.iterdir()}
+            serial = Path(directory) / "serial"
+            expected = frames.prepare_sequence(source, serial, "p3", size=24)
+            expected.pop("output")
+            for workers in (2, 4):
+                with self.subTest(workers=workers):
+                    target = Path(directory) / f"parallel-{workers}"
+                    report = frames.prepare_sequence(source, target, "p3", size=24, workers=workers)
+                    report.pop("output")
+                    self.assertEqual(report, expected)
+                    self.assertEqual(sorted(path.name for path in target.iterdir()), sorted(originals))
+                    for name, original in originals.items():
+                        self.assertEqual((source / name).read_bytes(), original)
+                        self.assertEqual((target / name).read_bytes(), (serial / name).read_bytes())
+
+    def test_rejects_missing_extra_frames_and_existing_output_before_processing(self):
+        for invalid in ("missing", "extra", "output"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+                source = self.fixture(directory)
+                target = Path(directory) / "prepared"
+                if invalid == "missing":
+                    (source / "0001.png").unlink()
+                elif invalid == "extra":
+                    (source / "extra.png").write_bytes(b"untouched")
+                else:
+                    target.mkdir()
+                    (target / "existing").write_bytes(b"untouched")
+                with self.assertRaisesRegex(ValueError, "exactly 8|already exists"):
+                    frames.prepare_sequence(source, target, "p3", size=24, workers=4)
+                self.assertEqual(target.exists(), invalid == "output")
+                if invalid == "output":
+                    self.assertEqual((target / "existing").read_bytes(), b"untouched")
+
+    def test_worker_input_failures_propagate_and_drain_all_children(self):
+        cases = {
+            "corrupt": (OSError, "cannot identify"),
+            "missing-icc": (ValueError, "missing an ICC"),
+            "invalid-icc": (OSError, "cannot open profile"),
+            "transparent": (ValueError, "must be opaque"),
+            "mode": (ValueError, "Expected an RGB or RGBA"),
+            "dimensions": (ValueError, "captured dimensions differ"),
+        }
+        for invalid, (error, message) in cases.items():
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+                source = self.fixture(directory)
+                target = Path(directory) / "prepared"
+                bad = source / "0001.png"
+                profile = frames.PROFILE_PATHS["p3"].read_bytes()
+                if invalid == "corrupt":
+                    bad.write_bytes(b"broken PNG")
+                elif invalid == "missing-icc":
+                    Image.new("RGB", (36, 36)).save(bad)
+                elif invalid == "invalid-icc":
+                    Image.new("RGB", (36, 36)).save(bad, icc_profile=b"invalid ICC")
+                elif invalid == "transparent":
+                    Image.new("RGBA", (36, 36), (1, 2, 3, 0)).save(bad, icc_profile=profile)
+                elif invalid == "mode":
+                    Image.new("L", (36, 36)).save(bad, icc_profile=profile)
+                else:
+                    Image.new("RGB", (30, 30)).save(bad, icc_profile=profile)
+                previous = {child.pid for child in multiprocessing.active_children()}
+                with self.assertRaisesRegex(error, message):
+                    frames.prepare_sequence(source, target, "p3", size=24, workers=4)
+                self.assertEqual({child.pid for child in multiprocessing.active_children()}, previous)
+                self.assertFalse(list(target.glob("*.pending.png")))
+                self.assertFalse((target / "0007.png").exists())
+
+    def test_parallel_preparation_rejects_different_prepared_dimensions(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+            source = self.fixture(directory)
+            Image.new("RGB", (30, 30)).save(source / "0001.png", icc_profile=frames.PROFILE_PATHS["p3"].read_bytes())
+            with self.assertRaisesRegex(ValueError, "prepared dimensions differ"):
+                frames.prepare_sequence(source, Path(directory) / "prepared", "p3", workers=4)
+
+    def test_abrupt_worker_exit_fails_without_leaving_children(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+            source = self.fixture(directory)
+            previous = {child.pid for child in multiprocessing.active_children()}
+            with patch.object(frames, "prepare_frame", crashed_preparation), self.assertRaises(BrokenProcessPool):
+                frames.prepare_sequence(source, Path(directory) / "prepared", "p3", size=24, workers=4)
+            self.assertEqual({child.pid for child in multiprocessing.active_children()}, previous)
+
+    @unittest.skipUnless(hasattr(os, "getpgrp"), "POSIX process groups required")
+    def test_workers_stay_in_parent_process_group(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(frames, "FRAME_COUNT", 8):
+            source = self.fixture(directory)
+            target = Path(directory) / "prepared"
+            with patch.object(frames, "prepare_frame", tracked_preparation):
+                frames.prepare_sequence(source, target, "p3", size=24, workers=4)
+            records = [json.loads(path.read_text()) for path in target.glob("*.worker.json")]
+            self.assertEqual(len(records), 8)
+            self.assertTrue(all(record["pid"] != os.getpid() and record["group"] == os.getpgrp() for record in records))
+            self.assertLessEqual(len({record["pid"] for record in records}), 4)
+
+    @unittest.skipUnless(hasattr(os, "killpg"), "POSIX process groups required")
+    def test_group_interruption_stops_preparation_workers_without_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.fixture(directory)
+            target = Path(directory) / "prepared"
+            script = Path(directory) / "interrupted.py"
+            script.write_text(f"""import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, {str(Path(frames.__file__).parent)!r})
+import frames
+
+def waiting_preparation(input_path, output_path, *args):
+    marker = Path(output_path).with_suffix('.worker.json')
+    pending = marker.with_suffix('.pending')
+    pending.write_text(json.dumps({{'pid': os.getpid(), 'group': os.getpgrp()}}))
+    pending.replace(marker)
+    time.sleep(30)
+
+if __name__ == '__main__':
+    frames.FRAME_COUNT = 8
+    frames.prepare_frame = waiting_preparation
+    print(json.dumps(frames.prepare_sequence(sys.argv[1], sys.argv[2], 'p3', workers=4)), flush=True)
+""")
+            process = subprocess.Popen([sys.executable, str(script), str(source), str(target)],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 10
+                while len(list(target.glob("*.worker.json"))) < 4 and time.monotonic() < deadline:
+                    self.assertIsNone(process.poll(), "Preparation exited before its workers started")
+                    time.sleep(.02)
+                records = [json.loads(path.read_text()) for path in target.glob("*.worker.json")]
+                self.assertEqual(len(records), 4)
+                self.assertTrue(all(record["group"] == process.pid for record in records))
+                os.killpg(process.pid, signal.SIGTERM)
+                stdout, _ = process.communicate(timeout=5)
+                self.assertNotEqual(process.returncode, 0)
+                self.assertEqual(stdout, "")
+                deadline = time.monotonic() + 5
+                while True:
+                    running = [record["pid"] for record in records if any(state and not state.startswith("Z") for state in
+                               subprocess.run(["ps", "-o", "stat=", "-p", str(record["pid"])], capture_output=True,
+                                              text=True, check=False).stdout.split())]
+                    if not running or time.monotonic() >= deadline:
+                        break
+                    time.sleep(.02)
+                self.assertEqual(running, [])
+            finally:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.communicate(timeout=5)
+
+    def test_worker_count_is_bounded_and_cli_defaults_to_four(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for workers in (True, 0, -1, 1.5, 5):
+                with self.subTest(workers=workers), self.assertRaises(ValueError):
+                    frames.prepare_sequence(directory, Path(directory) / "prepared", "p3", workers=workers)
+            self.assertFalse((Path(directory) / "prepared").exists())
+        command = ["frames.py", "prepare-sequence", "--input", "/input", "--output", "/output", "--space", "p3"]
+        for arguments, expected in ((command, 4), (command + ["--workers", "1"], 1)):
+            with patch.object(sys, "argv", arguments), patch.object(frames, "prepare_sequence", return_value={}) as prepare, \
+                    patch("builtins.print"):
+                frames.main()
+            self.assertEqual(prepare.call_args.args[-1], expected)
 
 
 class TileStitchTests(unittest.TestCase):

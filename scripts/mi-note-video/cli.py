@@ -76,6 +76,8 @@ def environment(vm, root):
     config = vm.config
     paths = [str(Path(config[name]).parent) for name in ('node', 'ffmpeg', 'ffprobe', 'python')]
     return {'HOME': config['guestHome'], 'TMPDIR': '/private/tmp', 'MI_NOTE_JOB_ROOT': root,
+            'MI_NOTE_RENDER_BACKEND': getattr(vm, 'kind', 'vm'),
+            'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
             'MI_NOTE_FFMPEG': config['ffmpeg'], 'MI_NOTE_FFPROBE': config['ffprobe'],
             'PATH': ':'.join(dict.fromkeys([*paths, '/usr/bin', '/bin', '/usr/sbin', '/sbin']))}
 
@@ -127,17 +129,23 @@ def service_running(vm, label, arguments, cwd, root):
     return 'state = running' in value
 
 
-def assert_idle(vm):
+def assert_idle(vm, allowed_jobs=None):
     script = '''const fs=require('node:fs'),cp=require('node:child_process');
-const path=process.argv[1]+'/render.lock/owner.json';
-if(fs.existsSync(path)){
- let owner;try{owner=JSON.parse(fs.readFileSync(path))}catch{process.exit(0)}
- if(Number.isSafeInteger(owner.pid)&&owner.pid>1){
-  let command='';try{command=cp.execFileSync('/bin/ps',['-p',String(owner.pid),'-o','command='],{encoding:'utf8'})}catch{}
-  if(command.includes('/scripts/mi-note-video/guest-runner.mjs'))throw Error('A rendering job is active. Interrupt it before preparing another source snapshot.');
- }
+const allowed=JSON.parse(process.argv[2]);
+const processes=cp.execFileSync('/bin/ps',['-axo','pid=,command='],{encoding:'utf8'}).split('\\n');
+for(const line of processes){
+ const match=line.match(/^\\s*(\\d+)\\s+(.+)$/);if(!match)continue;
+ const command=match[2];
+ if(!command.includes('/scripts/mi-note-video/guest-runner.mjs --job ')||command.startsWith('/usr/bin/caffeinate ')||command.includes(' -e ')||command.includes(' --eval '))continue;
+ const job=allowed.find(item=>command.includes(item.sourceRoot+'/scripts/mi-note-video/guest-runner.mjs --job '+item.root+'/job.json'));
+ if(!job)throw Error('A rendering job is active. Interrupt it before preparing another source snapshot.');
+ const ownerPath=process.argv[1]+'/execution-locks/'+job.jobId+'/owner.json';
+ const legacy=process.argv[1]+'/render.lock/owner.json';
+ const owner=JSON.parse(fs.readFileSync(fs.existsSync(ownerPath)?ownerPath:legacy));
+ const started=cp.execFileSync('/bin/ps',['-p',match[1],'-o','lstart='],{encoding:'utf8'}).trim();
+ if(owner.pid!==Number(match[1])||owner.jobId!==job.jobId||owner.sourceId!==job.sourceId||owner.started!==started)throw Error('Active execution ownership changed.');
 }'''
-    vm.exec([vm.config['node'], '-e', script, vm.config['guestRoot']])
+    vm.exec([vm.config['node'], '-e', script, vm.config['guestRoot'], json.dumps(allowed_jobs or [])])
 
 
 def paths(state, name):
@@ -189,7 +197,8 @@ def interrupt(vm, job):
     script = '''const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');
 const job=JSON.parse(fs.readFileSync(process.argv[1]));
 const state=JSON.parse(fs.readFileSync(job.root+'/job-status.json'));
-const owner=JSON.parse(fs.readFileSync(path.dirname(path.dirname(job.root))+'/render.lock/owner.json'));
+const executionOwner=path.dirname(path.dirname(job.root))+'/execution-locks/'+job.jobId+'/owner.json';
+const owner=JSON.parse(fs.readFileSync(fs.existsSync(executionOwner)?executionOwner:path.dirname(path.dirname(job.root))+'/render.lock/owner.json'));
 if(state.jobId!==job.jobId||state.sourceId!==job.sourceId||owner.jobId!==job.jobId||owner.sourceId!==job.sourceId||owner.pid!==state.pid||owner.attempt!==state.attempt)throw Error('Guest job identity changed.');
 const started=cp.execFileSync('/bin/ps',['-p',String(owner.pid),'-o','lstart='],{encoding:'utf8'}).trim();
 if(started!==owner.started)throw Error('The runner process was replaced.');
@@ -301,7 +310,7 @@ def _run_job(vm, args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Standalone native Safari video rendering in an owned macOS VM.')
+    parser = argparse.ArgumentParser(description='Resumable native Safari video rendering on the host or in an owned macOS VM.')
     parser.add_argument('--state', type=Path, help='Private renderer state directory (defaults to current-user Application Support).')
     commands = parser.add_subparsers(dest='command', required=True)
     adopt = commands.add_parser('adopt', help='Adopt an idle, configured macOS VM and copy its pinned access credentials.')
@@ -310,8 +319,13 @@ def main():
     for option in ('guest-user', 'host-key-alias', 'guest-root', 'node', 'python', 'ffmpeg', 'ffprobe'):
         adopt.add_argument('--' + option, required=True)
     adopt.add_argument('--move', action='store_true', help='Move this task’s owned idle VM into private state instead of keeping its existing location.')
-    commands.add_parser('prepare', help='Stage a hashed source snapshot and pinned dependencies; does not render.')
-    commands.add_parser('doctor', help='Boot and verify access, the GUI session, and pinned runtimes; does not capture.')
+    for name, help_text in (
+        ('setup', 'Prepare an isolated host runtime or check the configured VM.'),
+        ('prepare', 'Stage a hashed source snapshot and pinned dependencies; does not render.'),
+        ('doctor', 'Verify access, the GUI session, and pinned runtimes; does not capture.'),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument('--backend', choices=['host', 'vm'], default='vm')
     run = commands.add_parser('run', help='Start a named rendering job. Explicit card selection is required.')
     run.add_argument('--job', required=True, type=job_name)
     group = run.add_mutually_exclusive_group(required=True)
@@ -320,25 +334,99 @@ def main():
     run.add_argument('--profile', choices=CONTRACT['profiles'], default=CONTRACT['defaults']['profile'])
     run.add_argument('--motion', choices=CONTRACT['motions'], default=CONTRACT['defaults']['motion'])
     run.add_argument('--output', type=Path)
+    run.add_argument('--backend', choices=['host', 'vm'], default='vm')
+    run.add_argument('--retention', choices=['full', 'receipt'], default='full')
+    run.add_argument('--background', action='store_true')
     for name in ('resume', 'collect', 'interrupt'):
         command = commands.add_parser(name)
         command.add_argument('job', type=job_name)
+        if name == 'resume':
+            command.add_argument('--backend', choices=['host', 'vm'])
+            command.add_argument('--from-id', type=int)
+            command.add_argument('--background', action='store_true')
+            command.add_argument('--refresh-controller', action='store_true', help='Freeze updated host job-control code while preserving the original native rendering source and checkpoints.')
+        if name == 'interrupt':
+            command.add_argument('--after-card', action='store_true', help='Stop after the next card is durably published, preserving a clean source-upgrade boundary.')
+    upgrade = commands.add_parser('upgrade-source', help='Pin a verified equivalent rendering source for untouched remaining catalog cards.')
+    upgrade.add_argument('job', type=job_name)
+    upgrade.add_argument('--from-id', type=int, required=True)
+    upgrade.add_argument('--evidence', type=Path, required=True)
     status = commands.add_parser('status')
     status.add_argument('job', nargs='?', type=job_name)
+    status.add_argument('--backend', choices=['host', 'vm'], default='vm')
     commands.add_parser('vm-stop', help='Stop the owned VM after interrupting active jobs.')
     args = parser.parse_args()
     vm = VM(args.state)
+    from types import SimpleNamespace
+    import catalog
+    if args.command == 'run' or (getattr(args, 'job', None) and catalog.is_catalog(vm.state, args.job)):
+        state = catalog.state_path(args.state)
+        if args.command == 'status':
+            result = catalog.status(state, args.job)
+        elif args.command == 'interrupt':
+            result = catalog.request_interrupt(state, args.job, after_card=args.after_card)
+        elif args.command == 'upgrade-source':
+            with exclusive_work(SimpleNamespace(state=state)):
+                job, metadata = catalog.load(state, args.job)
+                result = catalog.upgrade_source(state, job, metadata, args.from_id, args.evidence)
+        elif args.command in ('run', 'resume'):
+            background_request = None
+            with exclusive_work(SimpleNamespace(state=state)):
+                if args.command == 'run':
+                    job, metadata = catalog.create(state, args)
+                else:
+                    job, metadata = catalog.load(state, args.job)
+                    if os.environ.get('MI_NOTE_RESUME_JOB_ID') != job['jobId']:
+                        catalog.begin_resume(state, args.job)
+                    catalog.check_interruption(state, args.job)
+                    catalog.pending_cards(job, catalog.verify_catalog(state, job, metadata), args.from_id)
+                    catalog.check_interruption(state, args.job)
+                    if args.refresh_controller:
+                        metadata = catalog.refresh_controller(state, job, metadata)
+                        catalog.check_interruption(state, args.job)
+                selected = args.backend or catalog.status(state, args.job)['backend']
+                if args.background:
+                    catalog.ensure_other_idle(state, job, selected)
+                    background_request = (state, job, catalog.controller_root(state, job, metadata), selected, getattr(args, 'from_id', None))
+                else:
+                    return catalog.run(state, args.job, selected, getattr(args, 'from_id', None), preserve_interrupt=True)
+            from background import launch as launch_background
+            catalog.check_interruption(state, args.job)
+            result = launch_background(*background_request)
+        else:
+            with exclusive_work(SimpleNamespace(state=state)):
+                result = catalog.collect_current(state, args.job)
+        print(json.dumps(result, indent=2), flush=True)
+        return 0
+    if args.command == 'upgrade-source' or (args.command == 'interrupt' and args.after_card):
+        raise ValueError('Source upgrades and card-boundary interruption require a catalog job.')
     if args.command == 'adopt':
         result = vm.adopt(args.vm, args.guest_user, args.password_file, args.known_hosts, args.host_key_alias,
                          args.guest_root, args.node, args.python, args.ffmpeg, args.ffprobe, move=args.move)
-    elif args.command == 'doctor':
-        result = {'guest': ready(vm), 'runtime': inspect_runtime(vm)}
+    elif args.command in ('setup', 'doctor'):
+        if args.backend == 'host':
+            from backends import Host, setup_host_runtime
+            state = catalog.state_path(args.state)
+            if args.command == 'setup':
+                with exclusive_work(SimpleNamespace(state=state)):
+                    result = setup_host_runtime(state)
+            else:
+                host = Host(state)
+                result = {'host': catalog.backend_ready(host), 'runtime': inspect_runtime(host)}
+        else:
+            result = {'guest': ready(vm), 'runtime': inspect_runtime(vm)}
     elif args.command == 'prepare':
-        with exclusive_work(vm):
-            ready(vm)
-            assert_idle(vm)
-            result = prepare(vm, vm.state)
+        backend = vm if args.backend == 'vm' else catalog.backend_for(catalog.state_path(args.state), 'host')
+        with exclusive_work(backend):
+            if args.backend == 'vm':
+                ready(backend)
+            else:
+                catalog.backend_ready(backend)
+            assert_idle(backend)
+            result = prepare(backend, backend.state)
     elif args.command in ('run', 'resume'):
+        if args.backend not in (None, 'vm') or args.background or args.from_id is not None or args.refresh_controller:
+            raise ValueError('Legacy VM jobs resume without --backend host, --background, or --from-id; create a new catalog for these features.')
         return run_job(vm, args)
     elif args.command == 'collect':
         ready(vm)
@@ -353,7 +441,7 @@ def main():
             job, _ = load_job(vm.state, args.job)
             result = remote_json(vm, job['root'] + '/job-status.json') if vm.status().get('running') else {'vm': vm.status(), 'lastKnownJobStatus': read(paths(vm.state, args.job) / 'last-status.json') if (paths(vm.state, args.job) / 'last-status.json').exists() else None}
         else:
-            result = vm.status()
+            result = catalog.backend_for(vm.state, args.backend).status()
     else:
         vm.stop()
         result = {'shutdownRequested': True}

@@ -12,6 +12,7 @@ import uuid
 
 
 HERE = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(HERE))
 SPEC = importlib.util.spec_from_file_location('unit_collector', HERE / 'collect.py')
 collector = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(collector)
