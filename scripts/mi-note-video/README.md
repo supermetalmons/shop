@@ -222,6 +222,13 @@ An execution ownership record remains until the host acknowledgment and cleanup
 finish. The encoder has its own shared lock, so only one encoder runs at a time.
 The VM and older frozen sources retain serial execution.
 
+Within a card, warmups, controls, and frame zero remain sequential. Later frames
+can capture their native viewport tiles while the preceding frame is stitched
+and checked. At most two frames are unfinished, and checkpoints are committed in
+order only after every existing pixel and ICC check passes. Recovery waits for
+both operations before restarting the owned capture session. Preflight reuses
+one Python worker for its unchanged image operations and checks.
+
 `active-executions.json` identifies both pipeline executions for interruption and
 resume, including after a supervisor crash. The controller publishes cards in
 catalog order and starts no new cards after a boundary-stop request. Immediate

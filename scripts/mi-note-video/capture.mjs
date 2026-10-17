@@ -12,6 +12,7 @@ import { createServer } from 'vite';
 import { Safari } from './safari.mjs';
 import { FrameWorker } from './frame-worker.mjs';
 import { StreamProcessing } from './stream-processing.mjs';
+import { runCaptureOverlap } from './capture-overlap.mjs';
 import { captureReleaseRecord, confirmOwnedProcessesStopped, releaseCaptureResources, saveCaptureRelease } from './capture-release.mjs';
 import { preparedWorkingFramePattern, recoverInterruptedEncodes } from './encoding-recovery.mjs';
 import { nativePendingFramePattern, recoverUncommittedFrames } from './frame-recovery.mjs';
@@ -960,7 +961,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     await delay(200);
   };
   const safariSnapshot = () => safari.evaluate('const page={origin:location.origin,pathname:location.pathname,readyState:document.readyState,visibility:document.visibilityState};return window.miNoteCaptureComparison ? {...window.miNoteCaptureComparison.snapshot(),asyncError:window.__comparisonAsyncError||null,completedAction:window.__comparisonCompletedAction||null,page}:{ready:false,harnessMissing:true,page};');
-  const safariWait = async (id, frame, nativePixels, predicate = () => true) => {
+  const safariWait = async (id, frame, nativePixels, predicate = () => true, checkCapture = () => {}) => {
     const startedAt = Date.now();
     let deadline = startedAt + 45_000;
     let lastSnapshot = null;
@@ -968,6 +969,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     let hiddenLogged = false;
     while (Date.now() < deadline) {
       checkActive();
+      checkCapture();
       const snapshot = await safariSnapshot();
       lastSnapshot = snapshot;
       polls += 1;
@@ -991,10 +993,11 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     writeFileSync(diagnosticPath, JSON.stringify({ cardId: id, frame, nativePixels, polls, lastSnapshot }, null, 2) + '\n');
     throw new Error(`Safari card ${id} frame ${frame} did not become ready. Last snapshot: ${JSON.stringify(lastSnapshot)}. Diagnostic: ${diagnosticPath}`);
   };
-  const safariAction = async (expression, id, frame, predicate = () => true) => {
+  const safariAction = async (expression, id, frame, predicate = () => true, checkCapture = () => {}) => {
+    checkCapture();
     const actionId = randomUUID();
     await safari.evaluate(`if(!window.miNoteCaptureComparison)throw new Error('Capture tab changed');window.__comparisonAsyncError=null;window.__comparisonCompletedAction=null;void (async()=>(${expression}))().then(()=>{window.__comparisonCompletedAction=${JSON.stringify(actionId)}},error=>{window.__comparisonAsyncError=error.message});return true;`);
-    return safariWait(id, frame, true, state => state.completedAction === actionId && predicate(state));
+    return safariWait(id, frame, true, state => state.completedAction === actionId && predicate(state), checkCapture);
   };
   const settleDisplayedImage = async id => safariAction(`(async()=>{
     const api=window.miNoteCaptureComparison;
@@ -1028,7 +1031,8 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     console.log(`Safari ${id}c: remounted at capture scale ${captureScale} after ${reason}`);
     return mounted;
   };
-  const safariScreenshot = async ({ tab, id, frame, row, col, scroll, file, initial, expectedDimensions }) => {
+  const safariScreenshot = async ({ tab, id, frame, row, col, scroll, file, initial, expectedDimensions,
+    checkCapture = () => {}, deferRecovery = false }) => {
     if (existsSync(file)) throw new Error(`Capture output already exists: ${file}`);
     let actual;
     const recoveryDeadline = Date.now() + nativeRecoveryMilliseconds;
@@ -1037,22 +1041,29 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     while (Date.now() < recoveryDeadline) {
       attempt += 1;
       checkActive();
+      checkCapture();
       if (attempt > 1 && Date.now() - lastRecoveryLog >= 5000) {
         console.log(`Recovering Safari ${id}c frame ${frame} tile ${row},${col}: reselect owned tab; ${Math.ceil((recoveryDeadline - Date.now()) / 1000)} seconds remain`);
         lastRecoveryLog = Date.now();
       }
       await safari.call('switch_tab', tab);
       if (attempt > 1) await delay(300);
-      if (attempt > 1) await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size,
-        cause: new Error(`Rejected native PNG header: ${JSON.stringify(actual)}`) },
-      () => remountCard(id, initial, 'rejected native PNG header'));
-      const pose = await safariAction(`window.miNoteCaptureComparison.setFrame(${frame})`, id, frame);
+      checkCapture();
+      if (attempt > 1) {
+        const cause = new Error(`Rejected native PNG header: ${JSON.stringify(actual)}`);
+        if (deferRecovery) throw cause;
+        await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size, cause },
+          () => remountCard(id, initial, 'rejected native PNG header'));
+      }
+      const pose = await safariAction(`window.miNoteCaptureComparison.setFrame(${frame})`, id, frame, () => true, checkCapture);
       const captureScroll = options.singleViewportCapture ? singleViewportScroll(pose, expectedDimensions) : scroll;
       const snapshot = await safariAction(`window.miNoteCaptureComparison.setScrollPixels(${captureScroll.x},${captureScroll.y})`, id, frame,
-        state => Math.abs(state.scrollPixels.x - captureScroll.x) <= 0.075 && Math.abs(state.scrollPixels.y - captureScroll.y) <= 0.075);
+        state => Math.abs(state.scrollPixels.x - captureScroll.x) <= 0.075 && Math.abs(state.scrollPixels.y - captureScroll.y) <= 0.075, checkCapture);
       assertSnapshot(snapshot, id, frame, initial, captureScroll);
+      checkCapture();
       const pending = join(cache, 'capture-attempts', `${id}c-${frame}-${row}-${col}-${attempt}-${randomUUID()}.png`);
       await safari.call('screenshot', { full_page: false, savePath: pending });
+      checkCapture();
       try { actual = readPngDimensions(pending); } catch (error) { actual = { error: error.message }; }
       if (actual.width === expectedDimensions.width && actual.height === expectedDimensions.height) {
         renameSync(pending, file);
@@ -1063,55 +1074,70 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     }
     throw new Error(`Native Safari screenshot dimensions changed: ${JSON.stringify(actual)}. Exit window overview/Mission Control and unminimize Safari before starting a fresh run. Rejected evidence is preserved in ${join(cache, 'capture-attempts')}.`);
   };
-  const captureJoinedFrame = async ({ tab, id, frame, label, file, initial, grid, screenshotDimensions }) => {
+  const captureFrameTiles = async ({ tab, id, frame, label, file, initial, grid, screenshotDimensions,
+    captureRunId = `${Date.now()}-${randomUUID().slice(0, 8)}`, attempt = 1, checkCapture = () => {}, deferRecovery = false }) => {
+    const tileDirectory = join(cache, 'tiles', `${id}c`, label, `run-${captureRunId}`, `attempt-${attempt}`);
+    mkdirSync(tileDirectory, { recursive: true });
+    const records = [];
+    for (let row = 0; row < grid.ys.length; row += 1) for (let col = 0; col < grid.xs.length; col += 1) {
+      checkCapture();
+      const tileFile = join(tileDirectory, `${row}-${col}.png`);
+      const captured = await safariScreenshot({ tab, id, frame, row, col, file: tileFile, initial,
+        scroll: { x: grid.xs[col], y: grid.ys[row] }, expectedDimensions: screenshotDimensions, checkCapture, deferRecovery });
+      if (!nativeIcc) {
+        const inspected = await imageHelper('inspect', { input: tileFile });
+        if (!inspected.icc) throw new Error('Native Safari screenshot is missing its ICC profile');
+        nativeIcc = inspected.icc.sha256;
+      }
+      records.push({ path: tileFile, sha256: hash(tileFile), row, col,
+        originX: physicalInteger(-captured.snapshot.stageRect.x * captured.snapshot.dpr, 'tile originX'),
+        originY: physicalInteger(-captured.snapshot.stageRect.y * captured.snapshot.dpr, 'tile originY'),
+        viewportWidth: screenshotDimensions.width, viewportHeight: screenshotDimensions.height,
+        iccSha256: nativeIcc, captureAttempts: captured.captureAttempts, snapshot: captured.snapshot });
+    }
+    const metadataPath = join(cache, 'metadata', `${id}c-${label}-tiles-${captureRunId}-${attempt}.json`);
+    const reference = options.singleViewportCapture ? knownStaticReference() : null;
+    if (options.singleViewportCapture && !reference) throw new Error('Single-viewport capture requires a verified native background reference.');
+    writeFileSync(metadataPath, JSON.stringify({ id, frame, profile: profile.id, captureScale, width: capturedSize, height: capturedSize,
+      ...(reference ? { singleViewportCapture: true, backgroundReference: {
+        path: reference.path, sha256: reference.sha256, excludedBounds: staticBounds(initial),
+      } } : {}),
+      ...(options.landscapeBlackCapture ? { landscapeViewportCapture: true } : {}), captureRotationDegrees: profile.rotationDegrees, backgroundRgb: [0, 0, 0], shadows: false,
+      columns: grid.xs.length, rows: grid.ys.length, tiles: records }, null, 2) + '\n', { flag: 'wx' });
+    return { id, frame, label, file, initial, captureRunId, attempt, metadataPath, records };
+  };
+  const stitchCapturedFrame = async ({ id, frame, label, file, initial, captureRunId, attempt, metadataPath, records }) => {
+    try {
+      const stitched = await imageHelper('stitch', { metadata: metadataPath, output: file,
+        deliverySize, deliverySpaces });
+      if (!stitched.passed || stitched.icc?.sha256 !== nativeIcc) throw new Error('Joined frame ICC or seam validation failed.');
+      const staticCheck = await checkStatic([file], initial, `${id}-${label}-${attempt}`);
+      if (staticCheck && !staticCheck.passed) {
+        const rejectedPath = join(cache, 'capture-attempts', `${id}c-${label}-static-${captureRunId}-${attempt}.png`);
+        renameSync(file, rejectedPath);
+        writeFileSync(join(cache, 'metadata', `${id}c-${label}-static-rejected-${captureRunId}-${attempt}.json`),
+          JSON.stringify({ rejectedPath, stitched, staticCheck }, null, 2) + '\n', { flag: 'wx' });
+        throw new Error(`Static exterior QA failed: ${JSON.stringify(staticCheck)}`);
+      }
+      if (staticCheck) stitched.staticExterior = staticCheck;
+      const stitchReport = join(cache, 'metadata', `${id}c-${label}-stitch-${captureRunId}.json`);
+      writeFileSync(stitchReport, JSON.stringify(stitched, null, 2) + '\n', { flag: 'wx' });
+      return { stitched, tiles: records, snapshot: records[0].snapshot, stitchReport };
+    } catch (error) {
+      if (!/Tile overlap\/seam QA failed|Static exterior QA failed/.test(error.message)) throw error;
+      writeFileSync(join(cache, 'metadata', `${id}c-${label}-stitch-rejected-${captureRunId}-${attempt}.json`), JSON.stringify({ error: error.message, metadata: metadataPath }) + '\n', { flag: 'wx' });
+      throw error;
+    }
+  };
+  const captureJoinedFrame = async args => {
+    const { id, frame, initial } = args;
     const captureRunId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
     for (let attempt = 1; attempt <= stitchAttempts; attempt += 1) {
-      const tileDirectory = join(cache, 'tiles', `${id}c`, label, `run-${captureRunId}`, `attempt-${attempt}`);
-      mkdirSync(tileDirectory, { recursive: true });
-      const records = [];
-      for (let row = 0; row < grid.ys.length; row += 1) for (let col = 0; col < grid.xs.length; col += 1) {
-        const tileFile = join(tileDirectory, `${row}-${col}.png`);
-        const captured = await safariScreenshot({ tab, id, frame, row, col, file: tileFile, initial,
-          scroll: { x: grid.xs[col], y: grid.ys[row] }, expectedDimensions: screenshotDimensions });
-        if (!nativeIcc) {
-          const inspected = await imageHelper('inspect', { input: tileFile });
-          if (!inspected.icc) throw new Error('Native Safari screenshot is missing its ICC profile');
-          nativeIcc = inspected.icc.sha256;
-        }
-        records.push({ path: tileFile, sha256: hash(tileFile), row, col,
-          originX: physicalInteger(-captured.snapshot.stageRect.x * captured.snapshot.dpr, 'tile originX'),
-          originY: physicalInteger(-captured.snapshot.stageRect.y * captured.snapshot.dpr, 'tile originY'),
-          viewportWidth: screenshotDimensions.width, viewportHeight: screenshotDimensions.height,
-          iccSha256: nativeIcc, captureAttempts: captured.captureAttempts, snapshot: captured.snapshot });
-      }
-      const metadataPath = join(cache, 'metadata', `${id}c-${label}-tiles-${captureRunId}-${attempt}.json`);
-      const reference = options.singleViewportCapture ? knownStaticReference() : null;
-      if (options.singleViewportCapture && !reference) throw new Error('Single-viewport capture requires a verified native background reference.');
-      writeFileSync(metadataPath, JSON.stringify({ id, frame, profile: profile.id, captureScale, width: capturedSize, height: capturedSize,
-        ...(reference ? { singleViewportCapture: true, backgroundReference: {
-          path: reference.path, sha256: reference.sha256, excludedBounds: staticBounds(initial),
-        } } : {}),
-        ...(options.landscapeBlackCapture ? { landscapeViewportCapture: true } : {}), captureRotationDegrees: profile.rotationDegrees, backgroundRgb: [0, 0, 0], shadows: false,
-        columns: grid.xs.length, rows: grid.ys.length, tiles: records }, null, 2) + '\n', { flag: 'wx' });
+      const acquired = await captureFrameTiles({ ...args, captureRunId, attempt });
       try {
-        const stitched = await imageHelper('stitch', { metadata: metadataPath, output: file,
-          deliverySize, deliverySpaces });
-        if (!stitched.passed || stitched.icc?.sha256 !== nativeIcc) throw new Error('Joined frame ICC or seam validation failed.');
-        const staticCheck = await checkStatic([file], initial, `${id}-${label}-${attempt}`);
-        if (staticCheck && !staticCheck.passed) {
-          const rejectedPath = join(cache, 'capture-attempts', `${id}c-${label}-static-${captureRunId}-${attempt}.png`);
-          renameSync(file, rejectedPath);
-          writeFileSync(join(cache, 'metadata', `${id}c-${label}-static-rejected-${captureRunId}-${attempt}.json`),
-            JSON.stringify({ rejectedPath, stitched, staticCheck }, null, 2) + '\n', { flag: 'wx' });
-          throw new Error(`Static exterior QA failed: ${JSON.stringify(staticCheck)}`);
-        }
-        if (staticCheck) stitched.staticExterior = staticCheck;
-        const stitchReport = join(cache, 'metadata', `${id}c-${label}-stitch-${captureRunId}.json`);
-        writeFileSync(stitchReport, JSON.stringify(stitched, null, 2) + '\n', { flag: 'wx' });
-        return { stitched, tiles: records, snapshot: records[0].snapshot, stitchReport };
+        return await stitchCapturedFrame(acquired);
       } catch (error) {
         if (!/Tile overlap\/seam QA failed|Static exterior QA failed/.test(error.message)) throw error;
-        writeFileSync(join(cache, 'metadata', `${id}c-${label}-stitch-rejected-${captureRunId}-${attempt}.json`), JSON.stringify({ error: error.message, metadata: metadataPath }) + '\n', { flag: 'wx' });
         await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size, cause: error, retryAllowed: attempt < stitchAttempts }, async () => {
           console.log(`Safari ${id}c frame ${frame}: retrying complete tile set after failed pixel QA (${attempt}/${stitchAttempts})`);
           await remountCard(id, initial, 'failed tile-set pixel QA');
@@ -1254,15 +1280,14 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         manifest.staticReference = knownStaticReference();
         const profileSamples = [{ path: before, icc: first.stitched.icc }];
         saveManifest();
-        for (let frame = 0; frame < preset.frames; frame += 1) {
+        const commitFrame = async (frame, captured) => {
           checkActive();
           if (savedFrames.get(id).has(frame)) {
             await processingFor(id, initial)?.stream.enqueue(savedFrames.get(id).get(frame));
-            continue;
+            return;
           }
           const label = String(frame).padStart(4, '0');
           const file = join(raw, `${label}.png`);
-          const captured = await capture(frame, label, file);
           const frameRecord = { id, frame, path: file, sha256: hash(file), stitchReport: captured.stitchReport,
             stitchReportSha256: hash(captured.stitchReport), tileMetadata: captured.stitched.metadata, iccSha256: captured.stitched.icc.sha256 };
           savedFrames.get(id).set(frame, frameRecord);
@@ -1273,6 +1298,22 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
           await processingFor(id, initial)?.stream.enqueue(frameRecord);
           if (frame % profileSampleInterval === 0 || frame === preset.frames - 1) profileSamples.push({ path: file, icc: captured.stitched.icc });
           if ((frame + 1) % 24 === 0) console.log(`Safari ${id}c: ${frame + 1}/${preset.frames} joined frames`);
+        };
+        await commitFrame(0, savedFrames.get(id).has(0) ? null : await capture(0, '0000', join(raw, '0000.png')));
+        try {
+          await runCaptureOverlap({ frames: Array.from({ length: preset.frames - 1 }, (_, index) => index + 1),
+            check: checkActive,
+            acquire: (frame, { check }) => {
+              if (savedFrames.get(id).has(frame)) return null;
+              const label = String(frame).padStart(4, '0');
+              return captureFrameTiles({ tab, id, frame, label, file: join(raw, `${label}.png`), initial, grid, screenshotDimensions,
+                checkCapture: check, deferRecovery: true });
+            },
+            complete: (frame, acquired) => acquired ? stitchCapturedFrame(acquired) : null,
+            commit: commitFrame });
+        } catch (error) {
+          if (!/Tile overlap\/seam QA failed|Static exterior QA failed|Rejected native PNG header/.test(error.message)) throw error;
+          await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size, cause: error, retryAllowed: false }, () => { throw error; });
         }
         {
           manifest.nativeProofs[id].afterCalibrations ||= [];

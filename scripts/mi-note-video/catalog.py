@@ -29,6 +29,7 @@ SOURCE_UPGRADE_FILES = {
     'scripts/mi-note-video/quality.py', 'scripts/mi-note-video/audit.py',
     'scripts/mi-note-video/video_validation.py', 'scripts/mi-note-video/processing_worker.py',
     'scripts/mi-note-video/stream-processing.mjs', 'scripts/mi-note-video/capture-release.mjs',
+    'scripts/mi-note-video/capture-overlap.mjs', 'scripts/mi-note-video/preflight.mjs',
     'scripts/mi-note-video/pipeline.json', 'scripts/mi-note-video/safari.mjs',
 }
 PIPELINE_CAPABILITY = {'version': 1, 'maxUnfinished': 2, 'captureRelease': 1, 'streamProcessing': 1}

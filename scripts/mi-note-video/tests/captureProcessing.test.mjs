@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { StreamProcessing } from '../stream-processing.mjs';
+import { runCaptureOverlap } from '../capture-overlap.mjs';
+import { recoverNativeCapture } from '../captureRecovery.mjs';
 
 const source = readFileSync(new URL('../capture.mjs', import.meta.url), 'utf8');
 const declaration = (name, next) => {
@@ -13,7 +15,7 @@ const declaration = (name, next) => {
   return source.slice(start, end);
 };
 
-function fixture(context, failedFrame) {
+function fixture(context, failedFrame, { failurePhase = 'complete', failureMessage = 'Safari MCP exited' } = {}) {
   const files = new Map();
   const workers = [];
   const processing = new Map();
@@ -21,6 +23,12 @@ function fixture(context, failedFrame) {
   const manifest = { nativeFrames: {}, nativeProofs: {}, videos: [], captures: [] };
   const hash = path => createHash('sha256').update(files.get(path)).digest('hex');
   let failed = false;
+  const failFrame = (frame, label, phase) => {
+    if (!failed && /^\d{4}$/.test(label) && frame === failedFrame && phase === failurePhase) {
+      failed = true;
+      throw new Error(failureMessage);
+    }
+  };
   let rest = 'first session';
   const initial = { viewport: { width: 16, height: 16 }, dpr: 1 };
   class Worker {
@@ -49,6 +57,7 @@ function fixture(context, failedFrame) {
   }
   const bindings = {
     processing, manifest, savedFrames, hash, join, randomUUID, FrameWorker: Worker, StreamProcessing: Stream,
+    runCaptureOverlap, recoverNativeCapture,
     captures: new Map(), savedGeometry: new Map(), activeChildren: new Set(),
     cache: '/fixture/capture', output: '/fixture/output', root: '/fixture/source', runId: 'fixture',
     options: { python: 'fixture', nft2Tilt: true, singleViewportCapture: true },
@@ -63,15 +72,14 @@ function fixture(context, failedFrame) {
     stopProcessingChildren: () => {}, repeatCheck: 'fixture', run: async () => JSON.stringify({ checks: [{ equal: true, iccEqual: true }] }),
     writeFileSync: (path, value) => files.set(path, value), appendFileSync: () => {}, console: { log: () => {} },
     captureJoinedFrame: async ({ frame, label, file }) => {
-      if (!failed && /^\d{4}$/.test(label) && frame === failedFrame) {
-        failed = true;
-        throw new Error('Safari MCP exited');
-      }
+      failFrame(frame, label, 'complete');
       files.set(file, `${rest}:frame-${frame}`);
       const stitchReport = `${file}.json`;
       files.set(stitchReport, 'stitch report');
       return { stitchReport, stitched: { icc: { sha256: 'b'.repeat(64) }, metadata: stitchReport }, snapshot: initial };
     },
+    captureFrameTiles: async args => { failFrame(args.frame, args.label, 'acquire'); return args; },
+    stitchCapturedFrame: args => bindings.captureJoinedFrame(args),
   };
   const createCapture = () => Function(...Object.keys(bindings), `
     let safariAuxiliary, staticReference, aborted;
@@ -130,3 +138,25 @@ test('a fresh process replays saved frames against their original baseline befor
   assert.equal(workers[0].beforeSha256, before);
   assert.deepEqual(workers[0].frames, [0, 1, 2]);
 });
+
+for (const [failurePhase, failureMessage] of [
+  ['acquire', 'Rejected native PNG header'],
+  ['complete', 'Tile overlap/seam QA failed'],
+  ['complete', 'Static exterior QA failed'],
+]) {
+  test(`${failureMessage} requires a fresh session and replays only the committed prefix`, async context => {
+    const { capture, workers, manifest, savedFrames } = fixture(context, 1, { failurePhase, failureMessage });
+    await assert.rejects(capture(), error => /^Native rest reference mismatch:/.test(error.message)
+      && error.cause.message === failureMessage);
+    const before = manifest.nativeProofs[1].before.sha256;
+    assert.deepEqual([...savedFrames.get(1).keys()], [0]);
+    assert.deepEqual(Object.keys(manifest.nativeFrames), ['1:0']);
+    assert.deepEqual(workers[0].frames, [0]);
+    assert.equal(manifest.nativeProofs[1].after, undefined);
+    assert.deepEqual(manifest.captures, []);
+    await capture();
+    assert.equal(manifest.nativeProofs[1].before.sha256, before);
+    assert.equal(workers.length, 1);
+    assert.deepEqual(workers[0].frames, [0, 1, 2]);
+  });
+}

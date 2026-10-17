@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createServer } from 'vite';
 import { tsImport } from 'tsx/esm/api';
 import { Safari } from './safari.mjs';
+import { FrameWorker } from './frame-worker.mjs';
 import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, assertSourceHashes, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeBackend, catalogCount } from './native-config.mjs';
 
 const root = sourceRoot;
@@ -23,11 +24,8 @@ const { nativeSize, deliverySize, captureScale } = profile;
 const output = options.output;
 const approvedPath = join(output, 'approved.json');
 const runDirectory = join(output, `run-${Date.now()}-${randomUUID().slice(0, 8)}`);
-const helperPath = join(root, 'scripts/mi-note-video/frames.py');
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const run = (command, args) => execFileSync(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }).trim();
-const python = (source, ...args) => JSON.parse(run(options.python, ['-c', source, ...args]));
-const helper = args => JSON.parse(run(options.python, [helperPath, ...args]));
 const save = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const integer = (value, label) => {
@@ -50,14 +48,14 @@ const effectKeys = { pointerX: '--pointer-x', pointerY: '--pointer-y', backgroun
 const processList = () => new Map(run('/bin/ps', ['-axo', 'pid=,lstart=,command=']).split('\n')
   .filter(line => line.trim().endsWith('/Safari.app/Contents/MacOS/Safari -ApplePersistenceIgnoreStateQuietly YES --automation'))
   .map(line => [Number(line.trim().split(/\s+/)[0]), line.trim()]));
-const compare = (first, second) => python(`import sys,json,hashlib,numpy as np
-from PIL import Image
-a=Image.open(sys.argv[1]);b=Image.open(sys.argv[2]);aa=np.asarray(a);bb=np.asarray(b);icc=a.info.get('icc_profile')
-same_size=aa.shape==bb.shape
-equal=bool(same_size and np.array_equal(aa,bb));same_icc=bool(icc and icc==b.info.get('icc_profile'))
-print(json.dumps({'passed':equal and same_icc,'pixelExact':equal,'iccExact':same_icc,'iccSha256':hashlib.sha256(icc).hexdigest() if icc else None}))`, first, second);
 const report = { status: 'running', identity, directory: runDirectory, startedAt: new Date().toISOString(), cards: [] };
-let safari, server, ownedProcess, processBaseline, tab, interrupted, staticReference, nativeIcc, viewport;
+let safari, server, ownedProcess, processBaseline, tab, interrupted, staticReference, nativeIcc, viewport, frameWorker;
+const imageHelper = (operation, args) => {
+  if (interrupted) throw interrupted;
+  frameWorker ||= new FrameWorker(options.python, ['-u', join(root, 'scripts/mi-note-video/frame_worker.py')]);
+  return frameWorker.request(operation, args);
+};
+const compare = (first, second) => imageHelper('compare', { first, second });
 const assertSources = () => assertSourceHashes(sourceHashes);
 
 async function focusOwned() {
@@ -160,7 +158,7 @@ async function capture(id, frame, label, rotation, directory, initial) {
     assertSnapshot(snapshot, id, frame, rotation, scroll);
     const path = join(directory, `${label}-${row}-${col}.png`);
     await safari.call('screenshot', { full_page: false, savePath: path });
-    const inspected = helper(['inspect', path]);
+    const inspected = await imageHelper('inspect', { input: path });
     check(inspected.width === viewport.width && inspected.height === viewport.height && inspected.icc, 'Native screenshot geometry or ICC is missing.');
     if (nativeIcc) check(inspected.icc.sha256 === nativeIcc, 'Native display ICC changed during capture.');
     nativeIcc = inspected.icc.sha256;
@@ -173,7 +171,7 @@ async function capture(id, frame, label, rotation, directory, initial) {
   const metadata = join(directory, `${label}-tiles.json`);
   save(metadata, { id, frame, ...(validatingProfile ? { profile: profile.id } : {}), backgroundRgb: [0, 0, 0], shadows: false, captureRotationDegrees: rotation, captureScale, width: nativeSize, height: nativeSize, columns: grid.xs.length, rows: grid.ys.length, ...mode, tiles });
   const path = join(directory, `${label}.png`);
-  const stitched = helper(['stitch', '--metadata', metadata, '--output', path, '--delivery-size', String(deliverySize), '--delivery-spaces', 'p3']);
+  const stitched = await imageHelper('stitch', { metadata, output: path, deliverySize, deliverySpaces: ['p3'] });
   check(stitched.passed && stitched.iccPreservedByteForByte, 'Native stitch or lossless transpose failed.');
   const stitchReport = join(directory, `${label}-stitch.json`);
   save(stitchReport, stitched);
@@ -187,7 +185,7 @@ async function calibrate(id, rotation, directory, initial, baselinePath) {
     const control = await capture(id, 0, `${baselinePath ? 'end' : 'start'}-control-${attempt}`, rotation, directory, initial);
     const reference = baselinePath || controls.at(-1)?.path;
     if (reference) {
-      control.repeat = compare(reference, control.path);
+      control.repeat = await compare(reference, control.path);
       consecutive = control.repeat.passed ? consecutive + 1 : 0;
     }
     controls.push(control);
@@ -277,11 +275,7 @@ async function main() {
   report.uprightWarmup = await warm(options.id, 0, uprightDirectory, upright);
   report.uprightCalibration = await calibrate(options.id, 0, uprightDirectory, upright);
   const referencePath = report.uprightCalibration.baseline;
-  const exterior = python(`import sys,json,hashlib,numpy as np
-from PIL import Image
-image=Image.open(sys.argv[1]);image.load();bounds=json.loads(sys.argv[2]);size=int(sys.argv[3]);a=np.asarray(image);l,t,r,b=bounds;icc=image.info.get('icc_profile')
-passed=image.size==(size,size) and image.mode=='RGB' and bool(icc) and all(np.all(part==0) for part in (a[:t],a[b:],a[t:b,:l],a[t:b,r:]))
-print(json.dumps({'passed':bool(passed),'bounds':bounds,'iccSha256':hashlib.sha256(icc).hexdigest() if icc else None}))`, referencePath, JSON.stringify(excludedBounds(upright)), String(nativeSize));
+  const exterior = await imageHelper('black-exterior', { input: referencePath, bounds: excludedBounds(upright), size: nativeSize });
   check(exterior.passed, 'Fresh upright static reference has a non-black exterior.');
   staticReference = { path: referencePath, sha256: hash(referencePath), nativeIccSha256: nativeIcc, exterior,
     provenance: 'Independent native upright black scene captured in this guest and joined without resampling.' };
@@ -314,10 +308,10 @@ print(json.dumps({'passed':bool(passed),'bounds':bounds,'iccSha256':hashlib.sha2
   for (const frame of contract.capture.controlFrames) {
     const sample = await capture(options.id, frame, String(frame).padStart(4, '0'), profile.rotationDegrees, directory, initial);
     const preparedPath = join(directory, `${String(frame).padStart(4, '0')}-p3-${deliverySize}.png`);
-    sample.prepared = helper(['prepare', '--input', sample.path, '--output', preparedPath, '--space', 'p3', '--size', String(deliverySize)]);
+    sample.prepared = await imageHelper('prepare', { input: sample.path, output: preparedPath, space: 'p3', size: deliverySize });
     card.samples.push(sample);
   }
-  card.frameZeroRepeat = compare(card.start.baseline, card.samples[0].path);
+  card.frameZeroRepeat = await compare(card.start.baseline, card.samples[0].path);
   check(card.frameZeroRepeat.passed, 'Sample frame zero differs from the independent baseline.');
   card.end = await calibrate(options.id, profile.rotationDegrees, directory, initial, card.start.baseline);
   save(join(directory, 'report.json'), card);
@@ -344,7 +338,10 @@ print(json.dumps({'passed':bool(passed),'bounds':bounds,'iccSha256':hashlib.sha2
   console.log(JSON.stringify({ status: 'passed', approved: approvedPath, profile: profile.id, motion: options.motion, geometryFrames: 552, nativeSamples: 5 }));
 }
 
-const interrupt = signal => { interrupted = new Error(`Interrupted by ${signal}`); };
+const interrupt = signal => {
+  interrupted = new Error(`Interrupted by ${signal}`);
+  frameWorker?.fail(interrupted);
+};
 process.once('SIGINT', interrupt);
 process.once('SIGTERM', interrupt);
 try {
@@ -356,9 +353,13 @@ try {
   console.error(report.error);
   process.exitCode = 1;
 } finally {
-  await safari?.close();
-  if (ownedProcess && processList().get(ownedProcess.pid) === ownedProcess.identity) {
-    try { process.kill(ownedProcess.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  try {
+    await safari?.close();
+    if (ownedProcess && processList().get(ownedProcess.pid) === ownedProcess.identity) {
+      try { process.kill(ownedProcess.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    }
+  } finally {
+    try { await server?.close(); }
+    finally { await frameWorker?.close(); }
   }
-  await server?.close();
 }

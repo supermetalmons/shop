@@ -10,6 +10,28 @@ from PIL import Image
 import frames
 
 
+def compare_images(first, second):
+    with Image.open(first) as a, Image.open(second) as b:
+        aa, bb = np.asarray(a), np.asarray(b)
+        icc = a.info.get("icc_profile")
+        same_size = aa.shape == bb.shape
+        equal = bool(same_size and np.array_equal(aa, bb))
+        same_icc = bool(icc and icc == b.info.get("icc_profile"))
+    return {"passed": equal and same_icc, "pixelExact": equal, "iccExact": same_icc,
+            "iccSha256": hashlib.sha256(icc).hexdigest() if icc else None}
+
+
+def black_exterior(input_path, bounds, size):
+    with Image.open(input_path) as image:
+        image.load()
+        a = np.asarray(image)
+        left, top, right, bottom = bounds
+        icc = image.info.get("icc_profile")
+        passed = image.size == (size, size) and image.mode == "RGB" and bool(icc) \
+            and all(np.all(part == 0) for part in (a[:top], a[bottom:], a[top:bottom, :left], a[top:bottom, right:]))
+    return {"passed": bool(passed), "bounds": bounds, "iccSha256": hashlib.sha256(icc).hexdigest() if icc else None}
+
+
 class StaticExteriorChecker:
     def __init__(self):
         self.cached = None
@@ -69,6 +91,13 @@ class FrameOperations:
             return frames.inspect_image(args["input"])
         if operation == "stitch":
             return frames.stitch_frame(args["metadata"], args["output"], args.get("deliverySize"), args.get("deliverySpaces"))
+        if operation == "prepare":
+            return frames.prepare_frame(args["input"], args["output"], args["space"],
+                                        args.get("crop"), args.get("inputSpace"), args.get("size"))
+        if operation == "compare":
+            return compare_images(args["first"], args["second"])
+        if operation == "black-exterior":
+            return black_exterior(args["input"], args["bounds"], args["size"])
         if operation == "static-check":
             return self.static.check(args["reference"], json.loads(Path(args["filesPath"]).read_text()),
                                      args["bounds"], args["size"], args["expansionPixels"], args.get("referenceSha256"))

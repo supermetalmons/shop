@@ -63,8 +63,10 @@ class CatalogTests(unittest.TestCase):
     def upgrade(self, from_card=2, changed='scripts/mi-note-video/capture.mjs'):
         evidence = self.state / 'equivalence.json'
         atomic_json(evidence, self.equivalence())
-        baseline = {'sourceId': self.job['sourceId'], 'files': {'scripts/mi-note-video/contract.json': self.job['contractSha256'], changed: '0' * 64}}
-        candidate = {'sourceId': 'c' * 64, 'files': {**baseline['files'], changed: '1' * 64}}
+        changed = [changed] if isinstance(changed, str) else changed
+        baseline = {'sourceId': self.job['sourceId'], 'files': {'scripts/mi-note-video/contract.json': self.job['contractSha256'],
+                    **{name: '0' * 64 for name in changed}}}
+        candidate = {'sourceId': 'c' * 64, 'files': {**baseline['files'], **{name: '1' * 64 for name in changed}}}
         publication = {**catalog.empty_manifest(self.job), 'videos': {'1': {}}}
         with patch.object(catalog, 'ensure_exclusive_native'), patch.object(catalog, 'verify_catalog', return_value=publication), \
                 patch.object(catalog, 'verify_snapshot', return_value=baseline), patch.object(catalog, 'snapshot', return_value=candidate), \
@@ -537,6 +539,17 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(observed, [(1, self.state / 'releases' / ('a' * 64)), (2, self.state / 'releases' / ('c' * 64))] * 2)
         with self.assertRaisesRegex(RuntimeError, 'Prepared rendering source'):
             catalog.execution_for(self.state, job, 'vm', self.backend, self.prepared, 2)
+
+    def test_source_upgrade_accepts_verified_preflight_worker_and_capture_overlap(self):
+        changed = ['scripts/mi-note-video/capture-overlap.mjs', 'scripts/mi-note-video/capture.mjs',
+                   'scripts/mi-note-video/catalog.py', 'scripts/mi-note-video/frame_worker.py',
+                   'scripts/mi-note-video/preflight.mjs']
+        result = self.upgrade(changed=changed)
+        job, metadata = catalog.load(self.state, self.job['name'])
+        self.assertEqual(result['status'], 'source-upgraded')
+        self.assertEqual(catalog.source_for_card(job, metadata, 1), self.job['sourceId'])
+        self.assertEqual(catalog.source_for_card(job, metadata, 2), 'c' * 64)
+        self.assertEqual(metadata['renderSourceHistory'][-1]['unchangedRenderInputs']['changedFiles'], sorted(changed))
 
     def test_source_upgrade_rejects_partial_checkpoints_and_earlier_holes(self):
         for backend in ('host', 'vm'):
