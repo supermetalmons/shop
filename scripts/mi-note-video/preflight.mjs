@@ -8,7 +8,9 @@ import { createServer } from 'vite';
 import { tsImport } from 'tsx/esm/api';
 import { Safari } from './safari.mjs';
 import { FrameWorker } from './frame-worker.mjs';
-import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, assertSourceHashes, viteOptions, assertProfileGrid, warmNativeCapture, assertNativeBackend, catalogCount } from './native-config.mjs';
+import { runCaptureOverlap } from './capture-overlap.mjs';
+import { frameScrollAction } from './frame-scroll-action.mjs';
+import { sourceRoot, contract, parseOptions, profileFor, motionFor, renderingSourceHashes, runtimeVersions, assertSourceHashes, viteOptions, assertProfileGrid, warmupFrames, assertNativeBackend, catalogCount } from './native-config.mjs';
 
 const root = sourceRoot;
 const options = parseOptions(process.argv.slice(2), 'preflight');
@@ -50,10 +52,15 @@ const processList = () => new Map(run('/bin/ps', ['-axo', 'pid=,lstart=,command=
   .map(line => [Number(line.trim().split(/\s+/)[0]), line.trim()]));
 const report = { status: 'running', identity, directory: runDirectory, startedAt: new Date().toISOString(), cards: [] };
 let safari, server, ownedProcess, processBaseline, tab, interrupted, staticReference, nativeIcc, viewport, frameWorker;
-const imageHelper = (operation, args) => {
-  if (interrupted) throw interrupted;
+const checkActive = () => { if (interrupted) throw interrupted; };
+const imageHelper = async (operation, args, checkCapture = checkActive) => {
+  checkActive();
+  checkCapture();
   frameWorker ||= new FrameWorker(options.python, ['-u', join(root, 'scripts/mi-note-video/frame_worker.py')]);
-  return frameWorker.request(operation, args);
+  const result = await frameWorker.request(operation, args);
+  checkActive();
+  checkCapture();
+  return result;
 };
 const compare = (first, second) => imageHelper('compare', { first, second });
 const assertSources = () => assertSourceHashes(sourceHashes);
@@ -77,23 +84,34 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
   }
 }
 
-async function wait(predicate = () => true) {
+async function wait(predicate = () => true, checkCapture = checkActive, resultToken) {
   const deadline = Date.now() + 120_000;
   let state;
   while (Date.now() < deadline) {
-    if (interrupted) throw interrupted;
-    state = await safari.evaluate('return window.miNoteCaptureComparison ? {...window.miNoteCaptureComparison.snapshot(),completedAction:window.__vmPreflightCompleted,asyncError:window.__vmPreflightError} : {harnessMissing:true,page:{url:location.href,readyState:document.readyState,visibility:document.visibilityState}}');
+    checkActive();
+    checkCapture();
+    const observed = await safari.evaluate(`return window.miNoteCaptureComparison ? {...window.miNoteCaptureComparison.snapshot(),completedAction:window.__vmPreflightCompleted,asyncError:window.__vmPreflightError${resultToken ? ',actionResult:window.__vmPreflightResult' : ''}} : {harnessMissing:true,page:{url:location.href,readyState:document.readyState,visibility:document.visibilityState}}`);
+    checkActive();
+    checkCapture();
+    const { actionResult, ...snapshot } = observed;
+    state = snapshot;
     if (state.error || state.asyncError) throw new Error(state.error || state.asyncError);
-    if (state.ready && state.paintReady && state.viewport?.visibility === 'visible' && predicate(state)) return state;
+    if (state.ready && state.paintReady && state.viewport?.visibility === 'visible' && predicate(state)) {
+      if (!resultToken) return state;
+      check(actionResult?.token === resultToken && actionResult.value, 'Preflight action result is missing or stale.');
+      return { snapshot: state, result: actionResult.value };
+    }
     await delay(50);
   }
   throw new Error(`Preflight readiness timed out: ${JSON.stringify(state)}`);
 }
 
-async function action(expression, predicate = () => true) {
+async function action(expression, predicate = () => true, checkCapture = checkActive, readResult = false) {
+  checkActive();
+  checkCapture();
   const token = randomUUID();
-  await safari.evaluate(`window.__vmPreflightCompleted=null;window.__vmPreflightError=null;void(async()=>(${expression}))().then(()=>window.__vmPreflightCompleted=${JSON.stringify(token)},error=>window.__vmPreflightError=error.message);return true;`);
-  return wait(state => state.completedAction === token && predicate(state));
+  await safari.evaluate(`window.__vmPreflightCompleted=null;window.__vmPreflightError=null;window.__vmPreflightResult=null;void(async()=>(${expression}))().then(value=>{${readResult ? `window.__vmPreflightResult={token:${JSON.stringify(token)},value};` : ''}window.__vmPreflightCompleted=${JSON.stringify(token)};},error=>window.__vmPreflightError=error.message);return true;`);
+  return wait(state => state.completedAction === token && predicate(state), checkCapture, readResult ? token : undefined);
 }
 
 async function remount(id) {
@@ -140,42 +158,91 @@ function excludedBounds(state) {
     Math.min(nativeSize, Math.ceil(card.x + card.width) + Math.ceil(80 * captureScale)), Math.min(nativeSize, Math.ceil(card.y + card.height) + Math.ceil(80 * captureScale))];
 }
 
-async function capture(id, frame, label, rotation, directory, initial) {
+async function acquireCapture(id, frame, label, rotation, directory, initial, checkCapture = checkActive) {
+  checkCapture();
+  const dimensions = { ...viewport };
   const quantum = nativeScrollQuantum(captureScale, 2);
   const axis = (size, documentLength) => tileAxisPositions({ length: nativeSize, viewport: size, documentLength: integer(documentLength, 'document dimension'), gutterPixels: 32, seamBandPixels: 128, scrollQuantum: quantum });
   const grid = rotation === 90 ? { xs: [0], ys: [0] }
-    : { xs: axis(viewport.width, initial.documentPixels.width), ys: axis(viewport.height, initial.documentPixels.height) };
+    : { xs: axis(dimensions.width, initial.documentPixels.width), ys: axis(dimensions.height, initial.documentPixels.height) };
   if (validatingProfile) assertProfileGrid(profile, grid);
+  const captureProfile = validatingProfile ? profile.id : null;
   let selection;
   const tiles = [];
   for (let row = 0; row < grid.ys.length; row += 1) for (let col = 0; col < grid.xs.length; col += 1) {
+    checkCapture();
     await safari.call('switch_tab', tab);
-    const pose = await action(`window.miNoteCaptureComparison.setFrame(${frame})`, state => state.frame === frame);
-    assertSnapshot(pose, id, frame, rotation);
-    selection = rotation === 90 ? chooseLandscapeViewport(pose, viewport) : null;
-    const scroll = selection ? selection.scroll : { x: grid.xs[col], y: grid.ys[row] };
-    const snapshot = await action(`window.miNoteCaptureComparison.setScrollPixels(${scroll.x},${scroll.y})`);
+    checkCapture();
+    let snapshot, scroll;
+    if (rotation === 90) {
+      const pose = await action(`window.miNoteCaptureComparison.setFrame(${frame})`, state => state.frame === frame, checkCapture);
+      assertSnapshot(pose, id, frame, rotation);
+      selection = chooseLandscapeViewport(pose, dimensions);
+      scroll = selection.scroll;
+      snapshot = await action(`window.miNoteCaptureComparison.setScrollPixels(${scroll.x},${scroll.y})`, () => true, checkCapture);
+    } else {
+      selection = null;
+      scroll = { x: grid.xs[col], y: grid.ys[row] };
+      const completed = await action(frameScrollAction({ cardId: id, frame, scroll, pollMilliseconds: 50 }), state => state.frame === frame, checkCapture, true);
+      check(completed.result?.pose && completed.result.scrolled, 'Preflight frame and scroll snapshots are missing.');
+      assertSnapshot(completed.result.pose, id, frame, rotation);
+      assertSnapshot(completed.result.scrolled, id, frame, rotation, scroll);
+      snapshot = completed.snapshot;
+    }
     assertSnapshot(snapshot, id, frame, rotation, scroll);
     const path = join(directory, `${label}-${row}-${col}.png`);
+    checkCapture();
     await safari.call('screenshot', { full_page: false, savePath: path });
-    const inspected = await imageHelper('inspect', { input: path });
-    check(inspected.width === viewport.width && inspected.height === viewport.height && inspected.icc, 'Native screenshot geometry or ICC is missing.');
-    if (nativeIcc) check(inspected.icc.sha256 === nativeIcc, 'Native display ICC changed during capture.');
-    nativeIcc = inspected.icc.sha256;
-    tiles.push({ path, sha256: hash(path), row, col, originX: integer(-snapshot.stageRect.x * 2, 'tile origin X'),
-      originY: integer(-snapshot.stageRect.y * 2, 'tile origin Y'), viewportWidth: viewport.width, viewportHeight: viewport.height,
-      iccSha256: nativeIcc, snapshot });
+    checkCapture();
+    tiles.push({ path, row, col, originX: integer(-snapshot.stageRect.x * 2, 'tile origin X'),
+      originY: integer(-snapshot.stageRect.y * 2, 'tile origin Y'), viewportWidth: dimensions.width, viewportHeight: dimensions.height, snapshot });
   }
   const mode = rotation === 90 ? { singleViewportCapture: true, landscapeViewportCapture: true, captureRotationDegrees: 90,
     backgroundRgb: [0, 0, 0], shadows: false, backgroundReference: { path: staticReference.path, sha256: staticReference.sha256, excludedBounds: excludedBounds(initial) } } : {};
+  return { id, frame, label, rotation, directory, dimensions, grid, captureProfile, selection, tiles, mode };
+}
+
+async function completeCapture(acquired, checkCapture = checkActive) {
+  checkCapture();
+  const { id, frame, label, rotation, directory, dimensions, grid, captureProfile, selection, mode } = acquired;
+  const tiles = [];
+  for (const tile of acquired.tiles) {
+    const inspected = await imageHelper('inspect', { input: tile.path }, checkCapture);
+    check(inspected.width === dimensions.width && inspected.height === dimensions.height && inspected.icc, 'Native screenshot geometry or ICC is missing.');
+    if (nativeIcc) check(inspected.icc.sha256 === nativeIcc, 'Native display ICC changed during capture.');
+    nativeIcc = inspected.icc.sha256;
+    tiles.push({ path: tile.path, sha256: hash(tile.path), row: tile.row, col: tile.col, originX: tile.originX,
+      originY: tile.originY, viewportWidth: tile.viewportWidth, viewportHeight: tile.viewportHeight,
+      iccSha256: nativeIcc, snapshot: tile.snapshot });
+  }
+  checkCapture();
   const metadata = join(directory, `${label}-tiles.json`);
-  save(metadata, { id, frame, ...(validatingProfile ? { profile: profile.id } : {}), backgroundRgb: [0, 0, 0], shadows: false, captureRotationDegrees: rotation, captureScale, width: nativeSize, height: nativeSize, columns: grid.xs.length, rows: grid.ys.length, ...mode, tiles });
+  save(metadata, { id, frame, ...(captureProfile ? { profile: captureProfile } : {}), backgroundRgb: [0, 0, 0], shadows: false, captureRotationDegrees: rotation, captureScale, width: nativeSize, height: nativeSize, columns: grid.xs.length, rows: grid.ys.length, ...mode, tiles });
   const path = join(directory, `${label}.png`);
-  const stitched = await imageHelper('stitch', { metadata, output: path, deliverySize, deliverySpaces: ['p3'] });
+  const stitched = await imageHelper('stitch', { metadata, output: path, deliverySize, deliverySpaces: ['p3'] }, checkCapture);
   check(stitched.passed && stitched.iccPreservedByteForByte, 'Native stitch or lossless transpose failed.');
   const stitchReport = join(directory, `${label}-stitch.json`);
   save(stitchReport, stitched);
   return { id, frame, path, sha256: hash(path), metadata, stitchReport, selection };
+}
+
+async function capture(id, frame, label, rotation, directory, initial) {
+  return completeCapture(await acquireCapture(id, frame, label, rotation, directory, initial));
+}
+
+async function captureSequence(id, entries, rotation, directory, initial, { prepare = false, results = [] } = {}) {
+  await runCaptureOverlap({ frames: entries, check: checkActive,
+    acquire: ({ frame, label }, { check: checkCapture }) => acquireCapture(id, frame, label, rotation, directory, initial, checkCapture),
+    complete: async ({ label }, acquired) => {
+      const sample = await completeCapture(acquired);
+      if (prepare) {
+        const preparedPath = join(directory, `${label}-p3-${deliverySize}.png`);
+        sample.prepared = await imageHelper('prepare', { input: sample.path, output: preparedPath, space: 'p3', size: deliverySize });
+      }
+      return sample;
+    },
+    commit: (_, completed) => { checkActive(); results.push(completed); } });
+  return results;
 }
 
 async function calibrate(id, rotation, directory, initial, baselinePath) {
@@ -234,7 +301,7 @@ async function geometryScan(initial, rotation, name) {
 }
 
 async function warm(id, rotation, directory, initial) {
-  return warmNativeCapture((frame, index) => capture(id, frame, `warmup-${index}`, rotation, directory, initial));
+  return captureSequence(id, warmupFrames().map((frame, index) => ({ frame, label: `warmup-${index}` })), rotation, directory, initial);
 }
 
 function validateApproval(approved) {
@@ -305,12 +372,8 @@ async function main() {
     console.log(JSON.stringify({ status: 'resume-verified', verification, controls: report.resumeControls.controls.length }));
     return;
   }
-  for (const frame of contract.capture.controlFrames) {
-    const sample = await capture(options.id, frame, String(frame).padStart(4, '0'), profile.rotationDegrees, directory, initial);
-    const preparedPath = join(directory, `${String(frame).padStart(4, '0')}-p3-${deliverySize}.png`);
-    sample.prepared = await imageHelper('prepare', { input: sample.path, output: preparedPath, space: 'p3', size: deliverySize });
-    card.samples.push(sample);
-  }
+  await captureSequence(options.id, contract.capture.controlFrames.map(frame => ({ frame, label: String(frame).padStart(4, '0') })),
+    profile.rotationDegrees, directory, initial, { prepare: true, results: card.samples });
   card.frameZeroRepeat = await compare(card.start.baseline, card.samples[0].path);
   check(card.frameZeroRepeat.passed, 'Sample frame zero differs from the independent baseline.');
   card.end = await calibrate(options.id, profile.rotationDegrees, directory, initial, card.start.baseline);

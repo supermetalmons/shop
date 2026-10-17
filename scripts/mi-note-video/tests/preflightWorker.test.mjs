@@ -5,7 +5,7 @@ import test from 'node:test';
 import { FrameWorker } from '../frame-worker.mjs';
 
 const source = readFileSync(new URL('../preflight.mjs', import.meta.url), 'utf8');
-const helperStart = source.indexOf('const imageHelper = ');
+const helperStart = source.indexOf('const checkActive = ');
 const helperEnd = source.indexOf('const assertSources = ', helperStart);
 const lifecycleStart = source.indexOf('const interrupt = signal => ');
 assert.ok(helperStart >= 0 && helperEnd > helperStart && lifecycleStart > helperEnd);

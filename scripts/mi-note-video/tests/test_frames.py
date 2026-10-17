@@ -219,6 +219,187 @@ class FramePreparationTests(unittest.TestCase):
                 frames.validate_frames(directory, "srgb")
 
 
+class BlackPaddingIccTests(unittest.TestCase):
+    def full_transform(self, image, source, target):
+        return ImageCms.applyTransform(image, frames.color_transform(source, target))
+
+    def padded_image(self, size=(37, 37)):
+        image = Image.new("RGB", size, "black")
+        y, x = np.indices((size[1] - 12, size[0] - 10))
+        pixels = np.stack([(17 * x + y) % 256, (3 * x + 29 * y) % 256, (x + y * 7) % 256], axis=2).astype(np.uint8)
+        image.paste(Image.fromarray(pixels), (3, 5))
+        return image
+
+    def prepare_optimized(self, source, output, space, **options):
+        with Image.open(source) as image:
+            image.load()
+            return frames.prepare_loaded_frame(image, source, output, space, black_padding=True, **options)
+
+    def assert_transform_equal(self, image, source, target):
+        before, info = image.tobytes(), image.info.copy()
+        expected = self.full_transform(image, source, target)
+        actual = frames.transform_black_padded_rgb(image, source, target)
+        self.assertEqual((actual.mode, actual.size, actual.info), (expected.mode, expected.size, expected.info))
+        self.assertEqual(actual.tobytes(), expected.tobytes())
+        self.assertEqual(image.tobytes(), before)
+        self.assertEqual(image.info, info)
+
+    def test_partial_and_all_black_images_match_full_icc_conversion_and_metadata(self):
+        exif = Image.Exif()
+        exif[270] = "native capture metadata"
+        for source_space in ("srgb", "p3"):
+            source = frames.PROFILE_PATHS[source_space].read_bytes()
+            for target_space in ("srgb", "p3"):
+                target = frames.PROFILE_PATHS[target_space].read_bytes()
+                for image in (self.padded_image(), Image.new("RGB", (19, 17), "black")):
+                    with self.subTest(source=source_space, target=target_space, bounds=image.getbbox()):
+                        image.info.update(icc_profile=source, exif=exif.tobytes(), transparency=(7, 8, 9), dpi=(144, 144))
+                        self.assert_transform_equal(image, source, target)
+
+    def test_single_red_green_and_blue_pixels_at_every_edge_are_preserved(self):
+        source = frames.PROFILE_PATHS["srgb"].read_bytes()
+        target = frames.PROFILE_PATHS["p3"].read_bytes()
+        for color in ((1, 0, 0), (0, 1, 0), (0, 0, 1), (255, 0, 0), (0, 255, 0), (0, 0, 255)):
+            for position in ((0, 0), (11, 0), (0, 9), (11, 9), (5, 4)):
+                with self.subTest(color=color, position=position):
+                    image = Image.new("RGB", (12, 10), "black")
+                    image.putpixel(position, color)
+                    self.assert_transform_equal(image, source, target)
+
+    def test_full_bounding_rectangle_keeps_the_original_full_transform(self):
+        source = frames.PROFILE_PATHS["srgb"].read_bytes()
+        target = frames.PROFILE_PATHS["p3"].read_bytes()
+        for image in (Image.new("RGB", (1, 1), (0, 0, 1)), self.padded_image()):
+            image.putpixel((0, 0), (1, 0, 0))
+            image.putpixel((image.width - 1, image.height - 1), (0, 1, 0))
+            with patch.object(ImageCms, "applyTransform", wraps=ImageCms.applyTransform) as apply:
+                frames.transform_black_padded_rgb(image, source, target)
+            self.assertEqual(apply.call_count, 1)
+            self.assertIs(apply.call_args.args[0], image)
+
+    def test_empty_geometry_delegates_to_the_original_transform(self):
+        source = frames.PROFILE_PATHS["srgb"].read_bytes()
+        target = frames.PROFILE_PATHS["p3"].read_bytes()
+        for dimensions in ((0, 0), (0, 7), (7, 0)):
+            image = Image.new("RGB", dimensions)
+            failure = ValueError("empty image transform")
+            with patch.object(ImageCms, "applyTransform", side_effect=failure) as apply:
+                with self.assertRaises(ValueError) as raised:
+                    frames.transform_black_padded_rgb(image, source, target)
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(apply.call_count, 1)
+            self.assertIs(apply.call_args.args[0], image)
+
+    def test_padding_uses_transformed_black_and_cache_is_bound_to_both_profiles(self):
+        calls = []
+
+        def transform(source, target):
+            return (sum(source) % 31 + 1, sum(target) % 37 + 1, (sum(source) + sum(target)) % 41 + 1)
+
+        def apply(image, selected):
+            calls.append((image.size, selected))
+            pixels = (np.asarray(image, dtype=np.uint16) + np.asarray(selected, dtype=np.uint16)) % 256
+            result = Image.fromarray(pixels.astype(np.uint8))
+            result.info = {**image.info, "icc_profile": bytes(selected)}
+            return result
+
+        frames.transformed_black_rgb.cache_clear()
+        self.addCleanup(frames.transformed_black_rgb.cache_clear)
+        profiles = [(b"source-a", b"target-a"), (b"source-b", b"target-a"), (b"source-a", b"target-b")]
+        with patch.object(frames, "color_transform", side_effect=transform), patch.object(ImageCms, "applyTransform", side_effect=apply):
+            for source, target in profiles + profiles:
+                image = self.padded_image()
+                image.info["metadata"] = "preserved"
+                self.assert_transform_equal(image, source, target)
+            self.assert_transform_equal(Image.new("RGB", (9, 7), "black"), *profiles[0])
+        self.assertEqual(frames.transformed_black_rgb.cache_info().misses, 3)
+        self.assertEqual(frames.transformed_black_rgb.cache_info().hits, 3)
+        self.assertEqual(sum(size == (1, 1) for size, _ in calls), 4)
+
+    def test_prepared_png_bytes_reports_and_full_canvas_lanczos_match_original(self):
+        for mode, crop, size in (("RGB", None, None), ("RGB", None, 24), ("RGBA", (1, 1, 33, 33), 22),
+                                 ("RGB", (2, 3, 29, 27), None)):
+            with self.subTest(mode=mode, crop=crop, size=size), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, baseline, candidate = root / "input.png", root / "baseline.png", root / "candidate.png"
+                image = self.padded_image().convert(mode)
+                image.save(source, icc_profile=frames.PROFILE_PATHS["srgb"].read_bytes())
+                original = source.read_bytes()
+                expected = frames.prepare_frame(source, baseline, "p3", crop=crop, size=size)
+                calls = []
+                resize = Image.Image.resize
+
+                def tracked_resize(current, *args, **kwargs):
+                    calls.append((current.size, args, kwargs))
+                    return resize(current, *args, **kwargs)
+
+                with patch.object(Image.Image, "resize", tracked_resize):
+                    actual = self.prepare_optimized(source, candidate, "p3", crop=crop, size=size)
+                self.assertEqual(candidate.read_bytes(), baseline.read_bytes())
+                self.assertEqual(json.dumps({**actual, "path": "OUTPUT"}, sort_keys=True),
+                                 json.dumps({**expected, "path": "OUTPUT"}, sort_keys=True))
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(len(calls), int(size is not None))
+                if size is not None:
+                    expected_canvas = (crop[2], crop[3]) if crop else image.size
+                    self.assertEqual(calls[0], (expected_canvas, ((size, size), Image.Resampling.LANCZOS), {}))
+
+    def test_default_preflight_and_standalone_preparation_never_use_bbox_or_black_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.png"
+            self.padded_image().save(source, icc_profile=frames.PROFILE_PATHS["srgb"].read_bytes())
+            with patch.object(Image.Image, "getbbox", side_effect=AssertionError("Default preparation must not inspect padding")), \
+                    patch.object(frames, "transform_black_padded_rgb", side_effect=AssertionError("Default preparation must keep the original ICC path")), \
+                    patch.object(frames, "transformed_black_rgb", side_effect=AssertionError("Default preparation must not touch the black cache")):
+                default = frames.prepare_frame(source, root / "default.png", "p3", size=24)
+                with Image.open(source) as image:
+                    image.load()
+                    loaded = frames.prepare_loaded_frame(image, source, root / "loaded.png", "p3", size=24)
+                    explicit = frames.prepare_loaded_frame(image, source, root / "false.png", "p3", size=24, black_padding=False)
+            self.assertEqual((root / "default.png").read_bytes(), (root / "loaded.png").read_bytes())
+            self.assertEqual((root / "default.png").read_bytes(), (root / "false.png").read_bytes())
+            for report in (loaded, explicit):
+                self.assertEqual({**report, "path": "OUTPUT"}, {**default, "path": "OUTPUT"})
+
+    def test_black_padding_requires_an_explicit_boolean_opt_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = self.padded_image()
+            image.info["icc_profile"] = frames.PROFILE_PATHS["srgb"].read_bytes()
+            for value in (1, "true", None, []):
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, "must be a boolean"):
+                    frames.prepare_loaded_frame(image, root / "input.png", root / "output.png", "p3", black_padding=value)
+            self.assertFalse((root / "output.png").exists())
+
+    def test_existing_profile_alpha_crop_mode_and_size_errors_are_unchanged(self):
+        cases = [
+            ("RGB", None, {}), ("RGB", b"invalid ICC", {}),
+            ("RGBA", "profile", {"alpha": 0}), ("L", "profile", {}),
+            ("RGB", "profile", {"size": 0}), ("RGB", "profile", {"size": 40}),
+            ("RGB", "profile", {"crop": (35, 35, 3, 3)}),
+            ("RGB", "profile", {"crop": (1, 1, 29, 27), "size": 20}),
+        ]
+        for mode, profile, options in cases:
+            with self.subTest(mode=mode, options=options), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "input.png"
+                image = self.padded_image().convert(mode)
+                values = dict(options)
+                if "alpha" in values:
+                    image.putalpha(values.pop("alpha"))
+                profile_bytes = frames.PROFILE_PATHS["srgb"].read_bytes() if profile == "profile" else profile
+                image.save(source, **({"icc_profile": profile_bytes} if profile_bytes is not None else {}))
+                with self.assertRaises(Exception) as expected:
+                    frames.prepare_frame(source, root / "baseline.png", "p3", **values)
+                with self.assertRaises(Exception) as actual:
+                    self.prepare_optimized(source, root / "candidate.png", "p3", **values)
+                self.assertIs(type(actual.exception), type(expected.exception))
+                self.assertEqual(str(actual.exception), str(expected.exception))
+                self.assertFalse((root / "baseline.png").exists())
+                self.assertFalse((root / "candidate.png").exists())
+
+
 class PreparationSequenceTests(unittest.TestCase):
     def fixture(self, directory, count=8):
         source = Path(directory) / "source"

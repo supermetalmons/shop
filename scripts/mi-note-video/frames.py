@@ -66,6 +66,28 @@ def color_transform(source_bytes, target_bytes):
     )
 
 
+@lru_cache(maxsize=16)
+def transformed_black_rgb(source_bytes, target_bytes):
+    black = Image.new("RGB", (1, 1), (0, 0, 0))
+    return ImageCms.applyTransform(black, color_transform(source_bytes, target_bytes)).getpixel((0, 0))
+
+
+def transform_black_padded_rgb(image, source_bytes, target_bytes):
+    transform = color_transform(source_bytes, target_bytes)
+    if not all(image.size):
+        return ImageCms.applyTransform(image, transform)
+    bounds = image.getbbox()
+    if bounds == (0, 0, image.width, image.height):
+        return ImageCms.applyTransform(image, transform)
+    converted = ImageCms.applyTransform(image.crop(bounds or (0, 0, 1, 1)), transform)
+    background = transformed_black_rgb(source_bytes, target_bytes) if bounds else converted.getpixel((0, 0))
+    result = Image.new("RGB", image.size, background)
+    result.info = converted.info.copy()
+    if bounds:
+        result.paste(converted, (bounds[0], bounds[1]))
+    return result
+
+
 def inspect_image(path):
     with Image.open(path) as image:
         image.load()
@@ -601,7 +623,7 @@ def prepare_frame(input_path, output_path, space, crop=None, input_space=None, s
         return prepare_loaded_frame(image, input_path, output, space, crop, input_space, size)
 
 
-def prepare_loaded_frame(image, input_path, output_path, space, crop=None, input_space=None, size=None):
+def prepare_loaded_frame(image, input_path, output_path, space, crop=None, input_space=None, size=None, *, black_padding=False):
     if size is not None:
         integer(size, "size", 1)
     output = require_new_output(output_path, ".png")
@@ -626,7 +648,12 @@ def prepare_loaded_frame(image, input_path, output_path, space, crop=None, input
     captured_size = {"width": image.width, "height": image.height}
     if size is not None and (image.width != image.height or size > image.width):
         raise ValueError("Size requires a square source crop and must not upscale it")
-    converted = ImageCms.applyTransform(image.convert("RGB"), color_transform(source_bytes, target_bytes))
+    if type(black_padding) is not bool:
+        raise ValueError("Black-padding ICC optimization must be a boolean")
+    if black_padding:
+        converted = transform_black_padded_rgb(image.convert("RGB"), source_bytes, target_bytes)
+    else:
+        converted = ImageCms.applyTransform(image.convert("RGB"), color_transform(source_bytes, target_bytes))
     resample = None
     if size is not None and converted.size != (size, size):
         converted = converted.resize((size, size), Image.Resampling.LANCZOS)

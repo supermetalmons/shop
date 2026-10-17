@@ -229,6 +229,21 @@ order only after every existing pixel and ICC check passes. Recovery waits for
 both operations before restarting the owned capture session. Preflight reuses
 one Python worker for its unchanged image operations and checks.
 
+Upright captures batch frame selection and scrolling into one browser action,
+preserving both paint waits and the intermediate and final snapshot checks.
+Preflight overlaps its fixed warmup and sample sequences with image processing,
+with at most two unfinished captures. Adaptive calibration remains sequential,
+and each sequence drains before the next phase or approval.
+
+Streaming color preparation transforms the nonblack image bounds and reconstructs the
+remaining canvas with the same ICC transform's black value before the unchanged
+full-canvas Lanczos resize. Exterior checks still decode each saved PNG and
+verify its geometry, ICC, and reference checksum. Steady output frames can use
+their nonzero pixel bounds to prove an exactly black exterior. Warmups, controls,
+and frame zero retain the original comparison and reference-cache initialization.
+Preflight and standalone preparation retain the original full-canvas ICC path.
+Other exterior-check cases retain the full comparison.
+
 `active-executions.json` identifies both pipeline executions for interruption and
 resume, including after a supervisor crash. The controller publishes cards in
 catalog order and starts no new cards after a boundary-stop request. Immediate

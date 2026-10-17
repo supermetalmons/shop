@@ -35,15 +35,18 @@ def black_exterior(input_path, bounds, size):
 class StaticExteriorChecker:
     def __init__(self):
         self.cached = None
+        self.black_exterior_cache = None
 
-    def check(self, reference, paths, bounds, size, expansion_pixels, reference_sha256=None):
+    def check(self, reference, paths, bounds, size, expansion_pixels, reference_sha256=None, fast_static_check=False):
         content = Path(reference).read_bytes()
         digest = hashlib.sha256(content).hexdigest()
         key = (str(Path(reference).resolve()), digest, size, tuple(bounds))
         if self.cached is not None and self.cached[0] != key:
             self.cached = None
+            self.black_exterior_cache = None
         if reference_sha256 is not None and digest != reference_sha256:
             self.cached = None
+            self.black_exterior_cache = None
             raise ValueError("Trusted static reference checksum changed.")
         if self.cached is None:
             with Image.open(io.BytesIO(content)) as image:
@@ -57,6 +60,15 @@ class StaticExteriorChecker:
             mask[top:bottom, left:right] = False
             self.cached = (key, mask, reference_pixels[mask], profile)
         _, mask, expected, profile = self.cached
+        if type(fast_static_check) is not bool:
+            raise ValueError("fastStaticCheck must be a boolean")
+        black_bounds = None
+        if fast_static_check:
+            if self.black_exterior_cache is None or self.black_exterior_cache[0] != key:
+                left, top, right, bottom = bounds
+                rectangle = all(type(value) is int for value in bounds) and 0 <= left <= right <= size and 0 <= top <= bottom <= size
+                self.black_exterior_cache = (key, tuple(bounds) if rectangle and not np.any(expected) else None)
+            black_bounds = self.black_exterior_cache[1]
         checks = []
         for path in paths:
             with Image.open(path) as image:
@@ -64,16 +76,27 @@ class StaticExteriorChecker:
                 if image.size != (size, size) or image.mode != "RGB":
                     raise ValueError("Invalid static-check frame: " + path)
                 icc_equal = image.info.get("icc_profile") == profile
-                pixels = np.asarray(image)[mask]
-            different = np.any(expected != pixels, axis=1)
-            count = int(different.sum())
-            if count:
-                delta = np.abs(expected.astype(np.int16) - pixels.astype(np.int16))
-                maximum = int(delta.max())
-                mean = float(delta.mean())
-            else:
+                zero_exterior = False
+                if black_bounds is not None:
+                    box = image.getbbox()
+                    left, top, right, bottom = black_bounds
+                    zero_exterior = box is None or (box[0] >= left and box[1] >= top and box[2] <= right and box[3] <= bottom)
+                if not zero_exterior:
+                    pixels = np.asarray(image)[mask]
+            if zero_exterior:
+                count = 0
                 maximum = 0
                 mean = 0.0
+            else:
+                different = np.any(expected != pixels, axis=1)
+                count = int(different.sum())
+                if count:
+                    delta = np.abs(expected.astype(np.int16) - pixels.astype(np.int16))
+                    maximum = int(delta.max())
+                    mean = float(delta.mean())
+                else:
+                    maximum = 0
+                    mean = 0.0
             checks.append({"path": path, "equal": count == 0, "iccEqual": icc_equal,
                            "differentPixels": count, "maxChannelError": maximum, "meanChannelError": mean,
                            "passed": count == 0 and icc_equal})
@@ -100,7 +123,8 @@ class FrameOperations:
             return black_exterior(args["input"], args["bounds"], args["size"])
         if operation == "static-check":
             return self.static.check(args["reference"], json.loads(Path(args["filesPath"]).read_text()),
-                                     args["bounds"], args["size"], args["expansionPixels"], args.get("referenceSha256"))
+                                     args["bounds"], args["size"], args["expansionPixels"], args.get("referenceSha256"),
+                                     args.get("fastStaticCheck", False))
         raise ValueError("Unknown frame worker operation: " + str(operation))
 
 

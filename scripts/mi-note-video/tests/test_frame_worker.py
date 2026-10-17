@@ -80,8 +80,8 @@ class FrameWorkerTests(unittest.TestCase):
                 image.putpixel(position, color)
         image.save(path, icc_profile=self.profile if profile is None else profile)
 
-    def check(self, checker, digest=None, paths=None, bounds=None):
-        return checker.check(str(self.reference), paths or [str(self.frame)], bounds or self.bounds, 32, 240, digest)
+    def check(self, checker, digest=None, paths=None, bounds=None, fast_static_check=False):
+        return checker.check(str(self.reference), paths or [str(self.frame)], bounds or self.bounds, 32, 240, digest, fast_static_check)
 
     def test_static_reports_match_original_for_equal_different_interior_and_icc_cases(self):
         checker = frame_worker.StaticExteriorChecker()
@@ -91,8 +91,161 @@ class FrameWorkerTests(unittest.TestCase):
             self.save(self.frame, changes, profile)
             expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
             self.assertEqual(self.check(checker), expected)
+            self.assertEqual(self.check(checker, fast_static_check=True), expected)
         self.assertEqual(self.check(checker, paths=[str(self.frame)] * 3),
                          uncached_static_check(str(self.reference), [str(self.frame)] * 3, self.bounds, 32, 240))
+
+    def test_rgb_bbox_includes_nonzero_pixels_from_every_channel(self):
+        checker = frame_worker.StaticExteriorChecker()
+        for channel in range(3):
+            color = tuple(1 if index == channel else 0 for index in range(3))
+            self.save(self.frame, [((0, 0), color)])
+            with Image.open(self.frame) as image:
+                self.assertEqual(image.getbbox(), (0, 0, 1, 1))
+            expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+            self.assertEqual(self.check(checker, fast_static_check=True), expected)
+            self.assertEqual(expected["checks"][0]["differentPixels"], 1)
+        self.save(self.frame, [((5, 6), (1, 0, 0)), ((15, 16), (0, 1, 0)), ((25, 26), (0, 0, 1))])
+        with Image.open(self.frame) as image:
+            self.assertEqual(image.getbbox(), (5, 6, 26, 27))
+        self.assertEqual(self.check(checker, fast_static_check=True), uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240))
+
+    def test_excluded_rectangle_edges_match_original_pixel_counts_and_metrics(self):
+        checker = frame_worker.StaticExteriorChecker()
+        left, top, right, bottom = self.bounds
+        for point in [(left, top), (right - 1, bottom - 1), (left, 10), (right - 1, 10),
+                      (10, top), (10, bottom - 1), (left - 1, 10), (right, 10), (10, top - 1), (10, bottom)]:
+            with self.subTest(point=point):
+                self.save(self.frame, [(point, (25, 0, 240))])
+                expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+                result = self.check(checker, fast_static_check=True)
+                self.assertEqual(result, expected)
+                self.assertEqual(result["checks"][0]["differentPixels"],
+                                 0 if left <= point[0] < right and top <= point[1] < bottom else 1)
+
+    def test_black_exterior_fast_path_reloads_each_saved_frame_and_keeps_reference_hash_checks(self):
+        self.save(self.reference, [((10, 10), (200, 30, 80))])
+        checker = frame_worker.StaticExteriorChecker()
+        digest = hashlib.sha256(self.reference.read_bytes()).hexdigest()
+        self.assertTrue(self.check(checker, digest)["passed"])
+        self.save(self.frame, [((4, 5), (0, 0, 1)), ((23, 27), (255, 40, 0))])
+        expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+        opened_paths, loaded_paths = [], []
+        original_open = Image.open
+
+        def tracked_open(path, *args, **kwargs):
+            image = original_open(path, *args, **kwargs)
+            opened_paths.append(str(path))
+            original_load = image.load
+
+            def tracked_load(*args, **kwargs):
+                loaded_paths.append(str(path))
+                return original_load(*args, **kwargs)
+
+            image.load = tracked_load
+            return image
+
+        with patch.object(frame_worker.np, "asarray", side_effect=AssertionError("Fast proof should not materialize frame arrays")), \
+                patch.object(frame_worker.Image, "open", side_effect=tracked_open), \
+                patch.object(frame_worker.Path, "read_bytes", autospec=True, side_effect=Path.read_bytes) as read:
+            self.assertEqual(self.check(checker, digest, fast_static_check=True), expected)
+            self.assertEqual(self.check(checker, digest, fast_static_check=True), expected)
+            self.assertEqual(read.call_count, 2)
+        self.assertEqual(opened_paths, [str(self.frame), str(self.frame)])
+        self.assertGreaterEqual(loaded_paths.count(str(self.frame)), 2)
+        self.frame.write_bytes(b"corrupt replacement")
+        with self.assertRaises(OSError):
+            self.check(checker, digest, fast_static_check=True)
+
+    def test_default_calibration_path_keeps_original_reference_cache_and_black_proof_is_lazy(self):
+        checker = frame_worker.StaticExteriorChecker()
+        with patch.object(frame_worker.Image.Image, "getbbox", side_effect=AssertionError("Default checks must not use bbox")), \
+                patch.object(frame_worker.np, "any", wraps=np.any) as any_pixels:
+            self.assertTrue(self.check(checker)["passed"])
+            self.assertTrue(self.check(checker)["passed"])
+            self.assertEqual(any_pixels.call_count, 2)
+            self.assertTrue(all(call.kwargs == {"axis": 1} for call in any_pixels.call_args_list))
+        self.assertEqual(len(checker.cached), 4)
+        self.assertIsNone(checker.black_exterior_cache)
+        original_cache = checker.cached
+        self.assertTrue(self.check(checker, fast_static_check=True)["passed"])
+        self.assertIs(checker.cached, original_cache)
+        self.assertEqual(checker.black_exterior_cache, (original_cache[0], tuple(self.bounds)))
+        with patch.object(frame_worker.np, "any", side_effect=AssertionError("Cached fast proof must not repeat array comparisons")):
+            self.assertTrue(self.check(checker, fast_static_check=True)["passed"])
+        with patch.object(frame_worker.Image.Image, "getbbox", side_effect=AssertionError("Controls must stay on the original path after opt-in")):
+            self.assertTrue(self.check(checker)["passed"])
+        self.save(self.reference, [((10, 10), (8, 9, 10))])
+        self.assertTrue(self.check(checker)["passed"])
+        self.assertEqual(len(checker.cached), 4)
+        self.assertIsNone(checker.black_exterior_cache)
+        self.assertTrue(self.check(checker, fast_static_check=True)["passed"])
+        with self.assertRaisesRegex(ValueError, "Trusted static reference checksum changed"):
+            self.check(checker, "0" * 64, fast_static_check=True)
+        self.assertIsNone(checker.cached)
+        self.assertIsNone(checker.black_exterior_cache)
+
+    def test_explicit_fast_flag_preserves_protocol_reports_and_rejects_non_booleans(self):
+        files = self.directory / "static-files.json"
+        files.write_text(json.dumps([str(self.frame)]))
+        arguments = {"reference": str(self.reference), "filesPath": str(files), "bounds": self.bounds,
+                     "size": 32, "expansionPixels": 240}
+        operations = frame_worker.FrameOperations()
+        expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+        with patch.object(frame_worker.Image.Image, "getbbox", side_effect=AssertionError("Missing flag must keep the original path")):
+            self.assertEqual(operations.run("static-check", arguments), expected)
+        self.assertIsNone(operations.static.black_exterior_cache)
+        self.assertEqual(operations.run("static-check", {**arguments, "fastStaticCheck": True}), expected)
+        self.assertIsNotNone(operations.static.black_exterior_cache)
+        with patch.object(frame_worker.Image.Image, "getbbox", side_effect=AssertionError("Explicit false must keep the original path")):
+            self.assertEqual(operations.run("static-check", {**arguments, "fastStaticCheck": False}), expected)
+        for invalid in (1, "true", None, []):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "fastStaticCheck must be a boolean"):
+                operations.run("static-check", {**arguments, "fastStaticCheck": invalid})
+
+    def test_empty_full_and_generic_excluded_bounds_preserve_original_reports_and_errors(self):
+        checker = frame_worker.StaticExteriorChecker()
+        self.save(self.frame, [((0, 0), (1, 2, 3)), ((10, 10), (9, 0, 7)), ((31, 31), (0, 1, 0))])
+        for bounds in [[0, 0, 32, 32], [0, 0, 0, 0], [4, 5, 4, 28], [4, 5, 24, 5],
+                       [-5, -4, 24, 28], [4, 5, 40, 40], [24, 28, 4, 5], [True, 5, 24, 28], [None, 2, 24, 28]]:
+            with self.subTest(bounds=bounds):
+                expected = uncached_static_check(str(self.reference), [str(self.frame)], bounds, 32, 240)
+                for fast in (False, True):
+                    self.assertEqual(checker.check(str(self.reference), [str(self.frame)], bounds, 32, 240,
+                                                   fast_static_check=fast), expected)
+        for bounds in [[], [1, 2, 3], [1, 2, 3, 4, 5], [1.5, 2, 24, 28], ["bad", 2, 24, 28]]:
+            with self.subTest(bounds=bounds):
+                try:
+                    uncached_static_check(str(self.reference), [str(self.frame)], bounds, 32, 240)
+                except Exception as expected:
+                    with self.assertRaises(type(expected)) as actual:
+                        checker.check(str(self.reference), [str(self.frame)], bounds, 32, 240)
+                    self.assertEqual(str(actual.exception), str(expected))
+                else:
+                    self.fail("Expected invalid bounds to raise")
+        self.assertEqual(checker.check(str(self.reference), [], self.bounds, 32, 240),
+                         uncached_static_check(str(self.reference), [], self.bounds, 32, 240))
+
+    def test_nonblack_reference_and_changed_frame_icc_keep_original_fallback_results(self):
+        self.save(self.reference, [((0, 0), (8, 20, 3))])
+        checker = frame_worker.StaticExteriorChecker()
+        for changes in [None, [((0, 0), (8, 20, 3))], [((0, 0), (9, 25, 2)), ((31, 31), (60, 1, 200))]]:
+            self.save(self.frame, changes)
+            expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+            with patch.object(frame_worker.Image.Image, "getbbox", side_effect=AssertionError("Nonblack reference must use the original comparison")):
+                self.assertEqual(self.check(checker, fast_static_check=True), expected)
+        self.save(self.reference)
+        for profile in [frame_worker.frames.PROFILE_PATHS["srgb"].read_bytes(), b""]:
+            self.save(self.frame, [((10, 10), (5, 10, 15))], profile=profile)
+            expected = uncached_static_check(str(self.reference), [str(self.frame)], self.bounds, 32, 240)
+            result = self.check(checker, fast_static_check=True)
+            self.assertEqual(result, expected)
+            self.assertTrue(result["checks"][0]["equal"])
+            self.assertFalse(result["checks"][0]["iccEqual"])
+            self.assertFalse(result["passed"])
+        self.save(self.frame, mode="RGBA")
+        with self.assertRaisesRegex(ValueError, "Invalid static-check frame"):
+            self.check(checker)
 
     def test_reference_is_rehashed_every_time_but_decoded_once_until_content_or_bounds_change(self):
         checker = frame_worker.StaticExteriorChecker()

@@ -22,7 +22,7 @@ SOURCE_UPGRADE_FILES = {
     'scripts/mi-note-video/catalog.py', 'scripts/mi-note-video/cli.py',
     'scripts/mi-note-video/capture.mjs', 'scripts/mi-note-video/frames.py',
     'scripts/mi-note-video/frame-worker.mjs', 'scripts/mi-note-video/frame_worker.py',
-    'scripts/mi-note-video/background.py', 'scripts/mi-note-video/collect.py',
+    'scripts/mi-note-video/background.py', 'scripts/mi-note-video/backends.py', 'scripts/mi-note-video/collect.py',
     'scripts/mi-note-video/storage.py', 'scripts/mi-note-video/test.mjs',
     'scripts/mi-note-video/README.md',
     'scripts/mi-note-video/guest-runner.mjs', 'scripts/mi-note-video/jobs.py',
@@ -30,6 +30,7 @@ SOURCE_UPGRADE_FILES = {
     'scripts/mi-note-video/video_validation.py', 'scripts/mi-note-video/processing_worker.py',
     'scripts/mi-note-video/stream-processing.mjs', 'scripts/mi-note-video/capture-release.mjs',
     'scripts/mi-note-video/capture-overlap.mjs', 'scripts/mi-note-video/preflight.mjs',
+    'scripts/mi-note-video/frame-scroll-action.mjs',
     'scripts/mi-note-video/pipeline.json', 'scripts/mi-note-video/safari.mjs',
 }
 PIPELINE_CAPABILITY = {'version': 1, 'maxUnfinished': 2, 'captureRelease': 1, 'streamProcessing': 1}

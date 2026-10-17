@@ -70,7 +70,10 @@ class ProcessingWorkerTests(unittest.TestCase):
         expected_video = frames.encode_frames(self.root / 'serial', self.root / 'expected.mp4', 'p3', 64)
         requests = self.messages() + [{'id': 278, 'operation': 'quality', 'args': self.finish},
                                       {'id': 279, 'operation': 'finish', 'args': {}}]
-        code, responses = self.serve(requests)
+        with patch.object(frames, 'prepare_loaded_frame', wraps=frames.prepare_loaded_frame) as preparation:
+            code, responses = self.serve(requests)
+        self.assertEqual(preparation.call_count, 276)
+        self.assertTrue(all(call.kwargs.get('black_padding') is True for call in preparation.call_args_list))
         self.assertEqual(code, 0, responses[-1])
         result = responses[-1]['result']
         self.assertEqual(result['qualityReport'], expected_quality)
@@ -83,6 +86,22 @@ class ProcessingWorkerTests(unittest.TestCase):
             self.assertEqual((self.root / 'prepared' / f'{frame:04d}.png').read_bytes(),
                              (self.root / 'serial' / f'{frame:04d}.png').read_bytes())
             self.assertEqual(responses[frame + 1]['result']['sourceSha256'], self.args['beforeSha256'])
+
+    def test_streaming_icc_opt_in_occurs_only_after_the_native_checkpoint_hash_is_verified(self):
+        session = processing_worker.ProcessingSession(self.args)
+        self.addCleanup(session.close)
+        request = self.messages(1)[1]['args']
+        with patch.object(frames, 'prepare_loaded_frame', wraps=frames.prepare_loaded_frame) as preparation, \
+                patch.object(frames, 'transform_black_padded_rgb', wraps=frames.transform_black_padded_rgb) as optimized:
+            with self.assertRaisesRegex(ValueError, 'checksum changed'):
+                session.frame({**request, 'sha256': '0' * 64})
+            preparation.assert_not_called()
+            optimized.assert_not_called()
+            result = session.frame(request)
+        self.assertEqual(result['frame'], 0)
+        self.assertEqual(preparation.call_count, 1)
+        self.assertIs(preparation.call_args.kwargs['black_padding'], True)
+        self.assertEqual(optimized.call_count, 1)
 
     def test_quality_checkpoint_precedes_publication_and_survives_lost_finalization_response(self):
         session = processing_worker.ProcessingSession(self.args)

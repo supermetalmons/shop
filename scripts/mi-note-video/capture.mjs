@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { tsImport } from 'tsx/esm/api';
 import { createServer } from 'vite';
 import { Safari } from './safari.mjs';
+import { frameScrollAction } from './frame-scroll-action.mjs';
 import { FrameWorker } from './frame-worker.mjs';
 import { StreamProcessing } from './stream-processing.mjs';
 import { runCaptureOverlap } from './capture-overlap.mjs';
@@ -833,13 +834,13 @@ async function main() {
     manifest.staticReference = staticReference;
     saveManifest();
   };
-  const checkStatic = async (files, initial, label) => {
+  const checkStatic = async (files, initial, label, fastStaticCheck = false) => {
     const reference = knownStaticReference();
     if (!reference) return null;
     const listPath = join(cache, 'metadata', `static-${label}-${runId}-${randomUUID().slice(0, 8)}-files.json`);
     writeFileSync(listPath, JSON.stringify(files), { flag: 'wx' });
     return imageHelper('static-check', { reference: reference.path, referenceSha256: reference.sha256, filesPath: listPath,
-      bounds: staticBounds(initial), size: capturedSize,
+      bounds: staticBounds(initial), size: capturedSize, ...(fastStaticCheck ? { fastStaticCheck: true } : {}),
       expansionPixels: options.landscapeBlackCapture ? Math.ceil(80 * captureScale) : options.nft2Tilt ? 80 * captureScale : 4 },
     { timeoutMilliseconds: 120_000 + files.length * 2000 });
   };
@@ -960,8 +961,8 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     if (activated.trim() !== 'true') throw new Error('Safari capture window could not be activated.');
     await delay(200);
   };
-  const safariSnapshot = () => safari.evaluate('const page={origin:location.origin,pathname:location.pathname,readyState:document.readyState,visibility:document.visibilityState};return window.miNoteCaptureComparison ? {...window.miNoteCaptureComparison.snapshot(),asyncError:window.__comparisonAsyncError||null,completedAction:window.__comparisonCompletedAction||null,page}:{ready:false,harnessMissing:true,page};');
-  const safariWait = async (id, frame, nativePixels, predicate = () => true, checkCapture = () => {}) => {
+  const safariSnapshot = (includeActionResult = false) => safari.evaluate(`const page={origin:location.origin,pathname:location.pathname,readyState:document.readyState,visibility:document.visibilityState};return window.miNoteCaptureComparison ? {...window.miNoteCaptureComparison.snapshot(),asyncError:window.__comparisonAsyncError||null,completedAction:window.__comparisonCompletedAction||null,page${includeActionResult ? ',actionResult:window.__comparisonActionResult||null' : ''}}:{ready:false,harnessMissing:true,page};`);
+  const safariWait = async (id, frame, nativePixels, predicate = () => true, checkCapture = () => {}, includeActionResult = false) => {
     const startedAt = Date.now();
     let deadline = startedAt + 45_000;
     let lastSnapshot = null;
@@ -970,7 +971,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     while (Date.now() < deadline) {
       checkActive();
       checkCapture();
-      const snapshot = await safariSnapshot();
+      const { actionResult, ...snapshot } = await safariSnapshot(includeActionResult);
       lastSnapshot = snapshot;
       polls += 1;
       if (snapshot?.error || snapshot?.asyncError) throw new Error(snapshot.error || snapshot.asyncError);
@@ -983,9 +984,9 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         console.error(`Safari card ${id} frame ${frame} is hidden; waiting up to 120 seconds for its capture window to become visible. Exit window overview/Mission Control if active. Diagnostic: ${diagnosticPath}`);
       }
       if (snapshot?.ready && snapshot.paintReady && visibility === 'visible'
-        && snapshot.cardId === id && snapshot.frame === frame && snapshot.nativePixels === nativePixels && predicate(snapshot)) {
+        && snapshot.cardId === id && snapshot.frame === frame && snapshot.nativePixels === nativePixels && predicate(snapshot, actionResult)) {
         if (hiddenLogged) console.log(`Safari card ${id} frame ${frame}: capture window is visible again`);
-        return snapshot;
+        return includeActionResult ? { snapshot, result: actionResult.value } : snapshot;
       }
       await delay(30);
     }
@@ -993,11 +994,12 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
     writeFileSync(diagnosticPath, JSON.stringify({ cardId: id, frame, nativePixels, polls, lastSnapshot }, null, 2) + '\n');
     throw new Error(`Safari card ${id} frame ${frame} did not become ready. Last snapshot: ${JSON.stringify(lastSnapshot)}. Diagnostic: ${diagnosticPath}`);
   };
-  const safariAction = async (expression, id, frame, predicate = () => true, checkCapture = () => {}) => {
+  const safariAction = async (expression, id, frame, predicate = () => true, checkCapture = () => {}, includeActionResult = false) => {
     checkCapture();
     const actionId = randomUUID();
-    await safari.evaluate(`if(!window.miNoteCaptureComparison)throw new Error('Capture tab changed');window.__comparisonAsyncError=null;window.__comparisonCompletedAction=null;void (async()=>(${expression}))().then(()=>{window.__comparisonCompletedAction=${JSON.stringify(actionId)}},error=>{window.__comparisonAsyncError=error.message});return true;`);
-    return safariWait(id, frame, true, state => state.completedAction === actionId && predicate(state), checkCapture);
+    await safari.evaluate(`if(!window.miNoteCaptureComparison)throw new Error('Capture tab changed');window.__comparisonAsyncError=null;window.__comparisonCompletedAction=null;window.__comparisonActionResult=null;void (async()=>(${expression}))().then(value=>{${includeActionResult ? `window.__comparisonActionResult={actionId:${JSON.stringify(actionId)},value};` : ''}window.__comparisonCompletedAction=${JSON.stringify(actionId)}},error=>{window.__comparisonAsyncError=error.message});return true;`);
+    return safariWait(id, frame, true, (state, result) => state.completedAction === actionId
+      && (!includeActionResult || result?.actionId === actionId) && predicate(state), checkCapture, includeActionResult);
   };
   const settleDisplayedImage = async id => safariAction(`(async()=>{
     const api=window.miNoteCaptureComparison;
@@ -1055,10 +1057,20 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
         await recoverNativeCapture({ id, committedFrames: savedFrames.get(id).size, cause },
           () => remountCard(id, initial, 'rejected native PNG header'));
       }
-      const pose = await safariAction(`window.miNoteCaptureComparison.setFrame(${frame})`, id, frame, () => true, checkCapture);
-      const captureScroll = options.singleViewportCapture ? singleViewportScroll(pose, expectedDimensions) : scroll;
-      const snapshot = await safariAction(`window.miNoteCaptureComparison.setScrollPixels(${captureScroll.x},${captureScroll.y})`, id, frame,
-        state => Math.abs(state.scrollPixels.x - captureScroll.x) <= 0.075 && Math.abs(state.scrollPixels.y - captureScroll.y) <= 0.075, checkCapture);
+      let captureScroll, snapshot;
+      if (options.singleViewportCapture) {
+        const pose = await safariAction(`window.miNoteCaptureComparison.setFrame(${frame})`, id, frame, () => true, checkCapture);
+        captureScroll = singleViewportScroll(pose, expectedDimensions);
+        snapshot = await safariAction(`window.miNoteCaptureComparison.setScrollPixels(${captureScroll.x},${captureScroll.y})`, id, frame,
+          state => Math.abs(state.scrollPixels.x - captureScroll.x) <= 0.075 && Math.abs(state.scrollPixels.y - captureScroll.y) <= 0.075, checkCapture);
+      } else {
+        captureScroll = scroll;
+        const captured = await safariAction(frameScrollAction({ cardId: id, frame, scroll }), id, frame,
+          state => Math.abs(state.scrollPixels.x - scroll.x) <= 0.075 && Math.abs(state.scrollPixels.y - scroll.y) <= 0.075, checkCapture, true);
+        assertSnapshot(captured.result?.pose, id, frame, initial);
+        assertSnapshot(captured.result?.scrolled, id, frame, initial, captureScroll);
+        snapshot = captured.snapshot;
+      }
       assertSnapshot(snapshot, id, frame, initial, captureScroll);
       checkCapture();
       const pending = join(cache, 'capture-attempts', `${id}c-${frame}-${row}-${col}-${attempt}-${randomUUID()}.png`);
@@ -1106,12 +1118,12 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
       columns: grid.xs.length, rows: grid.ys.length, tiles: records }, null, 2) + '\n', { flag: 'wx' });
     return { id, frame, label, file, initial, captureRunId, attempt, metadataPath, records };
   };
-  const stitchCapturedFrame = async ({ id, frame, label, file, initial, captureRunId, attempt, metadataPath, records }) => {
+  const stitchCapturedFrame = async ({ id, frame, label, file, initial, captureRunId, attempt, metadataPath, records, fastStaticCheck = false }) => {
     try {
       const stitched = await imageHelper('stitch', { metadata: metadataPath, output: file,
         deliverySize, deliverySpaces });
       if (!stitched.passed || stitched.icc?.sha256 !== nativeIcc) throw new Error('Joined frame ICC or seam validation failed.');
-      const staticCheck = await checkStatic([file], initial, `${id}-${label}-${attempt}`);
+      const staticCheck = await checkStatic([file], initial, `${id}-${label}-${attempt}`, fastStaticCheck);
       if (staticCheck && !staticCheck.passed) {
         const rejectedPath = join(cache, 'capture-attempts', `${id}c-${label}-static-${captureRunId}-${attempt}.png`);
         renameSync(file, rejectedPath);
@@ -1309,7 +1321,7 @@ return captureApp's activateWithOptions:(current application's NSApplicationActi
               return captureFrameTiles({ tab, id, frame, label, file: join(raw, `${label}.png`), initial, grid, screenshotDimensions,
                 checkCapture: check, deferRecovery: true });
             },
-            complete: (frame, acquired) => acquired ? stitchCapturedFrame(acquired) : null,
+            complete: (frame, acquired) => acquired ? stitchCapturedFrame({ ...acquired, fastStaticCheck: true }) : null,
             commit: commitFrame });
         } catch (error) {
           if (!/Tile overlap\/seam QA failed|Static exterior QA failed|Rejected native PNG header/.test(error.message)) throw error;

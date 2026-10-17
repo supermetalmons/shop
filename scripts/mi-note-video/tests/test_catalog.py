@@ -540,10 +540,10 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Prepared rendering source'):
             catalog.execution_for(self.state, job, 'vm', self.backend, self.prepared, 2)
 
-    def test_source_upgrade_accepts_verified_preflight_worker_and_capture_overlap(self):
-        changed = ['scripts/mi-note-video/capture-overlap.mjs', 'scripts/mi-note-video/capture.mjs',
+    def test_source_upgrade_accepts_verified_capture_and_controller_changes(self):
+        changed = ['scripts/mi-note-video/backends.py', 'scripts/mi-note-video/capture-overlap.mjs', 'scripts/mi-note-video/capture.mjs',
                    'scripts/mi-note-video/catalog.py', 'scripts/mi-note-video/frame_worker.py',
-                   'scripts/mi-note-video/preflight.mjs']
+                   'scripts/mi-note-video/preflight.mjs', 'scripts/mi-note-video/frame-scroll-action.mjs']
         result = self.upgrade(changed=changed)
         job, metadata = catalog.load(self.state, self.job['name'])
         self.assertEqual(result['status'], 'source-upgraded')

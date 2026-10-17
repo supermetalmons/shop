@@ -71,7 +71,7 @@ class ProcessingSession:
             row, color = self.quality.measure(image, frame, source_hash)
             if not row['staticExteriorExact'] or not row['firstRestExact']:
                 raise ValueError('Native processing frame static or rest pixels changed')
-            preparation = frames.prepare_loaded_frame(image, source, destination, self.space, size=self.size)
+            preparation = frames.prepare_loaded_frame(image, source, destination, self.space, size=self.size, black_padding=True)
         prepared = destination.read_bytes()
         self.encoder.write(frame, prepared)
         self.quality.add(row, color)
