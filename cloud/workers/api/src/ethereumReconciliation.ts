@@ -213,14 +213,22 @@ async function completedEvents(context: EthereumContext, events: ReconciliationE
   return new Set(results.flatMap((result) => result.results.map((row) => `${row.name}:${row.id}:${row.transaction_hash}:${row.block_hash}`)));
 }
 
-async function scanEthereumEvents(context: EthereumContext, start: number, finish: number, summary: ReconciliationResult, budget: QueryBudget): Promise<void> {
+async function scanEthereumEvents(context: EthereumContext, start: number, finish: number, scanEnd: number, summary: ReconciliationResult, budget: QueryBudget): Promise<void> {
   const ranges = [{ start, finish }];
   let requests = 0;
   let confirmations = 0;
+  let savedNextBlock = start;
   const checkpoint = async (nextBlock: number) => {
-    await context.env.COMMERCE_DB.prepare(`INSERT INTO ethereum_reconciliation_cursor (chain_id, contract_address, next_block)
-      VALUES (?, ?, ?) ON CONFLICT(chain_id, contract_address) DO UPDATE SET next_block = MAX(next_block, excluded.next_block)`)
-      .bind(context.config.chainId, context.config.contractAddress, nextBlock).run();
+    const result = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_reconciliation_cursor
+      SET next_block = ?, scan_end_block = CASE WHEN ? > scan_end_block THEN NULL ELSE scan_end_block END
+      WHERE chain_id = ? AND contract_address = ? AND next_block = ? AND scan_end_block = ?`)
+      .bind(nextBlock, nextBlock, context.config.chainId, context.config.contractAddress, savedNextBlock, scanEnd).run();
+    if (result.meta.changes !== 1) {
+      recordReconciliationOutcome(summary, 'deferred');
+      return false;
+    }
+    savedNextBlock = nextBlock;
+    return true;
   };
   while (ranges.length && requests < 64) {
     context.signal.throwIfAborted();
@@ -272,8 +280,9 @@ async function scanEthereumEvents(context: EthereumContext, start: number, finis
         if (result.status === 'pending' && result.confirmations === 0) { await checkpoint(block); return; }
       }
     }
-    await checkpoint(range.finish + 1);
+    if (!await checkpoint(range.finish + 1)) return;
   }
+  if (ranges.length || finish < scanEnd) budget.limited = true;
 }
 
 export async function reconcileEthereum111k(env: EthereumEnvironment, signal: AbortSignal, options: ReconciliationOptions & {
@@ -327,14 +336,24 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     head ??= rpcInteger(await ethereumRpc(context, 'eth_blockNumber', []));
     budget.phaseRemaining = budget.remaining;
     budget.exhausted = false;
-    const saved = await context.env.COMMERCE_DB.prepare(`SELECT next_block FROM ethereum_reconciliation_cursor WHERE chain_id = ? AND contract_address = ?`)
-      .bind(config.chainId, config.contractAddress).first<{ next_block: number }>();
+    const saved = await context.env.COMMERCE_DB.prepare(`SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor WHERE chain_id = ? AND contract_address = ?`)
+      .bind(config.chainId, config.contractAddress).first<{ next_block: number; scan_end_block: number | null }>();
+    const activeScan = saved?.scan_end_block != null && saved.next_block <= saved.scan_end_block;
     const lastScannedBlock = (saved?.next_block ?? config.deploymentBlock) - 1;
-    const start = Math.max(config.deploymentBlock, lastScannedBlock - REORG_WINDOW_BLOCKS);
-    const finish = Math.min(head, start + 1999);
+    const start = activeScan ? saved.next_block : Math.max(config.deploymentBlock, lastScannedBlock - REORG_WINDOW_BLOCKS);
+    const scanEnd = activeScan ? saved.scan_end_block! : Math.min(head, start + 1999);
+    const finish = Math.min(head, scanEnd);
     if (finish >= start) {
-      try { await scanEthereumEvents(context, start, finish, summary, budget); }
-      catch (error) {
+      try {
+        const begun = activeScan || (await context.env.COMMERCE_DB.prepare(`
+          INSERT INTO ethereum_reconciliation_cursor (chain_id, contract_address, next_block, scan_end_block)
+          VALUES (?, ?, ?, ?) ON CONFLICT(chain_id, contract_address) DO UPDATE
+          SET next_block = excluded.next_block, scan_end_block = excluded.scan_end_block
+          WHERE ethereum_reconciliation_cursor.next_block = ? AND ethereum_reconciliation_cursor.scan_end_block IS ?`)
+          .bind(config.chainId, config.contractAddress, start, scanEnd, saved?.next_block ?? start, saved?.scan_end_block ?? null).run()).meta.changes === 1;
+        if (begun) await scanEthereumEvents(context, start, finish, scanEnd, summary, budget);
+        else recordReconciliationOutcome(summary, 'deferred');
+      } catch (error) {
         context.signal.throwIfAborted();
         if (!budget.exhausted) throw error;
         recordReconciliationOutcome(summary, 'deferred');

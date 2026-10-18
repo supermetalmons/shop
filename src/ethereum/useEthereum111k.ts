@@ -19,6 +19,10 @@ import { ethereumAddressEncryptionKey } from './addressEncryption';
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 export type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
 
+function isTransactionFailure(error: unknown): error is EthereumApiError {
+  return error instanceof EthereumApiError && (error.code === 'transaction-reverted' || error.code === 'operation-failed');
+}
+
 export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   const queryClient = useQueryClient();
   const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
@@ -147,7 +151,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     }
   }, [profile.error, shipments.error, scope, invalidateSession]);
   const confirmation = useQuery({ queryKey: ['ethereum111k', 'transaction', scope, pending?.hash],
-    queryFn: ({ signal }) => ethereumApi.confirm(pending!.hash, config, owner!, signal),
+    queryFn: ({ signal }) => ethereumApi.confirm(pending!.hash, config, owner!, signal, pending!),
     enabled: Boolean(pending && owner && config.enabled), retry: false,
     refetchInterval: 4_000,
   });
@@ -159,7 +163,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     const result = confirmation.data;
     if (!pending || !scope || !owner) return;
     const transactionKey = `${scope}:${pending.hash}`;
-    if (confirmation.isSuccess && result?.status === 'pending' && result.confirmations === 0) {
+    if (confirmation.isSuccess && result?.status === 'pending') {
       if (inclusions.current.delete(transactionKey)) {
         void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
       }
@@ -255,12 +259,13 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     })();
   }, [confirmation.data, confirmation.dataUpdatedAt, confirmation.isSuccess, requiredConfirmations, pending, scope, owner, session, queryClient, invalidateSession]);
   useEffect(() => {
-    if (!pending || !scope || !(confirmation.error instanceof EthereumApiError) || confirmation.error.code !== 'transaction-reverted' || reverting.current.has(pending.hash)) return;
+    if (!pending || !scope || !isTransactionFailure(confirmation.error) || reverting.current.has(pending.hash)) return;
+    const failure = confirmation.error;
     reverting.current.add(pending.hash);
     inclusions.current.delete(`${scope}:${pending.hash}`);
     void withEthereumSubmissionLock(scope, () => {
       const latest = queryClient.getQueryState(['ethereum111k', 'transaction', scope, pending.hash]);
-      if (latest?.status !== 'error' || !(latest.error instanceof EthereumApiError) || latest.error.code !== 'transaction-reverted') return false;
+      if (latest?.status !== 'error' || !isTransactionFailure(latest.error)) return false;
       const current = readEthereumPending(scope);
       if (readEthereumSubmission(scope) || current && current.hash !== pending.hash) return false;
       restoreEthereumExpected(scope, pending.hash);
@@ -268,7 +273,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
       return true;
     }).then(cleared => {
       if (!cleared) { reverting.current.delete(pending.hash); return; }
-      if (mounted.current && scopeRef.current === scope) setError('The transaction reverted. Your NFTs are unchanged; you can try again.');
+      if (mounted.current && scopeRef.current === scope) setError(failure.code === 'operation-failed' ? failure.message : 'The transaction reverted. Your NFTs are unchanged; you can try again.');
     }).catch(cause => {
       reverting.current.delete(pending.hash);
       if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));

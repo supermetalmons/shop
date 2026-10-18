@@ -10,6 +10,9 @@ import {
 } from '../../shared/ethereum/api';
 import { ethereumAssetId, ETHEREUM_ITEM_KINDS, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import { monsApiOrigin } from '../lib/monsApiOrigin';
+import type { EthereumLog } from '../../shared/ethereum/abi';
+import type { EthereumSubmission } from './state';
+import { matchesEthereumOperationEvent } from './recovery';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -153,10 +156,25 @@ export const ethereumApi = {
   async confirmClaim(claimId: string, transactionHash: string, session: EthereumSession): Promise<EthereumConfirmationResponse> {
     return await request(ETHEREUM_API_PATHS.claimConfirm, { body: { claimId, transactionHash } satisfies EthereumClaimConfirmRequest, session }) as EthereumConfirmationResponse;
   },
-  async confirm(transactionHash: string, config: Ethereum111kConfig, owner: string, signal?: AbortSignal): Promise<EthereumTransactionConfirmResponse> {
+  async confirm(transactionHash: string, config: Ethereum111kConfig, owner: string, signal?: AbortSignal, operation?: EthereumSubmission): Promise<EthereumTransactionConfirmResponse> {
     const value = await request(ETHEREUM_API_PATHS.transactionsConfirm, { body: { transactionHash }, signal });
     if (!record(value) || !['pending', 'confirmed'].includes(String(value.status)) || !Number.isSafeInteger(value.confirmations) ||
       !Array.isArray(value.items) || !Array.isArray(value.burnedTokenIds) || !value.burnedTokenIds.every(id => typeof id === 'string' && normalizeEthereumTokenId(id) === id)) return invalid();
+    if (value.status === 'confirmed' && operation && operation.action !== 'cancel') {
+      if (!operation.intent) throw new Error('The saved transaction is missing its original request. Check your wallet before stopping tracking.');
+      if (!Array.isArray(value.logs) || !value.logs.every((log): log is EthereumLog => record(log) &&
+        normalizeEthereumAddress(log.address) === config.contractAddress && Array.isArray(log.topics) &&
+        log.topics.every(topic => typeof topic === 'string' && /^0x[0-9a-fA-F]{64}$/.test(topic)) &&
+        typeof log.data === 'string' && /^0x(?:[0-9a-fA-F]{2})*$/.test(log.data))) return invalid();
+      const matches = value.logs.filter(log => matchesEthereumOperationEvent(operation, owner, config.contractAddress!, log)).length;
+      if (matches !== 1) {
+        if (Number(value.confirmations) < config.confirmationBlocks) {
+          return { status: 'pending', confirmations: Number(value.confirmations), items: [], burnedTokenIds: [] };
+        }
+        if (matches > 1) throw new EthereumApiError(409, 'This transaction contains multiple matching operations. Check your wallet before stopping tracking.', 'operation-ambiguous');
+        throw new EthereumApiError(409, 'The Ethereum operation did not succeed. Check your wallet before trying again.', 'operation-failed');
+      }
+    }
     return { status: value.status as 'pending' | 'confirmed', confirmations: Number(value.confirmations),
       items: value.items.map(item => parseEthereumInventoryItem(item, config, record(item) ? normalizeEthereumAddress(item.owner) ?? '' : '')).filter(item => item.owner === owner),
       burnedTokenIds: value.burnedTokenIds as string[] };

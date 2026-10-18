@@ -75,7 +75,7 @@ Funding, faucet choice, remote deployment and secret provisioning are separate d
 | `ETHEREUM_111K_SIGNER_SECRET` | Backend authorization key matching `quoteSigner()`; required for delivery and claims, optional while undeployed |
 | `ALCHEMY_MI_NOTE_API_KEY` | Existing server-only key for Sepolia RPC and NFT indexing |
 
-The public A11CE fixture key is exclusively for isolated local testing. Provision a separate signer for Sepolia. Apply OPS migration `0008_ethereum_profiles.sql` and Commerce migrations `0037_ethereum_111k.sql`, `0038_ethereum_reconciliation.sql`, and `0039_ethereum_reconciliation_indexes.sql` through the existing reviewed migration workflow. These add Ethereum records, atomic state guards for fulfillment writes, and indexes for eligible recovery work. Never use the local helper to initialize a production database.
+The public A11CE fixture key is exclusively for isolated local testing. Provision a separate signer for Sepolia. Apply OPS migration `0008_ethereum_profiles.sql` and Commerce migrations `0037_ethereum_111k.sql` through `0040_ethereum_reconciliation_resume.sql` using the existing reviewed migration workflow. These add Ethereum records, atomic state guards for fulfillment writes, indexes for eligible recovery work, and resumable event scans. Never use the local helper to initialize a production database.
 
 ## API and verification
 

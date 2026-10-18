@@ -2,12 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
+import { keccak_256 } from '@noble/hashes/sha3';
+import { bytesToHex } from '@noble/hashes/utils';
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
 import { ethereumApi, EthereumApiError } from '../src/ethereum/api.ts';
 import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, toggleEthereumSelection } from '../src/ethereum/state.ts';
 import { ethereumChainId, ethereumOperation } from '../src/ethereum/wallet.ts';
 import { resolveAppRoute } from '../src/routes.ts';
 import type { EthereumInventoryItem } from '../shared/ethereum/api.ts';
+import type { EthereumSubmission } from '../src/ethereum/state.ts';
 import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
 
 const owner = '0x1111111111111111111111111111111111111111';
@@ -15,6 +19,71 @@ const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
 const config = resolveEthereum111kConfig({ contractAddress: contract });
 const hash = `0x${'ab'.repeat(32)}`;
+
+const mintOperation: EthereumSubmission = { scope: ethereumInventoryScope(config, owner)!, action: 'mint', submittedAt: 1,
+  intent: { to: contract, data: encodeCall('mintCrates(uint256)', ['uint256'], [1]), value: `0x${BigInt(config.cratePriceWei).toString(16)}` } };
+const mintLog = { address: contract,
+  topics: [`0x${bytesToHex(keccak_256(new TextEncoder().encode('CratesPurchased(address,uint256,uint256,uint256)')))}`, encodeAbi(['address'], [owner])],
+  data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, config.cratePriceWei]) };
+
+for (const action of ['mint', 'unbox', 'transfer', 'delivery', 'claim'] as const) {
+  test(`${action} confirmation waits for finality before reporting a caught inner failure`, async t => {
+    let confirmations = 1;
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations, items: [], burnedTokenIds: [], logs: [] }));
+    const operation = { ...mintOperation, action };
+    assert.deepEqual(await ethereumApi.confirm(hash, config, owner, undefined, operation),
+      { status: 'pending', confirmations: 1, items: [], burnedTokenIds: [] });
+    confirmations = config.confirmationBlocks;
+    await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, operation),
+      error => error instanceof EthereumApiError && error.code === 'operation-failed');
+  });
+}
+
+test('mint confirmation checks the event even when minted tokens have already moved', async t => {
+  let logs = [mintLog];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [], logs }));
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, mintOperation)).status, 'confirmed');
+  for (const invalidLogs of [
+    [{ ...mintLog, topics: [mintLog.topics[0], encodeAbi(['address'], [other])] }],
+    [{ ...mintLog, data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 2, config.cratePriceWei]) }],
+    [{ ...mintLog, data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, 0]) }],
+  ]) {
+    logs = invalidLogs;
+    await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, mintOperation),
+      error => error instanceof EthereumApiError && error.code === 'operation-failed');
+  }
+});
+
+test('multiple successful matching mints remain ambiguous instead of failing', async t => {
+  let confirmations = 1;
+  const logs = [111112, 111113].map((firstToken, index) => ({ ...mintLog, logIndex: `0x${index}`,
+    data: encodeAbi(['uint256', 'uint256', 'uint256'], [firstToken, 1, config.cratePriceWei]) }));
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations, items: [], burnedTokenIds: [], logs }));
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, mintOperation)).status, 'pending');
+  confirmations = config.confirmationBlocks;
+  await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, mintOperation),
+    error => error instanceof EthereumApiError && error.code === 'operation-ambiguous');
+});
+
+test('receipt transfers and verified cancellations do not require minted items', async t => {
+  const receiptId = '2000001';
+  let logs = [{ address: contract, topics: [ETHEREUM_EVENT_TOPICS.Transfer, encodeAbi(['address'], [owner]),
+    encodeAbi(['address'], [other]), encodeAbi(['uint256'], [receiptId])], data: '0x' }];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [], logs }));
+  const operation: EthereumSubmission = { ...mintOperation, action: 'transfer', intent: { to: contract,
+    data: encodeCall('safeTransferFrom(address,address,uint256)', ['address', 'address', 'uint256'], [owner, other, receiptId]), value: '0x0' } };
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, operation)).status, 'confirmed');
+  logs = [];
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined,
+    { ...operation, action: 'cancel', actionBeforeCancellation: 'transfer' })).status, 'confirmed');
+});
+
+test('missing event data or a legacy request keeps confirmation recoverable', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] }));
+  await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, mintOperation),
+    error => !(error instanceof EthereumApiError) && /invalid response/.test(String(error)));
+  await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, { ...mintOperation, intent: undefined }), /missing its original request/);
+});
 
 function providerFixture() {
   let chainId = 1;

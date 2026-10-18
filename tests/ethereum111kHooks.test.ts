@@ -205,6 +205,54 @@ test('an explicitly reverted transaction clears recovery; unknown transactions r
   assert.equal(readEthereumPending(scope), null);
 });
 
+test('ambiguous successful mints keep tracking and block another purchase', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
+  t.mock.method(ethereumApi, 'confirm', async () => {
+    throw new EthereumApiError(409, 'This transaction contains multiple matching operations.', 'operation-ambiguous');
+  });
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.match(view.result.current.error ?? '', /multiple matching operations/));
+  assert.equal(readEthereumPending(scope)?.hash, hash);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), false); });
+  assert.equal(connected.sent.length, 0);
+  assert.equal(readEthereumPending(scope)?.hash, hash);
+});
+
+for (const action of ['delivery', 'claim'] as const) {
+  test(`a re-mined ${action} without its operation restores inventory and clears failed tracking`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    let state: 'included' | 'pending' | 'failed' = 'included';
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: [state === 'included' ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+    }));
+    const confirm = t.mock.method(ethereumApi, 'confirm', async () => {
+      if (state === 'failed') throw new EthereumApiError(409, 'The Ethereum operation did not succeed.', 'operation-failed');
+      return { status: state === 'included' ? 'confirmed' : 'pending', confirmations: 1,
+        items: state === 'included' ? [receipt] : [], burnedTokenIds: state === 'included' ? [original.tokenId] : [] };
+    });
+    const view = harness();
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+    assert.equal(confirm.mock.calls[0].arguments[4]?.action, action);
+    state = 'pending';
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+    state = 'failed';
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(view.result.current.pending, null));
+    assert.match(view.result.current.error ?? '', /operation did not succeed/);
+    assert.ok(readEthereumExpected(scope).includes(original.tokenId));
+  });
+}
+
 test('Ethereum delivery sends once, encrypts the address and automatically publishes at three confirmations', async t => {
   speedUpConfirmationPolls(t);
   let confirmations = 1;
@@ -1772,7 +1820,7 @@ for (const action of ['delivery', 'claim'] as const) {
   });
 }
 
-test('revert cleanup preserves a new reservation before its storage event arrives', async t => {
+for (const failureCode of ['transaction-reverted', 'operation-failed']) test(`${failureCode} cleanup preserves a new reservation before its storage event arrives`, async t => {
   const scope = ethereumInventoryScope(config, owner)!;
   writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
   let rejectConfirmation: ((error: Error) => void) | undefined;
@@ -1785,7 +1833,7 @@ test('revert cleanup preserves a new reservation before its storage event arrive
   const reserved = JSON.stringify({ scope, hash: `0x${'0'.repeat(64)}`, awaitingHash: true,
     action: 'mint', nonce: '0x8', submittedAt: Date.now(), intent: { to: contract, data: '0x', value: '0x0' } });
   window.localStorage.setItem(key, reserved);
-  await act(async () => { rejectConfirmation!(new EthereumApiError(409, 'Reverted', 'transaction-reverted')); });
+  await act(async () => { rejectConfirmation!(new EthereumApiError(409, 'Failed', failureCode)); });
   assert.equal(window.localStorage.getItem(key), reserved);
   assert.equal(readEthereumSubmission(scope)?.nonce, '0x8');
 });

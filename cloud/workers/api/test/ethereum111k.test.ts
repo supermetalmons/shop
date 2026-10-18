@@ -612,6 +612,22 @@ test('an orphaned failed receipt stays pending until its transaction is observed
   } finally { f.close(); }
 });
 
+test('transaction confirmation returns canonical collection events independently of minted holdings', async () => {
+  const f = fixture();
+  try {
+    const log: EthereumLog = { address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.Transfer,
+      topicAddress(WALLET), topicAddress(OTHER_WALLET), topicNumber('2000001')], data: '0x',
+      blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: '0x0' };
+    f.setReceipt(HASH, [log, { ...log, address: OTHER_CONTRACT }]);
+    const result = await f.request(paths.transactionsConfirm, { transactionHash: HASH });
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body.logs, [log]);
+    assert.deepEqual(result.body.items, []);
+    f.state.canonical.set(100, blockHash(999));
+    assert.equal((await f.request(paths.transactionsConfirm, { transactionHash: HASH })).body.status, 'pending');
+  } finally { f.close(); }
+});
+
 test('confirmed deliveries recover a failed publication through durable reconciliation without regenerating codes', async () => {
   const f = fixture();
   try {
@@ -1380,7 +1396,7 @@ test('deferred claims rotate so newer orphaned claims can recover', async () => 
     f.state.receipts.delete(CLAIM_HASH);
     f.state.logs = f.state.logs.filter((log) => log.transactionHash !== CLAIM_HASH);
     f.state.tokens.set('2000001', { kind: 5, displayId: 1, owner: WALLET });
-    f.commerce.database.prepare('INSERT INTO ethereum_reconciliation_cursor VALUES (?, ?, ?)').run(31337, CONTRACT, 203);
+    f.commerce.database.prepare('INSERT INTO ethereum_reconciliation_cursor (chain_id, contract_address, next_block) VALUES (?, ?, ?)').run(31337, CONTRACT, 203);
     for (let attempt = 0; attempt < 3; attempt++) {
       f.state.head = 205 + attempt * 25;
       f.state.now += 300_000;
@@ -1723,6 +1739,104 @@ test('crowded event windows split and resume a hot block without replaying compl
     assert.equal(f.quoteRow(10_955).block_hash, blockHash(100));
     assert.ok(Number(f.commerce.database.prepare('SELECT next_block FROM ethereum_reconciliation_cursor').get()!.next_block) > 100);
     assert.equal(f.commerce.database.prepare("SELECT COUNT(*) AS n FROM ethereum_delivery_quotes WHERE order_id BETWEEN 10000 AND 11000 AND status = 'confirmed'").get()!.n, 1001);
+  } finally { f.close(); }
+});
+
+test('a previous worker checkpoint cannot strand an exhausted scan', async () => {
+  const f = fixture();
+  try {
+    const { prepared } = await f.prepared(['7']);
+    const log = f.deliveryLog(prepared, ['7'], ['1000821']);
+    f.state.logs = [log];
+    f.setReceipt(HASH, [log]);
+    f.state.head = 200;
+    f.commerce.database.prepare(`INSERT INTO ethereum_reconciliation_cursor
+      (chain_id, contract_address, next_block, scan_end_block) VALUES (?, ?, 53, 102)`).run(31337, CONTRACT);
+    f.commerce.database.prepare(`INSERT INTO ethereum_reconciliation_cursor (chain_id, contract_address, next_block)
+      VALUES (?, ?, ?) ON CONFLICT(chain_id, contract_address) DO UPDATE SET next_block = MAX(next_block, excluded.next_block)`)
+      .run(31337, CONTRACT, 103);
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.quoteRow(prepared.orderId).status, 'confirmed');
+    const scan = f.state.calls.find(call => call.method === 'eth_getLogs')!.params[0] as { fromBlock: string };
+    assert.equal(BigInt(scan.fromBlock), 38n);
+    const cursor = f.commerce.database.prepare('SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor').get()!;
+    assert.equal(cursor.next_block, 201);
+    assert.equal(cursor.scan_end_block, null);
+  } finally { f.close(); }
+});
+
+test('exhausted scan repair preserves a concurrently started scan', async () => {
+  const f = fixture();
+  try {
+    f.state.head = 200;
+    f.commerce.database.prepare(`INSERT INTO ethereum_reconciliation_cursor
+      (chain_id, contract_address, next_block, scan_end_block) VALUES (?, ?, 103, 102)`).run(31337, CONTRACT);
+    let replaced = false;
+    f.env.COMMERCE_DB = d1Database(f.commerce.database, ({ method, sql }) => {
+      if (replaced || method !== 'first' || !sql.includes('SELECT next_block, scan_end_block')) return;
+      replaced = true;
+      f.commerce.database.prepare('UPDATE ethereum_reconciliation_cursor SET scan_end_block = 200').run();
+    });
+    const result = await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(result.deferred, 1);
+    assert.equal(f.state.calls.some(call => call.method === 'eth_getLogs'), false);
+    const cursor = f.commerce.database.prepare('SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor').get()!;
+    assert.equal(cursor.next_block, 103);
+    assert.equal(cursor.scan_end_block, 200);
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.commerce.database.prepare('SELECT next_block FROM ethereum_reconciliation_cursor').get()!.next_block, 201);
+    assert.equal(f.commerce.database.prepare('SELECT scan_end_block FROM ethereum_reconciliation_cursor').get()!.scan_end_block, null);
+  } finally { f.close(); }
+});
+
+test('limited event ranges resume a fixed scan and retain the next reorg sweep', async () => {
+  const f = fixture();
+  try {
+    const first = await f.prepared(['7']);
+    const reorg = await f.prepared(['111112'], '10000000-0000-4000-8000-000000000002');
+    const log = f.deliveryLog(first.prepared, ['7'], ['1000821']);
+    f.state.logs = [log];
+    f.setReceipt(HASH, [log]);
+    const loadCursor = () => f.commerce.database.prepare('SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor').get()!;
+    let requests = 0;
+    const limitedFetch: typeof fetch = async (input, init) => {
+      const rpc = JSON.parse(String(init?.body)) as Rpc;
+      if (rpc.method === 'eth_getLogs') {
+        requests++;
+        const range = rpc.params[0] as { fromBlock: string; toBlock: string };
+        if (BigInt(range.toBlock) - BigInt(range.fromBlock) + 1n > 2n) {
+          return Response.json({ jsonrpc: '2.0', id: rpc.id, error: { code: -32602, message: 'Log range too large' } });
+        }
+      }
+      return f.providerFetch(input, init);
+    };
+    let previous = 2;
+    for (let run = 0; run < 5; run++) {
+      requests = 0;
+      f.databaseCalls.statements = 0;
+      const summary = await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: limitedFetch, nowMs: () => f.state.now });
+      const cursor = loadCursor();
+      assert.ok(Number(cursor.next_block) > previous);
+      assert.ok(requests <= 64);
+      assert.ok(f.databaseCalls.statements <= 400);
+      if (cursor.scan_end_block === null) break;
+      assert.equal(cursor.scan_end_block, 102);
+      assert.equal(summary.hasMore, true);
+      previous = Number(cursor.next_block);
+      f.state.head = 164;
+    }
+    assert.equal(loadCursor().scan_end_block, null);
+    assert.equal(loadCursor().next_block, 103);
+    assert.equal(f.quoteRow(first.prepared.orderId).status, 'confirmed');
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(loadCursor().next_block, 165);
+    const reorgHash = `0x${'cc'.repeat(32)}`;
+    const reorgLog = f.deliveryLog(reorg.prepared, ['111112'], ['2000001'], reorgHash);
+    f.state.logs.push(reorgLog);
+    f.setReceipt(reorgHash, [reorgLog]);
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.quoteRow(reorg.prepared.orderId).status, 'confirmed');
+    assert.equal(loadCursor().scan_end_block, null);
   } finally { f.close(); }
 });
 

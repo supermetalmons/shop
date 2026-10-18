@@ -448,7 +448,8 @@ export async function ethereumCommerce(request: Request, context: EthereumContex
     if (!receipt) return { status: 'pending', confirmations, items: [], burnedTokenIds: [] };
     const ids = transferTokenIds(receipt, requireEthereumContract(context));
     const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted));
-    return { status: 'confirmed', confirmations, items, burnedTokenIds: ids.burned };
+    const logs = receipt.logs.filter(log => log.address.toLowerCase() === context.config.contractAddress);
+    return { status: 'confirmed', confirmations, items, burnedTokenIds: ids.burned, logs };
   }
   const session = await verifyEthereumSession(request, context);
   if (path.endsWith('/delivery/confirm')) {

@@ -103,7 +103,7 @@ function intentArguments(intent: NonNullable<EthereumSubmission['intent']>, sign
     ? decodeReturn(types, `0x${intent.data.slice(10)}`) : null;
 }
 
-function matchesRecoveryEvent(pending: EthereumSubmission, owner: string, contract: string, log: EthereumLog): boolean {
+export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner: string, contract: string, log: EthereumLog): boolean {
   const intent = pending.intent;
   if (!intent || ethereumAddress(log.address) !== contract || log.removed) return false;
   if (pending.action !== 'mint' && pending.action !== 'delivery' && BigInt(intent.value) !== 0n) return false;
@@ -167,7 +167,7 @@ async function wrappedTransactionProof(provider: EIP1193Provider, hash: string, 
   const logs = receipt.logs.filter((value): value is EthereumLog => Boolean(value && typeof value === 'object' &&
     typeof value.address === 'string' && Array.isArray(value.topics) && value.topics.every((topic: unknown) => typeof topic === 'string' && /^0x[0-9a-fA-F]{64}$/.test(topic)) &&
     typeof value.data === 'string' && /^0x(?:[0-9a-fA-F]{2})*$/.test(value.data)));
-  if (logs.filter(log => matchesRecoveryEvent(pending, owner, contract, log)).length !== 1) {
+  if (logs.filter(log => matchesEthereumOperationEvent(pending, owner, contract, log)).length !== 1) {
     throw new Error('That transaction does not contain the saved Ethereum operation for your wallet.');
   }
 }
