@@ -9,7 +9,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog } from '../../../../shared/ethereum/abi.ts';
 import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { ethereumHexQuantity, ethereumReceiptTokenId, ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
-import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse } from '../../../../shared/ethereum/api.ts';
+import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse } from '../../../../shared/ethereum/api.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import { createCommerceD1Harness, d1Database } from '../test/commerceD1Harness.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
@@ -261,6 +261,39 @@ try {
     assert.ok(inventory.items.every(item => item.owner === buyer.toLowerCase()));
     gas.apiSignedDelivery = BigInt(redeemed.gasUsed).toString();
     gas.apiSignedClaim = BigInt(claimed.gasUsed).toString();
+    const mixedIds = ['111116', '22', '2'];
+    const mixedReceiptIds = ['2000005', '1000002', '1000022'];
+    const mixedRequest = { tokenIds: mixedIds, addressId: saved.address.id, requestId: crypto.randomUUID() };
+    const mixedPrepared = await api<EthereumDeliveryPrepareResponse>(ETHEREUM_API_PATHS.deliveryPrepare, mixedRequest, session);
+    const repeatedMixed = await api<EthereumDeliveryPrepareResponse>(ETHEREUM_API_PATHS.deliveryPrepare, mixedRequest, session);
+    assert.deepEqual(repeatedMixed, mixedPrepared);
+    assert.equal(mixedPrepared.quote.receiptIdsHash, ethereumReceiptIdsHash(mixedReceiptIds));
+    const mixed = await send(buyer, mixedPrepared.transaction.data, mixedPrepared.transaction.to, BigInt(mixedPrepared.transaction.value));
+    const mixedEvents = decodeEventLogs(mixed.logs, contract);
+    const mixedDelivery = mixedEvents.find(event => event.name === 'DeliveryRedeemed');
+    assert.ok(mixedDelivery?.name === 'DeliveryRedeemed');
+    assert.deepEqual(mixedDelivery.tokenIds, mixedIds);
+    assert.deepEqual(mixedDelivery.receiptIds, mixedReceiptIds);
+    const mixedTransfers = mixedEvents.filter(event => event.name === 'Transfer');
+    assert.deepEqual(mixedTransfers.map(event => [event.from, event.to, event.tokenId]), [
+      ...mixedIds.map(id => [buyer.toLowerCase(), '0x' + '0'.repeat(40), id]),
+      ...mixedReceiptIds.map(id => ['0x' + '0'.repeat(40), buyer.toLowerCase(), id]),
+    ]);
+    assert.equal(mixedEvents.at(-1)?.name, 'DeliveryRedeemed');
+    const includedMixed = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm, { transactionHash: mixed.transactionHash });
+    assert.equal(includedMixed.status, 'confirmed');
+    assert.deepEqual(includedMixed.burnedTokenIds, mixedIds);
+    assert.deepEqual(includedMixed.items.map(item => [item.tokenId, item.displayId]), [
+      ['2000005', 5], ['1000002', 2], ['1000022', 22],
+    ]);
+    await rpc('anvil_mine', [2]);
+    const mixedConfirmed = await api<EthereumDeliveryConfirmResponse>(ETHEREUM_API_PATHS.deliveryConfirm,
+      { orderId: mixedPrepared.orderId, transactionHash: mixed.transactionHash }, session);
+    assert.equal(mixedConfirmed.status, 'confirmed');
+    const mixedShipments = await api<EthereumShipmentsResponse>(ETHEREUM_API_PATHS.shipments, undefined, session);
+    const mixedOrder = mixedShipments.orders.find(order => order.deliveryId === mixedPrepared.orderId);
+    assert.deepEqual(mixedOrder?.items, [{ kind: 'box', refId: 5 }, { kind: 'dude', refId: 2 }, { kind: 'dude', refId: 22 }]);
+    gas.apiSignedMixedDelivery = BigInt(mixed.gasUsed).toString();
   } finally { commerce.database.close(); ops.close(); }
 
   await mkdir(output, { recursive: true });
@@ -278,7 +311,7 @@ try {
     await writeFile(resolve(output, `${preview.name}.svg`), svg);
     await writeFile(resolve(output, `${preview.name}.json`), JSON.stringify(metadata, null, 2));
   }
-  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, passed: ['warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'all five onchain SVG types'] };
+  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, passed: ['warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'all five onchain SVG types'] };
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

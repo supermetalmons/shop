@@ -367,15 +367,19 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   });
   const deliver = (selected: EthereumInventoryItem[], address: EthereumDeliveryAddress) => run('Confirm delivery in your wallet…', async (operation, capturedScope) => {
     if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !['artwork', 'crate'].includes(item.kind))) throw new Error('Choose up to 50 artworks or crates for delivery.');
+    const orderedItems = [...selected].sort((left, right) => {
+      const leftId = BigInt(left.tokenId), rightId = BigInt(right.tokenId);
+      return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    });
     const signedIn = await authenticate(operation, capturedScope);
     operation.assertCurrent();
     const addressKey = ethereumAddressEncryptionKey(encryptionKey, config.chainId, import.meta.env?.DEV === true, import.meta.env?.VITE_111K_LOCAL_ADDRESS_PUBLIC_KEY);
     const encrypted = encryptAddressPayload(address.formatted, addressKey);
     const saved = await ethereumApi.saveAddress({ encrypted: encrypted.cipherText, hint: encrypted.hint, country: address.country, countryCode: address.countryCode, email: address.email }, signedIn);
     operation.assertCurrent();
-    const prepared = await ethereumApi.prepareDelivery(selected.map(item => item.tokenId), saved.address.id, crypto.randomUUID(), signedIn, operation.signal);
+    const prepared = await ethereumApi.prepareDelivery(orderedItems.map(item => item.tokenId), saved.address.id, crypto.randomUUID(), signedIn, operation.signal);
     operation.assertCurrent();
-    const request = checkedEthereumDelivery(prepared, config, operation.address, selected);
+    const request = checkedEthereumDelivery(prepared, config, operation.address, orderedItems);
     await submit(operation, capturedScope, 'delivery', request, { orderId: prepared.orderId });
   });
   const transfer = (item: EthereumInventoryItem, destination: string) => run('Confirm transfer in your wallet…', async (operation, capturedScope) => {

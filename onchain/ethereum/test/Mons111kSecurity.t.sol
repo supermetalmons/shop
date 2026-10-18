@@ -34,8 +34,15 @@ contract SecurityReceiver {
     address public transferNewTo;
     uint256 public transferOtherId;
     address public transferOtherTo;
+    uint256 public sourceTransferFailures;
     bool private checkPurchaseTotals;
     uint256[3] private expectedPurchaseTotals;
+    uint256[] private deliverySources;
+    uint256[] private deliveryReceipts;
+    uint256 private deliveryStartingBalance;
+    uint256 private deliveryStartingSupply;
+    uint256 private deliveryOrderId;
+    bool private catchSourceTransfers;
     SecurityCall[] private attacks;
 
     error ReceiverRejected(uint256 callback);
@@ -51,7 +58,10 @@ contract SecurityReceiver {
         wrongSelector = wrongSelector_;
         transferNewTo = transferNewTo_;
         transferOtherId = 0;
+        sourceTransferFailures = 0;
         checkPurchaseTotals = false;
+        delete deliverySources;
+        delete deliveryReceipts;
         delete attacks;
     }
 
@@ -72,6 +82,21 @@ contract SecurityReceiver {
     function configureOtherTransfer(uint256 id, address recipient) external {
         transferOtherId = id;
         transferOtherTo = recipient;
+    }
+
+    function expectDeliveryState(
+        uint256[] calldata sources,
+        uint256[] calldata receipts,
+        uint256 orderId,
+        bool catchTransfers
+    ) external {
+        require(sources.length != 0 && sources.length == receipts.length, "invalid delivery expectation");
+        deliverySources = sources;
+        deliveryReceipts = receipts;
+        deliveryStartingBalance = token.balanceOf(address(this));
+        deliveryStartingSupply = token.totalSupply();
+        deliveryOrderId = orderId;
+        catchSourceTransfers = catchTransfers;
     }
 
     function execute(bytes calldata data, uint256 value) external {
@@ -102,6 +127,7 @@ contract SecurityReceiver {
         require(holder == address(this), "callback owner mismatch");
         bytes32 metadata = keccak256(bytes(token.tokenURI(id)));
         require(metadata == keccak256(bytes(token.previewTokenURI(kind, displayId))), "callback metadata mismatch");
+        if (deliverySources.length != 0) _checkDeliveryState(id);
         if (checkPurchaseTotals) {
             (uint256 allocated, uint256 warehouses, uint256 artworks,,,) = token.stats();
             require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
@@ -132,6 +158,49 @@ contract SecurityReceiver {
             require(keccak256(bytes(token.tokenURI(id))) == metadata, "transfer changed metadata");
         }
         return this.onERC721Received.selector;
+    }
+
+    function _checkDeliveryState(uint256 id) private {
+        require(token.usedDeliveryOrders(deliveryOrderId), "delivery authorization not consumed");
+        require(id == deliveryReceipts[callbacks - 1], "callback receipt order mismatch");
+        require(
+            token.balanceOf(address(this)) == deliveryStartingBalance - deliverySources.length + callbacks,
+            "callback delivery balance mismatch"
+        );
+        require(
+            token.totalSupply() == deliveryStartingSupply - deliverySources.length + callbacks,
+            "callback delivery supply mismatch"
+        );
+        for (uint256 i; i < deliverySources.length; ++i) {
+            (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(deliverySources[i]);
+            require(kind == 0 && displayId == 0 && holder == address(0), "delivery source remains live");
+            (bool exists, bytes memory reason) =
+                address(token).staticcall(abi.encodeCall(token.ownerOf, (deliverySources[i])));
+            require(
+                !exists && bytes4(reason) == bytes4(keccak256("OwnerQueryForNonexistentToken()")),
+                "delivery source owner remains queryable"
+            );
+            (kind, displayId, holder) = token.getTokenInfo(deliveryReceipts[i]);
+            if (i < callbacks) {
+                uint256 offset = deliveryReceipts[i] < 2000000 ? 1000000 : 2000000;
+                require(
+                    kind == (offset == 1000000 ? 4 : 5) && displayId == deliveryReceipts[i] - offset
+                        && holder == address(this),
+                    "minted receipt prefix mismatch"
+                );
+            } else {
+                require(kind == 0 && displayId == 0 && holder == address(0), "future receipt already minted");
+            }
+            if (catchSourceTransfers) {
+                (bool success, bytes memory failure) = address(token)
+                    .call(abi.encodeCall(token.transferFrom, (address(this), address(0xB0B), deliverySources[i])));
+                require(
+                    !success && bytes4(failure) == bytes4(keccak256("OwnerQueryForNonexistentToken()")),
+                    "burned source transfer did not fail"
+                );
+                sourceTransferFailures++;
+            }
+        }
     }
 
     function _execute(bytes memory data, uint256 value) private {
@@ -487,7 +556,7 @@ contract Mons111kSecurityTest is TestSupport {
         SecurityCall memory call_ = _route(buyer, 4);
         buyer.configureOtherTransfer(111114, BOB);
         bytes32 beforeState = _state(address(buyer));
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(bytes4(keccak256("OwnerQueryForNonexistentToken()")));
         buyer.execute(call_.data, call_.value);
         assertEq(_state(address(buyer)), beforeState);
         _seedStillOwned(buyer);
@@ -497,6 +566,48 @@ contract Mons111kSecurityTest is TestSupport {
         buyer.execute(call_.data, call_.value);
         _outputs(2000001, 3, 5, 1, address(buyer));
         assertTrue(token.usedDeliveryOrders(2));
+    }
+
+    function testArtworkDeliveryCallbacksObserveAllBurnsAndOnlyMintedReceiptPrefix() public {
+        _deliveryCallbacks(false, false);
+    }
+
+    function testMixedDeliveryCallbacksObserveAllBurnsAndOnlyMintedReceiptPrefix() public {
+        _deliveryCallbacks(true, false);
+    }
+
+    function testArtworkDeliveryCallbacksCanCatchTransfersOfEveryBurnedSource() public {
+        _deliveryCallbacks(false, true);
+    }
+
+    function testMixedDeliveryCallbacksCanCatchTransfersOfEveryBurnedSource() public {
+        _deliveryCallbacks(true, true);
+    }
+
+    function testUncaughtArtworkSourceTransferRollsBackDeliveryAndCanRetry() public {
+        _uncaughtDeliverySourceTransfer(false);
+    }
+
+    function testUncaughtMixedSourceTransferRollsBackDeliveryAndCanRetry() public {
+        _uncaughtDeliverySourceTransfer(true);
+    }
+
+    function testMixedDeliveryCallbacksCanTransferNewReceiptsAndUnrelatedArtwork() public {
+        SecurityReceiver buyer = _artworkReceiver();
+        (uint256[] memory ids, uint256[] memory receipts) = _deliverySelection(true);
+        SecurityCall memory call_ = _deliveryCall(buyer, ids);
+        uint256 balance = token.balanceOf(address(buyer));
+        uint256 supply = token.totalSupply();
+        buyer.configure(0, false, BOB);
+        buyer.configureOtherTransfer(2, BOB);
+        buyer.execute(call_.data, call_.value);
+        assertEq(buyer.callbacks(), ids.length);
+        assertEq(token.balanceOf(address(buyer)), balance - ids.length - 1);
+        assertEq(token.balanceOf(BOB), ids.length + 1);
+        assertEq(token.totalSupply(), supply);
+        _deliveryOutputs(ids, receipts, BOB);
+        _info(2, 1, 22, BOB);
+        _info(3, 1, 23, address(buyer));
     }
 
     function testTwoOpeningsInOneWrapperCallHaveSeparateArtworkOffsets() public {
@@ -641,6 +752,86 @@ contract Mons111kSecurityTest is TestSupport {
         bytes memory signature = _deliverySignature(ids, quote, SIGNER_KEY);
         buyer.execute(abi.encodeCall(token.redeemForDelivery, (ids, quote, signature)), quote.fee);
         buyer.configure(0, false, address(0));
+    }
+
+    function _artworkReceiver() internal returns (SecurityReceiver buyer) {
+        buyer = _receiver();
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111113)), 0);
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111112)), 0);
+        buyer.configure(0, false, address(0));
+    }
+
+    function _deliverySelection(bool mixed) internal pure returns (uint256[] memory ids, uint256[] memory receipts) {
+        ids = new uint256[](4);
+        ids[0] = mixed ? 111114 : 40;
+        ids[1] = 20;
+        ids[2] = 1;
+        ids[3] = 21;
+        receipts = new uint256[](4);
+        receipts[0] = mixed ? 2000003 : 1000020;
+        receipts[1] = 1000040;
+        receipts[2] = 1000021;
+        receipts[3] = 1000001;
+    }
+
+    function _deliveryCall(SecurityReceiver buyer, uint256[] memory ids) internal returns (SecurityCall memory) {
+        Mons111k.DeliveryQuote memory quote = _quote(address(buyer), 2, ids);
+        return SecurityCall(
+            abi.encodeCall(token.redeemForDelivery, (ids, quote, _deliverySignature(ids, quote, SIGNER_KEY))), quote.fee
+        );
+    }
+
+    function _deliveryCallbacks(bool mixed, bool catchTransfers) internal {
+        SecurityReceiver buyer = _artworkReceiver();
+        (uint256[] memory ids, uint256[] memory receipts) = _deliverySelection(mixed);
+        SecurityCall memory call_ = _deliveryCall(buyer, ids);
+        uint256 balance = token.balanceOf(address(buyer));
+        uint256 supply = token.totalSupply();
+        buyer.expectDeliveryState(ids, receipts, 2, catchTransfers);
+        buyer.execute(call_.data, call_.value);
+        assertEq(buyer.callbacks(), ids.length);
+        assertEq(buyer.sourceTransferFailures(), catchTransfers ? ids.length * ids.length : 0);
+        assertEq(token.balanceOf(address(buyer)), balance);
+        assertEq(token.balanceOf(BOB), 0);
+        assertEq(token.totalSupply(), supply);
+        _deliveryOutputs(ids, receipts, address(buyer));
+        _info(2, 1, 22, address(buyer));
+        _info(19, 1, 39, address(buyer));
+        _info(22, 1, 2, address(buyer));
+        _info(39, 1, 19, address(buyer));
+    }
+
+    function _uncaughtDeliverySourceTransfer(bool mixed) internal {
+        SecurityReceiver buyer = _artworkReceiver();
+        (uint256[] memory ids, uint256[] memory receipts) = _deliverySelection(mixed);
+        SecurityCall memory call_ = _deliveryCall(buyer, ids);
+        buyer.configureOtherTransfer(ids[ids.length - 1], BOB);
+        bytes32 beforeState = _state(address(buyer));
+        vm.expectRevert(bytes4(keccak256("OwnerQueryForNonexistentToken()")));
+        buyer.execute(call_.data, call_.value);
+        assertEq(_state(address(buyer)), beforeState);
+        assertFalse(token.usedDeliveryOrders(2));
+        assertEq(buyer.callbacks(), 0);
+        assertEq(token.balanceOf(BOB), 0);
+        for (uint256 i; i < ids.length; ++i) {
+            uint256 offset = receipts[i] < 2000000 ? 1000000 : 2000000;
+            _info(ids[i], offset == 1000000 ? 1 : 2, receipts[i] - offset, address(buyer));
+            _info(receipts[i], 0, 0, address(0));
+        }
+        buyer.configure(0, false, address(0));
+        buyer.expectDeliveryState(ids, receipts, 2, false);
+        buyer.execute(call_.data, call_.value);
+        assertEq(buyer.callbacks(), ids.length);
+        _deliveryOutputs(ids, receipts, address(buyer));
+    }
+
+    function _deliveryOutputs(uint256[] memory ids, uint256[] memory receipts, address holder) internal view {
+        assertTrue(token.usedDeliveryOrders(2));
+        for (uint256 i; i < ids.length; ++i) {
+            _info(ids[i], 0, 0, address(0));
+            uint256 offset = receipts[i] < 2000000 ? 1000000 : 2000000;
+            _info(receipts[i], offset == 1000000 ? 4 : 5, receipts[i] - offset, holder);
+        }
     }
 
     function _route(SecurityReceiver buyer, uint256 route) internal returns (SecurityCall memory) {

@@ -3,7 +3,7 @@ import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
+import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
 import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumSession, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
@@ -312,6 +312,51 @@ test('Ethereum delivery sends once, encrypts the address and automatically publi
   assert.equal(confirmationAttempts, 2);
   assert.equal(connected.sent.length, 1);
   assert.equal(readEthereumPending(scope), null);
+});
+
+for (const differentArtworkOrder of [false, true]) test(`delivery sorts a copy of mixed tokens numerically${differentArtworkOrder ? ' when artwork numbers have another order' : ''}`, async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  saveEthereumSession(scope, {
+    token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000,
+  });
+  t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+  t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'saved-ethereum-address' } }));
+  const selected: EthereumInventoryItem[] = [
+    token(),
+    { ...token(owner, '10'), kind: 'artwork', displayId: 850, name: 'Artwork #850' },
+    { ...token(owner, '2'), kind: 'artwork', displayId: 842, name: 'Artwork #842' },
+  ];
+  if (differentArtworkOrder) selected.push({ ...token(owner, '21'), kind: 'artwork', displayId: 1, name: 'Artwork #1' });
+  const originalSelection = structuredClone(selected);
+  Object.freeze(selected);
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: selected, nextCursor: null, observedBlock: 1 }));
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const signature = `0x${'ab'.repeat(65)}`;
+  const tokenIds = differentArtworkOrder ? ['2', '10', '21', '111112'] : ['2', '10', '111112'];
+  const receiptIdsHash = ethereumReceiptIdsHash(differentArtworkOrder ? ['1000842', '1000850', '1000001', '2000001'] : ['1000842', '1000850', '2000001']);
+  const prepare = t.mock.method(ethereumApi, 'prepareDelivery', async ids => {
+    assert.deepEqual(ids, tokenIds);
+    return { orderId: 42, expiresAtMs: deadline * 1000, signature, quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
+      transaction: { to: contract, data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]), value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`, chainId: config.chainId } };
+  });
+  const connected = wallet();
+  const view = harness(connected, false, 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=');
+  await waitFor(() => assert.equal(view.result.current.items.length, selected.length));
+  await act(async () => {
+    assert.equal(await view.result.current.deliver(selected, {
+      formatted: 'Test Name\n123 Example Street', country: 'United States', countryCode: 'US', email: 'test@example.com',
+    }), true);
+  });
+  assert.equal(prepare.mock.callCount(), 1);
+  assert.equal(connected.sent.length, 1);
+  const [sent] = connected.sent[0] as [{ data: string }];
+  assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], `0x${sent.data.slice(10)}`), [
+    tokenIds.map(BigInt), [42n, owner, BigInt(config.deliveryFeeWei), BigInt(deadline), receiptIdsHash], signature,
+  ]);
+  assert.equal(readEthereumPending(scope)?.intent?.data, sent.data);
+  assert.deepEqual(selected, originalSelection);
+  assert.deepEqual(view.result.current.items, originalSelection);
 });
 
 test('unboxing reveals artwork at first inclusion without waiting for fulfillment confirmations', async t => {

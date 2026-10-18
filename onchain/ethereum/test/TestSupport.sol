@@ -1,6 +1,12 @@
 pragma solidity 0.8.30;
 
 interface Vm {
+    struct Log {
+        bytes32[] topics;
+        bytes data;
+        address emitter;
+    }
+
     function addr(uint256 privateKey) external returns (address);
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
     function prank(address sender) external;
@@ -14,6 +20,8 @@ interface Vm {
     function snapshotGasLastCall(string calldata name) external returns (uint256 gasUsed);
     function expectRevert() external;
     function expectRevert(bytes4 selector) external;
+    function recordLogs() external;
+    function getRecordedLogs() external returns (Log[] memory);
     function writeFile(string calldata path, string calldata content) external;
     function envAddress(string calldata name) external returns (address);
     function envUint(string calldata name) external returns (uint256);

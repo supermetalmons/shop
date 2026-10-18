@@ -154,6 +154,182 @@ contract Mons111kGasTest is TestSupport {
         _deliverMixed(receiver, "deliverMixed50Receiver");
     }
 
+    function testGasDeliverArtworks20Ascending() public {
+        _deliverOrdered(alice, 0, 0, "deliverArtworks20Ascending");
+    }
+
+    function testGasDeliverArtworks20AscendingReceiver() public {
+        _deliverOrdered(receiver, 0, 0, "deliverArtworks20AscendingReceiver");
+    }
+
+    function testGasDeliverArtworks20Descending() public {
+        _deliverOrdered(alice, 0, 1, "deliverArtworks20Descending");
+    }
+
+    function testGasDeliverArtworks20DescendingReceiver() public {
+        _deliverOrdered(receiver, 0, 1, "deliverArtworks20DescendingReceiver");
+    }
+
+    function testGasDeliverArtworks20Shuffled() public {
+        _deliverOrdered(alice, 0, 2, "deliverArtworks20Shuffled");
+    }
+
+    function testGasDeliverArtworks20ShuffledReceiver() public {
+        _deliverOrdered(receiver, 0, 2, "deliverArtworks20ShuffledReceiver");
+    }
+
+    function testGasDeliverArtworks31Ascending() public {
+        _deliverOrdered(alice, 1, 0, "deliverArtworks31Ascending");
+    }
+
+    function testGasDeliverArtworks31AscendingReceiver() public {
+        _deliverOrdered(receiver, 1, 0, "deliverArtworks31AscendingReceiver");
+    }
+
+    function testGasDeliverArtworks31Descending() public {
+        _deliverOrdered(alice, 1, 1, "deliverArtworks31Descending");
+    }
+
+    function testGasDeliverArtworks31DescendingReceiver() public {
+        _deliverOrdered(receiver, 1, 1, "deliverArtworks31DescendingReceiver");
+    }
+
+    function testGasDeliverArtworks31Shuffled() public {
+        _deliverOrdered(alice, 1, 2, "deliverArtworks31Shuffled");
+    }
+
+    function testGasDeliverArtworks31ShuffledReceiver() public {
+        _deliverOrdered(receiver, 1, 2, "deliverArtworks31ShuffledReceiver");
+    }
+
+    function testGasDeliverArtworks50Descending() public {
+        _deliverOrdered(alice, 2, 1, "deliverArtworks50Descending");
+    }
+
+    function testGasDeliverArtworks50DescendingReceiver() public {
+        _deliverOrdered(receiver, 2, 1, "deliverArtworks50DescendingReceiver");
+    }
+
+    function testGasDeliverArtworks50Shuffled() public {
+        _deliverOrdered(alice, 2, 2, "deliverArtworks50Shuffled");
+    }
+
+    function testGasDeliverArtworks50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 2, 2, "deliverArtworks50ShuffledReceiver");
+    }
+
+    function testGasDeliverSparseArtworks50Ascending() public {
+        _deliverOrdered(alice, 3, 0, "deliverSparseArtworks50Ascending");
+    }
+
+    function testGasDeliverSparseArtworks50AscendingReceiver() public {
+        _deliverOrdered(receiver, 3, 0, "deliverSparseArtworks50AscendingReceiver");
+    }
+
+    function testGasDeliverSparseArtworks50Descending() public {
+        _deliverOrdered(alice, 3, 1, "deliverSparseArtworks50Descending");
+    }
+
+    function testGasDeliverSparseArtworks50DescendingReceiver() public {
+        _deliverOrdered(receiver, 3, 1, "deliverSparseArtworks50DescendingReceiver");
+    }
+
+    function testGasDeliverSparseArtworks50Shuffled() public {
+        _deliverOrdered(alice, 3, 2, "deliverSparseArtworks50Shuffled");
+    }
+
+    function testGasDeliverSparseArtworks50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 3, 2, "deliverSparseArtworks50ShuffledReceiver");
+    }
+
+    function testGasDeliverFragmentedArtworks50Ascending() public {
+        _deliverOrdered(alice, 4, 0, "deliverFragmentedArtworks50Ascending");
+    }
+
+    function testGasDeliverFragmentedArtworks50AscendingReceiver() public {
+        _deliverOrdered(receiver, 4, 0, "deliverFragmentedArtworks50AscendingReceiver");
+    }
+
+    function testGasDeliverFragmentedArtworks50Descending() public {
+        _deliverOrdered(alice, 4, 1, "deliverFragmentedArtworks50Descending");
+    }
+
+    function testGasDeliverFragmentedArtworks50DescendingReceiver() public {
+        _deliverOrdered(receiver, 4, 1, "deliverFragmentedArtworks50DescendingReceiver");
+    }
+
+    function testGasDeliverFragmentedArtworks50Shuffled() public {
+        _deliverOrdered(alice, 4, 2, "deliverFragmentedArtworks50Shuffled");
+    }
+
+    function testGasDeliverFragmentedArtworks50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 4, 2, "deliverFragmentedArtworks50ShuffledReceiver");
+    }
+
+    function testGasDeliverInitializedArtworks50Ascending() public {
+        _deliverOrdered(alice, 5, 0, "deliverInitializedArtworks50Ascending");
+    }
+
+    function testGasDeliverInitializedArtworks50AscendingReceiver() public {
+        _deliverOrdered(receiver, 5, 0, "deliverInitializedArtworks50AscendingReceiver");
+    }
+
+    function testGasDeliverInitializedArtworks50Descending() public {
+        _deliverOrdered(alice, 5, 1, "deliverInitializedArtworks50Descending");
+    }
+
+    function testGasDeliverInitializedArtworks50DescendingReceiver() public {
+        _deliverOrdered(receiver, 5, 1, "deliverInitializedArtworks50DescendingReceiver");
+    }
+
+    function testGasDeliverInitializedArtworks50Shuffled() public {
+        _deliverOrdered(alice, 5, 2, "deliverInitializedArtworks50Shuffled");
+    }
+
+    function testGasDeliverInitializedArtworks50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 5, 2, "deliverInitializedArtworks50ShuffledReceiver");
+    }
+
+    function testGasDeliverMixed50Descending() public {
+        _deliverOrdered(alice, 6, 1, "deliverMixed50Descending");
+    }
+
+    function testGasDeliverMixed50DescendingReceiver() public {
+        _deliverOrdered(receiver, 6, 1, "deliverMixed50DescendingReceiver");
+    }
+
+    function testGasDeliverMixed50Shuffled() public {
+        _deliverOrdered(alice, 6, 2, "deliverMixed50Shuffled");
+    }
+
+    function testGasDeliverMixed50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 6, 2, "deliverMixed50ShuffledReceiver");
+    }
+
+    function testGasDeliverCrates50Descending() public {
+        _deliverOrdered(alice, 7, 1, "deliverCrates50Descending");
+    }
+
+    function testGasDeliverCrates50DescendingReceiver() public {
+        _deliverOrdered(receiver, 7, 1, "deliverCrates50DescendingReceiver");
+    }
+
+    function testGasDeliverCrates50Shuffled() public {
+        _deliverOrdered(alice, 7, 2, "deliverCrates50Shuffled");
+    }
+
+    function testGasDeliverCrates50ShuffledReceiver() public {
+        _deliverOrdered(receiver, 7, 2, "deliverCrates50ShuffledReceiver");
+    }
+
+    function testGasDeliverArtwork1Receiver() public {
+        _deliverArtworks(receiver, 1, "deliverArtwork1Receiver");
+    }
+
+    function testGasDeliverCrate1Receiver() public {
+        _deliverCrates(receiver, 1, "deliverCrate1Receiver");
+    }
+
     function testGasClaim20() public {
         _claim(alice, 1, "claim20");
     }
@@ -359,6 +535,61 @@ contract Mons111kGasTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         vm.snapshotGasLastCall(name);
         assertTrue(token.usedDeliveryOrders(quote.orderId));
+    }
+
+    function _deliverOrdered(address wallet, uint256 scenario, uint256 order, string memory name) internal {
+        uint256[] memory ids;
+        if (scenario == 1) {
+            uint256 crateId = _bonusCrate(wallet);
+            vm.prank(wallet);
+            token.unboxCrate(crateId);
+            ids = _range(1, 31);
+        } else if (scenario == 6) {
+            _buyCrates(wallet, 27);
+            vm.startPrank(wallet);
+            token.unboxCrate(111112);
+            token.unboxCrate(111113);
+            vm.stopPrank();
+            ids = new uint256[](50);
+            for (uint256 i; i < 25; ++i) {
+                ids[i] = i + 1;
+                ids[25 + i] = 111114 + i;
+            }
+        } else if (scenario == 7) {
+            _buyCrates(wallet, 50);
+            ids = _range(111112, 50);
+        } else {
+            uint256 quantity = scenario == 0 ? 20 : 50;
+            _artworks(wallet, scenario == 0 ? 1 : scenario == 3 ? 5 : 3);
+            ids = _range(1, quantity);
+            if (scenario == 3) {
+                for (uint256 i; i < quantity; ++i) {
+                    ids[i] = 2 * i + 1;
+                }
+            } else if (scenario == 4 || scenario == 5) {
+                uint256 step = scenario == 4 ? 5 : 1;
+                for (uint256 i = step - 1; i < quantity; i += step) {
+                    vm.prank(wallet);
+                    token.transferFrom(wallet, bob, ids[i]);
+                    vm.prank(bob);
+                    token.transferFrom(bob, wallet, ids[i]);
+                }
+            }
+        }
+        if (order == 1) {
+            for (uint256 i; i < ids.length / 2; ++i) {
+                uint256 last = ids.length - 1 - i;
+                (ids[i], ids[last]) = (ids[last], ids[i]);
+            }
+        } else if (order == 2) {
+            uint256 seed = 0x111c;
+            for (uint256 i = ids.length - 1; i > 0; --i) {
+                seed = (seed * 1664525 + 1013904223) & 0xffffffff;
+                uint256 j = seed % (i + 1);
+                (ids[i], ids[j]) = (ids[j], ids[i]);
+            }
+        }
+        _deliver(wallet, ids, name);
     }
 
     function _claim(address wallet, uint256 crateNumber, string memory name) internal {

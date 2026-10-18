@@ -187,9 +187,11 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         }
         if (keccak256(abi.encode(receiptIds)) != quote.receiptIdsHash) revert InvalidAuthorization();
         usedDeliveryOrders[quote.orderId] = true;
+        // Burn hooks must remain free of external calls so upfront ownership checks stay valid.
         for (uint256 i; i < tokenIds.length; ++i) {
-            if (ownerOf(tokenIds[i]) != msg.sender) revert WrongOwner();
             _burn(tokenIds[i]);
+        }
+        for (uint256 i; i < receiptIds.length; ++i) {
             _mintSpotOnce(msg.sender, receiptIds[i]);
         }
         emit DeliveryRedeemed(quote.orderId, msg.sender, quote.fee, tokenIds, receiptIds);

@@ -32,14 +32,14 @@ npm run test:invariants:extended
 
 That campaign uses 512 sequences of 128 calls. Receiver regressions also exercise reentrancy, rejected callbacks, transfers during callbacks, and multiple operations within a single transaction. Reentrancy locks and the temporary artwork offset use transient storage, which requires EIP-1153; the configured Prague EVM supports it. Both are cleared before a successful call returns so subsequent calls in the same transaction remain safe.
 
-Gas snapshots measure individual calls with isolated transaction state, excluding scenario setup and signature preparation. `npm run check` requires every benchmark to succeed and produce its expected runtime measurement, then compares those measurements with the committed snapshots without updating them. Filtered tests and missing or renamed measurements fail the check. Use these commands for a separate check or an intentional baseline update:
+Gas snapshots exclude scenario setup and signature preparation. With `--isolate`, write-call measurements include transaction intrinsic gas and any applicable calldata floor; view calls remain ordinary call-gas measurements. `npm run check` requires every benchmark to succeed and produce its expected runtime measurement, then compares those measurements with the committed snapshots without updating them. Filtered tests and missing or renamed measurements fail the check. Use these commands for a separate check or an intentional baseline update:
 
 ```sh
 npm run gas:check
 npm run gas:update
 ```
 
-Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values measure call execution gas, not a wallet's complete transaction fee. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
+Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values are gas units, not ETH fees, and omit any outer contract-wallet transaction overhead. Differently ordered authorizations can also differ slightly in signature-byte calldata cost. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
 
 ## Local chain
 
@@ -58,6 +58,8 @@ npm run deploy:local
 The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 2` to `.local/deployment.json`. Optional overrides are `MONS_111K_LOCAL_RPC_URL`, `MONS_111K_LOCAL_OWNER`, `MONS_111K_LOCAL_QUOTE_SIGNER`, and `MONS_111K_LOCAL_TREASURY`.
 
 Protocol v2 requires a fresh collection deployment because the contract is not upgradeable. Restart the local chain, rerun `deploy:local`, and restart the local API with its fresh database before testing v2. Existing v1 addresses, delivery quotes, claim authorizations, and local deployment files are incompatible. Both delivery and crate-claim authorizations now use EIP-712 domain version `2`.
+
+The burn-first delivery implementation also requires a fresh collection deployment, while retaining protocol version 2. Frontend delivery sorting works with existing v2 contracts. Existing authorizations remain order-sensitive and bound to their original contract address; the optimization does not rewrite saved quotes or pending transactions.
 
 Start the isolated API from the repository root:
 
@@ -100,7 +102,11 @@ CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)
 
 `tokenIdsHash` is `keccak256(abi.encode(tokenIds))`, including the ABI array offset and length. `receiptIdsHash` is `keccak256(abi.encode(expectedReceiptIds))`, using the expected receipt for each token in the same order. Both hashes bind array order and length. The calldata quote tuple appends `bytes32 receiptIdsHash` after its existing `orderId`, `wallet`, `fee`, and `deadline` fields.
 
-Before any burn or mint, delivery derives every receipt ID from the current token identity, validates ownership and item kind, and compares the receipt commitment. A changed mapping, such as an artwork token ID allocated to a different crate after a reorg, reverts with `InvalidAuthorization`. The caller must prepare a fresh quote. Ownership is checked again immediately before each burn so receiver callbacks cannot transfer a later selected token out from under the operation.
+Before any burn or mint, delivery derives every receipt ID from the current token identity, validates ownership and item kind, and compares the receipt commitment. A changed mapping, such as an artwork token ID allocated to a different crate after a reorg, reverts with `InvalidAuthorization`. The caller must prepare a fresh quote. All selected originals are then burned before any receipt is safely minted. Burn hooks make no external calls, so the upfront ownership checks remain valid throughout the burn phase.
+
+Transfer logs contain all original burns followed by receipt mints; `DeliveryRedeemed` remains last and preserves the token/receipt pairing in the signed order. During a receipt callback, all selected originals are nonexistent, and balance/supply reflect all burns plus only receipts minted so far. A receiver may transfer a new receipt or an unrelated token. Rejecting any receipt still rolls back every burn, mint, payment and consumed authorization.
+
+The frontend sorts a copy of each new delivery selection numerically by original token ID before requesting a quote. It uses the same order when checking calldata and receipt identities, without changing displayed inventory or selection order. Receipt IDs are never independently sorted because artwork token IDs and displayed artwork numbers can differ. Backend signing, retries and confirmation preserve request order; arbitrary-order quotes and saved pending transactions remain supported.
 
 Delivery order IDs and claim IDs must be nonzero and can be consumed only once. The deadline must be current and at most ten minutes ahead of the executing block timestamp. Failed actions revert completely, including authorization consumption and payment.
 
@@ -118,6 +124,28 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
+### Delivery ordering and burn-first (2026-10-18)
+
+The burn-first implementation was accepted against `678dd7cf` using an identical expanded 89-scenario harness. All 52 delivery scenarios improve, and none of the 77 measured write calls regress. The original 45 baseline measurements reproduce exactly. Coverage includes 20/31/50 artworks, ascending/reversed/deterministically shuffled selections, sparse/fragmented/initialized ownership, crates, mixed deliveries, and both EOA and contract receivers.
+
+| Operation | Before | Burn-first | Gas saved |
+| --- | ---: | ---: | ---: |
+| 50 artworks, ascending | 2,976,674 | 2,957,308 | 19,366 |
+| 50 crates | 2,040,119 | 2,019,153 | 20,966 |
+| 25 artworks + 25 crates, ascending | 2,500,590 | 2,480,424 | 20,166 |
+
+These are isolated write-transaction snapshots, including intrinsic gas while excluding setup. Each before/after pair uses identical calldata, so its difference isolates the contract change. Sorting provides an additional, order-dependent saving: on the accepted contract, ascending delivery of 50 fresh artworks saves 75,960 snapshot gas versus reverse order and 12,606 versus the recorded shuffle. Crate-only and fully initialized ownership controls show at most 24 gas of signature-byte variation across orderings, rather than a structural execution saving. Sorting runs offchain and changes neither the ABI nor EIP-712 version or fixtures.
+
+Collection runtime decreases from 14,411 to 14,358 bytes; creation bytecode decreases from 15,876 to 15,823 bytes. Actual deployment transactions on the same restored Prague Anvil state cost 3,399,940 gas before and 3,388,448 after, saving 11,492 gas. Renderer runtime and deployment cost remain 7,752 bytes and 1,728,982 gas.
+
+[The comparison record](benchmarks/delivery-order.json) contains all measurements, source/harness hashes, tool versions, deployment receipts and the acceptance decision. Reproduce it from this package with:
+
+```sh
+node scripts/benchmark-delivery.mjs /tmp/111k-delivery-comparison.json
+```
+
+The script compares baseline sources from the recorded commit with the working-tree candidate in temporary projects using the same harness and compiler settings. It starts and stops its own local Anvil node, updates no snapshots, and exits unsuccessfully if any measured write call regresses or no delivery improves. The committed snapshots contain the accepted 89-scenario measurements.
+
 ### Ownership lookup optimization (2026-10-18)
 
 The accepted change resolves ownership once in `getTokenInfo`: sequential artwork lookup uses one bounded backward scan, while spot tokens read their explicit ownership entry. Both supply counters retain their existing storage representation. Compared with `abe1a634`, all 33 write benchmarks improve or stay unchanged. Fresh 20-item artwork lookup saves 5,044 gas (9.55%), fresh 31-item lookup saves 7,893 (9.87%), and fragmented lookup saves 1,159 (7.33%). Delivering 50 artworks saves 115,217 gas (3.73%).
@@ -128,7 +156,7 @@ Counter packing was measured separately on top of the accepted ownership change,
 
 The collection runtime grows from 14,233 to 14,411 bytes (+178) for the accepted change; the rejected packing candidate is 14,459 bytes (+48 more). The renderer remains 7,752 bytes. All are below the 24,576-byte runtime limit.
 
-All 45 measurements use the same harness, Foundry 1.7.1-Homebrew, Solidity 0.8.30, optimizer 200 runs, Prague, and the default non-IR pipeline. These are isolated call execution measurements, excluding setup and signature preparation; they are not complete wallet transaction gas or ETH fees. `Ownership Δ` compares with the baseline; `Packing Δ` compares with the accepted ownership implementation. Negative values save gas.
+All 45 measurements use the same harness, Foundry 1.7.1-Homebrew, Solidity 0.8.30, optimizer 200 runs, Prague, and the default non-IR pipeline. The write snapshots include isolated transaction overhead; view snapshots measure call gas. Setup, signature preparation and any outer wallet execution are excluded. The historical JSON record's execution-only label is inaccurate; its unchanged numerical comparisons remain valid. `Ownership Δ` compares with the baseline; `Packing Δ` compares with the accepted ownership implementation. Negative values save gas.
 
 | Operation | Baseline | Ownership | Ownership Δ | Packing | Packing Δ |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -178,7 +206,7 @@ All 45 measurements use the same harness, Foundry 1.7.1-Homebrew, Solidity 0.8.3
 | unboxWarehouseReceiver | 372,627 | 372,538 | -89 | 372,550 | +12 |
 | warehousesMinted | 2,384 | 2,384 | 0 | 2,387 | +3 |
 
-[The benchmark record](benchmarks/ownership-counters.json) preserves all measurements, percentage changes, exact tool versions, source/harness hashes, and the decision. [The rejected packing patch](benchmarks/counter-packing.patch) reproduces that candidate from the accepted source in a separate checkout; it is evidence only and is not applied. To reproduce the baseline, use `src/Mons111k.sol` from `abe1a634` with the recorded 45-scenario harness. Run the command in the record for each source version with snapshot emission disabled. The committed [gas snapshots](snapshots/Mons111kGasTest.json) contain only the accepted implementation's measurements.
+[The benchmark record](benchmarks/ownership-counters.json) preserves all measurements, percentage changes, exact tool versions, source/harness hashes, and the decision. [The rejected packing patch](benchmarks/counter-packing.patch) reproduces that candidate from the accepted ownership source in a separate checkout; it is evidence only and is not applied. To reproduce the baseline, use `src/Mons111k.sol` from `abe1a634` with the recorded 45-scenario harness. Run the command in the record for each source version with snapshot emission disabled. The committed [gas snapshots](snapshots/Mons111kGasTest.json) track the current accepted implementation; this comparison's historical measurements remain in its benchmark record.
 
 ### Historical comparisons
 
@@ -218,4 +246,4 @@ The historical comparison below records emergency-pause hardening at `8d260f49` 
 | unboxWarehouse | 357,528 | 353,550 | -3,978 | -1.11% |
 | unboxWarehouseReceiver | 376,605 | 372,627 | -3,978 | -1.06% |
 
-That pause-control change grew the collection runtime from 14,080 to 14,345 bytes (+265). The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These call-level snapshots are not complete transaction gas or ETH fee estimates; intrinsic gas, refunds, and wallet-specific execution affect the final transaction cost.
+That pause-control change grew the collection runtime from 14,080 to 14,345 bytes (+265). The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These snapshots are gas measurements, not ETH fee estimates. Isolated writes include transaction overhead; wallet-specific outer execution can add further cost.

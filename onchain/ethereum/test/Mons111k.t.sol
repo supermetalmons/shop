@@ -2,7 +2,7 @@ pragma solidity 0.8.30;
 
 import {Mons111k} from "../src/Mons111k.sol";
 import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
-import {TestSupport} from "./TestSupport.sol";
+import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract RejectingTreasury {
     fallback() external payable {
@@ -543,7 +543,7 @@ contract Mons111kTest is TestSupport {
         _info(2_000_001, 5, 1, address(buyer));
     }
 
-    function testReceiptCallbackCannotTransferAnotherSelectedTokenBeforeItsBurn() public {
+    function testReceiptCallbackCannotTransferAnAlreadyBurnedSelectedToken() public {
         ContractBuyer buyer = new ContractBuyer(token);
         buyer.mint{value: 0.0002 ether}(2);
         buyer.setTransferOnReceipt(111113, bob);
@@ -552,13 +552,81 @@ contract Mons111kTest is TestSupport {
         ids[1] = 111113;
         Mons111k.DeliveryQuote memory quote = _quote(address(buyer), 19, ids);
         bytes memory signature = _deliverySignature(ids, quote);
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(bytes4(keccak256("OwnerQueryForNonexistentToken()")));
         buyer.redeem{value: quote.fee}(ids, quote, signature);
         assertFalse(token.usedDeliveryOrders(19));
         _info(111112, 2, 1, address(buyer));
         _info(111113, 2, 2, address(buyer));
         _info(2_000_001, 0, 0, address(0));
         _info(2_000_002, 0, 0, address(0));
+    }
+
+    function testUnsortedDeliveryBurnLogsPrecedeReceiptMintsAndPreservePairedIdentities() public {
+        _buyCrates(alice, 3);
+        vm.startPrank(alice);
+        token.unboxCrate(111113);
+        token.unboxCrate(111112);
+        vm.stopPrank();
+        uint256[] memory ids = new uint256[](4);
+        ids[0] = 111114;
+        ids[1] = 20;
+        ids[2] = 21;
+        ids[3] = 1;
+        uint256[] memory receipts = new uint256[](4);
+        receipts[0] = 2_000_003;
+        receipts[1] = 1_000_040;
+        receipts[2] = 1_000_001;
+        receipts[3] = 1_000_021;
+        Mons111k.DeliveryQuote memory quote = _quote(alice, 21, ids);
+        assertEq(quote.receiptIdsHash, keccak256(abi.encode(receipts)));
+        bytes memory signature = _deliverySignature(ids, quote);
+        uint256 supply = token.totalSupply();
+        uint256 balance = token.balanceOf(alice);
+        vm.recordLogs();
+        vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, ids.length * 2 + 1);
+        bytes32 transferTopic = keccak256("Transfer(address,address,uint256)");
+        for (uint256 i; i < ids.length; ++i) {
+            Vm.Log memory burned = logs[i];
+            assertEq(burned.emitter, address(token));
+            assertEq(burned.topics.length, 4);
+            assertEq(burned.topics[0], transferTopic);
+            assertEq(burned.topics[1], bytes32(uint256(uint160(alice))));
+            assertEq(burned.topics[2], bytes32(0));
+            assertEq(burned.topics[3], bytes32(ids[i]));
+            assertEq(burned.data.length, 0);
+            Vm.Log memory minted = logs[ids.length + i];
+            assertEq(minted.emitter, address(token));
+            assertEq(minted.topics.length, 4);
+            assertEq(minted.topics[0], transferTopic);
+            assertEq(minted.topics[1], bytes32(0));
+            assertEq(minted.topics[2], bytes32(uint256(uint160(alice))));
+            assertEq(minted.topics[3], bytes32(receipts[i]));
+            assertEq(minted.data.length, 0);
+            _missingToken(ids[i]);
+        }
+        Vm.Log memory delivered = logs[logs.length - 1];
+        assertEq(delivered.emitter, address(token));
+        assertEq(delivered.topics.length, 3);
+        assertEq(delivered.topics[0], keccak256("DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])"));
+        assertEq(delivered.topics[1], bytes32(quote.orderId));
+        assertEq(delivered.topics[2], bytes32(uint256(uint160(alice))));
+        (uint256 fee, uint256[] memory eventIds, uint256[] memory eventReceipts) =
+            abi.decode(delivered.data, (uint256, uint256[], uint256[]));
+        assertEq(fee, quote.fee);
+        assertEq(keccak256(abi.encode(eventIds)), keccak256(abi.encode(ids)));
+        assertEq(keccak256(abi.encode(eventReceipts)), quote.receiptIdsHash);
+        assertEq(token.totalSupply(), supply);
+        assertEq(token.balanceOf(alice), balance);
+        assertTrue(token.usedDeliveryOrders(quote.orderId));
+        _info(2_000_003, 5, 3, alice);
+        _info(1_000_040, 4, 40, alice);
+        _info(1_000_001, 4, 1, alice);
+        _info(1_000_021, 4, 21, alice);
+        _info(2, 1, 22, alice);
+        _info(22, 1, 2, alice);
     }
 
     function testRejectingTreasuryCannotBlockPurchasesAndWithdrawalCanRetry() public {
