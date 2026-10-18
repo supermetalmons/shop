@@ -130,6 +130,54 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
+### Compiler settings (2026-10-18)
+
+The current build keeps Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), and raises `optimizer_runs` from 200 to 1000. Across the same 89 measurements, all 77 write calls and eight reads improve; four reads are unchanged. No measured call regresses. Contract sources, ABI, storage layout and metadata fixtures are unchanged.
+
+The [compiler comparison record](benchmarks/compiler-settings.json) contains all 14 configurations, full gas measurements, source/toolchain hashes, ABI comparisons, code sizes and actual deployment receipts. Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The baseline reproduces all 89 snapshots from `7c2cdec3`; the runner reads that historical snapshot file even after the current snapshots are updated.
+
+| Pipeline | Optimizer runs | Writes improved / regressed | Collection bytes | Renderer bytes | Combined deployment gas change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Legacy | 1 | 0 / 77 | 14,103 | 10,312 | -59,966 |
+| Legacy | 50 | 0 / 77 | 14,103 | 10,321 | -58,118 |
+| Legacy | 200 (baseline) | 0 / 0 | 14,358 | 10,338 | 0 |
+| Legacy | 500 | 72 / 5 | 14,544 | 10,478 | +68,366 |
+| **Legacy** | **1000 (selected)** | **77 / 0** | **15,476** | **11,775** | **+521,749** |
+| Legacy | 1500 | 77 / 0 | 15,554 | 11,775 | +538,613 |
+| Legacy | 2000 | 77 / 0 | 16,309 | 11,975 | +733,286 |
+| Legacy | 5000 | 77 / 0 | 17,056 | 12,265 | +944,226 |
+| Legacy | 10000 | 77 / 0 | 17,351 | 12,415 | +1,038,083 |
+| IR | 1 | 16 / 61 | 12,747 | 11,028 | -185,624 |
+| IR | 50 | 24 / 53 | 12,871 | 11,041 | -155,571 |
+| IR | 200 | 36 / 41 | 12,891 | 11,068 | -146,219 |
+| IR | 1000 | 46 / 31 | 14,331 | 12,670 | +474,290 |
+| IR | 10000 | 58 / 19 | 15,705 | 13,963 | +1,029,907 |
+
+1000 is the lowest tested setting that improves every write without regressing any read. 1500 produces identical call measurements with a larger collection. 2000 and 5000 provide smaller additional savings at higher deployment cost; 5000 leaves only 23 bytes within the renderer's 12 KiB project budget. Legacy/10000 and IR/1000+ exceed that budget, although every configuration remains within Ethereum's deployment size limits. Each tested IR configuration regresses at least one write.
+
+| Operation | Legacy/200 gas | Legacy/1000 gas | Saved |
+| --- | ---: | ---: | ---: |
+| Mint 15 crates | 484,246 | 483,304 | 942 |
+| Mint 15 warehouses | 843,203 | 842,261 | 942 |
+| Unpack warehouse | 353,461 | 352,687 | 774 |
+| Unpack 20-artwork crate | 130,828 | 130,156 | 672 |
+| Unpack 31-artwork crate | 135,234 | 134,243 | 991 |
+| Deliver 50 artworks | 2,957,308 | 2,951,756 | 5,552 |
+| Deliver 50 crates | 2,019,153 | 2,011,951 | 7,202 |
+| Deliver 25 artworks + 25 crates | 2,480,424 | 2,474,047 | 6,377 |
+| Claim 31 artwork receipts | 899,495 | 897,439 | 2,056 |
+
+Collection deployment costs 3,619,372 gas (+230,924); renderer deployment costs 2,579,119 (+290,825). These are one-time deployment costs, separate from the user-call savings. Normal committed gas snapshots also compile the test receiver with the selected settings, saving another 45 gas per callback; the comparison above deliberately excludes that receiver-only saving.
+
+Reproduce the complete matrix from `onchain/ethereum`, without changing configuration, fixtures or snapshots:
+
+```sh
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json
+node scripts/benchmark-compiler.mjs /tmp/111k-ir-settings.json ir 1 50 200 1000 10000
+```
+
+The settings affect future builds and deployments. Existing deployed contracts retain their original bytecode. The earlier optimization records below retain their original compiler settings and measurements.
+
 ### Delivery ordering and burn-first (2026-10-18)
 
 The burn-first implementation was accepted against `678dd7cf` using an identical expanded 89-scenario harness. All 52 delivery scenarios improve, and none of the 77 measured write calls regress. The original 45 baseline measurements reproduce exactly. Coverage includes 20/31/50 artworks, ascending/reversed/deterministically shuffled selections, sparse/fragmented/initialized ownership, crates, mixed deliveries, and both EOA and contract receivers.
