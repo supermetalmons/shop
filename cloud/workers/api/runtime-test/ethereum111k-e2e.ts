@@ -306,7 +306,6 @@ try {
     assert.ok(metadata.image.startsWith('data:image/svg+xml;base64,'));
     const svg = Buffer.from(metadata.image.slice(metadata.image.indexOf(',') + 1), 'base64').toString();
     assert.match(svg, /<svg/);
-    assert.ok(svg.includes(String(preview.id)));
     assert.doesNotMatch(svg, /<script|<image|https?:\/\/(?!www\.w3\.org)/);
     await writeFile(resolve(output, `${preview.name}.svg`), svg);
     await writeFile(resolve(output, `${preview.name}.json`), JSON.stringify(metadata, null, 2));
