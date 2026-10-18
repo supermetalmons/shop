@@ -66,7 +66,7 @@ Re-mined claims awaiting three confirmations show “Confirming” in fulfillmen
 
 ## Sepolia configuration
 
-Funding, faucet choice, remote deployment and secret provisioning are separate decisions. When those are authorized, the API uses these settings:
+The [first Sepolia release](../../releases/111k-sepolia/README.md) records the deployed contracts, public configuration, and verification. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |

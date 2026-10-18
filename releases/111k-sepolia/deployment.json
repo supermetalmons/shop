@@ -1,0 +1,51 @@
+{
+  "chainId": 11155111,
+  "contractAddress": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+  "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "deploymentBlock": 11943221,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "treasury": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "sourceRevision": "972d74785b28e7e3e9d1c329439c94dfe0ea766a",
+  "compiler": {
+    "solidity": "0.8.30",
+    "evmVersion": "prague",
+    "optimizerRuns": 1000,
+    "viaIR": false,
+    "bytecodeHash": "none"
+  },
+  "contracts": {
+    "NFT111KRenderer": {
+      "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "transactionHash": "0xcd160f8a410109afa458f112f7fe2ec6614129b2e8e42c5073d909e972d90f82",
+      "blockNumber": 11943218,
+      "blockHash": "0xddea50932f38d1f2f009710bc4fe8a2bf93ce7ed8f679c72974f876755b6a32b",
+      "gasUsed": "18396617",
+      "effectiveGasPrice": "1000",
+      "runtimeBytes": 11775,
+      "runtimeSha256": "1b2d34d1015ec1ec2baea16fa206ed84d0994a2186094f326e1917b7a723dba4"
+    },
+    "NFT111K": {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "transactionHash": "0x09be411c1c067c350319d3e602c8ec9b51232f090a78395c5fa73aa24ee4b4e0",
+      "blockNumber": 11943221,
+      "blockHash": "0x8a13086b8cba978c58588419e0262709380219790328542a29a2ad51b581268f",
+      "gasUsed": "27828140",
+      "effectiveGasPrice": "1000",
+      "runtimeBytes": 17206,
+      "runtimeSha256": "980f1d8da08a76c1be78f7a77e5c5e212a02e119815bd1137e4f1b12bbb528f0"
+    }
+  },
+  "verifiedAt": "2026-10-18T19:44:48.291Z",
+  "failedAttempts": [
+    {
+      "contract": "NFT111KRenderer",
+      "transactionHash": "0xb6af865ff9b77211e01c1453d3efb891f01fb9d6dccbf59ae30cb2a6c5a14b05",
+      "nonce": 1,
+      "status": "reverted",
+      "gasLimit": "3352776",
+      "reason": "Prague local simulation underestimated Sepolia Glamsterdam code-storage gas; no contract was created."
+    }
+  ],
+  "gasEstimation": "Live Sepolia eth_estimateGas, verified with creation eth_call, then 20% headroom plus 50,000 gas."
+}

@@ -11,8 +11,9 @@ The `/111k_devnet` Ethereum test collection adds ERC721A crates, warehouses,
 onchain SVG artwork, delivery receipts, and physical crate code claims. It uses
 an independent Ethereum wallet session and inventory alongside existing Solana
 holdings. See [111K local setup and configuration](scripts/docs/111k_testnet.md)
-for the local Anvil/API workflow, validation commands, and deferred Sepolia
-deployment settings. The isolated [contract project](onchain/ethereum/README.md)
+for the local Anvil/API workflow, validation commands, and Sepolia deployment
+settings. The [first Sepolia release](releases/111k-sepolia/README.md) records the
+deployed addresses and verification. The isolated [contract project](onchain/ethereum/README.md)
 contains the approved Solidity dependencies, generated ABI, and contract tests.
 
 ## Architecture
