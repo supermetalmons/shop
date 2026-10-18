@@ -1117,7 +1117,7 @@ test('a re-mined successful wrapper without its claim event restores the code an
   } finally { f.close(); }
 });
 
-test('a missing delivery event preserves an order completed through another canonical transaction', async () => {
+test('a missing delivery event suspends fulfillment until another canonical transaction is verified', async () => {
   const f = fixture();
   try {
     const first = await f.confirmed();
@@ -1131,7 +1131,9 @@ test('a missing delivery event preserves an order completed through another cano
     f.state.head = 105;
     f.state.logs = [];
     await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
-    assert.equal(f.order(first.prepared.orderId)!.status, 'ready_to_ship');
+    assert.equal(f.order(first.prepared.orderId)!.status, 'processing');
+    assert.deepEqual(f.order(first.prepared.orderId)!.irlClaims, []);
+    assert.equal(f.quoteRow(first.prepared.orderId).status, 'pending');
     assert.equal(f.quoteRow(first.prepared.orderId).transaction_hash, HASH);
     assert.deepEqual(f.claimRow(), originalClaim);
     f.state.logs = [replacementLog];
@@ -1139,6 +1141,74 @@ test('a missing delivery event preserves an order completed through another cano
     assert.equal(f.quoteRow(first.prepared.orderId).transaction_hash, replacementHash);
     assert.equal(f.order(first.prepared.orderId)!.status, 'ready_to_ship');
     assert.deepEqual(f.claimRow(), originalClaim);
+  } finally { f.close(); }
+});
+
+test('a replacement delivery stays unfulfillable during discovery catch-up and until three confirmations', async () => {
+  const f = fixture();
+  try {
+    const first = await f.confirmed();
+    const originalClaim = f.claimRow();
+    const originalLog = { ...f.deliveryLog(first.prepared), blockNumber: '0x1385', blockHash: blockHash(4997) };
+    f.setReceipt(HASH, [originalLog], 4997);
+    f.state.head = 4999;
+    assert.equal((await f.request(paths.deliveryConfirm,
+      { orderId: first.prepared.orderId, transactionHash: HASH }, first.authentication.token)).body.status, 'confirmed');
+    f.state.canonical.set(4997, blockHash(14997));
+    f.state.receipts.delete(HASH);
+    const replacementHash = blockHash(60_000);
+    const replacementLog = { ...f.deliveryLog(first.prepared, ['111112'], ['2000001'], replacementHash),
+      blockNumber: '0x1388', blockHash: blockHash(5000) };
+    f.setReceipt(replacementHash, [replacementLog], 5000);
+    f.state.logs = [replacementLog];
+    f.state.head = 5000;
+    for (let pass = 0; pass < 3; pass++) {
+      await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+      assert.equal(f.quoteRow(first.prepared.orderId).status, 'pending');
+      assert.equal(f.quoteRow(first.prepared.orderId).transaction_hash, pass < 2 ? HASH : replacementHash);
+      assert.equal(f.quoteRow(first.prepared.orderId).published_at_ms, null);
+      assert.equal(f.order(first.prepared.orderId)!.status, 'processing');
+      assert.deepEqual(f.order(first.prepared.orderId)!.irlClaims, []);
+      assert.deepEqual(f.claimRow(), originalClaim);
+      assert.equal((await f.request(paths.claimPrepare,
+        { receiptId: '2000001', code: originalClaim.code }, first.authentication.token)).response.status, 409);
+    }
+    f.state.head = 5002;
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.quoteRow(first.prepared.orderId).status, 'confirmed');
+    assert.equal(f.order(first.prepared.orderId)!.status, 'ready_to_ship');
+    assert.deepEqual(f.claimRow(), originalClaim);
+    assert.equal((f.order(first.prepared.orderId)!.irlClaims as Record<string, unknown>[])[0].code, originalClaim.code);
+    assert.equal((await f.request(paths.claimPrepare,
+      { receiptId: '2000001', code: originalClaim.code }, first.authentication.token)).response.status, 200);
+  } finally { f.close(); }
+});
+
+test('a delayed replacement-delivery suspension cannot erase its canonical reconfirmation', async () => {
+  const f = fixture();
+  try {
+    const first = await f.confirmed();
+    const originalClaim = f.claimRow();
+    const replacementHash = blockHash(60_000);
+    const replacementLog = { ...f.deliveryLog(first.prepared, ['111112'], ['2000001'], replacementHash),
+      blockNumber: '0x67', blockHash: blockHash(103) };
+    f.state.canonical.set(100, blockHash(10_100));
+    f.state.receipts.delete(HASH);
+    f.setReceipt(replacementHash, [replacementLog], 103);
+    f.state.logs = [];
+    f.state.head = 105;
+    const barrier = pauseCommerceBatch(f, () => f.quoteRow(first.prepared.orderId).status === 'pending');
+    const reconciliation = reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    await barrier.paused;
+    assert.equal((await f.request(paths.deliveryConfirm,
+      { orderId: first.prepared.orderId, transactionHash: replacementHash }, first.authentication.token)).body.status, 'confirmed');
+    barrier.resume();
+    await reconciliation;
+    assert.equal(f.quoteRow(first.prepared.orderId).transaction_hash, replacementHash);
+    assert.equal(f.quoteRow(first.prepared.orderId).status, 'confirmed');
+    assert.equal(f.order(first.prepared.orderId)!.status, 'ready_to_ship');
+    assert.deepEqual(f.claimRow(), originalClaim);
+    assert.equal((f.order(first.prepared.orderId)!.irlClaims as Record<string, unknown>[])[0].code, originalClaim.code);
   } finally { f.close(); }
 });
 
@@ -1236,10 +1306,11 @@ test('deferred deliveries rotate so later orphaned orders can be retired', async
       f.state.head = 205 + attempt * 25;
       f.state.now += 300_000;
       await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
-      assert.equal(f.order(10_000)!.status, 'ready_to_ship');
+      assert.equal(f.order(10_000)!.status, 'processing');
     }
     const { updated_at_ms, ...unchanged } = f.quoteRow(10_000);
-    assert.deepEqual(unchanged, Object.fromEntries(Object.entries(deferred).filter(([key]) => key !== 'updated_at_ms')));
+    assert.deepEqual(unchanged, { ...Object.fromEntries(Object.entries(deferred).filter(([key]) => key !== 'updated_at_ms')),
+      status: 'pending', published_at_ms: null, verified_at_block: null });
     assert.ok(Number(updated_at_ms) > Number(deferred.updated_at_ms));
     assert.equal(f.quoteRow(10_020).transaction_hash, null);
     assert.equal(f.order(10_020)!.status, 'processing');

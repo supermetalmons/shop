@@ -321,6 +321,655 @@ test('crate receipt claims keep polling until three confirmations without anothe
   assert.equal(connected.sent.length, 1);
 });
 
+for (const action of ['delivery', 'claim'] as const) {
+  for (const authenticated of [true, false]) {
+    test(`${action} updates inventory at first inclusion while ${authenticated ? 'signed in' : 'restored without a session'} and finalizes at three confirmations`, async t => {
+      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+      let confirmations = 0;
+      const scope = ethereumInventoryScope(config, owner)!;
+      if (authenticated) savedSession(owner);
+      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, submittedAt: Date.now(), orderId: 42, claimId: hash });
+      writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+      const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+        items: [confirmations === 0 ? original : receipt].filter(item => expected.includes(item.tokenId)),
+        nextCursor: null, observedBlock: 10 + confirmations,
+      }));
+      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+      t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations === 0 ? 'pending' : 'confirmed', confirmations,
+        items: confirmations === 0 ? [] : [receipt], burnedTokenIds: confirmations === 0 ? [] : [original.tokenId] }));
+      const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => ({ status: 'confirmed', confirmations: 3 }));
+      const connected = wallet();
+      const view = harness(connected);
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+      assert.equal(view.result.current.confirmations, 0);
+      assert.equal(inventory.mock.callCount(), 1);
+      confirmations = 1;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+      assert.equal(inventory.mock.callCount(), 1);
+      assert.deepEqual(readEthereumExpected(scope), [receipt.tokenId]);
+      assert.equal(readEthereumPending(scope)?.hash, hash);
+      assert.equal(finalize.mock.callCount(), 0);
+      confirmations = 2;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.equal(view.result.current.confirmations, 2));
+      assert.equal(readEthereumPending(scope)?.hash, hash);
+      assert.equal(finalize.mock.callCount(), 0);
+      confirmations = 3;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      if (!authenticated) {
+        await waitFor(() => assert.equal(view.result.current.confirmations, 3));
+        assert.equal(readEthereumPending(scope)?.hash, hash);
+        assert.equal(finalize.mock.callCount(), 0);
+        savedSession(owner);
+        await act(async () => { assert.equal(await view.result.current.signIn(), true); });
+      }
+      await waitFor(() => assert.equal(view.result.current.pending, null));
+      assert.equal(finalize.mock.callCount(), 1);
+      assert.deepEqual(readEthereumExpected(scope), [receipt.tokenId]);
+      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]);
+      assert.equal(connected.sent.length, 0);
+    });
+  }
+}
+
+for (const action of ['delivery', 'claim'] as const) {
+  test(`${action} restores unindexed originals after reorgs and reloads before applying a re-mined inclusion`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    let included = false;
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+    const inventory = t.mock.method(ethereumApi, 'inventory', async (currentConfig, currentOwner, _cursor, _signal, expected = []) => ({
+      items: [included ? receipt : original].filter(item => item.owner === currentOwner &&
+        item.chainId === currentConfig.chainId && item.contractAddress === currentConfig.contractAddress && expected.includes(item.tokenId)),
+      nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+      items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
+    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim');
+    let view = harness();
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+    assert.equal(inventory.mock.callCount(), 1);
+    included = false;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    assert.equal(view.result.current.confirmations, 0);
+    assert.equal(inventory.mock.callCount(), 2);
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+    assert.equal(view.result.current.confirmations, 1);
+    assert.equal(inventory.mock.callCount(), 2);
+    assert.equal(finalize.mock.callCount(), 0);
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+    view.unmount();
+    view.client.clear();
+    included = false;
+    view = harness();
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    assert.equal(view.result.current.confirmations, 0);
+    const reloadReads = inventory.mock.callCount();
+    assert.ok(reloadReads >= 3);
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+    assert.equal(inventory.mock.callCount(), reloadReads);
+    assert.equal(finalize.mock.callCount(), 0);
+  });
+}
+
+for (const action of ['delivery', 'claim'] as const) {
+  test(`${action} restores an unindexed original when a previously included transaction reverts`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    let state: 'pending' | 'included' | 'reverted' = 'pending';
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: [state === 'included' ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async () => {
+      if (state === 'reverted') throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
+      return { status: state === 'included' ? 'confirmed' : 'pending', confirmations: state === 'included' ? 1 : 0,
+        items: state === 'included' ? [receipt] : [], burnedTokenIds: state === 'included' ? [original.tokenId] : [] };
+    });
+    const view = harness();
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    state = 'included';
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+    state = 'reverted';
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => {
+      assert.equal(view.result.current.pending, null);
+      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+    });
+    assert.match(view.result.current.error ?? '', /reverted/);
+    assert.ok(readEthereumExpected(scope).includes(original.tokenId));
+  });
+}
+
+for (const action of ['delivery', 'claim'] as const) {
+  test(`${action} ignores cached success after a definitive revert without retrying finalization`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    let reverted = false;
+    savedSession(owner);
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+    t.mock.method(ethereumApi, 'confirm', async () => {
+      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
+      return { status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] };
+    });
+    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
+      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
+      return { status: 'pending', confirmations: 2, orderId: 42 };
+    });
+    const view = harness();
+    await waitFor(() => assert.equal(finalize.mock.callCount(), 1));
+    reverted = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(view.result.current.pending, null));
+    assert.equal(finalize.mock.callCount(), 1);
+    assert.match(view.result.current.error ?? '', /reverted/);
+  });
+
+  test(`late ${action} finalization cannot consume recovery after a definitive revert`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    let confirmations = 0;
+    let reverted = false;
+    let finish: (() => void) | undefined;
+    savedSession(owner);
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: [confirmations && !reverted ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async () => {
+      if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
+      return { status: confirmations ? 'confirmed' : 'pending', confirmations, items: confirmations ? [receipt] : [],
+        burnedTokenIds: confirmations ? [original.tokenId] : [] };
+    });
+    const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { status: 'confirmed', confirmations: 3, orderId: 42 };
+    });
+    const view = harness();
+    await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+    confirmations = 3;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => { assert.ok(finish); assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]); });
+    reverted = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await act(async () => { finish!(); });
+    await waitFor(() => {
+      assert.equal(view.result.current.pending, null);
+      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+    });
+    assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
+    assert.equal(finalize.mock.callCount(), 1);
+    assert.match(view.result.current.error ?? '', /reverted/);
+  });
+
+  for (const stage of ['overlay', 'cleanup'] as const) {
+    test(`${action} ${stage} queued behind the submission lock cannot commit cached success after a definitive revert`, async t => {
+      const scope = ethereumInventoryScope(config, owner)!;
+      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+      let confirmations = 0;
+      let reverted = false;
+      let finish: (() => void) | undefined;
+      if (stage === 'cleanup') savedSession(owner);
+      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+      writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+      t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+        items: [confirmations && !reverted ? receipt : original].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+      }));
+      t.mock.method(ethereumApi, 'confirm', async () => {
+        if (reverted) throw new EthereumApiError(409, 'The transaction reverted.', 'transaction-reverted');
+        return { status: confirmations ? 'confirmed' : 'pending', confirmations, items: confirmations ? [receipt] : [],
+          burnedTokenIds: confirmations ? [original.tokenId] : [] };
+      });
+      t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
+        await new Promise<void>(resolve => { finish = resolve; });
+        return { status: 'confirmed', confirmations: 3, orderId: 42 };
+      });
+      const view = harness();
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+      if (stage === 'cleanup') {
+        confirmations = 3;
+        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+        await waitFor(() => assert.ok(finish));
+      }
+      let release: (() => void) | undefined;
+      const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+        assert.ok(lock);
+        await new Promise<void>(resolve => { release = resolve; });
+      });
+      const requests = t.mock.method(navigator.locks, 'request');
+      try {
+        if (stage === 'cleanup') await act(async () => { finish!(); });
+        else {
+          confirmations = 1;
+          await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+        }
+        await waitFor(() => assert.ok(requests.mock.callCount() > 0));
+        reverted = true;
+        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      } finally {
+        await act(async () => { release!(); await competing; });
+      }
+      await waitFor(() => {
+        assert.equal(view.result.current.pending, null);
+        assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+      });
+      assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
+      assert.match(view.result.current.error ?? '', /reverted/);
+    });
+  }
+
+  test(`dismissing an included ${action} preserves its original NFT through a later orphan and unrelated mint`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+      kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    const minted = token(owner, '111113');
+    const nextHash = `0x${'cd'.repeat(32)}`;
+    let included = false;
+    let nextMinted = false;
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: [included ? receipt : original, ...(nextMinted ? [minted] : [])].filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async transactionHash => {
+      if (transactionHash === nextHash) {
+        nextMinted = true;
+        return { status: 'confirmed', confirmations: 1, items: [minted], burnedTokenIds: [] };
+      }
+      return { status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+        items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] };
+    });
+    const connected = wallet();
+    const request = connected.provider!.request;
+    connected.provider!.request = async args => args.method === 'eth_sendTransaction' ? nextHash : request(args);
+    let view = harness(connected);
+    await waitFor(() => { assert.ok(view.result.current.stats.data); assert.equal(view.result.current.items[0]?.tokenId, original.tokenId); });
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(view.result.current.items[0]?.tokenId, receipt.tokenId));
+    await act(async () => { await view.result.current.dismissPending(); });
+    assert.equal(view.result.current.pending, null);
+    included = false;
+    await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
+    await waitFor(() => { assert.equal(view.result.current.pending, null); assert.equal(nextMinted, true); });
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), new Set([original.tokenId, minted.tokenId]));
+    view.unmount();
+    view.client.clear();
+    view = harness(connected);
+    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), new Set([original.tokenId, minted.tokenId])));
+  });
+}
+
+for (const reload of [false, true]) {
+  test(`a reorg of fifty indexed delivery items preserves one hundred unrelated unindexed holdings${reload ? ' across reload' : ''}`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const selected: EthereumInventoryItem[] = Array.from({ length: 50 }, (_, index) => ({
+      ...token(owner, String(index + 1)), kind: 'artwork', displayId: index + 1,
+    }));
+    const untouched: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
+      ...token(owner, String(index + 51)), kind: 'artwork', displayId: index + 51,
+    }));
+    const receipts: EthereumInventoryItem[] = selected.map(item => ({
+      ...token(owner, String(1_000_000 + item.displayId)), kind: 'artwork_receipt', displayId: item.displayId,
+    }));
+    let included = false;
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, untouched.map(item => item.tokenId));
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: [...(included ? [] : selected.slice(0, 30)), ...[...untouched, ...(included ? receipts : [])].filter(item => expected.includes(item.tokenId))],
+      nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+      items: included ? receipts : [], burnedTokenIds: included ? selected.map(item => item.tokenId) : [] }));
+    let view = harness();
+    await waitFor(() => assert.equal(view.result.current.items.length, 130));
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(view.result.current.items.length, 150));
+    if (reload) {
+      view.unmount();
+      view.client.clear();
+      included = false;
+      view = harness();
+    } else {
+      included = false;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    }
+    await waitFor(() => {
+      const ids = new Set(view.result.current.items.map(item => item.tokenId));
+      assert.ok(untouched.every(item => ids.has(item.tokenId)));
+      assert.ok(receipts.every(item => !ids.has(item.tokenId)));
+    });
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+  });
+}
+
+for (const reorg of [false, true]) {
+  test(`a fifty-item delivery preserves one hundred unindexed holdings through ${reorg ? 'reorgs and reloads' : 'ordinary finalization'}`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const originals: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
+      ...token(owner, String(index + 1)), kind: 'artwork', displayId: index + 1,
+    }));
+    const selected = originals.slice(0, 50);
+    const untouched = originals.slice(50);
+    const receipts: EthereumInventoryItem[] = selected.map(item => ({
+      ...token(owner, String(1_000_000 + item.displayId)), kind: 'artwork_receipt', displayId: item.displayId,
+    }));
+    const originalIds = new Set(originals.map(item => item.tokenId));
+    const deliveredIds = new Set([...untouched, ...receipts].map(item => item.tokenId));
+    let confirmations = 0;
+    savedSession(owner);
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+    writeEthereumStorage(`${scope}:expected`, [...originalIds]);
+    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+    t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+      items: (confirmations ? [...untouched, ...receipts] : originals).filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+    }));
+    t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations ? 'confirmed' : 'pending', confirmations,
+      items: confirmations ? receipts : [], burnedTokenIds: confirmations ? selected.map(item => item.tokenId) : [] }));
+    t.mock.method(ethereumApi, 'confirmDelivery', async () => ({ status: 'confirmed', confirmations: 3, orderId: 42 }));
+    let view = harness();
+    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
+    confirmations = 1;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds);
+    assert.equal(view.result.current.items.length, 100);
+    if (reorg) {
+      confirmations = 0;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
+      assert.equal(view.result.current.items.length, 100);
+      assert.equal(readEthereumPending(scope)?.hash, hash);
+      confirmations = 1;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
+      view.unmount();
+      view.client.clear();
+      confirmations = 0;
+      view = harness();
+      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), originalIds));
+      assert.equal(view.result.current.items.length, 100);
+      assert.equal(readEthereumPending(scope)?.hash, hash);
+      confirmations = 1;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds));
+    }
+    confirmations = 3;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(view.result.current.pending, null));
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+    assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), deliveredIds);
+    assert.equal(view.result.current.items.length, 100);
+  });
+}
+
+test('transient confirmation errors do not replay an inclusion over newer receipt ownership', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const original = token();
+  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
+  let included = false;
+  let transferred = false;
+  let failure = false;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+  const inventory = t.mock.method(ethereumApi, 'inventory', async () => ({
+    items: transferred ? [] : included ? [receipt] : [original], nextCursor: null, observedBlock: 10,
+  }));
+  t.mock.method(ethereumApi, 'confirm', async () => {
+    if (failure) throw new EthereumApiError(503, 'Temporary RPC failure');
+    return { status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+      items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] };
+  });
+  const view = harness();
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+  included = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+  transferred = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items, []));
+  failure = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.error, 'Temporary RPC failure'));
+  assert.deepEqual(view.result.current.items, []);
+  failure = false;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.error, null));
+  assert.deepEqual(view.result.current.items, []);
+  assert.equal(inventory.mock.callCount(), 2);
+  assert.equal(readEthereumPending(scope)?.hash, hash);
+});
+
+test('first-inclusion work queued behind the submission lock cannot apply an orphaned receipt', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const original = token();
+  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
+  let included = false;
+  let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
+  let inventorySignal: AbortSignal | undefined;
+  let reads = 0;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+  writeEthereumStorage(`${scope}:expected`, [original.tokenId]);
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
+    if (++reads === 1) return { items: [original], nextCursor: null, observedBlock: 10 };
+    inventorySignal = signal;
+    return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
+  });
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+    items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
+  const view = harness();
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+  let release: (() => void) | undefined;
+  const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+    assert.ok(lock);
+    await new Promise<void>(resolve => { release = resolve; });
+  });
+  const requests = t.mock.method(navigator.locks, 'request');
+  try {
+    included = true;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => assert.equal(requests.mock.callCount(), 1));
+    included = false;
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+    await waitFor(() => { assert.equal(view.result.current.confirmations, 0); assert.ok(finishInventory); });
+  } finally {
+    await act(async () => { release!(); await competing; });
+  }
+  assert.equal(inventorySignal?.aborted, false);
+  await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+  assert.deepEqual(readEthereumExpected(scope), [original.tokenId]);
+  assert.equal(readEthereumPending(scope)?.hash, hash);
+});
+
+for (const action of ['delivery', 'claim'] as const) {
+  for (const outcome of ['confirmed', 'pending', 'error'] as const) {
+    test(`late ${action} finalization returning ${outcome} cannot clear a re-mined transaction that has only one confirmation`, async t => {
+      const scope = ethereumInventoryScope(config, owner)!;
+      const original: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '111112' : '2000001'),
+        kind: action === 'delivery' ? 'crate' : 'crate_receipt' };
+      const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+        kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+      let confirmations = 0;
+      let finish: (() => void) | undefined;
+      savedSession(owner);
+      writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+      t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
+      t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+      t.mock.method(ethereumApi, 'inventory', async () => ({
+        items: confirmations ? [receipt] : [original], nextCursor: null, observedBlock: 10,
+      }));
+      t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmations ? 'confirmed' : 'pending', confirmations,
+        items: confirmations ? [receipt] : [], burnedTokenIds: confirmations ? [original.tokenId] : [] }));
+      const finalize = t.mock.method(ethereumApi, action === 'delivery' ? 'confirmDelivery' : 'confirmClaim', async () => {
+        await new Promise<void>(resolve => { finish = resolve; });
+        if (outcome === 'error') throw new EthereumApiError(503, 'Finalization temporarily unavailable');
+        return { status: outcome, confirmations: outcome === 'confirmed' ? 3 : 0 };
+      });
+      const view = harness();
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+      confirmations = 1;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+      confirmations = 3;
+      await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+      await waitFor(() => assert.ok(finish));
+      try {
+        confirmations = 0;
+        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+        await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+        confirmations = 1;
+        await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+        await waitFor(() => assert.equal(view.result.current.confirmations, 1));
+      } finally {
+        await act(async () => { finish!(); });
+      }
+      await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+      assert.equal(view.result.current.pending?.hash, hash);
+      assert.equal(readEthereumPending(scope)?.hash, hash);
+      assert.equal(finalize.mock.callCount(), 1);
+    });
+  }
+}
+
+for (const action of ['delivery', 'claim'] as const) {
+  test(`reloading a pending ${action} restarts an interrupted inventory load`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original = token(owner, action === 'delivery' ? '111112' : '2000001');
+    const receipt: EthereumInventoryItem = { ...token(owner, action === 'delivery' ? '2000001' : '1000001'),
+      kind: action === 'delivery' ? 'crate_receipt' : 'artwork_receipt' };
+    const unrelated = token(owner, '111113');
+    let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
+    let inventorySignal: AbortSignal | undefined;
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action, orderId: 42, claimId: hash, submittedAt: Date.now() });
+    const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal, expected = []) => {
+      if (!finishInventory) {
+        inventorySignal = signal;
+        return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
+      }
+      assert.ok(expected.includes(receipt.tokenId));
+      return { items: [receipt, unrelated], nextCursor: 'next-page', observedBlock: 11 };
+    });
+    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
+      items: [receipt], burnedTokenIds: [original.tokenId] }));
+    const view = harness();
+    await waitFor(() => {
+      assert.equal(inventory.mock.callCount(), 2);
+      assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId, unrelated.tokenId]);
+      assert.equal(view.result.current.inventory.hasNextPage, true);
+    });
+    assert.equal(inventorySignal?.aborted, true);
+    await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
+    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId, unrelated.tokenId]);
+    assert.equal(view.result.current.inventory.hasNextPage, true);
+    assert.equal(readEthereumPending(scope)?.hash, hash);
+    assert.equal(view.result.current.session, null);
+  });
+}
+
+test('first-inclusion receipts survive an older inventory request completing afterward', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const original = token();
+  const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+  let included = false;
+  let finishInventory: ((response: EthereumInventoryResponse) => void) | undefined;
+  let inventorySignal: AbortSignal | undefined;
+  let reads = 0;
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, signal) => {
+    if (++reads === 1) return { items: [original], nextCursor: null, observedBlock: 10 };
+    if (reads > 2) return { items: [receipt], nextCursor: null, observedBlock: 11 };
+    inventorySignal = signal;
+    return new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
+  });
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+    items: included ? [receipt] : [], burnedTokenIds: included ? [original.tokenId] : [] }));
+  const view = harness();
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
+  act(() => { void view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+  await waitFor(() => assert.ok(finishInventory));
+  included = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]));
+  assert.equal(inventorySignal?.aborted, true);
+  await act(async () => { finishInventory!({ items: [original], nextCursor: null, observedBlock: 10 }); });
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId), [receipt.tokenId]);
+  assert.equal(readEthereumPending(scope)?.hash, hash);
+});
+
+for (const newer of ['reservation', 'transaction', 'cleared'] as const) {
+  test(`first-inclusion inventory rejects ${newer} pending state after waiting for the submission lock`, async t => {
+    const scope = ethereumInventoryScope(config, owner)!;
+    const original = token();
+    const receipt: EthereumInventoryItem = { ...token(owner, '2000001'), kind: 'crate_receipt' };
+    writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: 1 });
+    t.mock.method(ethereumApi, 'inventory', async () => ({ items: [original], nextCursor: null, observedBlock: 10 }));
+    let finish: ((result: EthereumTransactionConfirmResponse) => void) | undefined;
+    t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>(resolve => { finish = resolve; }));
+    const view = harness();
+    await waitFor(() => { assert.ok(finish); assert.equal(view.result.current.items.length, 1); });
+    let release: (() => void) | undefined;
+    const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+      assert.ok(lock);
+      await new Promise<void>(resolve => { release = resolve; });
+    });
+    const requests = t.mock.method(navigator.locks, 'request');
+    await act(async () => { finish!({ status: 'confirmed', confirmations: 1, items: [receipt], burnedTokenIds: [original.tokenId] }); });
+    await waitFor(() => assert.equal(requests.mock.callCount(), 1));
+    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+    const key = `mons.ethereum111k:${scope}:pending`;
+    const replacement = newer === 'cleared' ? null : JSON.stringify({ scope, action: 'mint', submittedAt: 2, nonce: '0x8',
+      hash: `0x${(newer === 'reservation' ? '00' : 'cd').repeat(32)}`, ...(newer === 'reservation' ? { awaitingHash: true } : {}) });
+    if (replacement === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, replacement);
+    await act(async () => { release!(); await competing; });
+    assert.equal(window.localStorage.getItem(key), replacement);
+    assert.deepEqual(readEthereumExpected(scope), []);
+    assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
+  });
+}
+
 test('a wallet cancellation replacement recovers after reload and is acknowledged only after three confirmations', async t => {
   speedUpConfirmationPolls(t);
   const scope = ethereumInventoryScope(config, owner)!;
@@ -544,6 +1193,8 @@ for (const change of ['account', 'provider', 'unmount'] as const) {
 
 for (const blockedStorage of [false, true]) {
   test(`a late finalization 401 preserves a fresh session for the same account${blockedStorage ? ' with blocked session storage' : ''}`, async t => {
+    let now = Date.now();
+    t.mock.method(Date, 'now', () => now);
     const previousSession = savedSession(owner);
     const freshSession = { ...previousSession, token: 'fresh-session' };
     const scope = ethereumInventoryScope(config, owner)!;
@@ -576,6 +1227,7 @@ for (const blockedStorage of [false, true]) {
     assert.equal(view.result.current.session?.token, freshSession.token);
     assert.equal(view.result.current.error, null);
     if (!blockedStorage) assert.equal(readEthereumSession(scope, config, owner)?.token, freshSession.token);
+    now++;
     act(() => view.result.current.refresh());
     await waitFor(() => assert.equal(view.result.current.pending, null));
     assert.deepEqual(finalizedTokens, [previousSession.token, freshSession.token]);

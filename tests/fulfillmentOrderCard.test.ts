@@ -107,6 +107,26 @@ test('Ethereum re-mined claims show confirming and keep codes unavailable until 
   assert.ok(view.getByRole('button', { name: 'Download code PNG' }));
 });
 
+test('Ethereum fulfillment links valid Sepolia transactions and omits local or malformed references', () => {
+  const hash = `0x${'ab'.repeat(32)}`;
+  const ethereumOrder = order({ dropId: '111k_devnet', source: 'ethereum',
+    ethereumTransaction: { chainId: 11155111, hash } });
+  const view = render(createElement(FulfillmentOrderCard, props({ order: ethereumOrder, drop: undefined })));
+  const link = view.getByRole('link', { name: 'View delivery transaction' });
+  assert.equal(link.getAttribute('href'), `https://sepolia.etherscan.io/tx/${hash}`);
+  assert.equal(link.getAttribute('target'), '_blank');
+  assert.equal(link.getAttribute('rel'), 'noopener noreferrer');
+  const unavailable: FulfillmentOrder['ethereumTransaction'][] = [
+    { chainId: 31337, hash }, { chainId: 11155111, hash: 'javascript:alert(1)' }, undefined,
+  ];
+  for (const ethereumTransaction of unavailable) {
+    view.rerender(createElement(FulfillmentOrderCard, props({
+      order: { ...ethereumOrder, ethereumTransaction }, drop: undefined,
+    })));
+    assert.equal(view.queryByRole('link', { name: 'View delivery transaction' }), null);
+  }
+});
+
 test('grouped orders show shared contact once while retaining each order’s own actions', (t) => {
   const onEditAddress = t.mock.fn<Props['onEditAddress']>();
   const onEditStatus = t.mock.fn<Props['onEditStatus']>();

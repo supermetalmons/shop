@@ -15,6 +15,7 @@ export type EthereumPendingTransaction = {
   actionBeforeCancellation?: Exclude<EthereumAction, 'cancel'>;
 };
 export type EthereumSubmission = Omit<EthereumPendingTransaction, 'hash'>;
+type EthereumInventoryRecovery = { hash: string; sourceIds: string[]; mintedIds: string[] };
 
 export type EthereumInventoryView = InventoryItem & { ethereum: EthereumInventoryItem };
 
@@ -189,7 +190,57 @@ export function readEthereumSubmission(scope: string): EthereumSubmission | null
 
 export function readEthereumExpected(scope: string): string[] {
   const value = readEthereumStorage<unknown>(`${scope}:expected`);
-  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && id.length <= 78 && normalizeEthereumTokenId(id) === id))].slice(-100) : [];
+  return expectedIds(Array.isArray(value) ? value : value && typeof value === 'object' && 'ids' in value ? value.ids : null, 100);
+}
+
+function expectedIds(value: unknown, limit: number): string[] {
+  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === 'string' && id.length <= 78 && normalizeEthereumTokenId(id) === id))].slice(-limit) : [];
+}
+
+function readEthereumInventoryRecovery(scope: string): EthereumInventoryRecovery | null {
+  const value = readEthereumStorage<{ recovery?: EthereumInventoryRecovery }>(`${scope}:expected`);
+  const recovery = value?.recovery;
+  return recovery && typeof recovery.hash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(recovery.hash)
+    ? { hash: recovery.hash, sourceIds: expectedIds(recovery.sourceIds, 100), mintedIds: expectedIds(recovery.mintedIds, 50) } : null;
+}
+
+function readEthereumRetainedIds(scope: string): string[] {
+  return expectedIds(readEthereumStorage<{ retainedIds?: unknown }>(`${scope}:expected`)?.retainedIds, 100);
+}
+
+export function readEthereumInventoryExpected(scope: string): string[] {
+  const recoveryIds = [...new Set([...readEthereumRetainedIds(scope), ...(readEthereumInventoryRecovery(scope)?.sourceIds ?? [])])].slice(-100);
+  return [...new Set([...readEthereumExpected(scope), ...recoveryIds])];
+}
+
+export function writeEthereumExpected(scope: string, ids: string[], recovery = readEthereumInventoryRecovery(scope), retainedIds = readEthereumRetainedIds(scope)): void {
+  const normalized = expectedIds(ids, 100);
+  const previous = readEthereumInventoryRecovery(scope);
+  if (recovery && previous && previous.hash !== recovery.hash) retainedIds.push(...previous.sourceIds);
+  if (recovery && previous?.hash === recovery.hash) recovery = {
+    ...recovery, sourceIds: [...new Set([...previous.sourceIds, ...recovery.sourceIds])].slice(-100),
+  };
+  retainedIds = [...new Set([...retainedIds, ...(recovery?.sourceIds ?? [])])].slice(-100)
+    .filter(id => !recovery?.sourceIds.includes(id));
+  writeEthereumStorage(`${scope}:expected`, recovery || retainedIds.length
+    ? { ids: normalized, ...(recovery ? { recovery } : {}), ...(retainedIds.length ? { retainedIds } : {}) } : normalized);
+}
+
+export function clearEthereumInventoryRecovery(scope: string, hash: string): void {
+  if (readEthereumInventoryRecovery(scope)?.hash === hash) writeEthereumExpected(scope, readEthereumExpected(scope), null);
+}
+
+export function restoreEthereumExpected(scope: string, hash: string): void {
+  const recovery = readEthereumInventoryRecovery(scope);
+  if (!recovery || recovery.hash !== hash) return;
+  const minted = new Set(recovery.mintedIds);
+  const restored = [...new Set([...readEthereumExpected(scope).filter(id => !minted.has(id)), ...recovery.sourceIds])];
+  writeEthereumExpected(scope, restored, null, [...readEthereumRetainedIds(scope), ...restored.slice(0, -100)]);
+}
+
+export function replaceEthereumInventoryRecovery(scope: string, previousHash: string, hash: string): void {
+  const recovery = readEthereumInventoryRecovery(scope);
+  if (recovery?.hash === previousHash) writeEthereumExpected(scope, readEthereumExpected(scope), { ...recovery, hash });
 }
 
 export function readEthereumSession(scope: string, config: Ethereum111kConfig, owner: string): EthereumSession | null {

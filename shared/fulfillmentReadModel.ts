@@ -125,6 +125,11 @@ export function fulfillmentOrderFromRecord(
   const deliveryId = positiveInteger(order.deliveryId ?? documentId);
   if (deliveryId === null) return null;
   const source = optionalString(order.source);
+  const ethereumTransaction: FulfillmentOrder['ethereumTransaction'] = source === 'ethereum' &&
+    (order.chainId === 11155111 || order.chainId === 31337) &&
+    typeof order.deliverySignature === 'string' && /^0x[0-9a-fA-F]{64}$/.test(order.deliverySignature)
+    ? { chainId: order.chainId, hash: order.deliverySignature.toLowerCase() }
+    : undefined;
   const isAdminIrlRedeem = source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
   const addressSnapshot = record(order.addressSnapshot) || {};
   const encrypted = optionalString(addressSnapshot.encrypted);
@@ -235,6 +240,7 @@ export function fulfillmentOrderFromRecord(
     deliveryId,
     owner: optionalString(order.owner) || '',
     source,
+    ...(ethereumTransaction ? { ethereumTransaction } : {}),
     ...(source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE && options.stripeChargeback === true
       ? { stripeChargeback: true }
       : {}),

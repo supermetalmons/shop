@@ -109,6 +109,46 @@ test('Mi Note fulfillment is visible to the designated mainnet operators without
   }
 });
 
+test('fulfillment exposes validated Ethereum transaction references through the staff route without raw order fields', async context => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const hash = `0x${'ab'.repeat(32)}`;
+  const variations = [
+    { source: 'ethereum', chainId: 11155111, deliverySignature: `0x${'AB'.repeat(32)}` },
+    { source: 'ethereum', chainId: 31337, deliverySignature: hash },
+    { source: 'ethereum', chainId: 1, deliverySignature: hash },
+    { source: 'ethereum', chainId: 11155111, deliverySignature: 'invalid-transaction-hash' },
+    { source: 'onchain', chainId: 11155111, deliverySignature: hash },
+  ];
+  variations.forEach((variation, index) => seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('111k_devnet', String(index + 1)),
+    data: {
+      dropId: '111k_devnet', deliveryId: index + 1, owner: OWNER, status: 'ready_to_ship', items: [],
+      internalDeliveryAuthorization: 'private-authorization-must-not-leak',
+      ...variation,
+    },
+    processedAt: { seconds: Math.floor(NOW_MS / 1000), nanos: index },
+  }));
+  const result = await handleStaffReadRequest(
+    tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: '111k_devnet' }),
+    { COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: '' },
+    FULFILLMENT_ORDERS_PATH,
+    {},
+    d1StaffDependencies(async () => assert.fail('Unexpected provider request'), {
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  const text = await result.response.text();
+  const payload = JSON.parse(text) as { orders: Array<{ deliveryId: number; ethereumTransaction?: { chainId: number; hash: string } }> };
+  const orders = [...payload.orders].sort((left, right) => left.deliveryId - right.deliveryId);
+  assert.equal(orders.length, variations.length);
+  assert.deepEqual(orders.map(order => order.ethereumTransaction), [
+    { chainId: 11155111, hash }, { chainId: 31337, hash }, undefined, undefined, undefined,
+  ]);
+  assert.doesNotMatch(text, /deliverySignature|internalDeliveryAuthorization|private-authorization-must-not-leak/);
+});
+
 test('fulfillment adds only matching dispute history without exposing Stripe IDs or changing orders', async () => {
   const harness = createCommerceD1Harness();
   await recordStripeChargeback(harness.db, {

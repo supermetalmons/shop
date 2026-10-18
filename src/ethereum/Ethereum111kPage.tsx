@@ -11,7 +11,7 @@ import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import type { InventoryItem } from '../types';
 import { ethereumApi } from './api';
 import { ethereumContainerPreview } from './preview';
-import { ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumStorage } from './state';
+import { ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 
 export type Ethereum111kPageProps = {
@@ -100,7 +100,7 @@ export default function Ethereum111kPage({
     if (!model.scope || !claimReceiptId || !claimLinkKey || claimLinkHandled === claimLinkKey) return;
     const expected = readEthereumExpected(model.scope);
     if (expected.includes(claimReceiptId)) return;
-    writeEthereumStorage(`${model.scope}:expected`, [...expected, claimReceiptId].slice(-100));
+    writeEthereumExpected(model.scope, [...expected, claimReceiptId].slice(-100));
     model.refresh();
   }, [model.scope, claimReceiptId, claimLinkKey, claimLinkHandled, model.refresh]);
   useEffect(() => {

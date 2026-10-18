@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EthereumItemKind } from '../../shared/ethereum/protocol';
+import { ethereumExplorerTransaction, resolveEthereum111kConfig } from '../../shared/ethereum/config';
 import type { FulfillmentOrder } from '../types';
 import { monsApiOrigin } from '../lib/monsApiOrigin';
 import { fulfillmentOrderKey } from './orders';
@@ -57,11 +58,16 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
 }) {
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
   const canShowAddress = showFullAddress && order.address.full && order.address.full !== '***';
+  const transaction = order.ethereumTransaction;
+  const transactionLink = transaction?.chainId === 11155111
+    ? ethereumExplorerTransaction(resolveEthereum111kConfig({ chainId: transaction.chainId }), transaction.hash)
+    : null;
   return <div className="fulfillment-order-section">
     <div className="card__head">
       <div>
         <div className="card__title">Order {order.deliveryId}</div>
         <div className="muted small">111k · Ethereum test order</div>
+        {transactionLink ? <a className="muted small" href={transactionLink} target="_blank" rel="noopener noreferrer">View delivery transaction</a> : null}
         {showContactInfo && order.address.full !== '***' && order.address.email ? <div className="muted small">{order.address.email}</div> : null}
       </div>
       <button type="button" className="secondary-light" aria-label="Edit status" onClick={() => onEditStatus(fulfillmentOrderKey(order))}>

@@ -138,6 +138,63 @@ test('Ethereum inventory isolates chain, contract and owner, without changing NF
   await assert.rejects(ethereumApi.inventory(config, owner, null));
 });
 
+test('Ethereum inventory reads all live and rollback IDs in two parallel bounded requests', async t => {
+  const liveIds = Array.from({ length: 100 }, (_, index) => String(index + 1));
+  const rollbackIds = Array.from({ length: 100 }, (_, index) => String(index + 1001));
+  const controller = new AbortController();
+  const requests: Array<{ url: URL; signal: AbortSignal; resolve: (response: Response) => void }> = [];
+  t.mock.method(globalThis, 'fetch', (input, init) => new Promise<Response>(resolve => {
+    requests.push({ url: new URL(String(input)), signal: init!.signal!, resolve });
+  }));
+  const response = ethereumApi.inventory(config, owner, null, controller.signal,
+    [...liveIds, ...rollbackIds, liveIds[0], rollbackIds[0]]);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(entry => entry.url.searchParams.get('expectedTokenIds')?.split(',')), [liveIds, rollbackIds]);
+  for (const entry of requests) {
+    assert.equal(entry.url.pathname, '/ethereum/111k/inventory');
+    assert.equal(entry.url.searchParams.get('owner'), owner);
+    assert.equal(entry.url.searchParams.has('cursor'), false);
+  }
+  const indexed = item('9999');
+  requests[1].resolve(Response.json({ items: [indexed, ...rollbackIds.map(id => item(id))], nextCursor: 'second-cursor', observedBlock: 21 }));
+  requests[0].resolve(Response.json({ items: [indexed, ...liveIds.map(id => item(id))], nextCursor: 'first-cursor', observedBlock: 20 }));
+  const result = await response;
+  assert.equal(result.items.length, 201);
+  assert.deepEqual(new Set(result.items.map(entry => entry.tokenId)), new Set(['9999', ...liveIds, ...rollbackIds]));
+  assert.equal(result.nextCursor, 'first-cursor');
+  assert.equal(result.observedBlock, 20);
+  controller.abort();
+  assert.ok(requests.every(entry => entry.signal.aborted));
+});
+
+test('Ethereum inventory cursor pages use one request without repeating expected IDs', async t => {
+  const requests: URL[] = [];
+  t.mock.method(globalThis, 'fetch', async input => {
+    requests.push(new URL(String(input)));
+    return Response.json({ items: [item('151')], nextCursor: null, observedBlock: 22 });
+  });
+  const result = await ethereumApi.inventory(config, owner, 'page-two', undefined,
+    Array.from({ length: 200 }, (_, index) => String(index + 1)));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].searchParams.get('cursor'), 'page-two');
+  assert.equal(requests[0].searchParams.has('expectedTokenIds'), false);
+  assert.deepEqual(result.items.map(entry => entry.tokenId), ['151']);
+  assert.equal(result.nextCursor, null);
+});
+
+test('Ethereum inventory validates supplemental ownership and rejects excess IDs without truncation', async t => {
+  const ids = Array.from({ length: 201 }, (_, index) => String(index + 1));
+  const fetch = t.mock.method(globalThis, 'fetch', async input => {
+    const expected = new URL(String(input)).searchParams.get('expectedTokenIds')!.split(',');
+    return Response.json({ items: [{ ...item(expected[0]), owner: expected[0] === '101' ? other : owner }],
+      nextCursor: null, observedBlock: 20 });
+  });
+  await assert.rejects(ethereumApi.inventory(config, owner, null, undefined, ids), /Too many expected/);
+  assert.equal(fetch.mock.callCount(), 0);
+  await assert.rejects(ethereumApi.inventory(config, owner, null, undefined, ids.slice(0, 200)), /invalid response/);
+  assert.equal(fetch.mock.callCount(), 2);
+});
+
 test('Ethereum selection caps delivery at 50 and keeps warehouses separate from shippable items', () => {
   const rows = Array.from({ length: 51 }, (_, index) => item(String(index + 1)));
   const warehouse = item('116667', 'warehouse');

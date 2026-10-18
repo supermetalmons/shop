@@ -92,13 +92,23 @@ export const ethereumApi = {
     return value as EthereumStats;
   },
   async inventory(config: Ethereum111kConfig, owner: string, cursor: string | null, signal?: AbortSignal, expectedTokenIds: string[] = []): Promise<EthereumInventoryResponse> {
-    const params = new URLSearchParams({ owner });
-    if (cursor) params.set('cursor', cursor);
-    else if (expectedTokenIds.length) params.set('expectedTokenIds', expectedTokenIds.slice(-100).join(','));
-    const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal });
-    if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
-      (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
-    return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
+    const expected = cursor ? [] : [...new Set(expectedTokenIds)];
+    if (expected.length > 200) throw new Error('Too many expected Ethereum token IDs.');
+    const batches = expected.length > 100 ? [expected.slice(0, 100), expected.slice(100)] : [expected];
+    const pages = await Promise.all(batches.map(async ids => {
+      const params = new URLSearchParams({ owner });
+      if (cursor) params.set('cursor', cursor);
+      else if (ids.length) params.set('expectedTokenIds', ids.join(','));
+      const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal });
+      if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
+        (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
+      return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
+    }));
+    return {
+      items: [...new Map(pages.flatMap(page => page.items).map(item => [item.id, item])).values()],
+      nextCursor: pages[0].nextCursor,
+      observedBlock: Math.min(...pages.map(page => page.observedBlock)),
+    };
   },
   async challenge(address: string, config: Ethereum111kConfig, signal?: AbortSignal): Promise<EthereumAuthChallenge> {
     const value = await request(ETHEREUM_API_PATHS.authChallenge, { body: { dropId: config.dropId, address, chainId: config.chainId }, signal });

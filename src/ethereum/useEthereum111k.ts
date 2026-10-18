@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession } from '../../shared/ethereum/api';
+import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
 import { ETHEREUM_FUNCTIONS, ethereumHexQuantity } from '../../shared/ethereum/protocol';
@@ -8,8 +8,8 @@ import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
 import {
-  clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumOperation, readEthereumPending,
-  readEthereumSession, readEthereumSubmission, reserveEthereumSubmission, runEthereumOperation, saveEthereumSession, subscribeEthereumOperation, subscribeEthereumPending, withEthereumSubmissionLock, writeEthereumStorage, type EthereumAction, type EthereumPendingTransaction, type EthereumSubmission,
+  clearEthereumInventoryRecovery, clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumInventoryExpected, readEthereumOperation, readEthereumPending,
+  readEthereumSession, readEthereumSubmission, replaceEthereumInventoryRecovery, reserveEthereumSubmission, restoreEthereumExpected, runEthereumOperation, saveEthereumSession, subscribeEthereumOperation, subscribeEthereumPending, withEthereumSubmissionLock, writeEthereumExpected, writeEthereumStorage, type EthereumAction, type EthereumPendingTransaction, type EthereumSubmission,
 } from './state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from './wallet';
 import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
@@ -106,7 +106,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   const inventory = useInfiniteQuery({
     queryKey: ethereumInventoryQueryKey(scope), enabled: Boolean(scope && config.enabled),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) => ethereumApi.inventory(config, owner!, pageParam, signal, readEthereumExpected(scope!)),
+    queryFn: ({ pageParam, signal }) => ethereumApi.inventory(config, owner!, pageParam, signal, readEthereumInventoryExpected(scope!)),
     getNextPageParam: page => page.nextCursor,
     retry: false, refetchInterval: 30_000,
   });
@@ -127,38 +127,92 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   });
   const confirmationErrorKey = confirmation.error ? `${scope}:${pending?.hash}:${confirmation.errorUpdatedAt}` : null;
   const finishing = useRef(new Set<string>());
+  const reverting = useRef(new Set<string>());
+  const inclusions = useRef(new Map<string, { applied: boolean }>());
   useEffect(() => {
     const result = confirmation.data;
-    if (!pending || !scope || !owner || result?.status !== 'confirmed' || result.confirmations < requiredConfirmations || finishing.current.has(pending.hash)) return;
-    if ((pending.action === 'delivery' || pending.action === 'claim') && !session) return;
+    if (!pending || !scope || !owner) return;
+    const transactionKey = `${scope}:${pending.hash}`;
+    if (confirmation.isSuccess && result?.status === 'pending' && result.confirmations === 0) {
+      if (inclusions.current.delete(transactionKey)) {
+        void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+      }
+      return;
+    }
+    if (!confirmation.isSuccess || result?.status !== 'confirmed' || result.confirmations < 1 || finishing.current.has(pending.hash)) return;
+    const inclusion = inclusions.current.get(transactionKey) ?? { applied: false };
+    inclusions.current.set(transactionKey, inclusion);
+    const confirmationKey = ['ethereum111k', 'transaction', scope, pending.hash];
+    const isCurrentInclusion = (minimumConfirmations = 1, allowCleared = false) => {
+      const latest = queryClient.getQueryState<EthereumTransactionConfirmResponse>(confirmationKey);
+      const current = readEthereumPending(scope);
+      return inclusions.current.get(transactionKey) === inclusion && latest?.status === 'success' && latest.data?.status === 'confirmed' && latest.data.confirmations >= minimumConfirmations &&
+        !readEthereumSubmission(scope) && (current?.hash === pending.hash || allowCleared && !current);
+    };
+    const release = () => {
+      finishing.current.delete(pending.hash);
+      if (inclusions.current.get(transactionKey) !== inclusion) void queryClient.invalidateQueries({ queryKey: confirmationKey });
+    };
+    const requiresFinalization = pending.action === 'delivery' || pending.action === 'claim';
+    const readyToFinish = result.confirmations >= requiredConfirmations && (!requiresFinalization || Boolean(session));
+    if (!readyToFinish && (!requiresFinalization || inclusion.applied)) return;
     finishing.current.add(pending.hash);
+    const updateExpected = (retainSources: boolean) => {
+      const mintedIds = result.items.map(item => item.tokenId);
+      const changed = new Set([...result.burnedTokenIds, ...mintedIds]);
+      const previous = readEthereumExpected(scope);
+      const expected = [...new Set([...previous.filter(id => !changed.has(id)), ...mintedIds])].slice(-100);
+      if (retainSources) writeEthereumExpected(scope, expected,
+        { hash: pending.hash, sourceIds: [...new Set([...previous.filter(id => !expected.includes(id)), ...result.burnedTokenIds])], mintedIds });
+      else {
+        writeEthereumExpected(scope, expected);
+        clearEthereumInventoryRecovery(scope, pending.hash);
+      }
+    };
+    const updateInventory = () => {
+      const burned = new Set(result.burnedTokenIds);
+      updateExpected(requiresFinalization);
+      queryClient.setQueryData<InfiniteData<EthereumInventoryResponse>>(ethereumInventoryQueryKey(scope), previous => {
+        if (!previous) return { pageParams: [null], pages: [{ items: result.items, nextCursor: null, observedBlock: 0 }] };
+        const added = new Set(result.items.map(item => item.id));
+        return { ...previous, pages: previous.pages.map((page, index) => ({ ...page,
+          items: [...(index === 0 ? result.items : []), ...page.items.filter(item => !burned.has(item.tokenId) && !added.has(item.id))],
+        })) };
+      });
+      inclusion.applied = true;
+    };
     void (async () => {
       try {
+        if (requiresFinalization && !inclusion.applied) {
+          const updated = await withEthereumSubmissionLock(scope, async () => {
+            if (!isCurrentInclusion()) return false;
+            const interruptedInventory = queryClient.getQueryState(ethereumInventoryQueryKey(scope))?.fetchStatus === 'fetching';
+            await queryClient.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+            if (!isCurrentInclusion()) return false;
+            updateInventory();
+            if (interruptedInventory) void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
+            return true;
+          });
+          if (!updated) { release(); return; }
+        }
+        if (!readyToFinish) { release(); return; }
         if (pending.action === 'delivery' && pending.orderId !== undefined) {
           const finalized = await ethereumApi.confirmDelivery(pending.orderId, pending.hash, session!);
-          if (finalized.status !== 'confirmed') { finishing.current.delete(pending.hash); return; }
+          if (finalized.status !== 'confirmed') { release(); return; }
         }
         if (pending.action === 'claim' && pending.claimId) {
           const finalized = await ethereumApi.confirmClaim(pending.claimId, pending.hash, session!);
-          if (finalized.status !== 'confirmed') { finishing.current.delete(pending.hash); return; }
+          if (finalized.status !== 'confirmed') { release(); return; }
         }
         const cleared = await withEthereumSubmissionLock(scope, () => {
-          const current = readEthereumPending(scope);
-          if (readEthereumSubmission(scope) || current && current.hash !== pending.hash) return false;
-          const burned = new Set(result.burnedTokenIds);
-          const expected = [...new Set([...readEthereumExpected(scope).filter(id => !burned.has(id)), ...result.items.map(item => item.tokenId)])].slice(-100);
-          writeEthereumStorage(`${scope}:expected`, expected);
-          queryClient.setQueryData<InfiniteData<EthereumInventoryResponse>>(ethereumInventoryQueryKey(scope), previous => {
-            if (!previous) return { pageParams: [null], pages: [{ items: result.items, nextCursor: null, observedBlock: 0 }] };
-            const added = new Set(result.items.map(item => item.id));
-            return { ...previous, pages: previous.pages.map((page, index) => ({ ...page,
-              items: [...(index === 0 ? result.items : []), ...page.items.filter(item => !burned.has(item.tokenId) && !added.has(item.id))],
-            })) };
-          });
+          if (!isCurrentInclusion(requiredConfirmations, true)) return false;
+          if (pending.action === 'cancel') restoreEthereumExpected(scope, pending.hash);
+          if (!inclusion.applied) updateInventory();
+          if (requiresFinalization) updateExpected(false);
           writeEthereumStorage(`${scope}:pending`, null);
           return true;
         });
-        if (!cleared) { finishing.current.delete(pending.hash); return; }
+        if (!cleared) { release(); return; }
         if (mounted.current && scopeRef.current === scope) {
           if (pending.action === 'unbox' && result.items.length) setRevealed({ scope, items: result.items });
           if (pending.action === 'cancel') setNotice('Your wallet cancellation is confirmed.');
@@ -168,28 +222,32 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
         void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
         void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments', scope] });
       } catch (cause) {
-        finishing.current.delete(pending.hash);
+        release();
         if (cause instanceof EthereumApiError && cause.status === 401 && cause.rejectedSessionToken && !invalidateSession(scope, cause.rejectedSessionToken)) return;
         if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
       }
     })();
-  }, [confirmation.data, confirmation.dataUpdatedAt, requiredConfirmations, pending, scope, owner, session, queryClient, invalidateSession]);
+  }, [confirmation.data, confirmation.dataUpdatedAt, confirmation.isSuccess, requiredConfirmations, pending, scope, owner, session, queryClient, invalidateSession]);
   useEffect(() => {
-    if (!pending || !scope || !(confirmation.error instanceof EthereumApiError) || confirmation.error.code !== 'transaction-reverted' || finishing.current.has(pending.hash)) return;
-    finishing.current.add(pending.hash);
+    if (!pending || !scope || !(confirmation.error instanceof EthereumApiError) || confirmation.error.code !== 'transaction-reverted' || reverting.current.has(pending.hash)) return;
+    reverting.current.add(pending.hash);
+    inclusions.current.delete(`${scope}:${pending.hash}`);
     void withEthereumSubmissionLock(scope, () => {
+      const latest = queryClient.getQueryState(['ethereum111k', 'transaction', scope, pending.hash]);
+      if (latest?.status !== 'error' || !(latest.error instanceof EthereumApiError) || latest.error.code !== 'transaction-reverted') return false;
       const current = readEthereumPending(scope);
       if (readEthereumSubmission(scope) || current && current.hash !== pending.hash) return false;
+      restoreEthereumExpected(scope, pending.hash);
       writeEthereumStorage(`${scope}:pending`, null);
       return true;
     }).then(cleared => {
-      if (!cleared) { finishing.current.delete(pending.hash); return; }
+      if (!cleared) { reverting.current.delete(pending.hash); return; }
       if (mounted.current && scopeRef.current === scope) setError('The transaction reverted. Your NFTs are unchanged; you can try again.');
     }).catch(cause => {
-      finishing.current.delete(pending.hash);
+      reverting.current.delete(pending.hash);
       if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
     });
-  }, [confirmation.error, pending, scope]);
+  }, [confirmation.error, pending, scope, queryClient]);
   const items = useMemo(() => owner && scope ? [...new Map((inventory.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()] : [], [inventory.data, owner, scope]);
   const run = async (label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<void>, allowPending = false): Promise<boolean> => {
     if (scope && readEthereumOperation(scope)) return false;
@@ -324,6 +382,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
       replacementHash, assertCurrent: operation.assertCurrent });
     operation.assertCurrent();
     if (readEthereumPending(capturedScope)?.hash !== captured.hash) throw new Error('The pending transaction changed. Refresh and try again.');
+    replaceEthereumInventoryRecovery(capturedScope, captured.hash, replacement.hash);
     writeEthereumStorage(`${capturedScope}:pending`, replacement);
   }, true);
   const dismissPending = async () => {

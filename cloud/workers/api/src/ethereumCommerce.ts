@@ -47,20 +47,20 @@ async function loadEthereumDelivery(context: EthereumContext, orderId: number): 
 
 export async function retireEthereumDelivery(context: EthereumContext, row: EthereumDeliveryRow): Promise<boolean> {
   const [used] = decodeReturn(['bool'], await ethereumCall(context, encodeCall('usedDeliveryOrders(uint256)', ['uint256'], [row.order_id])));
-  if (used) return false;
+  const status = used ? 'pending' : 'prepared';
   const snapshot = [row.chain_id, row.contract_address, row.order_id, row.status, row.transaction_hash, row.block_hash, row.updated_at_ms];
   const matches = `chain_id = ? AND contract_address = ? AND order_id = ? AND status = ?
     AND transaction_hash IS ? AND block_hash IS ? AND updated_at_ms = ?`;
   const results = await context.env.COMMERCE_DB.batch([
-    context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = 'prepared',
+    context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = ?,
       published_at_ms = NULL, verified_at_block = NULL, updated_at_ms = MAX(updated_at_ms + 1, ?)
-      WHERE ${matches}`).bind(context.nowMs, ...snapshot),
+      WHERE ${matches}`).bind(status, context.nowMs, ...snapshot),
   ]);
   if (results[0].meta.changes !== 1) return false;
   const retiredAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
-  const projected = await projectPendingEthereumDelivery(context, { ...row, status: 'prepared',
+  const projected = await projectPendingEthereumDelivery(context, { ...row, status,
     published_at_ms: null, updated_at_ms: retiredAtMs });
-  if (!projected) return false;
+  if (!projected || used) return false;
   const acknowledged = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET transaction_hash = NULL,
     block_number = NULL, block_hash = NULL WHERE chain_id = ? AND contract_address = ? AND order_id = ?
       AND status = 'prepared' AND transaction_hash IS ? AND block_number IS ? AND block_hash IS ?
