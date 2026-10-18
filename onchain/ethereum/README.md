@@ -41,6 +41,12 @@ npm run gas:update
 
 Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values are gas units, not ETH fees, and omit any outer contract-wallet transaction overhead. Differently ordered authorizations can also differ slightly in signature-byte calldata cost. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
 
+## Onchain SVG artwork
+
+Artworks show four simple flower families: narrow daisies, notched blossoms, broad poppies, and layered dahlias. They have curved stems and two leaves on full 720×720 backgrounds, with six palettes pairing soft backgrounds and colorful petals. An artwork receipt embeds the same composition. The filled flower center's position and radius encode a permutation of all 111,111 display IDs, so uniqueness does not depend on chance or hidden metadata. `test/Renderer.t.sol` checks the complete center mapping, deterministic SVG output, matching receipt artwork, and size budgets of 4 KiB per SVG and 12 KiB for the renderer runtime.
+
+Standalone crates and warehouses are vertically centered on transparent canvases. Crates use warm wood colors, including within crate receipts; warehouses use muted sage green. Receipt canvases retain their paper and red redeemed sticker.
+
 ## Local chain
 
 Start Anvil in one terminal:
@@ -138,13 +144,13 @@ These are isolated write-transaction snapshots, including intrinsic gas while ex
 
 Collection runtime decreases from 14,411 to 14,358 bytes; creation bytecode decreases from 15,876 to 15,823 bytes. Actual deployment transactions on the same restored Prague Anvil state cost 3,399,940 gas before and 3,388,448 after, saving 11,492 gas. Renderer runtime and deployment cost remain 7,752 bytes and 1,728,982 gas.
 
-[The comparison record](benchmarks/delivery-order.json) contains all measurements, source/harness hashes, tool versions, deployment receipts and the acceptance decision. Reproduce it from this package with:
+[The comparison record](benchmarks/delivery-order.json) contains all measurements, source/harness hashes, tool versions, deployment receipts and the acceptance decision. Reproduce this historical comparison from `onchain/ethereum` in a clean checkout of `9e330148`, with its package dependencies installed:
 
 ```sh
 node scripts/benchmark-delivery.mjs /tmp/111k-delivery-comparison.json
 ```
 
-The script compares baseline sources from the recorded commit with the working-tree candidate in temporary projects using the same harness and compiler settings. It starts and stops its own local Anvil node, updates no snapshots, and exits unsuccessfully if any measured write call regresses or no delivery improves. The committed snapshots contain the accepted 89-scenario measurements.
+The script compares baseline sources from the recorded commit with the working-tree candidate in temporary projects using the same harness and compiler settings. It requires matching renderer sources; the newer SVG artwork intentionally differs from the renderer used for this comparison. It starts and stops its own local Anvil node, updates no snapshots, and exits unsuccessfully if any measured write call regresses or no delivery improves. The committed snapshots contain the accepted 89-scenario measurements.
 
 ### Ownership lookup optimization (2026-10-18)
 

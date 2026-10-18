@@ -15,7 +15,14 @@ for (const fixture of fixtures) {
   const svg = Buffer.from(metadata.image.split(',')[1], 'base64').toString();
   assert.ok(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg"'));
   assert.ok(svg.endsWith('</svg>'));
-  assert.ok(svg.includes(`#${fixture.displayId}`));
+  const svgTag = svg.match(/^<svg\b[^>]*>/)[0];
+  assert.match(svgTag, /\bwidth="720"/);
+  assert.match(svgTag, /\bheight="720"/);
+  assert.match(svgTag, /\bviewBox="0 0 720 720"/);
+  const text = Array.from(svg.matchAll(/<text\b[^>]*>(.*?)<\/text>/gs), match => match[1]).sort();
+  const expectedText = fixture.kind === 1 || fixture.kind === 4 ? [] : [String(fixture.displayId)];
+  if (fixture.kind >= 4) expectedText.push('REDEEMED');
+  assert.deepEqual(text, expectedText.sort());
   assert.ok(!/<script|<foreignObject|href=/.test(svg));
   await writeFile(new URL(`${fixture.kind}-${fixture.displayId}.svg`, previewDirectory), svg);
 }
