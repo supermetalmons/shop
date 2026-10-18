@@ -55,6 +55,12 @@ collection's constructor immutables. Owner, treasury, signer, renderer, initial
 supply, prices, sale status, redemption pause and all five SVG metadata types
 were checked onchain.
 
+Both the [111K source](https://sepolia.etherscan.io/address/0x6acc38d2ab61a06882be5d964a69efefe23058b3#code)
+and [renderer source](https://sepolia.etherscan.io/address/0x08cded8258730bda384ff198001e47a1b50f7f9d#code)
+are published on Sepolia Etherscan as **Source Code Verified (Exact Match)**.
+The [source verification record](etherscan-verification.json) includes the
+compiler settings, input hashes, constructor arguments and local artifact checks.
+
 Before deployment, the merged revision passed `npm run check`, the Ethereum
 contract/frontend suite, the Anvil lifecycle suite, the native renderer suite,
 and 512 extended invariant sequences with 65,536 calls and zero reverts.

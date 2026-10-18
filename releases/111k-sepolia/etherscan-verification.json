@@ -1,0 +1,64 @@
+{
+  "chainId": 11155111,
+  "explorer": "https://sepolia.etherscan.io",
+  "status": "verified",
+  "matchType": "exact",
+  "checkedAt": "2026-10-18T20:26:17Z",
+  "sourceRevision": "972d74785b28e7e3e9d1c329439c94dfe0ea766a",
+  "compilerVersion": "0.8.30+commit.73712a01",
+  "settings": {
+    "remappings": [
+      "@openzeppelin/=node_modules/@openzeppelin/",
+      "erc721a/=node_modules/erc721a/"
+    ],
+    "optimizer": {
+      "enabled": true,
+      "runs": 1000
+    },
+    "metadata": {
+      "bytecodeHash": "none"
+    },
+    "evmVersion": "prague",
+    "libraries": {},
+    "viaIR": false,
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "metadata"
+        ]
+      }
+    }
+  },
+  "constructorArgumentsEncoding": "ABI-encoded hexadecimal without the 0x prefix",
+  "contracts": [
+    {
+      "name": "NFT111K",
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "sourceUrl": "https://sepolia.etherscan.io/address/0x6acc38d2ab61a06882be5d964a69efefe23058b3#code",
+      "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
+      "sourceCount": 21,
+      "standardJsonInputSha256": "1f2975899ae571a68202deee2073d6d449689cac5c6a29d31ad1d7123d679a93",
+      "constructorArguments": "000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93000000000000000000000000cc4c8bfd93af9f36d46215a0206954bf6a14c3ca000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae9300000000000000000000000008cded8258730bda384ff198001e47a1b50f7f9d",
+      "localCompilation": {
+        "creationBytecodeMatchesDeploymentArtifact": true,
+        "runtimeBytecodeMatchesDeploymentArtifact": true
+      }
+    },
+    {
+      "name": "NFT111KRenderer",
+      "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "sourceUrl": "https://sepolia.etherscan.io/address/0x08cded8258730bda384ff198001e47a1b50f7f9d#code",
+      "fullyQualifiedName": "src/NFT111KRenderer.sol:NFT111KRenderer",
+      "sourceCount": 9,
+      "standardJsonInputSha256": "b3608093136e06fefdb106d67f553057eb32bb40e6d017689e443ab704b1915a",
+      "constructorArguments": "",
+      "localCompilation": {
+        "creationBytecodeMatchesDeploymentArtifact": true,
+        "runtimeBytecodeMatchesDeploymentArtifact": true
+      }
+    }
+  ]
+}
