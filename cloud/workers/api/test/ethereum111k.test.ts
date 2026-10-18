@@ -6,7 +6,7 @@ import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../.
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
   type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse } from '../../../../shared/ethereum/api.ts';
 import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { crateArtworkIds, ethereumHexQuantity } from '../../../../shared/ethereum/protocol.ts';
+import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
@@ -79,7 +79,7 @@ function fixture() {
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 821, owner: WALLET }]]),
     receipts: new Map<string, EthereumReceipt>(), canonical: new Map<number, string>(),
-    logs: [] as EthereumLog[], calls: [] as Rpc[], urls: [] as string[], usedOrders: new Set<number>(),
+    logs: [] as EthereumLog[], calls: [] as Rpc[], batchSizes: [] as number[], urls: [] as string[], usedOrders: new Set<number>(),
     alchemyNfts: [] as Record<string, unknown>[], alchemyCursor: null as string | null,
     afterRpc: null as ((payload: Rpc, result: unknown) => Promise<void>) | null,
   };
@@ -143,6 +143,7 @@ function fixture() {
     if (url.includes('/getNFTsForOwner')) return Response.json({ ownedNfts: state.alchemyNfts,
       ...(state.alchemyCursor ? { pageKey: state.alchemyCursor } : {}) });
     const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+    if (Array.isArray(payload)) state.batchSizes.push(payload.length);
     const handle = async (entry: Rpc) => {
       const result = await responseFor(entry);
       await state.afterRpc?.(entry, result);
@@ -1855,6 +1856,34 @@ test('physical claim authorization needs the exact receipt, code and owner and s
     assert.equal(retry.response.status, 200);
     assert.equal(retry.body.claimId, prepared.body.claimId);
     assert.equal(f.claimRow().code, code);
+  } finally { f.close(); }
+});
+
+test('bundled transactions confirm more than 150 minted items with complete metadata', async () => {
+  const f = fixture();
+  try {
+    const minted = Array.from({ length: 165 }, (_, index) => String(111112 + index));
+    const burned = Array.from({ length: 15 }, (_, index) => String(116667 + index));
+    f.state.tokens.clear();
+    minted.forEach((tokenId, index) => f.state.tokens.set(tokenId, { kind: 2, displayId: index + 1, owner: WALLET }));
+    const logs = [...burned, ...minted].map((tokenId, index): EthereumLog => ({
+      address: CONTRACT,
+      topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(index < burned.length ? WALLET : ZERO),
+        topicAddress(index < burned.length ? ZERO : WALLET), topicNumber(tokenId)],
+      data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH,
+      logIndex: ethereumHexQuantity(index),
+    }));
+    f.setReceipt(HASH, logs);
+    const result = await f.request<{ status: string; items: EthereumInventoryItem[]; burnedTokenIds: string[] }>(
+      paths.transactionsConfirm, { transactionHash: HASH });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.status, 'confirmed');
+    assert.deepEqual(result.body.items.map(item => item.tokenId), minted);
+    assert.deepEqual(result.body.items.map(item => item.name), minted.map((_tokenId, index) => `Kind 2 #${index + 1}`));
+    assert.ok(result.body.items.every(item => item.owner === WALLET && item.kind === 'crate' &&
+      item.image.startsWith('data:image/svg+xml;base64,')));
+    assert.deepEqual(result.body.burnedTokenIds, burned);
+    assert.deepEqual(f.state.batchSizes, [150, 15, 150, 15]);
   } finally { f.close(); }
 });
 

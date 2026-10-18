@@ -14,7 +14,6 @@ import {
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const PAGE_SIZE = 30;
-const LOCAL_TOKEN_INFO_BATCH_SIZE = 150;
 
 export type EthereumTokenInfo = { tokenId: string; kind: EthereumItemKind; displayId: number; owner: string };
 export type EthereumLog = { address: string; topics: string[]; data: string; blockNumber: string; blockHash: string;
@@ -134,12 +133,8 @@ async function localOwnerIds(context: EthereumContext, wallet: string): Promise<
     }
   }
   const candidates = [...ids].sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1);
-  const owned: string[] = [];
-  for (let offset = 0; offset < candidates.length; offset += LOCAL_TOKEN_INFO_BATCH_SIZE) {
-    const infos = await ethereumTokenInfos(context, candidates.slice(offset, offset + LOCAL_TOKEN_INFO_BATCH_SIZE));
-    owned.push(...infos.filter(info => info.owner === wallet).map(info => info.tokenId));
-  }
-  return owned;
+  const infos = await ethereumTokenInfos(context, candidates);
+  return infos.filter(info => info.owner === wallet).map(info => info.tokenId);
 }
 
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {

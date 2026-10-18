@@ -3,6 +3,8 @@ import type { Ethereum111kConfig } from '../../../../shared/ethereum/api.js';
 import { EthereumApiError } from './ethereumError.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 
+const CONTRACT_READ_BATCH_SIZE = 150;
+
 export type EthereumEnvironment = Pick<Env,
   'OPS_DB' | 'COMMERCE_DB' | 'ALCHEMY_MI_NOTE_API_KEY' |
   'ETHEREUM_111K_CHAIN_ID' | 'ETHEREUM_111K_CONTRACT_ADDRESS' |
@@ -92,21 +94,26 @@ export async function ethereumRpc(context: EthereumContext, method: string, para
 
 export async function ethereumCallBatch(context: EthereumContext, calls: string[]): Promise<string[]> {
   if (!calls.length) return [];
-  if (calls.length > 150) throw new EthereumApiError('invalid-argument', 'Too many contract reads.');
   await checkEthereumChain(context);
   const to = requireEthereumContract(context);
-  const body = await rpcRequest(context, calls.map((data, index) => ({ jsonrpc: '2.0', id: index + 1,
-    method: 'eth_call', params: [{ to, data }, 'latest'] })));
-  if (!Array.isArray(body) || body.length !== calls.length) throw new EthereumApiError('unavailable', 'Ethereum RPC returned an incomplete response.');
-  const results = new Map<number, string>();
-  for (const value of body) {
-    if (!value || typeof value !== 'object' || !Number.isInteger(value.id) || value.id < 1 || value.id > calls.length ||
-      results.has(value.id) || typeof value.result !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value.result)) {
-      throw new EthereumApiError('unavailable', 'Ethereum RPC returned an invalid response.');
+  const values: string[] = [];
+  for (let offset = 0; offset < calls.length; offset += CONTRACT_READ_BATCH_SIZE) {
+    context.signal.throwIfAborted();
+    const batch = calls.slice(offset, offset + CONTRACT_READ_BATCH_SIZE);
+    const body = await rpcRequest(context, batch.map((data, index) => ({ jsonrpc: '2.0', id: index + 1,
+      method: 'eth_call', params: [{ to, data }, 'latest'] })));
+    if (!Array.isArray(body) || body.length !== batch.length) throw new EthereumApiError('unavailable', 'Ethereum RPC returned an incomplete response.');
+    const results = new Map<number, string>();
+    for (const value of body) {
+      if (!value || typeof value !== 'object' || !Number.isInteger(value.id) || value.id < 1 || value.id > batch.length ||
+        results.has(value.id) || typeof value.result !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value.result)) {
+        throw new EthereumApiError('unavailable', 'Ethereum RPC returned an invalid response.');
+      }
+      results.set(value.id, value.result);
     }
-    results.set(value.id, value.result);
+    values.push(...batch.map((_call, index) => results.get(index + 1)!));
   }
-  return calls.map((_call, index) => results.get(index + 1)!);
+  return values;
 }
 
 async function checkEthereumChain(context: EthereumContext): Promise<void> {

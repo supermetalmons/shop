@@ -251,43 +251,43 @@ test('crate claims reject another receipt, mismatched calldata and expired autho
 });
 
 test('replacement recovery verifies sender, nonce, chain and the exact original intent', async () => {
-  const { ethereumReplacement } = await import('../src/ethereum/recovery.ts');
+  const { recoverEthereumTransaction } = await import('../src/ethereum/recovery.ts');
   const replacementHash = `0x${'cd'.repeat(32)}`;
   const intent = { to: contract, data: '0x12345678', value: '0x123' };
   const pending = { scope: ethereumInventoryScope(config, owner)!, hash, action: 'mint' as const, submittedAt: Date.now(), nonce: '0x7', intent };
   let candidate = { hash: replacementHash, from: owner, to: contract, input: intent.data, value: intent.value, nonce: '0x7', chainId: '0xaa36a7' };
   const provider: EIP1193Provider = { request: async () => candidate };
-  const args = { provider, config, owner, pending, replacementHash, assertCurrent() {} };
-  const replacement = await ethereumReplacement(args);
+  const args = { provider, config, owner, pending, transactionHash: replacementHash, assertCurrent() {} };
+  const replacement = await recoverEthereumTransaction(args);
   assert.equal(replacement.hash, replacementHash);
   assert.equal(replacement.action, 'mint');
   candidate = { ...candidate, nonce: '0x8' };
-  await assert.rejects(ethereumReplacement(args), /does not replace/);
+  await assert.rejects(recoverEthereumTransaction(args), /does not replace/);
   candidate = { ...candidate, nonce: '0x7', value: '0x456' };
-  await assert.rejects(ethereumReplacement(args), /changes the original/);
+  await assert.rejects(recoverEthereumTransaction(args), /changes the original/);
   candidate = { ...candidate, value: intent.value, from: other };
-  await assert.rejects(ethereumReplacement(args), /wallet or network/);
+  await assert.rejects(recoverEthereumTransaction(args), /wallet or network/);
   candidate = { ...candidate, from: owner, chainId: '0x1' };
-  await assert.rejects(ethereumReplacement(args), /wallet or network/);
+  await assert.rejects(recoverEthereumTransaction(args), /wallet or network/);
 });
 
 test('replacement recovery can recover the original nonce and recognizes only a matching self-transfer as cancellation', async () => {
-  const { ethereumReplacement } = await import('../src/ethereum/recovery.ts');
+  const { recoverEthereumTransaction } = await import('../src/ethereum/recovery.ts');
   const replacementHash = `0x${'cd'.repeat(32)}`;
   const original = { hash, from: owner, to: contract, input: '0x12345678', value: '0x123', nonce: '0x7', chainId: '0xaa36a7' };
   const candidate = { ...original, hash: replacementHash, to: owner, input: '0x', value: '0x0' };
   const provider: EIP1193Provider = { request: async ({ params }) => (params as string[])[0] === hash ? original : candidate };
   const pending = { scope: ethereumInventoryScope(config, owner)!, hash, action: 'mint' as const, submittedAt: Date.now() };
-  const replacement = await ethereumReplacement({ provider, config, owner, pending, replacementHash, assertCurrent() {} });
+  const replacement = await recoverEthereumTransaction({ provider, config, owner, pending, transactionHash: replacementHash, assertCurrent() {} });
   assert.equal(replacement.action, 'cancel');
   assert.equal(replacement.nonce, '0x7');
   assert.equal(replacement.actionBeforeCancellation, 'mint');
   const resumedHash = `0x${'ef'.repeat(32)}`;
   provider.request = async () => ({ ...original, hash: resumedHash });
-  const resumed = await ethereumReplacement({ provider, config, owner, pending: replacement, replacementHash: resumedHash, assertCurrent() {} });
+  const resumed = await recoverEthereumTransaction({ provider, config, owner, pending: replacement, transactionHash: resumedHash, assertCurrent() {} });
   assert.equal(resumed.action, 'mint');
   provider.request = async () => null;
-  await assert.rejects(ethereumReplacement({ provider, config, owner, pending, replacementHash, assertCurrent() {} }), /cannot be verified/);
+  await assert.rejects(recoverEthereumTransaction({ provider, config, owner, pending, transactionHash: replacementHash, assertCurrent() {} }), /cannot be verified/);
 });
 
 test('a local address encryption public key is accepted only in development on chain 31337', async () => {

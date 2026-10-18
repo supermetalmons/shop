@@ -13,7 +13,7 @@ import {
 } from './state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from './wallet';
 import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
-import { ethereumReplacement, ethereumTransactionMatchesIntent, readEthereumWalletTransaction } from './recovery';
+import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './recovery';
 import { ethereumAddressEncryptionKey } from './addressEncryption';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
@@ -113,12 +113,12 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
       try {
         const network = await provider.request({ method: 'eth_chainId' });
         if (!active || ethereumChainId(network) !== config.chainId) return;
-        const actual = await readEthereumWalletTransaction(provider, pending.hash, config.chainId, owner);
-        if (!active || !actual || !ethereumTransactionMatchesIntent(actual, intent)) return;
+        const actual = await readEthereumSubmittedTransaction(provider, pending.hash, config.chainId, owner, intent);
+        if (!active || !actual) return;
         await withEthereumSubmissionLock(scope, () => {
           const current = readEthereumPending(scope);
           if (active && current?.hash === pending.hash && !current.nonce) {
-            writeEthereumStorage(`${scope}:pending`, { ...current, nonce: actual.nonce });
+            writeEthereumStorage(`${scope}:pending`, { ...current, ...actual });
           }
         });
       } catch {} finally { fetching = false; }
@@ -290,7 +290,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
         if (!mounted.current || scopeRef.current !== scope || walletRef.current.provider !== capturedWallet.provider || walletRef.current.address !== capturedWallet.address) {
           throw new Error('Your Ethereum wallet changed. Please try again.');
         }
-        const operation = ethereumOperation(() => mounted.current ? walletRef.current : { address: null, provider: null }, config);
+        const operation = ethereumOperation(() => mounted.current && scopeRef.current === scope ? walletRef.current : { address: null, provider: null }, config);
         try { await action(operation, scope); }
         finally { operation.dispose(); }
       });
@@ -340,11 +340,11 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     const { nonce: _reservedNonce, ...submitted } = submission;
     const record: EthereumPendingTransaction = { ...submitted, hash };
     writeEthereumStorage(`${capturedScope}:pending`, record);
-    void readEthereumWalletTransaction(operation.provider, hash, config.chainId, operation.address).then(async actual => {
-      if (!actual || !ethereumTransactionMatchesIntent(actual, transaction)) return;
+    void readEthereumSubmittedTransaction(operation.provider, hash, config.chainId, operation.address, transaction).then(async actual => {
+      if (!actual) return;
       await withEthereumSubmissionLock(capturedScope, () => {
         const current = readEthereumPending(capturedScope);
-        if (current?.hash === hash && !current.nonce) writeEthereumStorage(`${capturedScope}:pending`, { ...current, nonce: actual.nonce });
+        if (current?.hash === hash && !current.nonce) writeEthereumStorage(`${capturedScope}:pending`, { ...current, ...actual });
       });
     }).catch(() => {});
   };
@@ -392,23 +392,14 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     const submission = readEthereumSubmission(capturedScope);
     if (!captured && !submission) throw new Error('This transaction is no longer pending.');
     await operation.ensureNetwork();
-    if (!captured) {
-      if (!submission) throw new Error('This transaction is no longer pending.');
-      const hash = replacementHash.trim().toLowerCase();
-      if (!/^0x[0-9a-f]{64}$/.test(hash)) throw new Error('Paste the transaction hash from your wallet.');
-      const actual = await readEthereumWalletTransaction(operation.provider, hash, config.chainId, operation.address);
-      operation.assertCurrent();
-      if (!actual || !submission.intent || !ethereumTransactionMatchesIntent(actual, submission.intent)) throw new Error('That transaction does not match the saved Ethereum request.');
-      if (!submission.nonce || BigInt(actual.nonce) < BigInt(submission.nonce)) throw new Error('That transaction does not match the saved Ethereum request nonce.');
-      if (readEthereumPending(capturedScope) || readEthereumSubmission(capturedScope)?.submittedAt !== submission.submittedAt) throw new Error('The pending transaction changed. Refresh and try again.');
-      writeEthereumStorage(`${capturedScope}:pending`, { ...submission, hash, nonce: actual.nonce });
-      return;
-    }
-    const replacement = await ethereumReplacement({ provider: operation.provider, config, owner: operation.address, pending: captured,
-      replacementHash, assertCurrent: operation.assertCurrent });
+    const replacement = await recoverEthereumTransaction({ provider: operation.provider, config, owner: operation.address,
+      pending: captured ?? submission!, transactionHash: replacementHash, assertCurrent: operation.assertCurrent });
     operation.assertCurrent();
-    if (readEthereumPending(capturedScope)?.hash !== captured.hash) throw new Error('The pending transaction changed. Refresh and try again.');
-    replaceEthereumInventoryRecovery(capturedScope, captured.hash, replacement.hash);
+    if (captured ? readEthereumPending(capturedScope)?.hash !== captured.hash :
+      readEthereumPending(capturedScope) || readEthereumSubmission(capturedScope)?.submittedAt !== submission!.submittedAt) {
+      throw new Error('The pending transaction changed. Refresh and try again.');
+    }
+    if (captured) replaceEthereumInventoryRecovery(capturedScope, captured.hash, replacement.hash);
     writeEthereumStorage(`${capturedScope}:pending`, replacement);
   }, true);
   const dismissPending = async () => {

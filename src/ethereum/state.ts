@@ -11,6 +11,8 @@ export type EthereumPendingTransaction = {
   orderId?: number;
   claimId?: string;
   nonce?: string;
+  transactionSender?: string;
+  transactionCallHash?: string;
   intent?: { to: string; data: string; value: string };
   actionBeforeCancellation?: Exclude<EthereumAction, 'cancel'>;
 };
@@ -172,6 +174,8 @@ function readEthereumTransaction(scope: string): (EthereumPendingTransaction & {
   return value && value.scope === scope && /^0x[0-9a-fA-F]{64}$/.test(value.hash) &&
     ['mint', 'unbox', 'delivery', 'claim', 'transfer', 'cancel'].includes(value.action) && Number.isFinite(value.submittedAt) &&
     (value.nonce === undefined || /^0x[0-9a-fA-F]+$/.test(value.nonce)) &&
+    (value.transactionSender === undefined || typeof value.transactionSender === 'string' && normalizeEthereumAddress(value.transactionSender) === value.transactionSender) &&
+    (value.transactionCallHash === undefined || /^0x[0-9a-f]{64}$/.test(value.transactionCallHash)) &&
     (value.actionBeforeCancellation === undefined || ['mint', 'unbox', 'delivery', 'claim', 'transfer'].includes(value.actionBeforeCancellation)) &&
     (value.intent === undefined || normalizeEthereumAddress(value.intent?.to) && /^0x(?:[0-9a-fA-F]{2})*$/.test(value.intent?.data) && /^0x[0-9a-fA-F]+$/.test(value.intent?.value)) ? value : null;
 }

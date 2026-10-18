@@ -3,7 +3,7 @@ import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { encodeCall } from '../shared/ethereum/abi.ts';
+import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
 import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumSession, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
@@ -1549,6 +1549,8 @@ test('an invalid pending nonce prevents wallet submission before reserving recov
   assert.equal(connected.sent.length, 0);
   assert.equal(view.result.current.submission, null);
   assert.equal(view.result.current.pending, null);
+  assert.equal(readEthereumSubmission(view.result.current.scope!), null);
+  assert.equal(readEthereumPending(view.result.current.scope!), null);
 });
 
 test('a confirmed transaction finishes when its stored record has already disappeared', async t => {
@@ -1825,3 +1827,204 @@ for (const action of ['delivery', 'claim'] as const) {
     assert.equal(view.result.current.submission?.nonce, '0x8');
   });
 }
+
+for (const submitted of [false, true]) {
+  test(`a collection change ${submitted ? 'preserves an already submitted transaction' : 'aborts transaction preparation'}`, async () => {
+    const connected = wallet();
+    const request = connected.provider!.request;
+    let resume: (() => void) | undefined;
+    connected.provider!.request = async args => {
+      const result = await request(args);
+      if (args.method === (submitted ? 'eth_sendTransaction' : 'eth_getTransactionCount')) {
+        await new Promise<void>(resolve => { resume = resolve; });
+      }
+      return result;
+    };
+    const view = harness(connected);
+    await waitFor(() => assert.ok(view.result.current.stats.data));
+    const previousScope = view.result.current.scope!;
+    let mint: Promise<boolean> | undefined;
+    act(() => { mint = view.result.current.mint('crate', 1); });
+    await waitFor(() => assert.ok(resume));
+    assert.equal(connected.sent.length, submitted ? 1 : 0);
+    const replacement = resolveEthereum111kConfig({ contractAddress: '0x4444444444444444444444444444444444444444' });
+    act(() => { view.client.setQueryData(['ethereum111k', 'config'], replacement); });
+    await waitFor(() => assert.equal(view.result.current.scope, ethereumInventoryScope(replacement, owner)));
+    await act(async () => { resume!(); assert.equal(await mint, submitted); });
+    assert.equal(connected.sent.length, submitted ? 1 : 0);
+    assert.equal(readEthereumPending(previousScope)?.hash ?? null, submitted ? hash : null);
+    assert.equal(readEthereumSubmission(previousScope), null);
+    assert.equal(readEthereumOperation(previousScope), null);
+    assert.equal(view.result.current.pending, null);
+    assert.equal(view.result.current.busy, null);
+  });
+}
+
+const wrappedBlockHash = `0x${'ef'.repeat(32)}`;
+function wrappedMintReceipt(transactionHash: string) {
+  return { transactionHash, from: other, to: owner, status: '0x1', blockNumber: '0x65', blockHash: wrappedBlockHash, logs: [{
+    address: contract,
+    topics: ['0xf74beeed6afd1c86b1e7db3a5e02e09ce36876cd81ef0a532aab80ccab145aed', encodeAbi(['address'], [owner])],
+    data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, config.cratePriceWei]),
+  }] };
+}
+
+for (const action of ['mint', 'transfer', 'unbox'] as const) {
+  test(`a contract-wallet ${action} ${action === 'unbox' ? 'recovers its lost hash without a chain-height checkpoint' : 'keeps an ambiguous lost-hash submission blocked'} after reload`, async () => {
+    const connected = wallet();
+    const request = connected.provider!.request;
+    const storage = window.localStorage;
+    connected.provider!.request = async args => {
+      if (args.method === 'eth_getTransactionByHash') return null;
+      const result = await request(args);
+      if (args.method === 'eth_sendTransaction') Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+        getItem: storage.getItem.bind(storage), removeItem: storage.removeItem.bind(storage), setItem() { throw new Error('Quota exceeded'); },
+      } });
+      return result;
+    };
+    const first = harness(connected);
+    await waitFor(() => assert.ok(first.result.current.stats.data));
+    await act(async () => {
+      const submitted = action === 'mint' ? first.result.current.mint('crate', 1) : action === 'unbox' ? first.result.current.unbox(token()) :
+        first.result.current.transfer({ ...token(owner, '2000001'), kind: 'crate_receipt' }, other);
+      assert.equal(await submitted, true);
+    });
+    const scope = ethereumInventoryScope(config, owner)!;
+    const key = `mons.ethereum111k:${scope}:pending`;
+    const reserved = storage.getItem(key)!;
+    assert.equal(JSON.parse(reserved).awaitingHash, true);
+    assert.equal(JSON.parse(reserved).nonce, '0x7');
+    assert.equal(connected.sent.length, 1);
+    const locks = navigator.locks;
+    await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
+    dom.window.close();
+    ({ dom } = setupFrontendDom());
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: locks });
+    window.localStorage.setItem(key, reserved);
+    const receipt = { ...wrappedMintReceipt(hash), blockNumber: '0x1' };
+    if (action === 'unbox') receipt.logs = [{ address: contract,
+      topics: ['0xe69ab792dddbde960afe57d10ae0b0010bff06941200790103ff188c4f2e00e1', encodeAbi(['uint256'], [111112]), encodeAbi(['address'], [owner])],
+      data: encodeAbi(['uint256', 'uint256'], [1, 20]),
+    }];
+    if (action === 'transfer') receipt.logs = [{ address: contract,
+      topics: [ETHEREUM_EVENT_TOPICS.Transfer, encodeAbi(['address'], [owner]), encodeAbi(['address'], [other]), encodeAbi(['uint256'], [2000001])], data: '0x',
+    }];
+    const restoredWallet = wallet();
+    const restoredRequest = restoredWallet.provider!.request;
+    restoredWallet.provider!.request = async args => {
+      if (args.method === 'eth_getTransactionByHash') return { hash, from: other, to: owner, input: '0x1234', value: '0x0', nonce: '0x2', chainId: '0xaa36a7' };
+      if (args.method === 'eth_getCode') { assert.deepEqual(args.params, [owner, 'latest']); return '0x6000'; }
+      if (args.method === 'eth_getTransactionReceipt') { assert.deepEqual(args.params, [hash]); return receipt; }
+      if (args.method === 'eth_getBlockByNumber') { assert.deepEqual(args.params, ['0x1', false]); return { hash: wrappedBlockHash }; }
+      return restoredRequest(args);
+    };
+    const restored = harness(restoredWallet);
+    await waitFor(() => assert.ok(restored.result.current.submission));
+    await act(async () => { assert.equal(await restored.result.current.mint('crate', 1), false); });
+    await act(async () => { assert.equal(await restored.result.current.replacePending(hash), action === 'unbox'); });
+    assert.equal(restoredWallet.sent.length, 0);
+    if (action !== 'unbox') {
+      assert.match(restored.result.current.error ?? '', /cannot.*safely recover/i);
+      assert.equal(restored.result.current.submission?.action, action);
+      assert.equal(restored.result.current.pending, null);
+      assert.equal(window.localStorage.getItem(key), reserved);
+      await act(async () => { assert.equal(await restored.result.current.mint('crate', 1), false); });
+      assert.equal(restoredWallet.sent.length, 0);
+      return;
+    }
+    assert.equal(restored.result.current.submission, null);
+    assert.equal(restored.result.current.pending?.hash, hash);
+    assert.equal(restored.result.current.pending?.nonce, '0x2');
+    assert.equal(restored.result.current.pending?.transactionSender, other);
+    assert.equal(restored.result.current.pending?.intent?.to, contract);
+    assert.equal(readEthereumSubmission(scope), null);
+    assert.equal(JSON.parse(window.localStorage.getItem(key)!).hash, hash);
+  });
+}
+
+test('a contract-wallet mint persists the relayer nonce and recovers a mined replacement after remount', async () => {
+  const connected = wallet();
+  const request = connected.provider!.request;
+  const replacementHash = `0x${'cd'.repeat(32)}`;
+  let originalAvailable = true;
+  let originalLookups = 0;
+  connected.provider!.request = async args => {
+    if (args.method === 'eth_getTransactionByHash') {
+      const transactionHash = (args.params as string[])[0];
+      if (transactionHash === hash) {
+        originalLookups++;
+        if (!originalAvailable) return null;
+      }
+      return { hash: transactionHash, from: other, to: owner, input: '0x1234', value: '0x0', nonce: '0x2', chainId: '0xaa36a7' };
+    }
+    if (args.method === 'eth_getCode') { assert.deepEqual(args.params, [owner, 'latest']); return '0x6000'; }
+    if (args.method === 'eth_getTransactionReceipt') { assert.deepEqual(args.params, [replacementHash]); return wrappedMintReceipt(replacementHash); }
+    if (args.method === 'eth_getBlockByNumber') { assert.deepEqual(args.params, ['0x65', false]); return { hash: wrappedBlockHash }; }
+    return request(args);
+  };
+  const first = harness(connected);
+  await waitFor(() => assert.ok(first.result.current.stats.data));
+  await act(async () => { assert.equal(await first.result.current.mint('crate', 1), true); });
+  const scope = ethereumInventoryScope(config, owner)!;
+  await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x2'));
+  assert.equal(readEthereumPending(scope)?.transactionSender, other);
+  const transactionCallHash = readEthereumPending(scope)?.transactionCallHash;
+  assert.match(transactionCallHash ?? '', /^0x[0-9a-f]{64}$/);
+  assert.equal(connected.sent.length, 1);
+  first.unmount();
+  first.client.clear();
+  originalAvailable = false;
+  const completedLookups = originalLookups;
+  const restored = harness(connected);
+  await waitFor(() => assert.equal(restored.result.current.pending?.hash, hash));
+  assert.equal(restored.result.current.pending?.transactionCallHash, transactionCallHash);
+  await act(async () => { assert.equal(await restored.result.current.replacePending(replacementHash), true); });
+  assert.equal(originalLookups, completedLookups);
+  assert.equal(connected.sent.length, 1);
+  assert.equal(restored.result.current.pending?.hash, replacementHash);
+  assert.equal(restored.result.current.pending?.nonce, '0x2');
+  assert.equal(restored.result.current.pending?.transactionSender, other);
+  assert.equal(restored.result.current.pending?.transactionCallHash, transactionCallHash);
+  assert.equal(restored.result.current.pending?.action, 'mint');
+  assert.equal(readEthereumSubmission(scope), null);
+});
+
+test('a known contract-wallet unbox recovers a new relayer transaction and unblocks subsequent actions', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const replacementHash = `0x${'cd'.repeat(32)}`;
+  const newRelayer = '0x4444444444444444444444444444444444444444';
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: Date.now(), nonce: '0x2', transactionSender: other,
+    intent: { to: contract, data: encodeCall('unboxCrate(uint256)', ['uint256'], [111112]), value: '0x0' } });
+  const connected = wallet();
+  const request = connected.provider!.request;
+  let originalLookups = 0;
+  connected.provider!.request = async args => {
+    if (args.method === 'eth_getTransactionByHash') {
+      if ((args.params as string[])[0] === hash) { originalLookups++; return null; }
+      return { hash: replacementHash, from: newRelayer, to: owner, input: '0x5678', value: '0x0', nonce: '0x9', chainId: '0xaa36a7' };
+    }
+    if (args.method === 'eth_getCode') return '0x6000';
+    if (args.method === 'eth_getTransactionReceipt') return { ...wrappedMintReceipt(replacementHash), from: newRelayer, logs: [{ address: contract,
+      topics: ['0xe69ab792dddbde960afe57d10ae0b0010bff06941200790103ff188c4f2e00e1', encodeAbi(['uint256'], [111112]), encodeAbi(['address'], [owner])],
+      data: encodeAbi(['uint256', 'uint256'], [1, 20]),
+    }] };
+    if (args.method === 'eth_getBlockByNumber') return { hash: wrappedBlockHash };
+    return request(args);
+  };
+  const view = harness(connected);
+  await waitFor(() => { assert.equal(view.result.current.pending?.hash, hash); assert.ok(view.result.current.stats.data); });
+  await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
+  assert.equal(view.result.current.pending?.hash, replacementHash);
+  assert.equal(view.result.current.pending?.transactionSender, newRelayer);
+  assert.equal(view.result.current.pending?.nonce, '0x9');
+  assert.equal(originalLookups, 0);
+  t.mock.method(ethereumApi, 'confirm', async transactionHash => ({ status: transactionHash === replacementHash ? 'confirmed' : 'pending',
+    confirmations: transactionHash === replacementHash ? 1 : 0,
+    items: transactionHash === replacementHash ? [{ ...token(owner, '1'), kind: 'artwork' }] : [],
+    burnedTokenIds: transactionHash === replacementHash ? ['111112'] : [] }));
+  act(() => view.result.current.refresh());
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  assert.equal(readEthereumPending(scope), null);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
+  assert.equal(connected.sent.length, 1);
+});
