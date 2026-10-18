@@ -120,9 +120,10 @@ export function writeEthereumStorage(key: string, value: unknown): void {
   let baseline = storageSnapshots.get(window)?.get(key) ?? null;
   try { baseline = readPersistedEthereumStorage(key); } catch {}
   try {
-    if (value === null) window.localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
-    else window.localStorage.setItem(`${STORAGE_PREFIX}${key}`, JSON.stringify(value));
-    if (readPersistedEthereumStorage(key) !== (value === null ? null : JSON.stringify(value))) throw new Error('Storage unavailable');
+    const serialized = value === null ? null : JSON.stringify(value);
+    if (serialized === null) window.localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+    else window.localStorage.setItem(`${STORAGE_PREFIX}${key}`, serialized);
+    if (readPersistedEthereumStorage(key) !== serialized) throw new Error('Storage unavailable');
     storageFallbacks.get(window)?.delete(key);
   } catch {
     let fallback = storageFallbacks.get(window);

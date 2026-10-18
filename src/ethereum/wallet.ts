@@ -1,12 +1,11 @@
+import { normalizeEthereumAddress as ethereumAddress } from '../../shared/ethereum/protocol';
 import type { EIP1193Provider, EthereumProviderListener } from '../wallet/injectedEthereumProviders';
+
+export { ethereumAddress };
 
 export type EthereumWalletSnapshot = { address: string | null; provider: EIP1193Provider | null };
 export type EthereumNetwork = { chainId: number; chainName: string; walletRpcUrl: string; explorerUrl: string };
 export type EthereumTransaction = { to: string; data: string; value: string; chainId: number };
-
-export function ethereumAddress(value: unknown): string | null {
-  return typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value) ? value.toLowerCase() : null;
-}
 
 export function ethereumChainId(value: unknown): number | null {
   if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) return null;

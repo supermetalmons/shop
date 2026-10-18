@@ -52,12 +52,10 @@ export async function retireEthereumDelivery(context: EthereumContext, row: Ethe
   const snapshot = [row.chain_id, row.contract_address, row.order_id, row.status, row.transaction_hash, row.block_hash, row.updated_at_ms];
   const matches = `chain_id = ? AND contract_address = ? AND order_id = ? AND status = ?
     AND transaction_hash IS ? AND block_hash IS ? AND updated_at_ms = ?`;
-  const results = await context.env.COMMERCE_DB.batch([
-    context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = ?,
-      published_at_ms = NULL, verified_at_block = NULL, updated_at_ms = MAX(updated_at_ms + 1, ?)
-      WHERE ${matches}`).bind(status, context.nowMs, ...snapshot),
-  ]);
-  if (results[0].meta.changes !== 1) return false;
+  const result = await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET status = ?,
+    published_at_ms = NULL, verified_at_block = NULL, updated_at_ms = MAX(updated_at_ms + 1, ?)
+    WHERE ${matches}`).bind(status, context.nowMs, ...snapshot).run();
+  if (result.meta.changes !== 1) return false;
   const retiredAtMs = Math.max(context.nowMs, row.updated_at_ms + 1);
   const projected = await projectPendingEthereumDelivery(context, { ...row, status,
     published_at_ms: null, updated_at_ms: retiredAtMs });

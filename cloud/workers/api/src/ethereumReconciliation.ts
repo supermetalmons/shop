@@ -17,18 +17,17 @@ import { emptyReconciliationResult, recordReconciliationOutcome, reportReconcili
 const REORG_WINDOW_BLOCKS = 64;
 const RECENT_RECONCILIATION_TIMEOUT_MS = 30_000;
 
-type QueryBudget = { remaining: number; phaseRemaining: number; exhausted: boolean; limited: boolean };
+type QueryBudget = { remaining: number; exhausted: boolean; limited: boolean };
 
 function budgetedDatabase(db: D1Database, budget: QueryBudget): D1Database {
   const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
   const reserve = (count: number) => {
-    if (count > budget.remaining || count > budget.phaseRemaining) {
+    if (count > budget.remaining) {
       budget.exhausted = true;
       budget.limited = true;
       throw new Error('Ethereum reconciliation query limit reached');
     }
     budget.remaining -= count;
-    budget.phaseRemaining -= count;
   };
   const wrap = (statement: D1PreparedStatement): D1PreparedStatement => {
     const proxy = new Proxy(statement, {
@@ -292,7 +291,7 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
   const failures: unknown[] = [];
   try {
     const config = ethereumConfig(env);
-    const budget: QueryBudget = { remaining: 400, phaseRemaining: 400, exhausted: false, limited: false };
+    const budget: QueryBudget = { remaining: 400, exhausted: false, limited: false };
     const context: EthereumContext = { env: { ...env, COMMERCE_DB: budgetedDatabase(env.COMMERCE_DB, budget) },
       config, signal, fetch: options.fetch || fetch, nowMs: (options.nowMs || Date.now)() };
     await cleanupEthereumAuth(env.OPS_DB, context.nowMs);
@@ -302,8 +301,8 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     });
     const recentContext = { ...context, signal: recentScope.signal };
     const recentBudgets: QueryBudget[] = [
-      { remaining: 100, phaseRemaining: 100, exhausted: false, limited: false },
-      { remaining: 100, phaseRemaining: 100, exhausted: false, limited: false },
+      { remaining: 100, exhausted: false, limited: false },
+      { remaining: 100, exhausted: false, limited: false },
     ];
     let head: number | undefined;
     let recentTimedOut = false;
@@ -334,8 +333,6 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     }
     if (head !== undefined) context.chainCheck = recentContext.chainCheck;
     head ??= rpcInteger(await ethereumRpc(context, 'eth_blockNumber', []));
-    budget.phaseRemaining = budget.remaining;
-    budget.exhausted = false;
     const saved = await context.env.COMMERCE_DB.prepare(`SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor WHERE chain_id = ? AND contract_address = ?`)
       .bind(config.chainId, config.contractAddress).first<{ next_block: number; scan_end_block: number | null }>();
     const activeScan = saved?.scan_end_block != null && saved.next_block <= saved.scan_end_block;

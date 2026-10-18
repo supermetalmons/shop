@@ -1,13 +1,10 @@
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { keccak_256 } from '@noble/hashes/sha3';
-import { bytesToHex, concatBytes, hexToBytes, utf8ToBytes } from '@noble/hashes/utils';
 import { z } from 'zod';
 import {
   MI_NOTE_AUTH_CHALLENGE_PATH, MI_NOTE_AUTH_LOGOUT_PATH, MI_NOTE_AUTH_VERIFY_PATH,
   MI_NOTE_SESSION_HEADER, type MiNoteEthereumChallenge, type MiNoteEthereumSession,
 } from '../../../../shared/miNoteAuth.js';
 import { normalizeMiNoteAddress } from '../../../../shared/miNoteCards.js';
-import { checksumEthereumAddress } from '../../../../shared/ethereum/crypto.js';
+import { checksumEthereumAddress, personalMessageHash, recoverEthereumAddress } from '../../../../shared/ethereum/crypto.js';
 import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 import { getPreorderConfig } from '../../../../shared/preorders.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
@@ -100,21 +97,6 @@ function canonicalMessage(challenge: ChallengeRow): string {
   ].join('\n');
 }
 
-function signedAddress(message: string, signature: string): string | null {
-  try {
-    const bytes = hexToBytes(signature.slice(2));
-    if (bytes.length !== 65) return null;
-    const recovery = bytes[64] >= 27 ? bytes[64] - 27 : bytes[64];
-    if (recovery !== 0 && recovery !== 1) return null;
-    const body = utf8ToBytes(message);
-    const hash = keccak_256(concatBytes(utf8ToBytes(`\x19Ethereum Signed Message:\n${body.length}`), body));
-    const recovered = secp256k1.Signature.fromCompact(bytes.subarray(0, 64)).addRecoveryBit(recovery);
-    if (recovered.hasHighS()) return null;
-    const publicKey = recovered.recoverPublicKey(hash).toRawBytes(false);
-    return `0x${bytesToHex(keccak_256(publicKey.subarray(1)).subarray(12))}`;
-  } catch { return null; }
-}
-
 async function parseBody<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
   const value = await readBoundedRequestJson(request, {
     maxBytes: 2048,
@@ -161,7 +143,7 @@ async function createSession(request: Request, env: MiNoteAuthEnv, origin: strin
     challenge.origin !== origin || !getPreorderConfig(challenge.preorder_id)) {
     throw new MiNoteAuthError('failed-precondition', 409, 'The verification request expired or was already used. Please sign again.');
   }
-  if (signedAddress(canonicalMessage(challenge), body.signature) !== challenge.address) {
+  if (recoverEthereumAddress(personalMessageHash(canonicalMessage(challenge)), body.signature) !== challenge.address) {
     throw new MiNoteAuthError('unauthenticated', 401, 'The Ethereum signature does not match this wallet.');
   }
   const sessionId = crypto.randomUUID();

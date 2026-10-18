@@ -47,7 +47,6 @@ export default function Ethereum111kPage({
   const [receiptAction, setReceiptAction] = useState<'transfer' | 'claim' | null>(null);
   const [recipient, setRecipient] = useState('');
   const [claimCode, setClaimCode] = useState('');
-  const [walletPickerOpen, setWalletPickerOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [replacementHash, setReplacementHash] = useState('');
   const [confirmDismiss, setConfirmDismiss] = useState(false);
@@ -58,6 +57,7 @@ export default function Ethereum111kPage({
   const itemsById = useMemo(() => new Map(model.items.map(item => [item.id, item])), [model.items]);
   const selectedItems = useMemo(() => [...selected].map(id => itemsById.get(id)).filter((item): item is EthereumInventoryItem => Boolean(item)), [selected, itemsById]);
   const disabled = Boolean(model.busy || model.pending || model.submission || externalBusy || suspended);
+  const walletPickerOpen = wallet.status === 'choosing';
   const hasSubmittedTransaction = Boolean(model.pending || (model.submission && !model.busy));
   const remaining = kind === 'crate' ? model.stats.data?.remainingCrates : model.stats.data?.remainingWarehouses;
   const unitPrice = kind === 'crate' ? model.stats.data?.cratePriceWei ?? model.config.cratePriceWei : model.stats.data?.warehousePriceWei ?? model.config.warehousePriceWei;
@@ -148,9 +148,6 @@ export default function Ethereum111kPage({
     document.addEventListener('keydown', dismiss);
     return () => document.removeEventListener('keydown', dismiss);
   }, [selected.size, disabled, viewed, deliveryOpen, recoveryOpen, walletPickerOpen, model.revealed, model.scope]);
-  useEffect(() => {
-    setWalletPickerOpen(wallet.status === 'choosing');
-  }, [wallet.status]);
   useEffect(() => {
     if (walletPickerOpen) firstWalletRef.current?.focus();
   }, [walletPickerOpen]);
@@ -279,7 +276,7 @@ export default function Ethereum111kPage({
         {canDeliver ? <button type="button" onClick={() => setDeliveryOpen(true)} disabled={disabled}>Send</button> : null}
       </div>
     </div></BackgroundLayerPortal> : null}
-    <Modal open={walletPickerOpen} title="Connect Ethereum" onClose={() => { wallet.cancel(); setWalletPickerOpen(false); }} suspended={suspended}>
+    <Modal open={walletPickerOpen} title="Connect Ethereum" onClose={wallet.cancel} suspended={suspended}>
       <div className="ethereum111k__wallets">{wallet.wallets.map((candidate, index) => {
         const icon = getInjectedWalletIconSrc(candidate.info.icon);
         return <button key={candidate.info.uuid} ref={index === 0 ? firstWalletRef : undefined} type="button" onClick={() => wallet.selectWallet(candidate)}>{icon ? <img src={icon} alt="" /> : null}{candidate.info.name}</button>;
