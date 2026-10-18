@@ -220,12 +220,12 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function getTokenInfo(uint256 tokenId) public view returns (uint8 kind, uint256 displayId, address holder) {
-        if (!_exists(tokenId)) return (0, 0, address(0));
+        TokenOwnership memory ownership = tokenId <= MAX_ARTWORKS ? _artworkOwnership(tokenId) : _ownershipAt(tokenId);
+        if (ownership.addr == address(0) || ownership.burned) return (0, 0, address(0));
         if (tokenId <= MAX_ARTWORKS) {
-            TokenOwnership memory ownership = _ownershipOf(tokenId);
             return (uint8(ItemKind.Artwork), tokenId + ownership.extraData - MAX_ARTWORKS, ownership.addr);
         }
-        holder = ownerOf(tokenId);
+        holder = ownership.addr;
         if (tokenId >= CRATE_TOKEN_START && tokenId < CRATE_TOKEN_START + MAX_CRATES) {
             return (uint8(ItemKind.Crate), tokenId - CRATE_TOKEN_START + 1, holder);
         }
@@ -333,6 +333,16 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (holder != msg.sender) revert WrongOwner();
         if (kind != uint8(expected)) revert WrongItemKind();
         return number;
+    }
+
+    function _artworkOwnership(uint256 tokenId) private view returns (TokenOwnership memory) {
+        if (tokenId == 0 || tokenId >= _nextTokenId()) {
+            return TokenOwnership(address(0), 0, false, 0);
+        }
+        unchecked {
+            while (!_ownershipIsInitialized(tokenId)) --tokenId;
+        }
+        return _ownershipAt(tokenId);
     }
 
     function _mintSpotOnce(address recipient, uint256 tokenId) private {

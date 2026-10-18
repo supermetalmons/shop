@@ -118,7 +118,71 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
-Disabling ownership renunciation and using `ECDSA.recoverCalldata` were measured against `72882e49` with the settings below. All 13 delivery/claim scenarios save 237–248 gas per call; the other 16 measurements are unchanged. The collection runtime is now 14,233 bytes. Current baselines are in `snapshots/Mons111kGasTest.json`.
+### Ownership lookup optimization (2026-10-18)
+
+The accepted change resolves ownership once in `getTokenInfo`: sequential artwork lookup uses one bounded backward scan, while spot tokens read their explicit ownership entry. Both supply counters retain their existing storage representation. Compared with `abe1a634`, all 33 write benchmarks improve or stay unchanged. Fresh 20-item artwork lookup saves 5,044 gas (9.55%), fresh 31-item lookup saves 7,893 (9.87%), and fragmented lookup saves 1,159 (7.33%). Delivering 50 artworks saves 115,217 gas (3.73%).
+
+The read tradeoff is explicit: absent sequential/spot lookups cost 270/272 more gas; burned sequential/spot lookups cost 648/286 more. Their return values and `tokenURI` error behavior are unchanged. The generated ABI and authorization/metadata fixtures are unchanged.
+
+Counter packing was measured separately on top of the accepted ownership change, using a single word and the same `uint256` getter ABI. It saves 173 gas on direct crate purchases, 22,406 on first warehouse purchases (including after direct crate sales), 5,306 on later warehouse purchases, and 2,055 on `stats()`. It was rejected because 19 write benchmarks increase by 12 or 600 gas relative to the ownership candidate. The acceptance rule checks each write benchmark, without averaging gains against regressions. Packing's getter overhead is also shown below.
+
+The collection runtime grows from 14,233 to 14,411 bytes (+178) for the accepted change; the rejected packing candidate is 14,459 bytes (+48 more). The renderer remains 7,752 bytes. All are below the 24,576-byte runtime limit.
+
+All 45 measurements use the same harness, Foundry 1.7.1-Homebrew, Solidity 0.8.30, optimizer 200 runs, Prague, and the default non-IR pipeline. These are isolated call execution measurements, excluding setup and signature preparation; they are not complete wallet transaction gas or ETH fees. `Ownership Δ` compares with the baseline; `Packing Δ` compares with the accepted ownership implementation. Negative values save gas.
+
+| Operation | Baseline | Ownership | Ownership Δ | Packing | Packing Δ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| allocatedCrates | 2,362 | 2,362 | 0 | 2,377 | +15 |
+| claim20 | 609,895 | 609,808 | -87 | 609,820 | +12 |
+| claim20Crate10 | 609,895 | 609,808 | -87 | 609,820 | +12 |
+| claim20Receiver | 644,562 | 644,475 | -87 | 644,487 | +12 |
+| claim31 | 899,582 | 899,495 | -87 | 899,507 | +12 |
+| claim31Receiver | 953,320 | 953,234 | -86 | 953,246 | +12 |
+| deliverArtwork1 | 137,200 | 137,199 | -1 | 137,211 | +12 |
+| deliverArtworks50 | 3,091,891 | 2,976,674 | -115,217 | 2,977,274 | +600 |
+| deliverArtworks50Receiver | 3,178,904 | 3,063,725 | -115,179 | 3,064,325 | +600 |
+| deliverCrate1 | 129,752 | 129,663 | -89 | 129,675 | +12 |
+| deliverCrates50 | 2,043,799 | 2,040,119 | -3,680 | 2,040,719 | +600 |
+| deliverCrates50Receiver | 2,130,709 | 2,127,108 | -3,601 | 2,127,708 | +600 |
+| deliverMixed50 | 2,556,682 | 2,500,590 | -56,092 | 2,501,190 | +600 |
+| deliverMixed50Receiver | 2,643,667 | 2,587,634 | -56,033 | 2,588,234 | +600 |
+| getTokenInfoAbsentSequential | 2,732 | 3,002 | +270 | 3,002 | 0 |
+| getTokenInfoAbsentSpot | 2,848 | 3,120 | +272 | 3,120 | 0 |
+| getTokenInfoBurnedSequential | 4,951 | 5,599 | +648 | 5,599 | 0 |
+| getTokenInfoBurnedSpot | 2,848 | 3,134 | +286 | 3,134 | 0 |
+| getTokenInfoFragmented | 15,802 | 14,643 | -1,159 | 14,643 | 0 |
+| getTokenInfoFresh | 52,837 | 47,793 | -5,044 | 47,793 | 0 |
+| getTokenInfoFresh31 | 79,996 | 72,103 | -7,893 | 72,103 | 0 |
+| getTokenInfoInitialized | 5,805 | 5,803 | -2 | 5,803 | 0 |
+| getTokenInfoSpot | 3,532 | 3,442 | -90 | 3,442 | 0 |
+| mintCrates1 | 120,918 | 120,918 | 0 | 120,745 | -173 |
+| mintCrates15 | 484,246 | 484,246 | 0 | 484,073 | -173 |
+| mintCrates15After1 | 432,946 | 432,946 | 0 | 432,773 | -173 |
+| mintCrates15After240 | 432,946 | 432,946 | 0 | 432,773 | -173 |
+| mintCrates15AfterWarehouse | 432,946 | 432,946 | 0 | 432,773 | -173 |
+| mintCrates15Receiver | 510,253 | 510,253 | 0 | 510,080 | -173 |
+| mintCrates1AfterWarehouse | 69,618 | 69,618 | 0 | 69,445 | -173 |
+| mintWarehouses1 | 165,953 | 165,953 | 0 | 143,547 | -22,406 |
+| mintWarehouses15 | 843,203 | 843,203 | 0 | 820,797 | -22,406 |
+| mintWarehouses15AfterCrate | 791,903 | 791,903 | 0 | 769,497 | -22,406 |
+| mintWarehouses15AfterWarehouse | 774,803 | 774,803 | 0 | 769,497 | -5,306 |
+| mintWarehouses15Receiver | 869,210 | 869,210 | 0 | 846,804 | -22,406 |
+| mintWarehouses1AfterCrate | 114,653 | 114,653 | 0 | 92,247 | -22,406 |
+| mintWarehouses1AfterWarehouse | 97,553 | 97,553 | 0 | 92,247 | -5,306 |
+| stats | 13,190 | 13,190 | 0 | 11,135 | -2,055 |
+| unboxCrate20 | 130,918 | 130,828 | -90 | 130,840 | +12 |
+| unboxCrate20Receiver | 162,027 | 161,938 | -89 | 161,950 | +12 |
+| unboxCrate31 | 135,324 | 135,234 | -90 | 135,246 | +12 |
+| unboxCrate31Receiver | 183,408 | 183,319 | -89 | 183,331 | +12 |
+| unboxWarehouse | 353,550 | 353,461 | -89 | 353,473 | +12 |
+| unboxWarehouseReceiver | 372,627 | 372,538 | -89 | 372,550 | +12 |
+| warehousesMinted | 2,384 | 2,384 | 0 | 2,387 | +3 |
+
+[The benchmark record](benchmarks/ownership-counters.json) preserves all measurements, percentage changes, exact tool versions, source/harness hashes, and the decision. [The rejected packing patch](benchmarks/counter-packing.patch) reproduces that candidate from the accepted source in a separate checkout; it is evidence only and is not applied. To reproduce the baseline, use `src/Mons111k.sol` from `abe1a634` with the recorded 45-scenario harness. Run the command in the record for each source version with snapshot emission disabled. The committed [gas snapshots](snapshots/Mons111kGasTest.json) contain only the accepted implementation's measurements.
+
+### Historical comparisons
+
+Disabling ownership renunciation and using `ECDSA.recoverCalldata` were measured against `72882e49` with the settings below. All 13 delivery/claim scenarios save 237–248 gas per call; the other 16 measurements are unchanged. That revision had a 14,233-byte collection runtime.
 
 The historical comparison below records emergency-pause hardening at `8d260f49` against `9a95163b`, using Foundry 1.7.1, Solidity 0.8.30, optimizer 200 runs, and Prague. The same 29 isolated scenarios were captured before and after that change. Every measured call uses less gas, including the new pause check for delivery and claims. `Receiver` cases include minimal ERC-721 receiver callbacks; `After1`/`After240` use existing holdings; `Crate10` claims a different fixed artwork range.
 

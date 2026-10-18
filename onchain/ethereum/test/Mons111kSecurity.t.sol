@@ -34,6 +34,8 @@ contract SecurityReceiver {
     address public transferNewTo;
     uint256 public transferOtherId;
     address public transferOtherTo;
+    bool private checkPurchaseTotals;
+    uint256[3] private expectedPurchaseTotals;
     SecurityCall[] private attacks;
 
     error ReceiverRejected(uint256 callback);
@@ -49,7 +51,13 @@ contract SecurityReceiver {
         wrongSelector = wrongSelector_;
         transferNewTo = transferNewTo_;
         transferOtherId = 0;
+        checkPurchaseTotals = false;
         delete attacks;
+    }
+
+    function expectPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) external {
+        checkPurchaseTotals = true;
+        expectedPurchaseTotals = [allocated, warehouses, artworks];
     }
 
     function configureAttacks(SecurityCall[] calldata calls) external {
@@ -94,6 +102,14 @@ contract SecurityReceiver {
         require(holder == address(this), "callback owner mismatch");
         bytes32 metadata = keccak256(bytes(token.tokenURI(id)));
         require(metadata == keccak256(bytes(token.previewTokenURI(kind, displayId))), "callback metadata mismatch");
+        if (checkPurchaseTotals) {
+            (uint256 allocated, uint256 warehouses, uint256 artworks,,,) = token.stats();
+            require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
+            require(token.warehousesMinted() == expectedPurchaseTotals[1], "callback warehouse count mismatch");
+            require(allocated == expectedPurchaseTotals[0], "callback stats allocation mismatch");
+            require(warehouses == expectedPurchaseTotals[1], "callback stats warehouse count mismatch");
+            require(artworks == expectedPurchaseTotals[2], "callback stats artwork count mismatch");
+        }
         if (callbacks == rejectAt) {
             if (wrongSelector) return bytes4(0);
             revert ReceiverRejected(callbacks);
@@ -380,6 +396,26 @@ contract Mons111kSecurityTest is TestSupport {
 
     function testWarehouseMintCallbacksRejectEveryProtectedReentry() public {
         _reentry(1);
+    }
+
+    function testCrateMintCallbacksObserveFinalPurchaseTotalsBeforeAndAfterMixedHistory() public {
+        SecurityReceiver buyer = new SecurityReceiver(token);
+        vm.deal(address(buyer), 100 ether);
+        _purchaseWithTotals(buyer, false, 3, 3, 0, 0);
+        _purchaseWithTotals(buyer, true, 2, 25, 2, 0);
+        buyer.configure(0, false, address(0));
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111112)), 0);
+        _purchaseWithTotals(buyer, false, 15, 40, 2, 20);
+    }
+
+    function testWarehouseMintCallbacksObserveFinalPurchaseTotalsBeforeAndAfterMixedHistory() public {
+        SecurityReceiver buyer = new SecurityReceiver(token);
+        vm.deal(address(buyer), 100 ether);
+        _purchaseWithTotals(buyer, true, 3, 33, 3, 0);
+        _purchaseWithTotals(buyer, false, 2, 35, 3, 0);
+        buyer.configure(0, false, address(0));
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111145)), 0);
+        _purchaseWithTotals(buyer, true, 15, 200, 18, 20);
     }
 
     function testWarehouseOpeningCallbacksRejectEveryProtectedReentry() public {
@@ -680,25 +716,63 @@ contract Mons111kSecurityTest is TestSupport {
         uint256[3] memory positions = [uint256(1), count / 2 + 1, count];
         for (uint256 i; i < positions.length; ++i) {
             buyer.configure(positions[i], false, address(0));
+            _expectRoutePurchaseTotals(buyer, route);
             bytes32 beforeState = _state(address(buyer));
             SecurityVm(address(vm))
                 .expectRevert(abi.encodeWithSelector(SecurityReceiver.ReceiverRejected.selector, positions[i]));
             buyer.execute(call_.data, call_.value);
             assertEq(_state(address(buyer)), beforeState);
+            if (route < 2) _assertPurchaseTotals(15, 1, 0);
             assertEq(buyer.callbacks(), 0);
             _seedStillOwned(buyer);
             _assertOutputs(route, address(0));
         }
         buyer.configure(count / 2 + 1, true, address(0));
+        _expectRoutePurchaseTotals(buyer, route);
         bytes32 beforeWrongSelector = _state(address(buyer));
         vm.expectRevert(bytes4(keccak256("TransferToNonERC721ReceiverImplementer()")));
         buyer.execute(call_.data, call_.value);
         assertEq(_state(address(buyer)), beforeWrongSelector);
+        if (route < 2) _assertPurchaseTotals(15, 1, 0);
         _seedStillOwned(buyer);
         _assertOutputs(route, address(0));
         buyer.configure(0, false, address(0));
+        _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);
         _assertOutputs(route, address(buyer));
+        if (route < 2) _assertPurchaseTotals(route == 0 ? 18 : 48, route == 0 ? 1 : 4, 0);
+    }
+
+    function _expectRoutePurchaseTotals(SecurityReceiver buyer, uint256 route) internal {
+        if (route < 2) buyer.expectPurchaseTotals(route == 0 ? 18 : 48, route == 0 ? 1 : 4, 0);
+    }
+
+    function _purchaseWithTotals(
+        SecurityReceiver buyer,
+        bool warehouse,
+        uint256 quantity,
+        uint256 allocated,
+        uint256 warehouses,
+        uint256 artworks
+    ) internal {
+        buyer.configure(0, false, address(0));
+        buyer.expectPurchaseTotals(allocated, warehouses, artworks);
+        if (warehouse) {
+            buyer.execute(abi.encodeCall(token.mintWarehouses, (quantity)), quantity * token.warehousePrice());
+        } else {
+            buyer.execute(abi.encodeCall(token.mintCrates, (quantity)), quantity * token.cratePrice());
+        }
+        assertEq(buyer.callbacks(), quantity);
+        _assertPurchaseTotals(allocated, warehouses, artworks);
+    }
+
+    function _assertPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) internal view {
+        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,) = token.stats();
+        assertEq(token.allocatedCrates(), allocated);
+        assertEq(token.warehousesMinted(), warehouses);
+        assertEq(actualAllocated, allocated);
+        assertEq(actualWarehouses, warehouses);
+        assertEq(actualArtworks, artworks);
     }
 
     function _callbackTransfers(uint256 route) internal {

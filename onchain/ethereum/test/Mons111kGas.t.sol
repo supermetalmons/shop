@@ -56,6 +56,16 @@ contract Mons111kGasTest is TestSupport {
         _mintCrates(alice, 15, "mintCrates15After240");
     }
 
+    function testGasMintCrates1AfterWarehouse() public {
+        _buyWarehouses(alice, 1);
+        _mintCrates(alice, 1, "mintCrates1AfterWarehouse");
+    }
+
+    function testGasMintCrates15AfterWarehouse() public {
+        _buyWarehouses(alice, 1);
+        _mintCrates(alice, 15, "mintCrates15AfterWarehouse");
+    }
+
     function testGasMintWarehouses1() public {
         _mintWarehouses(alice, 1, "mintWarehouses1");
     }
@@ -66,6 +76,26 @@ contract Mons111kGasTest is TestSupport {
 
     function testGasMintWarehouses15Receiver() public {
         _mintWarehouses(receiver, 15, "mintWarehouses15Receiver");
+    }
+
+    function testGasMintWarehouses1AfterCrate() public {
+        _buyCrates(alice, 1);
+        _mintWarehouses(alice, 1, "mintWarehouses1AfterCrate");
+    }
+
+    function testGasMintWarehouses15AfterCrate() public {
+        _buyCrates(alice, 1);
+        _mintWarehouses(alice, 15, "mintWarehouses15AfterCrate");
+    }
+
+    function testGasMintWarehouses1AfterWarehouse() public {
+        _buyWarehouses(alice, 1);
+        _mintWarehouses(alice, 1, "mintWarehouses1AfterWarehouse");
+    }
+
+    function testGasMintWarehouses15AfterWarehouse() public {
+        _buyWarehouses(alice, 1);
+        _mintWarehouses(alice, 15, "mintWarehouses15AfterWarehouse");
     }
 
     function testGasUnboxWarehouse() public {
@@ -165,6 +195,106 @@ contract Mons111kGasTest is TestSupport {
         assertEq(kind, 1);
         assertEq(displayId, 20);
         assertEq(owner, alice);
+    }
+
+    function testGasGetTokenInfoFresh31() public {
+        uint256 crateId = _bonusCrate(alice);
+        vm.prank(alice);
+        token.unboxCrate(crateId);
+        (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(31);
+        vm.snapshotGasLastCall("getTokenInfoFresh31");
+        assertEq(kind, 1);
+        assertEq(displayId, 111111);
+        assertEq(owner, alice);
+    }
+
+    function testGasGetTokenInfoInitialized() public {
+        _artworks(alice, 1);
+        vm.prank(alice);
+        token.transferFrom(alice, bob, 20);
+        (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(20);
+        vm.snapshotGasLastCall("getTokenInfoInitialized");
+        assertEq(kind, 1);
+        assertEq(displayId, 20);
+        assertEq(owner, bob);
+    }
+
+    function testGasGetTokenInfoSpot() public {
+        _buyCrates(alice, 1);
+        (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(111112);
+        vm.snapshotGasLastCall("getTokenInfoSpot");
+        assertEq(kind, 2);
+        assertEq(displayId, 1);
+        assertEq(owner, alice);
+    }
+
+    function testGasGetTokenInfoAbsentSequential() public {
+        _artworks(alice, 1);
+        _absentTokenInfo(21, "getTokenInfoAbsentSequential");
+    }
+
+    function testGasGetTokenInfoAbsentSpot() public {
+        _buyCrates(alice, 1);
+        _absentTokenInfo(111113, "getTokenInfoAbsentSpot");
+    }
+
+    function testGasGetTokenInfoBurnedSequential() public {
+        _artworks(alice, 1);
+        uint256[] memory ids = _range(20, 1);
+        Mons111k.DeliveryQuote memory quote = _quote(alice, ids);
+        bytes memory signature = _deliverySignature(ids, quote);
+        vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        _absentTokenInfo(20, "getTokenInfoBurnedSequential");
+    }
+
+    function testGasGetTokenInfoBurnedSpot() public {
+        _artworks(alice, 1);
+        _absentTokenInfo(111112, "getTokenInfoBurnedSpot");
+    }
+
+    function testGasStats() public {
+        _buyCrates(alice, 1);
+        _buyWarehouses(alice, 1);
+        (
+            uint256 allocated,
+            uint256 warehouses,
+            uint256 artworks,
+            uint256 cratePrice,
+            uint256 warehousePrice,
+            bool saleActive
+        ) = token.stats();
+        vm.snapshotGasLastCall("stats");
+        assertEq(allocated, 12);
+        assertEq(warehouses, 1);
+        assertEq(artworks, 0);
+        assertEq(cratePrice, 0.0001 ether);
+        assertEq(warehousePrice, 0.0011 ether);
+        assertTrue(saleActive);
+    }
+
+    function testGasAllocatedCrates() public {
+        _buyCrates(alice, 1);
+        _buyWarehouses(alice, 1);
+        uint256 allocated = token.allocatedCrates();
+        vm.snapshotGasLastCall("allocatedCrates");
+        assertEq(allocated, 12);
+    }
+
+    function testGasWarehousesMinted() public {
+        _buyCrates(alice, 1);
+        _buyWarehouses(alice, 1);
+        uint256 warehouses = token.warehousesMinted();
+        vm.snapshotGasLastCall("warehousesMinted");
+        assertEq(warehouses, 1);
+    }
+
+    function _absentTokenInfo(uint256 tokenId, string memory name) internal {
+        (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(tokenId);
+        vm.snapshotGasLastCall(name);
+        assertEq(kind, 0);
+        assertEq(displayId, 0);
+        assertEq(owner, address(0));
     }
 
     function _mintCrates(address wallet, uint256 quantity, string memory name) internal {

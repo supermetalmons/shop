@@ -135,6 +135,59 @@ contract Mons111kTest is TestSupport {
         assertEq(token.allocatedCrates(), 12);
     }
 
+    function testMissingTokenInfoAndMetadataAcrossRangesBeforeAndAfterMinting() public {
+        _missingTokenMatrix(1);
+        _missingToken(111112);
+        _missingToken(116667);
+        _missingToken(1_000_001);
+        _missingToken(2_000_001);
+
+        _buyCrates(alice, 3);
+        _buyWarehouses(alice, 1);
+        vm.prank(alice);
+        token.unboxCrate(111112);
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = 1;
+        ids[1] = 111113;
+        _redeem(alice, ids, 1);
+
+        _missingTokenMatrix(21);
+        _info(20, 1, 20, alice);
+        _info(111114, 2, 3, alice);
+        _info(116667, 3, 1, alice);
+        _info(1_000_001, 4, 1, alice);
+        _info(2_000_002, 5, 2, alice);
+    }
+
+    function testArtworkBurnsPreserveNeighborsAtBatchBoundariesAndTail() public {
+        _buyCrates(alice, 2);
+        vm.startPrank(alice);
+        token.unboxCrate(111113);
+        token.unboxCrate(111112);
+        vm.stopPrank();
+        uint256[] memory ids = new uint256[](4);
+        ids[0] = 1;
+        ids[1] = 10;
+        ids[2] = 20;
+        ids[3] = 40;
+        _redeem(alice, ids, 1);
+
+        for (uint256 i; i < ids.length; ++i) {
+            _missingToken(ids[i]);
+        }
+        _info(2, 1, 22, alice);
+        _info(9, 1, 29, alice);
+        _info(11, 1, 31, alice);
+        _info(19, 1, 39, alice);
+        _info(21, 1, 1, alice);
+        _info(39, 1, 19, alice);
+        _missingToken(41);
+        _info(1_000_021, 4, 21, alice);
+        _info(1_000_030, 4, 30, alice);
+        _info(1_000_040, 4, 40, alice);
+        _info(1_000_020, 4, 20, alice);
+    }
+
     function testWarehouseReservationsStayDistinctAndUnpackingDoesNotChangeSupply() public {
         _buyCrates(alice, 2);
         vm.prank(bob);
@@ -148,7 +201,7 @@ contract Mons111kTest is TestSupport {
         vm.prank(bob);
         token.unboxWarehouse(116668);
         assertEq(token.allocatedCrates(), 25);
-        _info(116668, 0, 0, address(0));
+        _missingToken(116668);
         for (uint256 number = 14; number <= 24; ++number) {
             _info(111111 + number, 2, number, bob);
         }
@@ -188,6 +241,7 @@ contract Mons111kTest is TestSupport {
     function testReceiptClaimUsesFixedCrateNumbersAndCanTransfer() public {
         _buyCrates(alice, 3);
         _redeem(alice, _one(111114), 1);
+        _missingToken(111114);
         _info(2_000_003, 5, 3, alice);
         vm.prank(alice);
         token.transferFrom(alice, bob, 2_000_003);
@@ -202,7 +256,7 @@ contract Mons111kTest is TestSupport {
         for (uint256 id = 41; id <= 60; ++id) {
             _info(1_000_000 + id, 4, id, bob);
         }
-        _info(2_000_003, 0, 0, address(0));
+        _missingToken(2_000_003);
         vm.prank(bob);
         vm.expectRevert();
         token.claimCrateReceipt(2_000_003, claimId, deadline, signature);
@@ -639,6 +693,46 @@ contract Mons111kTest is TestSupport {
         assertEq(kind, expectedKind);
         assertEq(id, expectedId);
         assertEq(holder, expectedOwner);
+    }
+
+    function _missingToken(uint256 tokenId) internal {
+        _info(tokenId, 0, 0, address(0));
+        vm.expectRevert(bytes4(keccak256("URIQueryForNonexistentToken()")));
+        token.tokenURI(tokenId);
+    }
+
+    function _missingTokenMatrix(uint256 nextArtwork) internal {
+        uint256[26] memory ids = [
+            uint256(0),
+            nextArtwork,
+            nextArtwork + 1,
+            111110,
+            111111,
+            111115,
+            116665,
+            116666,
+            116668,
+            117170,
+            117171,
+            117172,
+            500000,
+            999999,
+            1_000_000,
+            1_000_002,
+            1_111_110,
+            1_111_111,
+            1_111_112,
+            1_999_999,
+            2_000_000,
+            2_000_003,
+            2_005_554,
+            2_005_555,
+            2_005_556,
+            type(uint256).max
+        ];
+        for (uint256 i; i < ids.length; ++i) {
+            _missingToken(ids[i]);
+        }
     }
 
     function _quote(address wallet, uint256 orderId, uint256[] memory ids)
