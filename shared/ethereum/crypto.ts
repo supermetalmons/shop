@@ -54,15 +54,19 @@ function typedDigest(chainId: number, contractAddress: string, structHash: Hex):
   return keccakHex(concatBytes(Uint8Array.of(0x19, 0x01), hexToBytes(domain.slice(2)), hexToBytes(structHash.slice(2))));
 }
 
+export function ethereumTokenIdsHash(tokenIds: readonly (string | bigint | number)[]): Hex {
+  return keccakHex(encodeAbi(['uint256[]'], [tokenIds]));
+}
+
 export function ethereumReceiptIdsHash(receiptIds: readonly (string | bigint | number)[]): Hex {
-  return keccakHex(encodeAbi(['uint256[]'], [receiptIds]));
+  return ethereumTokenIdsHash(receiptIds);
 }
 
 export function deliveryDigest(args: {
   chainId: number; contractAddress: string; wallet: string; tokenIds: readonly (string | bigint | number)[];
   orderId: number | bigint | string; fee: string | bigint; deadline: number | bigint; receiptIdsHash: string;
 }): Hex {
-  const idsHash = keccakHex(encodeAbi(['uint256[]'], [args.tokenIds]));
+  const idsHash = ethereumTokenIdsHash(args.tokenIds);
   const structHash = keccakHex(encodeAbi(['bytes32', 'address', 'bytes32', 'bytes32', 'uint256', 'uint256', 'uint256'], [
     hashText('Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)'),
     requireEthereumAddress(args.wallet), idsHash, args.receiptIdsHash, args.orderId, args.fee, args.deadline,

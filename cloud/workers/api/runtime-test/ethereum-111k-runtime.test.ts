@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
@@ -47,7 +49,9 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
     }
     const publicConfig = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: ORIGIN } });
     assert.equal(publicConfig.status, 200);
-    assert.equal((await publicConfig.json() as { enabled: boolean }).enabled, false);
+    const collectionConfig = await publicConfig.json() as { enabled: boolean; maxUnboxQuantity: number };
+    assert.equal(collectionConfig.enabled, false);
+    assert.equal(collectionConfig.maxUnboxQuantity, 15);
     assert.match(publicConfig.headers.get('cache-control') || '', /no-store/);
     const forged = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: 'https://evil.example' } });
     assert.equal(forged.status, 403);
@@ -95,6 +99,100 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
     assert.ok(await runtimeEnv.COMMERCE_DB.prepare("SELECT name FROM sqlite_schema WHERE name = 'ethereum_delivery_quotes'").first());
     assert.ok(await runtimeEnv.COMMERCE_DB.prepare("SELECT name FROM sqlite_schema WHERE name = 'ethereum_crate_claims'").first());
   } finally { await server.close(); }
+});
+
+test('native Worker contract batches return a full 311-item confirmation and reject a changed snapshot', async () => {
+  const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const directory = await mkdtemp(join(tmpdir(), '111k-read-runtime-'));
+  const fixturePath = join(directory, 'worker.mjs');
+  await writeFile(fixturePath, `
+import { handleEthereumRequest } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumHandler.ts'))};
+import { encodeAbi, encodeCall, decodeReturn, ETHEREUM_EVENT_TOPICS } from ${JSON.stringify(resolve('shared/ethereum/abi.ts'))};
+const contract = '0x1111111111111111111111111111111111111111';
+const wallet = ${JSON.stringify(WALLET)};
+const zero = '0x0000000000000000000000000000000000000000';
+const hash = '0x' + 'aa'.repeat(32);
+const blockHash = number => '0x' + number.toString(16).padStart(64, '0');
+const selector = signature => encodeCall(signature, [], []);
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url);
+    const calls = [];
+    const envelopes = [];
+    let changed = false;
+    const provider = async (_input, init) => {
+      const payload = JSON.parse(init.body);
+      const respond = rpc => {
+        let result;
+        if (rpc.method === 'eth_chainId') result = '0x7a69';
+        else if (rpc.method === 'eth_blockNumber') result = '0x66';
+        else if (rpc.method === 'eth_getBlockByNumber') {
+          const number = rpc.params[0] === 'latest' ? 102 : Number(BigInt(rpc.params[0]));
+          result = { number: '0x' + number.toString(16), hash: blockHash(changed && number === 102 ? 999 : number) };
+        } else if (rpc.method === 'eth_getTransactionReceipt') {
+          result = { transactionHash: hash, blockNumber: '0x64', blockHash: blockHash(100), status: '0x1', from: wallet, to: contract,
+            logs: Array.from({ length: 311 }, (_, index) => ({ address: contract,
+              topics: [ETHEREUM_EVENT_TOPICS.Transfer, encodeAbi(['address'], [zero]), encodeAbi(['address'], [wallet]), encodeAbi(['uint256'], [index + 1])],
+              data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: hash, logIndex: '0x' + index.toString(16) })) };
+        } else if (rpc.method === 'eth_call') {
+          calls.push(rpc.params);
+          const data = rpc.params[0].data;
+          const argumentsHex = '0x' + data.slice(10);
+          if (data.startsWith(selector('getTokenInfos(uint256[])'))) {
+            const [ids] = decodeReturn(['uint256[]'], argumentsHex);
+            if (ids.length > 150) throw new Error('Token information batch is too large');
+            result = encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id => [1, id, wallet])]);
+          } else if (data.startsWith(selector('previewTokenURIs(uint8[],uint256[])'))) {
+            const [kinds, ids] = decodeReturn(['uint8[]', 'uint256[]'], argumentsHex);
+            if (ids.length > 30 || kinds.length !== ids.length) throw new Error('Metadata batch is invalid');
+            result = encodeAbi(['string[]'], [ids.map(id => 'data:application/json;base64,' + btoa(JSON.stringify({
+              name: 'Artwork #' + id, image: 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+            })))]);
+            if (url.searchParams.has('reorg')) changed = true;
+          } else throw new Error('Unexpected contract read');
+        } else throw new Error('Unexpected RPC: ' + rpc.method);
+        return { jsonrpc: '2.0', id: rpc.id, result };
+      };
+      if (Array.isArray(payload)) envelopes.push(payload.length);
+      return Response.json(Array.isArray(payload) ? payload.map(respond).reverse() : respond(payload));
+    };
+    const response = await handleEthereumRequest(request, { ...env, PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: true }) } }, url.pathname, { fetch: provider });
+    response.headers.set('X-Test-Contract-Calls', String(calls.length));
+    response.headers.set('X-Test-Max-Envelope', String(Math.max(...envelopes)));
+    response.headers.set('X-Test-Pinned-Calls', String(calls.every(params => params[1] === blockHash(102))));
+    return response;
+  },
+};
+`, 'utf8');
+  const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
+    name: 'ethereum-read-runtime', main: fixturePath,
+    compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
+    vars: { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: '0x1111111111111111111111111111111111111111',
+      ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0' },
+  } }] });
+  try {
+    await server.listen();
+    const worker = server.getWorker('ethereum-read-runtime');
+    const confirm = (query = '') => worker.fetch(`https://api.mons.shop${paths.transactionsConfirm}${query}`, {
+      method: 'POST', headers: { Origin: ORIGIN, 'X-Mons-CSRF': '1', 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.42' },
+      body: JSON.stringify({ transactionHash: `0x${'aa'.repeat(32)}` }),
+    });
+    const confirmed = await confirm();
+    assert.equal(confirmed.status, 200, await confirmed.clone().text());
+    const body = await confirmed.json() as { status: string; items: { tokenId: string; name: string }[] };
+    assert.equal(body.status, 'confirmed');
+    assert.deepEqual(body.items.map(item => item.tokenId), Array.from({ length: 311 }, (_, index) => String(index + 1)));
+    assert.equal(body.items[310].name, 'Artwork #311');
+    assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '14');
+    assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '4');
+    assert.equal(confirmed.headers.get('X-Test-Pinned-Calls'), 'true');
+    const orphaned = await confirm('?reorg=1');
+    assert.equal(orphaned.status, 503);
+    assert.equal((await orphaned.json() as { items?: unknown }).items, undefined);
+  } finally {
+    await server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('native D1 rejects stale Ethereum state inside the document commit', async () => {

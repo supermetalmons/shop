@@ -39,6 +39,7 @@ contract SecurityReceiver {
     uint256[3] private expectedPurchaseTotals;
     uint256[] private deliverySources;
     uint256[] private deliveryReceipts;
+    uint256[] private unboxSources;
     uint256 private deliveryStartingBalance;
     uint256 private deliveryStartingSupply;
     uint256 private deliveryOrderId;
@@ -62,6 +63,7 @@ contract SecurityReceiver {
         checkPurchaseTotals = false;
         delete deliverySources;
         delete deliveryReceipts;
+        delete unboxSources;
         delete attacks;
     }
 
@@ -99,6 +101,10 @@ contract SecurityReceiver {
         catchSourceTransfers = catchTransfers;
     }
 
+    function expectUnboxSources(uint256[] calldata sources) external {
+        unboxSources = sources;
+    }
+
     function execute(bytes calldata data, uint256 value) external {
         _execute(data, value);
     }
@@ -128,6 +134,17 @@ contract SecurityReceiver {
         bytes32 metadata = keccak256(bytes(token.tokenURI(id)));
         require(metadata == keccak256(bytes(token.previewTokenURI(kind, displayId))), "callback metadata mismatch");
         if (deliverySources.length != 0) _checkDeliveryState(id);
+        for (uint256 i; i < unboxSources.length; ++i) {
+            (uint8 sourceKind, uint256 sourceNumber, address sourceHolder) = token.getTokenInfo(unboxSources[i]);
+            require(sourceKind == 0 && sourceNumber == 0 && sourceHolder == address(0), "unbox source remains live");
+            (bool transferred, bytes memory reason) = address(token)
+                .call(abi.encodeCall(token.transferFrom, (address(this), address(0xB0B), unboxSources[i])));
+            require(
+                !transferred && bytes4(reason) == bytes4(keccak256("OwnerQueryForNonexistentToken()")),
+                "unbox source transfer did not fail"
+            );
+            sourceTransferFailures++;
+        }
         if (checkPurchaseTotals) {
             (uint256 allocated, uint256 warehouses, uint256 artworks,,,) = token.stats();
             require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
@@ -503,6 +520,10 @@ contract NFT111KSecurityTest is TestSupport {
         _reentry(5);
     }
 
+    function testBatchOpeningCallbacksRejectEveryProtectedReentry() public {
+        _reentry(6);
+    }
+
     function testCrateMintRejectionAtFirstMiddleAndLastRollsBackAndRetries() public {
         _rejections(0);
     }
@@ -527,6 +548,10 @@ contract NFT111KSecurityTest is TestSupport {
         _rejections(5);
     }
 
+    function testBatchOpeningRejectionAtFirstMiddleAndLastRollsBackAndRetries() public {
+        _rejections(6);
+    }
+
     function testFreshCrateTransfersInsideCallbacksPreserveOwnershipAndMetadata() public {
         _callbackTransfers(0);
     }
@@ -549,6 +574,78 @@ contract NFT111KSecurityTest is TestSupport {
 
     function testFreshClaimReceiptTransfersInsideCallbacksPreserveOwnershipAndMetadata() public {
         _callbackTransfers(5);
+    }
+
+    function testBatchArtworkTransfersInsideCallbacksPreserveOwnershipAndMetadata() public {
+        _callbackTransfers(6);
+    }
+
+    function testBatchCallbacksObserveEverySelectedCrateAlreadyBurned() public {
+        SecurityReceiver buyer = _receiver();
+        buyer.expectUnboxSources(_range(111112, 3));
+        SecurityCall memory call_ = _route(buyer, 6);
+        buyer.execute(call_.data, 0);
+        assertEq(buyer.callbacks(), 60);
+        assertEq(buyer.sourceTransferFailures(), 180);
+        _assertOutputs(6, address(buyer));
+    }
+
+    function testBatchUncaughtSourceTransferRollsBackAndCanRetry() public {
+        SecurityReceiver buyer = _receiver();
+        buyer.configureOtherTransfer(111114, BOB);
+        SecurityCall memory call_ = _route(buyer, 6);
+        bytes32 beforeState = _state(address(buyer));
+        vm.expectRevert(bytes4(keccak256("OwnerQueryForNonexistentToken()")));
+        buyer.execute(call_.data, 0);
+        assertEq(_state(address(buyer)), beforeState);
+        _seedStillOwned(buyer);
+        buyer.configure(0, false, address(0));
+        buyer.execute(call_.data, 0);
+        _assertOutputs(6, address(buyer));
+    }
+
+    function testBatchCanTransferUnrelatedAndNewArtworksDuringCallbacks() public {
+        SecurityReceiver buyer = _receiver();
+        buyer.execute(abi.encodeCall(token.unboxCrate, (111112)), 0);
+        buyer.configure(0, false, BOB);
+        buyer.configureOtherTransfer(2, BOB);
+        uint256[] memory ids = _range(111113, 2);
+        buyer.execute(abi.encodeCall(token.unboxCrates, (ids)), 0);
+        _outputs(21, 40, 1, 21, BOB);
+        _info(2, 1, 2, BOB);
+        assertEq(buyer.callbacks(), 40);
+    }
+
+    function testBatchThenSingleOpeningClearsTransientState() public {
+        SecurityReceiver buyer = _receiver();
+        SecurityCall[] memory calls = new SecurityCall[](2);
+        calls[0] = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
+        calls[1] = SecurityCall(abi.encodeCall(token.unboxCrate, (111114)), 0);
+        buyer.executeSequence(calls);
+        _outputs(1, 60, 1, 1, address(buyer));
+    }
+
+    function testSingleThenBatchOpeningKeepsIndependentArtworkOffsets() public {
+        SecurityReceiver buyer = _receiver();
+        SecurityCall[] memory calls = new SecurityCall[](2);
+        calls[0] = SecurityCall(abi.encodeCall(token.unboxCrate, (111114)), 0);
+        calls[1] = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
+        buyer.executeSequence(calls);
+        _outputs(1, 20, 1, 41, address(buyer));
+        _outputs(21, 40, 1, 1, address(buyer));
+    }
+
+    function testCaughtBatchRejectionThenDifferentOpeningAndBatchRetryClearTransientState() public {
+        SecurityReceiver buyer = _receiver();
+        SecurityCall memory batch = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
+        buyer.configure(25, false, address(0));
+        SecurityCall[] memory calls = new SecurityCall[](2);
+        calls[0] = SecurityCall(abi.encodeCall(token.unboxCrate, (111114)), 0);
+        calls[1] = batch;
+        buyer.executeAfterCaughtRevert(batch.data, 0, calls);
+        assertEq(buyer.caughtFailures(), 1);
+        _outputs(1, 20, 1, 41, address(buyer));
+        _outputs(21, 40, 1, 1, address(buyer));
     }
 
     function testCallbackTransferOfLaterDeliveryItemRollsBackTheWholeSelection() public {
@@ -847,6 +944,12 @@ contract NFT111KSecurityTest is TestSupport {
                 quote.fee
             );
         }
+        if (route == 6) {
+            uint256[] memory ids = _range(111112, 3);
+            ids[0] = 111114;
+            ids[2] = 111112;
+            return SecurityCall(abi.encodeCall(token.unboxCrates, (ids)), 0);
+        }
         uint256 deadline = block.timestamp + 300;
         return SecurityCall(
             abi.encodeCall(
@@ -865,7 +968,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _reentry(uint256 route) internal {
         SecurityReceiver buyer = _receiver();
         SecurityCall memory call_ = _route(buyer, route);
-        SecurityCall[] memory attacks = new SecurityCall[](6);
+        SecurityCall[] memory attacks = new SecurityCall[](7);
         attacks[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         attacks[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         attacks[2] = SecurityCall(abi.encodeCall(token.unboxWarehouse, (116667)), 0);
@@ -888,16 +991,17 @@ contract NFT111KSecurityTest is TestSupport {
             ),
             0
         );
+        attacks[6] = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
         buyer.configureAttacks(attacks);
         buyer.execute(call_.data, call_.value);
         assertEq(buyer.callbacks(), _count(route));
-        assertEq(buyer.blockedCalls(), 6 * _count(route));
+        assertEq(buyer.blockedCalls(), 7 * _count(route));
         assertFalse(token.usedDeliveryOrders(99));
         assertFalse(token.usedClaims(INNER_CLAIM));
         _assertOutputs(route, address(buyer));
         assertEq(token.allocatedCrates(), route == 0 ? 18 : route == 1 ? 48 : 15);
         assertEq(token.warehousesMinted(), route == 1 ? 4 : 1);
-        assertEq(_artworksMinted(), route == 3 ? 20 : 0);
+        assertEq(_artworksMinted(), route == 3 ? 20 : route == 6 ? 60 : 0);
     }
 
     function _rejections(uint256 route) internal {
@@ -1010,16 +1114,27 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _count(uint256 route) internal pure returns (uint256) {
-        return route == 0 || route == 1 || route == 4 ? 3 : route == 2 ? 11 : 20;
+        return route == 0 || route == 1 || route == 4 ? 3 : route == 2 ? 11 : route == 6 ? 60 : 20;
     }
 
     function _assertOutputs(uint256 route, address holder) internal view {
-        if (route == 0) _outputs(111127, 3, 2, 16, holder);
-        else if (route == 1) _outputs(116668, 3, 3, 2, holder);
-        else if (route == 2) _outputs(111116, 11, 2, 5, holder);
-        else if (route == 3) _outputs(1, 20, 1, 21, holder);
-        else if (route == 4) _outputs(2000001, 3, 5, 1, holder);
-        else _outputs(1000061, 20, 4, 61, holder);
+        if (route == 0) {
+            _outputs(111127, 3, 2, 16, holder);
+        } else if (route == 1) {
+            _outputs(116668, 3, 3, 2, holder);
+        } else if (route == 2) {
+            _outputs(111116, 11, 2, 5, holder);
+        } else if (route == 3) {
+            _outputs(1, 20, 1, 21, holder);
+        } else if (route == 4) {
+            _outputs(2000001, 3, 5, 1, holder);
+        } else if (route == 5) {
+            _outputs(1000061, 20, 4, 61, holder);
+        } else {
+            _outputs(1, 20, 1, 41, holder);
+            _outputs(21, 20, 1, 21, holder);
+            _outputs(41, 20, 1, 1, holder);
+        }
     }
 
     function _seedStillOwned(SecurityReceiver buyer) internal view {
@@ -1092,9 +1207,7 @@ contract NFT111KSecurityTest is TestSupport {
             receipts[i] = (kind == 1 ? 1000000 : 2000000) + displayId;
         }
         return
-            NFT111K.DeliveryQuote(
-                orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts))
-            );
+            NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
     }
 
     function _redeem(address wallet, uint256[] memory ids, uint256 orderId) internal {
@@ -1130,9 +1243,8 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _sign(bytes32 structHash, uint256 key) internal returns (bytes memory) {
-        bytes32 domain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token))
-        );
+        bytes32 domain =
+            keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token)));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, keccak256(abi.encodePacked(hex"1901", domain, structHash)));
         return abi.encodePacked(r, s, v);
     }

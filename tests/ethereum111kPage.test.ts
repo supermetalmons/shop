@@ -95,6 +95,55 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
   assert.equal(view.queryByRole('button', { name: 'Open crate' }), null);
 });
 
+test('crate opening is capped at fifteen without truncating fifty-item delivery selections', async t => {
+  const crates = Array.from({ length: 51 }, (_, index) => ({ ...item(String(111112 + index)), displayId: index + 1, name: `Crate #${index + 1}` }));
+  const artwork = { ...item('1', 'artwork'), name: 'Artwork #1' };
+  const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [...crates, artwork, warehouse], nextCursor: null, observedBlock: 10 }));
+  const view = page();
+  const select = (token: EthereumInventoryItem) => fireEvent.click(view.container.querySelector(`[data-inventory-id="${token.id}"]`)!);
+  await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, 53));
+  select(crates[0]);
+  assert.equal((view.getByRole('button', { name: 'Open crate' }) as HTMLButtonElement).disabled, false);
+  for (const crate of crates.slice(1, 15)) select(crate);
+  assert.equal((view.getByRole('button', { name: 'Open 15 crates' }) as HTMLButtonElement).disabled, false);
+  select(crates[15]);
+  assert.equal((view.getByRole('button', { name: 'Open 16 crates' }) as HTMLButtonElement).disabled, true);
+  assert.ok(view.getByText(/Open up to 15 crates at once/));
+  for (const crate of crates.slice(16)) select(crate);
+  assert.equal((view.getByRole('button', { name: 'Open 50 crates' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 50);
+  select(crates[0]);
+  select(artwork);
+  assert.equal(view.queryByRole('button', { name: /Open \d+ crates/ }), null);
+  assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);
+  select(warehouse);
+  assert.equal(view.container.querySelectorAll('.inventory__item--selected').length, 1);
+  assert.equal((view.getByRole('button', { name: 'Open warehouse' }) as HTMLButtonElement).disabled, false);
+  assert.equal(view.queryByRole('button', { name: 'Send' }), null);
+});
+
+test('the complete bonus batch reveal keeps all 311 artworks reachable with lazy image decoding', async t => {
+  const artworks: EthereumInventoryItem[] = Array.from({ length: 311 }, (_, index) => ({
+    ...item(String(index + 1), 'artwork'), displayId: index + 1, name: `Artwork #${index + 1}`,
+  }));
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'ab'.repeat(32)}`, action: 'unbox', submittedAt: Date.now() });
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+    items: artworks.filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
+  }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1, items: artworks, burnedTokenIds: [] }));
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('dialog', { name: 'Your artworks' })));
+  const reveal = document.querySelector('.ethereum111k__reveal-grid')!;
+  assert.equal(reveal.querySelectorAll('button').length, 311);
+  assert.ok(view.getByText('311 artworks'));
+  assert.ok([...reveal.querySelectorAll('img')].every(image => image.getAttribute('loading') === 'lazy' && image.getAttribute('decoding') === 'async'));
+  fireEvent.click(reveal.querySelectorAll('button')[310]);
+  assert.ok(view.getByRole('dialog', { name: 'Artwork #311' }));
+});
+
 test('claim links load the owned receipt, prefill its code, and remove the code from the address bar', async t => {
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item('2000001', 'crate_receipt')], nextCursor: null, observedBlock: 10 }));
   window.history.replaceState(null, '', '/111k_devnet?receiptId=2000001&claim=ABCDEF123456');

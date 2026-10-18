@@ -34,7 +34,10 @@ const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200.json');
 assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
 const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
 const expectedNames = Object.keys(committedSnapshots).sort((a, b) => a.localeCompare(b));
-assert.equal(expectedNames.length, 89, 'Expected all 89 committed gas benchmarks');
+const sourceNames = [...read(join(packageRoot, 'test/NFT111KGas.t.sol')).matchAll(/\bfunction\s+testGas([A-Z]\w*)\s*\(\s*\)/g)]
+  .map(([, name]) => name[0].toLowerCase() + name.slice(1)).sort((a, b) => a.localeCompare(b));
+assert.ok(sourceNames.length > 0 && new Set(sourceNames).size === sourceNames.length, 'Gas benchmark names are missing or duplicated');
+assert.deepEqual(expectedNames, sourceNames, 'Committed gas snapshots must cover every benchmark');
 const baselineReference = updateBaseline ? undefined : JSON.parse(read(baselinePath));
 if (baselineReference) {
   assert.equal(baselineReference.schemaVersion, 1, 'Unsupported compiler baseline schema');
@@ -252,7 +255,7 @@ const report = {
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
     fixedSettings: { solc: '0.8.30', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
     harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE in the original order, preserving addresses and signed calldata.',
-    measurement: 'All 89 snapshotGasLastCall measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.',
+    measurement: `All ${expectedNames.length} measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.`,
     environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.',
   },
   variants: [],

@@ -118,6 +118,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_METADATA_BATCH_SIZE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_PURCHASE_QUANTITY",
     "inputs": [],
     "outputs": [
@@ -132,6 +145,32 @@ export const nft111KAbi = [
   {
     "type": "function",
     "name": "MAX_QUOTE_LIFETIME",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_TOKEN_INFO_BATCH_SIZE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_UNBOX_QUANTITY",
     "inputs": [],
     "outputs": [
       {
@@ -359,6 +398,42 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "getTokenInfos",
+    "inputs": [
+      {
+        "name": "tokenIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "infos",
+        "type": "tuple[]",
+        "internalType": "struct NFT111K.TokenInfo[]",
+        "components": [
+          {
+            "name": "kind",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "displayId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "holder",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "isApprovedForAll",
     "inputs": [
       {
@@ -485,6 +560,30 @@ export const nft111KAbi = [
         "name": "",
         "type": "string",
         "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "previewTokenURIs",
+    "inputs": [
+      {
+        "name": "kinds",
+        "type": "uint8[]",
+        "internalType": "uint8[]"
+      },
+      {
+        "name": "displayIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "uris",
+        "type": "string[]",
+        "internalType": "string[]"
       }
     ],
     "stateMutability": "view"
@@ -929,6 +1028,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "unboxCrates",
+    "inputs": [
+      {
+        "name": "tokenIds",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "unboxWarehouse",
     "inputs": [
       {
@@ -1216,6 +1328,37 @@ export const nft111KAbi = [
       },
       {
         "name": "paid",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "CratesUnboxed",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokenIdsHash",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "firstArtToken",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "artworkCount",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"

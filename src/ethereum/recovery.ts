@@ -1,7 +1,7 @@
 import type { Ethereum111kConfig, EthereumPreparedTransaction } from '../../shared/ethereum/api';
 import { decodeEventLogs, decodeReturn, encodeCall, type EthereumLog } from '../../shared/ethereum/abi';
-import { ethereumReceiptIdsHash } from '../../shared/ethereum/crypto';
-import { ETHEREUM_FUNCTIONS } from '../../shared/ethereum/protocol';
+import { ethereumReceiptIdsHash, ethereumTokenIdsHash } from '../../shared/ethereum/crypto';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY } from '../../shared/ethereum/protocol';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import type { EIP1193Provider } from '../wallet/injectedEthereumProviders';
@@ -96,6 +96,7 @@ const recoveryEventTopics = Object.fromEntries([
   'WarehousesPurchased(address,uint256,uint256,uint256)',
   'WarehouseUnboxed(uint256,address,uint256,uint256)',
   'CrateUnboxed(uint256,address,uint256,uint256)',
+  'CratesUnboxed(address,bytes32,uint256,uint256)',
 ].map(signature => [signature.slice(0, signature.indexOf('(')), `0x${bytesToHex(keccak_256(utf8ToBytes(signature)))}`]));
 
 function intentArguments(intent: NonNullable<EthereumSubmission['intent']>, signature: string, types: string[]): unknown[] | null {
@@ -118,6 +119,16 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
     return false;
   }
   if (pending.action === 'unbox') {
+    const batchArgs = intentArguments(intent, ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]']);
+    if (batchArgs) {
+      const ids = batchArgs[0] as bigint[];
+      if (!ids.length || ids.length > ETHEREUM_MAX_UNBOX_QUANTITY || new Set(ids).size !== ids.length ||
+        ids.some(id => id < 111112n || id > 116666n) || topic !== recoveryEventTopics.CratesUnboxed || log.topics.length !== 3) return false;
+      const [firstArtToken, artworkCount] = decodeReturn(['uint256', 'uint256'], log.data) as bigint[];
+      const expectedCount = BigInt(ids.length * 20 + (ids.includes(116666n) ? 11 : 0));
+      return decodeReturn(['address'], log.topics[1])[0] === owner && log.topics[2].toLowerCase() === ethereumTokenIdsHash(ids) &&
+        artworkCount === expectedCount && firstArtToken > 0n && firstArtToken + artworkCount - 1n <= 111111n;
+    }
     for (const [signature, event] of [[ETHEREUM_FUNCTIONS.unboxCrate, 'CrateUnboxed'], [ETHEREUM_FUNCTIONS.unboxWarehouse, 'WarehouseUnboxed']]) {
       const args = intentArguments(intent, signature, ['uint256']);
       if (!args || topic !== recoveryEventTopics[event] || log.topics.length !== 3) continue;

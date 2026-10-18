@@ -8,7 +8,7 @@ import {
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ETHEREUM_ITEM_KINDS, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import { monsApiOrigin } from '../lib/monsApiOrigin';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
@@ -57,6 +57,7 @@ function parseEthereumConfig(value: unknown): Ethereum111kConfig {
     typeof value.walletRpcUrl !== 'string' || typeof value.explorerUrl !== 'string' ||
     !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.deliveryFeeWei) ||
     !Number.isSafeInteger(value.maxMintQuantity) || Number(value.maxMintQuantity) < 1 || Number(value.maxMintQuantity) > 15 ||
+    !Number.isSafeInteger(value.maxUnboxQuantity) || Number(value.maxUnboxQuantity) < 1 || Number(value.maxUnboxQuantity) > ETHEREUM_MAX_UNBOX_QUANTITY ||
     !Number.isSafeInteger(value.maxDeliveryItems) || Number(value.maxDeliveryItems) < 1 || Number(value.maxDeliveryItems) > 50 ||
     !Number.isSafeInteger(value.confirmationBlocks) || Number(value.confirmationBlocks) < 1) return invalid();
   const rpc = new URL(value.walletRpcUrl);
@@ -96,17 +97,25 @@ export const ethereumApi = {
   },
   async inventory(config: Ethereum111kConfig, owner: string, cursor: string | null, signal?: AbortSignal, expectedTokenIds: string[] = []): Promise<EthereumInventoryResponse> {
     const expected = cursor ? [] : [...new Set(expectedTokenIds)];
-    if (expected.length > 200) throw new Error('Too many expected Ethereum token IDs.');
-    const batches = expected.length > 100 ? [expected.slice(0, 100), expected.slice(100)] : [expected];
-    const pages = await Promise.all(batches.map(async ids => {
-      const params = new URLSearchParams({ owner });
-      if (cursor) params.set('cursor', cursor);
-      else if (ids.length) params.set('expectedTokenIds', ids.join(','));
-      const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal });
-      if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
-        (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
-      return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
-    }));
+    if (expected.length > ETHEREUM_MAX_INVENTORY_EXPECTED_IDS) throw new Error('Too many expected Ethereum token IDs.');
+    const batches: string[][] = [];
+    for (let offset = 0; offset < expected.length; offset += ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE) {
+      batches.push(expected.slice(offset, offset + ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE));
+    }
+    if (!batches.length) batches.push([]);
+    const pages: EthereumInventoryResponse[] = [];
+    for (let offset = 0; offset < batches.length; offset += 2) {
+      signal?.throwIfAborted();
+      pages.push(...await Promise.all(batches.slice(offset, offset + 2).map(async ids => {
+        const params = new URLSearchParams({ owner });
+        if (cursor) params.set('cursor', cursor);
+        else if (ids.length) params.set('expectedTokenIds', ids.join(','));
+        const value = await request(`${ETHEREUM_API_PATHS.inventory}?${params}`, { signal });
+        if (!record(value) || !Array.isArray(value.items) || value.items.length > 500 ||
+          (value.nextCursor !== null && typeof value.nextCursor !== 'string') || !Number.isSafeInteger(value.observedBlock)) return invalid();
+        return { items: value.items.map(item => parseEthereumInventoryItem(item, config, owner)), nextCursor: value.nextCursor as string | null, observedBlock: Number(value.observedBlock) };
+      })));
+    }
     return {
       items: [...new Map(pages.flatMap(page => page.items).map(item => [item.id, item])).values()],
       nextCursor: pages[0].nextCursor,

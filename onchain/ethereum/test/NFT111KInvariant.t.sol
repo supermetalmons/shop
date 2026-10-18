@@ -53,8 +53,7 @@ contract NFT111KInvariantHandler is TestSupport {
     bool private paused;
 
     constructor() {
-        token =
-            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()));
+        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()));
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 100 ether);
         }
@@ -96,6 +95,56 @@ contract NFT111KInvariantHandler is TestSupport {
     function unboxCrate(uint256 seed) external {
         uint256 id = _select(2, seed);
         if (id != 0) _unboxCrate(id);
+    }
+
+    function unboxCrates(uint256 seed, uint256 quantitySeed) external {
+        uint256 selected = _select(2, seed);
+        if (selected == 0) return;
+        address wallet = model[selected].holder;
+        uint256[] memory candidates = new uint256[](quantitySeed % 15 + 1);
+        uint256 count;
+        uint256 start = seed % touched.length;
+        for (uint256 i; i < touched.length && count < candidates.length; ++i) {
+            uint256 id = touched[(start + i) % touched.length];
+            if (model[id].live && model[id].kind == 2 && model[id].holder == wallet) candidates[count++] = id;
+        }
+        uint256[] memory ids = new uint256[](count);
+        for (uint256 i; i < count; ++i) {
+            ids[i] = candidates[i];
+        }
+        vm.prank(wallet);
+        token.unboxCrates(ids);
+        for (uint256 i; i < ids.length; ++i) {
+            _recordUnbox(ids[i]);
+        }
+    }
+
+    function rejectDuplicateBatch(uint256 seed) external {
+        uint256 selected = _select(2, seed);
+        if (selected == 0) return;
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = selected;
+        ids[1] = selected;
+        vm.prank(model[selected].holder);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
+        token.unboxCrates(ids);
+    }
+
+    function checkBatchRead(uint256 seed) external view {
+        uint256 count = touched.length < 150 ? touched.length : 150;
+        uint256[] memory ids = new uint256[](count);
+        uint256 start = seed % touched.length;
+        for (uint256 i; i < count; ++i) {
+            ids[i] = touched[(start + i) % touched.length];
+        }
+        NFT111K.TokenInfo[] memory infos = token.getTokenInfos(ids);
+        assertEq(infos.length, ids.length);
+        for (uint256 i; i < ids.length; ++i) {
+            ModelToken storage expected = model[ids[i]];
+            assertEq(infos[i].kind, expected.live ? expected.kind : 0);
+            assertEq(infos[i].displayId, expected.live ? expected.displayId : 0);
+            assertEq(infos[i].holder, expected.live ? expected.holder : address(0));
+        }
     }
 
     function transfer(uint256 tokenSeed, uint256 actorSeed) external {
@@ -254,10 +303,15 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function _unboxCrate(uint256 id) private {
         address wallet = model[id].holder;
-        uint256 firstDisplayId = (model[id].displayId - 1) * 20 + 1;
-        uint256 firstToken = artworkCount + 1;
         vm.prank(wallet);
         token.unboxCrate(id);
+        _recordUnbox(id);
+    }
+
+    function _recordUnbox(uint256 id) private {
+        address wallet = model[id].holder;
+        uint256 firstDisplayId = (model[id].displayId - 1) * 20 + 1;
+        uint256 firstToken = artworkCount + 1;
         model[id].live = false;
         ++openedCrates;
         artworkCount += 20;
@@ -366,9 +420,8 @@ contract NFT111KInvariantHandler is TestSupport {
     }
 
     function _sign(bytes32 structHash) private returns (bytes memory) {
-        bytes32 domain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token))
-        );
+        bytes32 domain =
+            keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token)));
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(SIGNER_KEY, keccak256(abi.encodePacked(hex"1901", domain, structHash)));
         return abi.encodePacked(r, s, v);
@@ -442,7 +495,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](12);
+        bytes4[] memory selectors = new bytes4[](15);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -455,6 +508,9 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[9] = handler.rejectWrongOwner.selector;
         selectors[10] = handler.rejectDeliveryReplay.selector;
         selectors[11] = handler.rejectClaimReplay.selector;
+        selectors[12] = handler.unboxCrates.selector;
+        selectors[13] = handler.rejectDuplicateBatch.selector;
+        selectors[14] = handler.checkBatchRead.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

@@ -86,13 +86,43 @@ contract FixturesTest is TestSupport {
             uint256(f.domain).toHexString(32)
         );
         output = string.concat(output, '",', _deliveryJson(f), ",", _claimJson(f));
+        uint256[] memory crateIds = new uint256[](3);
+        crateIds[0] = 111153;
+        crateIds[1] = 111112;
+        crateIds[2] = 116666;
+        output = string.concat(
+            output,
+            ',"batchUnbox":{"tokenIds":[111153,111112,116666],"artworkCount":71,"tokenIdsHash":"',
+            uint256(keccak256(abi.encode(crateIds))).toHexString(32),
+            '"}'
+        );
         output = string.concat(output, ',"calls":{"mintCrates3":"', _hex(abi.encodeCall(NFT111K.mintCrates, (3))));
         output = string.concat(output, '","mintWarehouses2":"', _hex(abi.encodeCall(NFT111K.mintWarehouses, (2))));
         output = string.concat(output, '","unboxCrate42":"', _hex(abi.encodeCall(NFT111K.unboxCrate, (111153))));
-        output = string.concat(
-            output, '","unboxWarehouse42":"', _hex(abi.encodeCall(NFT111K.unboxWarehouse, (116708))), '"}}'
-        );
+        output = string.concat(output, '","unboxWarehouse42":"', _hex(abi.encodeCall(NFT111K.unboxWarehouse, (116708))));
+        output =
+            string.concat(output, '","unboxCratesUnsorted":"', _hex(abi.encodeCall(NFT111K.unboxCrates, (crateIds))));
+        output = string.concat(output, _batchReadCallsJson(), '"}}');
         vm.writeFile("fixtures/eip712.json", output);
+    }
+
+    function _batchReadCallsJson() private pure returns (string memory) {
+        uint256[] memory ids = new uint256[](3);
+        ids[0] = 1;
+        ids[1] = 0;
+        ids[2] = 111112;
+        string memory output = string.concat('","getTokenInfos":"', _hex(abi.encodeCall(NFT111K.getTokenInfos, (ids))));
+        uint8[] memory kinds = new uint8[](3);
+        kinds[0] = 4;
+        kinds[1] = 1;
+        kinds[2] = 5;
+        ids[0] = 111111;
+        ids[1] = 42;
+        ids[2] = 5555;
+        return
+            string.concat(
+                output, '","previewTokenURIs":"', _hex(abi.encodeCall(NFT111K.previewTokenURIs, (kinds, ids)))
+            );
     }
 
     function _deliveryJson(AuthorizationFixture memory f) private pure returns (string memory output) {
@@ -129,9 +159,7 @@ contract FixturesTest is TestSupport {
         output = string.concat(
             output,
             '","calldata":"',
-            _hex(
-                abi.encodeCall(NFT111K.claimCrateReceipt, (2_000_042, f.claimId, f.quote.deadline, f.claimSignature))
-            ),
+            _hex(abi.encodeCall(NFT111K.claimCrateReceipt, (2_000_042, f.claimId, f.quote.deadline, f.claimSignature))),
             '"}'
         );
     }

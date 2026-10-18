@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach } from 'node:test';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { ETHEREUM_MAX_EXPECTED_IDS } from '../shared/ethereum/protocol.ts';
 import {
   clearEthereumInventoryRecovery,
   readEthereumExpected,
@@ -25,10 +26,10 @@ beforeEach(() => { frontend = setupFrontendDom(); });
 afterEach(() => frontend.dom.window.close());
 
 test('legacy expected-ID arrays remain readable and bounded without recovery metadata', () => {
-  const ids = Array.from({ length: 102 }, (_, index) => String(index + 1));
-  window.localStorage.setItem(key, JSON.stringify(['0', '01', '0x1', null, 4, ...ids, '102']));
-  assert.deepEqual(readEthereumExpected(scope), ids.slice(-100));
-  assert.deepEqual(readEthereumInventoryExpected(scope), ids.slice(-100));
+  const ids = Array.from({ length: ETHEREUM_MAX_EXPECTED_IDS + 2 }, (_, index) => String(index + 1));
+  window.localStorage.setItem(key, JSON.stringify(['0', '01', '0x1', null, 4, ...ids, ids.at(-1)]));
+  assert.deepEqual(readEthereumExpected(scope), ids.slice(-ETHEREUM_MAX_EXPECTED_IDS));
+  assert.deepEqual(readEthereumInventoryExpected(scope), ids.slice(-ETHEREUM_MAX_EXPECTED_IDS));
   const persisted = window.localStorage.getItem(key);
   restoreEthereumExpected(scope, hash);
   assert.equal(window.localStorage.getItem(key), persisted);
@@ -84,12 +85,12 @@ test('adding an expected claim-link ID preserves pending inventory recovery', ()
   writeEthereumExpected(scope, liveIds, recovery);
   const claimLinkId = '2000001';
   writeEthereumExpected(scope, [...readEthereumExpected(scope), claimLinkId]);
-  const expected = [...liveIds.slice(1), claimLinkId];
+  const expected = [...liveIds, claimLinkId];
   assert.deepEqual(readEthereumExpected(scope), expected);
   assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!).recovery, recovery);
   assert.deepEqual(readEthereumInventoryExpected(scope), [...expected, ...sourceIds]);
   restoreEthereumExpected(scope, hash);
-  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set([...untouchedIds.slice(1), claimLinkId, ...sourceIds]));
+  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set([...untouchedIds, claimLinkId, ...sourceIds]));
 });
 
 test('successful finalization clears recovery sources while preserving all live expected IDs', () => {
@@ -99,6 +100,28 @@ test('successful finalization clears recovery sources while preserving all live 
   assert.deepEqual(readEthereumInventoryExpected(scope), liveIds);
   restoreEthereumExpected(scope, hash);
   assert.deepEqual(readEthereumExpected(scope), liveIds);
+});
+
+test('a complete bonus batch and five hundred rollback IDs survive reload and replacement cancellation', () => {
+  const originals = Array.from({ length: 189 }, (_, index) => String(index + 50000));
+  const batch = Array.from({ length: 311 }, (_, index) => String(index + 1));
+  const sources = Array.from({ length: 500 }, (_, index) => String(index + 100001));
+  const expected = [...originals, ...batch];
+  writeEthereumExpected(scope, expected, { hash, sourceIds: sources, mintedIds: batch });
+  assert.equal(readEthereumExpected(scope).length, 500);
+  assert.equal(readEthereumInventoryExpected(scope).length, 1000);
+  const persisted = window.localStorage.getItem(key)!;
+  frontend.dom.window.close();
+  frontend = setupFrontendDom();
+  window.localStorage.setItem(key, persisted);
+  assert.deepEqual(readEthereumExpected(scope), expected);
+  assert.equal(readEthereumInventoryExpected(scope).length, 1000);
+  replaceEthereumInventoryRecovery(scope, hash, replacementHash);
+  restoreEthereumExpected(scope, hash);
+  assert.deepEqual(readEthereumExpected(scope), expected);
+  restoreEthereumExpected(scope, replacementHash);
+  assert.deepEqual(new Set(readEthereumInventoryExpected(scope)), new Set([...originals, ...sources]));
+  assert.ok(batch.every(id => !readEthereumInventoryExpected(scope).includes(id)));
 });
 
 test('a later transaction preserves older recovery sources and clears only its matching recovery', () => {
@@ -144,7 +167,7 @@ test('recovery preserves fifty evicted live IDs and fifty burned sources across 
   assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!).recovery.sourceIds, allSources);
   assert.equal(readEthereumInventoryExpected(scope).length, 200);
   restoreEthereumExpected(scope, hash);
-  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set(allSources));
+  assert.deepEqual(new Set(readEthereumExpected(scope)), new Set([...untouchedIds, ...allSources]));
   assert.deepEqual(new Set(readEthereumInventoryExpected(scope)), new Set([...untouchedIds, ...allSources]));
 });
 
@@ -153,7 +176,7 @@ test('restoring a full recovery keeps all one hundred fifty originals across rel
   const restoredIds = new Set([...untouchedIds, ...evictedIds, ...sourceIds]);
   writeEthereumExpected(scope, liveIds, { hash, sourceIds: [...evictedIds, ...sourceIds], mintedIds });
   restoreEthereumExpected(scope, hash);
-  assert.equal(readEthereumExpected(scope).length, 100);
+  assert.equal(readEthereumExpected(scope).length, 150);
   assert.equal(readEthereumInventoryExpected(scope).length, 150);
   assert.deepEqual(new Set(readEthereumInventoryExpected(scope)), restoredIds);
   assert.ok(mintedIds.every(id => !readEthereumInventoryExpected(scope).includes(id)));
@@ -177,13 +200,13 @@ test('malformed persisted inventory data is ignored or normalized within live an
   }
   window.localStorage.setItem(key, JSON.stringify({ ids: liveIds, recovery: { ...recovery, hash: 'invalid' } }));
   assert.deepEqual(readEthereumInventoryExpected(scope), liveIds);
-  const boundedSources = [...Array.from({ length: 50 }, (_, index) => String(index + 501)), ...sourceIds];
+  const boundedSources = [...Array.from({ length: ETHEREUM_MAX_EXPECTED_IDS - sourceIds.length }, (_, index) => String(index + 501)), ...sourceIds];
   window.localStorage.setItem(key, JSON.stringify({ ids: [...invalidIds, ...liveIds, ...liveIds], recovery: {
     hash, sourceIds: ['999', ...invalidIds, ...boundedSources, ...boundedSources], mintedIds: ['998', ...invalidIds, ...mintedIds, ...mintedIds],
   } }));
   assert.deepEqual(readEthereumExpected(scope), liveIds);
   assert.deepEqual(readEthereumInventoryExpected(scope), [...liveIds, ...boundedSources]);
-  assert.equal(readEthereumInventoryExpected(scope).length, 200);
+  assert.equal(readEthereumInventoryExpected(scope).length, liveIds.length + ETHEREUM_MAX_EXPECTED_IDS);
   restoreEthereumExpected(scope, hash);
   assert.deepEqual(new Set(readEthereumExpected(scope)), new Set(boundedSources));
 });

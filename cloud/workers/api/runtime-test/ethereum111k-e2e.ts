@@ -5,17 +5,18 @@ import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { secp256k1 } from '@noble/curves/secp256k1';
+import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog } from '../../../../shared/ethereum/abi.ts';
-import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { ethereumHexQuantity, ethereumReceiptTokenId, ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
+import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
+import { crateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_MAX_METADATA_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
 import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse } from '../../../../shared/ethereum/api.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import { createCommerceD1Harness, d1Database } from '../test/commerceD1Harness.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 
-type Receipt = { status: string; transactionHash: string; contractAddress: string | null; gasUsed: string; logs: EthereumLog[] };
+type Receipt = { status: string; transactionHash: string; blockNumber: string; blockHash: string; contractAddress: string | null; gasUsed: string; logs: EthereumLog[] };
 const root = resolve(import.meta.dirname, '../../../..');
 const project = resolve(root, 'onchain/ethereum');
 const output = resolve(root, '.cache/111k-e2e');
@@ -36,6 +37,7 @@ let anvilError = '';
 anvil.stderr.on('data', data => { anvilError += String(data); });
 anvil.on('error', error => { anvilError += error.message; });
 const rpcUrl = `http://127.0.0.1:${port}`;
+const cratesUnboxedTopic = `0x${bytesToHex(keccak_256(new TextEncoder().encode('CratesUnboxed(address,bytes32,uint256,uint256)')))}`;
 let rpcId = 0;
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
   const response = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(15_000) });
@@ -68,6 +70,17 @@ async function deploy(name: string, from: string, types: string[] = [], args: un
   return send(from, `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(types, args).slice(2)}`);
 }
 
+function testEnvironment(contract: string, renderer: string, key: string, ops: EthereumEnvironment['OPS_DB'], commerce: EthereumEnvironment['COMMERCE_DB']): EthereumEnvironment {
+  const limiter = { limit: async () => ({ success: true }) };
+  return {
+    OPS_DB: ops, COMMERCE_DB: commerce, ALCHEMY_MI_NOTE_API_KEY: '',
+    ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contract,
+    ETHEREUM_111K_RENDERER_ADDRESS: renderer, ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
+    ETHEREUM_111K_RPC_URL: rpcUrl, ETHEREUM_111K_SIGNER_SECRET: key,
+    STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
+  } as EthereumEnvironment;
+}
+
 try {
   for (let attempt = 0; ; attempt++) {
     try { await rpc('eth_chainId'); break; } catch {
@@ -84,6 +97,12 @@ try {
   const info = (id: number | bigint) => call(contract, ETHEREUM_FUNCTIONS.tokenInfo, ['uint256'], [id], ['uint8', 'uint256', 'address']);
   const transact = (wallet: string, signature: string, types: string[], args: unknown[], value = 0n) => send(wallet, encodeCall(signature, types, args), contract, value);
   const gas: Record<string, string> = { deploy: BigInt(deployment.gasUsed).toString(), renderer: BigInt(rendererReceipt.gasUsed).toString() };
+  const batching: Record<string, number> = {};
+  for (const [name, expected] of [
+    ['MAX_UNBOX_QUANTITY', ETHEREUM_MAX_UNBOX_QUANTITY],
+    ['MAX_TOKEN_INFO_BATCH_SIZE', ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE],
+    ['MAX_METADATA_BATCH_SIZE', ETHEREUM_MAX_METADATA_BATCH_SIZE],
+  ] as const) assert.deepEqual(await call(contract, `${name}()`, [], [], ['uint256']), [BigInt(expected)]);
   const deadline = async () => Number(BigInt((await rpc<{ timestamp: string }>('eth_getBlockByNumber', ['latest', false])).timestamp)) + 600;
   let orderId = 0;
   async function authorizeDelivery(wallet: string, tokenIds: number[]) {
@@ -176,6 +195,87 @@ try {
   await assert.rejects(transact(buyer, ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [1], 1100000000000000n));
   await transact(buyer, ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [remaining], BigInt(remaining) * 100000000000000n);
   await assert.rejects(transact(buyer, ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1], 100000000000000n));
+  const batchIds = [...Array.from({ length: 10 }, (_, index) => 116657 + index), ...Array.from({ length: 5 }, (_, index) => 111115 + index)];
+  const expectedBatchArtworkIds = batchIds.flatMap(id => crateArtworkIds(id - 111111));
+  assert.equal(expectedBatchArtworkIds.length, 311);
+  const separateSnapshot = await rpc<string>('evm_snapshot');
+  let separateGas = 0n;
+  for (const tokenId of batchIds) separateGas += BigInt((await transact(buyer, ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [tokenId])).gasUsed);
+  assert.equal(await rpc<boolean>('evm_revert', [separateSnapshot]), true);
+  const batchSnapshot = await rpc<string>('evm_snapshot');
+  const batchCalldata = encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [batchIds]);
+  const batch = await send(buyer, batchCalldata, contract);
+  gas.unboxCrates15IncludingBonus = BigInt(batch.gasUsed).toString();
+  gas.unboxCrates15SeparateTransactions = separateGas.toString();
+  assert.ok(BigInt(batch.gasUsed) < separateGas, 'Batch opening must save gas over separate transactions');
+  const batchEvents = batch.logs.filter(log => log.address === contract && log.topics[0] === cratesUnboxedTopic);
+  assert.equal(batchEvents.length, 1);
+  assert.equal(batchEvents[0], batch.logs.at(-1));
+  assert.deepEqual(decodeReturn(['address'], batchEvents[0].topics[1]), [buyer.toLowerCase()]);
+  assert.equal(batchEvents[0].topics[2], ethereumTokenIdsHash(batchIds));
+  assert.deepEqual(decodeReturn(['uint256', 'uint256'], batchEvents[0].data), [41n, 311n]);
+  const transfers = decodeEventLogs(batch.logs, contract).filter(event => event.name === 'Transfer');
+  assert.deepEqual(transfers.slice(0, batchIds.length).map(event => [event.tokenId, event.to]), batchIds.map(id => [String(id), `0x${'0'.repeat(40)}`]));
+  const mintedIds = Array.from({ length: 311 }, (_, index) => String(index + 41));
+  assert.deepEqual(transfers.slice(batchIds.length).map(event => event.tokenId), mintedIds);
+  const expectedInfos = expectedBatchArtworkIds.map(id => [1n, BigInt(id), buyer.toLowerCase()]);
+  const actualInfos: unknown[] = [];
+  for (let offset = 0; offset < mintedIds.length; offset += ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE) {
+    const [infos] = await call(contract, ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [mintedIds.slice(offset, offset + ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE)], ['(uint8,uint256,address)[]']);
+    actualInfos.push(...infos as unknown[]);
+  }
+  assert.deepEqual(actualInfos, expectedInfos);
+  assert.deepEqual((await call(contract, ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[0, ...batchIds, 111111]], ['(uint8,uint256,address)[]']))[0], Array.from({ length: 17 }, () => [0n, 0n, `0x${'0'.repeat(40)}`]));
+  const metadataCall = { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [Array(30).fill(4), Array(30).fill(111111)]) };
+  const metadataRaw = await rpc<string>('eth_call', [metadataCall, 'latest']);
+  const [metadataBatch] = decodeReturn(['string[]'], metadataRaw);
+  assert.equal((metadataBatch as string[]).length, 30);
+  assert.ok((metadataBatch as string[]).every(uri => uri === (metadataBatch as string[])[0]));
+  batching.metadata30ResponseBytes = Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 1, result: metadataRaw }));
+  assert.ok(batching.metadata30ResponseBytes * 4 < 3 * 1024 * 1024);
+  const publicDatabase = new DatabaseSync(':memory:');
+  try {
+    const db = d1Database(publicDatabase);
+    const environment = testEnvironment(contract, rendererReceipt.contractAddress!, key, db, db);
+    const rpcCalls: Array<{ method: string; params: unknown[] }> = [];
+    const envelopes: number[] = [];
+    const trackingFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as { method: string; params: unknown[] } | Array<{ method: string; params: unknown[] }>;
+      rpcCalls.push(...Array.isArray(payload) ? payload : [payload]);
+      if (Array.isArray(payload)) envelopes.push(payload.length);
+      return fetch(input, init);
+    };
+    const publicRead = async <T>(path: string, body?: unknown): Promise<T> => {
+      const response = await handleEthereumRequest(new Request(`https://mons.shop${path}`, {
+        method: body ? 'POST' : 'GET', headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.111', 'Content-Type': 'application/json', 'X-Mons-CSRF': '1' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      }), environment, path.split('?')[0], { fetch: trackingFetch });
+      const result = await response.json();
+      assert.equal(response.status, 200, `${path}: ${response.ok ? 'OK' : JSON.stringify(result)}`);
+      return result as T;
+    };
+    const confirmedBatch = await publicRead<EthereumTransactionConfirmResponse & { logs: EthereumLog[] }>(ETHEREUM_API_PATHS.transactionsConfirm, { transactionHash: batch.transactionHash });
+    assert.equal(confirmedBatch.status, 'confirmed');
+    assert.equal(confirmedBatch.confirmations, 1);
+    assert.deepEqual(confirmedBatch.burnedTokenIds, batchIds.map(String));
+    assert.deepEqual(confirmedBatch.items.map(item => [item.tokenId, item.displayId, item.owner]), mintedIds.map((id, index) => [id, expectedBatchArtworkIds[index], buyer.toLowerCase()]));
+    assert.deepEqual(confirmedBatch.logs.filter(log => log.topics[0] === cratesUnboxedTopic), batchEvents);
+    const confirmedReads = rpcCalls.filter(request => request.method === 'eth_call');
+    batching.confirm311ContractCalls = confirmedReads.length;
+    assert.equal(batching.confirm311ContractCalls, Math.ceil(311 / 150) + Math.ceil(311 / 30));
+    assert.ok(confirmedReads.every(request => request.params[1] === batch.blockHash), 'Every confirmation read must target the exact inclusion block hash');
+    assert.ok(envelopes.every(length => length <= 4));
+    const observed = new Set<string>();
+    for (let offset = 0; offset < mintedIds.length; offset += 100) {
+      const response = await publicRead<{ items: Array<{ tokenId: string; owner: string }> }>(`${ETHEREUM_API_PATHS.inventory}?${new URLSearchParams({ owner: buyer, expectedTokenIds: mintedIds.slice(offset, offset + 100).join(',') })}`);
+      for (const item of response.items) {
+        assert.equal(item.owner, buyer.toLowerCase());
+        observed.add(item.tokenId);
+      }
+    }
+    assert.ok(mintedIds.every(id => observed.has(id)), 'Every batch output must be recoverable through the inventory API');
+  } finally { publicDatabase.close(); }
+  assert.equal(await rpc<boolean>('evm_revert', [batchSnapshot]), true);
   const snapshot = await rpc<string>('evm_snapshot');
   const special = await transact(buyer, ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [116666]);
   gas.unboxSpecialCrate = BigInt(special.gasUsed).toString();
@@ -193,15 +293,7 @@ try {
       commerce.database.exec(await readFile(resolve(root, 'cloud/workers/api/commerce-migrations/0037_ethereum_111k.sql'), 'utf8'));
     }
     ops.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql'), 'utf8'));
-    const limiter = { limit: async () => ({ success: true }) };
-    const environment = {
-      OPS_DB: d1Database(ops), COMMERCE_DB: commerce.db, ALCHEMY_MI_NOTE_API_KEY: '',
-      ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contract,
-      ETHEREUM_111K_RENDERER_ADDRESS: rendererReceipt.contractAddress!,
-      ETHEREUM_111K_DEPLOYMENT_BLOCK: '0', ETHEREUM_111K_RPC_URL: rpcUrl,
-      ETHEREUM_111K_SIGNER_SECRET: key, STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter,
-      STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
-    } as EthereumEnvironment;
+    const environment = testEnvironment(contract, rendererReceipt.contractAddress!, key, d1Database(ops), commerce.db);
     async function api<T>(path: string, body?: unknown, session?: EthereumSession): Promise<T> {
       const request = new Request(`https://mons.shop${path}`, {
         method: body === undefined ? 'GET' : 'POST', headers: { Origin: 'https://mons.shop', 'CF-Connecting-IP': '192.0.2.111',
@@ -310,7 +402,7 @@ try {
     await writeFile(resolve(output, `${preview.name}.svg`), svg);
     await writeFile(resolve(output, `${preview.name}.json`), JSON.stringify(metadata, null, 2));
   }
-  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, passed: ['warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'all five onchain SVG types'] };
+  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, batching, passed: ['warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'all five onchain SVG types'] };
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

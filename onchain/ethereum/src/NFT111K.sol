@@ -26,11 +26,20 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         bytes32 receiptIdsHash;
     }
 
+    struct TokenInfo {
+        uint8 kind;
+        uint256 displayId;
+        address holder;
+    }
+
     uint256 public constant MAX_ARTWORKS = 111_111;
     uint256 public constant MAX_CRATES = 5_555;
     uint256 public constant MAX_WAREHOUSES = 505;
     uint256 public constant CRATES_PER_WAREHOUSE = 11;
     uint256 public constant MAX_PURCHASE_QUANTITY = 15;
+    uint256 public constant MAX_UNBOX_QUANTITY = 15;
+    uint256 public constant MAX_TOKEN_INFO_BATCH_SIZE = 150;
+    uint256 public constant MAX_METADATA_BATCH_SIZE = 30;
     uint256 public constant MAX_DELIVERY_ITEMS = 50;
     uint256 public constant MAX_QUOTE_LIFETIME = 10 minutes;
     uint256 public constant CRATE_TOKEN_START = 111_112;
@@ -81,6 +90,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint256 indexed warehouseToken, address indexed owner, uint256 firstCrateToken, uint256 count
     );
     event CrateUnboxed(uint256 indexed crateToken, address indexed owner, uint256 firstArtToken, uint256 count);
+    event CratesUnboxed(
+        address indexed owner, bytes32 indexed tokenIdsHash, uint256 firstArtToken, uint256 artworkCount
+    );
     event DeliveryRedeemed(
         uint256 indexed orderId, address indexed wallet, uint256 fee, uint256[] tokenIds, uint256[] receiptIds
     );
@@ -142,14 +154,23 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function unboxCrate(uint256 tokenId) external nonReentrant {
         uint256 crateNumber = _requireOwnedKind(tokenId, ItemKind.Crate);
-        uint256 count = _crateContentsCount(crateNumber);
-        uint256 firstToken = _nextTokenId();
-        uint256 firstDisplayId = (crateNumber - 1) * 20 + 1;
         _burn(tokenId);
-        pendingArtworkOffset = uint24(MAX_ARTWORKS + firstDisplayId - firstToken);
-        _safeMint(msg.sender, count);
-        pendingArtworkOffset = 0;
-        emit CrateUnboxed(tokenId, msg.sender, firstToken, count);
+        _mintCrateArtworks(tokenId, crateNumber);
+    }
+
+    function unboxCrates(uint256[] calldata tokenIds) external nonReentrant {
+        if (tokenIds.length == 0 || tokenIds.length > MAX_UNBOX_QUANTITY) revert InvalidQuantity();
+        uint256[] memory crateNumbers = new uint256[](tokenIds.length);
+        // Burn hooks must remain free of external calls until every selected crate is burned.
+        for (uint256 i; i < tokenIds.length; ++i) {
+            crateNumbers[i] = _requireOwnedKind(tokenIds[i], ItemKind.Crate);
+            _burn(tokenIds[i]);
+        }
+        uint256 firstArtToken = _nextTokenId();
+        for (uint256 i; i < tokenIds.length; ++i) {
+            _mintCrateArtworks(tokenIds[i], crateNumbers[i]);
+        }
+        emit CratesUnboxed(msg.sender, keccak256(abi.encode(tokenIds)), firstArtToken, _nextTokenId() - firstArtToken);
     }
 
     function redeemForDelivery(uint256[] calldata tokenIds, DeliveryQuote calldata quote, bytes calldata signature)
@@ -243,6 +264,14 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         return (0, 0, address(0));
     }
 
+    function getTokenInfos(uint256[] calldata tokenIds) external view returns (TokenInfo[] memory infos) {
+        if (tokenIds.length > MAX_TOKEN_INFO_BATCH_SIZE) revert InvalidQuantity();
+        infos = new TokenInfo[](tokenIds.length);
+        for (uint256 i; i < tokenIds.length; ++i) {
+            (infos[i].kind, infos[i].displayId, infos[i].holder) = getTokenInfo(tokenIds[i]);
+        }
+    }
+
     function stats()
         external
         view
@@ -271,6 +300,19 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     function previewTokenURI(uint8 kind, uint256 displayId) external view returns (string memory) {
         if (!_validMetadataItem(kind, displayId)) revert InvalidMetadataItem();
         return renderer.tokenURI(kind, displayId);
+    }
+
+    function previewTokenURIs(uint8[] calldata kinds, uint256[] calldata displayIds)
+        external
+        view
+        returns (string[] memory uris)
+    {
+        if (kinds.length != displayIds.length || kinds.length > MAX_METADATA_BATCH_SIZE) revert InvalidQuantity();
+        uris = new string[](kinds.length);
+        for (uint256 i; i < kinds.length; ++i) {
+            if (!_validMetadataItem(kinds[i], displayIds[i])) revert InvalidMetadataItem();
+            uris[i] = renderer.tokenURI(kinds[i], displayIds[i]);
+        }
     }
 
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
@@ -350,6 +392,16 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     function _mintSpotOnce(address recipient, uint256 tokenId) private {
         if (_ownershipIsInitialized(tokenId)) revert TokenAlreadyIssued();
         _safeMintSpot(recipient, tokenId);
+    }
+
+    function _mintCrateArtworks(uint256 tokenId, uint256 crateNumber) private {
+        uint256 count = _crateContentsCount(crateNumber);
+        uint256 firstToken = _nextTokenId();
+        uint256 firstDisplayId = (crateNumber - 1) * 20 + 1;
+        pendingArtworkOffset = uint24(MAX_ARTWORKS + firstDisplayId - firstToken);
+        _safeMint(msg.sender, count);
+        pendingArtworkOffset = 0;
+        emit CrateUnboxed(tokenId, msg.sender, firstToken, count);
     }
 
     function _checkDeadline(uint256 deadline) private view {

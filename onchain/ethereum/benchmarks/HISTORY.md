@@ -17,4 +17,11 @@ Read any original artifact with `git show <blob-id>`, or use its commit and path
 git show 4aa970f95b42def9df35e743bbbfbbe09f9b8645:onchain/ethereum/README.md
 ```
 
-Use the exact revision and dependency/compiler versions named in each record to reproduce it in a separate checkout. Historical records may use former identifiers and domains. The current [compiler comparison](compiler-settings.json), [legacy/200 baseline](compiler-legacy-200.json) and [gas snapshots](../snapshots/NFT111KGasTest.json) describe the renamed collection.
+The renamed collection's pre-batch compiler records remain unchanged in commit `6af6035d5ab57ee3ee1195bfae5dfb0ff1b91319` and in the current tree:
+
+| Evidence | Path at that commit | Git blob ID |
+| --- | --- | --- |
+| Renamed pre-batch compiler comparison | `onchain/ethereum/benchmarks/compiler-settings.json` | `9f053112e2a91c5c362eb560a3100c1e2b9a7a6d` |
+| Renamed pre-batch legacy/200 baseline | `onchain/ethereum/benchmarks/compiler-legacy-200.json` | `a4c7ae52a8638e75c035a11ef59610d28cba4455` |
+
+Use the exact revision and dependency/compiler versions named in each record to reproduce it in a separate checkout. Historical records may use former identifiers and domains. The current [batch report](batch-operations.json) and [gas snapshots](../snapshots/NFT111KGasTest.json) describe batch unpacking and reads; the preserved compiler comparison and legacy/200 baseline predate those interfaces.

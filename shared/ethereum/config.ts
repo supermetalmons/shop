@@ -1,4 +1,4 @@
-import { ETHEREUM_111K_DROP_ID, ETHEREUM_MAX_DELIVERY_ITEMS, ETHEREUM_MAX_MINT_QUANTITY, normalizeEthereumAddress } from './protocol.ts';
+import { ETHEREUM_111K_DROP_ID, ETHEREUM_MAX_DELIVERY_ITEMS, ETHEREUM_MAX_MINT_QUANTITY, ETHEREUM_MAX_UNBOX_QUANTITY, normalizeEthereumAddress } from './protocol.ts';
 
 export type Ethereum111kConfig = {
   dropId: typeof ETHEREUM_111K_DROP_ID;
@@ -16,6 +16,7 @@ export type Ethereum111kConfig = {
   deliveryFeeWei: string;
   confirmationBlocks: number;
   maxMintQuantity: number;
+  maxUnboxQuantity: number;
   maxDeliveryItems: number;
 };
 
@@ -41,7 +42,8 @@ export function resolveEthereum111kConfig(input: {
     enabled: contractAddress !== null, testnet: true,
     cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000',
     deliveryFeeWei: '100000000000000', confirmationBlocks: 3,
-    maxMintQuantity: ETHEREUM_MAX_MINT_QUANTITY, maxDeliveryItems: ETHEREUM_MAX_DELIVERY_ITEMS,
+    maxMintQuantity: ETHEREUM_MAX_MINT_QUANTITY, maxUnboxQuantity: ETHEREUM_MAX_UNBOX_QUANTITY,
+    maxDeliveryItems: ETHEREUM_MAX_DELIVERY_ITEMS,
   };
 }
 

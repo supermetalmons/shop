@@ -1,13 +1,15 @@
 import { encodeCall, decodeReturn } from '../../../../shared/ethereum/abi.js';
 import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '../../../../shared/ethereum/protocol.js';
 import {
-  ETHEREUM_ITEM_KINDS, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
+  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS,
+  ETHEREUM_MAX_METADATA_BATCH_SIZE, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
   ethereumItemKindNumber, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
 import {
-  ethereumAddress, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
+  ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
+  verifyEthereumBlockSnapshot,
   type EthereumContext,
 } from './ethereumRuntime.js';
 
@@ -71,24 +73,43 @@ async function ethereumMetadata(context: EthereumContext, kind: EthereumItemKind
   return parseMetadata(decodeReturn(['string'], value)[0]);
 }
 
-export async function ethereumTokenInfos(context: EthereumContext, ids: string[]): Promise<EthereumTokenInfo[]> {
-  const values = await ethereumCallBatch(context, ids.map((id) => encodeCall('getTokenInfo(uint256)', ['uint256'], [id])));
+function readChunks<T>(values: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size));
+}
+
+export async function ethereumTokenInfos(context: EthereumContext, ids: string[], blockReference = 'latest'): Promise<EthereumTokenInfo[]> {
+  const batches = readChunks(ids, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE);
+  const values = await ethereumCallBatch(context, batches.map((batch) => encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [batch])), blockReference);
   return values.flatMap((value, index) => {
-    const [rawKind, rawDisplayId, rawOwner] = decodeReturn(['uint8', 'uint256', 'address'], value);
-    const kind = ethereumItemKind(Number(rawKind));
-    const displayId = Number(rawDisplayId);
-    if (!kind || rawOwner === ZERO_ADDRESS) return [];
-    if (!Number.isSafeInteger(displayId) || displayId < 1) throw new EthereumApiError('unavailable', 'Invalid item number.');
-    return [{ tokenId: ids[index], kind, displayId, owner: ethereumAddress(rawOwner) }];
+    const [rows] = decodeReturn(['(uint8,uint256,address)[]'], value);
+    if (!Array.isArray(rows) || rows.length !== batches[index].length) throw new EthereumApiError('unavailable', 'Ethereum token information is incomplete.');
+    return rows.flatMap(([rawKind, rawDisplayId, rawOwner], itemIndex) => {
+      if (rawKind === 0n && rawDisplayId === 0n && rawOwner === ZERO_ADDRESS) return [];
+      const kind = ethereumItemKind(Number(rawKind));
+      const displayId = Number(rawDisplayId);
+      const maximum = kind === 'warehouse' ? 505 : kind === 'crate' || kind === 'crate_receipt' ? 5555 : 111111;
+      if (!kind || rawOwner === ZERO_ADDRESS || !Number.isSafeInteger(displayId) || displayId < 1 || displayId > maximum) {
+        throw new EthereumApiError('unavailable', 'Invalid Ethereum token information.');
+      }
+      return [{ tokenId: batches[index][itemIndex], kind, displayId, owner: ethereumAddress(rawOwner) }];
+    });
   });
 }
 
-export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[]): Promise<EthereumInventoryItem[]> {
-  const values = await ethereumCallBatch(context, infos.map((info) => encodeCall('previewTokenURI(uint8,uint256)', ['uint8', 'uint256'], [ethereumItemKindNumber(info.kind), info.displayId])));
+export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[], blockReference = 'latest'): Promise<EthereumInventoryItem[]> {
+  const batches = readChunks(infos, ETHEREUM_MAX_METADATA_BATCH_SIZE);
+  const values = await ethereumCallBatch(context, batches.map((batch) => encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs,
+    ['uint8[]', 'uint256[]'], [batch.map((info) => ethereumItemKindNumber(info.kind)), batch.map((info) => info.displayId)])), blockReference);
   const contractAddress = requireEthereumContract(context);
-  return values.map((value, index) => ({ ...infos[index], ...parseMetadata(decodeReturn(['string'], value)[0]),
-    id: ethereumAssetId(context.config.chainId, contractAddress, infos[index].tokenId),
-    chainId: context.config.chainId, contractAddress }));
+  return values.flatMap((value, index) => {
+    const [uris] = decodeReturn(['string[]'], value);
+    if (!Array.isArray(uris) || uris.length !== batches[index].length) throw new EthereumApiError('unavailable', 'Ethereum metadata is incomplete.');
+    return uris.map((uri, itemIndex) => {
+      const info = batches[index][itemIndex];
+      return { ...info, ...parseMetadata(uri), id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
+        chainId: context.config.chainId, contractAddress };
+    });
+  });
 }
 
 async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor: string | null): Promise<{ ids: string[]; nextCursor: string | null }> {
@@ -118,8 +139,7 @@ async function alchemyOwnerIds(context: EthereumContext, wallet: string, cursor:
   return { ids, nextCursor };
 }
 
-async function localOwnerIds(context: EthereumContext, wallet: string): Promise<string[]> {
-  const head = rpcInteger(await ethereumRpc(context, 'eth_blockNumber', []));
+async function localOwnerInfos(context: EthereumContext, wallet: string, head: number, blockHash: string): Promise<EthereumTokenInfo[]> {
   if (head - context.config.deploymentBlock > 50_000) throw new EthereumApiError('resource-exhausted', 'Reset the local test chain to refresh its inventory.');
   const topic = `0x${wallet.slice(2).padStart(64, '0')}`;
   const ids = new Set<string>();
@@ -133,8 +153,8 @@ async function localOwnerIds(context: EthereumContext, wallet: string): Promise<
     }
   }
   const candidates = [...ids].sort((a, b) => BigInt(a) < BigInt(b) ? -1 : 1);
-  const infos = await ethereumTokenInfos(context, candidates);
-  return infos.filter(info => info.owner === wallet).map(info => info.tokenId);
+  const infos = await ethereumTokenInfos(context, candidates, blockHash);
+  return infos.filter(info => info.owner === wallet);
 }
 
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {
@@ -162,17 +182,30 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
   if (cursor && cursor.length > 4096) throw new EthereumApiError('invalid-argument', 'Invalid inventory cursor.');
   const expected = url.searchParams.get('expectedTokenIds');
   const extraIds = expected && !cursor ? expected.split(',').map(normalizeEthereumTokenId) : [];
-  if (extraIds.length > 100 || extraIds.some((id) => !id)) throw new EthereumApiError('invalid-argument', 'Invalid recent token IDs.');
-  let page: { ids: string[]; nextCursor: string | null };
+  if (extraIds.length > ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE || extraIds.some((id) => !id)) throw new EthereumApiError('invalid-argument', 'Invalid recent token IDs.');
+  const snapshot = await ethereumBlockSnapshot(context);
+  const blockReference = snapshot.blockHash;
+  const recentIds = [...new Set(extraIds.filter((id): id is string => id !== null))];
+  let infos: EthereumTokenInfo[];
+  let nextCursor: string | null;
   if (context.config.chainId === 31337) {
     const offset = cursor ? Number(cursor) : 0;
     if (!Number.isSafeInteger(offset) || offset < 0) throw new EthereumApiError('invalid-argument', 'Invalid inventory cursor.');
-    const ids = await localOwnerIds(context, wallet);
-    page = { ids: ids.slice(offset, offset + PAGE_SIZE), nextCursor: offset + PAGE_SIZE < ids.length ? String(offset + PAGE_SIZE) : null };
-  } else page = await alchemyOwnerIds(context, wallet, cursor);
-  const infos = await ethereumTokenInfos(context, [...new Set([...page.ids, ...extraIds.filter((id): id is string => id !== null)])]);
-  const items = await ethereumInventoryItems(context, infos.filter((info) => info.owner === wallet));
-  return { items, nextCursor: page.nextCursor, observedBlock: rpcInteger(await ethereumRpc(context, 'eth_blockNumber', [])) };
+    const owned = await localOwnerInfos(context, wallet, snapshot.blockNumber, blockReference);
+    const ownedIds = new Set(owned.map(info => info.tokenId));
+    const recovered = await ethereumTokenInfos(context, recentIds.filter(id => !ownedIds.has(id)), blockReference);
+    const recent = new Set(recentIds);
+    const page = owned.slice(offset, offset + PAGE_SIZE);
+    infos = [...new Map([...page, ...owned.filter((info) => recent.has(info.tokenId)), ...recovered].map((info) => [info.tokenId, info])).values()];
+    nextCursor = offset + PAGE_SIZE < owned.length ? String(offset + PAGE_SIZE) : null;
+  } else {
+    const page = await alchemyOwnerIds(context, wallet, cursor);
+    infos = await ethereumTokenInfos(context, [...new Set([...page.ids, ...recentIds])], blockReference);
+    nextCursor = page.nextCursor;
+  }
+  const items = await ethereumInventoryItems(context, infos.filter((info) => info.owner === wallet), blockReference);
+  await verifyEthereumBlockSnapshot(context, snapshot);
+  return { items, nextCursor, observedBlock: snapshot.blockNumber };
 }
 
 export function transferTokenIds(receipt: EthereumReceipt, contract: string): { minted: string[]; burned: string[] } {

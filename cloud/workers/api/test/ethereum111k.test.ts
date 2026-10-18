@@ -9,8 +9,8 @@ import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSigne
 import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
-import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
-import type { EthereumLog, EthereumReceipt } from '../src/ethereumRead.ts';
+import { ethereumCallBatch, ethereumConfig, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
+import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { planReadyToShipNotifications } from '../src/readyToShipNotifications.ts';
 import { requireShipStationEnabled } from '../src/shipstation/common.ts';
@@ -120,16 +120,23 @@ function fixture() {
           receipt.logs.some((log) => log.topics[0] === ETHEREUM_EVENT_TOPICS.CrateReceiptClaimed && log.topics[1] === claimId));
         return encodeAbi(['bool'], [used]);
       }
-      if (selector === functionSelector('getTokenInfo(uint256)')) {
-        const id = String(decodeReturn(['uint256'], argumentsHex)[0]);
-        const item = state.tokens.get(id);
-        return encodeAbi(['uint8', 'uint256', 'address'], item ? [item.kind, item.displayId, item.owner] : [0, 0, ZERO]);
+      if (selector === functionSelector('getTokenInfos(uint256[])')) {
+        const [ids] = decodeReturn(['uint256[]'], argumentsHex) as [bigint[]];
+        return encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id => {
+          const item = state.tokens.get(String(id));
+          return item ? [item.kind, item.displayId, item.owner] : [0, 0, ZERO];
+        })]);
       }
-      if (selector === functionSelector('previewTokenURI(uint8,uint256)')) {
-        const [kind, id] = decodeReturn(['uint8', 'uint256'], argumentsHex);
-        const name = `Kind ${kind} #${id}`;
-        const image = `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><text>${name}</text></svg>`).toString('base64')}`;
-        return encodeAbi(['string'], [`data:application/json;base64,${Buffer.from(JSON.stringify({ name, image })).toString('base64')}`]);
+      if (selector === functionSelector('previewTokenURI(uint8,uint256)') || selector === functionSelector('previewTokenURIs(uint8[],uint256[])')) {
+        const batched = selector === functionSelector('previewTokenURIs(uint8[],uint256[])');
+        const [kinds, ids] = batched ? decodeReturn(['uint8[]', 'uint256[]'], argumentsHex) as [bigint[], bigint[]] :
+          decodeReturn(['uint8', 'uint256'], argumentsHex).map(value => [value]) as [bigint[], bigint[]];
+        const uris = kinds.map((kind, index) => {
+          const name = `Kind ${kind} #${ids[index]}`;
+          const image = `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><text>${name}</text></svg>`).toString('base64')}`;
+          return `data:application/json;base64,${Buffer.from(JSON.stringify({ name, image })).toString('base64')}`;
+        });
+        return encodeAbi([batched ? 'string[]' : 'string'], batched ? [uris] : [uris[0]]);
       }
       if (selector === functionSelector('isValidSignature(bytes32,bytes)')) return encodeAbi(['bytes4'], [state.magic]);
       if (selector === functionSelector('stats()')) return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool'],
@@ -153,7 +160,7 @@ function fixture() {
     return Response.json(body);
   };
   async function request<T = Record<string, unknown>>(pathWithQuery: string, body?: unknown, session?: string,
-    options: { origin?: string; method?: string; csrf?: boolean; headers?: Record<string, string> } = {}) {
+    options: { origin?: string; method?: string; csrf?: boolean; headers?: Record<string, string>; fetch?: typeof fetch } = {}) {
     const path = pathWithQuery.split('?')[0];
     const method = options.method || (readPaths.has(path) || path === paths.addresses && body === undefined ? 'GET' : 'POST');
     const request = new Request(`${ORIGIN}${pathWithQuery}`, { method, headers: {
@@ -161,7 +168,7 @@ function fixture() {
       ...(options.csrf !== false ? { 'X-Mons-CSRF': '1' } : {}),
       ...(session ? { [ETHEREUM_SESSION_HEADER]: session } : {}), ...options.headers,
     }, ...(method === 'POST' ? { body: JSON.stringify(body ?? {}) } : {}) });
-    const response = await handleEthereumRequest(request, env, path, { nowMs: () => state.now, fetch: providerFetch });
+    const response = await handleEthereumRequest(request, env, path, { nowMs: () => state.now, fetch: options.fetch ?? providerFetch });
     return { response, body: await response.json() as T };
   }
   async function challenge(wallet = WALLET) {
@@ -240,6 +247,10 @@ function pauseRpc(f: ReturnType<typeof fixture>, matches: (payload: Rpc) => bool
     await released;
   };
   return { paused, resume };
+}
+
+function readContext(f: ReturnType<typeof fixture>, providerFetch = f.providerFetch): EthereumContext {
+  return { env: f.env, config: ethereumConfig(f.env), signal: AbortSignal.timeout(10_000), nowMs: f.state.now, fetch: providerFetch };
 }
 
 function pauseCommerceBatch(f: ReturnType<typeof fixture>, matches: () => boolean) {
@@ -1436,7 +1447,7 @@ test('deferred queue rotation cannot overwrite a concurrent canonical claim conf
     f.state.head = 205;
     f.state.logs = f.state.logs.filter((log) => log.transactionHash !== CLAIM_HASH);
     const barrier = pauseRpc(f, (rpc) => rpc.method === 'eth_call' &&
-      String((rpc.params[0] as { data: string }).data).startsWith(functionSelector('getTokenInfo(uint256)')));
+      String((rpc.params[0] as { data: string }).data).startsWith(functionSelector('getTokenInfos(uint256[])')));
     const reconciliation = reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
     await barrier.paused;
     const confirmed = await f.request(paths.claimConfirm,
@@ -1978,6 +1989,284 @@ test('physical claim authorization needs the exact receipt, code and owner and s
   } finally { f.close(); }
 });
 
+test('contract read batches preserve duplicate positions and omit absent token tuples', async () => {
+  const f = fixture();
+  try {
+    const context = readContext(f);
+    assert.deepEqual(await ethereumTokenInfos(context, []), []);
+    assert.deepEqual(await ethereumInventoryItems(context, []), []);
+    assert.equal(f.state.calls.length, 0);
+    const infos = await ethereumTokenInfos(context, ['111112', '999999', '111112', '111113']);
+    assert.deepEqual(infos.map(info => info.tokenId), ['111112', '111112', '111113']);
+    const items = await ethereumInventoryItems(context, infos);
+    assert.deepEqual(items.map(item => item.name), ['Kind 2 #1', 'Kind 2 #1', 'Kind 2 #2']);
+    assert.deepEqual(f.state.batchSizes, [1, 1]);
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === 'latest'));
+  } finally { f.close(); }
+});
+
+for (const token of [[0, 1, WALLET], [6, 1, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
+  test(`token information rejects an inconsistent tuple ${token.join(':')}`, async () => {
+    const f = fixture();
+    try {
+      const providerFetch: typeof fetch = async (input, init) => {
+        const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+        if (!Array.isArray(payload)) return f.providerFetch(input, init);
+        return Response.json(payload.map(rpc => ({ jsonrpc: '2.0', id: rpc.id, result: encodeAbi(['(uint8,uint256,address)[]'], [[token]]) })));
+      };
+      await assert.rejects(ethereumTokenInfos(readContext(f, providerFetch), ['111112']), /Invalid Ethereum token information/);
+    } finally { f.close(); }
+  });
+}
+
+test('a later metadata envelope failure returns no partial inventory and cancels the other envelope', { timeout: 5000 }, async () => {
+  const f = fixture();
+  try {
+    let envelopes = 0;
+    let cancelled = false;
+    let started!: () => void;
+    const held = new Promise<void>(resolve => { started = resolve; });
+    const providerFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (!Array.isArray(payload)) return f.providerFetch(input, init);
+      if (++envelopes === 1) {
+        started();
+        return new Promise<Response>((_resolve, reject) => {
+          init!.signal!.addEventListener('abort', () => { cancelled = true; reject(init!.signal!.reason); }, { once: true });
+        });
+      }
+      await held;
+      return Response.json(payload.map(rpc => ({ jsonrpc: '2.0', id: rpc.id, error: { code: -32000, message: 'Metadata unavailable' } })));
+    };
+    const infos = Array.from({ length: 311 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
+      displayId: index + 1, owner: WALLET }));
+    await assert.rejects(ethereumInventoryItems(readContext(f, providerFetch), infos), /Ethereum RPC returned an invalid response/);
+    assert.equal(envelopes, 2);
+    assert.equal(cancelled, true);
+  } finally { f.close(); }
+});
+
+test('contract read envelopes stay bounded and preserve order when concurrent responses arrive out of order', { timeout: 5000 }, async t => {
+  const f = fixture();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  t.after(release);
+  try {
+    let active = 0;
+    let maximum = 0;
+    let envelopes = 0;
+    let started!: () => void;
+    const concurrent = new Promise<void>(resolve => { started = resolve; });
+    const providerFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (!Array.isArray(payload)) return f.providerFetch(input, init);
+      const envelope = ++envelopes;
+      active++;
+      maximum = Math.max(maximum, active);
+      if (active === 2) started();
+      if (envelope === 1) await held;
+      try { return await f.providerFetch(input, init); }
+      finally { active--; }
+    };
+    const calls = Array.from({ length: 13 }, (_, index) => encodeCall('previewTokenURI(uint8,uint256)', ['uint8', 'uint256'], [1, index + 1]));
+    const pending = ethereumCallBatch(readContext(f, providerFetch), calls, '0x64');
+    await concurrent;
+    release();
+    const values = await pending;
+    assert.equal(maximum, 2);
+    assert.deepEqual(f.state.batchSizes.slice().sort((a, b) => a - b), [1, 4, 4, 4]);
+    assert.deepEqual(values.map(value => JSON.parse(atob(String(decodeReturn(['string'], value)[0]).split(',')[1])).name),
+      calls.map((_call, index) => `Kind 1 #${index + 1}`));
+    assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === '0x64'));
+  } finally { release(); f.close(); }
+});
+
+for (const failure of ['missing-response', 'duplicate-id', 'unknown-id', 'rpc-error', 'invalid-result', 'oversized-response'] as const) {
+  test(`contract read envelopes reject ${failure} without returning partial data`, async () => {
+    const f = fixture();
+    try {
+      const providerFetch: typeof fetch = async (input, init) => {
+        const response = await f.providerFetch(input, init);
+        const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+        if (!Array.isArray(payload)) return response;
+        const body = await response.json() as { id: number; result: string; error?: object }[];
+        if (failure === 'missing-response') body.pop();
+        if (failure === 'duplicate-id') body[0].id = body[1].id;
+        if (failure === 'unknown-id') body[0].id = payload.length + 1;
+        if (failure === 'rpc-error') body[0].error = { code: -32000, message: 'Read failed' };
+        if (failure === 'invalid-result') body[0].result = '0xzz';
+        if (failure === 'oversized-response') body[0].result = `0x${'00'.repeat(3 * 1024 * 1024 / 2)}`;
+        return Response.json(body);
+      };
+      await assert.rejects(ethereumCallBatch(readContext(f, providerFetch), [
+        encodeCall('getTokenInfos(uint256[])', ['uint256[]'], [['111112']]),
+        encodeCall('getTokenInfos(uint256[])', ['uint256[]'], [['111113']]),
+      ]), /Ethereum RPC returned an (?:incomplete|invalid) response/);
+    } finally { f.close(); }
+  });
+}
+
+for (const kind of ['token information', 'metadata'] as const) for (const extra of [false, true]) {
+  test(`inventory rejects ${extra ? 'extra' : 'missing'} ${kind} rows instead of shifting identities`, async () => {
+    const f = fixture();
+    try {
+      f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+      f.state.alchemyNfts = ['111112', '111113'].map(tokenId => ({ tokenId, contract: { address: CONTRACT } }));
+      const signature = kind === 'metadata' ? 'previewTokenURIs(uint8[],uint256[])' : 'getTokenInfos(uint256[])';
+      const type = kind === 'metadata' ? 'string[]' : '(uint8,uint256,address)[]';
+      const providerFetch: typeof fetch = async (input, init) => {
+        const response = await f.providerFetch(input, init);
+        if (!init?.body) return response;
+        const payload = JSON.parse(String(init.body)) as Rpc | Rpc[];
+        if (!Array.isArray(payload)) return response;
+        const body = await response.json() as { id: number; result: string }[];
+        for (const result of body) {
+          const call = payload.find(entry => entry.id === result.id)!;
+          if (!(call.params[0] as { data: string }).data.startsWith(functionSelector(signature))) continue;
+          const [values] = decodeReturn([type], result.result) as [unknown[]];
+          result.result = encodeAbi([type], [extra ? [...values, values[0]] : values.slice(1)]);
+        }
+        return Response.json(body);
+      };
+      const result = await f.request(`${paths.inventory}?owner=${WALLET}`, undefined, undefined, { fetch: providerFetch });
+      assert.equal(result.response.status, 503);
+      assert.equal(result.body.items, undefined);
+    } finally { f.close(); }
+  });
+}
+
+for (const chainId of [31337, 11155111]) {
+  test(`${chainId} inventory reads 30 items in two contract calls pinned to the returned block`, async () => {
+    const f = fixture();
+    try {
+      f.env.ETHEREUM_111K_CHAIN_ID = String(chainId);
+      f.state.tokens.clear();
+      const ids = Array.from({ length: 30 }, (_, index) => String(index + 1));
+      for (const id of ids) {
+        f.state.tokens.set(id, { kind: 1, displayId: Number(id), owner: WALLET });
+        f.state.logs.push({ address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber(id)],
+          data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: ethereumHexQuantity(id) });
+      }
+      f.state.alchemyNfts = ids.map(tokenId => ({ tokenId, contract: { address: CONTRACT } }));
+      f.state.afterRpc = async call => { if (call.method === 'eth_call') f.state.head = 103; };
+      const result = await f.request<{ items: { tokenId: string }[]; observedBlock: number }>(`${paths.inventory}?owner=${WALLET}`);
+      assert.equal(result.response.status, 200, JSON.stringify(result.body));
+      assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
+      assert.equal(result.body.observedBlock, 102);
+      const reads = f.state.calls.filter(call => call.method === 'eth_call');
+      assert.equal(reads.length, 2);
+      assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+      assert.ok(f.state.calls.filter(call => call.method === 'eth_getLogs').every(call => (call.params[0] as { toBlock: string }).toBlock === '0x66'));
+    } finally { f.close(); }
+  });
+}
+
+for (const path of [paths.inventory, paths.transactionsConfirm]) {
+  test(`${path} rejects a head reorg during metadata reads without returning a partial inventory`, async () => {
+    const f = fixture();
+    try {
+      f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+      f.state.alchemyNfts = [{ tokenId: '111112', contract: { address: CONTRACT } }];
+      f.setReceipt(HASH, [{ address: CONTRACT,
+        topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber('111112')],
+        data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: '0x0' }]);
+      f.state.afterRpc = async call => {
+        if (call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) {
+          f.state.canonical.set(102, blockHash(999));
+        }
+      };
+      const result = await f.request(path === paths.inventory ? `${path}?owner=${WALLET}` : path,
+        path === paths.transactionsConfirm ? { transactionHash: HASH } : undefined);
+      assert.equal(result.response.status, 503);
+      assert.equal(result.body.items, undefined);
+      assert.equal(result.body.status, undefined);
+    } finally { f.close(); }
+  });
+}
+
+test('inventory metadata remains coherent when an RPC pool serves another fork at the same block height', async () => {
+  const f = fixture();
+  try {
+    f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
+    f.state.tokens.clear();
+    const ids = Array.from({ length: 31 }, (_, index) => String(index + 1));
+    for (const id of ids) f.state.tokens.set(id, { kind: 1, displayId: Number(id), owner: WALLET });
+    f.state.alchemyNfts = ids.slice(0, 30).map(tokenId => ({ tokenId, contract: { address: CONTRACT } }));
+    const providerFetch: typeof fetch = async (input, init) => {
+      const response = await f.providerFetch(input, init);
+      if (!init?.body) return response;
+      const payload = JSON.parse(String(init.body)) as Rpc | Rpc[];
+      if (!Array.isArray(payload)) return response;
+      const body = await response.json() as { id: number; result: string }[];
+      for (const result of body) {
+        const call = payload.find(entry => entry.id === result.id)!;
+        const data = (call.params[0] as { data: string }).data;
+        if (!data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) continue;
+        const [, displayIds] = decodeReturn(['uint8[]', 'uint256[]'], `0x${data.slice(10)}`) as [bigint[], bigint[]];
+        if (displayIds[0] !== 31n || call.params[1] === blockHash(102)) continue;
+        const [uris] = decodeReturn(['string[]'], result.result) as [string[]];
+        const metadata = JSON.parse(atob(uris[0].split(',')[1]));
+        metadata.name = 'Metadata from a different fork';
+        result.result = encodeAbi(['string[]'], [[`data:application/json;base64,${btoa(JSON.stringify(metadata))}`]]);
+      }
+      return Response.json(body);
+    };
+    const result = await f.request<{ items: EthereumInventoryItem[]; observedBlock: number }>(
+      `${paths.inventory}?owner=${WALLET}&expectedTokenIds=31`, undefined, undefined, { fetch: providerFetch });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.observedBlock, 102);
+    assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `Kind 1 #${id}`));
+    const reads = f.state.calls.filter(call => call.method === 'eth_call');
+    assert.equal(reads.length, 3);
+    assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+    assert.equal(f.state.calls.filter(call => call.method === 'eth_getBlockByNumber' && call.params[0] === '0x66').length, 1);
+  } finally { f.close(); }
+});
+
+test('public transaction confirmation rechecks its receipt block after reading current metadata', async () => {
+  const f = fixture();
+  try {
+    f.setReceipt(HASH, [{ address: CONTRACT,
+      topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber('111112')],
+      data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: '0x0' }]);
+    f.state.afterRpc = async call => {
+      if (call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) {
+        f.state.canonical.set(100, blockHash(999));
+      }
+    };
+    const result = await f.request(paths.transactionsConfirm, { transactionHash: HASH });
+    assert.equal(result.response.status, 503);
+    assert.equal(result.body.items, undefined);
+    assert.equal(f.state.calls.filter(call => call.method === 'eth_getBlockByNumber' && call.params[0] === '0x64').length, 2);
+  } finally { f.close(); }
+});
+
+for (const count of [311, 620]) {
+  test(`public transaction confirmation keeps all ${count} minted items across bounded contract reads`, async () => {
+    const f = fixture();
+    try {
+      f.state.tokens.clear();
+      const ids = Array.from({ length: count }, (_, index) => String(index + 1));
+      const logs = ids.map((id, index): EthereumLog => {
+        f.state.tokens.set(id, { kind: 1, displayId: index + 1, owner: WALLET });
+        return { address: CONTRACT,
+          topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber(id)],
+          data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: ethereumHexQuantity(index) };
+      });
+      f.setReceipt(HASH, logs);
+      const result = await f.request<{ status: string; items: EthereumInventoryItem[] }>(paths.transactionsConfirm, { transactionHash: HASH });
+      assert.equal(result.response.status, 200, JSON.stringify(result.body));
+      assert.equal(result.body.status, 'confirmed');
+      assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
+      assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `Kind 1 #${id}`));
+      const reads = f.state.calls.filter(call => call.method === 'eth_call');
+      assert.equal(reads.length, Math.ceil(count / 150) + Math.ceil(count / 30));
+      assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+      assert.ok(f.state.batchSizes.every(size => size <= 4));
+    } finally { f.close(); }
+  });
+}
+
 test('bundled transactions confirm more than 150 minted items with complete metadata', async () => {
   const f = fixture();
   try {
@@ -2002,7 +2291,84 @@ test('bundled transactions confirm more than 150 minted items with complete meta
     assert.ok(result.body.items.every(item => item.owner === WALLET && item.kind === 'crate' &&
       item.image.startsWith('data:image/svg+xml;base64,')));
     assert.deepEqual(result.body.burnedTokenIds, burned);
-    assert.deepEqual(f.state.batchSizes, [150, 15, 150, 15]);
+    assert.deepEqual(f.state.batchSizes, [2, 4, 2]);
+  } finally { f.close(); }
+});
+
+test('local inventory recovers expected IDs at its captured hash when log discovery briefly sees another fork', async () => {
+  const f = fixture();
+  try {
+    f.state.tokens.clear();
+    const discovered = Array.from({ length: 31 }, (_, index) => String(index + 1));
+    const all = [...discovered, '40', '41', '42'];
+    for (const id of all) {
+      if (id !== '42') f.state.tokens.set(id, { kind: 1, displayId: Number(id), owner: id === '41' ? OTHER_WALLET : WALLET });
+      f.state.logs.push({ address: CONTRACT,
+        topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber(id)],
+        data: '0x', blockNumber: discovered.includes(id) ? '0x64' : '0x66',
+        blockHash: blockHash(discovered.includes(id) ? 100 : 102), transactionHash: HASH, logIndex: ethereumHexQuantity(id) });
+    }
+    let omitted = false;
+    const providerFetch: typeof fetch = async (input, init) => {
+      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+      if (!Array.isArray(payload) && payload.method === 'eth_getLogs' && !omitted) {
+        omitted = true;
+        f.state.canonical.set(102, blockHash(999));
+        const response = await f.providerFetch(input, init);
+        const body = await response.json() as { result: EthereumLog[] };
+        body.result = body.result.filter(log => BigInt(log.topics[3]) <= 31n);
+        f.state.canonical.set(102, blockHash(102));
+        return Response.json(body);
+      }
+      return f.providerFetch(input, init);
+    };
+    type Page = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number };
+    const first = await f.request<Page>(`${paths.inventory}?owner=${WALLET}&expectedTokenIds=1,31,40,41,42,40`,
+      undefined, undefined, { fetch: providerFetch });
+    assert.equal(first.response.status, 200, JSON.stringify(first.body));
+    assert.equal(omitted, true);
+    assert.deepEqual(first.body.items.map(item => item.tokenId), [...discovered, '40']);
+    assert.ok(first.body.items.every(item => item.owner === WALLET));
+    assert.equal(new Set(first.body.items.map(item => item.tokenId)).size, first.body.items.length);
+    assert.equal(first.body.nextCursor, '30');
+    assert.equal(first.body.observedBlock, 102);
+    const reads = f.state.calls.filter(call => call.method === 'eth_call');
+    const infoReads = reads.filter(call => (call.params[0] as { data: string }).data.startsWith(functionSelector('getTokenInfos(uint256[])')));
+    assert.deepEqual(infoReads.map(call => (decodeReturn(['uint256[]'], `0x${(call.params[0] as { data: string }).data.slice(10)}`)[0] as bigint[]).map(String)),
+      [discovered, ['40', '41', '42']]);
+    assert.ok(reads.every(call => call.params[1] === blockHash(102)));
+    const next = await f.request<Page>(`${paths.inventory}?owner=${WALLET}&cursor=30`, undefined, undefined, { fetch: providerFetch });
+    assert.equal(next.response.status, 200, JSON.stringify(next.body));
+    assert.deepEqual(next.body.items.map(item => item.tokenId), ['31', '40']);
+    assert.equal(next.body.nextCursor, null);
+  } finally { f.close(); }
+});
+
+test('local inventory reuses discovered expected IDs without extra ownership calls or changing pagination', async () => {
+  const f = fixture();
+  try {
+    f.state.tokens.clear();
+    const ids = Array.from({ length: 35 }, (_, index) => String(index + 1));
+    for (const id of ids) {
+      f.state.tokens.set(id, { kind: 1, displayId: Number(id), owner: WALLET });
+      f.state.logs.push({ address: CONTRACT,
+        topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber(id)],
+        data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: ethereumHexQuantity(id) });
+    }
+    type Page = { items: EthereumInventoryItem[]; nextCursor: string | null };
+    const first = await f.request<Page>(`${paths.inventory}?owner=${WALLET}&expectedTokenIds=31,1,31`);
+    assert.equal(first.response.status, 200, JSON.stringify(first.body));
+    assert.deepEqual(first.body.items.map(item => item.tokenId), ids.slice(0, 31));
+    assert.equal(first.body.nextCursor, '30');
+    const infoReads = () => f.state.calls.filter(call => call.method === 'eth_call' &&
+      (call.params[0] as { data: string }).data.startsWith(functionSelector('getTokenInfos(uint256[])')));
+    assert.equal(infoReads().length, 1);
+    assert.deepEqual((decodeReturn(['uint256[]'], `0x${(infoReads()[0].params[0] as { data: string }).data.slice(10)}`)[0] as bigint[]).map(String), ids);
+    const next = await f.request<Page>(`${paths.inventory}?owner=${WALLET}&cursor=30&expectedTokenIds=1`);
+    assert.equal(next.response.status, 200, JSON.stringify(next.body));
+    assert.deepEqual(next.body.items.map(item => item.tokenId), ids.slice(30));
+    assert.equal(next.body.nextCursor, null);
+    assert.equal(infoReads().length, 2);
   } finally { f.close(); }
 });
 

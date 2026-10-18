@@ -374,6 +374,89 @@ test('unboxing reveals artwork at first inclusion without waiting for fulfillmen
   assert.equal(connected.sent.length, 1);
 });
 
+for (const count of [1, 15, 16, 50]) {
+  test(`opening ${count} selected crates ${count <= 15 ? 'submits one ordered transaction' : 'rejects before wallet submission'}`, async () => {
+    const selected = Array.from({ length: count }, (_, index) => ({
+      ...token(owner, String(111112 + count - index - 1)), displayId: count - index,
+    }));
+    const originalIds = selected.map(item => item.tokenId);
+    const connected = wallet();
+    const view = harness(connected);
+    await waitFor(() => assert.ok(view.result.current.scope));
+    await act(async () => { assert.equal(await view.result.current.unbox(selected), count <= 15); });
+    assert.deepEqual(selected.map(item => item.tokenId), originalIds);
+    assert.equal(connected.sent.length, count <= 15 ? 1 : 0);
+    const scope = ethereumInventoryScope(config, owner)!;
+    if (count <= 15) {
+      const [sent] = connected.sent[0] as [{ data: string }];
+      const expected = count === 1 ? encodeCall('unboxCrate(uint256)', ['uint256'], [originalIds[0]])
+        : encodeCall('unboxCrates(uint256[])', ['uint256[]'], [originalIds]);
+      assert.equal(sent.data, expected);
+      assert.equal(readEthereumPending(scope)?.intent?.data, expected);
+    } else {
+      assert.match(view.result.current.error ?? '', /up to 15/);
+      assert.equal(readEthereumPending(scope), null);
+      assert.equal(readEthereumSubmission(scope), null);
+    }
+  });
+}
+
+test('opening rejects duplicate, mixed, foreign and multiple warehouse selections', async () => {
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.scope));
+  const crate = token();
+  const warehouse: EthereumInventoryItem = { ...token(owner, '116667'), kind: 'warehouse' };
+  for (const selected of [[], [crate, crate], [crate, warehouse], [warehouse, { ...warehouse, tokenId: '116668' }],
+    [{ ...crate, kind: 'artwork' as const }], [token(other)], [{ ...crate, chainId: 1 }], [{ ...crate, contractAddress: other }]]) {
+    await act(async () => { assert.equal(await view.result.current.unbox(selected), false); });
+  }
+  assert.equal(connected.sent.length, 0);
+  await act(async () => { assert.equal(await view.result.current.unbox([warehouse]), true); });
+  assert.equal(connected.sent.length, 1);
+  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall('unboxWarehouse(uint256)', ['uint256'], ['116667']));
+});
+
+test('a fifteen-crate bonus batch retains all 311 artworks through first inclusion, stale indexing and reload', async t => {
+  const selected = [...Array.from({ length: 14 }, (_, index) => ({ ...token(owner, String(111112 + index)), displayId: index + 1 })),
+    { ...token(owner, '116666'), displayId: 5555 }];
+  const artworks: EthereumInventoryItem[] = Array.from({ length: 311 }, (_, index) => ({
+    ...token(owner, String(index + 1)), kind: 'artwork', displayId: index < 280 ? index + 1 : 111081 + index - 280,
+    name: `Artwork #${index + 1}`,
+  }));
+  const previous: EthereumInventoryItem[] = Array.from({ length: 100 }, (_, index) => ({
+    ...token(owner, String(index + 50000)), kind: 'artwork', displayId: index + 50000,
+  }));
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:expected`, previous.map(item => item.tokenId));
+  let included = false;
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+    items: included ? [...previous, ...artworks].filter(item => expected.includes(item.tokenId)) : [...previous, ...selected],
+    nextCursor: null, observedBlock: 10,
+  }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+    items: included ? artworks : [], burnedTokenIds: included ? selected.map(item => item.tokenId) : [] }));
+  const connected = wallet();
+  let view = harness(connected);
+  await waitFor(() => assert.equal(view.result.current.items.length, 115));
+  await act(async () => { assert.equal(await view.result.current.unbox(selected), true); });
+  assert.equal(connected.sent.length, 1);
+  included = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.revealed?.length, 311));
+  assert.equal(view.result.current.pending, null);
+  const expectedIds = new Set([...previous, ...artworks].map(item => item.tokenId));
+  assert.deepEqual(new Set(readEthereumExpected(scope)), expectedIds);
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+  assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), expectedIds);
+  view.unmount();
+  view.client.clear();
+  view = harness(connected);
+  await waitFor(() => assert.deepEqual(new Set(view.result.current.items.map(item => item.tokenId)), expectedIds));
+  assert.equal(view.result.current.items.length, 411);
+  assert.equal(connected.sent.length, 1);
+});
+
 test('crate receipt claims keep polling until three confirmations without another wallet transaction', async t => {
   speedUpConfirmationPolls(t);
   let confirmations = 1;

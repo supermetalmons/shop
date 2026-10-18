@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { encodeAbi, decodeReturn, encodeCall, decodeEventLogs, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
-import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../shared/ethereum/crypto.ts';
+import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../shared/ethereum/crypto.ts';
 import { crateArtworkIds, ethereumAssetId, ethereumReceiptTokenId, formatEtherAmount } from '../shared/ethereum/protocol.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { nft111KAbi, nft111KRendererAbi } from '../shared/ethereum/abi.generated.ts';
@@ -42,6 +42,18 @@ test('ABI nested dynamic arrays, strings, and fixed arrays match Foundry cast', 
   const nested = ['(uint256,string)[]'];
   const values = [[[1n, 'one'], [2n, 'two']]];
   assert.deepEqual(decodeReturn(nested, encodeAbi(nested, values)), values);
+});
+
+test('batch token-info tuples and ordered crate commitments match Foundry cast', () => {
+  const castInfos = '0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000003000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000003350000000000000000000000001111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000000000000015b30000000000000000000000002222222222222222222222222222222222222222';
+  const infos = [[1n, 821n, WALLET], [0n, 0n, `0x${'0'.repeat(40)}`], [5n, 5555n, CONTRACT]];
+  assert.equal(encodeAbi(['(uint8,uint256,address)[]'], [infos]), castInfos);
+  assert.deepEqual(decodeReturn(['(uint8,uint256,address)[]'], castInfos), [infos]);
+  const ids = [111112, 116666, 111113];
+  assert.equal(ethereumTokenIdsHash(ids), '0x9b86e2acc7b70d77172ef248460e61b40ff43b920fa8cb4e27fb3640849e7b3c');
+  assert.notEqual(ethereumTokenIdsHash([...ids].reverse()), ethereumTokenIdsHash(ids));
+  assert.notEqual(ethereumTokenIdsHash(ids.slice(0, -1)), ethereumTokenIdsHash(ids));
+  assert.throws(() => decodeReturn(['(uint8,uint256,address)[]'], castInfos.slice(0, -64)));
 });
 
 test('ABI rejects unsafe inputs and malformed provider output', () => {
@@ -107,6 +119,18 @@ test('delivery and claim digests and calldata match Solidity-generated fixtures'
     [fixture.delivery.tokenIds, [fixture.delivery.orderId, fixture.wallet, fixture.delivery.fee, fixture.delivery.deadline, fixture.delivery.receiptIdsHash], fixture.delivery.signature]), fixture.delivery.calldata);
   assert.equal(encodeCall('claimCrateReceipt(uint256,bytes32,uint256,bytes)', ['uint256', 'bytes32', 'uint256', 'bytes'],
     [fixture.claim.receiptId, fixture.claim.claimId, fixture.claim.deadline, fixture.claim.signature]), fixture.claim.calldata);
+});
+
+test('batch calldata and ordered crate hashes match Solidity-generated fixtures', () => {
+  const fixture = JSON.parse(readFileSync(new URL('../onchain/ethereum/fixtures/eip712.json', import.meta.url), 'utf8')) as {
+    calls: { unboxCratesUnsorted: string; getTokenInfos: string; previewTokenURIs: string };
+    batchUnbox: { tokenIds: number[]; artworkCount: number; tokenIdsHash: string };
+  };
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [fixture.batchUnbox.tokenIds]), fixture.calls.unboxCratesUnsorted);
+  assert.equal(ethereumTokenIdsHash(fixture.batchUnbox.tokenIds), fixture.batchUnbox.tokenIdsHash);
+  assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => crateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[1, 0, 111112]]), fixture.calls.getTokenInfos);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[4, 1, 5], [111111, 42, 5555]]), fixture.calls.previewTokenURIs);
 });
 
 test('events decode only the configured contract and retain exact uint256 token identities', () => {

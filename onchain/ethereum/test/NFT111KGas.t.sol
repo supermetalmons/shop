@@ -4,6 +4,10 @@ import {NFT111K} from "../src/NFT111K.sol";
 import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
+interface GasMeasurementVm {
+    function snapshotValue(string calldata name, uint256 value) external;
+}
+
 contract MinimalGasReceiver {
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
         return this.onERC721Received.selector;
@@ -120,6 +124,90 @@ contract NFT111KGasTest is TestSupport {
 
     function testGasUnboxCrate31Receiver() public {
         _unboxCrate(receiver, true, "unboxCrate31Receiver");
+    }
+
+    function testGasUnboxCrates1() public {
+        _unboxCrates(alice, 1, false, false, "unboxCrates1");
+    }
+
+    function testGasUnboxCrates15() public {
+        _unboxCrates(alice, 15, false, false, "unboxCrates15");
+    }
+
+    function testGasUnboxCrates15Receiver() public {
+        _unboxCrates(receiver, 15, false, false, "unboxCrates15Receiver");
+    }
+
+    function testGasUnboxCrates15Bonus() public {
+        _unboxCrates(alice, 15, true, false, "unboxCrates15Bonus");
+    }
+
+    function testGasUnboxCrates15BonusReceiver() public {
+        _unboxCrates(receiver, 15, true, false, "unboxCrates15BonusReceiver");
+    }
+
+    function testGasUnboxCrates15Separate() public {
+        _unboxCrates(alice, 15, false, true, "unboxCrates15Separate");
+    }
+
+    function testGasUnboxCrates15SeparateReceiver() public {
+        _unboxCrates(receiver, 15, false, true, "unboxCrates15SeparateReceiver");
+    }
+
+    function testGasUnboxCrates15BonusSeparate() public {
+        _unboxCrates(alice, 15, true, true, "unboxCrates15BonusSeparate");
+    }
+
+    function testGasUnboxCrates15BonusSeparateReceiver() public {
+        _unboxCrates(receiver, 15, true, true, "unboxCrates15BonusSeparateReceiver");
+    }
+
+    function testGasGetTokenInfos150Fresh() public {
+        _artworks(alice, 150);
+        _buyWarehouses(alice, 491);
+        _buyCrates(alice, 4);
+        vm.prank(alice);
+        token.unboxCrate(116666);
+        uint256[] memory ids = new uint256[](150);
+        for (uint256 i; i < ids.length; ++i) {
+            ids[i] = 20 * (i + 1);
+        }
+        ids[149] = 3031;
+        NFT111K.TokenInfo[] memory infos = token.getTokenInfos(ids);
+        vm.snapshotGasLastCall("getTokenInfos150Fresh");
+        assertEq(infos.length, 150);
+        assertEq(infos[149].displayId, 111111);
+    }
+
+    function testGasGetTokenInfos150Spot() public {
+        _buyCrates(alice, 150);
+        NFT111K.TokenInfo[] memory infos = token.getTokenInfos(_range(111112, 150));
+        vm.snapshotGasLastCall("getTokenInfos150Spot");
+        assertEq(infos.length, 150);
+        assertEq(infos[149].displayId, 150);
+    }
+
+    function testGasGetTokenInfos150Missing() public {
+        NFT111K.TokenInfo[] memory infos = token.getTokenInfos(_range(1000001, 150));
+        vm.snapshotGasLastCall("getTokenInfos150Missing");
+        assertEq(infos.length, 150);
+        assertEq(infos[149].kind, 0);
+    }
+
+    function testGasPreviewTokenURIs1ArtworkReceipt() public {
+        _metadataBatch(1, 4, "previewTokenURIs1ArtworkReceipt");
+    }
+
+    function testGasPreviewTokenURIs30Artworks() public {
+        _metadataBatch(30, 1, "previewTokenURIs30Artworks");
+    }
+
+    function testGasPreviewTokenURIs30ArtworkReceipts() public {
+        _metadataBatch(30, 4, "previewTokenURIs30ArtworkReceipts");
+    }
+
+    function testGasPreviewTokenURIs30Mixed() public {
+        _metadataBatch(30, 0, "previewTokenURIs30Mixed");
     }
 
     function testGasDeliverArtwork1() public {
@@ -504,6 +592,48 @@ contract NFT111KGasTest is TestSupport {
         assertEq(owner, wallet);
     }
 
+    function _unboxCrates(address wallet, uint256 quantity, bool bonus, bool separate, string memory name) internal {
+        _buyCrates(wallet, quantity);
+        uint256[] memory ids = _range(111112, quantity);
+        if (bonus) {
+            _buyWarehouses(wallet, 503);
+            _buyCrates(wallet, 7);
+            ids[quantity - 1] = 116666;
+        }
+        if (separate) {
+            uint256 totalGas;
+            for (uint256 i; i < ids.length; ++i) {
+                vm.prank(wallet);
+                token.unboxCrate(ids[i]);
+                totalGas += vm.snapshotGasLastCall(name);
+            }
+            GasMeasurementVm(address(vm)).snapshotValue(name, totalGas);
+        } else {
+            vm.prank(wallet);
+            token.unboxCrates(ids);
+            vm.snapshotGasLastCall(name);
+        }
+        (,, uint256 count,,,) = token.stats();
+        assertEq(count, quantity * 20 + (bonus ? 11 : 0));
+        (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(count);
+        assertEq(kind, 1);
+        assertEq(displayId, bonus ? 111111 : quantity * 20);
+        assertEq(holder, wallet);
+    }
+
+    function _metadataBatch(uint256 count, uint8 kind, string memory name) internal {
+        uint8[] memory kinds = new uint8[](count);
+        uint256[] memory ids = new uint256[](count);
+        for (uint256 i; i < count; ++i) {
+            kinds[i] = kind == 0 ? uint8(i % 5 + 1) : kind;
+            ids[i] = kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
+        }
+        string[] memory uris = token.previewTokenURIs(kinds, ids);
+        vm.snapshotGasLastCall(name);
+        assertEq(uris.length, count);
+        assertTrue(2 * abi.encode(uris).length + 1024 < 512 * 1024);
+    }
+
     function _deliverArtworks(address wallet, uint256 quantity, string memory name) internal {
         _artworks(wallet, (quantity + 19) / 20);
         _deliver(wallet, _range(1, quantity), name);
@@ -678,9 +808,8 @@ contract NFT111KGasTest is TestSupport {
     }
 
     function _sign(bytes32 structHash) internal returns (bytes memory) {
-        bytes32 domain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token))
-        );
+        bytes32 domain =
+            keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token)));
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(SIGNER_KEY, keccak256(abi.encodePacked(hex"1901", domain, structHash)));
         return abi.encodePacked(r, s, v);

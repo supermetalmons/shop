@@ -61,9 +61,9 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 3` to `.local/deployment.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_TREASURY`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 4` to `.local/deployment.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_TREASURY`.
 
-Local deployment manifest version 3 identifies the renamed collection and signing domain. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. Older manifests are rejected with these redeployment instructions. Existing contracts require a fresh deployment to acquire the new collection name and domain; they are not upgradeable. Both delivery and crate-claim authorizations use EIP-712 domain name `111K` and version `2`. Authorizations remain bound to their original domain, chain and contract address, so old-domain signatures cannot authorize the renamed collection.
+Local deployment manifest version 4 identifies the batch unpacking and batch read interfaces. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests and probes the new getters before starting. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
 Start the isolated API from the repository root:
 
@@ -91,9 +91,21 @@ Crate `n` corresponds to artwork display numbers `20 × (n − 1) + 1` through `
 
 Warehouse purchases reserve eleven crate identities immediately. Unpacking mints those reserved crates without consuming supply again. A crate can either be unpacked into artworks or redeemed into a crate receipt. Claiming a physical crate burns its receipt and creates the same fixed artwork receipt numbers. Warehouses cannot be delivered, and artwork receipts cannot be redeemed again. Receipts remain transferable.
 
-The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates or warehouses; warehouse supply checks count eleven crate allocations per warehouse. Each unpacking call handles one warehouse or crate. Delivery accepts 1–50 items.
+The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates or warehouses; warehouse supply checks count eleven crate allocations per warehouse. `unboxCrate` and `unboxWarehouse` retain their single-container behavior. `unboxCrates(uint256[])` opens 1–15 distinct owned crates in one transaction. Delivery accepts 1–50 items.
 
 `getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. `stats().artworksMinted` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Artwork display offsets are stored per ERC721A mint batch and preserved through ownership changes.
+
+### Batch crate opening
+
+`unboxCrates` validates and burns every input before any artwork receiver callback. A duplicate, invalid, or unowned input, or a rejected receiver callback, reverts the whole operation. Crates are opened in the caller's input order, using a separate ERC721A artwork batch and identity offset for each crate. The transient offset is cleared after each mint. A maximum batch containing crate #5555 creates 311 artworks; warehouses remain single-item openings.
+
+Each crate emits its existing `CrateUnboxed` event. The final `CratesUnboxed(address indexed owner, bytes32 indexed tokenIdsHash, uint256 firstArtToken, uint256 artworkCount)` event commits to `keccak256(abi.encode(tokenIds))` in input order. Confirmation and recovery require exactly one matching aggregate event for a batch intent, including the owner, ordered ID commitment, output count and token range. Single-crate calls do not emit the aggregate event.
+
+### Bounded reads
+
+`getTokenInfos(uint256[])` accepts up to 150 IDs and returns `(uint8 kind, uint256 displayId, address holder)[]`. `previewTokenURIs(uint8[],uint256[])` accepts up to 30 corresponding kind/display-number pairs and returns `string[]`. Both preserve order and duplicates and return empty arrays for empty inputs. Token-info reads preserve zero tuples for absent or burned IDs. Oversized reads, mismatched metadata array lengths, or any invalid metadata pair revert the call.
+
+The API chunks inventory and confirmation reads through these getters, with at most four contract calls per JSON-RPC envelope and two envelopes in flight. The existing 3 MiB response bound and request deadlines remain enforced. All chunks in an inventory or confirmation response use the same exact block hash; the API verifies that snapshot is still canonical before returning and also rechecks a confirmed transaction's inclusion block. Pinning the hash prevents RPC nodes on different forks from mixing state at the same height. Failed chunks never produce a partial success. A normal 30-item inventory requires one token-info call and one metadata call, excluding chain checks, snapshot verification and any larger local ownership scan.
 
 ## Authorization
 
@@ -128,11 +140,32 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
+### Batch operations (2026-10-18)
+
+The [batch report](benchmarks/batch-operations.json) records the current source/toolchain hashes, all 105 verified gas snapshots, deployed code size and bounded-read response sizes. The collection runtime is 17,206 bytes, leaving 7,370 bytes below the EIP-170 limit. The renderer remains 11,775 bytes.
+
+| Opening | One batch | Fifteen separate transactions | Gas saved |
+| --- | ---: | ---: | ---: |
+| 15 ordinary crates, EOA | 1,215,149 | 1,714,920 | 499,771 (29.14%) |
+| 15 crates including #5555, EOA | 1,236,336 | 1,736,107 | 499,771 (28.79%) |
+| 15 ordinary crates, minimal receiver | 1,668,470 | 2,168,070 | 499,600 (23.04%) |
+| 15 crates including #5555, minimal receiver | 1,706,156 | 2,205,737 | 499,581 (22.65%) |
+
+These isolated write measurements include intrinsic/calldata gas and refunds, with identical initial state and input order for each comparison. Setup and arbitrary contract-wallet callback work are excluded. The Anvil API lifecycle also compares real transaction receipts after 40 artworks already exist: opening 15 crates including #5555 costs 1,219,236 gas versus 1,719,007 separately, saving 499,771 gas (29.07%).
+
+The 150-entry sparse artwork-info benchmark costs 6,942,976 gas. A 30-entry large artwork-receipt metadata read costs 18,989,148 gas and returns 190,144 ABI bytes (380,290 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
+
+Regenerate the report after reviewing updated gas snapshots:
+
+```sh
+node scripts/benchmark-batch.mjs
+```
+
 ### Compiler settings (2026-10-18)
 
-The current build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 1000`. The [current compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources at legacy/200 and legacy/1000. The comparison includes all 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and actual deployment receipts.
+The build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 1000`. The preserved [compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources before batch operations were added, at legacy/200 and legacy/1000. Its 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and deployment receipts describe that earlier revision, not the current batch implementation.
 
-All 77 write measurements and eight reads improve at 1000 runs; four reads are unchanged and none regress. These are fresh measurements of the renamed contract and signing domain.
+In that recorded comparison, all 77 write measurements and eight reads improve at 1000 runs; four reads are unchanged and none regress.
 
 | Pipeline | Optimizer runs | Writes improved / regressed | Collection bytes | Renderer bytes | Combined deployment gas change |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -151,11 +184,11 @@ All 77 write measurements and eight reads improve at 1000 runs; four reads are u
 | Deliver 25 artworks + 25 crates | 2,480,424 | 2,474,047 | 6,377 |
 | Claim 31 artwork receipts | 899,483 | 897,427 | 2,056 |
 
-Collection deployment costs 3,619,228 gas (+230,924); renderer deployment costs 2,579,059 (+291,853). Both remain within Ethereum's deployment size limits, and the renderer stays within its 12 KiB project budget. These one-time costs are separate from user-call savings. Normal gas snapshots also compile the test receiver at the selected settings; the compiler comparison keeps its bytecode fixed to isolate the collection's improvements.
+At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer deployment costs 2,579,059 (+291,853). Those one-time costs are separate from user-call savings. Normal gas snapshots also compile the test receiver at the selected settings; the compiler comparison keeps its bytecode fixed to isolate the collection's improvements.
 
 Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [checked-in legacy/200 baseline](benchmarks/compiler-legacy-200.json) records source, harness, dependency and compiler provenance as well as all 89 measurements. Normal runs reject changed provenance or measurements; they never silently replace the baseline. In both records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-Reproduce the current comparison from `onchain/ethereum`:
+The current source has 105 benchmarks, so the preserved 89-benchmark compiler baseline intentionally fails provenance/name checks against it. Reproduce the earlier comparison from its recorded source revision. To compare modified sources, explicitly refresh the compiler baseline with `--update-baseline` as shown below before running:
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000

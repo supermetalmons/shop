@@ -5,7 +5,7 @@ import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import { encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
-import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
+import { ethereumReceiptIdsHash, ethereumTokenIdsHash } from '../shared/ethereum/crypto.ts';
 import { ethereumApi, EthereumApiError } from '../src/ethereum/api.ts';
 import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, toggleEthereumSelection } from '../src/ethereum/state.ts';
 import { ethereumChainId, ethereumOperation } from '../src/ethereum/wallet.ts';
@@ -25,6 +25,44 @@ const mintOperation: EthereumSubmission = { scope: ethereumInventoryScope(config
 const mintLog = { address: contract,
   topics: [`0x${bytesToHex(keccak_256(new TextEncoder().encode('CratesPurchased(address,uint256,uint256,uint256)')))}`, encodeAbi(['address'], [owner])],
   data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, config.cratePriceWei]) };
+
+test('batch opening confirmation requires one complete ordered summary including the bonus artwork count', async t => {
+  const ids = [...Array.from({ length: 14 }, (_, index) => String(111125 - index)), '116666'];
+  const operation: EthereumSubmission = { ...mintOperation, action: 'unbox', intent: {
+    to: contract, data: encodeCall('unboxCrates(uint256[])', ['uint256[]'], [ids]), value: '0x0',
+  } };
+  const summary = { address: contract, topics: [
+    `0x${bytesToHex(keccak_256(new TextEncoder().encode('CratesUnboxed(address,bytes32,uint256,uint256)')))}`,
+    encodeAbi(['address'], [owner]), ethereumTokenIdsHash(ids),
+  ], data: encodeAbi(['uint256', 'uint256'], [1, 311]) };
+  const individual = { address: contract, topics: [
+    `0x${bytesToHex(keccak_256(new TextEncoder().encode('CrateUnboxed(uint256,address,uint256,uint256)')))}`,
+    encodeAbi(['uint256'], [ids[0]]), encodeAbi(['address'], [owner]),
+  ], data: encodeAbi(['uint256', 'uint256'], [1, 20]) };
+  let logs = [individual];
+  let confirmations = 1;
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations, items: [], burnedTokenIds: ids, logs }));
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, operation)).status, 'pending');
+  confirmations = 3;
+  for (const invalid of [
+    [individual],
+    [{ ...summary, topics: [summary.topics[0], encodeAbi(['address'], [other]), summary.topics[2]] }],
+    [{ ...summary, topics: [summary.topics[0], summary.topics[1], ethereumTokenIdsHash([...ids].reverse())] }],
+    [{ ...summary, topics: [summary.topics[0], summary.topics[1], ethereumTokenIdsHash(ids.slice(1))] }],
+    [{ ...summary, data: encodeAbi(['uint256', 'uint256'], [1, 300]) }],
+    [{ ...summary, data: encodeAbi(['uint256', 'uint256'], [0, 311]) }],
+    [{ ...summary, data: encodeAbi(['uint256', 'uint256'], [111000, 311]) }],
+  ]) {
+    logs = invalid;
+    await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, operation),
+      error => error instanceof EthereumApiError && error.code === 'operation-failed');
+  }
+  logs = [individual, summary];
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, operation)).status, 'confirmed');
+  logs = [summary, summary];
+  await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, operation),
+    error => error instanceof EthereumApiError && error.code === 'operation-ambiguous');
+});
 
 for (const action of ['mint', 'unbox', 'transfer', 'delivery', 'claim'] as const) {
   test(`${action} confirmation waits for finality before reporting a caught inner failure`, async t => {
@@ -251,8 +289,45 @@ test('Ethereum inventory cursor pages use one request without repeating expected
   assert.equal(result.nextCursor, null);
 });
 
+test('Ethereum inventory reads one thousand expected IDs with at most two requests running', async t => {
+  const ids = Array.from({ length: 1000 }, (_, index) => String(index + 1));
+  const chunks: string[][] = [];
+  let active = 0;
+  let maximum = 0;
+  t.mock.method(globalThis, 'fetch', async input => {
+    const chunk = new URL(String(input)).searchParams.get('expectedTokenIds')!.split(',');
+    chunks.push(chunk);
+    maximum = Math.max(maximum, ++active);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    active--;
+    return Response.json({ items: [item('9999'), ...chunk.map(id => item(id))], nextCursor: 'next', observedBlock: 20 });
+  });
+  const result = await ethereumApi.inventory(config, owner, null, undefined, [...ids, ids[0]]);
+  assert.equal(maximum, 2);
+  assert.equal(chunks.length, 10);
+  assert.ok(chunks.every(chunk => chunk.length === 100));
+  assert.deepEqual(chunks.flat(), ids);
+  assert.equal(result.items.length, 1001);
+  assert.equal(result.nextCursor, 'next');
+});
+
+test('aborting expected-ID inventory stops before another chunk starts', async t => {
+  const controller = new AbortController();
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    requests++;
+    return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }));
+  });
+  const inventory = ethereumApi.inventory(config, owner, null, controller.signal,
+    Array.from({ length: 311 }, (_, index) => String(index + 1)));
+  assert.equal(requests, 2);
+  controller.abort();
+  await assert.rejects(inventory, /abort/i);
+  assert.equal(requests, 2);
+});
+
 test('Ethereum inventory validates supplemental ownership and rejects excess IDs without truncation', async t => {
-  const ids = Array.from({ length: 201 }, (_, index) => String(index + 1));
+  const ids = Array.from({ length: 1001 }, (_, index) => String(index + 1));
   const fetch = t.mock.method(globalThis, 'fetch', async input => {
     const expected = new URL(String(input)).searchParams.get('expectedTokenIds')!.split(',');
     return Response.json({ items: [{ ...item(expected[0]), owner: expected[0] === '101' ? other : owner }],

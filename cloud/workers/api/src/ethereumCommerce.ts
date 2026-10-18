@@ -10,7 +10,8 @@ import { EthereumApiError, readEthereumBody } from './ethereumError.js';
 import { limitEthereumRequest, verifyEthereumSession } from './ethereumAuth.js';
 import { loadEthereumAddress } from './ethereumProfile.js';
 import {
-  ethereumCall, ethereumRpc, ethereumTransactionHash, requireEthereumContract, rpcInteger, type EthereumContext,
+  ethereumBlockSnapshot, ethereumCall, ethereumRpc, ethereumTransactionHash, requireEthereumContract, rpcInteger,
+  verifyEthereumBlockSnapshot, type EthereumContext,
 } from './ethereumRuntime.js';
 import {
   ethereumInventoryItems, ethereumReceipt, ethereumTokenInfos, transferTokenIds, type EthereumTokenInfo,
@@ -446,10 +447,16 @@ export async function ethereumCommerce(request: Request, context: EthereumContex
     const body = await readEthereumBody(request, context.signal, z.object({ transactionHash: hash }).strict());
     const { receipt, confirmations } = await ethereumReceipt(context, ethereumTransactionHash(body.transactionHash));
     if (!receipt) return { status: 'pending', confirmations, items: [], burnedTokenIds: [] };
+    const snapshot = await ethereumBlockSnapshot(context);
+    const receiptBlock = rpcInteger(receipt.blockNumber);
+    if (snapshot.blockNumber < receiptBlock) throw new EthereumApiError('unavailable', 'Ethereum changed while confirming your transaction. Try again.');
+    const blockReference = snapshot.blockHash;
     const ids = transferTokenIds(receipt, requireEthereumContract(context));
-    const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted));
+    const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted, blockReference), blockReference);
     const logs = receipt.logs.filter(log => log.address.toLowerCase() === context.config.contractAddress);
-    return { status: 'confirmed', confirmations, items, burnedTokenIds: ids.burned, logs };
+    await Promise.all([verifyEthereumBlockSnapshot(context, snapshot),
+      verifyEthereumBlockSnapshot(context, { blockNumber: receiptBlock, blockHash: receipt.blockHash })]);
+    return { status: 'confirmed', confirmations: snapshot.blockNumber - receiptBlock + 1, items, burnedTokenIds: ids.burned, logs };
   }
   const session = await verifyEthereumSession(request, context);
   if (path.endsWith('/delivery/confirm')) {

@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-18T18:08:51.491Z",
+  "sourceCommit": "6af6035d5ab57ee3ee1195bfae5dfb0ff1b91319",
+  "sourceSha256": {
+    "src/NFT111K.sol": "4808a38362bdede683f82bcbb8f62014ba0eedb30199403bc9df4c0f4035baf6",
+    "src/NFT111KRenderer.sol": "1cd6f937209b65f6163c75d3397196dc3828aee8f92b1884c47e0ed0f9b614cf",
+    "src/INFT111KRenderer.sol": "25ee08675b3b8fa174d800d0a8fd59663a82631d2bf5231eab6dca8a727c769d",
+    "test/NFT111KGas.t.sol": "545ded1e7e7262bbbc9a5c6b1c83689b7cee0fb5afe57e0c5e45fea3510b3574",
+    "test/TestSupport.sol": "1f4e22d8ca3908e1fefc1b7b4c3d7acd7e0ac9205ab907acdc089ed9deb745bc",
+    "test/NFT111KBatch.t.sol": "4c782adaa27e66e8f1b0b08771186d4d4fd7ce4159b0417c14225275e8be8b66",
+    "foundry.toml": "17dd3750f2805ae7a71ca84ebc93f2ce350ecdbb783e1c5ef6e622d8e0863cd9",
+    "package-lock.json": "0911c8501c6eb8800372a79cf7c6ee86bed89563566560aa9ccca0a5710ed0e6",
+    "snapshots/NFT111KGasTest.json": "a693ef842b6a54f729b236bc7dd79b32d5a9ac0ec45447140303bfcfb0d2d9da",
+    "fixtures/metadata.json": "6fbb6fb2b8f00dfa078b58955b57ff5ee42ca3803742a2ad9ba09864454b8000",
+    "scripts/benchmark-batch.mjs": "aa7220ca1c8a12d5b9840db1b9802d6ba9843337ba2e2fdc2551b815dd78c592"
+  },
+  "toolchain": {
+    "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "compiler": "0.8.30+commit.73712a01",
+    "compilerSettings": {
+      "remappings": [
+        "@openzeppelin/=node_modules/@openzeppelin/",
+        "erc721a/=node_modules/erc721a/"
+      ],
+      "optimizer": {
+        "enabled": true,
+        "runs": 1000
+      },
+      "metadata": {
+        "bytecodeHash": "none"
+      },
+      "compilationTarget": {
+        "src/NFT111K.sol": "NFT111K"
+      },
+      "evmVersion": "prague",
+      "libraries": {}
+    },
+    "dependencies": {
+      "@openzeppelin/contracts": "5.6.1",
+      "erc721a": "4.3.0"
+    }
+  },
+  "measurement": {
+    "command": "node onchain/ethereum/scripts/benchmark-batch.mjs",
+    "gas": "Verified committed Forge --isolate measurements. Batch costs are one transaction; separate costs sum fifteen isolated transactions with identical initial state and token order. Setup and harness costs are excluded. Write costs include intrinsic/calldata gas and refunds. Read costs measure the callee STATICCALL.",
+    "response": "ABI return sizes derive from the exact static tuple layout or the matching committed renderer fixture, including array heads, lengths and padding. Hex sizes include the 0x prefix but omit the JSON-RPC envelope.",
+    "receiver": "MinimalGasReceiver; arbitrary contract-wallet callback work is excluded."
+  },
+  "runtime": {
+    "bytes": 17206,
+    "eip170Limit": 24576,
+    "headroomBytes": 7370
+  },
+  "unbox15": {
+    "ordinary": {
+      "artworks": 300,
+      "eoa": {
+        "batch": 1215149,
+        "separate": 1714920,
+        "saved": 499771,
+        "savedPercent": 29.14
+      },
+      "receiver": {
+        "batch": 1668470,
+        "separate": 2168070,
+        "saved": 499600,
+        "savedPercent": 23.04
+      }
+    },
+    "bonus": {
+      "artworks": 311,
+      "eoa": {
+        "batch": 1236336,
+        "separate": 1736107,
+        "saved": 499771,
+        "savedPercent": 28.79
+      },
+      "receiver": {
+        "batch": 1706156,
+        "separate": 2205737,
+        "saved": 499581,
+        "savedPercent": 22.65
+      }
+    }
+  },
+  "tokenInfo150": {
+    "sparseArtworkTailsIncludingBonusGas": 6942976,
+    "cratesGas": 558023,
+    "absentTokensGas": 509723,
+    "abiReturnBytes": 14464,
+    "rpcHexValueBytes": 28930
+  },
+  "metadata30": {
+    "artworkGas": 14341937,
+    "artworkReceiptGas": 18989148,
+    "mixedKindsGas": 10493266,
+    "responseScenario": {
+      "kind": 4,
+      "displayId": 111111,
+      "repetitions": 30,
+      "singleUriBytes": 6245
+    },
+    "abiReturnBytes": 190144,
+    "rpcHexValueBytes": 380290,
+    "testedCallGasBudget": 25000000,
+    "testedHexResponseBudgetBytes": 524288
+  }
+}

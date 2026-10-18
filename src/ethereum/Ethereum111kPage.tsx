@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
-import { formatEtherAmount } from '../../shared/ethereum/protocol';
+import { ETHEREUM_MAX_EXPECTED_IDS, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
 import { DeliveryForm } from '../components/DeliveryForm';
@@ -70,6 +70,8 @@ export default function Ethereum111kPage({
   const inventoryItems = useMemo(() => [...ethereumItems, ...solanaInventoryItems], [ethereumItems, solanaInventoryItems]);
   const combinedSelection = useMemo(() => selected.size ? selected : solanaSelected, [selected, solanaSelected]);
   const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
+  const selectedCrates = selectedItems.length > 0 && selectedItems.every(item => item.kind === 'crate');
+  const unboxLimitExceeded = selectedCrates && selectedItems.length > model.config.maxUnboxQuantity;
   const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => ['crate', 'artwork'].includes(item.kind));
   const txLink = model.pending ? ethereumExplorerTransaction(model.config, model.pending.hash) : null;
   const claimLinkKey = claimReceiptId && linkedClaimCode ? `${claimReceiptId}:${linkedClaimCode}` : null;
@@ -100,7 +102,7 @@ export default function Ethereum111kPage({
     if (!model.scope || !claimReceiptId || !claimLinkKey || claimLinkHandled === claimLinkKey) return;
     const expected = readEthereumExpected(model.scope);
     if (expected.includes(claimReceiptId)) return;
-    writeEthereumExpected(model.scope, [...expected, claimReceiptId].slice(-100));
+    writeEthereumExpected(model.scope, [...expected, claimReceiptId].slice(-ETHEREUM_MAX_EXPECTED_IDS));
     model.refresh();
   }, [model.scope, claimReceiptId, claimLinkKey, claimLinkHandled, model.refresh]);
   useEffect(() => {
@@ -234,7 +236,7 @@ export default function Ethereum111kPage({
         <button type="button" className="ghost" onClick={() => { setRecoveryOpen(true); setReplacementHash(''); setConfirmDismiss(false); }}>Recover transaction</button>
       </div> : null}
       {model.pending ? <div className="ethereum111k__pending" role="status" aria-live="polite">
-        <span>{model.pending.action === 'unbox' ? 'Opening your container' : model.pending.action === 'delivery' ? 'Confirming your delivery' : model.pending.action === 'cancel' ? 'Confirming your wallet cancellation' : 'Confirming your transaction'} · {model.confirmations}/{model.requiredConfirmations}</span>
+        <span>{model.pending.action === 'unbox' ? 'Opening your containers' : model.pending.action === 'delivery' ? 'Confirming your delivery' : model.pending.action === 'cancel' ? 'Confirming your wallet cancellation' : 'Confirming your transaction'} · {model.confirmations}/{model.requiredConfirmations}</span>
         {txLink ? <a href={txLink} target="_blank" rel="noreferrer">View transaction ↗</a> : null}
         {['delivery', 'claim'].includes(model.pending.action) && !model.session ? <button type="button" onClick={() => void model.signIn()} disabled={Boolean(model.busy)}>Sign in to finish</button> : null}
         <button type="button" className="ghost" onClick={model.refresh}>Refresh</button>
@@ -267,11 +269,13 @@ export default function Ethereum111kPage({
       </section>
     </> : null}
     {selectedItems.length ? <BackgroundLayerPortal><div className="selection-panel selection-panel--inventory ethereum111k__selection">
-      <div className="selection-panel__left"><span>{selectedItems.length} selected</span></div>
+      <div className="selection-panel__left"><span>{selectedItems.length} selected{unboxLimitExceeded ? <small> · Open up to {model.config.maxUnboxQuantity} crates at once</small> : null}</span></div>
       <div className="selection-panel__actions">
         <button type="button" className="quiet" onClick={clear}>Cancel</button>
         {selectedItems.length === 1 ? <button type="button" onClick={() => setViewed(selectedItems[0])}>View</button> : null}
-        {selectedContainer ? <button type="button" onClick={() => void model.unbox(selectedContainer)} disabled={disabled}>Open {selectedContainer.kind}</button> : null}
+        {selectedContainer || selectedCrates ? <button type="button" onClick={() => void model.unbox(selectedItems)} disabled={disabled || unboxLimitExceeded}>
+          {selectedItems.length === 1 ? `Open ${selectedContainer!.kind}` : `Open ${selectedItems.length} crates`}
+        </button> : null}
         {canDeliver ? <button type="button" onClick={() => setDeliveryOpen(true)} disabled={disabled}>Send</button> : null}
       </div>
     </div></BackgroundLayerPortal> : null}
@@ -322,7 +326,8 @@ export default function Ethereum111kPage({
       {model.error ? <p className="error" role="alert">{model.error}</p> : null}
     </Modal>
     <Modal open={Boolean(model.revealed)} title={revealItems[0]?.kind === 'crate' ? 'Your crates' : 'Your artworks'} onClose={model.closeReveal} className="ethereum111k__reveal" suspended={suspended}>
-      <div className="ethereum111k__reveal-grid">{revealItems.map((item, index) => <button type="button" key={item.id} style={{ animationDelay: `${Math.min(index, 10) * 35}ms` }} onClick={() => { model.closeReveal(); setViewed(item); }}><img src={item.image} alt={item.name} /><span>{item.name}</span></button>)}</div>
+      <p className="muted small">{revealItems.length} {revealItems[0]?.kind === 'crate' ? 'crates' : 'artworks'}</p>
+      <div className="ethereum111k__reveal-grid">{revealItems.map((item, index) => <button type="button" key={item.id} style={{ animationDelay: `${Math.min(index, 10) * 35}ms` }} onClick={() => { model.closeReveal(); setViewed(item); }}><img src={item.image} alt={item.name} loading="lazy" decoding="async" /><span>{item.name}</span></button>)}</div>
     </Modal>
   </div>;
 }

@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ethereumHexQuantity } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumHexQuantity } from '../../shared/ethereum/protocol';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
@@ -191,7 +191,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
       const mintedIds = result.items.map(item => item.tokenId);
       const changed = new Set([...result.burnedTokenIds, ...mintedIds]);
       const previous = readEthereumExpected(scope);
-      const expected = [...new Set([...previous.filter(id => !changed.has(id)), ...mintedIds])].slice(-100);
+      const expected = [...new Set([...previous.filter(id => !changed.has(id)), ...mintedIds])].slice(-ETHEREUM_MAX_EXPECTED_IDS);
       if (retainSources) writeEthereumExpected(scope, expected,
         { hash: pending.hash, sourceIds: [...new Set([...previous.filter(id => !expected.includes(id)), ...result.burnedTokenIds])], mintedIds });
       else {
@@ -361,9 +361,17 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     const price = kind === 'crate' ? stats.data.cratePriceWei : stats.data.warehousePriceWei;
     await submit(operation, capturedScope, 'mint', transaction(encodeCall(kind === 'crate' ? ETHEREUM_FUNCTIONS.mintCrates : ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [quantity]), ethereumHexQuantity(BigInt(price) * BigInt(quantity))));
   });
-  const unbox = (item: EthereumInventoryItem) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
-    if (item.owner !== operation.address || (item.kind !== 'crate' && item.kind !== 'warehouse')) throw new Error('Select one of your crates or warehouses.');
-    await submit(operation, capturedScope, 'unbox', transaction(encodeCall(item.kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [item.tokenId])));
+  const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[]) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
+    const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
+    if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
+      items.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
+        (item.kind !== 'crate' && !(items.length === 1 && item.kind === 'warehouse')))) {
+      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse.`);
+    }
+    const data = items.length === 1
+      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
+      : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [items.map(item => item.tokenId)]);
+    await submit(operation, capturedScope, 'unbox', transaction(data));
   });
   const deliver = (selected: EthereumInventoryItem[], address: EthereumDeliveryAddress) => run('Confirm delivery in your wallet…', async (operation, capturedScope) => {
     if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !['artwork', 'crate'].includes(item.kind))) throw new Error('Choose up to 50 artworks or crates for delivery.');

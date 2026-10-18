@@ -46,7 +46,7 @@ const collection = send((await artifact('NFT111K')).bytecode.object + constructo
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
 
 const result = {
-  protocolVersion: 3,
+  protocolVersion: 4,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   rendererAddress: renderer.contractAddress, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, treasury,

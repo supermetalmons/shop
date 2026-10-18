@@ -5,14 +5,14 @@ import { createTestHarness } from 'wrangler';
 import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
-import { requireEthereumAddress } from '../shared/ethereum/protocol.ts';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string;
 };
-if (deployment.protocolVersion !== 3) throw new Error('The local deployment uses an incompatible collection name or authorization format. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 4) throw new Error('The local deployment does not support the current batch contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -45,6 +45,17 @@ if ([collectionCode, rendererCode].some((code) => typeof code !== 'string' || co
 }
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
+
+const [unboxLimit, tokenInfos, tokenURIs] = await Promise.all([
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
+]);
+if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
+  typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
+  typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0) {
+  throw new Error('The local collection does not implement the current batch interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+}
 
 const rawConfig = JSON.parse(await readFile(resolve(root, 'cloud/workers/api/wrangler.jsonc'), 'utf8'));
 const emptySecrets = Object.fromEntries((rawConfig.secrets?.required || []).map((name: string) => [name, '']));

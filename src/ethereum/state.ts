@@ -1,5 +1,5 @@
 import type { Ethereum111kConfig, EthereumInventoryItem, EthereumSession } from '../../shared/ethereum/api';
-import { ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import type { InventoryItem } from '../types';
 
 export type EthereumAction = 'mint' | 'unbox' | 'delivery' | 'claim' | 'transfer' | 'cancel';
@@ -194,7 +194,7 @@ export function readEthereumSubmission(scope: string): EthereumSubmission | null
 
 export function readEthereumExpected(scope: string): string[] {
   const value = readEthereumStorage<unknown>(`${scope}:expected`);
-  return expectedIds(Array.isArray(value) ? value : value && typeof value === 'object' && 'ids' in value ? value.ids : null, 100);
+  return expectedIds(Array.isArray(value) ? value : value && typeof value === 'object' && 'ids' in value ? value.ids : null, ETHEREUM_MAX_EXPECTED_IDS);
 }
 
 function expectedIds(value: unknown, limit: number): string[] {
@@ -205,26 +205,27 @@ function readEthereumInventoryRecovery(scope: string): EthereumInventoryRecovery
   const value = readEthereumStorage<{ recovery?: EthereumInventoryRecovery }>(`${scope}:expected`);
   const recovery = value?.recovery;
   return recovery && typeof recovery.hash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(recovery.hash)
-    ? { hash: recovery.hash, sourceIds: expectedIds(recovery.sourceIds, 100), mintedIds: expectedIds(recovery.mintedIds, 50) } : null;
+    ? { hash: recovery.hash, sourceIds: expectedIds(recovery.sourceIds, ETHEREUM_MAX_EXPECTED_IDS), mintedIds: expectedIds(recovery.mintedIds, ETHEREUM_MAX_EXPECTED_IDS) } : null;
 }
 
 function readEthereumRetainedIds(scope: string): string[] {
-  return expectedIds(readEthereumStorage<{ retainedIds?: unknown }>(`${scope}:expected`)?.retainedIds, 100);
+  return expectedIds(readEthereumStorage<{ retainedIds?: unknown }>(`${scope}:expected`)?.retainedIds, ETHEREUM_MAX_EXPECTED_IDS);
 }
 
 export function readEthereumInventoryExpected(scope: string): string[] {
-  const recoveryIds = [...new Set([...readEthereumRetainedIds(scope), ...(readEthereumInventoryRecovery(scope)?.sourceIds ?? [])])].slice(-100);
+  const recoveryIds = [...new Set([...readEthereumRetainedIds(scope), ...(readEthereumInventoryRecovery(scope)?.sourceIds ?? [])])].slice(-ETHEREUM_MAX_EXPECTED_IDS);
   return [...new Set([...readEthereumExpected(scope), ...recoveryIds])];
 }
 
 export function writeEthereumExpected(scope: string, ids: string[], recovery = readEthereumInventoryRecovery(scope), retainedIds = readEthereumRetainedIds(scope)): void {
-  const normalized = expectedIds(ids, 100);
+  const normalized = expectedIds(ids, ETHEREUM_MAX_EXPECTED_IDS);
   const previous = readEthereumInventoryRecovery(scope);
   if (recovery && previous && previous.hash !== recovery.hash) retainedIds.push(...previous.sourceIds);
   if (recovery && previous?.hash === recovery.hash) recovery = {
-    ...recovery, sourceIds: [...new Set([...previous.sourceIds, ...recovery.sourceIds])].slice(-100),
+    ...recovery, sourceIds: [...new Set([...previous.sourceIds, ...recovery.sourceIds])].slice(-ETHEREUM_MAX_EXPECTED_IDS),
   };
-  retainedIds = [...new Set([...retainedIds, ...(recovery?.sourceIds ?? [])])].slice(-100)
+  if (recovery) recovery = { ...recovery, sourceIds: expectedIds(recovery.sourceIds, ETHEREUM_MAX_EXPECTED_IDS), mintedIds: expectedIds(recovery.mintedIds, ETHEREUM_MAX_EXPECTED_IDS) };
+  retainedIds = [...new Set([...retainedIds, ...(recovery?.sourceIds ?? [])])].slice(-ETHEREUM_MAX_EXPECTED_IDS)
     .filter(id => !recovery?.sourceIds.includes(id));
   writeEthereumStorage(`${scope}:expected`, recovery || retainedIds.length
     ? { ids: normalized, ...(recovery ? { recovery } : {}), ...(retainedIds.length ? { retainedIds } : {}) } : normalized);
@@ -239,7 +240,7 @@ export function restoreEthereumExpected(scope: string, hash: string): void {
   if (!recovery || recovery.hash !== hash) return;
   const minted = new Set(recovery.mintedIds);
   const restored = [...new Set([...readEthereumExpected(scope).filter(id => !minted.has(id)), ...recovery.sourceIds])];
-  writeEthereumExpected(scope, restored, null, [...readEthereumRetainedIds(scope), ...restored.slice(0, -100)]);
+  writeEthereumExpected(scope, restored, null, [...readEthereumRetainedIds(scope), ...restored.slice(0, -ETHEREUM_MAX_EXPECTED_IDS)]);
 }
 
 export function replaceEthereumInventoryRecovery(scope: string, previousHash: string, hash: string): void {

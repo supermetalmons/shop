@@ -4,7 +4,13 @@ const CRATE_COUNT = 5_555;
 const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
+export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
+export const ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE = 150;
+export const ETHEREUM_MAX_METADATA_BATCH_SIZE = 30;
+export const ETHEREUM_MAX_EXPECTED_IDS = 500;
+export const ETHEREUM_MAX_INVENTORY_EXPECTED_IDS = 2 * ETHEREUM_MAX_EXPECTED_IDS;
+export const ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE = 100;
 export const ETHEREUM_AUTHORIZATION_TTL_SECONDS = 600;
 
 export type Hex = `0x${string}`;
@@ -101,12 +107,15 @@ export const ETHEREUM_FUNCTIONS = {
   mintCrates: 'mintCrates(uint256)',
   mintWarehouses: 'mintWarehouses(uint256)',
   unboxCrate: 'unboxCrate(uint256)',
+  unboxCrates: 'unboxCrates(uint256[])',
   unboxWarehouse: 'unboxWarehouse(uint256)',
   transfer: 'safeTransferFrom(address,address,uint256)',
   redeemForDelivery: 'redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)',
   claimCrateReceipt: 'claimCrateReceipt(uint256,bytes32,uint256,bytes)',
   tokenInfo: 'getTokenInfo(uint256)',
+  tokenInfos: 'getTokenInfos(uint256[])',
   tokenURI: 'tokenURI(uint256)',
   previewTokenURI: 'previewTokenURI(uint8,uint256)',
+  previewTokenURIs: 'previewTokenURIs(uint8[],uint256[])',
   stats: 'stats()',
 } as const;

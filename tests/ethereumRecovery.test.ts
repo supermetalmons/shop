@@ -4,7 +4,7 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
 import { encodeAbi, encodeCall, type EthereumLog } from '../shared/ethereum/abi.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
+import { ethereumReceiptIdsHash, ethereumTokenIdsHash } from '../shared/ethereum/crypto.ts';
 import { ETHEREUM_FUNCTIONS } from '../shared/ethereum/protocol.ts';
 import { readEthereumSubmittedTransaction, recoverEthereumTransaction } from '../src/ethereum/recovery.ts';
 import type { EthereumPendingTransaction, EthereumSubmission } from '../src/ethereum/state.ts';
@@ -75,6 +75,8 @@ test('contract-wallet recovery binds every supported action to its emitted colle
       log: event('WarehousesPurchased(address,uint256,uint256,uint256)', ['address'], [owner], ['uint256', 'uint256', 'uint256'], [116667, 2, 22]) },
     { name: 'crate opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112])),
       log: event('CrateUnboxed(uint256,address,uint256,uint256)', ['uint256', 'address'], [111112, owner], ['uint256', 'uint256'], [1, 20]) },
+    { name: 'batch crate opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[116666, 111112]])),
+      log: event('CratesUnboxed(address,bytes32,uint256,uint256)', ['address', 'bytes32'], [owner, ethereumTokenIdsHash([116666, 111112])], ['uint256', 'uint256'], [1, 51]) },
     { name: 'warehouse opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [116667])),
       log: event('WarehouseUnboxed(uint256,address,uint256,uint256)', ['uint256', 'address'], [116667, owner], ['uint256', 'uint256'], [111112, 11]) },
     { name: 'delivery', pending: { ...submission('delivery', encodeCall(ETHEREUM_FUNCTIONS.redeemForDelivery,
@@ -122,6 +124,40 @@ test('contract-wallet recovery binds every supported action to its emitted colle
     f.state.receipt!.logs = [{ ...log, address: recipient }];
     await assert.rejects(f.recover(request), /does not contain/);
   });
+});
+
+test('a partial batch cannot recover a contract-wallet unbox submission or replacement', async () => {
+  const ids = [111113, 111112];
+  const pending = submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [ids]));
+  const individual = ids.map((id, index) => event('CrateUnboxed(uint256,address,uint256,uint256)',
+    ['uint256', 'address'], [id, owner], ['uint256', 'uint256'], [index * 20 + 1, 20]));
+  const summary = event('CratesUnboxed(address,bytes32,uint256,uint256)', ['address', 'bytes32'],
+    [owner, ethereumTokenIdsHash(ids)], ['uint256', 'uint256'], [1, 40]);
+  const f = fixture(individual);
+  for (const request of [pending, known(pending)]) {
+    f.state.receipt!.logs = individual;
+    await assert.rejects(f.recover(request), /does not contain/);
+    f.state.receipt!.logs = [...individual, summary];
+    assert.equal((await f.recover(request)).hash, hash);
+    f.state.receipt!.logs = [summary, summary];
+    await assert.rejects(f.recover(request), /does not contain/);
+  }
+});
+
+test('EOA batch replacement preserves the exact ordered calldata and recognizes a wallet cancellation', async () => {
+  const intent = submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[111113, 111112]]));
+  const pending: EthereumPendingTransaction = { ...intent, hash: originalHash, nonce: '0x7' };
+  const f = fixture();
+  const candidate = { ...f.transactions.get(hash)!, from: owner, to: contract, input: intent.intent!.data };
+  f.transactions.set(hash, candidate);
+  assert.equal((await f.recover(pending)).action, 'unbox');
+  f.transactions.set(hash, { ...candidate, input: encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[111112, 111113]]) });
+  await assert.rejects(f.recover(pending), /changes the original/);
+  f.transactions.set(hash, { ...candidate, to: owner, input: '0x', value: '0x0' });
+  const cancelled = await f.recover(pending);
+  assert.equal(cancelled.action, 'cancel');
+  assert.equal(cancelled.actionBeforeCancellation, 'unbox');
+  assert.equal(cancelled.intent?.data, intent.intent?.data);
 });
 
 test('wrapped recovery rejects unrelated wallet, amount, quantity, operation and ambiguous events', async () => {
