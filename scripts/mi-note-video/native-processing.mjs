@@ -1,7 +1,9 @@
-import { createHash } from 'node:crypto';
-import { linkSync, readFileSync, unlinkSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants, copyFileSync, linkSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 
 const completionTimeoutMilliseconds = 600_000;
+const publicationFileSystem = { copyFileSync, linkSync, unlinkSync };
 
 export class NativeProcessing {
   constructor(worker, config, { workers = 2, capacity = workers + 1, frameCount = 276, onError = () => {} } = {}) {
@@ -104,7 +106,25 @@ export class NativeProcessing {
   }
 }
 
-export async function finishNativeVideo(processing, args, { stagedPath, output, verify }) {
+export function cleanupPublicationCopy(result, output) {
+  const copiedPath = result?.publicationCopyPath;
+  if (copiedPath === undefined) return;
+  const prefix = `.${basename(output)}.`;
+  if (typeof copiedPath !== 'string' || !isAbsolute(copiedPath) || result.video?.output !== output
+    || dirname(copiedPath) !== dirname(output) || copiedPath !== join(dirname(output), basename(copiedPath))
+    || !basename(copiedPath).startsWith(prefix)
+    || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/.test(basename(copiedPath).slice(prefix.length))) {
+    throw new Error('Invalid native publication copy receipt.');
+  }
+  try {
+    if (!lstatSync(copiedPath).isFile()) throw new Error('Native publication copy is not a regular file.');
+    unlinkSync(copiedPath);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+export async function finishNativeVideo(processing, args, { stagedPath, output, verify, checkpointPublication = async () => {}, publicationFs = publicationFileSystem }) {
   verify();
   const result = await processing.finish(args, verify);
   await processing.close();
@@ -115,7 +135,29 @@ export async function finishNativeVideo(processing, args, { stagedPath, output, 
   const sha256 = createHash('sha256').update(readFileSync(stagedPath)).digest('hex');
   if (sha256 !== result.video.sha256) throw new Error('Staged native video checksum differs.');
   verify();
-  linkSync(stagedPath, output);
-  unlinkSync(stagedPath);
-  return { ...result, video: { ...result.video, output } };
+  const published = { ...result, video: { ...result.video, output } };
+  await checkpointPublication(published);
+  verify();
+  try {
+    publicationFs.linkSync(stagedPath, output);
+  } catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    const copiedPath = join(dirname(output), `.${basename(output)}.${randomUUID()}.tmp`);
+    published.publicationCopyPath = copiedPath;
+    await checkpointPublication(published);
+    verify();
+    let copied = false;
+    try {
+      publicationFs.copyFileSync(stagedPath, copiedPath, constants.COPYFILE_EXCL);
+      copied = true;
+      const copiedSha256 = createHash('sha256').update(readFileSync(copiedPath)).digest('hex');
+      if (copiedSha256 !== result.video.sha256) throw new Error('Copied native video checksum differs.');
+      verify();
+      publicationFs.linkSync(copiedPath, output);
+    } finally {
+      if (copied) publicationFs.unlinkSync(copiedPath);
+    }
+  }
+  publicationFs.unlinkSync(stagedPath);
+  return published;
 }

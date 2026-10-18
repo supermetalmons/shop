@@ -54,8 +54,13 @@ func opaqueRGBImage(_ image: CGImage) throws -> CGImage {
 }
 
 final class CaptureWindow: NSWindow {
+    var backgroundCapture = false
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-    override var canBecomeKey: Bool { true }
+    override var canBecomeKey: Bool { !backgroundCapture }
+    override var canBecomeMain: Bool { backgroundCapture ? false : super.canBecomeMain }
+    // WebKit suspends animation frames for occluded windows, even while ScreenCaptureKit records them.
+    override var occlusionState: NSWindow.OcclusionState { backgroundCapture ? .visible : super.occlusionState }
+    var compositorVisible: Bool { super.occlusionState.contains(.visible) }
 }
 
 final class CaptureStreamOutput: NSObject, SCStreamOutput, SCStreamDelegate {
@@ -228,8 +233,13 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         let scale = screen.backingScaleFactor
         backingScale = scale
         let size = NSSize(width: CGFloat(physicalWidth) / scale, height: CGFloat(physicalHeight) / scale)
-        let rect = NSRect(x: screen.frame.minX + 16, y: screen.frame.maxY - size.height - 40, width: size.width, height: size.height)
+        let background = args["background"] as? Bool ?? false
+        let rightmostDisplay = NSScreen.screens.map { $0.frame.maxX }.max() ?? screen.frame.maxX
+        let rect = background
+            ? NSRect(x: rightmostDisplay + 64, y: screen.frame.minY, width: size.width, height: size.height)
+            : NSRect(x: screen.frame.minX + 16, y: screen.frame.maxY - size.height - 40, width: size.width, height: size.height)
         let captureWindow = CaptureWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
+        captureWindow.backgroundCapture = background
         captureWindow.title = args["title"] as? String ?? "Mi Note Native Capture"
         captureWindow.isReleasedWhenClosed = false
         captureWindow.hasShadow = false
@@ -237,7 +247,12 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         captureWindow.isOpaque = true
         captureWindow.backgroundColor = .black
         captureWindow.colorSpace = screen.colorSpace
-        captureWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        captureWindow.collectionBehavior = background ? [.canJoinAllSpaces, .stationary, .ignoresCycle] : [.canJoinAllSpaces, .fullScreenAuxiliary]
+        if background {
+            captureWindow.ignoresMouseEvents = true
+            captureWindow.canHide = false
+            captureWindow.hidesOnDeactivate = false
+        }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.suppressesIncrementalRendering = true
@@ -247,11 +262,35 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         view.autoresizingMask = [.width, .height]
         captureWindow.contentView = view
         captureWindow.setFrame(rect, display: true)
-        captureWindow.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate()
+        if background { captureWindow.orderBack(nil) }
+        else {
+            captureWindow.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate()
+        }
         window = captureWindow
         webView = view
+        try verifyPresentation()
         return status()
+    }
+
+    private func presentationState() -> [String: Any] {
+        let frame = window?.frame ?? .zero
+        return ["mode": window?.backgroundCapture == true ? "offscreen" : "foreground",
+                "appActive": NSApplication.shared.isActive,
+                "windowKey": window?.isKeyWindow ?? false, "windowMain": window?.isMainWindow ?? false,
+                "intersectsScreen": NSScreen.screens.contains { $0.frame.intersects(frame) },
+                "compositorVisible": window?.compositorVisible ?? false,
+                "frame": ["x": frame.minX, "y": frame.minY, "width": frame.width, "height": frame.height],
+                "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0]
+    }
+
+    private func verifyPresentation() throws {
+        guard let window, window.backgroundCapture else { return }
+        guard !NSApplication.shared.isActive, !window.isKeyWindow, !window.isMainWindow,
+              !NSScreen.screens.contains(where: { $0.frame.intersects(window.frame) }) else {
+            window.orderOut(nil)
+            throw CaptureFailure(message: "Background capture window became active or intersected a display.")
+        }
     }
 
     private func status() -> [String: Any] {
@@ -262,6 +301,7 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
                 "physicalWidth": physicalWidth, "physicalHeight": physicalHeight,
                 "viewWidth": bounds.width, "viewHeight": bounds.height,
                 "windowVisible": window?.isVisible ?? false,
+                "presentation": presentationState(),
                 "screenCaptureAuthorized": CGPreflightScreenCaptureAccess(),
                 "screenColorSpace": window?.screen?.colorSpace?.localizedName ?? "unknown",
                 "methods": ["screen-capture-kit", "screen-capture-stream", "webkit"],
@@ -281,6 +321,7 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         guard let webView, let window, let path = args["path"] as? String, path.hasPrefix("/") else {
             throw CaptureFailure(message: "snapshot requires initialization and an absolute output path.")
         }
+        try verifyPresentation()
         guard window.backingScaleFactor == backingScale,
               abs(webView.bounds.width * backingScale - CGFloat(physicalWidth)) < 0.01,
               abs(webView.bounds.height * backingScale - CGFloat(physicalHeight)) < 0.01 else {
@@ -298,8 +339,10 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
             case .success(let image):
                 let captureSeconds = CFAbsoluteTimeGetCurrent() - started
                 do {
+                    try self.verifyPresentation()
                     if acknowledgePaint { try self.verifyPaint(image, serial: serial) }
                     var output = try self.writeImage(image, args: args, path: path)
+                    output["presentation"] = self.presentationState()
                     output["method"] = method
                     output["captureSeconds"] = captureSeconds
                     output["writeSeconds"] = CFAbsoluteTimeGetCurrent() - started - captureSeconds

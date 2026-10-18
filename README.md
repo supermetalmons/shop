@@ -87,18 +87,21 @@ drop configurations remain explicit in `knip.ts`; standalone scripts are not
 automatically treated as live code.
 
 The [Mi Note video renderer](scripts/mi-note-video/README.md) uses the dedicated
-AppKit/WKWebView capture application and the preserved recipe from the approved
-46-video review: upright 2160 × 2160, `breathing-swing`, black background,
+AppKit/WKWebView capture application and a validated native recipe:
+upright 2160 × 2160, `breathing-swing`, black background,
 no shadow, Display P3 HEVC Main 10, 60 fps, and 276 frames. It retains the
 established capture and image-processing path, including exact cycle controls
 and full video decoding checks.
 
 Run `npm run render:mi-note-videos -- help` for the native-only commands, or
 `npm run render:mi-note-videos -- doctor` to verify the existing application and
-pinned runtime. `run` requires explicit card IDs and a new output directory;
-`resume` verifies the same selection and run identity. These commands do not
+pinned runtime. `run` requires explicit card IDs and adds videos directly to
+`~/Movies/Mi Note Native Renders` by default; `resume` verifies the same selection
+and run identity. Intermediate images are removed after successful validation,
+and small run receipts stay in private Application Support storage. These commands do not
 install dependencies, rebuild the application, or start background jobs.
-The frozen review folder and historical output evidence remain preserved.
+Add `--background` to render in an offscreen window without activating the app
+or taking keyboard focus; the logged-in graphical session is still required.
 
 ## Mi Note cards
 

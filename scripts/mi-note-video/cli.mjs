@@ -1,43 +1,46 @@
 import { spawn } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { environmentMatches, nativeEnvironment, runtimePaths, verifyPinnedNode } from './native-runtime.mjs';
+import { defaultOutputDirectory } from './native-output.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 export const help = `Mi Note native video renderer
 
-  run --ids 17|1-46|1,4-6 --output /absolute/new-directory [--retain-all]
-  resume --ids SAME_SELECTION --output /absolute/existing-directory [--retain-all]
-  doctor
+  run --ids 17|1-46|1,4-6 [--output /absolute/video-directory] [--retain-all] [--background]
+  resume --ids SAME_SELECTION [--output /absolute/video-directory] [--retain-all] [--background]
+  doctor [--background]
   help
 
 Uses the preserved native app and runtime, Display P3, 2160 pixels, 276 frames,
 60 fps, and breathing-swing. Doctor verifies the runtime without rendering.
-Resume requires the same version 2 run identity; preserved review outputs are not modified.
+Use --background to capture offscreen without activating the application.
+Videos default to ~/Movies/Mi Note Native Renders; new cards join the same directory.
+Run state stays in Application Support. Successful runs discard intermediate images by default.
+Resume requires the same run identity.
 `;
 
 export function parseArguments(argv, maximum = 1430) {
   if (!argv.length || (argv.length === 1 && ['help', '--help', '-h'].includes(argv[0]))) return { command: 'help' };
   const [command, ...args] = argv;
   if (!['run', 'resume', 'doctor'].includes(command)) throw new Error(`Unknown command: ${command}`);
-  if (command === 'doctor') {
-    if (args.length) throw new Error('Doctor takes no options.');
-    return { command };
-  }
-  const options = { command, resume: command === 'resume', 'retain-all': false };
+  const options = command === 'doctor' ? { command, background: false }
+    : { command, resume: command === 'resume', output: defaultOutputDirectory(), 'retain-all': false, background: false };
+  const allowed = command === 'doctor' ? ['--background'] : ['--ids', '--output', '--retain-all', '--background'];
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
-    if (!['--ids', '--output', '--retain-all'].includes(flag)) throw new Error(`Unknown option: ${flag}`);
+    if (!allowed.includes(flag)) throw new Error(`Unknown option: ${flag}`);
     if (seen.has(flag)) throw new Error(`Duplicate option: ${flag}`);
     seen.add(flag);
-    if (flag === '--retain-all') { options['retain-all'] = true; continue; }
+    if (flag === '--retain-all' || flag === '--background') { options[flag.slice(2)] = true; continue; }
     const value = args[++index];
     if (!value || value.startsWith('--')) throw new Error(`Missing value: ${flag}`);
     options[flag.slice(2)] = value;
   }
-  if (!options.ids || !options.output) throw new Error('--ids and --output are required.');
+  if (command === 'doctor') return options;
+  if (!options.ids) throw new Error('--ids is required.');
   if (!isAbsolute(options.output)) throw new Error('--output must be an absolute directory.');
   options.output = resolve(options.output);
   options.cardIds = options.ids.split(',').flatMap(part => {
@@ -64,10 +67,6 @@ export async function execute(command, args, env) {
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArguments(argv);
   if (options.command === 'help') { process.stdout.write(help); return 0; }
-  if (options.resume) {
-    const manifest = JSON.parse(readFileSync(join(options.output, 'native-run.json'), 'utf8'));
-    if (manifest.version !== 2) throw new Error('Resume requires a version 2 native run; the preserved review folder is unchanged.');
-  }
   const paths = runtimePaths();
   verifyPinnedNode(paths);
   const env = nativeEnvironment(paths);
@@ -77,7 +76,7 @@ export async function main(argv = process.argv.slice(2)) {
     const model = assertNativeHost();
     const environment = verifyNativeEnvironment(paths);
     const sourceHashes = renderingSourceHashes();
-    process.stdout.write(JSON.stringify({ passed: true, model, ...environment, sourceHashes }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ passed: true, model, presentation: options.background ? 'offscreen' : 'foreground', ...environment, sourceHashes }, null, 2) + '\n');
     return 0;
   }
   return execute(paths.node, [join(directory, 'native-render.mjs'), ...argv], env);

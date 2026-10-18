@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
-import { finishNativeVideo, NativeProcessing } from '../native-processing.mjs';
+import { cleanupPublicationCopy, finishNativeVideo, NativeProcessing } from '../native-processing.mjs';
+import { hashFile, verifyCompletedCard } from '../native-config.mjs';
 
 const sha256 = 'a'.repeat(64);
 const record = frame => ({ frame, path: `/native/${String(frame).padStart(4, '0')}.png`, sha256 });
@@ -134,7 +135,7 @@ test('cancellation during quality or encoder finalization closes the worker and 
 });
 
 function publicationFixture(context) {
-  const directory = mkdtempSync(join(tmpdir(), 'mi-note-publication-'));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'mi-note-publication-')));
   context.after(() => rmSync(directory, { recursive: true, force: true }));
   const stagedPath = join(directory, '.video.staged.mp4'), output = join(directory, '17.mp4');
   const content = Buffer.from('validated encoded video');
@@ -158,6 +159,24 @@ test('validated staged video is published without changing bytes', async context
   assert.equal(result.video.output, data.output);
   assert.equal(result.video.sha256, data.result.video.sha256);
   assert.equal(existsSync(data.stagedPath), false);
+});
+
+test('failed publication checkpoint and cancellation during checkpoint never publish', async context => {
+  for (const failure of ['checkpoint', 'cancellation']) {
+    const data = publicationFixture(context);
+    let interrupted = false;
+    await assert.rejects(finishNativeVideo(data.processing, {}, { ...data,
+      verify() { if (interrupted) throw new Error('interrupted'); },
+      checkpointPublication(result) {
+        assert.equal(existsSync(data.output), false);
+        assert.equal(result.video.output, data.output);
+        assert.equal(hashFile(data.stagedPath), result.video.sha256);
+        if (failure === 'checkpoint') throw new Error('checkpoint failed');
+        interrupted = true;
+      } }), /checkpoint failed|interrupted/);
+    assert.equal(existsSync(data.output), false);
+    assert.deepEqual(readFileSync(data.stagedPath), data.content);
+  }
 });
 
 test('source changes before or during finalization leave no published video', async context => {
@@ -201,4 +220,185 @@ test('publication never overwrites an existing video', async context => {
   await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, verify() {} }), { code: 'EEXIST' });
   assert.equal(readFileSync(data.output, 'utf8'), 'existing video');
   assert.equal(existsSync(data.stagedPath), true);
+});
+
+function crossVolumePublication(data, onCopy = () => {}) {
+  const copiedPaths = [];
+  return {
+    copiedPaths,
+    publicationFs: {
+      linkSync(source, destination) {
+        if (source === data.stagedPath) throw Object.assign(new Error('Different volume'), { code: 'EXDEV' });
+        assert.equal(existsSync(data.stagedPath), true);
+        assert.deepEqual(readFileSync(source), data.content);
+        linkSync(source, destination);
+      },
+      copyFileSync(source, destination, flags) {
+        assert.equal(flags, constants.COPYFILE_EXCL);
+        assert.equal(dirname(destination), dirname(data.output));
+        assert.ok(basename(destination).startsWith(`.${basename(data.output)}.`));
+        copiedPaths.push(destination);
+        copyFileSync(source, destination, flags);
+        onCopy(destination);
+      },
+      unlinkSync,
+    },
+  };
+}
+
+test('cross-volume publication copies and revalidates before exclusively publishing complete bytes', async context => {
+  const data = publicationFixture(context);
+  let copied = false, verifiedCopy = false, checkpoint;
+  const publication = crossVolumePublication(data, destination => {
+    assert.equal(checkpoint.publicationCopyPath, destination);
+    assert.equal(existsSync(data.output), false);
+    copied = true;
+  });
+  const linkCopy = publication.publicationFs.linkSync;
+  publication.publicationFs.linkSync = (source, destination) => {
+    if (source !== data.stagedPath) assert.equal(verifiedCopy, true);
+    linkCopy(source, destination);
+  };
+  const result = await finishNativeVideo(data.processing, {}, { ...data, ...publication,
+    checkpointPublication(result) {
+      if (result.publicationCopyPath) assert.equal(existsSync(result.publicationCopyPath), false);
+      checkpoint = JSON.parse(JSON.stringify(result));
+    },
+    verify() { if (copied) { assert.equal(existsSync(data.output), false); verifiedCopy = true; } } });
+  assert.equal(result.video.output, data.output);
+  assert.deepEqual(readFileSync(data.output), data.content);
+  assert.equal(existsSync(data.stagedPath), false);
+  assert.equal(publication.copiedPaths.length, 1);
+  assert.equal(existsSync(publication.copiedPaths[0]), false);
+});
+
+test('failed copy-path checkpoint and cancellation prevent cross-volume copying', async context => {
+  for (const failure of ['checkpoint', 'cancellation']) {
+    const data = publicationFixture(context);
+    const publication = crossVolumePublication(data);
+    let interrupted = false, checkpoints = 0;
+    await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, ...publication,
+      verify() { if (interrupted) throw new Error('interrupted'); },
+      checkpointPublication(result) {
+        checkpoints++;
+        if (!result.publicationCopyPath) return;
+        assert.equal(existsSync(result.publicationCopyPath), false);
+        if (failure === 'checkpoint') throw new Error('copy checkpoint failed');
+        interrupted = true;
+      } }), /copy checkpoint failed|interrupted/);
+    assert.equal(checkpoints, 2);
+    assert.deepEqual(publication.copiedPaths, []);
+    assert.equal(existsSync(data.output), false);
+    assert.deepEqual(readFileSync(data.stagedPath), data.content);
+  }
+});
+
+test('interrupted partial copies are cleaned only from the persisted publication receipt', async context => {
+  const data = publicationFixture(context);
+  const publication = crossVolumePublication(data);
+  const receiptPath = join(dirname(data.output), 'publication.json');
+  const unrelated = join(dirname(data.output), `.${basename(data.output)}.${randomUUID()}.tmp`);
+  writeFileSync(unrelated, 'unrelated temporary file');
+  publication.publicationFs.copyFileSync = (source, destination) => {
+    const persisted = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    assert.equal(persisted.publicationCopyPath, destination);
+    assert.equal(existsSync(destination), false);
+    writeFileSync(destination, 'partial');
+    throw new Error('copy interrupted');
+  };
+  await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, ...publication, verify() {},
+    checkpointPublication(result) { writeFileSync(receiptPath, JSON.stringify(result)); } }), /copy interrupted/);
+  const persisted = JSON.parse(readFileSync(receiptPath, 'utf8'));
+  assert.equal(readFileSync(persisted.publicationCopyPath, 'utf8'), 'partial');
+  assert.equal(existsSync(data.output), false);
+  cleanupPublicationCopy(persisted, data.output);
+  cleanupPublicationCopy(persisted, data.output);
+  assert.equal(existsSync(persisted.publicationCopyPath), false);
+  assert.equal(readFileSync(unrelated, 'utf8'), 'unrelated temporary file');
+  assert.deepEqual(readFileSync(data.stagedPath), data.content);
+});
+
+test('publication copy cleanup rejects unsafe receipts and nonregular files', context => {
+  const data = publicationFixture(context);
+  writeFileSync(data.output, 'published video');
+  const validPath = join(dirname(data.output), `.${basename(data.output)}.${randomUUID()}.tmp`);
+  const result = { video: { output: data.output }, publicationCopyPath: validPath };
+  cleanupPublicationCopy(undefined, data.output);
+  cleanupPublicationCopy({}, data.output);
+  for (const publicationCopyPath of [null, data.output, basename(validPath), join(dirname(data.output), '.17.mp4.invalid.tmp'),
+    join(dirname(data.output), 'other', basename(validPath)), `${dirname(data.output)}/other/../${basename(validPath)}`]) {
+    assert.throws(() => cleanupPublicationCopy({ ...result, publicationCopyPath }, data.output), /Invalid.*receipt/);
+  }
+  assert.throws(() => cleanupPublicationCopy({ ...result, video: { output: data.stagedPath } }, data.output), /Invalid.*receipt/);
+  symlinkSync(data.output, validPath);
+  assert.throws(() => cleanupPublicationCopy(result, data.output), /not a regular file/);
+  unlinkSync(validPath);
+  mkdirSync(validPath);
+  assert.throws(() => cleanupPublicationCopy(result, data.output), /not a regular file/);
+  assert.equal(readFileSync(data.output, 'utf8'), 'published video');
+});
+
+test('cross-volume copy corruption and source changes prevent publication and remove the copy', async context => {
+  for (const invalid of ['checksum', 'source']) {
+    const data = publicationFixture(context);
+    let changed = false;
+    const publication = crossVolumePublication(data, destination => {
+      if (invalid === 'checksum') writeFileSync(destination, 'corrupted copy');
+      else changed = true;
+    });
+    await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, ...publication,
+      verify() { if (changed) throw new Error('Rendering source changed'); } }), /checksum differs|source changed/);
+    assert.equal(existsSync(data.output), false);
+    assert.deepEqual(readFileSync(data.stagedPath), data.content);
+    assert.equal(publication.copiedPaths.length, 1);
+    assert.equal(existsSync(publication.copiedPaths[0]), false);
+  }
+});
+
+test('cross-volume publication does not overwrite a final video created while copying', async context => {
+  const data = publicationFixture(context);
+  const publication = crossVolumePublication(data, () => writeFileSync(data.output, 'existing video'));
+  await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, ...publication, verify() {} }), { code: 'EEXIST' });
+  assert.equal(readFileSync(data.output, 'utf8'), 'existing video');
+  assert.deepEqual(readFileSync(data.stagedPath), data.content);
+  assert.equal(publication.copiedPaths.length, 1);
+  assert.equal(existsSync(publication.copiedPaths[0]), false);
+});
+
+test('publication cleanup failures leave durable receipts that recover only the matching video', async context => {
+  for (const crossVolume of [false, true]) {
+    const data = publicationFixture(context);
+    const root = dirname(data.output), evidenceDirectory = join(root, 'evidence', '17');
+    mkdirSync(join(evidenceDirectory, 'certificate'), { recursive: true });
+    const certificatePath = join(evidenceDirectory, 'certificate', 'certificate.json');
+    const stream = { nb_read_frames: '276' };
+    writeFileSync(certificatePath, JSON.stringify({ version: 1, kind: 'mi-note-video-decode', fullyDecoded: true,
+      videoSha256: data.result.video.sha256, videoBytes: data.content.length, decodedFrames: 276, stream }));
+    Object.assign(data.result.video, { bytes: data.content.length, stream,
+      decodeCertificate: { path: certificatePath, sha256: hashFile(certificatePath) } });
+    const publicationFs = crossVolume ? crossVolumePublication(data).publicationFs : { copyFileSync, linkSync, unlinkSync };
+    publicationFs.unlinkSync = () => { throw new Error('cleanup failed'); };
+    const summaryPath = join(root, 'summary.json');
+    await assert.rejects(finishNativeVideo(data.processing, {}, { ...data, publicationFs, verify() {},
+      checkpointPublication(result) {
+        assert.equal(existsSync(data.output), false);
+        assert.equal(hashFile(data.stagedPath), result.video.sha256);
+        const summary = { id: 17, status: 'publishing', evidenceDirectory, frameCount: 276,
+          qualityPassed: true, fullyDecoded: true, video: { path: data.output, sha256: result.video.sha256 } };
+        const detail = { ...summary, result, frames: Array.from({ length: 276 }, (_, frame) => ({ frame,
+          path: join(evidenceDirectory, 'native', `${String(frame).padStart(4, '0')}.png`),
+          sha256: 'a'.repeat(64), pose: { cardId: 17, frame } })) };
+        writeFileSync(join(evidenceDirectory, 'card.json'), JSON.stringify(detail));
+        writeFileSync(summaryPath, JSON.stringify(summary));
+      } }), /cleanup failed/);
+    const summary = JSON.parse(readFileSync(summaryPath, 'utf8'));
+    const detail = verifyCompletedCard(root, 17, summary, root, { allowPublishing: true });
+    assert.equal(detail.status, 'publishing');
+    if (crossVolume) assert.equal(existsSync(detail.result.publicationCopyPath), true);
+    cleanupPublicationCopy(detail.result, data.output);
+    if (crossVolume) assert.equal(existsSync(detail.result.publicationCopyPath), false);
+    assert.deepEqual(readFileSync(data.output), data.content);
+    writeFileSync(data.output, 'unrelated video');
+    assert.throws(() => verifyCompletedCard(root, 17, summary, root, { allowPublishing: true }), /checksum differs/);
+  }
 });

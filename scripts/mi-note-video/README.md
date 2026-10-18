@@ -1,7 +1,7 @@
 # Native Mi Note videos
 
-This renderer uses the dedicated AppKit/WKWebView application and the capture
-and processing recipe preserved with the approved 46-video review. Run it on
+This renderer uses a dedicated AppKit/WKWebView application and the validated
+native capture and processing recipe. Run it on
 the physical host Mac with the existing pinned runtime and application.
 
 | Setting | Preserved value |
@@ -34,23 +34,24 @@ LittleCMS 2.19, and FFmpeg/FFprobe 8.1.2. Keep the complete runtime, its shared
 libraries, and `runtime.json`. JavaScript dependencies use this directory's
 unchanged `package.json` and `package-lock.json`.
 
-The approved application is:
+The current verified application supports foreground and offscreen capture:
 
 ```text
-.cache/native-webview/MiNoteCapture.app/Contents/MacOS/MiNoteCapture
+.cache/native-webview-background/MiNoteCapture.app/Contents/MacOS/MiNoteCapture
 ```
 
 Its executable SHA-256 is
-`7c24ee9d7d04b619424639f93a8ba5314dec7f8a80dc02ac5e55909c8049d529`.
+`9de42b40930d75c9e2713aae53f77eedfca3daf936a47d82b8ddcd463807d8d6`.
 The source capture profile SHA-256 is
 `0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0`.
-The controller checks the approved application, runtime, and profile before a
+The controller checks the verified application, runtime, and profile before a
 render. A graphical macOS session and Screen Recording permission for the
 capture application are required.
 
-No command installs dependencies, provisions a VM, or rebuilds the application.
-The build script remains available for deliberate development work, but a newly
-compiled binary is not automatically accepted as the approved application.
+No command installs dependencies or rebuilds the application.
+The build script defaults to this application directory.
+A newly compiled binary is not automatically accepted by the
+controller's executable and source hash checks.
 
 ## Commands
 
@@ -64,28 +65,57 @@ npm run render:mi-note-videos -- doctor
 `doctor` checks the preserved prerequisites without capturing a frame. The
 launcher selects the pinned Node executable before loading the renderer.
 
-Render one card into a new directory:
+Render one card into the shared video directory:
 
 ```sh
-npm run render:mi-note-videos -- run --ids 17 \
-  --output "$HOME/Movies/Mi Note Native Card 17"
+npm run render:mi-note-videos -- run --ids 49 --background
 ```
+
+The default destination is `~/Movies/Mi Note Native Renders`. Completed videos
+are named `1.mp4`, `2.mp4`, and so on, directly in that directory. New renders
+join the same directory, and existing videos are never overwritten. Use
+`--output /absolute/video-directory` only to choose another shared destination.
+Run state and verification receipts stay under
+`~/Library/Application Support/Mons Mi Note Render/native-runs`, keyed by the
+output directory and exact ordered selection.
+The initial manifest and run directory become available together, so an
+interrupted first write does not block a new attempt.
+
+`--background` captures entirely outside the display area without activating
+the app or focusing its window.
+
+This still uses a real offscreen window and requires the logged-in graphical
+session and a display. It does not minimize or hide the WebView: the window
+remains ordered in, and reports itself visible to WebKit so animation frames
+continue. ScreenCaptureKit captures only that window. Each capture verifies that
+the app is inactive, the window is not key or main, and its frame intersects no
+display. The original dimensions, color handling, and quality checks apply.
+One initial capture warms the offscreen surface before the two independent
+starting captures; both starting captures and both ending controls must still
+match exactly.
+Use the same `--background` selection when resuming. `doctor --background`
+verifies prerequisites without opening a window.
 
 Select IDs explicitly with a comma-separated list or inclusive range, for
 example `--ids 1,4-6` or `--ids 1-46`. There is no implicit collection render.
-The output directory must be new or empty. Runs stay in the foreground.
+Other cards can already exist in the output directory. Commands stay attached
+to the invoking terminal.
 
 Resume an interrupted run with the same selection and directory:
 
 ```sh
-npm run render:mi-note-videos -- resume --ids 17 \
-  --output "$HOME/Movies/Mi Note Native Card 17"
+npm run render:mi-note-videos -- resume --ids 49 --background
 ```
 
-Resume requires matching source, application, runtime, selection, recipe, and
-completed-video hashes. An unfinished card attempt is preserved before that
-card is captured again. Use `--retain-all` consistently on both commands when
-all native and prepared frames are needed for a replay benchmark.
+Resume requires matching source, application, runtime, selection, presentation,
+recipe, and completed-video hashes. A verified publication receipt is saved
+before a video becomes visible in the output directory, allowing resume to
+recover publication interrupted before the completion record was saved.
+Cross-volume copy temporaries are recorded before copying and removed on resume.
+An unfinished card attempt is preserved before that
+card is captured again. The video directory is never used for temporary frames.
+Use `--retain-all` consistently on both commands when all native and prepared
+frames are needed for a replay benchmark.
 
 ## Capture and evidence
 
@@ -102,29 +132,20 @@ captures must match that starting reference; up to eight attempts allow WebKit's
 raster refinement to settle. Preparation and encoding stay in frame order while
 two isolated workers perform the preserved image operations.
 
-Each run writes `native-run.json`. Per-card evidence includes geometry, source
-frame identities, quality reports, full-decode certificates, and native/prepared
-controls at frames 0, 69, 138, 207, and 275. `--retain-all` keeps the full sequence.
-Generated videos and evidence belong outside version control.
+Each run writes `native-run.json` in its private state directory. Per-card
+receipts retain geometry, source frame identities, quality reports, and the
+full-decode certificate. After successful publication and receipt persistence,
+default runs remove native/prepared PNGs, control images, and decoded YUV
+samples. `--retain-all` keeps those intermediates privately. Failed attempts
+retain their evidence for diagnosis. Generated videos and evidence belong
+outside version control.
 
-## Preserved reference and regression checks
+## Storage and checks
 
-The approved review remains at:
-
-```text
-~/Movies/Mi Note Native Review 2026-10-18
-```
-
-Preserve that folder in full: its 46 videos, source snapshot, compiled
-application, manifests, comparisons, and historical evidence. Its version-1
-manifest is an immutable reference and is not resumed by the current controller.
-New runs use their own output directories and version-2 manifests.
-
-The cleanup regression uses the retained 276-frame native canary for processing
-replay, followed by one fresh card-17 render. Compare prepared pixels, motion and
-cycle controls, decode certificates, and the established color/detail metrics.
-A fresh capture is checked against the reference; it is not assumed byte-equal
-to a separate historical capture.
+Application Support needs only `host/runtime` and `native-runs`. Keep the
+complete pinned runtime intact. Native run receipts support verification and
+resume; temporary images are removed after successful publication. Finished
+videos stay together in `~/Movies/Mi Note Native Renders`.
 
 Run the retained JavaScript and Python suites with:
 

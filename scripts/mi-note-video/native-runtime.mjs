@@ -14,19 +14,21 @@ export const expectedIccSha256 = '0ff6958f98684c61f6bbdce1368ddeaf3873baf84545ba
 export const preservedHashes = Object.freeze({
   runtimeReceipt: '245e4a945f28034b830e722a59bf12af47915b99f046bf4b24cf6fb0f2429893',
   node: 'b468fb9c67427c9d3aec07ee1105e63020923a631a9a2a00beb71a7ba3768bfd',
-  app: '7c24ee9d7d04b619424639f93a8ba5314dec7f8a80dc02ac5e55909c8049d529',
-  appInfo: '72a6fe00768dd3fef9aa4d1e9ed272c44557bc84bfec76f93a5d3e25d0b0e8e7',
-  swift: 'e5a457f6dafe2523073f3b72348b576b6f76d05664ba5c42dc1481039520158f',
-  build: '6b7714d11b5de29e69b867ba835d257eabd5a85acdae77ee8879a50e0912b26e',
   srgb: '2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e',
   packageLock: '30787c9a98225aa3ca68ecc788afbd881be7b6f6be170c2a90a7e1d9e5724a6d',
+});
+export const nativeAppHashes = Object.freeze({
+  app: '9de42b40930d75c9e2713aae53f77eedfca3daf936a47d82b8ddcd463807d8d6',
+  appInfo: '72a6fe00768dd3fef9aa4d1e9ed272c44557bc84bfec76f93a5d3e25d0b0e8e7',
+  swift: 'aba9c684966c5b711f6560a0f836f166c3dc16402e6926be88e0082d593f6407',
+  build: '727a16aebc0164528c9db3e95586c089672ff73076b39470be7bfe72994276b5',
 });
 
 export function runtimePaths() {
   const runtime = join(homedir(), 'Library/Application Support/Mons Mi Note Render/host/runtime');
   return { root: runtime, node: join(runtime, 'node/bin/node'), python: join(runtime, 'python/bin/python3.12'),
     ffmpeg: join(runtime, 'media/bin/ffmpeg'), ffprobe: join(runtime, 'media/bin/ffprobe'),
-    app: join(root, '.cache/native-webview/MiNoteCapture.app/Contents/MacOS/MiNoteCapture') };
+    app: join(root, '.cache/native-webview-background/MiNoteCapture.app/Contents/MacOS/MiNoteCapture') };
 }
 
 export function nativeEnvironment(paths = runtimePaths(), input = process.env) {
@@ -103,8 +105,8 @@ export function verifyNativeEnvironment(paths = runtimePaths()) {
   for (const key of ['python', 'pillow', 'numpy', 'littlecms']) check(versions.python[key] === runtimeContract[key], `Native ${key} version differs.`);
   for (const key of ['ffmpeg', 'ffprobe']) check(versions[key].startsWith(`${key} version ${runtimeContract[key]} `), `Native ${key} version differs.`);
   const binding = {
-    app: [paths.app, preservedHashes.app], appInfo: [join(dirname(paths.app), '../Info.plist'), preservedHashes.appInfo],
-    swift: [join(directory, 'native-webview.swift'), preservedHashes.swift], build: [join(directory, 'build-native-webview.sh'), preservedHashes.build],
+    app: [paths.app, nativeAppHashes.app], appInfo: [join(dirname(paths.app), '../Info.plist'), nativeAppHashes.appInfo],
+    swift: [join(directory, 'native-webview.swift'), nativeAppHashes.swift], build: [join(directory, 'build-native-webview.sh'), nativeAppHashes.build],
     packageLock: [join(directory, 'package-lock.json'), preservedHashes.packageLock],
     p3: ['/System/Library/ColorSync/Profiles/Display P3.icc', expectedIccSha256],
     srgb: ['/System/Library/ColorSync/Profiles/sRGB Profile.icc', preservedHashes.srgb],
@@ -117,6 +119,6 @@ export function verifyNativeEnvironment(paths = runtimePaths()) {
   }
   const executables = Object.fromEntries([paths.node, paths.python, paths.ffmpeg, paths.ffprobe].map(path => [path, checksum(regular(path))]));
   return { runtime, versions: { ...versions, dependencies, colorProfiles: { p3: expectedIccSha256, srgb: preservedHashes.srgb } },
-    executables, app: { path: paths.app, sha256: preservedHashes.app, infoSha256: preservedHashes.appInfo,
-      sourceSha256: preservedHashes.swift, buildSha256: preservedHashes.build } };
+    executables, app: { path: paths.app, sha256: nativeAppHashes.app, infoSha256: nativeAppHashes.appInfo,
+      sourceSha256: nativeAppHashes.swift, buildSha256: nativeAppHashes.build } };
 }

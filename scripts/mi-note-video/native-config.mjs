@@ -11,7 +11,7 @@ export const contract = JSON.parse(readFileSync(join(engineDirectory, 'contract.
 export const hashFile = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 export const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
 export const nativeSourceFiles = Object.freeze([
-  'cli.mjs', 'native-runtime.mjs', 'native-config.mjs', 'native-render.mjs', 'native-processing.mjs',
+  'cli.mjs', 'native-runtime.mjs', 'native-config.mjs', 'native-render.mjs', 'native-processing.mjs', 'native-output.mjs',
   'frame-worker.mjs', 'native_processing_worker.py', 'processing_worker.py', 'frame_worker.py',
   'frames.py', 'quality.py', 'video_validation.py', 'native-webview.swift', 'build-native-webview.sh',
   'harness.tsx', 'index.html', 'capture.css', 'captureGeometry.ts', 'motion.ts', 'preset.json',
@@ -31,6 +31,12 @@ export function assertNativeHost(system = {}) {
   requireValue(typeof model === 'string' && model.trim().length > 0, 'Native rendering could not identify the Mac hardware.');
   requireValue(!model.trim().startsWith('VirtualMac'), 'Native rendering requires physical Mac hardware.');
   return model.trim();
+}
+
+export function assertBackgroundPresentation(state) {
+  requireValue(state?.mode === 'offscreen' && state.appActive === false && state.windowKey === false
+    && state.windowMain === false && state.intersectsScreen === false,
+  'Background capture must remain offscreen without activating the app or focusing its window.');
 }
 
 export function renderingSourceHashes(root = sourceRoot, entries = nativeSourceFiles) {
@@ -62,7 +68,7 @@ export function assertSourceHashes(hashes, root = sourceRoot) {
 }
 
 export function assertResumeIdentity(manifest, identity) {
-  requireValue(manifest?.version === 2, 'Native resume requires a version 2 run; preserved version 1 review evidence remains unchanged.');
+  requireValue(manifest?.version === 2, 'Native resume requires a version 2 run.');
   for (const [key, value] of Object.entries(identity)) {
     requireValue(JSON.stringify(manifest[key]) === JSON.stringify(value), `Native resume ${key} differs.`);
   }
@@ -70,22 +76,37 @@ export function assertResumeIdentity(manifest, identity) {
   requireValue(Number.isSafeInteger(manifest.pid) && manifest.pid > 0, 'Native resume process identity is invalid.');
 }
 
-export function verifyCompletedCard(output, card, summary) {
-  const evidenceDirectory = join(output, 'evidence', String(card));
+export function verifyCompletedCard(output, card, summary, stateDirectory = output, { allowPublishing = false } = {}) {
+  const evidenceDirectory = join(stateDirectory, 'evidence', String(card));
   const videoPath = join(output, `${card}.mp4`);
-  requireValue(summary?.status === 'complete' && summary.id === card && summary.evidenceDirectory === evidenceDirectory
+  const recoverable = allowPublishing && summary?.status === 'publishing';
+  requireValue((summary?.status === 'complete' || recoverable) && summary.id === card && summary.evidenceDirectory === evidenceDirectory
     && summary.frameCount === 276 && summary.qualityPassed === true && summary.fullyDecoded === true
     && summary.video?.path === videoPath && /^[a-f0-9]{64}$/.test(summary.video.sha256), `Completed native card ${card} has an invalid summary binding.`);
   const detailPath = join(evidenceDirectory, 'card.json');
   for (const path of [detailPath, videoPath]) requireValue(existsSync(path) && lstatSync(path).isFile() && realpathSync(path) === path, `Completed native card ${card} is missing its canonical regular output.`);
   const detail = JSON.parse(readFileSync(detailPath, 'utf8'));
-  requireValue(detail.id === card && detail.status === 'complete' && detail.evidenceDirectory === evidenceDirectory
+  requireValue(detail.id === card && (detail.status === 'complete' || (recoverable && detail.status === 'publishing')) && detail.evidenceDirectory === evidenceDirectory
     && detail.video?.path === videoPath && detail.video.sha256 === summary.video.sha256
     && Array.isArray(detail.frames) && detail.frames.length === 276
-    && detail.frames.every((frame, index) => frame.frame === index && frame.pose?.cardId === card && frame.pose.frame === index)
-    && detail.result?.qualityReport?.passed === true && detail.result?.video?.fullyDecoded === true,
+    && detail.frames.every((frame, index) => frame.frame === index && frame.pose?.cardId === card && frame.pose.frame === index
+      && frame.path === join(evidenceDirectory, 'native', `${String(index).padStart(4, '0')}.png`) && /^[a-f0-9]{64}$/.test(frame.sha256 || ''))
+    && detail.result?.qualityReport?.passed === true && detail.result?.video?.fullyDecoded === true
+    && detail.result.video.output === videoPath && detail.result.video.sha256 === summary.video.sha256,
   `Completed native card ${card} has an invalid detail binding.`);
-  requireValue(hashFile(videoPath) === summary.video.sha256, `Completed native card ${card} video checksum differs.`);
+  requireValue(hashFile(videoPath) === summary.video.sha256 && lstatSync(videoPath).size === detail.result.video.bytes,
+    `Completed native card ${card} video checksum differs or size changed.`);
+  const certificatePath = join(evidenceDirectory, 'certificate', 'certificate.json');
+  const descriptor = detail.result.video.decodeCertificate;
+  requireValue(descriptor?.path === certificatePath && existsSync(certificatePath) && lstatSync(certificatePath).isFile()
+    && realpathSync(certificatePath) === certificatePath && hashFile(certificatePath) === descriptor.sha256,
+  `Completed native card ${card} decode certificate differs.`);
+  const certificate = JSON.parse(readFileSync(certificatePath, 'utf8'));
+  requireValue(certificate.version === 1 && certificate.kind === 'mi-note-video-decode' && certificate.fullyDecoded === true
+    && certificate.decodedFrames === 276 && certificate.videoSha256 === summary.video.sha256
+    && certificate.videoBytes === detail.result.video.bytes && certificate.stream?.nb_read_frames === '276'
+    && JSON.stringify(certificate.stream) === JSON.stringify(detail.result.video.stream),
+  `Completed native card ${card} decode certificate binding differs.`);
   return detail;
 }
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,15 +10,32 @@ import { parseArguments } from '../cli.mjs';
 
 const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url));
 
-test('public CLI requires explicit IDs and output with no backend or quality overrides', () => {
+test('public CLI requires explicit IDs and defaults to the shared video directory', () => {
   assert.deepEqual(parseArguments([]), { command: 'help' });
-  assert.deepEqual(parseArguments(['doctor']), { command: 'doctor' });
-  for (const args of [['run'], ['run', '--ids', '17'], ['run', '--output', '/tmp/render'], ['doctor', '--ids', '17']]) assert.throws(() => parseArguments(args));
+  assert.deepEqual(parseArguments(['doctor']), { command: 'doctor', background: false });
+  for (const args of [['run'], ['run', '--output', '/tmp/render'], ['doctor', '--ids', '17']]) assert.throws(() => parseArguments(args));
+  for (const command of ['run', 'resume']) assert.equal(parseArguments([command, '--ids', '49']).output, join(homedir(), 'Movies', 'Mi Note Native Renders'));
   for (const flag of ['--backend', '--method', '--probe', '--python', '--app', '--expected-icc', '--port', '--resume']) {
     assert.throws(() => parseArguments(['run', '--ids', '17', '--output', '/tmp/render', flag, 'anything']), /Unknown option/);
   }
   assert.throws(() => parseArguments(['setup']), /Unknown command/);
   assert.throws(() => parseArguments(['run', '--ids', '17', '--output', 'relative']), /absolute/);
+});
+
+test('background capture is an explicit boolean option for run, resume, and doctor', () => {
+  for (const command of ['run', 'resume', 'doctor']) {
+    const args = command === 'doctor' ? [command] : [command, '--ids', '48', '--output', '/tmp/render'];
+    assert.equal(parseArguments(args).background, false);
+    assert.equal(parseArguments([...args, '--background']).background, true);
+    assert.throws(() => parseArguments([...args, '--background', '--background']), /Duplicate option/);
+    assert.throws(() => parseArguments([...args, '--background', 'true']), /Unknown option/);
+    for (const flag of ['--app', '--method']) assert.throws(() => parseArguments([...args, '--background', flag, 'anything']), /Unknown option/);
+  }
+  assert.deepEqual(parseArguments(['doctor', '--background']), { command: 'doctor', background: true });
+  for (const flag of ['--ids', '--output', '--retain-all']) assert.throws(() => parseArguments(['doctor', flag]), /Unknown option/);
+  const run = parseArguments(['run', '--background', '--ids', '48', '--retain-all', '--output', '/tmp/render']);
+  assert.deepEqual(run.cardIds, [48]);
+  assert.equal(run['retain-all'], true);
 });
 
 test('run and resume keep an ordered, explicit, duplicate-free card selection', () => {
@@ -40,19 +57,8 @@ test('help and invalid commands do not create an output directory', context => {
   assert.match(help.stdout, /doctor/);
   const rejected = spawnSync(process.execPath, [cli, 'run', '--output', output], { encoding: 'utf8' });
   assert.equal(rejected.status, 1);
-  assert.match(rejected.stderr, /--ids and --output are required/);
+  assert.match(rejected.stderr, /--ids is required/);
   assert.equal(existsSync(output), false);
-});
-
-test('legacy resume rejection preserves the existing manifest bytes', context => {
-  const root = mkdtempSync(join(tmpdir(), 'mi-note-legacy-resume-'));
-  context.after(() => rmSync(root, { recursive: true, force: true }));
-  const path = join(root, 'native-run.json'), content = '{"version":1,"status":"complete"}\n';
-  writeFileSync(path, content);
-  const result = spawnSync(process.execPath, [cli, 'resume', '--ids', '17', '--output', root], { encoding: 'utf8' });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /version 2/);
-  assert.equal(readFileSync(path, 'utf8'), content);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

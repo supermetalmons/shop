@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-app_path="${1:-$source_dir/../../.cache/native-webview/MiNoteCapture.app}"
+app_path="${1:-$source_dir/../../.cache/native-webview-background/MiNoteCapture.app}"
 mkdir -p "$app_path/Contents/MacOS"
 cat > "$app_path/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
