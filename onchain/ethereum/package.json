@@ -1,0 +1,18 @@
+{
+  "name": "mons-111k-contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "forge build --offline",
+    "test": "forge test --offline",
+    "abi": "node scripts/generate-abi.mjs",
+    "check": "forge test --offline && node scripts/check-fixtures.mjs && node scripts/generate-abi.mjs --check",
+    "chain:local": "anvil --host 127.0.0.1 --chain-id 31337 --block-time 1",
+    "deploy:local": "node scripts/deploy-local.mjs"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "5.6.1",
+    "erc721a": "4.3.0"
+  }
+}

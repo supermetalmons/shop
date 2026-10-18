@@ -37,6 +37,7 @@ import {
   shipStationRatesSchema,
   supportedDropId,
   requireFulfillmentAccess,
+  requireShipStationEnabled,
   ShipStationProfileError,
   profileErrorForShipStation,
   decryptFulfillmentAddress,
@@ -138,6 +139,7 @@ async function addFulfillmentOrderToShipStation(
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  requireShipStationEnabled(dropId);
   const packageOverride = body.package ? normalizeShipStationPackage(body.package) : null;
   if (body.package && !packageOverride) {
     throw new ProfileReadError('invalid-argument', 400, SHIPSTATION_PACKAGE_RANGE_MESSAGE);

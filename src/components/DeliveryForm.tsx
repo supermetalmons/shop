@@ -22,6 +22,7 @@ interface DeliveryFormProps {
   submitLabel?: string;
   shipmentPending?: boolean;
   dropFamily?: DropFamily;
+  shippingNote?: string;
 }
 
 type DeliveryShippingContext = Pick<
@@ -45,6 +46,7 @@ export function DeliveryForm({
   submitLabel,
   shipmentPending = false,
   dropFamily,
+  shippingNote: shippingNoteOverride,
 }: DeliveryFormProps) {
   const shippingContextRef = useRef<DeliveryShippingContext | null>(null);
   const liveShippingContext = {
@@ -201,7 +203,7 @@ export function DeliveryForm({
           </select>
         </label>
       </div>
-      <div className="muted small">{shippingNote}</div>
+      <div className="muted small">{shippingNoteOverride ?? shippingNote}</div>
       {error ? <div className="error">{error}</div> : null}
       <div className={`row${mode === 'modal' ? ' row--end' : ''}`}>
         <button type="submit" disabled={saving || submitDisabled || shipmentPending}>

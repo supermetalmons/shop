@@ -19,7 +19,7 @@ afterEach(() => {
 });
 after(() => dom.window.close());
 
-function card(id: number): DrifCardConfig {
+function card(id: number): DrifCardConfig & { foilSrc: string; textureSrc: string } {
   return {
     imageSrc: `https://images.example/front-${id}.webp`,
     foilSrc: `https://images.example/foil-${id}.webp`,

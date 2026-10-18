@@ -62,6 +62,51 @@ test('an unknown drop renders no order or actions', () => {
   assert.equal(view.container.childElementCount, 0);
 });
 
+test('Ethereum test orders display their 31 artwork contents and keep external shipping actions unavailable', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
+    image: 'data:image/svg+xml;base64,PHN2Zy8+',
+  }), { headers: { 'Content-Type': 'application/json' } }));
+  const onEditStatus = t.mock.fn<Props['onEditStatus']>();
+  const onDownloadSecretCode = t.mock.fn<Props['onDownloadSecretCode']>();
+  const ethereumOrder = order({ dropId: '111k_devnet', source: 'ethereum', owner: '0x1111111111111111111111111111111111111111',
+    boxes: [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: Array.from({ length: 31 }, (_, index) => 111081 + index) }] });
+  const view = render(createElement(FulfillmentOrderCard, props({ order: ethereumOrder, drop: undefined, onEditStatus, onDownloadSecretCode })));
+  assert.ok(view.getByText('Crate #5555 · 31 artworks'));
+  assert.equal(view.queryByRole('button', { name: 'Print Label' }), null);
+  fireEvent.click(view.getByRole('button', { name: 'Show contents' }));
+  assert.ok(view.getByText('Artwork #111111'));
+  fireEvent.click(view.getByRole('button', { name: 'Edit status' }));
+  fireEvent.click(view.getByRole('button', { name: 'Download code PNG' }));
+  assert.deepEqual(onEditStatus.mock.calls[0].arguments, ['111k_devnet:42']);
+  assert.deepEqual(onDownloadSecretCode.mock.calls[0].arguments, [ethereumOrder, { kind: 'box', index: 0 }]);
+  view.rerender(createElement(FulfillmentOrderCard, props({ order: { ...ethereumOrder,
+    address: { full: '***', email: 'private@example.com' },
+    boxes: [{ ...ethereumOrder.boxes[0], receiptClaimStatus: 'claimed' }],
+  }, drop: undefined, canAdminEditFulfillmentAddress: false })));
+  assert.equal(view.queryByText('private@example.com'), null);
+  assert.equal(view.queryByRole('button', { name: 'Download code PNG' }), null);
+});
+
+test('Ethereum re-mined claims show confirming and keep codes unavailable until released', (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
+    image: 'data:image/svg+xml;base64,PHN2Zy8+',
+  }), { headers: { 'Content-Type': 'application/json' } }));
+  const claimProps = (receiptClaimStatus: string) => props({ drop: undefined, order: order({
+    dropId: '111k_devnet', source: 'ethereum',
+    boxes: [{ boxId: 5554, claimCode: 'ABCDEF123456', dudeIds: [111081], receiptClaimStatus }],
+  }) });
+  const view = render(createElement(FulfillmentOrderCard, claimProps('claimed')));
+  assert.ok(view.getByText('Claimed'));
+  view.rerender(createElement(FulfillmentOrderCard, claimProps('pending')));
+  assert.ok(view.getByText('Confirming'));
+  assert.equal(view.queryByText('Claimed'), null);
+  assert.equal(view.queryByText('ABCDEF123456'), null);
+  assert.equal(view.queryByRole('button', { name: 'Download code PNG' }), null);
+  view.rerender(createElement(FulfillmentOrderCard, claimProps('unclaimed')));
+  assert.ok(view.getByText('ABCDEF123456'));
+  assert.ok(view.getByRole('button', { name: 'Download code PNG' }));
+});
+
 test('grouped orders show shared contact once while retaining each order’s own actions', (t) => {
   const onEditAddress = t.mock.fn<Props['onEditAddress']>();
   const onEditStatus = t.mock.fn<Props['onEditStatus']>();

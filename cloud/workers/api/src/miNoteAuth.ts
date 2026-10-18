@@ -7,6 +7,7 @@ import {
   MI_NOTE_SESSION_HEADER, type MiNoteEthereumChallenge, type MiNoteEthereumSession,
 } from '../../../../shared/miNoteAuth.js';
 import { normalizeMiNoteAddress } from '../../../../shared/miNoteCards.js';
+import { checksumEthereumAddress } from '../../../../shared/ethereum/crypto.js';
 import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 import { getPreorderConfig } from '../../../../shared/preorders.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
@@ -84,12 +85,9 @@ function requestOrigin(request: Request): string {
 }
 
 function canonicalMessage(challenge: ChallengeRow): string {
-  const plainAddress = challenge.address.slice(2);
-  const checksum = bytesToHex(keccak_256(utf8ToBytes(plainAddress)));
-  const address = `0x${Array.from(plainAddress, (char, index) => Number.parseInt(checksum[index], 16) >= 8 ? char.toUpperCase() : char).join('')}`;
   return [
     `${new URL(challenge.origin).host} wants you to sign in with your Ethereum account:`,
-    address, '',
+    checksumEthereumAddress(challenge.address), '',
     'Verify ownership to view and preorder your Mi Note Cards.', '',
     `URI: ${challenge.origin}`,
     'Version: 1',

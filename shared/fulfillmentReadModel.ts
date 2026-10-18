@@ -175,7 +175,7 @@ export function fulfillmentOrderFromRecord(
     const figureId = item?.kind === 'dude' ? positiveInteger(item.refId) : null;
     return figureId === null ? [] : [{ figureId, assetId: optionalString(item?.assetId) }];
   });
-  const claimsByBox = new Map<number, { code?: string; dudeIds: number[]; boxAssetId?: string }>();
+  const claimsByBox = new Map<number, { code?: string; dudeIds: number[]; boxAssetId?: string; status?: string }>();
   if (Array.isArray(order.irlClaims)) {
     for (const value of order.irlClaims) {
       const claim = record(value);
@@ -183,6 +183,7 @@ export function fulfillmentOrderFromRecord(
       if (boxId === null) continue;
       claimsByBox.set(boxId, {
         code: optionalString(claim?.code),
+        status: optionalString(claim?.status),
         dudeIds: (Array.isArray(claim?.dudeIds) ? claim.dudeIds : []).flatMap((id) => {
           const parsed = positiveInteger(id);
           return parsed === null ? [] : [parsed];
@@ -200,7 +201,7 @@ export function fulfillmentOrderFromRecord(
       assetId: item.assetId || claim?.boxAssetId,
       claimCode: claim?.code,
       ...(receipt?.code ? { receiptClaimCode: receipt.code } : {}),
-      ...(receipt?.status ? { receiptClaimStatus: receipt.status } : {}),
+      ...(receipt?.status || claim?.status ? { receiptClaimStatus: receipt?.status || claim?.status } : {}),
       dudeIds: claim?.dudeIds || [],
     };
   }).sort((left, right) => left.boxId - right.boxId);

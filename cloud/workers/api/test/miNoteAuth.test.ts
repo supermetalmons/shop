@@ -82,6 +82,7 @@ test('challenge signatures reject wrong signer, wrong message, expiry, malformed
   const f = fixture();
   try {
     const challenge = await f.challenge();
+    assert.equal(challenge.message.split('\n')[1], '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
     assert.match(challenge.message, /Nonce: [0-9a-f]{32}/);
     assert.match(challenge.message, /urn:mons:preorder:mi_note_cards_devnet/);
     assert.equal(challenge.expiresAtMs, NOW + 300_000);

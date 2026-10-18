@@ -98,6 +98,26 @@ test('buildFulfillmentOrdersExport keeps fulfillment-visible data without addres
   assert.doesNotMatch(serialized, /label/);
 });
 
+test('Ethereum fulfillment exports preserve fixed artwork numbers and link codes to the correct receipt', () => {
+  const figures = Array.from({ length: 31 }, (_, index) => 111081 + index);
+  const order = cardOrder({ dropId: '111k_devnet', source: 'ethereum', boxes: [{ boxId: 5555,
+    claimCode: 'ABCDEF123456', dudeIds: figures }], looseDudes: [821, 840] });
+  const [exported] = buildFulfillmentOrdersExport([order], { dropById });
+  assert.deepEqual(exported.boxes, [{ secretCode: 'ABCDEF123456', figures }]);
+  assert.deepEqual(exported.looseFigures, [821, 840]);
+  const [entry] = buildFulfillmentSecretCodeExportEntries([order], { dropById });
+  assert.equal(entry.claimUrl, 'https://mons.shop/111k_devnet?receiptId=2005555&claim=ABCDEF123456');
+  assert.equal(entry.boxId, 5555);
+  assert.equal(entry.secretCode, 'ABCDEF123456');
+  assert.equal(entry.orderId, '111k_devnet:7');
+  for (const status of ['claimed', 'pending']) {
+    order.boxes[0].receiptClaimStatus = status;
+    assert.equal(buildFulfillmentSecretCodeExportEntry({ order, boxIndex: 0, options: { dropById } }), null);
+    assert.deepEqual(buildFulfillmentSecretCodeExportEntries([order], { dropById }), []);
+    assert.equal(countFulfillmentSecretCodeExportEntries([order]), 0);
+  }
+});
+
 test('fulfillment exports contain only orders from the selected visibility list', () => {
   const standardOrder = cardOrder({ deliveryId: 7 });
   const redeemedOrder = cardOrder({

@@ -29,6 +29,7 @@ import {
 } from './exportFiles';
 import { collectFulfillmentFigureMetadataTargets, mergeFigureMetadataRecords } from './figureMetadata';
 import { fulfillmentOrderKey } from './orders';
+import { loadEthereumFulfillmentPreview } from './EthereumFulfillmentCard';
 
 const defaultFulfillmentExportDependencies = {
   loadFigureMetadataBatch,
@@ -135,7 +136,7 @@ export function useFulfillmentExports({
               })
             : [],
         );
-        const options = { dropById, figureMetadataByKey: exportFigureMetadataByKey };
+        const options = { dropById, figureMetadataByKey: exportFigureMetadataByKey, ethereumClaimOrigin: window.location.origin };
         const entry =
           target.kind === 'box'
             ? buildFulfillmentSecretCodeExportEntry({ order, boxIndex: target.index, options })
@@ -145,6 +146,9 @@ export function useFulfillmentExports({
                 options,
               });
         if (!entry) throw new Error('Secret code unavailable');
+        if (order.dropId === '111k_devnet' && entry.boxId) {
+          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId) }];
+        }
 
         const pngBlob = await dependencies.buildSecretCodePngBlob(entry);
         dependencies.downloadBlobFile(entry.filename, pngBlob);
@@ -184,8 +188,22 @@ export function useFulfillmentExports({
       const exportEntries = buildFulfillmentSecretCodeExportEntries(displayedOrders, {
         dropById,
         figureMetadataByKey: exportFigureMetadataByKey,
+        ethereumClaimOrigin: window.location.origin,
       });
-      const zipBlob = await dependencies.buildSecretCodesZipBlob(exportEntries, setSecretCodesExportProgress);
+      const ethereumEntries = exportEntries.filter((entry) => entry.orderId.startsWith('111k_devnet:') && entry.boxId);
+      const preparationPercent = ethereumEntries.length ? 20 : 0;
+      let previewsLoaded = 0;
+      for (let index = 0; index < ethereumEntries.length; index += 4) {
+        const results = await Promise.allSettled(ethereumEntries.slice(index, index + 4).map(async (entry) => {
+          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId!) }];
+          setSecretCodesExportProgress(++previewsLoaded / ethereumEntries.length * preparationPercent);
+        }));
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure) throw failure.reason;
+      }
+      const zipBlob = await dependencies.buildSecretCodesZipBlob(exportEntries, (percent) => {
+        setSecretCodesExportProgress(preparationPercent + percent / 100 * (100 - preparationPercent));
+      });
       setSecretCodesExportProgress(100);
       dependencies.downloadBlobFile(filename, zipBlob);
     } catch (err) {

@@ -158,9 +158,10 @@ export default function FulfillmentApp({
   const authenticatedWallet = authenticated && sessionWallet ? sessionWallet : '';
   const walletAddress = connectedWallet || authenticatedWallet;
   const allowedDropIds = useMemo(
-    () => listAllowedFulfillmentDropIds(walletAddress, allDrops.map((drop) => drop.dropId)),
+    () => listAllowedFulfillmentDropIds(walletAddress, [...allDrops.map((drop) => drop.dropId), '111k_devnet']),
     [allDrops, walletAddress],
   );
+  const hasEthereumDropAccess = allowedDropIds.includes('111k_devnet');
   const visibleDrops = useMemo(() => {
     const allowedDropIdsSet = new Set(allowedDropIds);
     return allDrops.filter((drop) => allowedDropIdsSet.has(drop.dropId));
@@ -175,7 +176,9 @@ export default function FulfillmentApp({
     if (!selectedDropId) return visibleDrops;
     return [];
   }, [selectedDrop, selectedDropId, visibleDrops]);
-  const selectedDropIds = useMemo(() => selectedDrops.map((drop) => drop.dropId), [selectedDrops]);
+  const selectedDropIds = useMemo(() => selectedDropId === '111k_devnet' && hasEthereumDropAccess ? ['111k_devnet'] :
+    [...selectedDrops.map((drop) => drop.dropId), ...(!selectedDropId && hasEthereumDropAccess ? ['111k_devnet'] : [])],
+  [selectedDrops, selectedDropId, hasEthereumDropAccess]);
   const duplicateDrop = useMemo(
     () => selectedDrops.find((drop) => normalizeDropId(drop.dropId) === LITTLE_SWAG_BOXES_DROP_ID) || null,
     [selectedDrops],
@@ -188,7 +191,7 @@ export default function FulfillmentApp({
     sessionResolution,
     authLoading,
   });
-  const walletHasFulfillmentAccess = visibleDrops.length > 0;
+  const walletHasFulfillmentAccess = visibleDrops.length > 0 || hasEthereumDropAccess;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
   const canAdminEditFulfillmentAddress = signedIn && hasFulfillmentAddressAdminAccess(walletAddress);
   const walletBusy = walletAdapter.connecting || walletAdapter.disconnecting;
@@ -237,14 +240,14 @@ export default function FulfillmentApp({
 
   useEffect(() => {
     if (!walletAddress) return;
-    if (!visibleDrops.length) {
+    if (!visibleDrops.length && !hasEthereumDropAccess) {
       if (selectedDropId) onSelectedDropIdChange('');
       return;
     }
-    if (selectedDropId && !visibleDrops.some((drop) => drop.dropId === selectedDropId)) {
+    if (selectedDropId && !(selectedDropId === '111k_devnet' && hasEthereumDropAccess) && !visibleDrops.some((drop) => drop.dropId === selectedDropId)) {
       onSelectedDropIdChange('');
     }
-  }, [onSelectedDropIdChange, selectedDropId, visibleDrops, walletAddress]);
+  }, [onSelectedDropIdChange, selectedDropId, visibleDrops, walletAddress, hasEthereumDropAccess]);
 
   const resetOrderUi = useCallback(() => {
     setManualReviewMenuOpen(false);
@@ -550,6 +553,7 @@ export default function FulfillmentApp({
                 }}
               >
                 <option value="">All drops</option>
+                {hasEthereumDropAccess ? <option value="111k_devnet">111k_devnet · Ethereum</option> : null}
                 {visibleDrops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
                     {drop.dropId}

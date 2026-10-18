@@ -157,7 +157,7 @@ function checkViewerDismissal(
       target,
       currentTarget: frame,
       propertyName,
-    } as Parameters<ShopRevealController['handleRevealOverlayTransitionEnd']>[0]);
+    } as unknown as Parameters<ShopRevealController['handleRevealOverlayTransitionEnd']>[0]);
   });
   endTransition(frame, 'opacity');
   assert.equal(result.current.revealOverlay, overlay);

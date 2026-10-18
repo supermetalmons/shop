@@ -30,3 +30,7 @@ pnpm-debug.log*
 onchain/target/
 onchain/.anchor/
 onchain/test-ledger/
+onchain/ethereum/out/
+onchain/ethereum/cache/
+onchain/ethereum/broadcast/
+onchain/ethereum/.local/

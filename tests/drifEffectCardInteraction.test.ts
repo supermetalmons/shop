@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
-import { DRIF_GLITTER_URL, DRIF_GRAIN_URL } from '../src/drifCards.ts';
+import { DRIF_GLITTER_URL, DRIF_GRAIN_URL, type DrifCardConfig } from '../src/drifCards.ts';
 import { normalizeFigureDisplayImage } from '../src/lib/dropContent.ts';
 import { createMiNoteCard } from '../src/lib/miNoteCards.ts';
 import { getInteractiveCardPackCardByFigureId } from '../src/lib/interactiveCardPackReveal.ts';
@@ -289,7 +289,7 @@ test('switching cards ignores late decodes and waits for changed effect assets w
   runFrames(8);
   assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
 
-  const changedCard = { ...nextCard, textureSrc: 'https://example.com/changed-mask.webp' };
+  const changedCard = { ...nextCard, textureSrc: 'https://example.com/changed-mask.webp' } as DrifCardConfig;
   view.rerender(createElement(PonchoCardViewerOverlay, { ...props, card: changedCard, loadingImageSrc: nextPreview }));
   const thirdBatch = preloadedImages.slice(firstBatch.length + secondBatch.length);
   assert.equal(image.src, nextPreview);
@@ -408,7 +408,7 @@ for (const [change, changedCard] of [
     });
     fireEvent.load(image);
     assert.equal(imageReady, true);
-    view.rerender(createElement(DrifEffectCard, { ...props, card: changedCard }));
+    view.rerender(createElement(DrifEffectCard, { ...props, card: changedCard as DrifCardConfig }));
     assert.equal(view.container.querySelector('img'), image);
     assert.equal(image.src, card.imageSrc);
     assert.equal(element.classList.contains('loading'), false);

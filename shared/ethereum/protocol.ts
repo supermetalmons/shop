@@ -1,0 +1,112 @@
+export const ETHEREUM_111K_DROP_ID = '111k_devnet' as const;
+const ARTWORK_COUNT = 111_111;
+const CRATE_COUNT = 5_555;
+const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
+const CRATE_RECEIPT_OFFSET = 2_000_000n;
+export const ETHEREUM_MAX_MINT_QUANTITY = 15;
+export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
+export const ETHEREUM_AUTHORIZATION_TTL_SECONDS = 600;
+
+export type Hex = `0x${string}`;
+export type EthereumItemKind = 'artwork' | 'crate' | 'warehouse' | 'artwork_receipt' | 'crate_receipt';
+export const ETHEREUM_ITEM_KINDS: readonly EthereumItemKind[] = [
+  'artwork', 'crate', 'warehouse', 'artwork_receipt', 'crate_receipt',
+];
+
+export function ethereumItemKind(value: number): EthereumItemKind | null {
+  return ETHEREUM_ITEM_KINDS[value - 1] ?? null;
+}
+
+export function ethereumItemKindNumber(kind: EthereumItemKind): number {
+  return ETHEREUM_ITEM_KINDS.indexOf(kind) + 1;
+}
+
+export function normalizeEthereumAddress(value: unknown): Hex | null {
+  return typeof value === 'string' && /^0x[0-9a-fA-F]{40}$/.test(value)
+    ? value.toLowerCase() as Hex : null;
+}
+
+export function requireEthereumAddress(value: unknown): Hex {
+  const address = normalizeEthereumAddress(value);
+  if (!address) throw new Error('Invalid Ethereum address');
+  return address;
+}
+
+export function normalizeEthereumTokenId(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*|0x[0-9a-fA-F]+)$/.test(value)) return null;
+  try {
+    const id = BigInt(value);
+    return id > 0n && id < (1n << 256n) ? id.toString() : null;
+  } catch { return null; }
+}
+
+export function ethereumAssetId(chainId: number, contract: string, tokenId: string): string {
+  const id = normalizeEthereumTokenId(tokenId);
+  if (!Number.isSafeInteger(chainId) || chainId < 1 || !id) throw new Error('Invalid Ethereum asset identity');
+  return `eip155:${chainId}:${requireEthereumAddress(contract)}:${id}`;
+}
+
+export function crateArtworkIds(crateId: number): number[] {
+  if (!Number.isInteger(crateId) || crateId < 1 || crateId > CRATE_COUNT) throw new Error('Invalid crate number');
+  const count = crateId === CRATE_COUNT ? 31 : 20;
+  return Array.from({ length: count }, (_, index) => (crateId - 1) * 20 + index + 1);
+}
+
+export function ethereumReceiptTokenId(kind: 'artwork' | 'crate', displayId: number): string {
+  const maximum = kind === 'artwork' ? ARTWORK_COUNT : CRATE_COUNT;
+  if (!Number.isInteger(displayId) || displayId < 1 || displayId > maximum) throw new Error('Invalid item number');
+  return ((kind === 'artwork' ? ARTWORK_RECEIPT_OFFSET : CRATE_RECEIPT_OFFSET) + BigInt(displayId)).toString();
+}
+
+export function formatEtherAmount(wei: string | bigint, fractionDigits = 6): string {
+  const amount = BigInt(wei);
+  if (amount < 0n) throw new Error('Invalid ETH amount');
+  const whole = amount / 10n ** 18n;
+  const fraction = (amount % 10n ** 18n).toString().padStart(18, '0').slice(0, Math.max(0, Math.min(18, fractionDigits))).replace(/0+$/, '');
+  return `${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
+export function ethereumHexQuantity(value: bigint | number | string): Hex {
+  const parsed = BigInt(value);
+  if (parsed < 0n) throw new Error('Invalid Ethereum quantity');
+  return `0x${parsed.toString(16)}`;
+}
+
+export type EthereumMetadata = {
+  name: string;
+  description?: string;
+  image: string;
+  attributes?: Array<{ trait_type: string; value: string | number }>;
+};
+
+export type EthereumInventoryItem = EthereumMetadata & {
+  id: string;
+  chainId: number;
+  contractAddress: string;
+  owner: string;
+  tokenId: string;
+  kind: EthereumItemKind;
+  displayId: number;
+};
+
+export type EthereumDeliveryQuote = {
+  orderId: number;
+  wallet: string;
+  fee: string;
+  deadline: number;
+  receiptIdsHash: string;
+};
+
+export const ETHEREUM_FUNCTIONS = {
+  mintCrates: 'mintCrates(uint256)',
+  mintWarehouses: 'mintWarehouses(uint256)',
+  unboxCrate: 'unboxCrate(uint256)',
+  unboxWarehouse: 'unboxWarehouse(uint256)',
+  transfer: 'safeTransferFrom(address,address,uint256)',
+  redeemForDelivery: 'redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)',
+  claimCrateReceipt: 'claimCrateReceipt(uint256,bytes32,uint256,bytes)',
+  tokenInfo: 'getTokenInfo(uint256)',
+  tokenURI: 'tokenURI(uint256)',
+  previewTokenURI: 'previewTokenURI(uint8,uint256)',
+  stats: 'stats()',
+} as const;

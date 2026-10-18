@@ -10,6 +10,7 @@ import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
 import { reconcilePendingPreorders } from './preorders.js';
+import { reconcileEthereum111k } from './ethereumReconciliation.js';
 import {
   emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
   reportReconciliationResult, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
@@ -26,6 +27,7 @@ export type ScheduledReconcilers = {
   shippedNotifications: typeof reconcilePendingShippedNotifications;
   receiptClaims: typeof reconcileReceiptClaimWorkflows;
   preorders: typeof reconcilePendingPreorders;
+  ethereum: typeof reconcileEthereum111k;
 };
 
 async function cleanupScheduledOpsState(
@@ -125,6 +127,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   shippedNotifications: reconcilePendingShippedNotifications,
   receiptClaims: reconcileReceiptClaimWorkflows,
   preorders: reconcilePendingPreorders,
+  ethereum: reconcileEthereum111k,
 };
 
 type ScheduledJobOutcome =
@@ -190,6 +193,7 @@ async function runScheduledCommerceReconciliations(
     runScheduledJob('notifications', (onResult) => reconcilers.notifications(env, signal, { onResult })),
     runScheduledJob('receiptClaims', (onResult) => reconcilers.receiptClaims(env, signal, { onResult })),
     runScheduledJob('preorders', (onResult) => reconcilers.preorders(env, signal, { onResult })),
+    runScheduledJob('ethereum', (onResult) => reconcilers.ethereum(env, signal, { onResult })),
   ]);
   return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
 }

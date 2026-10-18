@@ -11,6 +11,7 @@ const config = {
   },
   ignoreIssues: {
     'src/lib/miNotePackRenderSetup.ts': ['exports', 'types'],
+    'shared/ethereum/abi.generated.ts': ['files'],
   },
   workspaces: {
     '.': {
@@ -47,7 +48,7 @@ const config = {
         'tests/**/*.ts',
       ],
       ignoreDependencies: ['buffer', 'cloudflare'],
-      ignoreBinaries: ['anchor', 'mkfifo', 'solana'],
+      ignoreBinaries: ['anchor', 'mkfifo', 'solana', 'forge', 'anvil'],
       ignoreExportsUsedInFile: { type: true },
     },
   },

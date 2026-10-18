@@ -10,6 +10,7 @@ const OPS_D1_MIGRATIONS = [
   '0005_remove_redundant_anonymous_auth_subject_index.sql',
   '0006_cover_expiry_cleanup_indexes.sql',
   '0007_mi_note_auth.sql',
+  '0008_ethereum_profiles.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
@@ -118,6 +119,12 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  ['ethereum_auth_challenges', { fingerprint: '6e3a933752f6a8d48b0202de4bbb1c6e018ccb1102d6a2c7d45d5241df46ae31', type: 'table', tableName: 'ethereum_auth_challenges' }],
+  ['ethereum_auth_challenges_expiry', { fingerprint: '21a384829b1eb2d660bf0b9a707610cdc9d7625be1d5a581a7f6b02a1703d490', type: 'index', tableName: 'ethereum_auth_challenges' }],
+  ['ethereum_auth_sessions', { fingerprint: '732acb080c3fbc5d6014f5370d80b83880e7cfb4f1eb49910a2d810373d4a62c', type: 'table', tableName: 'ethereum_auth_sessions' }],
+  ['ethereum_auth_sessions_expiry', { fingerprint: 'f8872ef7cb52c5709baf8138b735d03703f9eabe88a8b25808468b158b6909f9', type: 'index', tableName: 'ethereum_auth_sessions' }],
+  ['ethereum_profile_addresses', { fingerprint: '17a86741005bc79c0810fbd5be3c94762e410269ff8206fde6aef888580667f3', type: 'table', tableName: 'ethereum_profile_addresses' }],
+  ['ethereum_profiles', { fingerprint: '8b6401e72b6259db7255e618bd0bd5793658fd827d24c078ac5162bf279490c9', type: 'table', tableName: 'ethereum_profiles' }],
   ['mi_note_auth_challenges', { fingerprint: 'a4f038e92fabc0dd7e8a24d3d9024c183c6dd14712fe20dd48461ee826d9370c', type: 'table', tableName: 'mi_note_auth_challenges' }],
   ['mi_note_auth_challenges_expires_at_ms', { fingerprint: '884f06a33c788bdb89ff9062b3ef5e115fe70c6ef44539de471191ebcc1effd0', type: 'index', tableName: 'mi_note_auth_challenges' }],
   ['mi_note_auth_sessions', { fingerprint: '364c625d11c296754a2f9cb970016ead77d379f7b71bed4836f22832b7094410', type: 'table', tableName: 'mi_note_auth_sessions' }],
@@ -748,6 +755,10 @@ export function readRemoteOpsD1Integrity(
       WHERE
         schema = 'main' AND
         name IN (
+          'ethereum_auth_challenges',
+          'ethereum_auth_sessions',
+          'ethereum_profile_addresses',
+          'ethereum_profiles',
           'profile_addresses',
           'anonymous_auth_sessions',
           'profiles',

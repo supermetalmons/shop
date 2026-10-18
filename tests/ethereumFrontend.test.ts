@@ -1,0 +1,242 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
+import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
+import { ethereumApi, EthereumApiError } from '../src/ethereum/api.ts';
+import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, toggleEthereumSelection } from '../src/ethereum/state.ts';
+import { ethereumChainId, ethereumOperation } from '../src/ethereum/wallet.ts';
+import { resolveAppRoute } from '../src/routes.ts';
+import type { EthereumInventoryItem } from '../shared/ethereum/api.ts';
+import type { EIP1193Provider, EthereumProviderListener } from '../src/wallet/injectedEthereumProviders.ts';
+
+const owner = '0x1111111111111111111111111111111111111111';
+const other = '0x2222222222222222222222222222222222222222';
+const contract = '0x3333333333333333333333333333333333333333';
+const config = resolveEthereum111kConfig({ contractAddress: contract });
+const hash = `0x${'ab'.repeat(32)}`;
+
+function providerFixture() {
+  let chainId = 1;
+  let address = owner;
+  const calls: string[] = [];
+  const listeners = new Map<string, Set<EthereumProviderListener>>();
+  const emit = (event: string, value: unknown) => { for (const listener of listeners.get(event) ?? []) listener(value); };
+  const provider: EIP1193Provider = {
+    request: async ({ method, params }) => {
+      calls.push(method);
+      if (method === 'eth_accounts') return [address];
+      if (method === 'eth_chainId') return `0x${chainId.toString(16)}`;
+      if (method === 'wallet_switchEthereumChain') {
+        chainId = Number(BigInt((params as [{ chainId: string }])[0].chainId));
+        emit('chainChanged', `0x${chainId.toString(16)}`);
+        return null;
+      }
+      if (method === 'eth_sendTransaction') return hash;
+      throw new Error(`Unexpected method ${method}`);
+    },
+    on(event, listener) { if (!listeners.has(event)) listeners.set(event, new Set()); listeners.get(event)!.add(listener); },
+    removeListener(event, listener) { listeners.get(event)?.delete(listener); },
+  };
+  return { provider, calls, listeners, emit,
+    setAccount(next: string) { address = next; emit('accountsChanged', [next]); },
+    snapshot: () => ({ address, provider }),
+  };
+}
+function item(tokenId: string, kind: EthereumInventoryItem['kind'] = 'artwork'): EthereumInventoryItem {
+  return { id: ethereumAssetId(config.chainId, contract, tokenId), tokenId, chainId: config.chainId, contractAddress: contract,
+    owner, displayId: Number(tokenId), kind, name: `Artwork #${tokenId}`, image: 'data:image/svg+xml,%3Csvg/%3E' };
+}
+
+test('111k routes independently of Solana deployments and preserves its URL', () => {
+  const route = resolveAppRoute({ pathname: '/111k_devnet' });
+  assert.equal(route.kind, 'ethereum-drop');
+  assert.equal(route.ethereumDropId, '111k_devnet');
+  assert.equal(route.path, '/111k_devnet');
+  assert.equal(route.drop, null);
+  assert.equal(route.preorderId, null);
+  assert.equal(route.replacementHref, null);
+  assert.equal(resolveAppRoute({ pathname: '/' }).ethereumDropId, undefined);
+});
+
+test('Ethereum transactions switch network, recheck identity, and use the captured provider', async () => {
+  const wallet = providerFixture();
+  const operation = ethereumOperation(wallet.snapshot, config);
+  assert.equal(await operation.send({ to: contract, data: '0x12345678', value: '0x0', chainId: config.chainId }), hash);
+  assert.equal(wallet.calls.filter(method => method === 'eth_sendTransaction').length, 1);
+  assert.ok(wallet.calls.indexOf('wallet_switchEthereumChain') < wallet.calls.indexOf('eth_sendTransaction'));
+  assert.equal(wallet.calls.filter(method => method === 'eth_accounts').length, 2);
+  operation.dispose();
+  assert.equal([...wallet.listeners.values()].reduce((sum, set) => sum + set.size, 0), 0);
+});
+
+test('wallet cancellation never sends a transaction', async () => {
+  const wallet = providerFixture();
+  const original = wallet.provider.request;
+  wallet.provider.request = async args => {
+    if (args.method === 'wallet_switchEthereumChain') throw Object.assign(new Error('Cancelled'), { code: 4001 });
+    return original(args);
+  };
+  const operation = ethereumOperation(wallet.snapshot, config);
+  await assert.rejects(operation.send({ to: contract, data: '0x', value: '0x0', chainId: config.chainId }), /Cancelled/);
+  assert.ok(!wallet.calls.includes('eth_sendTransaction'));
+  operation.dispose();
+});
+
+test('account replacement, disconnect and unexpected chain changes cancel captured intent', async () => {
+  for (const event of ['accountsChanged', 'chainChanged', 'disconnect']) {
+    const wallet = providerFixture();
+    const operation = ethereumOperation(wallet.snapshot, config);
+    await operation.ensureNetwork();
+    if (event === 'accountsChanged') wallet.setAccount(other);
+    else wallet.emit(event, event === 'chainChanged' ? '0x1' : undefined);
+    assert.throws(operation.assertCurrent, /wallet changed/);
+    await assert.rejects(operation.send({ to: contract, data: '0x', value: '0x0', chainId: config.chainId }));
+    assert.ok(!wallet.calls.includes('eth_sendTransaction'));
+    operation.dispose();
+  }
+});
+
+test('transaction and config validation reject unrelated networks and unsafe local RPC settings', async t => {
+  const wallet = providerFixture();
+  const operation = ethereumOperation(wallet.snapshot, config);
+  await assert.rejects(operation.send({ to: contract, data: '0x', value: '0x0', chainId: 1 }), /network/);
+  operation.dispose();
+  let response = { ...config, chainId: 1 };
+  t.mock.method(globalThis, 'fetch', async () => Response.json(response));
+  await assert.rejects(ethereumApi.config());
+  response = { ...config, walletRpcUrl: 'http://untrusted.example' };
+  await assert.rejects(ethereumApi.config());
+  response = { ...config, chainId: 31337, walletRpcUrl: 'http://untrusted.example' };
+  await assert.rejects(ethereumApi.config());
+  response = { ...config, walletRpcUrl: 'http://[::1]:8545' };
+  await assert.rejects(ethereumApi.config());
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+    response = resolveEthereum111kConfig({ chainId: 31337, contractAddress: contract, walletRpcUrl: `http://${host}:8545` });
+    assert.equal((await ethereumApi.config()).walletRpcUrl, response.walletRpcUrl);
+  }
+  response = config;
+  assert.equal((await ethereumApi.config()).chainId, 11155111);
+  assert.equal(ethereumChainId('0xaa36a7'), 11155111);
+  assert.equal(ethereumChainId('11155111'), null);
+});
+
+test('Ethereum inventory isolates chain, contract and owner, without changing NFT display numbers', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  assert.notDeepEqual(ethereumInventoryQueryKey(scope), ethereumInventoryQueryKey(ethereumInventoryScope(config, other)));
+  assert.notEqual(scope, ethereumInventoryScope({ ...config, chainId: 31337 }, owner));
+  assert.notEqual(scope, ethereumInventoryScope({ ...config, contractAddress: other }, owner));
+  const artwork = { ...item('123'), displayId: 841 };
+  const view = ethereumInventoryView(artwork);
+  assert.equal(view.dudeId, 841);
+  assert.equal(view.ethereum.tokenId, '123');
+  assert.equal(view.id, ethereumAssetId(config.chainId, contract, '123'));
+  let response = { ...artwork, owner: other };
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ items: [response], nextCursor: null, observedBlock: 1 }));
+  await assert.rejects(ethereumApi.inventory(config, owner, null));
+  response = { ...artwork, chainId: 1 };
+  await assert.rejects(ethereumApi.inventory(config, owner, null));
+});
+
+test('Ethereum selection caps delivery at 50 and keeps warehouses separate from shippable items', () => {
+  const rows = Array.from({ length: 51 }, (_, index) => item(String(index + 1)));
+  const warehouse = item('116667', 'warehouse');
+  const receipt = item('1000001', 'artwork_receipt');
+  const index = new Map([...rows, warehouse, receipt].map(row => [row.id, row]));
+  const selected = new Set(rows.slice(0, 50).map(row => row.id));
+  assert.equal(toggleEthereumSelection(selected, rows[50], index, 50).size, 50);
+  assert.deepEqual([...toggleEthereumSelection(selected, warehouse, index, 50)], [warehouse.id]);
+  assert.deepEqual([...toggleEthereumSelection(new Set([warehouse.id]), rows[0], index, 50)], [rows[0].id]);
+  assert.equal(toggleEthereumSelection(selected, receipt, index, 50).size, 50);
+});
+
+test('delivery authorization bytes must match the selected IDs, wallet, order, signature and exact fee', async () => {
+  const { checkedEthereumDelivery } = await import('../src/ethereum/prepared.ts');
+  const { encodeCall } = await import('../shared/ethereum/abi.ts');
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const signature = `0x${'ab'.repeat(65)}`;
+  const selected = [item('1'), item('2')];
+  const receiptIdsHash = ethereumReceiptIdsHash(['1000001', '1000002']);
+  const quote = { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash };
+  const prepared = { orderId: 42, quote, expiresAtMs: deadline * 1000, signature,
+    transaction: { chainId: config.chainId, to: contract, value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`,
+      data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)', ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], [['1', '2'], [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]) } };
+  assert.equal(checkedEthereumDelivery(prepared, config, owner, selected), prepared.transaction);
+  assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [...selected].reverse()), /does not match/);
+  assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, wallet: other } }, config, owner, selected), /wallet or fee/);
+  assert.throws(() => checkedEthereumDelivery({ ...prepared, signature: `0x${'cd'.repeat(65)}` }, config, owner, selected), /does not match/);
+  assert.throws(() => checkedEthereumDelivery({ ...prepared, transaction: { ...prepared.transaction, value: '0x1' } }, config, owner, selected), /does not match/);
+  assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [{ ...selected[0], displayId: 3 }, selected[1]]), /selected items/);
+  assert.throws(() => checkedEthereumDelivery(prepared, config, owner, [{ ...selected[0], kind: 'crate' }, selected[1]]), /selected items/);
+  assert.throws(() => checkedEthereumDelivery({ ...prepared, quote: { ...quote, receiptIdsHash: ethereumReceiptIdsHash(['1000002', '1000001']) } }, config, owner, selected), /selected items/);
+});
+
+test('only authenticated 401 responses identify the session token to invalidate', async t => {
+  const session = { token: 'rejected-token', address: owner, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 60_000 };
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ message: 'Expired' }, { status: 401 }));
+  await assert.rejects(ethereumApi.profile(session), cause => cause instanceof EthereumApiError && cause.rejectedSessionToken === session.token);
+  await assert.rejects(ethereumApi.challenge(owner, config), cause => cause instanceof EthereumApiError && cause.rejectedSessionToken === null);
+});
+
+test('crate claims reject another receipt, mismatched calldata and expired authorization', async () => {
+  const { checkedEthereumClaim } = await import('../src/ethereum/prepared.ts');
+  const { encodeCall } = await import('../shared/ethereum/abi.ts');
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const signature = `0x${'ab'.repeat(65)}`;
+  const claimId = `0x${'cd'.repeat(32)}`;
+  const prepared = { receiptId: '2000001', claimId, deadline, expiresAtMs: deadline * 1000, signature,
+    transaction: { chainId: config.chainId, to: contract, value: '0x0',
+      data: encodeCall('claimCrateReceipt(uint256,bytes32,uint256,bytes)', ['uint256', 'bytes32', 'uint256', 'bytes'], ['2000001', claimId, deadline, signature]) } };
+  assert.equal(checkedEthereumClaim(prepared, config, '2000001'), prepared.transaction);
+  assert.throws(() => checkedEthereumClaim(prepared, config, '2000002'), /does not match/);
+  assert.throws(() => checkedEthereumClaim({ ...prepared, transaction: { ...prepared.transaction, data: '0x' } }, config, '2000001'), /does not match/);
+  assert.throws(() => checkedEthereumClaim({ ...prepared, expiresAtMs: Date.now() - 1 }, config, '2000001'), /expired/);
+});
+
+test('replacement recovery verifies sender, nonce, chain and the exact original intent', async () => {
+  const { ethereumReplacement } = await import('../src/ethereum/recovery.ts');
+  const replacementHash = `0x${'cd'.repeat(32)}`;
+  const intent = { to: contract, data: '0x12345678', value: '0x123' };
+  const pending = { scope: ethereumInventoryScope(config, owner)!, hash, action: 'mint' as const, submittedAt: Date.now(), nonce: '0x7', intent };
+  let candidate = { hash: replacementHash, from: owner, to: contract, input: intent.data, value: intent.value, nonce: '0x7', chainId: '0xaa36a7' };
+  const provider: EIP1193Provider = { request: async () => candidate };
+  const args = { provider, config, owner, pending, replacementHash, assertCurrent() {} };
+  const replacement = await ethereumReplacement(args);
+  assert.equal(replacement.hash, replacementHash);
+  assert.equal(replacement.action, 'mint');
+  candidate = { ...candidate, nonce: '0x8' };
+  await assert.rejects(ethereumReplacement(args), /does not replace/);
+  candidate = { ...candidate, nonce: '0x7', value: '0x456' };
+  await assert.rejects(ethereumReplacement(args), /changes the original/);
+  candidate = { ...candidate, value: intent.value, from: other };
+  await assert.rejects(ethereumReplacement(args), /wallet or network/);
+  candidate = { ...candidate, from: owner, chainId: '0x1' };
+  await assert.rejects(ethereumReplacement(args), /wallet or network/);
+});
+
+test('replacement recovery can recover the original nonce and recognizes only a matching self-transfer as cancellation', async () => {
+  const { ethereumReplacement } = await import('../src/ethereum/recovery.ts');
+  const replacementHash = `0x${'cd'.repeat(32)}`;
+  const original = { hash, from: owner, to: contract, input: '0x12345678', value: '0x123', nonce: '0x7', chainId: '0xaa36a7' };
+  const candidate = { ...original, hash: replacementHash, to: owner, input: '0x', value: '0x0' };
+  const provider: EIP1193Provider = { request: async ({ params }) => (params as string[])[0] === hash ? original : candidate };
+  const pending = { scope: ethereumInventoryScope(config, owner)!, hash, action: 'mint' as const, submittedAt: Date.now() };
+  const replacement = await ethereumReplacement({ provider, config, owner, pending, replacementHash, assertCurrent() {} });
+  assert.equal(replacement.action, 'cancel');
+  assert.equal(replacement.nonce, '0x7');
+  assert.equal(replacement.actionBeforeCancellation, 'mint');
+  const resumedHash = `0x${'ef'.repeat(32)}`;
+  provider.request = async () => ({ ...original, hash: resumedHash });
+  const resumed = await ethereumReplacement({ provider, config, owner, pending: replacement, replacementHash: resumedHash, assertCurrent() {} });
+  assert.equal(resumed.action, 'mint');
+  provider.request = async () => null;
+  await assert.rejects(ethereumReplacement({ provider, config, owner, pending, replacementHash, assertCurrent() {} }), /cannot be verified/);
+});
+
+test('a local address encryption public key is accepted only in development on chain 31337', async () => {
+  const { ethereumAddressEncryptionKey } = await import('../src/ethereum/addressEncryption.ts');
+  assert.equal(ethereumAddressEncryptionKey('production', 31337, true, ' local '), 'local');
+  assert.equal(ethereumAddressEncryptionKey('production', 11155111, true, 'local'), 'production');
+  assert.equal(ethereumAddressEncryptionKey('production', 31337, false, 'local'), 'production');
+  assert.equal(ethereumAddressEncryptionKey('production', 31337, true, undefined), 'production');
+});

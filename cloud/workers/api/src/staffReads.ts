@@ -6,6 +6,7 @@ import {
   walletHasAdminAccess,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
+  isSupportedFulfillmentDrop,
 } from '../../../../shared/fulfillmentAccess.js';
 import type {
   FulfillmentManualReviewCheckout,
@@ -131,7 +132,7 @@ function supportedDropId(value: unknown): string {
     throw new ProfileReadError('invalid-argument', 400, 'dropId is required.');
   }
   const dropId = normalizeDropId(value);
-  if (!Object.hasOwn(DEPLOYMENT_DROPS, dropId)) {
+  if (!isSupportedFulfillmentDrop(dropId)) {
     throw new ProfileReadError('invalid-argument', 400, `Unsupported dropId: ${dropId}`);
   }
   return dropId;

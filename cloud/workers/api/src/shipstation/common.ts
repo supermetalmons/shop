@@ -2,11 +2,11 @@ import { parseDeliveryShipmentItemCounts } from '../deliveryOrderReadModel.js';
 import { z } from 'zod';
 import nacl from 'tweetnacl';
 import { normalizeDropId } from '../../../../../shared/deploymentCore.js';
-import { DEPLOYMENT_DROPS } from '../../../../../shared/deploymentRegistry.js';
 import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletHasFulfillmentDropAccess,
+  isSupportedFulfillmentDrop,
 } from '../../../../../shared/fulfillmentAccess.js';
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
@@ -73,10 +73,14 @@ export function clientCancellationReason(
 
 export function supportedDropId(value: string): string {
   const dropId = normalizeDropId(value);
-  if (!Object.hasOwn(DEPLOYMENT_DROPS, dropId)) {
+  if (!isSupportedFulfillmentDrop(dropId)) {
     throw new ProfileReadError('invalid-argument', 400, `Unsupported dropId: ${dropId}`);
   }
   return dropId;
+}
+
+export function requireShipStationEnabled(dropId: string): void {
+  if (dropId === '111k_devnet') throw new ProfileReadError('failed-precondition', 409, 'ShipStation is disabled for Ethereum test orders.');
 }
 
 function decodeBase64(value: string): Uint8Array | null {
