@@ -6,9 +6,9 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {IMons111kRenderer} from "./IMons111kRenderer.sol";
+import {INFT111KRenderer} from "./INFT111KRenderer.sol";
 
-contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
+contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     enum ItemKind {
         None,
         Artwork,
@@ -52,7 +52,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     bool public redemptionsPaused;
     address public quoteSigner;
     address payable public treasury;
-    IMons111kRenderer public renderer;
+    INFT111KRenderer public renderer;
     mapping(uint256 => uint256) public warehouseFirstCrate;
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
@@ -97,14 +97,14 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event BatchMetadataUpdate(uint256 fromTokenId, uint256 toTokenId);
 
     constructor(address initialOwner, address signer, address payable treasury_, address renderer_)
-        ERC721A("Mons 111k", "111K")
+        ERC721A("111K", "111K")
         Ownable(initialOwner)
-        EIP712("Mons111k", "2")
+        EIP712("111K", "2")
     {
         if (signer == address(0) || treasury_ == address(0) || renderer_.code.length == 0) revert InvalidAddress();
         quoteSigner = signer;
         treasury = treasury_;
-        renderer = IMons111kRenderer(renderer_);
+        renderer = INFT111KRenderer(renderer_);
     }
 
     function mintCrates(uint256 quantity) external payable nonReentrant {
@@ -311,7 +311,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function setRenderer(address renderer_) external onlyOwner {
         if (renderer_.code.length == 0) revert InvalidAddress();
-        renderer = IMons111kRenderer(renderer_);
+        renderer = INFT111KRenderer(renderer_);
         emit RendererUpdated(renderer_);
         emit BatchMetadataUpdate(1, CRATE_RECEIPT_OFFSET + MAX_CRATES);
     }

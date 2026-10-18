@@ -27,7 +27,7 @@ export function resolveEthereum111kConfig(input: {
   walletRpcUrl?: string;
 } = {}): Ethereum111kConfig {
   const chainId = Number(input.chainId || 11155111);
-  if (chainId !== 11155111 && chainId !== 31337) throw new Error('111k development supports Sepolia or a local chain only');
+  if (chainId !== 11155111 && chainId !== 31337) throw new Error('111K development supports Sepolia or a local chain only');
   const deploymentBlock = Number(input.deploymentBlock || 0);
   if (!Number.isSafeInteger(deploymentBlock) || deploymentBlock < 0) throw new Error('Invalid Ethereum deployment block');
   const contractAddress = normalizeEthereumAddress(input.contractAddress);

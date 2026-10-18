@@ -50,8 +50,8 @@ export function toggleEthereumSelection(selected: ReadonlySet<string>, item: Eth
   return next;
 }
 
-const STORAGE_PREFIX = 'mons.ethereum111k:';
-const STORAGE_CHANGED_EVENT = 'mons:ethereum111k-storage';
+const STORAGE_PREFIX = 'ethereum111k:';
+const STORAGE_CHANGED_EVENT = 'ethereum111k-storage';
 const storageFallbacks = new WeakMap<Window, Map<string, { value: unknown; baseline: string | null }>>();
 const storageSnapshots = new WeakMap<Window, Map<string, string | null>>();
 const activeOperations = new WeakMap<Window, Map<string, { label: string }>>();
@@ -69,7 +69,7 @@ export function subscribeEthereumOperation(scope: string, listener: () => void):
 export async function withEthereumSubmissionLock<T>(scope: string, run: () => T): Promise<T> {
   const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
   if (typeof locks?.request !== 'function') throw new Error('This browser cannot safely coordinate wallet transactions. Update your browser and try again.');
-  return locks.request(`mons:ethereum111k-submission:${scope}`, {}, run);
+  return locks.request(`ethereum111k-submission:${scope}`, {}, run);
 }
 
 export async function runEthereumOperation<T>(scope: string, label: string, run: () => Promise<T>): Promise<T> {
@@ -84,7 +84,7 @@ export async function runEthereumOperation<T>(scope: string, label: string, run:
   operations.set(scope, operation);
   notify();
   try {
-    return await locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+    return await locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
       if (!lock) throw new Error('Another Ethereum wallet request is already in progress. Wait for it to finish and try again.');
       return run();
     });
@@ -249,7 +249,7 @@ export function replaceEthereumInventoryRecovery(scope: string, previousHash: st
 
 export function readEthereumSession(scope: string, config: Ethereum111kConfig, owner: string): EthereumSession | null {
   try {
-    const session = JSON.parse(window.sessionStorage.getItem(`mons.ethereum111k:${scope}:session`) ?? 'null') as EthereumSession | null;
+    const session = JSON.parse(window.sessionStorage.getItem(`ethereum111k:${scope}:session`) ?? 'null') as EthereumSession | null;
     return session?.address === owner && session.chainId === config.chainId && session.dropId === config.dropId &&
       typeof session.token === 'string' && session.expiresAtMs > Date.now() + 10_000 ? session : null;
   } catch { return null; }
@@ -257,8 +257,8 @@ export function readEthereumSession(scope: string, config: Ethereum111kConfig, o
 
 export function saveEthereumSession(scope: string, session: EthereumSession | null): void {
   try {
-    if (session) window.sessionStorage.setItem(`mons.ethereum111k:${scope}:session`, JSON.stringify(session));
-    else window.sessionStorage.removeItem(`mons.ethereum111k:${scope}:session`);
+    if (session) window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify(session));
+    else window.sessionStorage.removeItem(`ethereum111k:${scope}:session`);
   } catch {}
 }
 

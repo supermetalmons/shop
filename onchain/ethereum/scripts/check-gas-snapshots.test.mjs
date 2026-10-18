@@ -7,8 +7,8 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const committedPath = resolve(root, 'snapshots/Mons111kGasTest.json');
-const harnessPath = resolve(root, 'test/Mons111kGas.t.sol');
+const committedPath = resolve(root, 'snapshots/NFT111KGasTest.json');
+const harnessPath = resolve(root, 'test/NFT111KGas.t.sol');
 
 function isolatedProject(directory, mutateHarness) {
   const project = join(directory, 'project');
@@ -19,7 +19,7 @@ function isolatedProject(directory, mutateHarness) {
   for (const file of ['package.json', 'foundry.toml', 'scripts/check-gas-snapshots.mjs', 'test/TestSupport.sol']) {
     copyFileSync(join(root, file), join(project, file));
   }
-  writeFileSync(join(project, 'test/Mons111kGas.t.sol'), mutateHarness(readFileSync(harnessPath, 'utf8')));
+  writeFileSync(join(project, 'test/NFT111KGas.t.sol'), mutateHarness(readFileSync(harnessPath, 'utf8')));
   symlinkSync(join(root, 'node_modules'), join(project, 'node_modules'), 'dir');
   return project;
 }
@@ -27,13 +27,13 @@ function isolatedProject(directory, mutateHarness) {
 function withGateSnapshot(change, check, options = {}) {
   const committed = readFileSync(committedPath, 'utf8');
   const committedHarness = readFileSync(harnessPath, 'utf8');
-  const directory = mkdtempSync(join(tmpdir(), 'mons-111k-gas-check-'));
+  const directory = mkdtempSync(join(tmpdir(), '111k-gas-check-'));
   try {
     const snapshots = join(directory, 'snapshots');
     mkdirSync(snapshots);
     const project = options.mutateHarness ? isolatedProject(directory, options.mutateHarness) : root;
     const value = change(JSON.parse(committed));
-    const snapshotPath = join(snapshots, 'Mons111kGasTest.json');
+    const snapshotPath = join(snapshots, 'NFT111KGasTest.json');
     const expected = value === null ? null : JSON.stringify(value, null, 2) + '\n';
     if (expected !== null) writeFileSync(snapshotPath, expected);
     const result = spawnSync('npm', ['run', '--silent', 'gas:check'], {
@@ -57,7 +57,7 @@ test('valid gas baselines pass without rewriting expected values', () => {
 test('a missing gas snapshot file fails without creating a baseline', () => {
   withGateSnapshot(() => null, (status, output) => {
     assert.notEqual(status, 0, output);
-    assert.match(output, /ENOENT.*Mons111kGasTest\.json/);
+    assert.match(output, /ENOENT.*NFT111KGasTest\.json/);
   });
 });
 
@@ -108,12 +108,12 @@ test('an omitted measurement fails even when every benchmark runs and its declar
     assert.notEqual(status, 0, output);
     assert.match(output, /Gas measurements for testGasGetTokenInfoFresh\(\) do not match/);
     const result = spawnSync('forge', [
-      'test', '--offline', '--isolate', '--match-contract', '^Mons111kGasTest$',
+      'test', '--offline', '--isolate', '--match-contract', '^NFT111KGasTest$',
       '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json',
     ], { cwd: project, encoding: 'utf8', timeout: 60_000 });
     if (result.error) throw result.error;
     assert.equal(result.status, 0, result.stderr);
-    const tests = JSON.parse(result.stdout)['test/Mons111kGas.t.sol:Mons111kGasTest'].test_results;
+    const tests = JSON.parse(result.stdout)['test/NFT111KGas.t.sol:NFT111KGasTest'].test_results;
     assert.equal(Object.keys(tests).length, Object.keys(JSON.parse(readFileSync(committedPath, 'utf8'))).length);
     assert.ok(Object.values(tests).every(test => test.status === 'Success'));
     assert.deepEqual(tests['testGasGetTokenInfoFresh()'].gas_snapshots, {});

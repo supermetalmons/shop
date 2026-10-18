@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
-import {Mons111k} from "../src/Mons111k.sol";
-import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
+import {NFT111K} from "../src/NFT111K.sol";
+import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract RejectingTreasury {
@@ -11,7 +11,7 @@ contract RejectingTreasury {
 }
 
 contract ContractBuyer {
-    Mons111k public immutable token;
+    NFT111K public immutable token;
     bool public attack;
     bool public rejectReceipt;
     bool public reentryBlocked;
@@ -19,7 +19,7 @@ contract ContractBuyer {
     uint256 public transferOnReceipt;
     address public transferRecipient;
 
-    constructor(Mons111k token_) {
+    constructor(NFT111K token_) {
         token = token_;
     }
 
@@ -41,7 +41,7 @@ contract ContractBuyer {
         transferRecipient = recipient;
     }
 
-    function redeem(uint256[] calldata ids, Mons111k.DeliveryQuote calldata quote, bytes calldata signature)
+    function redeem(uint256[] calldata ids, NFT111K.DeliveryQuote calldata quote, bytes calldata signature)
         external
         payable
     {
@@ -69,9 +69,9 @@ contract ContractBuyer {
     }
 }
 
-contract Mons111kTest is TestSupport {
-    Mons111k internal token;
-    Mons111kRenderer internal renderer;
+contract NFT111KTest is TestSupport {
+    NFT111K internal token;
+    NFT111KRenderer internal renderer;
     uint256 internal constant SIGNER_KEY = 0xA11CE;
     address internal alice = address(0xA110);
     address internal bob = address(0xB0B);
@@ -90,8 +90,27 @@ contract Mons111kTest is TestSupport {
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(address(this), 100 ether);
-        renderer = new Mons111kRenderer();
-        token = new Mons111k(address(this), vm.addr(SIGNER_KEY), treasury, address(renderer));
+        renderer = new NFT111KRenderer();
+        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), treasury, address(renderer));
+    }
+
+    function testCollectionNameSymbolAndSigningDomain() public view {
+        assertEq(token.name(), "111K");
+        assertEq(token.symbol(), "111K");
+        (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,,
+            uint256[] memory extensions
+        ) = token.eip712Domain();
+        assertEq(uint8(fields), 15);
+        assertEq(name, "111K");
+        assertEq(version, "2");
+        assertEq(chainId, block.chainid);
+        assertEq(verifyingContract, address(token));
+        assertEq(extensions.length, 0);
     }
 
     function testPricesPaymentWithdrawalAndOwnership() public {
@@ -114,16 +133,16 @@ contract Mons111kTest is TestSupport {
     }
 
     function testPurchaseValidationAndPauseOnlyAffectsSales() public {
-        vm.expectRevert(Mons111k.InvalidQuantity.selector);
+        vm.expectRevert(NFT111K.InvalidQuantity.selector);
         token.mintCrates(0);
-        vm.expectRevert(Mons111k.InvalidQuantity.selector);
+        vm.expectRevert(NFT111K.InvalidQuantity.selector);
         token.mintCrates(16);
-        vm.expectRevert(Mons111k.WrongPayment.selector);
+        vm.expectRevert(NFT111K.WrongPayment.selector);
         token.mintCrates(1);
         _buyCrates(alice, 1);
         token.setSaleActive(false);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.SaleInactive.selector);
+        vm.expectRevert(NFT111K.SaleInactive.selector);
         token.mintCrates{value: 0.0001 ether}(1);
         vm.prank(alice);
         token.unboxCrate(111112);
@@ -209,7 +228,7 @@ contract Mons111kTest is TestSupport {
         vm.expectRevert();
         token.unboxWarehouse(116668);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
         token.unboxWarehouse(116667);
     }
 
@@ -249,7 +268,7 @@ contract Mons111kTest is TestSupport {
         uint256 deadline = block.timestamp + 300;
         bytes memory signature = _claimSignature(bob, 2_000_003, claimId, deadline);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
         token.claimCrateReceipt(2_000_003, claimId, deadline, signature);
         vm.prank(bob);
         token.claimCrateReceipt(2_000_003, claimId, deadline, signature);
@@ -271,7 +290,7 @@ contract Mons111kTest is TestSupport {
         vm.prank(alice);
         token.setApprovalForAll(bob, true);
         vm.prank(bob);
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
         token.unboxCrate(111112);
     }
 
@@ -280,7 +299,7 @@ contract Mons111kTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         ids[0] = 111112;
         ids[1] = 111112;
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 9, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 9, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(alice);
         vm.expectRevert();
@@ -295,59 +314,59 @@ contract Mons111kTest is TestSupport {
         vm.prank(alice);
         token.mintWarehouses{value: 0.0011 ether}(1);
         uint256[] memory warehouse = _one(116667);
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 1, warehouse);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 1, warehouse);
         bytes memory signature = _deliverySignature(warehouse, quote);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.WrongItemKind.selector);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
         token.redeemForDelivery{value: quote.fee}(warehouse, quote, signature);
         _redeem(alice, _one(111112), 2);
         uint256[] memory receipt = _one(2_000_001);
         quote = _quote(alice, 3, receipt);
         signature = _deliverySignature(receipt, quote);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.WrongItemKind.selector);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
         token.redeemForDelivery{value: quote.fee}(receipt, quote, signature);
     }
 
     function testSignaturesBindWalletItemsFeeOrderAndDomain() public {
         _buyCrates(alice, 2);
         uint256[] memory ids = _one(111112);
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 1, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(bob);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.WrongPayment.selector);
+        vm.expectRevert(NFT111K.WrongPayment.selector);
         token.redeemForDelivery(ids, quote, signature);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(_one(111113), quote, signature);
         quote.orderId = 2;
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         quote.orderId = 1;
         quote.fee += 1;
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         quote.fee -= 1;
         bytes32 receiptIdsHash = quote.receiptIdsHash;
         quote.receiptIdsHash = bytes32(0);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         quote.receiptIdsHash = receiptIdsHash;
         vm.chainId(1);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         vm.chainId(31337);
         vm.prank(alice);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.AuthorizationAlreadyUsed.selector);
+        vm.expectRevert(NFT111K.AuthorizationAlreadyUsed.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
     }
 
@@ -359,7 +378,7 @@ contract Mons111kTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         ids[0] = 111113;
         ids[1] = 1;
-        Mons111k.DeliveryQuote memory staleQuote = _quote(alice, 17, ids);
+        NFT111K.DeliveryQuote memory staleQuote = _quote(alice, 17, ids);
         bytes memory staleSignature = _deliverySignature(ids, staleQuote);
         _info(1, 1, 41, alice);
 
@@ -369,7 +388,7 @@ contract Mons111kTest is TestSupport {
         _info(1, 1, 1, alice);
         uint256 balanceBefore = address(token).balance;
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: staleQuote.fee}(ids, staleQuote, staleSignature);
         assertEq(address(token).balance, balanceBefore);
         assertFalse(token.usedDeliveryOrders(17));
@@ -379,7 +398,7 @@ contract Mons111kTest is TestSupport {
         _info(1_000_001, 0, 0, address(0));
         _info(1_000_041, 0, 0, address(0));
 
-        Mons111k.DeliveryQuote memory freshQuote = _quote(alice, 17, ids);
+        NFT111K.DeliveryQuote memory freshQuote = _quote(alice, 17, ids);
         assertTrue(freshQuote.receiptIdsHash != staleQuote.receiptIdsHash);
         bytes memory freshSignature = _deliverySignature(ids, freshQuote);
         vm.prank(alice);
@@ -412,13 +431,13 @@ contract Mons111kTest is TestSupport {
         receipts[0] = 1_000_021;
         receipts[1] = 2_000_001;
         invalidHashes[5] = keccak256(abi.encode(receipts));
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 18, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 18, ids);
         uint256 balanceBefore = address(token).balance;
         for (uint256 i; i < invalidHashes.length; ++i) {
             quote.receiptIdsHash = invalidHashes[i];
             bytes memory signature = _deliverySignature(ids, quote);
             vm.prank(alice);
-            vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+            vm.expectRevert(NFT111K.InvalidAuthorization.selector);
             token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
             assertFalse(token.usedDeliveryOrders(18));
             assertEq(address(token).balance, balanceBefore);
@@ -433,12 +452,22 @@ contract Mons111kTest is TestSupport {
     }
 
     function testVersionOneDeliveryAndClaimSignaturesAreRejected() public {
+        _assertRejectedDomain(
+            keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("1"), block.chainid, address(token)))
+        );
+    }
+
+    function testPriorCollectionDomainSignaturesAreRejected() public {
+        bytes32 priorNameHash = 0x57a43f4571efe7668bd97a09b52785e99b105217cc6634d5f78d7947912d9761;
+        _assertRejectedDomain(
+            keccak256(abi.encode(DOMAIN_TYPEHASH, priorNameHash, keccak256("2"), block.chainid, address(token)))
+        );
+    }
+
+    function _assertRejectedDomain(bytes32 legacyDomain) private {
         _buyCrates(alice, 1);
         uint256[] memory ids = _one(111112);
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 20, ids);
-        bytes32 legacyDomain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("Mons111k"), keccak256("1"), block.chainid, address(token))
-        );
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 20, ids);
         bytes32 deliveryHash = keccak256(
             abi.encode(
                 DELIVERY_TYPEHASH,
@@ -452,7 +481,7 @@ contract Mons111kTest is TestSupport {
         );
         bytes memory signature = _sign(keccak256(abi.encodePacked(hex"1901", legacyDomain, deliveryHash)));
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         assertFalse(token.usedDeliveryOrders(20));
         _redeem(alice, ids, 20);
@@ -460,7 +489,7 @@ contract Mons111kTest is TestSupport {
         bytes32 claimHash = keccak256(abi.encode(CLAIM_TYPEHASH, alice, uint256(2_000_001), claimId, quote.deadline));
         signature = _sign(keccak256(abi.encodePacked(hex"1901", legacyDomain, claimHash)));
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.claimCrateReceipt(2_000_001, claimId, quote.deadline, signature);
         assertFalse(token.usedClaims(claimId));
         _info(2_000_001, 5, 1, alice);
@@ -473,22 +502,22 @@ contract Mons111kTest is TestSupport {
     function testQuoteDeadlineAndSignerRotation() public {
         _buyCrates(alice, 1);
         uint256[] memory ids = _one(111112);
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 1, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
         quote.deadline = block.timestamp - 1;
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.AuthorizationExpired.selector);
+        vm.expectRevert(NFT111K.AuthorizationExpired.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         quote.deadline = block.timestamp + 601;
         signature = _deliverySignature(ids, quote);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.AuthorizationTooLong.selector);
+        vm.expectRevert(NFT111K.AuthorizationTooLong.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         quote.deadline = block.timestamp + 300;
         signature = _deliverySignature(ids, quote);
         token.setQuoteSigner(bob);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         token.setQuoteSigner(vm.addr(SIGNER_KEY));
         vm.prank(alice);
@@ -505,13 +534,13 @@ contract Mons111kTest is TestSupport {
         uint256 deadline = block.timestamp + 300;
         bytes memory signature = _claimSignature(alice, 2_000_001, claimId, deadline);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.InvalidAuthorization.selector);
+        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
         token.claimCrateReceipt(2_000_002, claimId, deadline, signature);
         vm.prank(alice);
         token.claimCrateReceipt(2_000_001, claimId, deadline, signature);
         signature = _claimSignature(alice, 2_000_002, claimId, deadline);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.AuthorizationAlreadyUsed.selector);
+        vm.expectRevert(NFT111K.AuthorizationAlreadyUsed.selector);
         token.claimCrateReceipt(2_000_002, claimId, deadline, signature);
         _info(2_000_002, 5, 2, alice);
     }
@@ -531,7 +560,7 @@ contract Mons111kTest is TestSupport {
         buyer.mint{value: 0.0001 ether}(1);
         buyer.setRejectReceipt(true);
         uint256[] memory ids = _one(111112);
-        Mons111k.DeliveryQuote memory quote = _quote(address(buyer), 1, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(address(buyer), 1, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.expectRevert();
         buyer.redeem{value: quote.fee}(ids, quote, signature);
@@ -550,7 +579,7 @@ contract Mons111kTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         ids[0] = 111112;
         ids[1] = 111113;
-        Mons111k.DeliveryQuote memory quote = _quote(address(buyer), 19, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(address(buyer), 19, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.expectRevert(bytes4(keccak256("OwnerQueryForNonexistentToken()")));
         buyer.redeem{value: quote.fee}(ids, quote, signature);
@@ -577,7 +606,7 @@ contract Mons111kTest is TestSupport {
         receipts[1] = 1_000_040;
         receipts[2] = 1_000_001;
         receipts[3] = 1_000_021;
-        Mons111k.DeliveryQuote memory quote = _quote(alice, 21, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 21, ids);
         assertEq(quote.receiptIdsHash, keccak256(abi.encode(receipts)));
         bytes memory signature = _deliverySignature(ids, quote);
         uint256 supply = token.totalSupply();
@@ -632,7 +661,7 @@ contract Mons111kTest is TestSupport {
     function testRejectingTreasuryCannotBlockPurchasesAndWithdrawalCanRetry() public {
         token.setTreasury(payable(address(new RejectingTreasury())));
         _buyCrates(alice, 1);
-        vm.expectRevert(Mons111k.TreasuryPaymentFailed.selector);
+        vm.expectRevert(NFT111K.TreasuryPaymentFailed.selector);
         token.withdraw();
         assertEq(address(token).balance, 0.0001 ether);
         token.setTreasury(treasury);
@@ -642,7 +671,7 @@ contract Mons111kTest is TestSupport {
 
     function testRendererReplacementPreservesOwnershipAndValidatesPreviews() public {
         _buyCrates(alice, 1);
-        Mons111kRenderer replacement = new Mons111kRenderer();
+        NFT111KRenderer replacement = new NFT111KRenderer();
         vm.prank(alice);
         vm.expectRevert();
         token.setRenderer(address(replacement));
@@ -651,11 +680,11 @@ contract Mons111kTest is TestSupport {
         assertEq(token.tokenURI(111112), replacement.tokenURI(2, 1));
         assertTrue(token.supportsInterface(0x49064906));
         assertTrue(token.supportsInterface(0x80ac58cd));
-        vm.expectRevert(Mons111k.InvalidMetadataItem.selector);
+        vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
         token.previewTokenURI(2, 5556);
-        vm.expectRevert(Mons111k.InvalidMetadataItem.selector);
+        vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
         token.previewTokenURI(0, 1);
-        vm.expectRevert(Mons111k.InvalidAddress.selector);
+        vm.expectRevert(NFT111K.InvalidAddress.selector);
         token.setRenderer(bob);
     }
 
@@ -679,10 +708,10 @@ contract Mons111kTest is TestSupport {
         _buyCrates(alice, 6);
         assertEq(token.allocatedCrates(), 5555);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.SoldOut.selector);
+        vm.expectRevert(NFT111K.SoldOut.selector);
         token.mintCrates{value: 0.0001 ether}(1);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.SoldOut.selector);
+        vm.expectRevert(NFT111K.SoldOut.selector);
         token.mintWarehouses{value: 0.0011 ether}(1);
         vm.startPrank(alice);
         for (uint256 warehouse = 1; warehouse <= 504; ++warehouse) {
@@ -734,7 +763,7 @@ contract Mons111kTest is TestSupport {
         _buyCrates(alice, 1);
         assertEq(token.remainingCrates(), 10);
         vm.prank(alice);
-        vm.expectRevert(Mons111k.SoldOut.selector);
+        vm.expectRevert(NFT111K.SoldOut.selector);
         token.mintWarehouses{value: 0.0011 ether}(1);
         _buyCrates(alice, 10);
         assertEq(token.remainingCrates(), 0);
@@ -806,7 +835,7 @@ contract Mons111kTest is TestSupport {
     function _quote(address wallet, uint256 orderId, uint256[] memory ids)
         internal
         view
-        returns (Mons111k.DeliveryQuote memory)
+        returns (NFT111K.DeliveryQuote memory)
     {
         uint256[] memory receipts = new uint256[](ids.length);
         for (uint256 i; i < ids.length; ++i) {
@@ -815,24 +844,21 @@ contract Mons111kTest is TestSupport {
             else if (kind == 2) receipts[i] = 2_000_000 + displayId;
         }
         return
-            Mons111k.DeliveryQuote(
-                orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts))
-            );
+            NFT111K.DeliveryQuote(orderId, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
     }
 
     function _redeem(address wallet, uint256[] memory ids, uint256 orderId) internal {
-        Mons111k.DeliveryQuote memory quote = _quote(wallet, orderId, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(wallet, orderId, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(wallet);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
     }
 
     function _domain() internal view returns (bytes32) {
-        return
-            keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("Mons111k"), keccak256("2"), block.chainid, address(token)));
+        return keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token)));
     }
 
-    function _deliverySignature(uint256[] memory ids, Mons111k.DeliveryQuote memory quote)
+    function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)
         internal
         returns (bytes memory)
     {

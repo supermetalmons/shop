@@ -1,4 +1,4 @@
-export const mons111kAbi = [
+export const nft111KAbi = [
   {
     "type": "constructor",
     "inputs": [
@@ -514,7 +514,7 @@ export const mons111kAbi = [
       {
         "name": "quote",
         "type": "tuple",
-        "internalType": "struct Mons111k.DeliveryQuote",
+        "internalType": "struct NFT111K.DeliveryQuote",
         "components": [
           {
             "name": "orderId",
@@ -586,7 +586,7 @@ export const mons111kAbi = [
       {
         "name": "",
         "type": "address",
-        "internalType": "contract IMons111kRenderer"
+        "internalType": "contract INFT111KRenderer"
       }
     ],
     "stateMutability": "view"
@@ -1736,7 +1736,7 @@ export const mons111kAbi = [
   }
 ] as const;
 
-export const mons111kRendererAbi = [
+export const nft111KRendererAbi = [
   {
     "type": "function",
     "name": "tokenURI",

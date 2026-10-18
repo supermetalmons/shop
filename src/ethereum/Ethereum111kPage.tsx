@@ -189,19 +189,19 @@ export default function Ethereum111kPage({
   const connectedLabel = model.owner ? `${model.owner.slice(0, 6)}…${model.owner.slice(-4)}` : 'Connect Ethereum';
 
   return <div className="ethereum111k">
-    <section className="ethereum111k__purchase" aria-label="111k testnet mint">
+    <section className="ethereum111k__purchase" aria-label="111K testnet mint">
       <div className="ethereum111k__edition">
-        <span>111k / {model.config.chainName}</span>
+        <span>111K / {model.config.chainName}</span>
         <button type="button" className="ghost" onClick={() => model.owner ? model.disconnect() : wallet.connect()} disabled={Boolean(model.busy)} aria-label={model.owner ? 'Disconnect Ethereum wallet' : 'Connect Ethereum wallet'}>
           {wallet.status === 'connecting' || wallet.status === 'restoring' ? 'Connecting…' : model.owner ? `${connectedLabel} · Disconnect` : connectedLabel}
         </button>
       </div>
       <div className="ethereum111k__preview" key={kind}>
-        <img src={image} alt={kind === 'crate' ? '111k crate' : '111k warehouse'} draggable={false} />
+        <img src={image} alt={kind === 'crate' ? '111K crate' : '111K warehouse'} draggable={false} />
       </div>
       <form className="ethereum111k__mint" onSubmit={mint}>
         <div className="ethereum111k__product">
-          <h1>111k</h1>
+          <h1>111K</h1>
           <p>{kind === 'crate' ? 'A crate of 20 artworks. Crate #5555 holds 31.' : 'One warehouse. Eleven crates.'}</p>
         </div>
         <fieldset className="ethereum111k__types" disabled={disabled}>
@@ -247,17 +247,17 @@ export default function Ethereum111kPage({
         onReveal={onSolanaReveal} canRevealItem={item => !isEthereumInventoryView(item) && canOpenSolanaBoxes(item.dropId)}
         onViewItem={view} revealLoadingId={solanaRevealLoading} revealDisabled={disabled} figureMediaMode="image"
         emptyStateVisibility={solanaInventoryReady && (!model.owner || !model.config.enabled || model.inventory.isFetched) ? 'visible' : 'hidden'}
-        emptyStateContent={model.owner ? 'Your crates, warehouses and artworks appear here.' : 'Connect Ethereum to see your 111k collection.'} />
+        emptyStateContent={model.owner ? 'Your crates, warehouses and artworks appear here.' : 'Connect Ethereum to see your 111K collection.'} />
       {model.inventory.error ? <p className="error" role="alert">Couldn’t refresh Ethereum inventory. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></p> : null}
       {model.inventory.hasNextPage ? <button type="button" className="ghost" onClick={() => void model.inventory.fetchNextPage()} disabled={model.inventory.isFetchingNextPage}>{model.inventory.isFetchingNextPage ? 'Loading…' : 'Load more Ethereum items'}</button> : null}
     </section>
     {model.owner ? <>
       <section className="app-section ethereum111k__receipts">
-        <div className="app-section__head"><div className="app-section__title">111k receipts</div></div>
+        <div className="app-section__head"><div className="app-section__title">111K receipts</div></div>
         <InventoryGrid items={receipts} interactionMode="view-only" onViewItem={view} emptyStateContent="Your delivery receipts appear here." figureMediaMode="image" />
       </section>
       <section className="app-section ethereum111k__shipments">
-        <div className="app-section__head"><div className="app-section__title">111k shipments</div></div>
+        <div className="app-section__head"><div className="app-section__title">111K shipments</div></div>
         {!model.session ? <button type="button" className="ghost" onClick={() => void model.signIn()} disabled={Boolean(model.busy)}>Sign in with Ethereum to see shipments</button> :
           model.shipments.isPending ? <p className="muted">Loading shipments…</p> : model.shipments.error ? <p className="error">Couldn’t load shipments. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></p> :
           !model.shipments.data?.orders.length ? <p className="muted">No test shipments yet.</p> : <ol className="ethereum111k__orders">{model.shipments.data.orders.map(order => <li key={order.deliveryId}>
@@ -298,7 +298,7 @@ export default function Ethereum111kPage({
         </> : <button type="button" className="ghost" onClick={() => setConfirmDismiss(true)} disabled={Boolean(model.busy)}>Stop tracking…</button>}
       </div>
     </Modal>
-    <Modal open={Boolean(viewed) && !model.revealed} title={viewed?.name ?? '111k artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
+    <Modal open={Boolean(viewed) && !model.revealed} title={viewed?.name ?? '111K artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
       {viewed ? <>
         <img className="ethereum111k__view-image" src={viewed.image} alt={viewed.name} />
         {viewed.description ? <p className="muted small">{viewed.description}</p> : null}

@@ -411,7 +411,7 @@ function App({ route, suspended = false }: AppProps) {
         {isNfcPage ? (
           <NfcClaimPage key={route.nfcDeepLinkCode} />
         ) : isEthereum111kPage ? (
-          <Suspense fallback={<p className="muted" role="status">Loading 111k…</p>}>
+          <Suspense fallback={<p className="muted" role="status">Loading 111K…</p>}>
             <Ethereum111kPage
               wallet={ethereumWallet}
               claimReceiptId={route.ethereumClaimReceiptId}

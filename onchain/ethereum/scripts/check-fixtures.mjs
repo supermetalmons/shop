@@ -9,7 +9,8 @@ await mkdir(previewDirectory, { recursive: true });
 for (const fixture of fixtures) {
   assert.ok(fixture.tokenURI.startsWith('data:application/json;base64,'));
   const metadata = JSON.parse(Buffer.from(fixture.tokenURI.split(',')[1], 'base64').toString());
-  assert.equal(metadata.name, `111k ${types[fixture.kind]} #${fixture.displayId}`);
+  assert.equal(metadata.name, `111K ${types[fixture.kind]} #${fixture.displayId}`);
+  assert.ok(metadata.description.startsWith('111K test collection.'));
   assert.equal(metadata.attributes.find(attribute => attribute.trait_type === 'Item number').value, fixture.displayId);
   assert.ok(metadata.image.startsWith('data:image/svg+xml;base64,'));
   const svg = Buffer.from(metadata.image.split(',')[1], 'base64').toString();
@@ -27,6 +28,7 @@ for (const fixture of fixtures) {
   await writeFile(new URL(`${fixture.kind}-${fixture.displayId}.svg`, previewDirectory), svg);
 }
 const eip712 = JSON.parse(await readFile(new URL('eip712.json', fixturePath), 'utf8'));
+assert.equal(eip712.domainName, '111K');
 assert.equal(eip712.domainVersion, '2');
 assert.equal(eip712.delivery.receiptIds.length, eip712.delivery.tokenIds.length);
 assert.match(eip712.delivery.receiptIdsHash, /^0x[0-9a-f]{64}$/);

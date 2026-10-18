@@ -11,7 +11,7 @@ import {
 } from '../src/ethereum/state.ts';
 
 const scope = '11155111:0x3333333333333333333333333333333333333333:0x1111111111111111111111111111111111111111';
-const key = `mons.ethereum111k:${scope}:expected`;
+const key = `ethereum111k:${scope}:expected`;
 const hash = `0x${'ab'.repeat(32)}`;
 const replacementHash = `0x${'cd'.repeat(32)}`;
 const sourceIds = Array.from({ length: 50 }, (_, index) => String(index + 1));
@@ -36,8 +36,11 @@ test('legacy expected-ID arrays remain readable and bounded without recovery met
 
 test('one atomic storage write preserves one hundred live IDs and fifty recovery sources across reload', t => {
   const writes = t.mock.method(frontend.dom.window.Storage.prototype, 'setItem');
+  const changed: string[] = [];
+  window.addEventListener('ethereum111k-storage', event => { changed.push((event as CustomEvent<string>).detail); });
   writeEthereumExpected(scope, liveIds, recovery);
   assert.equal(writes.mock.callCount(), 1);
+  assert.deepEqual(changed, [`${scope}:expected`]);
   const persisted = window.localStorage.getItem(key)!;
   assert.deepEqual(JSON.parse(persisted), { ids: liveIds, recovery });
   assert.deepEqual(readEthereumExpected(scope), liveIds);

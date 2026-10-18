@@ -3,23 +3,23 @@ pragma solidity 0.8.30;
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Bytes} from "@openzeppelin/contracts/utils/Bytes.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
+import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface RendererVm {
     function parseJsonString(string calldata json, string calldata key) external pure returns (string memory);
 }
 
-contract Mons111kRendererTest is TestSupport {
+contract NFT111KRendererTest is TestSupport {
     using Strings for uint256;
 
     uint256 private constant MAX_ARTWORKS = 111111;
-    Mons111kRenderer private renderer;
-    Mons111kRenderer private secondRenderer;
+    NFT111KRenderer private renderer;
+    NFT111KRenderer private secondRenderer;
 
     function setUp() public {
-        renderer = new Mons111kRenderer();
-        secondRenderer = new Mons111kRenderer();
+        renderer = new NFT111KRenderer();
+        secondRenderer = new NFT111KRenderer();
     }
 
     function testRuntimeFitsCompactDeploymentBudget() public view {
@@ -78,7 +78,7 @@ contract Mons111kRendererTest is TestSupport {
         }
     }
 
-    function _svg(Mons111kRenderer source, uint8 kind, uint256 id) private pure returns (bytes memory svg) {
+    function _svg(NFT111KRenderer source, uint8 kind, uint256 id) private pure returns (bytes memory svg) {
         bytes memory uri = bytes(source.tokenURI(kind, id));
         assertEq(string(Bytes.slice(uri, 0, 29)), "data:application/json;base64,");
         string memory metadata = string(Base64.decode(string(Bytes.slice(uri, 29))));

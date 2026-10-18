@@ -1,8 +1,8 @@
 pragma solidity 0.8.30;
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {Mons111k} from "../src/Mons111k.sol";
-import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
+import {NFT111K} from "../src/NFT111K.sol";
+import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 contract FixturesTest is TestSupport {
@@ -11,7 +11,7 @@ contract FixturesTest is TestSupport {
     struct AuthorizationFixture {
         uint256[] ids;
         uint256[] receiptIds;
-        Mons111k.DeliveryQuote quote;
+        NFT111K.DeliveryQuote quote;
         bytes32 domain;
         bytes32 deliveryHash;
         bytes32 deliveryDigest;
@@ -36,11 +36,11 @@ contract FixturesTest is TestSupport {
         f.receiptIds[0] = 2_000_001;
         f.receiptIds[1] = 1_000_017;
         f.receiptIds[2] = 1_000_030;
-        f.quote = Mons111k.DeliveryQuote(42, WALLET, 0.0001 ether, 2_000_000_600, keccak256(abi.encode(f.receiptIds)));
+        f.quote = NFT111K.DeliveryQuote(42, WALLET, 0.0001 ether, 2_000_000_600, keccak256(abi.encode(f.receiptIds)));
         f.domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256("Mons111k"),
+                keccak256("111K"),
                 keccak256("2"),
                 uint256(31337),
                 VERIFYING_CONTRACT
@@ -82,15 +82,15 @@ contract FixturesTest is TestSupport {
             output,
             '","wallet":"',
             Strings.toHexString(WALLET),
-            '","domainVersion":"2","domainSeparator":"',
+            '","domainName":"111K","domainVersion":"2","domainSeparator":"',
             uint256(f.domain).toHexString(32)
         );
         output = string.concat(output, '",', _deliveryJson(f), ",", _claimJson(f));
-        output = string.concat(output, ',"calls":{"mintCrates3":"', _hex(abi.encodeCall(Mons111k.mintCrates, (3))));
-        output = string.concat(output, '","mintWarehouses2":"', _hex(abi.encodeCall(Mons111k.mintWarehouses, (2))));
-        output = string.concat(output, '","unboxCrate42":"', _hex(abi.encodeCall(Mons111k.unboxCrate, (111153))));
+        output = string.concat(output, ',"calls":{"mintCrates3":"', _hex(abi.encodeCall(NFT111K.mintCrates, (3))));
+        output = string.concat(output, '","mintWarehouses2":"', _hex(abi.encodeCall(NFT111K.mintWarehouses, (2))));
+        output = string.concat(output, '","unboxCrate42":"', _hex(abi.encodeCall(NFT111K.unboxCrate, (111153))));
         output = string.concat(
-            output, '","unboxWarehouse42":"', _hex(abi.encodeCall(Mons111k.unboxWarehouse, (116708))), '"}}'
+            output, '","unboxWarehouse42":"', _hex(abi.encodeCall(NFT111K.unboxWarehouse, (116708))), '"}}'
         );
         vm.writeFile("fixtures/eip712.json", output);
     }
@@ -111,7 +111,7 @@ contract FixturesTest is TestSupport {
         output = string.concat(
             output,
             '","calldata":"',
-            _hex(abi.encodeCall(Mons111k.redeemForDelivery, (f.ids, f.quote, f.deliverySignature))),
+            _hex(abi.encodeCall(NFT111K.redeemForDelivery, (f.ids, f.quote, f.deliverySignature))),
             '"}'
         );
     }
@@ -130,14 +130,14 @@ contract FixturesTest is TestSupport {
             output,
             '","calldata":"',
             _hex(
-                abi.encodeCall(Mons111k.claimCrateReceipt, (2_000_042, f.claimId, f.quote.deadline, f.claimSignature))
+                abi.encodeCall(NFT111K.claimCrateReceipt, (2_000_042, f.claimId, f.quote.deadline, f.claimSignature))
             ),
             '"}'
         );
     }
 
     function testExportMetadataFixtures() public {
-        Mons111kRenderer renderer = new Mons111kRenderer();
+        NFT111KRenderer renderer = new NFT111KRenderer();
         string memory output = "[";
         for (uint8 kind = 1; kind <= 5; ++kind) {
             output = string.concat(

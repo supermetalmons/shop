@@ -1,10 +1,10 @@
 pragma solidity 0.8.30;
 
-import {Mons111k} from "../src/Mons111k.sol";
-import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
+import {NFT111K} from "../src/NFT111K.sol";
+import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
-contract Mons111kInvariantHandler is TestSupport {
+contract NFT111KInvariantHandler is TestSupport {
     struct ModelToken {
         uint8 kind;
         uint256 displayId;
@@ -34,7 +34,7 @@ contract Mons111kInvariantHandler is TestSupport {
     bytes32 private constant CLAIM_TYPEHASH =
         keccak256("CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)");
 
-    Mons111k public immutable token;
+    NFT111K public immutable token;
     address[3] private actors = [address(0xA110), address(0xB0B), address(0xCA10)];
     mapping(uint256 => ModelToken) private model;
     mapping(uint256 => uint256) private firstCrates;
@@ -54,7 +54,7 @@ contract Mons111kInvariantHandler is TestSupport {
 
     constructor() {
         token =
-            new Mons111k(address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new Mons111kRenderer()));
+            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()));
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 100 ether);
         }
@@ -127,7 +127,7 @@ contract Mons111kInvariantHandler is TestSupport {
         if (id == 0) return;
         address stranger = model[id].holder == actors[0] ? actors[1] : actors[0];
         vm.prank(stranger);
-        vm.expectRevert(Mons111k.WrongOwner.selector);
+        vm.expectRevert(NFT111K.WrongOwner.selector);
         token.unboxCrate(id);
     }
 
@@ -135,10 +135,10 @@ contract Mons111kInvariantHandler is TestSupport {
         uint256 id = _select(1, seed);
         if (id == 0 || consumedOrders.length == 0) return;
         uint256[] memory ids = _one(id);
-        Mons111k.DeliveryQuote memory quote = _quote(id, consumedOrders[seed % consumedOrders.length]);
+        NFT111K.DeliveryQuote memory quote = _quote(id, consumedOrders[seed % consumedOrders.length]);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(quote.wallet);
-        vm.expectRevert(paused ? Mons111k.RedemptionsPaused.selector : Mons111k.AuthorizationAlreadyUsed.selector);
+        vm.expectRevert(paused ? NFT111K.RedemptionsPaused.selector : NFT111K.AuthorizationAlreadyUsed.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
     }
 
@@ -150,7 +150,7 @@ contract Mons111kInvariantHandler is TestSupport {
         address wallet = model[id].holder;
         bytes memory signature = _claimSignature(wallet, id, claimId, deadline);
         vm.prank(wallet);
-        vm.expectRevert(paused ? Mons111k.RedemptionsPaused.selector : Mons111k.AuthorizationAlreadyUsed.selector);
+        vm.expectRevert(paused ? NFT111K.RedemptionsPaused.selector : NFT111K.AuthorizationAlreadyUsed.selector);
         token.claimCrateReceipt(id, claimId, deadline, signature);
     }
 
@@ -276,10 +276,10 @@ contract Mons111kInvariantHandler is TestSupport {
     function _deliver(uint256 id) private {
         uint256 orderId = deliveryAttempts.length + 1;
         uint256[] memory ids = _one(id);
-        Mons111k.DeliveryQuote memory quote = _quote(id, orderId);
+        NFT111K.DeliveryQuote memory quote = _quote(id, orderId);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(quote.wallet);
-        if (paused) vm.expectRevert(Mons111k.RedemptionsPaused.selector);
+        if (paused) vm.expectRevert(NFT111K.RedemptionsPaused.selector);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         deliveryAttempts.push(DeliveryAttempt(orderId, !paused));
         if (paused) return;
@@ -298,7 +298,7 @@ contract Mons111kInvariantHandler is TestSupport {
         address wallet = model[id].holder;
         bytes memory signature = _claimSignature(wallet, id, claimId, deadline);
         vm.prank(wallet);
-        if (paused) vm.expectRevert(Mons111k.RedemptionsPaused.selector);
+        if (paused) vm.expectRevert(NFT111K.RedemptionsPaused.selector);
         token.claimCrateReceipt(id, claimId, deadline, signature);
         claimAttempts.push(ClaimAttempt(claimId, !paused));
         if (paused) return;
@@ -331,15 +331,15 @@ contract Mons111kInvariantHandler is TestSupport {
         return 0;
     }
 
-    function _quote(uint256 id, uint256 orderId) private view returns (Mons111k.DeliveryQuote memory) {
+    function _quote(uint256 id, uint256 orderId) private view returns (NFT111K.DeliveryQuote memory) {
         ModelToken storage original = model[id];
         uint256 receipt = (original.kind == 1 ? 1000000 : 2000000) + original.displayId;
-        return Mons111k.DeliveryQuote(
+        return NFT111K.DeliveryQuote(
             orderId, original.holder, DELIVERY_FEE, block.timestamp + 300, keccak256(abi.encode(_one(receipt)))
         );
     }
 
-    function _deliverySignature(uint256[] memory ids, Mons111k.DeliveryQuote memory quote)
+    function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)
         private
         returns (bytes memory)
     {
@@ -367,7 +367,7 @@ contract Mons111kInvariantHandler is TestSupport {
 
     function _sign(bytes32 structHash) private returns (bytes memory) {
         bytes32 domain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("Mons111k"), keccak256("2"), block.chainid, address(token))
+            abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token))
         );
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(SIGNER_KEY, keccak256(abi.encodePacked(hex"1901", domain, structHash)));
@@ -380,7 +380,7 @@ contract Mons111kInvariantHandler is TestSupport {
     }
 }
 
-contract Mons111kInvariantTest is TestSupport {
+contract NFT111KInvariantTest is TestSupport {
     struct FuzzSelector {
         address addr;
         bytes4[] selectors;
@@ -396,12 +396,12 @@ contract Mons111kInvariantTest is TestSupport {
         string[] artifacts;
     }
 
-    Mons111kInvariantHandler private handler;
+    NFT111KInvariantHandler private handler;
 
     function setUp() public {
         vm.chainId(31337);
         vm.warp(2_000_000_000);
-        handler = new Mons111kInvariantHandler();
+        handler = new NFT111KInvariantHandler();
     }
 
     function targetContracts() public view returns (address[] memory contracts_) {

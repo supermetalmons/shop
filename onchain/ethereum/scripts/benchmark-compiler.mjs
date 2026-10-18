@@ -8,16 +8,18 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const [output, pipelineArgument, ...runArguments] = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+const updateBaseline = arguments_.includes('--update-baseline');
+assert.ok(arguments_.filter(value => value === '--update-baseline').length <= 1, 'Duplicate --update-baseline flag');
+const [output, pipelineArgument, ...runArguments] = arguments_.filter(value => value !== '--update-baseline');
 if (!output || (pipelineArgument && !['legacy', 'ir'].includes(pipelineArgument))) {
-  throw new Error('Usage: node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...]');
+  throw new Error('Usage: node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...] [--update-baseline]');
 }
 const defaultRuns = { legacy: [1, 50, 200, 500, 1000, 1500, 2000, 5000, 10000], ir: [1, 50, 200, 1000, 10000] };
 const requestedRuns = runArguments.length ? [...new Set(runArguments.map(Number))] : undefined;
 assert.ok(!requestedRuns || requestedRuns.every(value => Number.isSafeInteger(value) && value > 0), 'Runs must be positive integers');
 const pipelines = pipelineArgument ? [pipelineArgument] : ['legacy', 'ir'];
 const outputPath = resolve(output);
-const temporaryRoot = mkdtempSync(join(tmpdir(), 'mons111k-compiler-'));
 const read = path => readFileSync(path, 'utf8');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const environment = Object.fromEntries(Object.entries(process.env)
@@ -25,17 +27,21 @@ const environment = Object.fromEntries(Object.entries(process.env)
 const run = (directory, args) => execFileSync('forge', args, {
   cwd: directory, env: environment, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
 });
-const testCommand = ['test', '--offline', '--isolate', '--match-contract', '^Mons111kGasTest$',
+const testCommand = ['test', '--offline', '--isolate', '--match-contract', '^NFT111KGasTest$',
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
-const names = ['Mons111k', 'Mons111kRenderer'];
-const snapshotReferenceCommit = '7c2cdec3892d04b311b5c230415d129e4cf44ef8';
-const snapshotReferencePath = 'onchain/ethereum/snapshots/Mons111kGasTest.json';
-const referenceSnapshots = execFileSync('git', ['show', `${snapshotReferenceCommit}:${snapshotReferencePath}`],
-  { cwd: packageRoot, encoding: 'utf8' });
-const expected = Object.fromEntries(Object.entries(JSON.parse(referenceSnapshots))
-  .map(([name, value]) => [name, Number(value)]).sort(([a], [b]) => a.localeCompare(b)));
-assert.equal(Object.keys(expected).length, 89, 'Expected all 89 committed gas benchmarks');
-const writeNames = Object.keys(expected).filter(name => /^(mint|unbox|deliver|claim)/.test(name));
+const names = ['NFT111K', 'NFT111KRenderer'];
+const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200.json');
+assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
+const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
+const expectedNames = Object.keys(committedSnapshots).sort((a, b) => a.localeCompare(b));
+assert.equal(expectedNames.length, 89, 'Expected all 89 committed gas benchmarks');
+const baselineReference = updateBaseline ? undefined : JSON.parse(read(baselinePath));
+if (baselineReference) {
+  assert.equal(baselineReference.schemaVersion, 1, 'Unsupported compiler baseline schema');
+  assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
+}
+const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
+const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))
@@ -95,11 +101,11 @@ function prepareHarness() {
   const directory = createProject('harness');
   mkdirSync(join(directory, 'test'));
   mkdirSync(join(directory, 'candidate'));
-  const source = read(join(packageRoot, 'test/Mons111kGas.t.sol'));
-  const originalDeployment = /token =\s*new Mons111k\(address\(this\), vm.addr\(SIGNER_KEY\), payable\(address\(0xBEEF\)\), address\(new Mons111kRenderer\(\)\)\);/;
+  const source = read(join(packageRoot, 'test/NFT111KGas.t.sol'));
+  const originalDeployment = /token =\s*new NFT111K\(address\(this\), vm.addr\(SIGNER_KEY\), payable\(address\(0xBEEF\)\), address\(new NFT111KRenderer\(\)\)\);/;
   assert.equal([...source.matchAll(new RegExp(originalDeployment, 'g'))].length, 1, 'Gas harness deployment changed');
-  const harness = source.replace(originalDeployment, `address renderer = _deployCandidate("Mons111kRenderer", "");
-        token = Mons111k(_deployCandidate("Mons111k", abi.encode(
+  const harness = source.replace(originalDeployment, `address renderer = _deployCandidate("NFT111KRenderer", "");
+        token = NFT111K(_deployCandidate("NFT111K", abi.encode(
             address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer
         )));`).replace('    function setUp() public {', `    function _deployCandidate(string memory name, bytes memory arguments) internal returns (address deployed) {
         bytes memory code = abi.encodePacked(vm.getCode(string.concat("candidate/", name, ".json")), arguments);
@@ -110,7 +116,7 @@ function prepareHarness() {
     function setUp() public {`);
   const support = read(join(packageRoot, 'test/TestSupport.sol'));
   assert.equal(support.includes('function getCode('), false, 'Test support already declares getCode');
-  writeFileSync(join(directory, 'test/Mons111kGas.t.sol'), harness);
+  writeFileSync(join(directory, 'test/NFT111KGas.t.sol'), harness);
   writeFileSync(join(directory, 'test/TestSupport.sol'), support.replace('interface Vm {',
     'interface Vm {\n    function getCode(string calldata artifactPath) external returns (bytes memory);'));
   run(directory, ['build', '--offline']);
@@ -122,20 +128,20 @@ function measurements(directory, harnessDirectory) {
     cpSync(join(directory, 'out', `${name}.sol`, `${name}.json`), join(harnessDirectory, 'candidate', `${name}.json`));
   }
   const suites = JSON.parse(run(harnessDirectory, testCommand));
-  assert.deepEqual(Object.keys(suites), ['test/Mons111kGas.t.sol:Mons111kGasTest'], 'Unexpected benchmark suite');
+  assert.deepEqual(Object.keys(suites), ['test/NFT111KGas.t.sol:NFT111KGasTest'], 'Unexpected benchmark suite');
   const results = Object.values(suites)[0].test_results;
-  assert.equal(Object.keys(results).length, Object.keys(expected).length, 'Missing benchmark results');
+  assert.equal(Object.keys(results).length, expectedNames.length, 'Missing benchmark results');
   const values = {};
   for (const [testName, result] of Object.entries(results)) {
     assert.equal(result.status, 'Success', `${testName} failed: ${result.reason ?? ''}`);
     const groups = Object.entries(result.gas_snapshots);
     assert.equal(groups.length, 1, `${testName}: unexpected snapshot groups`);
-    assert.equal(groups[0][0], 'Mons111kGasTest', `${testName}: unexpected snapshot group`);
+    assert.equal(groups[0][0], 'NFT111KGasTest', `${testName}: unexpected snapshot group`);
     const entries = Object.entries(groups[0][1]);
     assert.equal(entries.length, 1, `${testName}: unexpected snapshot count`);
     const [name, value] = entries[0];
     assert.equal(testName, `testGas${name[0].toUpperCase() + name.slice(1)}()`, 'Snapshot/test name mismatch');
-    assert.ok(Object.hasOwn(expected, name) && !Object.hasOwn(values, name), 'Unknown or duplicate gas snapshot');
+    assert.ok(expectedNames.includes(name) && !Object.hasOwn(values, name), 'Unknown or duplicate gas snapshot');
     values[name] = Number(value);
     assert.ok(Number.isSafeInteger(values[name]) && values[name] > 0, 'Invalid gas snapshot');
   }
@@ -192,10 +198,10 @@ async function deploymentMeasurements(variants) {
         assert.equal(receipt?.status, '0x1', `${variant.label}: deployment failed`);
         return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)) };
       };
-      const renderer = await deploy('Mons111kRenderer');
+      const renderer = await deploy('NFT111KRenderer');
       const args = [wallet, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', wallet, renderer.address]
         .map(address => address.slice(2).padStart(64, '0')).join('');
-      variant.deploymentTransactions = { renderer, collection: await deploy('Mons111k', args) };
+      variant.deploymentTransactions = { renderer, collection: await deploy('NFT111K', args) };
     }
   } finally {
     if (anvil.exitCode === null && !startupError) {
@@ -205,7 +211,7 @@ async function deploymentMeasurements(variants) {
 }
 
 function summarize(candidate, baseline) {
-  const deltas = Object.fromEntries(Object.keys(expected).map(name => [name, candidate.gas[name] - baseline.gas[name]]));
+  const deltas = Object.fromEntries(expectedNames.map(name => [name, candidate.gas[name] - baseline.gas[name]]));
   const regressions = Object.keys(deltas).filter(name => deltas[name] > 0);
   const improvements = Object.keys(deltas).filter(name => deltas[name] < 0);
   return {
@@ -218,18 +224,18 @@ function summarize(candidate, baseline) {
     worstWriteRegression: Math.max(0, ...writeNames.map(name => deltas[name])),
     abiUnchanged: names.every(name => candidate.artifacts[name].canonicalAbiSha256 === baseline.artifacts[name].canonicalAbiSha256),
     withinDeploymentSizeLimits: names.every(name => candidate.artifacts[name].runtimeBytes <= 24576 &&
-      candidate.artifacts[name].creationBytes + (name === 'Mons111k' ? 128 : 0) <= 49152),
-    withinProjectSizeBudgets: candidate.artifacts.Mons111kRenderer.runtimeBytes <= 12 * 1024,
+      candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? 128 : 0) <= 49152),
+    withinProjectSizeBudgets: candidate.artifacts.NFT111KRenderer.runtimeBytes <= 12 * 1024,
   };
 }
 
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   measuredAt: new Date().toISOString(),
   sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: packageRoot, encoding: 'utf8' }).trim(),
   sourceSha256: sourceHashes(packageRoot),
-  snapshotReference: { commit: snapshotReferenceCommit, path: snapshotReferencePath, sha256: hash(referenceSnapshots) },
-  benchmarkCount: Object.keys(expected).length,
+  baselineReference: { path: 'benchmarks/compiler-legacy-200.json', updated: updateBaseline },
+  benchmarkCount: expectedNames.length,
   writeBenchmarkCount: writeNames.length,
   toolchain: {
     forge: execFileSync('forge', ['--version'], { encoding: 'utf8' }).trim(),
@@ -240,14 +246,14 @@ const report = {
     packageLockSha256: hash(read(join(packageRoot, 'package-lock.json'))),
   },
   reproduction: {
-    command: 'node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...]',
+    command: 'node scripts/benchmark-compiler.mjs <output.json> [legacy|ir] [runs...] [--update-baseline]',
     defaultRuns,
     requestedMatrix: Object.fromEntries(pipelines.map(pipeline => [pipeline, requestedRuns ?? defaultRuns[pipeline]])),
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
     fixedSettings: { solc: '0.8.30', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
     harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE in the original order, preserving addresses and signed calldata.',
     measurement: 'All 89 snapshotGasLastCall measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.',
-    environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources, snapshots and fixtures are never modified.',
+    environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.',
   },
   variants: [],
 };
@@ -279,11 +285,42 @@ try {
     }
     return variant;
   };
+  const provenance = {
+    sourceSha256: report.sourceSha256,
+    gasTestSha256: hash(read(join(packageRoot, 'test/NFT111KGas.t.sol'))),
+    harnessSha256: harness.sha256,
+    testSupportSha256: harness.testSupportSha256,
+    packageLockSha256: report.toolchain.packageLockSha256,
+    dependencies: report.toolchain.dependencies,
+    forge: report.toolchain.forge,
+    fixedSettings: report.reproduction.fixedSettings,
+    viaIR: false,
+    optimizerRuns: 200,
+  };
+  if (baselineReference) {
+    assert.deepEqual(baselineReference.provenance, provenance,
+      'Compiler baseline provenance changed; review the changes and regenerate explicitly with --update-baseline');
+  }
   const baseline = measure('legacy-200', false, 200);
   assert.equal(baseline.status, 'measured', baseline.error ?? 'Baseline failed');
-  const mismatches = Object.keys(expected).filter(name => expected[name] !== baseline.gas[name]);
-  report.baseline = { label: baseline.label, reproducedSnapshotCount: Object.keys(expected).length - mismatches.length, mismatches };
-  assert.deepEqual(mismatches, [], 'Baseline does not reproduce committed snapshots');
+  if (updateBaseline) {
+    writeFileSync(baselinePath, JSON.stringify({
+      schemaVersion: 1,
+      measuredAt: report.measuredAt,
+      sourceCommit: report.sourceCommit,
+      provenance,
+      artifacts: baseline.artifacts,
+      gas: baseline.gas,
+    }, null, 2) + '\n');
+  } else {
+    assert.deepEqual(baseline.artifacts, baselineReference.artifacts, 'Compiler baseline artifacts changed');
+  }
+  const expected = updateBaseline ? baseline.gas : baselineReference.gas;
+  const mismatches = expectedNames.filter(name => expected[name] !== baseline.gas[name]);
+  report.baselineReference.sha256 = hash(read(baselinePath));
+  report.baseline = { label: baseline.label, validation: updateBaseline ? 'regenerated' : 'reproduced',
+    snapshotCount: expectedNames.length, mismatches };
+  assert.deepEqual(mismatches, [], 'Baseline does not reproduce the checked-in compiler baseline');
   for (const pipeline of pipelines) {
     for (const optimizerRuns of requestedRuns ?? defaultRuns[pipeline]) {
       const label = `${pipeline}-${optimizerRuns}`;

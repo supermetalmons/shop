@@ -371,6 +371,7 @@ test('111k EOA auth is one-use, chain/origin scoped, expires, and keeps shipping
   try {
     const proof = await f.challenge();
     assert.equal(proof.message.split('\n')[1], '0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A');
+    assert.equal(proof.message.split('\n')[3], 'Sign in to the 111K test collection for delivery and receipt claims.');
     const input = { challengeId: proof.challengeId, signature: signDigest(WALLET_KEY, personalMessageHash(proof.message)) };
     const raced = await Promise.all([f.request<EthereumSession>(paths.authVerify, input), f.request<EthereumSession>(paths.authVerify, input)]);
     assert.deepEqual(raced.map(result => result.response.status).sort(), [200, 409]);

@@ -266,7 +266,7 @@ test('Ethereum delivery sends once, encrypts the address and automatically publi
     return { status: 'confirmed', confirmations: 3 };
   });
   const scope = ethereumInventoryScope(config, owner)!;
-  window.sessionStorage.setItem(`mons.ethereum111k:${scope}:session`, JSON.stringify({
+  window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
     token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: '111k_devnet', expiresAtMs: Date.now() + 3_600_000,
   }));
   t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
@@ -381,7 +381,7 @@ test('crate receipt claims keep polling until three confirmations without anothe
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations, items: [], burnedTokenIds: ['2000001'] }));
   t.mock.method(ethereumApi, 'confirmClaim', async () => { published++; return { status: 'confirmed', confirmations: 3 }; });
   const scope = ethereumInventoryScope(config, owner)!;
-  window.sessionStorage.setItem(`mons.ethereum111k:${scope}:session`, JSON.stringify({
+  window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
     token: 'ethereum-session', address: owner, chainId: config.chainId, dropId: '111k_devnet', expiresAtMs: Date.now() + 3_600_000,
   }));
   t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
@@ -661,7 +661,7 @@ for (const action of ['delivery', 'claim'] as const) {
         await waitFor(() => assert.ok(finish));
       }
       let release: (() => void) | undefined;
-      const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+      const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
         assert.ok(lock);
         await new Promise<void>(resolve => { release = resolve; });
       });
@@ -894,7 +894,7 @@ test('first-inclusion work queued behind the submission lock cannot apply an orp
   const view = harness();
   await waitFor(() => assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]));
   let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
     assert.ok(lock);
     await new Promise<void>(resolve => { release = resolve; });
   });
@@ -1043,7 +1043,7 @@ for (const newer of ['reservation', 'transaction', 'cleared'] as const) {
     const view = harness();
     await waitFor(() => { assert.ok(finish); assert.equal(view.result.current.items.length, 1); });
     let release: (() => void) | undefined;
-    const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+    const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
       assert.ok(lock);
       await new Promise<void>(resolve => { release = resolve; });
     });
@@ -1051,7 +1051,7 @@ for (const newer of ['reservation', 'transaction', 'cleared'] as const) {
     await act(async () => { finish!({ status: 'confirmed', confirmations: 1, items: [receipt], burnedTokenIds: [original.tokenId] }); });
     await waitFor(() => assert.equal(requests.mock.callCount(), 1));
     assert.deepEqual(view.result.current.items.map(item => item.tokenId), [original.tokenId]);
-    const key = `mons.ethereum111k:${scope}:pending`;
+    const key = `ethereum111k:${scope}:pending`;
     const replacement = newer === 'cleared' ? null : JSON.stringify({ scope, action: 'mint', submittedAt: 2, nonce: '0x8',
       hash: `0x${(newer === 'reservation' ? '00' : 'cd').repeat(32)}`, ...(newer === 'reservation' ? { awaitingHash: true } : {}) });
     if (replacement === null) window.localStorage.removeItem(key);
@@ -1255,7 +1255,7 @@ test('a rejected approval releases the shared guard after its initiating page un
 
 test('a browser lock held by another tab rejects an action without queuing a wallet request', async () => {
   const scope = ethereumInventoryScope(config, owner)!;
-  const lockName = `mons:ethereum111k-submission:${scope}`;
+  const lockName = `ethereum111k-submission:${scope}`;
   let release: (() => void) | undefined;
   const competing = navigator.locks.request(lockName, { ifAvailable: true }, async lock => {
     assert.ok(lock);
@@ -1413,7 +1413,7 @@ test('two mounted trackers both clear when one finishes the shared transaction',
 
 test('browser storage events synchronize another tab’s replacement and completion', async () => {
   const scope = ethereumInventoryScope(config, owner)!;
-  const key = `mons.ethereum111k:${scope}:pending`;
+  const key = `ethereum111k:${scope}:pending`;
   writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: Date.now() });
   const view = harness();
   await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
@@ -1512,7 +1512,7 @@ for (const actualNonce of ['0x7', '0x8']) test(`a failed post-broadcast write re
   assert.equal(first.result.current.pending?.nonce, undefined);
   assert.match(first.result.current.storageWarning ?? '', /Transaction sent/);
   const scope = ethereumInventoryScope(config, owner)!;
-  const key = `mons.ethereum111k:${scope}:pending`;
+  const key = `ethereum111k:${scope}:pending`;
   const reserved = storage.getItem(key)!;
   assert.equal(JSON.parse(reserved).awaitingHash, true);
   assert.equal(JSON.parse(reserved).nonce, '0x7');
@@ -1557,7 +1557,7 @@ for (const readBlocked of [false, true]) {
   for (const replacement of ['reservation', 'transaction', 'removed'] as const) {
     test(`recovery fallback yields to ${replacement} before storage events after ${readBlocked ? 'blocked' : 'readable'} storage failure`, () => {
       const scope = ethereumInventoryScope(config, owner)!;
-      const key = `mons.ethereum111k:${scope}:pending`;
+      const key = `ethereum111k:${scope}:pending`;
       const storage = window.localStorage;
       const submittedAt = Date.now();
       const intent = { to: contract, data: '0x', value: '0x0' };
@@ -1600,7 +1600,7 @@ for (const method of ['eth_accounts', 'eth_chainId']) {
     assert.equal(first.result.current.error, 'Provider temporarily unavailable');
     assert.equal(connected.sent.length, 0);
     assert.equal(readEthereumSubmission(scope), null);
-    assert.equal(window.localStorage.getItem(`mons.ethereum111k:${scope}:pending`), null);
+    assert.equal(window.localStorage.getItem(`ethereum111k:${scope}:pending`), null);
     first.unmount();
     fail = false;
     const second = harness(connected);
@@ -1653,7 +1653,7 @@ test('a confirmed transaction finishes when its stored record has already disapp
   t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>(resolve => { finish = resolve; }));
   const view = harness();
   await waitFor(() => assert.ok(finish));
-  window.localStorage.removeItem(`mons.ethereum111k:${scope}:pending`);
+  window.localStorage.removeItem(`ethereum111k:${scope}:pending`);
   await act(async () => { finish!({ status: 'confirmed', confirmations: 1, items: [token()], burnedTokenIds: [] }); });
   await waitFor(() => assert.equal(view.result.current.pending, null));
   assert.deepEqual(readEthereumExpected(scope), [token().tokenId]);
@@ -1663,7 +1663,7 @@ for (const outcome of ['confirmed', 'reverted'] as const) {
   for (const newer of ['none', 'reservation', 'transaction'] as const) {
     test(`${outcome} cleanup waits for the submission lock and rechecks ${newer === 'none' ? 'the original transaction' : `a newer ${newer}`}`, async t => {
       const scope = ethereumInventoryScope(config, owner)!;
-      const key = `mons.ethereum111k:${scope}:pending`;
+      const key = `ethereum111k:${scope}:pending`;
       writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'mint', submittedAt: 1 });
       let finish: (() => void) | undefined;
       t.mock.method(ethereumApi, 'confirm', () => new Promise<EthereumTransactionConfirmResponse>((resolve, reject) => {
@@ -1674,7 +1674,7 @@ for (const outcome of ['confirmed', 'reverted'] as const) {
       const view = harness();
       await waitFor(() => assert.ok(finish));
       let release: (() => void) | undefined;
-      const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+      const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
         assert.ok(lock);
         await new Promise<void>(resolve => { release = resolve; });
       });
@@ -1700,7 +1700,7 @@ test('stop-tracking rechecks the displayed transaction after waiting for another
   const view = harness();
   await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
   let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
     assert.ok(lock);
     await new Promise<void>(resolve => { release = resolve; });
   });
@@ -1708,7 +1708,7 @@ test('stop-tracking rechecks the displayed transaction after waiting for another
   act(() => { dismissed = view.result.current.dismissPending(); });
   assert.equal(readEthereumPending(scope)?.hash, hash);
   const nextHash = `0x${'cd'.repeat(32)}`;
-  window.localStorage.setItem(`mons.ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
+  window.localStorage.setItem(`ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
   await act(async () => { release!(); await competing; await dismissed; });
   assert.equal(readEthereumPending(scope)?.hash, nextHash);
   assert.equal(view.result.current.notice, null);
@@ -1782,7 +1782,7 @@ test('late nonce enrichment rechecks the transaction under the submission lock',
   assert.ok(finishLookups.length && sentTransaction);
   const scope = ethereumInventoryScope(config, owner)!;
   let release: (() => void) | undefined;
-  const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
+  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
     assert.ok(lock);
     await new Promise<void>(resolve => { release = resolve; });
   });
@@ -1792,7 +1792,7 @@ test('late nonce enrichment rechecks the transaction under the submission lock',
   assert.equal(requests.mock.callCount(), finishLookups.length);
   assert.equal(readEthereumPending(scope)?.nonce, undefined);
   const nextHash = `0x${'cd'.repeat(32)}`;
-  window.localStorage.setItem(`mons.ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
+  window.localStorage.setItem(`ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
   await act(async () => { release!(); await competing; });
   assert.equal(readEthereumPending(scope)?.hash, nextHash);
   assert.equal(readEthereumPending(scope)?.nonce, undefined);
@@ -1849,7 +1849,7 @@ for (const action of ['delivery', 'claim'] as const) {
     let nextMint: Promise<boolean> | undefined;
     act(() => { nextMint = view.result.current.mint('crate', 1); });
     await waitFor(() => assert.ok(finishSend));
-    const key = `mons.ethereum111k:${scope}:pending`;
+    const key = `ethereum111k:${scope}:pending`;
     const reserved = window.localStorage.getItem(key);
     assert.equal(readEthereumSubmission(scope)?.action, 'mint');
     try {
@@ -1874,7 +1874,7 @@ for (const failureCode of ['transaction-reverted', 'operation-failed']) test(`${
   }));
   harness();
   await waitFor(() => assert.ok(rejectConfirmation));
-  const key = `mons.ethereum111k:${scope}:pending`;
+  const key = `ethereum111k:${scope}:pending`;
   const reserved = JSON.stringify({ scope, hash: `0x${'0'.repeat(64)}`, awaitingHash: true,
     action: 'mint', nonce: '0x8', submittedAt: Date.now(), intent: { to: contract, data: '0x', value: '0x0' } });
   window.localStorage.setItem(key, reserved);
@@ -1887,7 +1887,7 @@ for (const action of ['delivery', 'claim'] as const) {
   test(`late ${action} finalization cannot clear a newer saved reservation hidden by its old fallback`, async t => {
     const scope = ethereumInventoryScope(config, owner)!;
     savedSession(owner);
-    const key = `mons.ethereum111k:${scope}:pending`;
+    const key = `ethereum111k:${scope}:pending`;
     const storage = window.localStorage;
     const submittedAt = Date.now();
     const intent = { to: contract, data: '0x', value: '0x0' };
@@ -1983,7 +1983,7 @@ for (const action of ['mint', 'transfer', 'unbox'] as const) {
       assert.equal(await submitted, true);
     });
     const scope = ethereumInventoryScope(config, owner)!;
-    const key = `mons.ethereum111k:${scope}:pending`;
+    const key = `ethereum111k:${scope}:pending`;
     const reserved = storage.getItem(key)!;
     assert.equal(JSON.parse(reserved).awaitingHash, true);
     assert.equal(JSON.parse(reserved).nonce, '0x7');

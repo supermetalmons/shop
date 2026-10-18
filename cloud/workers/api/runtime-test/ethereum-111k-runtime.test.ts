@@ -64,6 +64,7 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
     });
     assert.equal(challenged.status, 200, await challenged.clone().text());
     const challenge = await challenged.json() as EthereumAuthChallenge;
+    assert.equal(challenge.message.split('\n')[3], 'Sign in to the 111K test collection for delivery and receipt claims.');
     const proof = { challengeId: challenge.challengeId, signature: signDigest(KEY, personalMessageHash(challenge.message)) };
     const verify = () => worker.fetch(`https://api.mons.shop${paths.authVerify}`, {
       method: 'POST', headers: { ...headers, 'X-Mons-CSRF': '1' }, body: JSON.stringify(proof),

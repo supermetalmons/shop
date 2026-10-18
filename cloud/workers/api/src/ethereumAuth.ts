@@ -65,7 +65,7 @@ export async function verifyEthereumSession(request: Request, context: EthereumC
 function signInMessage(args: { wallet: string; chainId: number; origin: string; challengeId: string; nowMs: number }): string {
   return [
     `${new URL(args.origin).host} wants you to sign in with your Ethereum account:`,
-    checksumEthereumAddress(args.wallet), '', 'Sign in to the Mons 111k test collection for delivery and receipt claims.', '',
+    checksumEthereumAddress(args.wallet), '', 'Sign in to the 111K test collection for delivery and receipt claims.', '',
     `URI: ${args.origin}`, 'Version: 1', `Chain ID: ${args.chainId}`,
     `Nonce: ${args.challengeId.replaceAll('-', '')}`,
     `Issued At: ${new Date(args.nowMs).toISOString()}`,

@@ -49,7 +49,7 @@ function hashText(value: string): Hex { return keccakHex(utf8ToBytes(value)); }
 function typedDigest(chainId: number, contractAddress: string, structHash: Hex): Hex {
   const domain = keccakHex(encodeAbi(['bytes32', 'bytes32', 'bytes32', 'uint256', 'address'], [
     hashText('EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)'),
-    hashText('Mons111k'), hashText('2'), chainId, requireEthereumAddress(contractAddress),
+    hashText('111K'), hashText('2'), chainId, requireEthereumAddress(contractAddress),
   ]));
   return keccakHex(concatBytes(Uint8Array.of(0x19, 0x01), hexToBytes(domain.slice(2)), hexToBytes(structHash.slice(2))));
 }

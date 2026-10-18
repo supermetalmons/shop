@@ -78,8 +78,8 @@ try {
   const [admin, buyer, secondBuyer] = await rpc<string[]>('eth_accounts');
   const key = bytesToHex(secp256k1.utils.randomPrivateKey());
   const signer = ethereumSignerAddress(key);
-  const rendererReceipt = await deploy('Mons111kRenderer', admin);
-  const deployment = await deploy('Mons111k', admin, ['address', 'address', 'address', 'address'], [admin, signer, admin, rendererReceipt.contractAddress]);
+  const rendererReceipt = await deploy('NFT111KRenderer', admin);
+  const deployment = await deploy('NFT111K', admin, ['address', 'address', 'address', 'address'], [admin, signer, admin, rendererReceipt.contractAddress]);
   const contract = deployment.contractAddress!;
   const info = (id: number | bigint) => call(contract, ETHEREUM_FUNCTIONS.tokenInfo, ['uint256'], [id], ['uint8', 'uint256', 'address']);
   const transact = (wallet: string, signature: string, types: string[], args: unknown[], value = 0n) => send(wallet, encodeCall(signature, types, args), contract, value);

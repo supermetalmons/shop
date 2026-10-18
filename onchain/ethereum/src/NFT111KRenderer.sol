@@ -2,9 +2,9 @@ pragma solidity 0.8.30;
 
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {IMons111kRenderer} from "./IMons111kRenderer.sol";
+import {INFT111KRenderer} from "./INFT111KRenderer.sol";
 
-contract Mons111kRenderer is IMons111kRenderer {
+contract NFT111KRenderer is INFT111KRenderer {
     using Strings for uint256;
 
     error InvalidItem();
@@ -19,11 +19,11 @@ contract Mons111kRenderer is IMons111kRenderer {
             Base64.encode(
                 bytes(
                     string.concat(
-                        '{"name":"111k ',
+                        '{"name":"111K ',
                         label,
                         " #",
                         number,
-                        '","description":"Mons 111k test collection. Fully onchain artwork placeholders. ',
+                        '","description":"111K test collection. Fully onchain artwork placeholders. ',
                         _description(kind, displayId),
                         '","image":"',
                         image,

@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
-import {Mons111k} from "../src/Mons111k.sol";
-import {Mons111kRenderer} from "../src/Mons111kRenderer.sol";
+import {NFT111K} from "../src/NFT111K.sol";
+import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 contract MinimalGasReceiver {
@@ -10,8 +10,8 @@ contract MinimalGasReceiver {
     }
 }
 
-contract Mons111kGasTest is TestSupport {
-    Mons111k internal token;
+contract NFT111KGasTest is TestSupport {
+    NFT111K internal token;
     address internal alice = address(0xA110);
     address internal bob = address(0xB0B);
     address internal receiver;
@@ -28,7 +28,7 @@ contract Mons111kGasTest is TestSupport {
         vm.chainId(31337);
         vm.warp(2_000_000_000);
         token =
-            new Mons111k(address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), address(new Mons111kRenderer()));
+            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), address(new NFT111KRenderer()));
         receiver = address(new MinimalGasReceiver());
         vm.deal(alice, 100 ether);
         vm.deal(receiver, 100 ether);
@@ -417,7 +417,7 @@ contract Mons111kGasTest is TestSupport {
     function testGasGetTokenInfoBurnedSequential() public {
         _artworks(alice, 1);
         uint256[] memory ids = _range(20, 1);
-        Mons111k.DeliveryQuote memory quote = _quote(alice, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(alice);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
@@ -529,7 +529,7 @@ contract Mons111kGasTest is TestSupport {
     }
 
     function _deliver(address wallet, uint256[] memory ids, string memory name) internal {
-        Mons111k.DeliveryQuote memory quote = _quote(wallet, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(wallet, ids);
         bytes memory signature = _deliverySignature(ids, quote);
         vm.prank(wallet);
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
@@ -595,7 +595,7 @@ contract Mons111kGasTest is TestSupport {
     function _claim(address wallet, uint256 crateNumber, string memory name) internal {
         uint256 crateId = crateNumber == 5555 ? _bonusCrate(wallet) : _ordinaryCrate(wallet, crateNumber);
         uint256[] memory ids = _range(crateId, 1);
-        Mons111k.DeliveryQuote memory quote = _quote(wallet, ids);
+        NFT111K.DeliveryQuote memory quote = _quote(wallet, ids);
         bytes memory deliverySignature = _deliverySignature(ids, quote);
         vm.prank(wallet);
         token.redeemForDelivery{value: quote.fee}(ids, quote, deliverySignature);
@@ -649,16 +649,16 @@ contract Mons111kGasTest is TestSupport {
         }
     }
 
-    function _quote(address wallet, uint256[] memory ids) internal view returns (Mons111k.DeliveryQuote memory) {
+    function _quote(address wallet, uint256[] memory ids) internal view returns (NFT111K.DeliveryQuote memory) {
         uint256[] memory receipts = new uint256[](ids.length);
         for (uint256 i; i < ids.length; ++i) {
             (uint8 kind, uint256 displayId,) = token.getTokenInfo(ids[i]);
             receipts[i] = (kind == 1 ? 1_000_000 : 2_000_000) + displayId;
         }
-        return Mons111k.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
+        return NFT111K.DeliveryQuote(1, wallet, 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts)));
     }
 
-    function _deliverySignature(uint256[] memory ids, Mons111k.DeliveryQuote memory quote)
+    function _deliverySignature(uint256[] memory ids, NFT111K.DeliveryQuote memory quote)
         internal
         returns (bytes memory)
     {
@@ -679,7 +679,7 @@ contract Mons111kGasTest is TestSupport {
 
     function _sign(bytes32 structHash) internal returns (bytes memory) {
         bytes32 domain = keccak256(
-            abi.encode(DOMAIN_TYPEHASH, keccak256("Mons111k"), keccak256("2"), block.chainid, address(token))
+            abi.encode(DOMAIN_TYPEHASH, keccak256("111K"), keccak256("2"), block.chainid, address(token))
         );
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(SIGNER_KEY, keccak256(abi.encodePacked(hex"1901", domain, structHash)));

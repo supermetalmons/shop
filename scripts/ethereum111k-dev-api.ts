@@ -8,11 +8,11 @@ import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 
 const root = resolve(import.meta.dirname, '..');
-const deploymentFile = resolve(root, process.env.MONS_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
+const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string;
 };
-if (deployment.protocolVersion !== 2) throw new Error('The local deployment uses an older authorization format. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 3) throw new Error('The local deployment uses an incompatible collection name or authorization format. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -69,7 +69,7 @@ delete config.routes;
 delete config.secrets;
 process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
 process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
-const runtimeRoot = await mkdtemp(join(tmpdir(), 'mons-111k-api-'));
+const runtimeRoot = await mkdtemp(join(tmpdir(), '111k-api-'));
 const server = createTestHarness({ root: runtimeRoot, workers: [{ config }] });
 let closed = false;
 let reconcileTimer: ReturnType<typeof setInterval> | undefined;

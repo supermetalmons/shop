@@ -3,7 +3,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const root = new URL('../', import.meta.url);
-const rpcUrl = new URL(process.env.MONS_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
+const rpcUrl = new URL(process.env.ETHEREUM_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.protocol !== 'http:' || rpcUrl.username || rpcUrl.password) {
   throw new Error('Local deployment accepts only an HTTP loopback RPC URL.');
 }
@@ -24,9 +24,9 @@ if (await rpc('eth_chainId') !== '0x7a69') throw new Error('Local deployment req
 if (!String(await rpc('web3_clientVersion')).toLowerCase().includes('anvil')) throw new Error('Local deployment requires Anvil.');
 const [deployer] = await rpc('eth_accounts');
 const fixture = JSON.parse(await readFile(new URL('fixtures/eip712.json', root), 'utf8'));
-const owner = process.env.MONS_111K_LOCAL_OWNER || deployer;
-const signer = process.env.MONS_111K_LOCAL_QUOTE_SIGNER || fixture.signer;
-const treasury = process.env.MONS_111K_LOCAL_TREASURY || deployer;
+const owner = process.env.ETHEREUM_111K_LOCAL_OWNER || deployer;
+const signer = process.env.ETHEREUM_111K_LOCAL_QUOTE_SIGNER || fixture.signer;
+const treasury = process.env.ETHEREUM_111K_LOCAL_TREASURY || deployer;
 for (const address of [deployer, owner, signer, treasury]) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/.test(address)) throw new Error('Invalid local deployment address.');
 }
@@ -37,16 +37,16 @@ const artifact = async name => JSON.parse(await readFile(new URL(`out/${name}.so
 const send = creation => JSON.parse(run('cast', [
   'send', '--rpc-url', rpcUrl.href, '--unlocked', '--from', deployer, '--create', creation, '--json',
 ]));
-const renderer = send((await artifact('Mons111kRenderer')).bytecode.object);
+const renderer = send((await artifact('NFT111KRenderer')).bytecode.object);
 if (!renderer.contractAddress || Number(renderer.status) !== 1) throw new Error('Renderer deployment failed.');
 const constructor = run('cast', [
   'abi-encode', 'constructor(address,address,address,address)', owner, signer, treasury, renderer.contractAddress,
 ]);
-const collection = send((await artifact('Mons111k')).bytecode.object + constructor.slice(2));
+const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
 
 const result = {
-  protocolVersion: 2,
+  protocolVersion: 3,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   rendererAddress: renderer.contractAddress, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, treasury,

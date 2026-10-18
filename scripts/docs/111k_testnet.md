@@ -1,4 +1,4 @@
-# 111k Ethereum test collection
+# 111K Ethereum test collection
 
 The first version runs on a local Anvil chain or Ethereum Sepolia. It does not deploy remotely, request faucet funds, publish CDN files, purchase shipping labels, or send customer emails automatically.
 
@@ -27,9 +27,9 @@ npm run dev:ethereum:api
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current authorization protocol is version 2. Restart Anvil and rerun `deploy:local` when upgrading an older local deployment; the API rejects legacy deployment files. Delivery quotes commit to the expected receipt identities, so a reorg that changes an artwork token's displayed number requires a fresh quote before delivery.
+The current local deployment manifest uses `protocolVersion: 3`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions. Fresh deployment is required to acquire the collection name `111K` and EIP-712 domain name `111K`. The authorization domain version remains `2`, and existing signed field schemas are unchanged. Old-domain signatures do not authorize the renamed contract.
 
-The burn-first delivery optimization needs a fresh contract deployment even though the authorization protocol remains version 2. Restart the local chain and API with fresh deployment/database state to test it. Frontend sorting also works with older v2 contracts, and does not rewrite existing quotes or pending transactions.
+Delivery quotes commit to the expected receipt identities, so a reorg that changes an artwork token's displayed number requires a fresh quote before delivery. New deliveries sort token IDs before signing without rewriting saved quotes or pending transactions.
 
 In Terminal 3, run the exact frontend command printed by the API, for example:
 
@@ -45,11 +45,11 @@ Exported Ethereum claim QR codes use the current app origin, so local exports re
 
 The API runs reconciliation every ten seconds to recover transactions after the browser closes. Database state and the local address key are discarded when it exits: restart Anvil and run `deploy:local` again when starting a fresh API session. The normal Solana inventory needs the regular API; this isolated local API only provides the Ethereum test flow.
 
-For a different local RPC port, set `MONS_111K_LOCAL_RPC_URL` when deploying. The API reads that URL from the deployment file. `MONS_111K_LOCAL_DEPLOYMENT` can select another local deployment JSON file. Only HTTP loopback URLs, Anvil and chain ID `31337` are accepted.
+For a different local RPC port, set `ETHEREUM_111K_LOCAL_RPC_URL` when deploying. The API reads that URL from the deployment file. `ETHEREUM_111K_LOCAL_DEPLOYMENT` can select another local deployment JSON file. Only HTTP loopback URLs, Anvil and chain ID `31337` are accepted.
 
 ## Collection behavior
 
-- One collection contains artwork, crates, warehouses, artwork receipts and crate receipts. Artwork SVG numbers identify placeholders, independently of ERC-721 token IDs.
+- One collection contains artwork, crates, warehouses, artwork receipts and crate receipts. Artwork metadata retains placeholder display numbers independently of ERC-721 token IDs; the flower SVGs intentionally omit visible numbers.
 - A shared supply of 5,555 crate allocations covers individual purchases and warehouses. Each warehouse reserves 11 allocations immediately; warehouse opening burns it and mints the reserved crates.
 - Crate `n` represents placeholder artworks `20 × (n − 1) + 1` through `20 × n`. Crate #5,555 instead represents #111,081–111,111, including the 11 bonus artworks.
 - Minting accepts 1–15 crates or warehouses per transaction. Prices are 0.0001 test ETH per crate and 0.0011 test ETH per warehouse.
@@ -102,10 +102,10 @@ The real-chain test starts and stops its own Anvil process and does not use an e
 
 ## Validation as of 2026-10-18
 
-- 80 Solidity checks and 89 isolated gas benchmarks pass, including 256 fuzz cases, stateful invariants, full 5,555-crate/111,111-artwork coverage, ownership lookup boundaries, pause behavior, signature tampering, callback reentrancy, purchase-counter visibility and rollback, transient-state cleanup, and both bonus-crate paths. Delivery regressions also cover all originals being burned before callbacks, intermediate balance/supply, caught and uncaught source transfers, receipt forwarding, grouped events and unsorted quotes with differing token/display identities. The extended invariant campaign also passes 512 sequences of 128 calls (65,536 calls), with no unexpected handler reverts. Ten gas-check regressions verify rejection of missing or changed snapshots, skipped benchmarks, and missing or renamed runtime measurements without rewriting baselines; intentional updates use the separate `gas:update` command. See the [contract checks and gas comparison](../../onchain/ethereum/README.md).
-- The focused Ethereum regression run passes 199 frontend tests and 92 API/native-runtime tests. This includes numeric delivery sorting with preserved receipt pairing, existing pending recovery, atomic sessions, migrations and Ethereum commit guards.
+- 82 Solidity checks and 89 isolated gas benchmarks pass, including 256 fuzz cases, stateful invariants, full 5,555-crate/111,111-artwork coverage, ownership lookup boundaries, pause behavior, signature tampering, callback reentrancy, purchase-counter visibility and rollback, transient-state cleanup, and both bonus-crate paths. Delivery regressions also cover all originals being burned before callbacks, intermediate balance/supply, caught and uncaught source transfers, receipt forwarding, grouped events and unsorted quotes with differing token/display identities. The extended invariant campaign also passes 512 sequences of 128 calls (65,536 calls), with no unexpected handler reverts. Ten gas-check regressions verify rejection of missing or changed snapshots, skipped benchmarks, and missing or renamed runtime measurements without rewriting baselines; intentional updates use the separate `gas:update` command. See the [contract checks and gas comparison](../../onchain/ethereum/README.md).
+- The focused Ethereum and fulfillment regression run passes 331 frontend/API tests, plus three native Worker runtime tests. Coverage includes renamed storage and submission locks, old deployment-manifest rejection, the exact sign-in label, numeric delivery sorting with preserved receipt pairing, pending recovery, atomic sessions, migrations and Ethereum commit guards.
 - The Anvil end-to-end lifecycle passes with real deployed contracts, backend signatures, encrypted addresses, three-confirmation publication, transferred crate receipts and code claims. It covers replacement delivery after a chain reorg, atomic rejection of a stale artwork-identity quote, successful delivery with a fresh quote, and an unsorted mixed quote whose grouped burn/mint logs and receipt identities remain correct through fulfillment. Its report and five SVG previews are generated under `.cache/111k-e2e/`.
 - Frontend, API and tools typechecks, generated ABI/authorization fixtures, production build and browser credential scan pass.
-- Current builds use Solidity 0.8.30, Prague, `via_ir = false` and 1000 optimizer runs. The 14-configuration compiler comparison improves all 77 write benchmarks over the previous 200-run build, with no measured call regressions. Runtime bytecode is 15,476 bytes for the collection and 11,775 bytes for the renderer, within the Ethereum limit and the renderer's 12 KiB project budget. Combined deployment costs increase by 521,749 gas. ABI, storage layout and metadata fixtures remain unchanged. The [compiler comparison](../../onchain/ethereum/README.md#compiler-settings-2026-10-18) records per-operation savings and preserves the historical burn-first measurements separately.
+- Current builds use Solidity 0.8.30, Prague, `via_ir = false` and 1000 optimizer runs. The [current compiler comparison](../../onchain/ethereum/README.md#compiler-settings-2026-10-18) measures the renamed sources at legacy/200 and legacy/1000: all 77 writes improve with no call regressions, while combined deployment costs increase by 522,777 gas. Runtime sizes are 15,476 bytes for the collection and 11,775 bytes for the renderer. The runner retains the full 14-configuration matrix. The [history index](../../onchain/ethereum/benchmarks/HISTORY.md) preserves original optimization evidence in Git without treating it as current measurements.
 
 Live browser interaction was unavailable because local browser use is disabled in the app settings; component tests cover the mobile controls, wallet/recovery flows and modal behavior. No public-network contract, Worker, database migration, funding request or production secret was deployed by this implementation.

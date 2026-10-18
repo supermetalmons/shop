@@ -60,12 +60,14 @@ function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, i
 test('the mint panel switches crate and warehouse previews, supports fifteen, and names the 31-artwork crate', async () => {
   const view = page();
   await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
+  assert.ok(view.getByRole('heading', { name: '111K' }));
+  assert.ok(view.getByRole('region', { name: '111K testnet mint' }));
   assert.ok(view.getByText('A crate of 20 artworks. Crate #5555 holds 31.'));
-  const crateImage = view.getByAltText('111k crate') as HTMLImageElement;
+  const crateImage = view.getByAltText('111K crate') as HTMLImageElement;
   assert.ok(crateImage.src.startsWith('data:image/svg+xml,'));
   fireEvent.click(view.getByLabelText('Warehouse'));
   assert.ok(view.getByText('One warehouse. Eleven crates.'));
-  assert.ok(view.getByAltText('111k warehouse'));
+  assert.ok(view.getByAltText('111K warehouse'));
   const quantity = view.getByRole('slider', { name: /Quantity/ }) as HTMLInputElement;
   assert.equal(quantity.max, '15');
   fireEvent.change(quantity, { target: { value: '15' } });
@@ -114,7 +116,7 @@ test('claim-link codes survive an unrelated cross-tab transaction and stay scope
   const view = page({ claimReceiptId: '2000001', claimCode: 'ABCDEF123456' });
   await waitFor(() => assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, 'ABCDEF123456'));
   assert.equal(window.location.search, '');
-  const key = `mons.ethereum111k:${scope}:pending`;
+  const key = `ethereum111k:${scope}:pending`;
   act(() => {
     const newValue = JSON.stringify({ scope, hash: `0x${'ab'.repeat(32)}`, action: 'mint', submittedAt: Date.now() });
     window.localStorage.setItem(key, newValue);
@@ -204,7 +206,7 @@ test('an interrupted submission blocks minting and offers hash recovery or expli
 for (const initialChain of ['0xaa36a7', '0x1']) for (const outcome of ['rejected', 'submitted', 'unknown'] as const) {
   test(`delivery drafts from chain ${initialChain} survive wallet approval and handle ${outcome} submissions`, async t => {
     const scope = ethereumInventoryScope(config, owner)!;
-    window.sessionStorage.setItem(`mons.ethereum111k:${scope}:session`, JSON.stringify({
+    window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
       token: 'session', address: owner, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000,
     }));
     t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));

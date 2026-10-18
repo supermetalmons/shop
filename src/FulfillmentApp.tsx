@@ -553,7 +553,7 @@ export default function FulfillmentApp({
                 }}
               >
                 <option value="">All drops</option>
-                {hasEthereumDropAccess ? <option value="111k_devnet">111k_devnet · Ethereum</option> : null}
+                {hasEthereumDropAccess ? <option value="111k_devnet">111K · Ethereum testnet</option> : null}
                 {visibleDrops.map((drop) => (
                   <option key={drop.dropId} value={drop.dropId}>
                     {drop.dropId}

@@ -1,4 +1,4 @@
-# Mons 111k contracts
+# 111K contracts
 
 An ERC721A collection with public crate and warehouse sales, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
 
@@ -61,11 +61,9 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 2` to `.local/deployment.json`. Optional overrides are `MONS_111K_LOCAL_RPC_URL`, `MONS_111K_LOCAL_OWNER`, `MONS_111K_LOCAL_QUOTE_SIGNER`, and `MONS_111K_LOCAL_TREASURY`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 3` to `.local/deployment.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_TREASURY`.
 
-Protocol v2 requires a fresh collection deployment because the contract is not upgradeable. Restart the local chain, rerun `deploy:local`, and restart the local API with its fresh database before testing v2. Existing v1 addresses, delivery quotes, claim authorizations, and local deployment files are incompatible. Both delivery and crate-claim authorizations now use EIP-712 domain version `2`.
-
-The burn-first delivery implementation also requires a fresh collection deployment, while retaining protocol version 2. Frontend delivery sorting works with existing v2 contracts. Existing authorizations remain order-sensitive and bound to their original contract address; the optimization does not rewrite saved quotes or pending transactions.
+Local deployment manifest version 3 identifies the renamed collection and signing domain. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. Older manifests are rejected with these redeployment instructions. Existing contracts require a fresh deployment to acquire the new collection name and domain; they are not upgradeable. Both delivery and crate-claim authorizations use EIP-712 domain name `111K` and version `2`. Authorizations remain bound to their original domain, chain and contract address, so old-domain signatures cannot authorize the renamed collection.
 
 Start the isolated API from the repository root:
 
@@ -77,7 +75,7 @@ The helper reads `.local/deployment.json`, injects the public local test signer,
 
 Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, and warehouse price `0.0011 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in the collection until the owner calls `withdraw()`, which sends the balance to the configured treasury.
 
-`script/Deploy111k.s.sol` prepares an explicitly configured deployment using `MONS_111K_DEPLOYER_KEY`, `MONS_111K_OWNER`, `MONS_111K_QUOTE_SIGNER`, and `MONS_111K_TREASURY`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, and `ETHEREUM_111K_TREASURY`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
 
 ## Supply and identities
 
@@ -99,7 +97,7 @@ The contract rejects reuse of every spot-minted ID, including IDs burned earlier
 
 ## Authorization
 
-The EIP-712 domain is `Mons111k`, version `2`, with the current chain ID and collection address. The accepted types are:
+The EIP-712 domain is `111K`, version `2`, with the current chain ID and collection address. The accepted types are:
 
 ```text
 Delivery(address wallet,bytes32 tokenIdsHash,bytes32 receiptIdsHash,uint256 orderId,uint256 fee,uint256 deadline)
@@ -132,28 +130,14 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ### Compiler settings (2026-10-18)
 
-The current build keeps Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), and raises `optimizer_runs` from 200 to 1000. Across the same 89 measurements, all 77 write calls and eight reads improve; four reads are unchanged. No measured call regresses. Contract sources, ABI, storage layout and metadata fixtures are unchanged.
+The current build uses Solidity 0.8.30, Prague and the legacy pipeline (`via_ir = false`), with `optimizer_runs = 1000`. The [current compiler comparison](benchmarks/compiler-settings.json) measures the renamed sources at legacy/200 and legacy/1000. The comparison includes all 89 benchmarks, source/toolchain hashes, ABI comparisons, code sizes and actual deployment receipts.
 
-The [compiler comparison record](benchmarks/compiler-settings.json) contains all 14 configurations, full gas measurements, source/toolchain hashes, ABI comparisons, code sizes and actual deployment receipts. Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The baseline reproduces all 89 snapshots from `7c2cdec3`; the runner reads that historical snapshot file even after the current snapshots are updated.
+All 77 write measurements and eight reads improve at 1000 runs; four reads are unchanged and none regress. These are fresh measurements of the renamed contract and signing domain.
 
 | Pipeline | Optimizer runs | Writes improved / regressed | Collection bytes | Renderer bytes | Combined deployment gas change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Legacy | 1 | 0 / 77 | 14,103 | 10,312 | -59,966 |
-| Legacy | 50 | 0 / 77 | 14,103 | 10,321 | -58,118 |
-| Legacy | 200 (baseline) | 0 / 0 | 14,358 | 10,338 | 0 |
-| Legacy | 500 | 72 / 5 | 14,544 | 10,478 | +68,366 |
-| **Legacy** | **1000 (selected)** | **77 / 0** | **15,476** | **11,775** | **+521,749** |
-| Legacy | 1500 | 77 / 0 | 15,554 | 11,775 | +538,613 |
-| Legacy | 2000 | 77 / 0 | 16,309 | 11,975 | +733,286 |
-| Legacy | 5000 | 77 / 0 | 17,056 | 12,265 | +944,226 |
-| Legacy | 10000 | 77 / 0 | 17,351 | 12,415 | +1,038,083 |
-| IR | 1 | 16 / 61 | 12,747 | 11,028 | -185,624 |
-| IR | 50 | 24 / 53 | 12,871 | 11,041 | -155,571 |
-| IR | 200 | 36 / 41 | 12,891 | 11,068 | -146,219 |
-| IR | 1000 | 46 / 31 | 14,331 | 12,670 | +474,290 |
-| IR | 10000 | 58 / 19 | 15,705 | 13,963 | +1,029,907 |
-
-1000 is the lowest tested setting that improves every write without regressing any read. 1500 produces identical call measurements with a larger collection. 2000 and 5000 provide smaller additional savings at higher deployment cost; 5000 leaves only 23 bytes within the renderer's 12 KiB project budget. Legacy/10000 and IR/1000+ exceed that budget, although every configuration remains within Ethereum's deployment size limits. Each tested IR configuration regresses at least one write.
+| Legacy | 200 (baseline) | 0 / 0 | 14,358 | 10,333 | 0 |
+| **Legacy** | **1000 (selected)** | **77 / 0** | **15,476** | **11,775** | **+522,777** |
 
 | Operation | Legacy/200 gas | Legacy/1000 gas | Saved |
 | --- | ---: | ---: | ---: |
@@ -162,142 +146,37 @@ The [compiler comparison record](benchmarks/compiler-settings.json) contains all
 | Unpack warehouse | 353,461 | 352,687 | 774 |
 | Unpack 20-artwork crate | 130,828 | 130,156 | 672 |
 | Unpack 31-artwork crate | 135,234 | 134,243 | 991 |
-| Deliver 50 artworks | 2,957,308 | 2,951,756 | 5,552 |
+| Deliver 50 artworks | 2,957,296 | 2,951,744 | 5,552 |
 | Deliver 50 crates | 2,019,153 | 2,011,951 | 7,202 |
 | Deliver 25 artworks + 25 crates | 2,480,424 | 2,474,047 | 6,377 |
-| Claim 31 artwork receipts | 899,495 | 897,439 | 2,056 |
+| Claim 31 artwork receipts | 899,483 | 897,427 | 2,056 |
 
-Collection deployment costs 3,619,372 gas (+230,924); renderer deployment costs 2,579,119 (+290,825). These are one-time deployment costs, separate from the user-call savings. Normal committed gas snapshots also compile the test receiver with the selected settings, saving another 45 gas per callback; the comparison above deliberately excludes that receiver-only saving.
+Collection deployment costs 3,619,228 gas (+230,924); renderer deployment costs 2,579,059 (+291,853). Both remain within Ethereum's deployment size limits, and the renderer stays within its 12 KiB project budget. These one-time costs are separate from user-call savings. Normal gas snapshots also compile the test receiver at the selected settings; the compiler comparison keeps its bytecode fixed to isolate the collection's improvements.
 
-Reproduce the complete matrix from `onchain/ethereum`, without changing configuration, fixtures or snapshots:
+Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [checked-in legacy/200 baseline](benchmarks/compiler-legacy-200.json) records source, harness, dependency and compiler provenance as well as all 89 measurements. Normal runs reject changed provenance or measurements; they never silently replace the baseline. In both records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
+
+Reproduce the current comparison from `onchain/ethereum`:
 
 ```sh
-node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000
+```
+
+The full 14-configuration matrix remains available. Omitting pipeline and run arguments tests legacy runs 1, 50, 200, 500, 1000, 1500, 2000, 5000 and 10000, plus IR runs 1, 50, 200, 1000 and 10000:
+
+```sh
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-matrix.json
 node scripts/benchmark-compiler.mjs /tmp/111k-ir-settings.json ir 1 50 200 1000 10000
 ```
 
-The settings affect future builds and deployments. Existing deployed contracts retain their original bytecode. The earlier optimization records below retain their original compiler settings and measurements.
-
-### Delivery ordering and burn-first (2026-10-18)
-
-The burn-first implementation was accepted against `678dd7cf` using an identical expanded 89-scenario harness. All 52 delivery scenarios improve, and none of the 77 measured write calls regress. The original 45 baseline measurements reproduce exactly. Coverage includes 20/31/50 artworks, ascending/reversed/deterministically shuffled selections, sparse/fragmented/initialized ownership, crates, mixed deliveries, and both EOA and contract receivers.
-
-| Operation | Before | Burn-first | Gas saved |
-| --- | ---: | ---: | ---: |
-| 50 artworks, ascending | 2,976,674 | 2,957,308 | 19,366 |
-| 50 crates | 2,040,119 | 2,019,153 | 20,966 |
-| 25 artworks + 25 crates, ascending | 2,500,590 | 2,480,424 | 20,166 |
-
-These are isolated write-transaction snapshots, including intrinsic gas while excluding setup. Each before/after pair uses identical calldata, so its difference isolates the contract change. Sorting provides an additional, order-dependent saving: on the accepted contract, ascending delivery of 50 fresh artworks saves 75,960 snapshot gas versus reverse order and 12,606 versus the recorded shuffle. Crate-only and fully initialized ownership controls show at most 24 gas of signature-byte variation across orderings, rather than a structural execution saving. Sorting runs offchain and changes neither the ABI nor EIP-712 version or fixtures.
-
-Collection runtime decreases from 14,411 to 14,358 bytes; creation bytecode decreases from 15,876 to 15,823 bytes. Actual deployment transactions on the same restored Prague Anvil state cost 3,399,940 gas before and 3,388,448 after, saving 11,492 gas. Renderer runtime and deployment cost remain 7,752 bytes and 1,728,982 gas.
-
-[The comparison record](benchmarks/delivery-order.json) contains all measurements, source/harness hashes, tool versions, deployment receipts and the acceptance decision. Reproduce this historical comparison from `onchain/ethereum` in a clean checkout of `9e330148`, with its package dependencies installed:
+After reviewing an intentional source, harness or toolchain change, explicitly regenerate the compiler baseline, then rerun the comparison without the update flag to verify it:
 
 ```sh
-node scripts/benchmark-delivery.mjs /tmp/111k-delivery-comparison.json
+node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json legacy 200 1000 --update-baseline
+node scripts/benchmark-compiler.mjs benchmarks/compiler-settings.json legacy 200 1000
 ```
 
-The script compares baseline sources from the recorded commit with the working-tree candidate in temporary projects using the same harness and compiler settings. It requires matching renderer sources; the newer SVG artwork intentionally differs from the renderer used for this comparison. It starts and stops its own local Anvil node, updates no snapshots, and exits unsuccessfully if any measured write call regresses or no delivery improves. The committed snapshots contain the accepted 89-scenario measurements.
-
-### Ownership lookup optimization (2026-10-18)
-
-The accepted change resolves ownership once in `getTokenInfo`: sequential artwork lookup uses one bounded backward scan, while spot tokens read their explicit ownership entry. Both supply counters retain their existing storage representation. Compared with `abe1a634`, all 33 write benchmarks improve or stay unchanged. Fresh 20-item artwork lookup saves 5,044 gas (9.55%), fresh 31-item lookup saves 7,893 (9.87%), and fragmented lookup saves 1,159 (7.33%). Delivering 50 artworks saves 115,217 gas (3.73%).
-
-The read tradeoff is explicit: absent sequential/spot lookups cost 270/272 more gas; burned sequential/spot lookups cost 648/286 more. Their return values and `tokenURI` error behavior are unchanged. The generated ABI and authorization/metadata fixtures are unchanged.
-
-Counter packing was measured separately on top of the accepted ownership change, using a single word and the same `uint256` getter ABI. It saves 173 gas on direct crate purchases, 22,406 on first warehouse purchases (including after direct crate sales), 5,306 on later warehouse purchases, and 2,055 on `stats()`. It was rejected because 19 write benchmarks increase by 12 or 600 gas relative to the ownership candidate. The acceptance rule checks each write benchmark, without averaging gains against regressions. Packing's getter overhead is also shown below.
-
-The collection runtime grows from 14,233 to 14,411 bytes (+178) for the accepted change; the rejected packing candidate is 14,459 bytes (+48 more). The renderer remains 7,752 bytes. All are below the 24,576-byte runtime limit.
-
-All 45 measurements use the same harness, Foundry 1.7.1-Homebrew, Solidity 0.8.30, optimizer 200 runs, Prague, and the default non-IR pipeline. The write snapshots include isolated transaction overhead; view snapshots measure call gas. Setup, signature preparation and any outer wallet execution are excluded. The historical JSON record's execution-only label is inaccurate; its unchanged numerical comparisons remain valid. `Ownership Δ` compares with the baseline; `Packing Δ` compares with the accepted ownership implementation. Negative values save gas.
-
-| Operation | Baseline | Ownership | Ownership Δ | Packing | Packing Δ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| allocatedCrates | 2,362 | 2,362 | 0 | 2,377 | +15 |
-| claim20 | 609,895 | 609,808 | -87 | 609,820 | +12 |
-| claim20Crate10 | 609,895 | 609,808 | -87 | 609,820 | +12 |
-| claim20Receiver | 644,562 | 644,475 | -87 | 644,487 | +12 |
-| claim31 | 899,582 | 899,495 | -87 | 899,507 | +12 |
-| claim31Receiver | 953,320 | 953,234 | -86 | 953,246 | +12 |
-| deliverArtwork1 | 137,200 | 137,199 | -1 | 137,211 | +12 |
-| deliverArtworks50 | 3,091,891 | 2,976,674 | -115,217 | 2,977,274 | +600 |
-| deliverArtworks50Receiver | 3,178,904 | 3,063,725 | -115,179 | 3,064,325 | +600 |
-| deliverCrate1 | 129,752 | 129,663 | -89 | 129,675 | +12 |
-| deliverCrates50 | 2,043,799 | 2,040,119 | -3,680 | 2,040,719 | +600 |
-| deliverCrates50Receiver | 2,130,709 | 2,127,108 | -3,601 | 2,127,708 | +600 |
-| deliverMixed50 | 2,556,682 | 2,500,590 | -56,092 | 2,501,190 | +600 |
-| deliverMixed50Receiver | 2,643,667 | 2,587,634 | -56,033 | 2,588,234 | +600 |
-| getTokenInfoAbsentSequential | 2,732 | 3,002 | +270 | 3,002 | 0 |
-| getTokenInfoAbsentSpot | 2,848 | 3,120 | +272 | 3,120 | 0 |
-| getTokenInfoBurnedSequential | 4,951 | 5,599 | +648 | 5,599 | 0 |
-| getTokenInfoBurnedSpot | 2,848 | 3,134 | +286 | 3,134 | 0 |
-| getTokenInfoFragmented | 15,802 | 14,643 | -1,159 | 14,643 | 0 |
-| getTokenInfoFresh | 52,837 | 47,793 | -5,044 | 47,793 | 0 |
-| getTokenInfoFresh31 | 79,996 | 72,103 | -7,893 | 72,103 | 0 |
-| getTokenInfoInitialized | 5,805 | 5,803 | -2 | 5,803 | 0 |
-| getTokenInfoSpot | 3,532 | 3,442 | -90 | 3,442 | 0 |
-| mintCrates1 | 120,918 | 120,918 | 0 | 120,745 | -173 |
-| mintCrates15 | 484,246 | 484,246 | 0 | 484,073 | -173 |
-| mintCrates15After1 | 432,946 | 432,946 | 0 | 432,773 | -173 |
-| mintCrates15After240 | 432,946 | 432,946 | 0 | 432,773 | -173 |
-| mintCrates15AfterWarehouse | 432,946 | 432,946 | 0 | 432,773 | -173 |
-| mintCrates15Receiver | 510,253 | 510,253 | 0 | 510,080 | -173 |
-| mintCrates1AfterWarehouse | 69,618 | 69,618 | 0 | 69,445 | -173 |
-| mintWarehouses1 | 165,953 | 165,953 | 0 | 143,547 | -22,406 |
-| mintWarehouses15 | 843,203 | 843,203 | 0 | 820,797 | -22,406 |
-| mintWarehouses15AfterCrate | 791,903 | 791,903 | 0 | 769,497 | -22,406 |
-| mintWarehouses15AfterWarehouse | 774,803 | 774,803 | 0 | 769,497 | -5,306 |
-| mintWarehouses15Receiver | 869,210 | 869,210 | 0 | 846,804 | -22,406 |
-| mintWarehouses1AfterCrate | 114,653 | 114,653 | 0 | 92,247 | -22,406 |
-| mintWarehouses1AfterWarehouse | 97,553 | 97,553 | 0 | 92,247 | -5,306 |
-| stats | 13,190 | 13,190 | 0 | 11,135 | -2,055 |
-| unboxCrate20 | 130,918 | 130,828 | -90 | 130,840 | +12 |
-| unboxCrate20Receiver | 162,027 | 161,938 | -89 | 161,950 | +12 |
-| unboxCrate31 | 135,324 | 135,234 | -90 | 135,246 | +12 |
-| unboxCrate31Receiver | 183,408 | 183,319 | -89 | 183,331 | +12 |
-| unboxWarehouse | 353,550 | 353,461 | -89 | 353,473 | +12 |
-| unboxWarehouseReceiver | 372,627 | 372,538 | -89 | 372,550 | +12 |
-| warehousesMinted | 2,384 | 2,384 | 0 | 2,387 | +3 |
-
-[The benchmark record](benchmarks/ownership-counters.json) preserves all measurements, percentage changes, exact tool versions, source/harness hashes, and the decision. [The rejected packing patch](benchmarks/counter-packing.patch) reproduces that candidate from the accepted ownership source in a separate checkout; it is evidence only and is not applied. To reproduce the baseline, use `src/Mons111k.sol` from `abe1a634` with the recorded 45-scenario harness. Run the command in the record for each source version with snapshot emission disabled. The committed [gas snapshots](snapshots/Mons111kGasTest.json) track the current accepted implementation; this comparison's historical measurements remain in its benchmark record.
+Compiler comparisons leave normal gas snapshots unchanged. Regenerate those separately with `npm run gas:update` when intended. The compiler settings affect future builds and deployments; existing deployed contracts retain their original bytecode.
 
 ### Historical comparisons
 
-Disabling ownership renunciation and using `ECDSA.recoverCalldata` were measured against `72882e49` with the settings below. All 13 delivery/claim scenarios save 237–248 gas per call; the other 16 measurements are unchanged. That revision had a 14,233-byte collection runtime.
-
-The historical comparison below records emergency-pause hardening at `8d260f49` against `9a95163b`, using Foundry 1.7.1, Solidity 0.8.30, optimizer 200 runs, and Prague. The same 29 isolated scenarios were captured before and after that change. Every measured call uses less gas, including the new pause check for delivery and claims. `Receiver` cases include minimal ERC-721 receiver callbacks; `After1`/`After240` use existing holdings; `Crate10` claims a different fixed artwork range.
-
-| Operation | Before | After | Gas change | Change |
-| --- | ---: | ---: | ---: | ---: |
-| claim20 | 613,982 | 610,132 | -3,850 | -0.63% |
-| claim20Crate10 | 613,982 | 610,132 | -3,850 | -0.63% |
-| claim20Receiver | 648,649 | 644,799 | -3,850 | -0.59% |
-| claim31 | 903,681 | 899,820 | -3,861 | -0.43% |
-| claim31Receiver | 957,419 | 953,558 | -3,861 | -0.40% |
-| deliverArtwork1 | 141,592 | 137,437 | -4,155 | -2.93% |
-| deliverArtworks50 | 3,202,055 | 3,092,138 | -109,917 | -3.43% |
-| deliverArtworks50Receiver | 3,289,069 | 3,179,152 | -109,917 | -3.34% |
-| deliverCrate1 | 133,820 | 129,989 | -3,831 | -2.86% |
-| deliverCrates50 | 2,047,920 | 2,044,040 | -3,880 | -0.19% |
-| deliverCrates50Receiver | 2,134,831 | 2,130,951 | -3,880 | -0.18% |
-| deliverMixed50 | 2,611,289 | 2,556,926 | -54,363 | -2.08% |
-| deliverMixed50Receiver | 2,698,275 | 2,643,912 | -54,363 | -2.01% |
-| getTokenInfoFragmented | 17,017 | 15,802 | -1,215 | -7.14% |
-| getTokenInfoFresh | 57,022 | 52,837 | -4,185 | -7.34% |
-| mintCrates1 | 124,864 | 120,918 | -3,946 | -3.16% |
-| mintCrates15 | 488,206 | 484,246 | -3,960 | -0.81% |
-| mintCrates15After1 | 436,906 | 432,946 | -3,960 | -0.91% |
-| mintCrates15After240 | 436,906 | 432,946 | -3,960 | -0.91% |
-| mintCrates15Receiver | 514,213 | 510,253 | -3,960 | -0.77% |
-| mintWarehouses1 | 169,921 | 165,953 | -3,968 | -2.34% |
-| mintWarehouses15 | 847,185 | 843,203 | -3,982 | -0.47% |
-| mintWarehouses15Receiver | 873,192 | 869,210 | -3,982 | -0.46% |
-| unboxCrate20 | 134,944 | 130,918 | -4,026 | -2.98% |
-| unboxCrate20Receiver | 166,053 | 162,027 | -4,026 | -2.42% |
-| unboxCrate31 | 139,350 | 135,324 | -4,026 | -2.89% |
-| unboxCrate31Receiver | 187,434 | 183,408 | -4,026 | -2.15% |
-| unboxWarehouse | 357,528 | 353,550 | -3,978 | -1.11% |
-| unboxWarehouseReceiver | 376,605 | 372,627 | -3,978 | -1.06% |
-
-That pause-control change grew the collection runtime from 14,080 to 14,345 bytes (+265). The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These snapshots are gas measurements, not ETH fee estimates. Isolated writes include transaction overhead; wallet-specific outer execution can add further cost.
+Superseded compiler, delivery and ownership comparisons, the rejected counter-packing candidate and the historical delivery runner are preserved in Git. The [history index](benchmarks/HISTORY.md) identifies their original immutable blobs and reproduction context. Those historical measurements describe their original sources and are not relabeled as current results.
