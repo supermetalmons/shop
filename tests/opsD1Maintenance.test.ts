@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { unstable_splitSqlQuery } from 'wrangler';
@@ -17,16 +17,10 @@ import {
   type RevealSubmissionsControlDependencies,
 } from '../scripts/ops/revealSubmissionsControl.ts';
 
-const schemaSql = [
-  '0001_current_schema.sql',
-  '0002_reveal_submission_write_fence.sql',
-  '0003_remove_ready_notification_pause.sql',
-  '0004_repair_ready_notification_cursor.sql',
-  '0005_remove_redundant_anonymous_auth_subject_index.sql',
-  '0006_cover_expiry_cleanup_indexes.sql',
-  '0007_mi_note_auth.sql',
-].map((name) => readFileSync(
-  new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
+const migrationsDirectory = new URL('../cloud/workers/api/ops-migrations/', import.meta.url);
+const migrationNames = readdirSync(migrationsDirectory).filter((name) => name.endsWith('.sql')).sort();
+const schemaSql = migrationNames.map((name) => readFileSync(
+  new URL(name, migrationsDirectory),
   'utf8',
 )).join('\n');
 
@@ -150,15 +144,7 @@ function integrityInput(
       expiryCleanupQueryPlans: expiryCleanupQueryPlans(db),
       rateLimitBucketExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
-      migrations: [
-        { name: '0001_current_schema.sql' },
-        { name: '0002_reveal_submission_write_fence.sql' },
-        { name: '0003_remove_ready_notification_pause.sql' },
-        { name: '0004_repair_ready_notification_cursor.sql' },
-        { name: '0005_remove_redundant_anonymous_auth_subject_index.sql' },
-        { name: '0006_cover_expiry_cleanup_indexes.sql' },
-        { name: '0007_mi_note_auth.sql' },
-      ],
+      migrations: migrationNames.map((name) => ({ name })),
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
         (SELECT COUNT(*) FROM profiles) AS profile_count,
@@ -192,6 +178,10 @@ function integrityInput(
       tableList: queryRows(db, `SELECT name, type, strict
         FROM pragma_table_list
         WHERE schema = 'main' AND name IN (
+          'ethereum_auth_challenges',
+          'ethereum_auth_sessions',
+          'ethereum_profile_addresses',
+          'ethereum_profiles',
           'anonymous_auth_sessions',
           'auth_wallet_bindings',
           'profile_addresses',
@@ -254,6 +244,25 @@ test('Ops baseline creates the exact current schema and active controls', () => 
   } finally {
     db.close();
   }
+});
+
+test('Ops integrity rejects Ethereum migration and schema drift', () => {
+  const healthy = integrityInput();
+  assert.throws(() => assertOpsD1Integrity({
+    ...healthy,
+    migrations: healthy.migrations.filter((row) => row.name !== '0008_ethereum_profiles.sql'),
+  }), /migrations/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({}, (db) => {
+    db.exec('DROP INDEX ethereum_auth_sessions_expiry');
+  })), /schema/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({}, (db) => {
+    db.exec('ALTER TABLE ethereum_profiles ADD COLUMN unexpected TEXT');
+  })), /schema/);
+  assert.throws(() => assertOpsD1Integrity({
+    ...healthy,
+    tableList: healthy.tableList.map((row) =>
+      row.name === 'ethereum_profiles' ? { ...row, strict: 0 } : row),
+  }), /strict flag/);
 });
 
 test('anonymous-auth subject lookup uses the UNIQUE auto-index', () => {

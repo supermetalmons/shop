@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-10-18T17:25:07.144Z",
+  "sourceCommit": "4aa970f95b42def9df35e743bbbfbbe09f9b8645",
+  "provenance": {
+    "sourceSha256": {
+      "INFT111KRenderer.sol": "25ee08675b3b8fa174d800d0a8fd59663a82631d2bf5231eab6dca8a727c769d",
+      "NFT111K.sol": "a96d3205b55970a533bc55cc15513866808c97e43857428fe43e91ed5539d602",
+      "NFT111KRenderer.sol": "1cd6f937209b65f6163c75d3397196dc3828aee8f92b1884c47e0ed0f9b614cf"
+    },
+    "gasTestSha256": "d17bcd4db920bcb4c210108dd5619ad8a43cfd5c0c4bfea5aef98dd78da774e2",
+    "harnessSha256": "0a01bd72f73f282c73cb6473d9039446a4c6c4acafa99dfdf1d8bb2032b736ed",
+    "testSupportSha256": "679884295b56fbd37c0770d88432e38d303cdb7377f211ff31b55023ea9490de",
+    "packageLockSha256": "0911c8501c6eb8800372a79cf7c6ee86bed89563566560aa9ccca0a5710ed0e6",
+    "dependencies": {
+      "@openzeppelin/contracts": "5.6.1",
+      "erc721a": "4.3.0"
+    },
+    "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
+    "fixedSettings": {
+      "solc": "0.8.30",
+      "optimizer": true,
+      "evmVersion": "prague",
+      "bytecodeHash": "none"
+    },
+    "viaIR": false,
+    "optimizerRuns": 200
+  },
+  "artifacts": {
+    "NFT111K": {
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "compilerSettings": {
+        "remappings": [
+          "@openzeppelin/=node_modules/@openzeppelin/",
+          "erc721a/=node_modules/erc721a/"
+        ],
+        "optimizer": {
+          "enabled": true,
+          "runs": 200
+        },
+        "metadata": {
+          "bytecodeHash": "none"
+        },
+        "compilationTarget": {
+          "src/NFT111K.sol": "NFT111K"
+        },
+        "evmVersion": "prague",
+        "libraries": {}
+      },
+      "creationBytes": 15814,
+      "runtimeBytes": 14358,
+      "creationSha256": "dc9be99f7fccffa1dd5a671f40c1d053e85c16f883b4b6909d48458fc721e928",
+      "runtimeTemplateSha256": "a8b4cbcabb97da0fc6153aae856e495464500f4bc1485f1121f793e91674b8c2",
+      "canonicalAbiSha256": "64ebd998d9b573d82bfd8cb4d8f9cff8bde1306665a24a941db198e3ec2f6f44"
+    },
+    "NFT111KRenderer": {
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "compilerSettings": {
+        "remappings": [
+          "@openzeppelin/=node_modules/@openzeppelin/",
+          "erc721a/=node_modules/erc721a/"
+        ],
+        "optimizer": {
+          "enabled": true,
+          "runs": 200
+        },
+        "metadata": {
+          "bytecodeHash": "none"
+        },
+        "compilationTarget": {
+          "src/NFT111KRenderer.sol": "NFT111KRenderer"
+        },
+        "evmVersion": "prague",
+        "libraries": {}
+      },
+      "creationBytes": 10361,
+      "runtimeBytes": 10333,
+      "creationSha256": "e0c2955edad4870b37f9792306376c9fef9dfec76a0b6a6585bb2727bdffc7e8",
+      "runtimeTemplateSha256": "01bc22dfbe0677bc4830a54e4cf98255915acf101875e0e09c6c5250bf531e74",
+      "canonicalAbiSha256": "49f1781c64b9b52bc6ed0675e1c73c87037157adf41f53689d33b07d23fed31d"
+    }
+  },
+  "gas": {
+    "allocatedCrates": 2362,
+    "claim20": 609808,
+    "claim20Crate10": 609808,
+    "claim20Receiver": 644475,
+    "claim31": 899483,
+    "claim31Receiver": 953234,
+    "deliverArtwork1": 136845,
+    "deliverArtwork1Receiver": 138794,
+    "deliverArtworks20Ascending": 1228842,
+    "deliverArtworks20AscendingReceiver": 1263749,
+    "deliverArtworks20Descending": 1263156,
+    "deliverArtworks20DescendingReceiver": 1298063,
+    "deliverArtworks20Shuffled": 1233810,
+    "deliverArtworks20ShuffledReceiver": 1268717,
+    "deliverArtworks31Ascending": 1907531,
+    "deliverArtworks31AscendingReceiver": 1961543,
+    "deliverArtworks31Descending": 1994381,
+    "deliverArtworks31DescendingReceiver": 2048393,
+    "deliverArtworks31Shuffled": 1915193,
+    "deliverArtworks31ShuffledReceiver": 1969217,
+    "deliverArtworks50": 2957296,
+    "deliverArtworks50Descending": 3033280,
+    "deliverArtworks50DescendingReceiver": 3120331,
+    "deliverArtworks50Receiver": 3044359,
+    "deliverArtworks50Shuffled": 2969914,
+    "deliverArtworks50ShuffledReceiver": 3056965,
+    "deliverCrate1": 129277,
+    "deliverCrate1Receiver": 131227,
+    "deliverCrates50": 2019153,
+    "deliverCrates50Descending": 2019153,
+    "deliverCrates50DescendingReceiver": 2106166,
+    "deliverCrates50Receiver": 2106166,
+    "deliverCrates50Shuffled": 2019153,
+    "deliverCrates50ShuffledReceiver": 2106166,
+    "deliverFragmentedArtworks50Ascending": 2560746,
+    "deliverFragmentedArtworks50AscendingReceiver": 2647809,
+    "deliverFragmentedArtworks50Descending": 2567418,
+    "deliverFragmentedArtworks50DescendingReceiver": 2654469,
+    "deliverFragmentedArtworks50Shuffled": 2563320,
+    "deliverFragmentedArtworks50ShuffledReceiver": 2650371,
+    "deliverInitializedArtworks50Ascending": 2018336,
+    "deliverInitializedArtworks50AscendingReceiver": 2105399,
+    "deliverInitializedArtworks50Descending": 2018348,
+    "deliverInitializedArtworks50DescendingReceiver": 2105399,
+    "deliverInitializedArtworks50Shuffled": 2018348,
+    "deliverInitializedArtworks50ShuffledReceiver": 2105399,
+    "deliverMixed50": 2480424,
+    "deliverMixed50Descending": 2516034,
+    "deliverMixed50DescendingReceiver": 2603066,
+    "deliverMixed50Receiver": 2567468,
+    "deliverMixed50Shuffled": 2486232,
+    "deliverMixed50ShuffledReceiver": 2573276,
+    "deliverSparseArtworks50Ascending": 4016403,
+    "deliverSparseArtworks50AscendingReceiver": 4103454,
+    "deliverSparseArtworks50Descending": 4096593,
+    "deliverSparseArtworks50DescendingReceiver": 4183644,
+    "deliverSparseArtworks50Shuffled": 4039347,
+    "deliverSparseArtworks50ShuffledReceiver": 4126422,
+    "getTokenInfoAbsentSequential": 3002,
+    "getTokenInfoAbsentSpot": 3120,
+    "getTokenInfoBurnedSequential": 5599,
+    "getTokenInfoBurnedSpot": 3134,
+    "getTokenInfoFragmented": 14643,
+    "getTokenInfoFresh": 47793,
+    "getTokenInfoFresh31": 72103,
+    "getTokenInfoInitialized": 5803,
+    "getTokenInfoSpot": 3442,
+    "mintCrates1": 120918,
+    "mintCrates15": 484246,
+    "mintCrates15After1": 432946,
+    "mintCrates15After240": 432946,
+    "mintCrates15AfterWarehouse": 432946,
+    "mintCrates15Receiver": 510253,
+    "mintCrates1AfterWarehouse": 69618,
+    "mintWarehouses1": 165953,
+    "mintWarehouses15": 843203,
+    "mintWarehouses15AfterCrate": 791903,
+    "mintWarehouses15AfterWarehouse": 774803,
+    "mintWarehouses15Receiver": 869210,
+    "mintWarehouses1AfterCrate": 114653,
+    "mintWarehouses1AfterWarehouse": 97553,
+    "stats": 13190,
+    "unboxCrate20": 130828,
+    "unboxCrate20Receiver": 161938,
+    "unboxCrate31": 135234,
+    "unboxCrate31Receiver": 183319,
+    "unboxWarehouse": 353461,
+    "unboxWarehouseReceiver": 372538,
+    "warehousesMinted": 2384
+  }
+}

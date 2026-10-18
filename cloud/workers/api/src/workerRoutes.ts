@@ -39,6 +39,8 @@ import { shopRoutes, packStatusRoute } from './workerRoutes/shop.js';
 import { commerceRoutes } from './workerRoutes/commerce.js';
 import { profileRoutes } from './workerRoutes/profile.js';
 import { staffRoutes } from './workerRoutes/staff.js';
+import { ethereumRoutes } from './ethereumRoutes.js';
+import { ETHEREUM_SESSION_HEADER } from '../../../../shared/ethereum/api.js';
 
 export type { MatchedWorkerRoute, WorkerRouteResult } from './workerRoutes/support.js';
 
@@ -52,6 +54,7 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
   ...commerceRoutes,
   ...profileRoutes,
   ...staffRoutes,
+  ...ethereumRoutes,
 ];
 
 function compileExactRoutes(entries: readonly ExactWorkerRoute[]): ReadonlyMap<string, MatchedWorkerRoute> {
@@ -122,6 +125,7 @@ export function workerRoutePreflightResponse(
 ): Response | undefined {
   if (request.method !== 'OPTIONS') return undefined;
   if (route.cors === 'mi-note') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
+  if (route.cors === 'ethereum') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
   if (route.cors === 'profile') return handleProfileCorsPreflight(request);
   if (route.cors === 'staff-auth') {
     return handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
@@ -155,6 +159,7 @@ export function applyWorkerRouteCors(
   response: Response,
 ): Response {
   if (route.cors === 'mi-note') return applyProfileCors(request, response, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
+  if (route.cors === 'ethereum') return applyProfileCors(request, response, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
   return route.cors === 'profile' || route.cors === 'staff-auth'
     ? applyProfileCors(request, response)
     : response;
@@ -192,8 +197,8 @@ export function unexpectedWorkerRouteResponse(
           : {}),
       },
     }, 503, receiptClaimRetryHeaders(route.logRoute)),
-    route.cors === 'mi-note' ? 'GET, POST, OPTIONS' : undefined,
-    route.cors === 'mi-note' ? MI_NOTE_SESSION_HEADER : undefined);
+    route.cors === 'mi-note' || route.cors === 'ethereum' ? 'GET, POST, OPTIONS' : undefined,
+    route.cors === 'mi-note' ? MI_NOTE_SESSION_HEADER : route.cors === 'ethereum' ? ETHEREUM_SESSION_HEADER : undefined);
   }
   return sharedJsonResponse({ ok: false, error: 'internal' }, 500);
 }

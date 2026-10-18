@@ -124,6 +124,9 @@ function env(options: {
     ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW: options.workflow || workflow,
     STRIPE_RECEIPT_CLAIM_WORKFLOW: {} as Env['STRIPE_RECEIPT_CLAIM_WORKFLOW'],
     STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: 'false',
+    ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: '',
+    ETHEREUM_111K_RENDERER_ADDRESS: '', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
+    ETHEREUM_111K_RPC_URL: '',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -240,6 +243,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       },
       shippedNotifications: async () => { calls.push('shippedNotifications'); return emptyReconciliationResult(); },
       receiptClaims: async () => { calls.push('receiptClaims'); return emptyReconciliationResult(); },
+      ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
     }),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
@@ -247,7 +251,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       return true;
     },
   );
-  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
+  assert.deepEqual(calls.sort(), ['ethereum', 'notifications', 'ops', 'packStatus', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {
@@ -3866,21 +3870,33 @@ test('transient provider errors retry once and provider deadlines return 504', a
   assert.deepEqual(await timedOut.json(), { ok: false, error: 'provider-timeout' });
 });
 
-test('fresh attempt budgets allow multi-wave inventory work beyond one attempt window', async () => {
-  const startedAt = performance.now();
+test('fresh attempt budgets allow multi-wave inventory work beyond one attempt window', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  context.mock.method(performance, 'now', () => now);
+  const attemptStarts: number[] = [];
   const providerFetch: ProviderFetch = async (_input, init) => {
+    attemptStarts.push(now);
     await new Promise((resolve) => setTimeout(resolve, 4));
     const body = JSON.parse(String(init?.body));
     const collection = body.params?.grouping?.[1];
     return rpcCursorSearchResult(body, [unknownAsset(`fresh-${collection}`, collection)]);
   };
-  const response = await handleRequest(request('/inventory'), env(), {
+  let completed = false;
+  const pending = handleRequest(request('/inventory'), env(), {
     ...quietDependencies(providerFetch),
     providerAttemptTimeoutMs: 10,
     providerTimeoutMs: 100,
-  });
+  }).finally(() => { completed = true; });
+  for (let tick = 0; tick < 30 && !completed; tick++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    now += 4;
+    context.mock.timers.tick(4);
+  }
+  assert.equal(completed, true, 'Inventory must finish within its simulated overall budget');
+  const response = await pending;
   assert.equal(response.status, 200);
-  assert.ok(performance.now() - startedAt > 10);
+  assert.ok(Math.max(...attemptStarts) - Math.min(...attemptStarts) > 10);
 });
 
 test('provider deadlines while reading streamed inventory and pending bodies return 504', async () => {

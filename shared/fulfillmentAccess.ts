@@ -1,4 +1,5 @@
 import { DEPLOYMENT_DROPS } from './deploymentRegistry.ts';
+import { ETHEREUM_111K_DROP_ID } from './ethereum/protocol.ts';
 
 export type ShipperFulfillmentAccessConfig = Readonly<{
   wallet: string;
@@ -20,12 +21,12 @@ export const ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES: readonly string[] = O
   'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
 ]);
 
-export const CARD_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze([
+const CARD_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze([
   'card_nft_2',
   'clear_cards',
 ]);
 
-export const CARD_NFT_BINDER_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
+const CARD_NFT_BINDER_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
   Object.values(DEPLOYMENT_DROPS)
     .filter((drop) => drop.dropFamily === 'card_nft_binder')
     .map((drop) => drop.dropId)
@@ -59,7 +60,7 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
   }),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: MAINNET_FULFILLMENT_DROP_IDS,
+    dropIds: Object.freeze([...MAINNET_FULFILLMENT_DROP_IDS, ETHEREUM_111K_DROP_ID]),
   }),
 ]);
 
@@ -71,6 +72,10 @@ export const STAFF_WALLET_ADDRESSES: readonly string[] = Object.freeze(Array.fro
 ])));
 
 const STAFF_WALLET_ADDRESS_SET = new Set(STAFF_WALLET_ADDRESSES);
+
+export function isSupportedFulfillmentDrop(dropId: string): boolean {
+  return dropId === ETHEREUM_111K_DROP_ID || Object.hasOwn(DEPLOYMENT_DROPS, dropId);
+}
 
 export function isStaffWalletAddress(wallet: string | null | undefined): boolean {
   return Boolean(wallet && STAFF_WALLET_ADDRESS_SET.has(wallet));

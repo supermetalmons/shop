@@ -9,7 +9,7 @@ export function fulfillmentBoxSecretCode(
 }
 
 export function isUsedReceiptClaimStatus(status: string | undefined): boolean {
-  return status === 'processing' || status === 'claimed';
+  return status === 'pending' || status === 'processing' || status === 'claimed';
 }
 
 export function fulfillmentCardClaimSecretCode(

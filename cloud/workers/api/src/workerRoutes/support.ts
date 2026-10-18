@@ -9,6 +9,7 @@ type WorkerRouteCorsPolicy =
   | 'profile'
   | 'staff-auth'
   | 'mi-note'
+  | 'ethereum'
   | 'pack-status';
 
 type WorkerRouteStaffPolicy = 'skip' | 'optional' | 'required';

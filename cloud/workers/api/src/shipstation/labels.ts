@@ -40,6 +40,7 @@ import {
   profileErrorForShipStation,
   supportedDropId,
   requireFulfillmentAccess,
+  requireShipStationEnabled,
   ShipStationProfileError,
   clientCancellationReason,
 } from './common.js';
@@ -166,6 +167,7 @@ async function getFulfillmentShipStationLabel(
 ): Promise<GetFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  requireShipStationEnabled(dropId);
   if (!apiKey) {
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }
@@ -323,6 +325,7 @@ async function voidFulfillmentShipStationLabel(
 ): Promise<VoidFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  requireShipStationEnabled(dropId);
   if (!apiKey) {
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }
@@ -518,6 +521,7 @@ async function purchaseFulfillmentShipStationLabel(
 ): Promise<PurchaseFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  requireShipStationEnabled(dropId);
   if (!apiKey) {
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }

@@ -12,7 +12,10 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.drop === b.drop &&
   a.upcoming === b.upcoming &&
   a.wipExperience === b.wipExperience &&
-  a.walletCluster === b.walletCluster;
+  a.walletCluster === b.walletCluster &&
+  a.ethereumDropId === b.ethereumDropId &&
+  a.ethereumClaimReceiptId === b.ethereumClaimReceiptId &&
+  a.ethereumClaimCode === b.ethereumClaimCode;
 
 function resolveCurrentRoute(): ResolvedAppRoute {
   const route = resolveAppRoute({

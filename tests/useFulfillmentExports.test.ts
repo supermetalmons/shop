@@ -5,7 +5,7 @@ import { figureMetadataCacheKey, type FigureMetadataRecord } from '../src/lib/fi
 import type { FulfillmentOrder } from '../src/types.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
-setupFrontendDom();
+const { dom } = setupFrontendDom();
 
 const { act, cleanup, renderHook } = await import('@testing-library/react');
 const { useFulfillmentExports } = await import('../src/fulfillment/useFulfillmentExports.ts');
@@ -17,6 +17,7 @@ const cardDrop = FRONTEND_DROPS.card_nft_2;
 afterEach(() => {
   cleanup();
   mock.restoreAll();
+  dom.reconfigure({ url: 'https://mons.shop/' });
 });
 
 function deferred<T>() {
@@ -66,6 +67,108 @@ function dependencies() {
     downloadJsonFile: mock.fn<Dependencies['downloadJsonFile']>(),
   };
 }
+
+test('Ethereum PNG and ZIP claim links stay on the local app origin', async () => {
+  dom.reconfigure({ url: 'http://localhost:5173/fulfillment' });
+  const inputs = options();
+  inputs.displayedOrders = [{ ...order(), dropId: '111k_devnet', source: 'ethereum',
+    boxes: [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: [111081] }], cardClaims: [] }];
+  inputs.fulfillmentFigureMetadataTargets = [];
+  mock.method(globalThis, 'fetch', async () => Response.json({ image: 'data:image/svg+xml;base64,PHN2Zy8+' }));
+  const files = dependencies();
+  const { result } = renderHook(() => useFulfillmentExports(inputs, files));
+  await act(async () => { await result.current.downloadSecretCodePng(inputs.displayedOrders[0], { kind: 'box', index: 0 }); });
+  await act(async () => { await result.current.downloadDisplayedSecretCodes(); });
+  const claimUrl = 'http://localhost:5173/111k_devnet?receiptId=2005555&claim=ABCDEF123456';
+  assert.equal(files.buildSecretCodePngBlob.mock.calls[0].arguments[0].claimUrl, claimUrl);
+  assert.equal(files.buildSecretCodesZipBlob.mock.calls[0].arguments[0][0].claimUrl, claimUrl);
+  assert.equal(inputs.setOrdersError.mock.calls.at(-1)?.arguments[0], null);
+});
+
+test('Ethereum ZIP previews load four at a time and preparation progress continues into ZIP generation', async () => {
+  const inputs = options();
+  const ids = [6601, 6602, 6603, 6604, 6605, 6606];
+  inputs.displayedOrders = [{ ...order(), dropId: '111k_devnet', source: 'ethereum', cardClaims: [],
+    boxes: ids.map((boxId) => ({ boxId, claimCode: 'ABCDEF123456', dudeIds: [111081] })) }];
+  inputs.fulfillmentFigureMetadataTargets = [];
+  const previews = ids.map(() => deferred<Response>());
+  const image = (id: number) => `data:image/svg+xml;base64,${Buffer.from(`<svg>${id}</svg>`).toString('base64')}`;
+  let active = 0;
+  let maxActive = 0;
+  const fetchPreview = mock.method(globalThis, 'fetch', (input: string | URL | Request) => {
+    const index = ids.indexOf(Number(new URL(String(input)).searchParams.get('displayId')));
+    assert.ok(index >= 0);
+    maxActive = Math.max(maxActive, ++active);
+    return previews[index].promise.finally(() => { active--; });
+  });
+  const files = dependencies();
+  const zip = deferred<Blob>();
+  files.buildSecretCodesZipBlob.mock.mockImplementation((_entries, onProgress) => {
+    onProgress?.(0);
+    return zip.promise;
+  });
+  const { result } = renderHook(() => useFulfillmentExports(inputs, files));
+  let download!: Promise<void>;
+  await act(async () => { download = result.current.downloadDisplayedSecretCodes(); });
+  assert.equal(fetchPreview.mock.callCount(), 4);
+  assert.equal(active, 4);
+  assert.equal(files.buildSecretCodesZipBlob.mock.callCount(), 0);
+
+  await act(async () => { previews[2].resolve(Response.json({ image: image(ids[2]) })); });
+  assert.ok(result.current.secretCodesExportPercent > 0);
+  assert.equal(result.current.secretCodeDownloadDisabled, true);
+  await act(async () => {
+    for (const index of [0, 1, 3]) previews[index].resolve(Response.json({ image: image(ids[index]) }));
+  });
+  assert.equal(fetchPreview.mock.callCount(), 6);
+  assert.equal(maxActive, 4);
+  assert.equal(files.buildSecretCodesZipBlob.mock.callCount(), 0);
+  await act(async () => {
+    for (const index of [4, 5]) previews[index].resolve(Response.json({ image: image(ids[index]) }));
+  });
+  assert.equal(result.current.secretCodesExportPercent, 20);
+  assert.deepEqual(files.buildSecretCodesZipBlob.mock.calls[0].arguments[0].map((entry) => entry.previewImages),
+    ids.map((id) => [{ src: image(id) }]));
+  act(() => { files.buildSecretCodesZipBlob.mock.calls[0].arguments[1]?.(50); });
+  assert.equal(result.current.secretCodesExportPercent, 60);
+  await act(async () => { zip.resolve(new Blob(['zip'])); await download; });
+  assert.equal(files.downloadBlobFile.mock.callCount(), 1);
+  assert.equal(result.current.secretCodesExporting, false);
+  assert.equal(result.current.secretCodesExportPercent, 0);
+});
+
+test('failed Ethereum previews finish their batch before unlocking exports and skip later batches', async () => {
+  const inputs = options();
+  inputs.displayedOrders = [{ ...order(), dropId: '111k_devnet', source: 'ethereum', cardClaims: [],
+    boxes: [6701, 6702, 6703, 6704, 6705].map((boxId) => ({ boxId, claimCode: 'ABCDEF123456', dudeIds: [111081] })) }];
+  inputs.fulfillmentFigureMetadataTargets = [];
+  const previews = Array.from({ length: 4 }, () => deferred<Response>());
+  let nextPreview = 0;
+  const fetchPreview = mock.method(globalThis, 'fetch', () => previews[nextPreview++].promise);
+  mock.method(console, 'error', () => undefined);
+  const files = dependencies();
+  const { result } = renderHook(() => useFulfillmentExports(inputs, files));
+  let download!: Promise<void>;
+  await act(async () => { download = result.current.downloadDisplayedSecretCodes(); });
+  await act(async () => { previews[0].reject(new Error('Preview unavailable')); });
+  assert.equal(result.current.secretCodesExporting, true);
+  assert.equal(fetchPreview.mock.callCount(), 4);
+  await act(async () => {
+    for (const preview of previews.slice(1)) preview.resolve(Response.json({ image: 'data:image/svg+xml;base64,PHN2Zy8+' }));
+    await download;
+  });
+  assert.equal(fetchPreview.mock.callCount(), 4);
+  assert.equal(files.buildSecretCodesZipBlob.mock.callCount(), 0);
+  assert.equal(files.downloadBlobFile.mock.callCount(), 0);
+  assert.equal(result.current.secretCodeDownloadDisabled, false);
+  assert.equal(result.current.secretCodesExportPercent, 0);
+  assert.equal(inputs.setOrdersError.mock.calls.at(-1)?.arguments[0], 'Preview unavailable');
+
+  fetchPreview.mock.mockImplementation(async () => Response.json({ image: 'data:image/svg+xml;base64,PHN2Zy8+' }));
+  await act(async () => { await result.current.downloadDisplayedSecretCodes(); });
+  assert.equal(files.downloadBlobFile.mock.callCount(), 1);
+  assert.equal(inputs.setOrdersError.mock.calls.at(-1)?.arguments[0], null);
+});
 
 test('ZIP uses refreshed metadata, reports progress, and blocks PNG downloads until completion', async () => {
   const inputs = options();

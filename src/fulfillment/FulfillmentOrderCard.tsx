@@ -27,6 +27,7 @@ import { FulfillmentOrderTitle } from './FulfillmentOrderTitle';
 import { formatOrderDate } from './manualReview';
 import { fulfillmentOrderKey } from './orders';
 import type { FulfillmentSecretCodeDownloadTarget } from './useFulfillmentExports';
+import { EthereumFulfillmentCard } from './EthereumFulfillmentCard';
 
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
 const BOX_CONTENTS_FIGURE_GAP = 12;
@@ -189,6 +190,10 @@ export function FulfillmentOrderCard({
   onPrintLabel,
   onDownloadSecretCode,
 }: FulfillmentOrderCardProps) {
+  if (order.dropId === '111k_devnet') return <EthereumFulfillmentCard {...{
+    order, showContactInfo, showFullAddress, canAdminEditFulfillmentAddress,
+    secretCodeDownloadDisabled, onEditAddress, onEditStatus, onDownloadSecretCode,
+  }} />;
   if (!orderDrop) return null;
   const orderKey = fulfillmentOrderKey(order);
   const orderDropContent = resolveDropContent(orderDrop);

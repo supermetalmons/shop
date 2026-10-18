@@ -15,7 +15,8 @@ const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { useShopPreorders } = await import('../src/shop/purchase/useShopPreorders.ts');
-type Options = Parameters<typeof useShopPreorders>[0];
+const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
+type Options = Omit<Parameters<typeof useShopPreorders>[0], 'ethereumWallet'>;
 const clients: InstanceType<typeof QueryClient>[] = [];
 const address = (value: number) => bs58.encode(new Uint8Array(32).fill(value));
 const buyer = address(31);
@@ -100,7 +101,10 @@ function harness(overrides: Partial<Options> = {}, client = new QueryClient({
     ...overrides,
   };
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  const view = renderHook((props: Options) => useShopPreorders(props), { wrapper, initialProps: options });
+  const view = renderHook((props: Options) => {
+    const ethereumWallet = useMiNoteEthereumWallet(props.preorderId !== null && !props.commerceUiSuspended);
+    return useShopPreorders({ ...props, ethereumWallet });
+  }, { wrapper, initialProps: options });
   return { ...view, options, client, toasts, successes, get refreshes() { return refreshes; } };
 }
 

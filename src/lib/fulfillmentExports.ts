@@ -64,7 +64,7 @@ type FulfillmentExportOptions = {
 };
 
 export type FulfillmentOrdersExportOptions = FulfillmentExportOptions;
-export type FulfillmentSecretCodeExportOptions = FulfillmentExportOptions;
+export type FulfillmentSecretCodeExportOptions = FulfillmentExportOptions & { ethereumClaimOrigin?: string };
 
 export type FulfillmentExportFilenameKind = 'orders' | 'addresses-sensitive' | 'secret-codes';
 
@@ -211,6 +211,13 @@ export function buildFulfillmentOrdersExport(
   options: FulfillmentOrdersExportOptions,
 ): FulfillmentOrderExport[] {
   return orders.map((order) => {
+    if (order.dropId === '111k_devnet') return {
+      orderId: fulfillmentExportOrderId(order), ...countryExportFields(order.address),
+      ...(order.boxes.length ? { boxes: order.boxes.map((box) => ({
+        ...(exportableBoxSecretCode(box) ? { secretCode: exportableBoxSecretCode(box) } : {}), figures: box.dudeIds,
+      })) } : {}),
+      ...(order.looseDudes.length ? { looseFigures: order.looseDudes } : {}),
+    };
     const drop = options.dropById.get(order.dropId) || null;
     const previewMode = resolveDropContent(drop || order.dropId).figures.fulfillmentPreviewMode;
     const boxes = order.boxes.map((box) =>
@@ -328,6 +335,7 @@ function buildFulfillmentSecretCodeExportResult(args: {
   secretCodeOrdinal: number;
   previewImages: FulfillmentSecretCodePreviewImage[];
   usedFilenames?: Set<string>;
+  ethereumClaimOrigin?: string;
 }): FulfillmentSecretCodeExportEntry {
   const orderSegment = sanitizeFilenameSegment(String(args.order.deliveryId), 'order');
   const filenameBase = `${orderSegment}-${args.secretCodeOrdinal}.png`;
@@ -336,7 +344,9 @@ function buildFulfillmentSecretCodeExportResult(args: {
     orderId: fulfillmentExportOrderId(args.order),
     ...args.target,
     secretCode: args.secretCode,
-    claimUrl: fulfillmentSecretCodeClaimUrl(args.secretCode),
+    claimUrl: args.order.dropId === '111k_devnet' && 'boxId' in args.target
+      ? `${new URL('/111k_devnet', args.ethereumClaimOrigin || 'https://mons.shop').href}?${new URLSearchParams({ receiptId: String(2_000_000 + args.target.boxId), claim: args.secretCode })}`
+      : fulfillmentSecretCodeClaimUrl(args.secretCode),
     filename,
     ...(args.previewImages.length ? { previewImages: args.previewImages } : {}),
   };
@@ -427,6 +437,11 @@ function buildFulfillmentSecretCodeExportEntryFromBox(args: {
   options?: FulfillmentSecretCodeExportOptions;
   usedFilenames?: Set<string>;
 }): FulfillmentSecretCodeExportEntry {
+  if (args.order.dropId === '111k_devnet') return buildFulfillmentSecretCodeExportResult({
+    order: args.order, target: { boxId: args.box.boxId, boxIndex: args.boxIndex }, secretCode: args.secretCode,
+    secretCodeOrdinal: args.secretCodeOrdinal, previewImages: [], usedFilenames: args.usedFilenames,
+    ethereumClaimOrigin: args.options?.ethereumClaimOrigin,
+  });
   const drop = args.options?.dropById.get(args.order.dropId) || null;
   const previewMode = resolveDropContent(drop || args.order.dropId).figures.fulfillmentPreviewMode;
   const previewImages = args.options

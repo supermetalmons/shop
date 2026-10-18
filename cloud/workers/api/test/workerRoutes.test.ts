@@ -8,7 +8,7 @@ import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIP
 
 type ExpectedExactRoute = readonly [
   pathname: string,
-  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'pack-status',
+  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'pack-status',
   profileOriginGate: boolean,
   staff: 'skip' | 'optional' | 'required',
   commerceMutation: boolean,
@@ -72,6 +72,21 @@ const EXPECTED_EXACT_ROUTES = [
   ['/fulfillment/shipstation-label-void', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-label-void'],
   ['/fulfillment/shipstation-rates', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-rates'],
   ['/fulfillment/shipstation-shipment', 'profile', true, 'required', true, 'profile', '/fulfillment/shipstation-shipment'],
+  ['/ethereum/111k/config', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/config'],
+  ['/ethereum/111k/stats', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/stats'],
+  ['/ethereum/111k/inventory', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/inventory'],
+  ['/ethereum/111k/metadata', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/metadata'],
+  ['/ethereum/111k/transactions/confirm', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/transactions/confirm'],
+  ['/ethereum/auth/challenge', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/challenge'],
+  ['/ethereum/auth/verify', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/verify'],
+  ['/ethereum/auth/logout', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/logout'],
+  ['/ethereum/profile', 'ethereum', true, 'skip', false, 'profile', '/ethereum/profile'],
+  ['/ethereum/addresses', 'ethereum', true, 'skip', false, 'profile', '/ethereum/addresses'],
+  ['/ethereum/shipments', 'ethereum', true, 'skip', false, 'profile', '/ethereum/shipments'],
+  ['/ethereum/111k/delivery/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/delivery/prepare'],
+  ['/ethereum/111k/delivery/confirm', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/delivery/confirm'],
+  ['/ethereum/111k/claims/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/claims/prepare'],
+  ['/ethereum/111k/claims/confirm', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/claims/confirm'],
 ] satisfies readonly ExpectedExactRoute[];
 
 function routeContract(pathname: string) {
@@ -131,6 +146,17 @@ test('unexpected Mi Note errors retain the verification CORS policy', () => {
     assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mi-Note-Session/);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
   }
+});
+
+test('unexpected Ethereum errors preserve wallet session CORS policy', () => {
+  const route = workerRouteRegistry.resolve('/ethereum/111k/delivery/prepare');
+  const response = unexpectedWorkerRouteResponse(route, new Request('https://api.mons.shop/ethereum/111k/delivery/prepare', {
+    headers: { Origin: 'https://mons.shop' },
+  }));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
+  assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mons-Ethereum-Session/);
+  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
 });
 
 test('pack-status route resolution distinguishes valid, invalid, and nonmatching paths', () => {

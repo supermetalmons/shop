@@ -1,0 +1,22 @@
+{
+  "name": "111k-contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "forge build --offline",
+    "test": "forge test --offline --no-match-contract NFT111KGasTest --gas-snapshot-emit=false",
+    "abi": "node scripts/generate-abi.mjs",
+    "check": "npm test && npm run test:gas-check && npm run gas:check && node scripts/check-fixtures.mjs && node scripts/generate-abi.mjs --check",
+    "gas:update": "forge test --offline --isolate --match-contract NFT111KGasTest --gas-snapshot-check=false --gas-snapshot-emit=true",
+    "gas:check": "node scripts/check-gas-snapshots.mjs",
+    "test:gas-check": "node --test scripts/check-gas-snapshots.test.mjs",
+    "test:invariants:extended": "FOUNDRY_INVARIANT_RUNS=512 FOUNDRY_INVARIANT_DEPTH=128 forge test --offline --match-contract NFT111KInvariantTest --gas-snapshot-emit=false",
+    "chain:local": "anvil --host 127.0.0.1 --chain-id 31337 --block-time 1",
+    "deploy:local": "node scripts/deploy-local.mjs"
+  },
+  "devDependencies": {
+    "@openzeppelin/contracts": "5.6.1",
+    "erc721a": "4.3.0"
+  }
+}

@@ -295,6 +295,7 @@ export type FulfillmentOrder = {
   deliveryId: number;
   owner: string;
   source?: string;
+  ethereumTransaction?: { chainId: 11155111 | 31337; hash: string };
   stripeChargeback?: boolean;
   status: string;
   createdAt?: number;

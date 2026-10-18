@@ -5,6 +5,7 @@ import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { useMiNoteEthereumWallet } from './hooks/useMiNoteEthereumWallet';
 import { useStripeCheckoutInventoryRecovery } from './hooks/useStripeCheckoutInventoryRecovery';
 import { useStripeCheckoutRecovery } from './hooks/useStripeCheckoutRecovery';
 import {
@@ -58,6 +59,7 @@ import { useShopDrop } from './shop/useShopDrop';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
+const Ethereum111kPage = lazy(() => import('./ethereum/Ethereum111kPage'));
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -88,6 +90,8 @@ function App({ route, suspended = false }: AppProps) {
   const drop = useShopDrop(route);
   const isNfcPage = route.kind === 'nfc';
   const commerceUiSuspended = suspended || isNfcPage;
+  const isEthereum111kPage = route.ethereumDropId === '111k_devnet';
+  const ethereumWallet = useMiNoteEthereumWallet((route.preorderId !== null || isEthereum111kPage) && !commerceUiSuspended);
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
   const purchaseState = useShopPurchaseState(drop);
@@ -153,7 +157,8 @@ function App({ route, suspended = false }: AppProps) {
   const walletActionBusy = Boolean(pendingAction);
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
-  const { miNoteCardsPage, ethereumWallet, ethereumVerification, preorderCheckout } = useShopPreorders({
+  const { miNoteCardsPage, ethereumVerification, preorderCheckout } = useShopPreorders({
+    ethereumWallet,
     preorderId: route.preorderId,
     connectedWallet,
     authenticatedWallet: account.authenticatedWallet,
@@ -377,6 +382,7 @@ function App({ route, suspended = false }: AppProps) {
     drop.routeDrop || drop.upcomingDropRoute || drop.normalizedCurrentPath === '/' ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
     miNoteCardsPage ? 'drop-page-frame--mi-note-cards' : '',
+    isEthereum111kPage ? 'drop-page-frame--ethereum' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -404,6 +410,30 @@ function App({ route, suspended = false }: AppProps) {
         />
         {isNfcPage ? (
           <NfcClaimPage key={route.nfcDeepLinkCode} />
+        ) : isEthereum111kPage ? (
+          <Suspense fallback={<p className="muted" role="status">Loading 111K…</p>}>
+            <Ethereum111kPage
+              wallet={ethereumWallet}
+              claimReceiptId={route.ethereumClaimReceiptId}
+              claimCode={route.ethereumClaimCode}
+              addressEncryptionPublicKey={ADDRESS_ENCRYPTION_PUBLIC_KEY}
+              solanaInventoryItems={inventory.inventoryItems}
+              solanaSelected={selection.selected}
+              onSolanaToggle={selection.toggleSelected}
+              clearSolanaSelection={selectionState.clearSelection}
+              pendingRevealIds={inventory.pendingRevealIds}
+              onSolanaReveal={(id, rect) => {
+                const item = inventory.inventoryIndex.get(id);
+                if (item) void actionHandlers.openPendingReveal(item, rect);
+              }}
+              onSolanaView={reveal.viewItem}
+              canOpenSolanaBoxes={drop.canOpenBoxesForDropId}
+              solanaRevealLoading={reveal.revealLoading}
+              solanaInventoryReady={inventory.inventoryInitialResponseReady}
+              externalBusy={walletActionBusy}
+              suspended={Boolean(activeModalLayer) || suspended}
+            />
+          </Suspense>
         ) : miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
@@ -445,7 +475,7 @@ function App({ route, suspended = false }: AppProps) {
           />
         )}
       </div>
-      {!miNoteCardsPage && !isNfcPage && (
+      {!miNoteCardsPage && !isNfcPage && !isEthereum111kPage && (
         <ShopInventorySection
           {...inventory}
           selected={selection.selected}

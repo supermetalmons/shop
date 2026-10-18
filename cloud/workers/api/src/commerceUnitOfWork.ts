@@ -68,6 +68,17 @@ import {
 
 type PendingDocument = StoredDocument | null;
 
+type EthereumStateExpectation = Readonly<{
+  chainId: number;
+  contractAddress: string;
+  id: string;
+  status: string;
+  transactionHash: string | null;
+  blockNumber: number | null;
+  blockHash: string | null;
+  updatedAtMs: number;
+} & ({ kind: 'delivery' } | { kind: 'claim'; orderId: number; claimId: string })>;
+
 const COMMERCE_READ_BATCH_SIZE = 50;
 
 function deliveryOwnerRevisionStatement(db: D1Database, owner: string): D1PreparedStatement {
@@ -108,6 +119,7 @@ export class CommerceUnitOfWork {
   private readonly recovery = new CommerceRecoveryStaging();
   private closed = false;
   private readonly deliveryOwnerExpectations = new Map<string, number>();
+  private readonly ethereumStateExpectations = new Map<string, EthereumStateExpectation>();
   private readonly expectations = new Map<string, DocumentExpectation>();
   private readonly original = new Map<string, StoredDocument | null>();
   private readonly pending = new Map<string, PendingDocument>();
@@ -131,6 +143,21 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const document = await this.load(key);
     return document ? publicRecord(document) : null;
+  }
+
+  expectEthereumState(input: EthereumStateExpectation): void {
+    this.assertOpen();
+    if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
+    const expectation: EthereumStateExpectation = {
+      chainId: input.chainId, contractAddress: input.contractAddress, id: input.id,
+      status: input.status, transactionHash: input.transactionHash, blockNumber: input.blockNumber,
+      blockHash: input.blockHash, updatedAtMs: input.updatedAtMs,
+      ...(input.kind === 'claim' ? { kind: input.kind, orderId: input.orderId, claimId: input.claimId } : { kind: input.kind }),
+    };
+    const key = JSON.stringify([input.kind, input.chainId, input.contractAddress, input.id]);
+    const previous = this.ethereumStateExpectations.get(key);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(expectation)) throw new CommerceWriteConflict();
+    this.ethereumStateExpectations.set(key, expectation);
   }
 
   async getRecoverySnapshot(key: CommerceDocumentKey<'delivery_order'>): Promise<RecoverySnapshot | null> {
@@ -345,7 +372,7 @@ export class CommerceUnitOfWork {
       recovery: this.recovery.original,
       notifications: this.outboxes.original,
     });
-    if (!this.pending.size && !this.outboxes.pending.size && !this.recovery.pending.size) {
+    if (!this.pending.size && !this.outboxes.pending.size && !this.recovery.pending.size && !this.ethereumStateExpectations.size) {
       if (!this.deliveryOwnerExpectations.size && !this.expectations.size && !this.outboxes.original.size && !this.recovery.original.size) {
         await authority(this.db);
         return;
@@ -357,12 +384,14 @@ export class CommerceUnitOfWork {
     const deliveryPaths = Array.from(this.pending, ([path, document]) =>
       (document ?? this.original.get(path))?.key.kind === 'delivery_order' ? path : null).filter((path): path is string => path !== null);
     const usesRecovery = this.recovery.original.size > 0 || deliveryPaths.length > 0;
+    const usesEthereum = this.ethereumStateExpectations.size > 0;
     const statements: D1PreparedStatement[] = [
       this.db.prepare(`INSERT INTO commerce_commit_guards (
         guard_id, expectations_json, delivery_owner_expectations_json,
         expected_documents_revision, created_at_ms, notification_outbox_expectations_json, stripe_checkout_paths_json
         ${usesRecovery ? ', delivery_recovery_expectations_json, delivery_recovery_paths_json' : ''}
-      ) VALUES (?, ?, ?, ?, ?, ?, ?${usesRecovery ? ', ?, ?' : ''})`).bind(
+        ${usesEthereum ? ', ethereum_state_expectations_json' : ''}
+      ) VALUES (?, ?, ?, ?, ?, ?, ?${usesRecovery ? ', ?, ?' : ''}${usesEthereum ? ', ?' : ''})`).bind(
         guardId,
         expectations.documents,
         expectations.deliveryOwners,
@@ -372,6 +401,7 @@ export class CommerceUnitOfWork {
         JSON.stringify(Array.from(this.pending, ([path, document]) =>
           (document ?? this.original.get(path))?.key.kind === 'stripe_checkout' ? path : null).filter(Boolean)),
         ...(usesRecovery ? [expectations.recovery, JSON.stringify(deliveryPaths)] : []),
+        ...(usesEthereum ? [JSON.stringify(Array.from(this.ethereumStateExpectations.values()))] : []),
       ),
     ];
     for (const [path, document] of this.pending) {

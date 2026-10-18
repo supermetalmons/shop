@@ -7,6 +7,7 @@ import type { CommerceDocumentRecord } from './commerceRepositoryTypes.js';
 
 const FULFILLMENT_ORDER_FIELDS = [
   'deliveryId', 'owner', 'source', 'status', 'createdAt', 'processedAt', 'fulfillmentStatus',
+  'chainId', 'deliverySignature',
   'fulfillmentTrackingCode', 'fulfillmentUpdatedAt', 'fulfillmentInternalStatus', 'shipstation',
   'addressSnapshot', 'items', 'irlClaims', 'stripeReceiptClaimsByBoxId', 'stripeReceiptClaims',
   'stripeReceiptClaim', 'adminIrlRedeem',

@@ -2,7 +2,7 @@ import type { VersionedTransaction } from '@solana/web3.js';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { getPreorderConfig } from '../../../shared/preorders';
-import { useMiNoteEthereumWallet } from '../../hooks/useMiNoteEthereumWallet';
+import type { useMiNoteEthereumWallet } from '../../hooks/useMiNoteEthereumWallet';
 import { useMiNoteVerification } from '../../hooks/useMiNoteVerification';
 import { usePreorderCheckout } from '../../hooks/usePreorderCheckout';
 import { usePreorderRecoveryRecords } from '../../hooks/usePreorderRecoveryRecords';
@@ -15,6 +15,7 @@ const MI_NOTE_DEVNET_PREORDER = getPreorderConfig('mi_note_cards_devnet')!;
 const MI_NOTE_MAINNET_PREORDER = getPreorderConfig('mi_note_cards')!;
 
 type ShopPreordersOptions = {
+  ethereumWallet: ReturnType<typeof useMiNoteEthereumWallet>;
   preorderId: ResolvedAppRoute['preorderId'];
   connectedWallet: string | undefined;
   authenticatedWallet: string | undefined;
@@ -30,6 +31,7 @@ type ShopPreordersOptions = {
 };
 
 export function useShopPreorders({
+  ethereumWallet,
   preorderId,
   connectedWallet,
   authenticatedWallet,
@@ -46,7 +48,6 @@ export function useShopPreorders({
   const miNoteCardsPage = preorderId !== null;
   const preorderConfig = preorderId === MI_NOTE_MAINNET_PREORDER.preorderId ? MI_NOTE_MAINNET_PREORDER : MI_NOTE_DEVNET_PREORDER;
   const preorderActive = miNoteCardsPage && !commerceUiSuspended;
-  const ethereumWallet = useMiNoteEthereumWallet(preorderActive);
   const ethereumVerification = useMiNoteVerification(preorderActive, preorderConfig.preorderId, ethereumWallet);
   const preorderOptions = {
     buyer: connectedWallet,

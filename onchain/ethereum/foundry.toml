@@ -1,0 +1,23 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+cache_path = "cache"
+libs = ["node_modules"]
+solc_version = "0.8.30"
+optimizer = true
+optimizer_runs = 1000
+via_ir = false
+evm_version = "prague"
+bytecode_hash = "none"
+gas_snapshot_emit = false
+fs_permissions = [{ access = "read-write", path = "./fixtures" }]
+
+[profile.default.fuzz]
+runs = 256
+
+[profile.default.invariant]
+runs = 128
+depth = 64
+fail_on_revert = true

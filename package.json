@@ -20,6 +20,7 @@
   "scripts": {
     "start": "npm run dev",
     "dev": "vite",
+    "dev:ethereum:api": "node --import tsx scripts/ethereum111k-dev-api.ts",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",
     "render:mi-note-videos": "node scripts/mi-note-video/cli.mjs",
@@ -55,6 +56,8 @@
     "check:dead-exports:production": "node scripts/check-production-exports.mjs",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:onchain": "cargo test --manifest-path onchain/Cargo.toml --locked",
+    "test:ethereum": "npm --prefix onchain/ethereum run check && node --import tsx --test tests/ethereum*.test.ts",
+    "test:ethereum:e2e": "node --import tsx cloud/workers/api/runtime-test/ethereum111k-e2e.ts",
     "test:onchain:sbf": "cd onchain && NO_DNA=1 anchor build --no-idl --arch sbf -- --features no-idl,no-log-ix-name,mainnet-program-id -- --locked && BOX_MINTER_SBF_PATH=\"$PWD/target/deploy/box_minter.so\" cargo test --locked --features sbf-tests,mainnet-program-id --test split_payments_sbf",
     "check": "npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run check:api && npm run typecheck:tools && npm run check:dead-code && npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
     "check-irl-claims": "tsx scripts/ops/checkIrlClaims.ts",

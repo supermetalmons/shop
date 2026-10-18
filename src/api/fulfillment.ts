@@ -497,6 +497,11 @@ export function createFulfillmentApiClient(
       Number.isSafeInteger(order.deliveryId) && Number(order.deliveryId) > 0 &&
       typeof order.owner === 'string' &&
       typeof order.status === 'string' &&
+      (order.ethereumTransaction === undefined ||
+        order.source === 'ethereum' && isRecord(order.ethereumTransaction) &&
+        hasExactKeys(order.ethereumTransaction, ['chainId', 'hash']) &&
+        (order.ethereumTransaction.chainId === 11155111 || order.ethereumTransaction.chainId === 31337) &&
+        typeof order.ethereumTransaction.hash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(order.ethereumTransaction.hash)) &&
       (order.buyerOrderShippedEmailState === undefined ||
         order.buyerOrderShippedEmailState === 'pending' ||
         order.buyerOrderShippedEmailState === 'queued') &&

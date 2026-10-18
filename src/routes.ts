@@ -50,6 +50,7 @@ const APP_ROUTE_ALIASES: Readonly<Record<string, RouteAlias>> = {
 type AppRouteKind =
   | 'home'
   | 'drop'
+  | 'ethereum-drop'
   | 'upcoming'
   | 'claim'
   | 'nfc'
@@ -69,6 +70,9 @@ export type ResolvedAppRoute = {
   upcoming: UpcomingDropRouteConfig | null;
   wipExperience: ShopWipExperience | null;
   walletCluster: SolanaCluster;
+  ethereumDropId?: '111k_devnet';
+  ethereumClaimReceiptId?: string;
+  ethereumClaimCode?: string;
 };
 
 type AppRouteLocation = {
@@ -125,6 +129,16 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
+  if (path === '/111k_devnet') {
+    const params = new URLSearchParams(search);
+    const receiptId = params.get('receiptId') ?? '';
+    const claimCode = params.get('claim') ?? '';
+    const validClaim = /^200[0-9]{4}$/.test(receiptId) && Number(receiptId) > 2_000_000 && Number(receiptId) <= 2_005_555 && /^[0-9a-fA-F]{12}$/.test(claimCode);
+    return createRoute('ethereum-drop', path, replacementHref, {
+      ethereumDropId: '111k_devnet',
+      ...(validClaim ? { ethereumClaimReceiptId: receiptId, ethereumClaimCode: claimCode.toUpperCase() } : {}),
+    });
+  }
 
   const wipRoute = WIP_ROUTE_BY_PATH.get(path);
   if (wipRoute) {

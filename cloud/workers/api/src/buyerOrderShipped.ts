@@ -37,7 +37,7 @@ export type BuyerOrderShippedDecision =
 type DeliveryOrder = Record<string, unknown>;
 
 function isIgnoredSource(order: DeliveryOrderNotificationView): boolean {
-  return order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
+  return order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE || order.source === 'ethereum';
 }
 
 function shippedWithTracking(order: DeliveryOrderNotificationView): boolean {

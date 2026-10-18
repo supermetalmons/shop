@@ -63,7 +63,7 @@ export function planReadyToShipNotifications(args: ReadyNotificationPlanOptions)
   const before = parseDeliveryOrderNotificationView(args.before);
   const after = parseDeliveryOrderNotificationView(args.after);
   if (!shouldNotifyShippersForDeliveryReadyToShipWrite({
-    before, after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
+    before, after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, 'ethereum'],
   })) return [];
   const deliveryId = notificationDeliveryId(after, args.deliveryId);
   const plan = readyToShipNotificationPlan(after, args.dropId);
