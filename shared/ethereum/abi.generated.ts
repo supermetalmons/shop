@@ -554,6 +554,19 @@ export const mons111kAbi = [
   },
   {
     "type": "function",
+    "name": "redemptionsPaused",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "remainingCrates",
     "inputs": [],
     "outputs": [
@@ -693,6 +706,19 @@ export const mons111kAbi = [
         "name": "signer",
         "type": "address",
         "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setRedemptionsPaused",
+    "inputs": [
+      {
+        "name": "paused",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "outputs": [],
@@ -1312,6 +1338,19 @@ export const mons111kAbi = [
   },
   {
     "type": "event",
+    "name": "RedemptionsPauseUpdated",
+    "inputs": [
+      {
+        "name": "paused",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "RendererUpdated",
     "inputs": [
       {
@@ -1587,6 +1626,11 @@ export const mons111kAbi = [
   {
     "type": "error",
     "name": "OwnershipNotInitializedForExtraData",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "RedemptionsPaused",
     "inputs": []
   },
   {

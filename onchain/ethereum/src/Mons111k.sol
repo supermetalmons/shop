@@ -3,12 +3,12 @@ pragma solidity 0.8.30;
 import {ERC721A} from "erc721a/contracts/ERC721A.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {IMons111kRenderer} from "./IMons111kRenderer.sol";
 
-contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
+contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     enum ItemKind {
         None,
         Artwork,
@@ -49,17 +49,19 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
     uint256 public cratePrice = 0.0001 ether;
     uint256 public warehousePrice = 0.0011 ether;
     bool public saleActive = true;
+    bool public redemptionsPaused;
     address public quoteSigner;
     address payable public treasury;
     IMons111kRenderer public renderer;
     mapping(uint256 => uint256) public warehouseFirstCrate;
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
-    uint24 private pendingArtworkOffset;
+    uint24 private transient pendingArtworkOffset;
 
     error InvalidQuantity();
     error SoldOut();
     error SaleInactive();
+    error RedemptionsPaused();
     error WrongPayment();
     error WrongOwner();
     error WrongItemKind();
@@ -86,6 +88,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
     );
     event PricesUpdated(uint256 cratePrice, uint256 warehousePrice);
     event SaleStatusUpdated(bool active);
+    event RedemptionsPauseUpdated(bool paused);
     event QuoteSignerUpdated(address indexed signer);
     event TreasuryUpdated(address indexed treasury);
     event RendererUpdated(address indexed renderer);
@@ -153,6 +156,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
         payable
         nonReentrant
     {
+        if (redemptionsPaused) revert RedemptionsPaused();
         if (tokenIds.length == 0 || tokenIds.length > MAX_DELIVERY_ITEMS) revert InvalidQuantity();
         if (quote.wallet != msg.sender || quote.orderId == 0) revert InvalidAuthorization();
         if (msg.value != quote.fee) revert WrongPayment();
@@ -194,6 +198,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
         external
         nonReentrant
     {
+        if (redemptionsPaused) revert RedemptionsPaused();
         uint256 crateNumber = _requireOwnedKind(receiptId, ItemKind.CrateReceipt);
         if (claimId == bytes32(0)) revert InvalidAuthorization();
         _checkDeadline(deadline);
@@ -215,10 +220,11 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
 
     function getTokenInfo(uint256 tokenId) public view returns (uint8 kind, uint256 displayId, address holder) {
         if (!_exists(tokenId)) return (0, 0, address(0));
-        holder = ownerOf(tokenId);
         if (tokenId <= MAX_ARTWORKS) {
-            return (uint8(ItemKind.Artwork), tokenId + _ownershipOf(tokenId).extraData - MAX_ARTWORKS, holder);
+            TokenOwnership memory ownership = _ownershipOf(tokenId);
+            return (uint8(ItemKind.Artwork), tokenId + ownership.extraData - MAX_ARTWORKS, ownership.addr);
         }
+        holder = ownerOf(tokenId);
         if (tokenId >= CRATE_TOKEN_START && tokenId < CRATE_TOKEN_START + MAX_CRATES) {
             return (uint8(ItemKind.Crate), tokenId - CRATE_TOKEN_START + 1, holder);
         }
@@ -277,6 +283,11 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuard, EIP712 {
     function setSaleActive(bool active) external onlyOwner {
         saleActive = active;
         emit SaleStatusUpdated(active);
+    }
+
+    function setRedemptionsPaused(bool paused) external onlyOwner {
+        redemptionsPaused = paused;
+        emit RedemptionsPauseUpdated(paused);
     }
 
     function setQuoteSigner(address signer) external onlyOwner {

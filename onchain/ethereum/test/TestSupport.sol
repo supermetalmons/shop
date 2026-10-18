@@ -11,6 +11,7 @@ interface Vm {
     function chainId(uint256 id) external;
     function snapshotState() external returns (uint256);
     function revertToState(uint256 snapshotId) external returns (bool);
+    function snapshotGasLastCall(string calldata name) external returns (uint256 gasUsed);
     function expectRevert() external;
     function expectRevert(bytes4 selector) external;
     function writeFile(string calldata path, string calldata content) external;

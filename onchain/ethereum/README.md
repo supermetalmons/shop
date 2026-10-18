@@ -1,6 +1,6 @@
 # Mons 111k contracts
 
-An ERC721A collection with public crate and warehouse sales, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, sale status, the authorization signer, treasury, and metadata renderer.
+An ERC721A collection with public crate and warehouse sales, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
 
 The isolated package uses only the approved `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat, ethers, viem, or forge-std dependency is needed.
 
@@ -13,7 +13,7 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`forge test` regenerates deterministic authorization/calldata vectors in `fixtures/eip712.json` and metadata fixtures in `fixtures/metadata.json`. `scripts/check-fixtures.mjs` validates metadata and decodes SVG previews under `out/media-previews`. Regenerate `shared/ethereum/abi.generated.ts` after changing the contract interface:
+`npm test` regenerates deterministic authorization/calldata vectors in `fixtures/eip712.json` and metadata fixtures in `fixtures/metadata.json`. `scripts/check-fixtures.mjs` validates metadata and decodes SVG previews under `out/media-previews`. Regenerate `shared/ethereum/abi.generated.ts` after changing the contract interface:
 
 ```sh
 npm run build
@@ -21,6 +21,23 @@ npm run abi
 ```
 
 The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, treasury failure, and metadata. Delivery tests also revert a chain snapshot and change the artwork mapping to verify that an old quote cannot redeem a different physical identity.
+
+Stateful invariant tests mix purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
+
+```sh
+npm run test:invariants:extended
+```
+
+That campaign uses 512 sequences of 128 calls. Receiver regressions also exercise reentrancy, rejected callbacks, transfers during callbacks, and multiple operations within a single transaction. Reentrancy locks and the temporary artwork offset use transient storage, which requires EIP-1153; the configured Prague EVM supports it. Both are cleared before a successful call returns so subsequent calls in the same transaction remain safe.
+
+Gas snapshots measure individual calls with isolated transaction state, excluding scenario setup and signature preparation. `npm run check` requires every benchmark to succeed and produce its expected runtime measurement, then compares those measurements with the committed snapshots without updating them. Filtered tests and missing or renamed measurements fail the check. Use these commands for a separate check or an intentional baseline update:
+
+```sh
+npm run gas:check
+npm run gas:update
+```
+
+Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values measure call execution gas, not a wallet's complete transaction fee. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
 
 ## Local chain
 
@@ -85,6 +102,52 @@ Before any burn or mint, delivery derives every receipt ID from the current toke
 
 Delivery order IDs and claim IDs must be nonzero and can be consumed only once. The deadline must be current and at most ten minutes ahead of the executing block timestamp. Failed actions revert completely, including authorization consumption and payment.
 
+### Emergency redemption pause
+
+The owner can call `setRedemptionsPaused(true)` to stop both `redeemForDelivery` and `claimCrateReceipt`, then `setRedemptionsPaused(false)` to resume them. `redemptionsPaused()` starts false, and each setter call emits `RedemptionsPauseUpdated(bool)`. Paused actions revert with `RedemptionsPaused()` before burning, minting, retaining payment, or consuming an authorization.
+
+This onchain switch is independent of `saleActive`: purchases, unpacking, transfers, and withdrawals keep their existing behavior. The API and page do not read the switch, so they may still prepare an authorization while paused; the contract rejects execution. Confirmation and fulfillment of transactions already mined continue normally.
+
+Pausing does not revoke signatures or extend their deadlines. An unused signature can execute after resumption if it is still valid. If the signing key was compromised, use the existing signer rotation before resuming. Authorization encoding remains EIP-712 version `2`.
+
 Secret codes and shipping details remain offchain. The backend authorizes a specific wallet and crate receipt only after validating its code. The contract derives the 20/31 output count and receipt numbers itself. Events bind completed operations to their offchain order/claim records.
 
 The owner can replace the renderer for a later metadata implementation. This changes metadata authority without allowing changes to ownership, supply rules, or redemption logic. Renderer changes emit ERC-4906 metadata refresh events.
+
+## Gas comparison
+
+Measured against `9a95163b` with Foundry 1.7.1, Solidity 0.8.30, optimizer 200 runs, and Prague. The same 29 isolated scenarios were captured before and after hardening. Every measured call uses less gas, including the new pause check for delivery and claims. `Receiver` cases include minimal ERC-721 receiver callbacks; `After1`/`After240` use existing holdings; `Crate10` claims a different fixed artwork range.
+
+| Operation | Before | After | Gas change | Change |
+| --- | ---: | ---: | ---: | ---: |
+| claim20 | 613,982 | 610,132 | -3,850 | -0.63% |
+| claim20Crate10 | 613,982 | 610,132 | -3,850 | -0.63% |
+| claim20Receiver | 648,649 | 644,799 | -3,850 | -0.59% |
+| claim31 | 903,681 | 899,820 | -3,861 | -0.43% |
+| claim31Receiver | 957,419 | 953,558 | -3,861 | -0.40% |
+| deliverArtwork1 | 141,592 | 137,437 | -4,155 | -2.93% |
+| deliverArtworks50 | 3,202,055 | 3,092,138 | -109,917 | -3.43% |
+| deliverArtworks50Receiver | 3,289,069 | 3,179,152 | -109,917 | -3.34% |
+| deliverCrate1 | 133,820 | 129,989 | -3,831 | -2.86% |
+| deliverCrates50 | 2,047,920 | 2,044,040 | -3,880 | -0.19% |
+| deliverCrates50Receiver | 2,134,831 | 2,130,951 | -3,880 | -0.18% |
+| deliverMixed50 | 2,611,289 | 2,556,926 | -54,363 | -2.08% |
+| deliverMixed50Receiver | 2,698,275 | 2,643,912 | -54,363 | -2.01% |
+| getTokenInfoFragmented | 17,017 | 15,802 | -1,215 | -7.14% |
+| getTokenInfoFresh | 57,022 | 52,837 | -4,185 | -7.34% |
+| mintCrates1 | 124,864 | 120,918 | -3,946 | -3.16% |
+| mintCrates15 | 488,206 | 484,246 | -3,960 | -0.81% |
+| mintCrates15After1 | 436,906 | 432,946 | -3,960 | -0.91% |
+| mintCrates15After240 | 436,906 | 432,946 | -3,960 | -0.91% |
+| mintCrates15Receiver | 514,213 | 510,253 | -3,960 | -0.77% |
+| mintWarehouses1 | 169,921 | 165,953 | -3,968 | -2.34% |
+| mintWarehouses15 | 847,185 | 843,203 | -3,982 | -0.47% |
+| mintWarehouses15Receiver | 873,192 | 869,210 | -3,982 | -0.46% |
+| unboxCrate20 | 134,944 | 130,918 | -4,026 | -2.98% |
+| unboxCrate20Receiver | 166,053 | 162,027 | -4,026 | -2.42% |
+| unboxCrate31 | 139,350 | 135,324 | -4,026 | -2.89% |
+| unboxCrate31Receiver | 187,434 | 183,408 | -4,026 | -2.15% |
+| unboxWarehouse | 357,528 | 353,550 | -3,978 | -1.11% |
+| unboxWarehouseReceiver | 376,605 | 372,627 | -3,978 | -1.06% |
+
+The collection runtime grows from 14,080 to 14,345 bytes (+265) with the added pause controls. The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These call-level snapshots are not complete transaction gas or ETH fee estimates; intrinsic gas, refunds, and wallet-specific execution affect the final transaction cost.

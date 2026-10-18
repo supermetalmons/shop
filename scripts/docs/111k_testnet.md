@@ -53,6 +53,7 @@ For a different local RPC port, set `MONS_111K_LOCAL_RPC_URL` when deploying. Th
 - Minting accepts 1–15 crates or warehouses per transaction. Prices are 0.0001 test ETH per crate and 0.0011 test ETH per warehouse.
 - Digital opening burns a crate and mints its 20/31 artworks atomically. All metadata and SVG media are onchain; the backend performs no randomness or reveal transaction.
 - Delivery accepts up to 50 owned artworks/crates, requires a backend authorization, and charges 0.0001 test ETH per order. One user transaction burns the originals and mints their receipts. Warehouses and receipts are ineligible for delivery.
+- The owner can use `setRedemptionsPaused(true)` as an emergency onchain stop for delivery and crate-receipt claims. It leaves sales, unpacking, transfers, and withdrawals unchanged. The app and API do not read this switch. Pausing does not consume or extend signatures; use the existing signer rotation before resuming after a signer compromise.
 - After three confirmations, the order becomes available in fulfillment. Re-mining below that threshold returns it to processing. Physical crates receive stable secret codes and their fixed placeholder contents. Entering a matching code lets the current crate-receipt owner submit one signed claim transaction that burns it and mints 20/31 artwork receipts.
 - Receipts use token IDs `1,000,000 + artwork number` and `2,000,000 + crate number`. Original display identities survive redemption; consumed token IDs and crate allocations are never reused.
 
@@ -98,10 +99,10 @@ The real-chain test starts and stops its own Anvil process and does not use an e
 
 ## Validation as of 2026-10-18
 
-- 25 Solidity tests pass, including 256 fuzz cases, full 5,555-crate/111,111-artwork coverage, signature tampering, callback reentrancy, and both bonus-crate paths.
+- 58 Solidity checks and 29 isolated gas benchmarks pass, including 256 fuzz cases, stateful invariants, full 5,555-crate/111,111-artwork coverage, pause behavior, signature tampering, callback reentrancy, transient-state cleanup, and both bonus-crate paths. The extended invariant campaign also passes 512 sequences of 128 calls (65,536 calls), with no unexpected handler reverts. Ten gas-check regressions verify rejection of missing or changed snapshots, skipped benchmarks, and missing or renamed runtime measurements without rewriting baselines; intentional updates use the separate `gas:update` command. See the [contract checks and gas comparison](../../onchain/ethereum/README.md).
 - 3,821 repository tests and 2,382 API tests pass. Native Worker/D1 checks pass, including the new routes, atomic sessions, migrations, Ethereum commit guards and fulfillment pagination.
 - The Anvil end-to-end lifecycle passes with real deployed contracts, backend signatures, encrypted addresses, three-confirmation publication, transferred crate receipts and code claims. It covers replacement delivery after a chain reorg, atomic rejection of a stale artwork-identity quote, and successful delivery with a fresh quote. Its report and five SVG previews are generated under `.cache/111k-e2e/`.
 - Frontend, API and tools typechecks, generated schema/ABI checks, dead-code checks, production build, browser credential scan, Worker dry run and startup profiling pass.
-- Runtime bytecode is 14,080 bytes for the collection and 7,752 bytes for the renderer, each below the 24,576-byte limit. Representative SVGs were rendered and visually inspected.
+- Runtime bytecode is 14,345 bytes for the collection and 7,752 bytes for the renderer, each below the 24,576-byte limit. Representative SVGs were rendered and visually inspected.
 
 Live browser interaction was unavailable because local browser use is disabled in the app settings; component tests cover the mobile controls, wallet/recovery flows and modal behavior. No public-network contract, Worker, database migration, funding request or production secret was deployed by this implementation.
