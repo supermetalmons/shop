@@ -86,24 +86,19 @@ Knip discovers supported CLI entrypoints from `package.json` scripts. Dynamic
 drop configurations remain explicit in `knip.ts`; standalone scripts are not
 automatically treated as live code.
 
-The [Mi Note Safari renderer](scripts/mi-note-renderer/README.md) exports the full
-1,430-card collection as native 2000 × 2800 transparent PNGs. Its tracked toolkit
-includes capture, resumable checkpoints, image QA, contact sheets, and ZIP64
-publication. Python dependencies are isolated from the shop's production runtime;
-generated captures and reports stay outside version control.
+The [Mi Note video renderer](scripts/mi-note-video/README.md) uses the dedicated
+AppKit/WKWebView capture application and the preserved recipe from the approved
+46-video review: upright 2160 × 2160, `breathing-swing`, black background,
+no shadow, Display P3 HEVC Main 10, 60 fps, and 276 frames. It retains the
+established capture and image-processing path, including exact cycle controls
+and full video decoding checks.
 
-The [Mi Note video renderer](scripts/mi-note-video/README.md) preserves three
-approved motions and native 1980-pixel sideways or 2160-pixel upright capture.
-Both produce black, shadowless Display P3 / 10-bit HEVC videos at 60 fps. The
-host and standalone VM backends share verified catalog progress with separate
-native checkpoints. New jobs support background supervision, inclusive resume
-from a verified ID prefix, and either full evidence or compact audit receipts.
-Outputs and stable controls default to private Application Support storage
-outside the worktree. The approved full-catalog recipe is `upright-2160` with
-`breathing-swing`; VM is the default backend, and backend switches require a
-completed interruption. Existing VM jobs and comparison renders remain available.
-Run `npm run render:mi-note-videos -- --help` for its commands. Rendering requires
-an explicit card selection; setup and validation never start a collection.
+Run `npm run render:mi-note-videos -- help` for the native-only commands, or
+`npm run render:mi-note-videos -- doctor` to verify the existing application and
+pinned runtime. `run` requires explicit card IDs and a new output directory;
+`resume` verifies the same selection and run identity. These commands do not
+install dependencies, rebuild the application, or start background jobs.
+The frozen review folder and historical output evidence remain preserved.
 
 ## Mi Note cards
 

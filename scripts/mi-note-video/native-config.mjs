@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
@@ -9,8 +9,14 @@ export const engineDirectory = dirname(fileURLToPath(import.meta.url));
 export const sourceRoot = resolve(engineDirectory, '../..');
 export const contract = JSON.parse(readFileSync(join(engineDirectory, 'contract.json'), 'utf8'));
 export const hashFile = path => createHash('sha256').update(readFileSync(path)).digest('hex');
-export const sourcePath = path => resolve(sourceRoot, path);
 export const requireValue = (condition, message) => { if (!condition) throw new Error(message); };
+export const nativeSourceFiles = Object.freeze([
+  'cli.mjs', 'native-runtime.mjs', 'native-config.mjs', 'native-render.mjs', 'native-processing.mjs',
+  'frame-worker.mjs', 'native_processing_worker.py', 'processing_worker.py', 'frame_worker.py',
+  'frames.py', 'quality.py', 'video_validation.py', 'native-webview.swift', 'build-native-webview.sh',
+  'harness.tsx', 'index.html', 'capture.css', 'captureGeometry.ts', 'motion.ts', 'preset.json',
+  'contract.json', 'package.json', 'package-lock.json', 'requirements.txt',
+]);
 
 export function catalogCount() {
   const source = readFileSync(join(sourceRoot, 'src/lib/miNoteCards.ts'), 'utf8');
@@ -19,140 +25,72 @@ export function catalogCount() {
   return count;
 }
 
-export function nativeBackend(value = 'vm') {
-  requireValue(['host', 'vm'].includes(value), `Unsupported native rendering backend: ${value}`);
-  return value;
-}
-
-export function assertNativeBackend(value = process.env.MI_NOTE_RENDER_BACKEND, system = {}) {
-  const backend = nativeBackend(value);
+export function assertNativeHost(system = {}) {
   requireValue((system.platform ?? process.platform) === 'darwin', 'Native rendering requires macOS.');
   const model = system.model ?? execFileSync('/usr/sbin/sysctl', ['-n', 'hw.model'], { encoding: 'utf8' }).trim();
   requireValue(typeof model === 'string' && model.trim().length > 0, 'Native rendering could not identify the Mac hardware.');
-  const virtual = model.trim().startsWith('VirtualMac');
-  requireValue(backend === 'vm' ? virtual : !virtual,
-    backend === 'vm' ? 'Native VM rendering requires the configured macOS VM.' : 'Native host rendering requires physical Mac hardware.');
-  return backend;
+  requireValue(!model.trim().startsWith('VirtualMac'), 'Native rendering requires physical Mac hardware.');
+  return model.trim();
 }
 
-export function profileFor(id) {
-  const value = contract.profiles[id];
-  requireValue(value && ['sideways-1980', 'upright-2160'].includes(id), `Unsupported profile: ${id}`);
-  return { id, ...value };
-}
-
-export function motionFor(id) {
-  requireValue(contract.motions.includes(id), `Unsupported motion: ${id}`);
-  return id === 'original' ? undefined : id;
-}
-
-export function parseOptions(argv, kind) {
-  const result = { python: process.env.MI_NOTE_VIDEO_PYTHON || 'python3', profile: contract.defaults.profile, motion: contract.defaults.motion };
-  const values = kind === 'preflight' ? ['profile', 'motion', 'id', 'output', 'python'] : ['profile', 'motion', 'ids', 'output', 'cache', 'preflight', 'python'];
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    if (flag === '--help') return { help: true };
-    if (kind === 'preflight' && flag === '--verify-resume') { result.verifyResume = true; continue; }
-    if (kind === 'capture' && ['--resume', '--check-resume'].includes(flag)) {
-      result.resume = true;
-      if (flag === '--check-resume') result.checkResume = true;
-      continue;
-    }
-    requireValue(flag.startsWith('--') && values.includes(flag.slice(2)), `Unknown option: ${flag}`);
-    const value = argv[++index];
-    requireValue(value && !value.startsWith('--'), `Missing value for ${flag}`);
-    result[flag.slice(2)] = value;
-  }
-  const rawId = kind === 'preflight' ? result.id : result.ids;
-  requireValue(typeof rawId === 'string' && /^\d+$/.test(rawId), 'Exactly one card ID is required.');
-  result.id = Number(rawId);
-  requireValue(Number.isInteger(result.id) && result.id >= 1 && result.id <= catalogCount(), `Card ID must be from 1 through ${catalogCount()}.`);
-  result.ids = [result.id];
-  profileFor(result.profile);
-  motionFor(result.motion);
-  for (const key of kind === 'preflight' ? ['output'] : ['output', 'cache', 'preflight']) {
-    requireValue(result[key], `--${key} is required.`);
-    result[key] = resolve(result[key]);
-  }
-  return result;
-}
-
-export function renderingSourceHashes() {
-  const snapshotPath = join(sourceRoot, 'source-snapshot.json');
-  if (existsSync(snapshotPath)) {
-    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'));
-    const files = snapshot.files;
-    requireValue(files && !Array.isArray(files) && typeof files === 'object', 'Invalid source snapshot inventory.');
-    const hashes = {};
-    for (const [path, record] of Object.entries(files)) {
-      const expected = typeof record === 'string' ? record : record.sha256;
-      requireValue(!isAbsolute(path) && !path.split(/[\\/]/).includes('..') && /^[a-f0-9]{64}$/.test(expected || ''), 'Unsafe source snapshot entry.');
-      requireValue(hashFile(join(sourceRoot, path)) === expected, `Source snapshot changed: ${path}`);
-      hashes[path] = expected;
-    }
-    hashes['source-snapshot.json'] = hashFile(snapshotPath);
-    return Object.fromEntries(Object.entries(hashes).sort(([a], [b]) => a.localeCompare(b)));
-  }
+export function renderingSourceHashes(root = sourceRoot, entries = nativeSourceFiles) {
+  root = resolve(root);
   const files = new Set();
-  const queue = readdirSync(engineDirectory).filter(name => ['.mjs', '.ts', '.tsx', '.css', '.html', '.json', '.py', '.txt'].includes(extname(name))
-    && !name.startsWith('test_')).map(name => join(engineDirectory, name));
+  const queue = entries.map(name => join(root, 'scripts/mi-note-video', name));
   while (queue.length) {
-    const path = queue.pop();
+    const path = resolve(queue.pop());
+    const name = relative(root, path);
+    requireValue(name && !isAbsolute(name) && !name.split(/[\\/]/).includes('..'), `Rendering dependency escapes source root: ${path}`);
     if (files.has(path)) continue;
+    requireValue(existsSync(path) && lstatSync(path).isFile() && realpathSync(path) === path, `Missing regular rendering dependency: ${name}`);
     files.add(path);
-    if (!['.mjs', '.ts', '.tsx'].includes(extname(path))) continue;
+    if (!['.mjs', '.ts', '.tsx', '.js'].includes(extname(path))) continue;
     const source = readFileSync(path, 'utf8');
     for (const match of source.matchAll(/(?:from\s+|import\s*\(?\s*)['"](\.[^'"]+)['"]/g)) {
       const base = resolve(dirname(path), match[1]);
       const found = [base, ...['.ts', '.tsx', '.mjs', '.js', '.json', '.css'].map(suffix => base + suffix)].find(existsSync);
-      requireValue(found && !relative(sourceRoot, found).startsWith('..'), `Missing local rendering dependency: ${match[1]}`);
+      requireValue(found, `Missing local rendering dependency: ${match[1]}`);
       queue.push(found);
     }
   }
-  return Object.fromEntries([...files].sort().map(path => [relative(sourceRoot, path), hashFile(path)]));
+  return Object.fromEntries([...files].map(path => [relative(root, path), hashFile(path)]).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-export function assertSourceHashes(hashes) {
-  for (const [path, expected] of Object.entries(hashes)) requireValue(hashFile(join(sourceRoot, path)) === expected, `Rendering source changed: ${path}`);
+export function assertSourceHashes(hashes, root = sourceRoot) {
+  const current = renderingSourceHashes(root);
+  requireValue(JSON.stringify(current) === JSON.stringify(hashes), 'Rendering source inventory or content changed.');
 }
 
-export function assertPreflightBinding(identity, current) {
-  for (const key of ['root', 'profile', 'motion', 'ids', 'sourceHashes', 'versions']) {
-    requireValue(identity && JSON.stringify(identity[key]) === JSON.stringify(current[key]), `Preflight ${key} differs from the current capture.`);
+export function assertResumeIdentity(manifest, identity) {
+  requireValue(manifest?.version === 2, 'Native resume requires a version 2 run; preserved version 1 review evidence remains unchanged.');
+  for (const [key, value] of Object.entries(identity)) {
+    requireValue(JSON.stringify(manifest[key]) === JSON.stringify(value), `Native resume ${key} differs.`);
   }
-  requireValue(nativeBackend(identity.backend) === nativeBackend(current.backend), 'Preflight backend differs from the current capture.');
+  requireValue(manifest.cards && typeof manifest.cards === 'object' && !Array.isArray(manifest.cards), 'Native resume card records are missing.');
+  requireValue(Number.isSafeInteger(manifest.pid) && manifest.pid > 0, 'Native resume process identity is invalid.');
 }
 
-export function runtimeVersions(python) {
-  const run = (name, args) => execFileSync(name, args, { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }).trim();
-  return {
-    node: process.version,
-    python: JSON.parse(run(python, ['-c', 'import json,platform;from PIL import Image,features;import numpy;print(json.dumps({"python":platform.python_version(),"pillow":Image.__version__,"littlecms":features.version("littlecms2"),"numpy":numpy.__version__}))'])),
-    ffmpeg: run(process.env.MI_NOTE_FFMPEG || 'ffmpeg', ['-version']).split('\n')[0],
-    ffprobe: run(process.env.MI_NOTE_FFPROBE || 'ffprobe', ['-version']).split('\n')[0],
-    safariDriver: run('/usr/bin/safaridriver', ['--version']),
-    colorProfiles: {
-      p3: hashFile('/System/Library/ColorSync/Profiles/Display P3.icc'),
-      srgb: hashFile('/System/Library/ColorSync/Profiles/sRGB Profile.icc'),
-    },
-  };
+export function verifyCompletedCard(output, card, summary) {
+  const evidenceDirectory = join(output, 'evidence', String(card));
+  const videoPath = join(output, `${card}.mp4`);
+  requireValue(summary?.status === 'complete' && summary.id === card && summary.evidenceDirectory === evidenceDirectory
+    && summary.frameCount === 276 && summary.qualityPassed === true && summary.fullyDecoded === true
+    && summary.video?.path === videoPath && /^[a-f0-9]{64}$/.test(summary.video.sha256), `Completed native card ${card} has an invalid summary binding.`);
+  const detailPath = join(evidenceDirectory, 'card.json');
+  for (const path of [detailPath, videoPath]) requireValue(existsSync(path) && lstatSync(path).isFile() && realpathSync(path) === path, `Completed native card ${card} is missing its canonical regular output.`);
+  const detail = JSON.parse(readFileSync(detailPath, 'utf8'));
+  requireValue(detail.id === card && detail.status === 'complete' && detail.evidenceDirectory === evidenceDirectory
+    && detail.video?.path === videoPath && detail.video.sha256 === summary.video.sha256
+    && Array.isArray(detail.frames) && detail.frames.length === 276
+    && detail.frames.every((frame, index) => frame.frame === index && frame.pose?.cardId === card && frame.pose.frame === index)
+    && detail.result?.qualityReport?.passed === true && detail.result?.video?.fullyDecoded === true,
+  `Completed native card ${card} has an invalid detail binding.`);
+  requireValue(hashFile(videoPath) === summary.video.sha256, `Completed native card ${card} video checksum differs.`);
+  return detail;
 }
 
 export function viteOptions(port) {
   return { root: sourceRoot, configFile: false, envDir: false, envPrefix: [], plugins: [react()],
     server: { host: '127.0.0.1', port, strictPort: true, hmr: false, watch: null },
     optimizeDeps: { include: ['react', 'react-dom/client', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'] } };
-}
-
-export function assertProfileGrid(profile, grid) {
-  requireValue(grid.xs.length === 1 && grid.ys.length === profile.tiles,
-    `${profile.id} requires exactly ${profile.tiles} native viewport capture${profile.tiles === 1 ? '' : 's'} per frame.`);
-}
-
-export function warmupFrames() { return [...contract.capture.warmupFrames]; }
-
-export async function warmNativeCapture(capture) {
-  const results = [];
-  for (const [index, frame] of warmupFrames().entries()) results.push(await capture(frame, index));
-  return results;
 }

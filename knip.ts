@@ -17,9 +17,7 @@ const config = {
       entry: [
         'src/renderer/main.tsx!',
         'src/static-render/clearCards.tsx!',
-        'scripts/mi-note-renderer/harness.tsx',
         'scripts/mi-note-video/harness.tsx',
-        'scripts/mi-note-renderer/tests/*.test.mjs',
         'scripts/mi-note-video/*.mjs',
         'scripts/mi-note-video/tests/*.{test.ts,test.mjs}',
         'src/lib/miNotePackRenderSetup.ts!',
@@ -42,7 +40,6 @@ const config = {
         'cloud/workers/api/runtime-test/**/*.ts',
         'cloud/workers/frontend/test/**/*.ts',
         'scripts/**/*.{ts,mjs}',
-        'scripts/mi-note-renderer/*.tsx',
         'scripts/mi-note-video/*.tsx',
         'tests/**/*.ts',
       ],
