@@ -101,6 +101,32 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     provider.on?.('chainChanged', changed);
     return () => { current = false; provider.removeListener?.('chainChanged', changed); };
   }, [wallet.provider]);
+  useEffect(() => {
+    const provider = wallet.provider;
+    const intent = pending?.intent;
+    if (!provider || !pending || pending.nonce || !intent || !scope || !owner) return;
+    let active = true;
+    let fetching = false;
+    const captureNonce = async () => {
+      if (fetching) return;
+      fetching = true;
+      try {
+        const network = await provider.request({ method: 'eth_chainId' });
+        if (!active || ethereumChainId(network) !== config.chainId) return;
+        const actual = await readEthereumWalletTransaction(provider, pending.hash, config.chainId, owner);
+        if (!active || !actual || !ethereumTransactionMatchesIntent(actual, intent)) return;
+        await withEthereumSubmissionLock(scope, () => {
+          const current = readEthereumPending(scope);
+          if (active && current?.hash === pending.hash && !current.nonce) {
+            writeEthereumStorage(`${scope}:pending`, { ...current, nonce: actual.nonce });
+          }
+        });
+      } catch {} finally { fetching = false; }
+    };
+    void captureNonce();
+    const interval = setInterval(() => { void captureNonce(); }, 4_000);
+    return () => { active = false; clearInterval(interval); };
+  }, [wallet.provider, pending, scope, owner, config.chainId]);
   const stats = useQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress],
     queryFn: ({ signal }) => ethereumApi.stats(signal), enabled: config.enabled, retry: false, refetchInterval: 30_000 });
   const inventory = useInfiniteQuery({
@@ -318,7 +344,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
       if (!actual || !ethereumTransactionMatchesIntent(actual, transaction)) return;
       await withEthereumSubmissionLock(capturedScope, () => {
         const current = readEthereumPending(capturedScope);
-        if (current?.hash === hash) writeEthereumStorage(`${capturedScope}:pending`, { ...current, nonce: actual.nonce });
+        if (current?.hash === hash && !current.nonce) writeEthereumStorage(`${capturedScope}:pending`, { ...current, nonce: actual.nonce });
       });
     }).catch(() => {});
   };

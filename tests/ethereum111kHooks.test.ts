@@ -1085,6 +1085,51 @@ test('returning before wallet approval tracks the transaction submitted by the u
   assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!), null);
 });
 
+for (const cancellation of [false, true]) {
+  test(`approval after navigating away captures the nonce for ${cancellation ? 'cancellation' : 'speed-up'} recovery`, async () => {
+    const connected = wallet();
+    const request = connected.provider!.request;
+    const replacementHash = `0x${'cd'.repeat(32)}`;
+    let finishSend: ((hash: string) => void) | undefined;
+    let sentTransaction: Record<string, unknown> | undefined;
+    let originalAvailable = true;
+    let originalLookups = 0;
+    connected.provider!.request = async args => {
+      if (args.method === 'eth_sendTransaction') {
+        sentTransaction = (args.params as Record<string, unknown>[])[0];
+        return new Promise(resolve => { finishSend = resolve; });
+      }
+      if (args.method !== 'eth_getTransactionByHash') return request(args);
+      const requestedHash = (args.params as string[])[0];
+      if (requestedHash === hash) {
+        originalLookups++;
+        if (!originalAvailable) return null;
+      }
+      const cancelled = requestedHash === replacementHash && cancellation;
+      return { hash: requestedHash, from: owner, to: cancelled ? owner : contract,
+        input: cancelled ? '0x' : sentTransaction!.data, value: cancelled ? '0x0' : sentTransaction!.value,
+        nonce: '0x8', chainId: '0xaa36a7' };
+    };
+    const first = harness(connected);
+    await waitFor(() => assert.ok(first.result.current.stats.data));
+    let mint: Promise<boolean> | undefined;
+    act(() => { mint = first.result.current.mint('crate', 1); });
+    await waitFor(() => assert.ok(finishSend));
+    first.unmount();
+    await act(async () => { finishSend!(hash); assert.equal(await mint, true); });
+    const scope = ethereumInventoryScope(config, owner)!;
+    await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x8'));
+    assert.equal(originalLookups, 1);
+    originalAvailable = false;
+    const second = harness(connected);
+    await waitFor(() => assert.equal(second.result.current.pending?.hash, hash));
+    await act(async () => { assert.equal(await second.result.current.replacePending(replacementHash), true); });
+    assert.equal(readEthereumPending(scope)?.hash, replacementHash);
+    assert.equal(readEthereumPending(scope)?.action, cancellation ? 'cancel' : 'mint');
+    assert.equal(originalLookups, 1);
+  });
+}
+
 test('a rejected approval releases the shared guard after its initiating page unmounts', async () => {
   const connected = wallet();
   const originalRequest = connected.provider!.request;
@@ -1574,20 +1619,72 @@ test('stop-tracking rechecks the displayed transaction after waiting for another
   assert.equal(view.result.current.notice, null);
 });
 
+for (const failure of ['missing', 'error'] as const) {
+  for (const reload of [false, true]) {
+    test(`nonce capture retries ${failure} RPC results${reload ? ' after reload' : ''} and enables replacement recovery`, async t => {
+      speedUpConfirmationPolls(t);
+      const connected = wallet();
+      const request = connected.provider!.request;
+      const replacementHash = `0x${'cd'.repeat(32)}`;
+      let sentTransaction: Record<string, unknown> | undefined;
+      let visible = false;
+      let removed = false;
+      let lookups = 0;
+      connected.provider!.request = async args => {
+        if (args.method === 'eth_sendTransaction') sentTransaction = (args.params as Record<string, unknown>[])[0];
+        if (args.method !== 'eth_getTransactionByHash') return request(args);
+        const requestedHash = (args.params as string[])[0];
+        if (requestedHash === hash) {
+          lookups++;
+          if (removed) return null;
+          if (!visible) {
+            if (failure === 'error') throw new Error('RPC temporarily unavailable');
+            return null;
+          }
+        }
+        return { hash: requestedHash, from: owner, to: contract, input: sentTransaction!.data,
+          value: sentTransaction!.value, nonce: '0x8', chainId: '0xaa36a7' };
+      };
+      let view = harness(connected);
+      await waitFor(() => assert.ok(view.result.current.stats.data));
+      await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
+      await waitFor(() => assert.ok(lookups > 0));
+      const scope = ethereumInventoryScope(config, owner)!;
+      assert.equal(readEthereumPending(scope)?.nonce, undefined);
+      if (reload) {
+        view.unmount();
+        view.client.clear();
+        const previousLookups = lookups;
+        view = harness(connected);
+        await waitFor(() => assert.ok(lookups > previousLookups));
+        assert.equal(readEthereumPending(scope)?.nonce, undefined);
+      }
+      visible = true;
+      await waitFor(() => assert.equal(readEthereumPending(scope)?.nonce, '0x8'));
+      removed = true;
+      const capturedLookups = lookups;
+      await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
+      assert.equal(readEthereumPending(scope)?.hash, replacementHash);
+      assert.equal(readEthereumPending(scope)?.nonce, '0x8');
+      assert.equal(lookups, capturedLookups);
+    });
+  }
+}
+
 test('late nonce enrichment rechecks the transaction under the submission lock', async t => {
   const connected = wallet();
   const request = connected.provider!.request;
-  let finishLookup: ((value: unknown) => void) | undefined;
+  const finishLookups: ((value: unknown) => void)[] = [];
   let sentTransaction: Record<string, unknown> | undefined;
   connected.provider!.request = async args => {
-    if (args.method === 'eth_getTransactionByHash') return new Promise(resolve => { finishLookup = resolve; });
+    if (args.method === 'eth_getTransactionByHash') return new Promise(resolve => { finishLookups.push(resolve); });
     if (args.method === 'eth_sendTransaction') sentTransaction = (args.params as Record<string, unknown>[])[0];
     return request(args);
   };
   const view = harness(connected);
   await waitFor(() => assert.ok(view.result.current.stats.data));
   await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
-  assert.ok(finishLookup && sentTransaction);
+  assert.ok(finishLookups.length && sentTransaction);
   const scope = ethereumInventoryScope(config, owner)!;
   let release: (() => void) | undefined;
   const competing = navigator.locks.request(`mons:ethereum111k-submission:${scope}`, { ifAvailable: true }, async lock => {
@@ -1595,9 +1692,9 @@ test('late nonce enrichment rechecks the transaction under the submission lock',
     await new Promise<void>(resolve => { release = resolve; });
   });
   const requests = t.mock.method(navigator.locks, 'request');
-  await act(async () => { finishLookup!({ hash, from: owner, to: contract, input: sentTransaction!.data,
-    value: sentTransaction!.value, nonce: '0x7', chainId: '0xaa36a7' }); });
-  assert.equal(requests.mock.callCount(), 1);
+  await act(async () => { finishLookups.forEach(finish => finish({ hash, from: owner, to: contract, input: sentTransaction!.data,
+    value: sentTransaction!.value, nonce: '0x7', chainId: '0xaa36a7' })); });
+  assert.equal(requests.mock.callCount(), finishLookups.length);
   assert.equal(readEthereumPending(scope)?.nonce, undefined);
   const nextHash = `0x${'cd'.repeat(32)}`;
   window.localStorage.setItem(`mons.ethereum111k:${scope}:pending`, JSON.stringify({ scope, hash: nextHash, action: 'mint', submittedAt: 2 }));
