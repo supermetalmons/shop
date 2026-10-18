@@ -26,7 +26,7 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
       throw new EthereumApiError('permission-denied', 'Invalid Ethereum request.');
     }
     const context: EthereumContext = { env, config: ethereumConfig(env), nowMs: (dependencies.nowMs || Date.now)(),
-      signal: AbortSignal.any([request.signal, AbortSignal.timeout(45_000)]), fetch: dependencies.fetch || fetch };
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(45_000)]), fetch: dependencies.fetch || ((input, init) => fetch(input, init)) };
     if (publicPaths.has(path)) await limitEthereumRequest(request, context, path, env.PUBLIC_SHOP_RATE_LIMITER);
     let result: unknown;
     if (path.startsWith('/ethereum/auth/')) result = await ethereumAuth(request, context, path);

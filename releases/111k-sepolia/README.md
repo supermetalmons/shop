@@ -38,7 +38,8 @@ contract. Recovery verified the failed receipt and empty code, preserved the
 broadcast journal, and used the next nonce. The live node estimated 18,543,789
 gas for the renderer and 28,050,166 for the collection. Each exact creation
 payload passed `eth_call` before signing with 20% headroom plus 50,000 gas.
-The compiled bytecode and constructor arguments were unchanged.
+Compiler settings and bytecode were preserved; the collection constructor used
+the successfully deployed renderer address.
 
 Future Sepolia deployments must estimate each creation against an upgraded live
 RPC, simulate that exact payload with the resulting gas limit, and use the

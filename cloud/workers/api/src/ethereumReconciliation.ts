@@ -293,7 +293,7 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     const config = ethereumConfig(env);
     const budget: QueryBudget = { remaining: 400, exhausted: false, limited: false };
     const context: EthereumContext = { env: { ...env, COMMERCE_DB: budgetedDatabase(env.COMMERCE_DB, budget) },
-      config, signal, fetch: options.fetch || fetch, nowMs: (options.nowMs || Date.now)() };
+      config, signal, fetch: options.fetch || ((input, init) => fetch(input, init)), nowMs: (options.nowMs || Date.now)() };
     await cleanupEthereumAuth(env.OPS_DB, context.nowMs);
     if (!config.enabled || !config.contractAddress) return summary;
     const recentScope = createTimedAbortScope(signal, {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -31,6 +32,76 @@ function ethereumRuntime() {
   delete config.secrets;
   return createTestHarness({ root: resolve('.'), workers: [{ config }] });
 }
+
+test('native Ethereum reconciliation and HTTP reads use the default Worker fetch', async (context) => {
+  const methods: string[] = [];
+  const rpc = createServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const { id, method } = JSON.parse(body) as { id: number; method: string };
+    methods.push(method);
+    const results: Record<string, unknown> = {
+      eth_chainId: '0x7a69', eth_blockNumber: '0x66', eth_getLogs: [],
+      eth_call: encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool'],
+        [0, 0, 0, 100000000000000n, 1100000000000000n, true]),
+    };
+    response.writeHead(Object.hasOwn(results, method) ? 200 : 400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] }));
+  });
+  context.after(() => new Promise<void>((resolve, reject) => rpc.close(error => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => rpc.listen(0, '127.0.0.1', resolve));
+  const address = rpc.address();
+  assert.ok(address && typeof address === 'object');
+  const directory = await mkdtemp(join(tmpdir(), 'ethereum-default-fetch-runtime-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const fixturePath = join(directory, 'worker.ts');
+  await writeFile(fixturePath, `
+import { reconcileEthereum111k } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumReconciliation.ts'))};
+import { handleEthereumRequest } from ${JSON.stringify(resolve('cloud/workers/api/src/ethereumHandler.ts'))};
+export default {
+  async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    if (path === '/ethereum/111k/stats') return handleEthereumRequest(request, {
+      ...env, PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    }, path);
+    try {
+      return Response.json(await reconcileEthereum111k(env, AbortSignal.timeout(10_000)));
+    } catch (error) {
+      return Response.json({ name: error.name, message: error.message }, { status: 500 });
+    }
+  },
+};
+`, 'utf8');
+  const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const contract = '0x1111111111111111111111111111111111111111';
+  const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
+    name: 'ethereum-default-fetch-runtime', main: fixturePath,
+    compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
+    d1_databases: production.d1_databases.filter((database: Record<string, unknown>) =>
+      database.binding === 'OPS_DB' || database.binding === 'COMMERCE_DB').map((database: Record<string, unknown>) => ({
+      ...database, remote: false, migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
+    })),
+    vars: { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contract,
+      ETHEREUM_111K_RPC_URL: `http://127.0.0.1:${address.port}`, ETHEREUM_111K_DEPLOYMENT_BLOCK: '100' },
+  } }] });
+  context.after(() => server.close());
+  await server.listen();
+  const worker = server.getWorker<Env>('ethereum-default-fetch-runtime');
+  await worker.applyD1Migrations('OPS_DB');
+  await worker.applyD1Migrations('COMMERCE_DB');
+  const response = await worker.fetch('https://api.mons.shop/reconcile');
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs']);
+  const env = await worker.getEnv();
+  assert.deepEqual(await env.COMMERCE_DB.prepare(`SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor
+    WHERE chain_id = ? AND contract_address = ?`).bind(31337, contract).first(), { next_block: 103, scan_end_block: null });
+  const stats = await worker.fetch(`https://api.mons.shop${paths.stats}`, {
+    headers: { Origin: ORIGIN, 'CF-Connecting-IP': '203.0.113.42' },
+  });
+  assert.equal(stats.status, 200, await stats.clone().text());
+  assert.equal((await stats.json() as { remainingCrates: number }).remainingCrates, 5555);
+  assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs', 'eth_chainId', 'eth_call']);
+});
 
 test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encrypted address isolation', async () => {
   const server = ethereumRuntime();
