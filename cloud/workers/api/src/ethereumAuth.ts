@@ -106,7 +106,7 @@ export async function ethereumAuth(request: Request, context: EthereumContext, p
   }
   if (path.endsWith('/verify')) {
     const body = await readEthereumBody(request, context.signal, z.object({
-      challengeId: z.string().regex(UUID), signature: z.string().regex(/^0x(?:[0-9a-fA-F]{2})+$/).max(8194),
+      challengeId: z.string().regex(UUID), signature: z.string().regex(/^0x(?:[0-9a-fA-F]{2})*$/).max(8194),
     }).strict());
     await limitEthereumRequest(request, context, 'verify', context.env.STAFF_AUTH_SESSION_RATE_LIMITER);
     const challenge = await context.env.OPS_DB.prepare('SELECT * FROM ethereum_auth_challenges WHERE challenge_id = ?')

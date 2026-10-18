@@ -407,26 +407,30 @@ test('disabled collections clean up expired Ethereum auth without accessing the 
   } finally { f.close(); }
 });
 
-test('111k auth accepts ERC-1271 only for a deployed wallet returning its magic value', async () => {
-  const f = fixture();
-  try {
-    const smartWallet = '0x4444444444444444444444444444444444444444';
-    const proof = await f.challenge(smartWallet);
-    const body = { challengeId: proof.challengeId, signature: '0x1234' };
-    assert.equal((await f.request(paths.authVerify, body)).response.status, 401);
-    f.state.contractCode.add(smartWallet);
-    f.state.magic = '0xffffffff';
-    assert.equal((await f.request(paths.authVerify, body)).response.status, 401);
-    f.state.magic = '0x1626ba7e';
-    const accepted = await f.request<EthereumSession>(paths.authVerify, body);
-    assert.equal(accepted.response.status, 200);
-    assert.equal(accepted.body.address, smartWallet);
-    const checked = f.state.calls.filter(call => call.method === 'eth_call').at(-1)!;
-    const call = checked.params[0] as { to: string; data: string };
-    assert.equal(call.to, smartWallet);
-    assert.deepEqual(decodeReturn(['bytes32', 'bytes'], `0x${call.data.slice(10)}`), [personalMessageHash(proof.message), '0x1234']);
-  } finally { f.close(); }
-});
+for (const signature of ['0x', '0x1234']) {
+  test(`111k auth accepts ERC-1271 signature ${signature} only for a deployed wallet returning its magic value`, async () => {
+    const f = fixture();
+    try {
+      const smartWallet = '0x4444444444444444444444444444444444444444';
+      const proof = await f.challenge(smartWallet);
+      const body = { challengeId: proof.challengeId, signature };
+      assert.equal((await f.request(paths.authVerify, body)).response.status, 401);
+      f.state.contractCode.add(smartWallet);
+      f.state.magic = '0xffffffff';
+      assert.equal((await f.request(paths.authVerify, body)).response.status, 401);
+      assert.equal(f.ops.prepare('SELECT COUNT(*) AS n FROM ethereum_auth_sessions').get()!.n, 0);
+      assert.equal(f.ops.prepare('SELECT consumed_at_ms FROM ethereum_auth_challenges WHERE challenge_id = ?').get(proof.challengeId)!.consumed_at_ms, null);
+      f.state.magic = '0x1626ba7e';
+      const accepted = await f.request<EthereumSession>(paths.authVerify, body);
+      assert.equal(accepted.response.status, 200);
+      assert.equal(accepted.body.address, smartWallet);
+      const checked = f.state.calls.filter(call => call.method === 'eth_call').at(-1)!;
+      const call = checked.params[0] as { to: string; data: string };
+      assert.equal(call.to, smartWallet);
+      assert.deepEqual(decodeReturn(['bytes32', 'bytes'], `0x${call.data.slice(10)}`), [personalMessageHash(proof.message), signature]);
+    } finally { f.close(); }
+  });
+}
 
 test('111k auth and mutations reject missing CSRF, wrong origin, wrong chain, and rate exhaustion', async () => {
   const f = fixture();
