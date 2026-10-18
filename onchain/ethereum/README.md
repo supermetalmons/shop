@@ -2,6 +2,8 @@
 
 An ERC721A collection with public crate and warehouse sales, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
 
+Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving withdrawals and emergency controls. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
+
 The isolated package uses only the approved `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat, ethers, viem, or forge-std dependency is needed.
 
 ## Check
@@ -116,7 +118,9 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
-Measured against `9a95163b` with Foundry 1.7.1, Solidity 0.8.30, optimizer 200 runs, and Prague. The same 29 isolated scenarios were captured before and after hardening. Every measured call uses less gas, including the new pause check for delivery and claims. `Receiver` cases include minimal ERC-721 receiver callbacks; `After1`/`After240` use existing holdings; `Crate10` claims a different fixed artwork range.
+Disabling ownership renunciation and using `ECDSA.recoverCalldata` were measured against `72882e49` with the settings below. All 13 delivery/claim scenarios save 237–248 gas per call; the other 16 measurements are unchanged. The collection runtime is now 14,233 bytes. Current baselines are in `snapshots/Mons111kGasTest.json`.
+
+The historical comparison below records emergency-pause hardening at `8d260f49` against `9a95163b`, using Foundry 1.7.1, Solidity 0.8.30, optimizer 200 runs, and Prague. The same 29 isolated scenarios were captured before and after that change. Every measured call uses less gas, including the new pause check for delivery and claims. `Receiver` cases include minimal ERC-721 receiver callbacks; `After1`/`After240` use existing holdings; `Crate10` claims a different fixed artwork range.
 
 | Operation | Before | After | Gas change | Change |
 | --- | ---: | ---: | ---: | ---: |
@@ -150,4 +154,4 @@ Measured against `9a95163b` with Foundry 1.7.1, Solidity 0.8.30, optimizer 200 r
 | unboxWarehouse | 357,528 | 353,550 | -3,978 | -1.11% |
 | unboxWarehouseReceiver | 376,605 | 372,627 | -3,978 | -1.06% |
 
-The collection runtime grows from 14,080 to 14,345 bytes (+265) with the added pause controls. The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These call-level snapshots are not complete transaction gas or ETH fee estimates; intrinsic gas, refunds, and wallet-specific execution affect the final transaction cost.
+That pause-control change grew the collection runtime from 14,080 to 14,345 bytes (+265). The renderer remains 7,752 bytes. Both remain below the 24,576-byte runtime limit. These call-level snapshots are not complete transaction gas or ETH fee estimates; intrinsic gas, refunds, and wallet-specific execution affect the final transaction cost.

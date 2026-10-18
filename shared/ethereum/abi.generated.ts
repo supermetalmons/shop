@@ -1630,6 +1630,11 @@ export const mons111kAbi = [
   },
   {
     "type": "error",
+    "name": "OwnershipRenunciationDisabled",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "RedemptionsPaused",
     "inputs": []
   },

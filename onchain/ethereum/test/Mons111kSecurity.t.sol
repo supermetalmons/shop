@@ -152,6 +152,84 @@ contract Mons111kSecurityTest is TestSupport {
         token = new SecurityCollection(address(this), vm.addr(SIGNER_KEY), TREASURY, address(new Mons111kRenderer()));
     }
 
+    function testRenunciationPreservesOwnershipBeforeDuringAndAfterTransfer() public {
+        vm.expectRevert(Mons111k.OwnershipRenunciationDisabled.selector);
+        token.renounceOwnership();
+        assertEq(token.owner(), address(this));
+        assertEq(token.pendingOwner(), address(0));
+        vm.prank(BOB);
+        SecurityVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", BOB));
+        token.renounceOwnership();
+
+        token.transferOwnership(ALICE);
+        vm.expectRevert(Mons111k.OwnershipRenunciationDisabled.selector);
+        token.renounceOwnership();
+        assertEq(token.owner(), address(this));
+        assertEq(token.pendingOwner(), ALICE);
+        vm.prank(ALICE);
+        SecurityVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", ALICE));
+        token.renounceOwnership();
+        assertEq(token.owner(), address(this));
+        assertEq(token.pendingOwner(), ALICE);
+
+        token.transferOwnership(address(0));
+        assertEq(token.owner(), address(this));
+        assertEq(token.pendingOwner(), address(0));
+        vm.prank(ALICE);
+        SecurityVm(address(vm)).expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", ALICE));
+        token.acceptOwnership();
+        token.transferOwnership(ALICE);
+        vm.prank(ALICE);
+        token.acceptOwnership();
+        SecurityVm(address(vm))
+            .expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", address(this)));
+        token.renounceOwnership();
+        vm.prank(ALICE);
+        vm.expectRevert(Mons111k.OwnershipRenunciationDisabled.selector);
+        token.renounceOwnership();
+        assertEq(token.owner(), ALICE);
+        assertEq(token.pendingOwner(), address(0));
+    }
+
+    function testRejectedRenunciationLeavesWithdrawPauseAndSignerRotationUsable() public {
+        _buyCrates(ALICE, 1);
+        token.transferOwnership(ALICE);
+        vm.prank(ALICE);
+        token.acceptOwnership();
+        vm.prank(ALICE);
+        vm.expectRevert(Mons111k.OwnershipRenunciationDisabled.selector);
+        token.renounceOwnership();
+        address signer = vm.addr(ROTATED_KEY);
+        uint256 balance = address(token).balance;
+        vm.startPrank(ALICE);
+        token.setRedemptionsPaused(true);
+        token.setQuoteSigner(signer);
+        token.withdraw();
+        vm.stopPrank();
+        assertTrue(token.redemptionsPaused());
+        assertEq(token.quoteSigner(), signer);
+        assertEq(TREASURY.balance, balance);
+        assertEq(address(token).balance, 0);
+        vm.prank(ALICE);
+        token.setRedemptionsPaused(false);
+        uint256[] memory ids = _one(111112);
+        Mons111k.DeliveryQuote memory quote = _quote(ALICE, 2, ids);
+        bytes memory signature = _deliverySignature(ids, quote, ROTATED_KEY);
+        vm.prank(ALICE);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        assertFalse(token.redemptionsPaused());
+        assertTrue(token.usedDeliveryOrders(2));
+        _info(2000001, 5, 1, ALICE);
+    }
+
+    function testDeliveryRejectsMalformedSignaturesAtomicallyAndAcceptsValidRetry() public {
+        _malformedAuthorization(false);
+    }
+
+    function testCrateClaimRejectsMalformedSignaturesAtomicallyAndAcceptsValidRetry() public {
+        _malformedAuthorization(true);
+    }
+
     function testRedemptionsStartUnpausedAndOnlyOwnerCanEmitPauseTransitions() public {
         assertFalse(token.redemptionsPaused());
         vm.prank(ALICE);
@@ -462,6 +540,59 @@ contract Mons111kSecurityTest is TestSupport {
 
     function testCaughtClaimRevertCanRetrySameAuthorizationInOneWrapperCall() public {
         _caughtAuthorizedRetry(5);
+    }
+
+    function _malformedAuthorization(bool claim) internal {
+        _buyCrates(ALICE, 2);
+        _redeem(ALICE, _one(111113), 1);
+        uint256[] memory ids = _one(111112);
+        Mons111k.DeliveryQuote memory quote = _quote(ALICE, 2, ids);
+        bytes memory signature = claim
+            ? _claimSignature(ALICE, 2000002, OUTER_CLAIM, quote.deadline, SIGNER_KEY)
+            : _deliverySignature(ids, quote, SIGNER_KEY);
+        bytes32 beforeState = _state(ALICE);
+        for (uint256 i; i < 5; ++i) {
+            (bytes memory malformed, bytes memory reason) = _malformedSignature(signature, i);
+            vm.prank(ALICE);
+            SecurityVm(address(vm)).expectRevert(reason);
+            if (claim) token.claimCrateReceipt(2000002, OUTER_CLAIM, quote.deadline, malformed);
+            else token.redeemForDelivery{value: quote.fee}(ids, quote, malformed);
+            assertEq(_state(ALICE), beforeState);
+            _info(111112, 2, 1, ALICE);
+            _info(2000002, 5, 2, ALICE);
+            _absent(2000001, 1);
+            _absent(1000021, 20);
+        }
+        vm.prank(ALICE);
+        if (claim) token.claimCrateReceipt(2000002, OUTER_CLAIM, quote.deadline, signature);
+        else token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        if (claim) {
+            assertTrue(token.usedClaims(OUTER_CLAIM));
+            _info(2000002, 0, 0, address(0));
+            _outputs(1000021, 20, 4, 21, ALICE);
+        } else {
+            assertTrue(token.usedDeliveryOrders(2));
+            _info(111112, 0, 0, address(0));
+            _info(2000001, 5, 1, ALICE);
+        }
+    }
+
+    function _malformedSignature(bytes memory signature, uint256 variant)
+        internal
+        pure
+        returns (bytes memory malformed, bytes memory reason)
+    {
+        if (variant < 3) {
+            uint256 length = variant == 0 ? 0 : variant == 1 ? 64 : 66;
+            return (new bytes(length), abi.encodeWithSignature("ECDSAInvalidSignatureLength(uint256)", length));
+        }
+        (bytes32 r, bytes32 s) = abi.decode(signature, (bytes32, bytes32));
+        if (variant == 3) {
+            return (abi.encodePacked(r, s, uint8(0)), abi.encodeWithSignature("ECDSAInvalidSignature()"));
+        }
+        bytes32 highS = bytes32(0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141 - uint256(s));
+        uint8 v = uint8(signature[64]) == 27 ? 28 : 27;
+        return (abi.encodePacked(r, highS, v), abi.encodeWithSignature("ECDSAInvalidSignatureS(bytes32)", highS));
     }
 
     function _receiver() internal returns (SecurityReceiver buyer) {

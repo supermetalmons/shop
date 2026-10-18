@@ -65,6 +65,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error WrongPayment();
     error WrongOwner();
     error WrongItemKind();
+    error OwnershipRenunciationDisabled();
     error InvalidAuthorization();
     error AuthorizationExpired();
     error AuthorizationTooLong();
@@ -175,7 +176,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
                 )
             )
         );
-        if (ECDSA.recover(digest, signature) != quoteSigner) revert InvalidAuthorization();
+        if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
         uint256[] memory receiptIds = new uint256[](tokenIds.length);
         for (uint256 i; i < tokenIds.length; ++i) {
             (uint8 kind, uint256 displayId, address holder) = getTokenInfo(tokenIds[i]);
@@ -205,7 +206,7 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (usedClaims[claimId]) revert AuthorizationAlreadyUsed();
         bytes32 digest =
             _hashTypedDataV4(keccak256(abi.encode(CLAIM_TYPEHASH, msg.sender, receiptId, claimId, deadline)));
-        if (ECDSA.recover(digest, signature) != quoteSigner) revert InvalidAuthorization();
+        if (ECDSA.recoverCalldata(digest, signature) != quoteSigner) revert InvalidAuthorization();
         usedClaims[claimId] = true;
         _burn(receiptId);
         uint256 count = _crateContentsCount(crateNumber);
@@ -272,6 +273,10 @@ contract Mons111k is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
         return interfaceId == 0x49064906 || super.supportsInterface(interfaceId);
+    }
+
+    function renounceOwnership() public override onlyOwner {
+        revert OwnershipRenunciationDisabled();
     }
 
     function setPrices(uint256 cratePrice_, uint256 warehousePrice_) external onlyOwner {
