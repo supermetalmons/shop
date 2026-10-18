@@ -59,7 +59,50 @@ Before deployment, the merged revision passed `npm run check`, the Ethereum
 contract/frontend suite, the Anvil lifecycle suite, the native renderer suite,
 and 512 extended invariant sequences with 65,536 calls and zero reverts.
 
-Application rollout uses OPS migration `0008` and Commerce migrations
-`0037`–`0040`, followed by the API Worker and frontend through the normal
-release commands. Database recovery follows the repository's fix-forward
+## Application rollout
+
+OPS migration `0008` and Commerce migrations `0037`–`0040` were applied and all
+three database integrity gates passed. The API was published before the
+frontend. The [application release record](application-release.json) contains
+versions, source revisions, test results and live transaction evidence.
+
+| Service | Current version | Source revision |
+| --- | --- | --- |
+| `mons-shop-api` | `faca4183-a862-470a-b8f1-bab83f3d333d` | `e8d3313a` |
+| `mons-shop` | `9690d4f8-37f5-4f87-b7a8-9e01c5bf3c8b` | `2dfa251b` |
+
+Live verification exposed a native Worker `fetch` receiver error in scheduled
+reconciliation. HTTP traffic already used a wrapper and remained functional.
+The API follow-up wraps the default fetch in both Ethereum entrypoints and
+adds a real Worker regression without an injected fetch. The affected unit
+tests, five Ethereum runtime tests, typecheck, bundle validation and startup
+check passed before the corrected API was published.
+
+The scheduled invocation after the correction completed all nine jobs
+successfully, including recovery of the test delivery without a client
+confirmation call. Database recovery follows the repository's fix-forward
 policy; deployed contracts are non-upgradeable.
+
+## Live acceptance
+
+[The collection page](https://mons.shop/111k_devnet) loaded successfully with
+the live Sepolia configuration, both container prices and current availability,
+and survived a browser reload. Wallet operations were exercised with signed
+test-wallet transactions and authenticated API requests; the in-app browser
+had no wallet extension.
+
+The test minted one warehouse, opened its eleven crates, batch-opened two
+crates into forty artworks, and delivered one artwork plus one remaining crate
+as order `531015330`. The client was interrupted after the delivery was mined,
+then resumed the same transaction hash. Scheduled reconciliation published the
+order before a client confirmation was sent.
+
+Crate receipt `2000003` was transferred to the second test wallet and its code
+claimed twenty artwork receipts. Every transaction reached three confirmations;
+inventory and authenticated shipment/claim reads matched the onchain results.
+
+The scoped post-smoke audit passed all 33 checks, including the stored
+fulfillment projection, primary-admin access, claimed crate contents, encrypted
+address isolation and canonical recovery record. No ShipStation record,
+notification outbox or pack-status outbox was created for the test order.
+All six queues and dead-letter queues had zero backlog.

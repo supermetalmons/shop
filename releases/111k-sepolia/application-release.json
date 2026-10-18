@@ -1,0 +1,192 @@
+{
+  "api": {
+    "name": "mons-shop-api",
+    "versionId": "faca4183-a862-470a-b8f1-bab83f3d333d",
+    "url": "https://api.mons.shop",
+    "sourceRevision": "e8d3313a9b3ce3bdd0ff99c7e418de561c3f2699",
+    "initialVersionId": "31067c19-affd-4821-b135-75538c68a543"
+  },
+  "frontend": {
+    "name": "mons-shop",
+    "versionId": "9690d4f8-37f5-4f87-b7a8-9e01c5bf3c8b",
+    "url": "https://mons.shop/111k_devnet",
+    "sourceRevision": "2dfa251b33f8200a32abdc8a446f9214b24d3836"
+  },
+  "migrations": {
+    "data": [],
+    "ops": [
+      "0008_ethereum_profiles.sql"
+    ],
+    "commerce": [
+      "0037_ethereum_111k.sql",
+      "0038_ethereum_reconciliation.sql",
+      "0039_ethereum_reconciliation_indexes.sql",
+      "0040_ethereum_reconciliation_resume.sql"
+    ]
+  },
+  "apiSmoke": {
+    "passed": true,
+    "checkedAt": "2026-10-18T20:10:11.603Z",
+    "chainId": 11155111,
+    "contractAddress": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+    "remainingCrates": 5469,
+    "inventoryItems": 30,
+    "confirmations": 130
+  },
+  "liveSmoke": {
+    "passed": true,
+    "completedAt": "2026-10-18T20:14:33.066Z",
+    "orderId": 531015330,
+    "transactions": {
+      "mint": {
+        "hash": "0x54009a606113007213ba3031e73d11e99b1c3925f9fa0be10ef4397dae88d7f6",
+        "blockNumber": 11943286,
+        "blockHash": "0x3284bafefa92d891c08eb8efbdbca71ab2f5596479023956969f7d2f3abce290"
+      },
+      "openWarehouse": {
+        "hash": "0xa773ed1450ac9fc0717f67a52c8e6a8016fcfdbee9e6137b5a5952dd5b27cadd",
+        "blockNumber": 11943289,
+        "blockHash": "0x9424e1c3b689b9c68ef4b0939ec173e7612fa0217a94f6f6c69db2f2e5fac991"
+      },
+      "openBatch": {
+        "hash": "0x45a62f3267f6b5833f88fa48b52739a5762e8d266815456293d831474040f26e",
+        "blockNumber": 11943293,
+        "blockHash": "0xf373468fc7ce3e5f9fa3962bd8507dad89b1503fdc08c334a7519d3e47df004a"
+      },
+      "delivery": {
+        "hash": "0xd8944996b6831a41b284447bfae688b585c440aa15316699ff63257ac5f9b189",
+        "blockNumber": 11943296,
+        "blockHash": "0x878939ebc6775769ec15906008f2361a4b2ca270eb19f5e89be65661ead51586"
+      },
+      "transferReceipt": {
+        "hash": "0x9a9262d345e568c01bb1b45c731b4aad09de7f512eca8db50c496cdb15d2b293",
+        "blockNumber": 11943366,
+        "blockHash": "0xbde73b8ad0049debf2e32e8c27b82408085d170403247dcb49ab35edfaf82ae4"
+      },
+      "claim": {
+        "hash": "0x2d9238f270e5680acc54792856c7abfc0c51c68f7d8f0d008514cf0600d88039",
+        "blockNumber": 11943370,
+        "blockHash": "0x41f6989755aee269bef8c6a097a7611b274bba4b2c8a8262fbe6836de527b66f"
+      }
+    },
+    "warehouseTokenId": "116667",
+    "openedCrateTokenIds": [
+      "111112",
+      "111113"
+    ],
+    "artworksMinted": 40,
+    "deliveryReceiptIds": [
+      "1000001",
+      "2000003"
+    ],
+    "crateReceiptId": "2000003",
+    "claimedArtworkReceipts": 20,
+    "interruptedClientResumed": true,
+    "deliveryHashPreserved": true,
+    "deliveryRecoveredWithoutClientConfirmationAt": "2026-10-18T20:11:09.119Z"
+  },
+  "scheduler": {
+    "observedAt": "2026-10-18T20:10:58.665Z",
+    "scheduledTime": 1792354249000,
+    "cron": "*/5 * * * *",
+    "outcome": "ok",
+    "jobsSucceeded": 9,
+    "ethereum": {
+      "job": "ethereum",
+      "outcome": "succeeded",
+      "durationMs": 4410,
+      "attempted": 1,
+      "completed": 1,
+      "deferred": 0,
+      "failed": 0
+    }
+  },
+  "scopedAudit": {
+    "passed": true,
+    "checksPassed": 33,
+    "checks": {
+      "quoteConfirmed": true,
+      "quotePublished": true,
+      "quoteIdentityMatches": true,
+      "quoteBlockMatches": true,
+      "quoteReachedConfirmations": true,
+      "crateClaimClaimed": true,
+      "crateClaimIdentityMatches": true,
+      "crateClaimBlockMatches": true,
+      "crateClaimReachedConfirmations": true,
+      "claimedProjectionMatches": true,
+      "documentReadyToShip": true,
+      "documentIsEthereumTestnet": true,
+      "documentTransactionMatches": true,
+      "documentItemsMatch": true,
+      "documentReceiptsMatch": true,
+      "canonicalRecoveryValid": true,
+      "noShipStationRecord": true,
+      "noNotificationMarkers": true,
+      "noNotificationOutbox": true,
+      "noPackStatusOutbox": true,
+      "supportedFulfillmentDrop": true,
+      "primaryAdminHasDropAccess": true,
+      "staffTransactionMatches": true,
+      "staffStatusReady": true,
+      "staffBoxClaimed": true,
+      "staffCrateContentsMatch": true,
+      "staffLooseArtworkMatches": true,
+      "staffAssetsMatch": true,
+      "staffSensitiveAddressHidden": true,
+      "syntheticAddressMatches": true,
+      "syntheticProfilesMatch": true,
+      "syntheticAddressCountsMatch": true,
+      "schedulerRecoveredDelivery": true
+    },
+    "counts": {
+      "quoteCount": 1,
+      "claimCount": 1,
+      "documentCount": 1,
+      "recoveryCount": 1,
+      "deliveredItemCount": 2,
+      "staffBoxCount": 1,
+      "staffLooseArtworkCount": 1,
+      "staffCrateArtworkCount": 20,
+      "notification_count": 0,
+      "notification_owner_count": 0,
+      "pack_status_count": 0,
+      "synthetic_profile_count": 1,
+      "deployer_profile_count": 1,
+      "recipient_profile_count": 0,
+      "synthetic_address_count": 1,
+      "deployer_address_count": 1,
+      "matching_address_count": 1,
+      "recipient_address_count": 0,
+      "queuesChecked": 6,
+      "queueBacklogCount": 0
+    }
+  },
+  "validation": {
+    "mergedRevision": "972d74785b28e7e3e9d1c329439c94dfe0ea766a",
+    "frontendWorkerTests": 4,
+    "apiTests": 2421,
+    "nativeRuntimeTests": 35,
+    "repositoryTests": 3944,
+    "rustTests": 35,
+    "solidityTests": 102,
+    "gasBenchmarks": 105,
+    "gasRegressionTests": 10,
+    "ethereumFrontendTests": 217,
+    "anvilLifecycleScenarios": 24,
+    "extendedInvariantCalls": 65536,
+    "extendedInvariantReverts": 0,
+    "rendererJavascriptTests": 82,
+    "rendererPythonTests": 66,
+    "postFixEthereumRuntimeTests": 5,
+    "postFixAffectedUnitTestsPassed": true,
+    "postFixApiTypecheckBundleAndStartupPassed": true
+  },
+  "browserVerification": {
+    "url": "https://mons.shop/111k_devnet",
+    "rendered": true,
+    "containerPricingVerified": true,
+    "reloadVerified": true,
+    "walletFlow": "Verified with signed test-wallet transactions and authenticated live API calls; no wallet extension was available in the in-app browser."
+  }
+}
