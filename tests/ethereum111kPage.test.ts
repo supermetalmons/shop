@@ -44,7 +44,6 @@ beforeEach(context => {
   t.mock.method(ethereumApi, 'stats', async () => ({ allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0,
     cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505 }));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
-  t.mock.method(ethereumApi, 'preview', async kind => previewImage(kind));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
 function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, initialize?: (client: InstanceType<typeof QueryClient>) => void) {
@@ -61,57 +60,23 @@ function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, i
 
 test('the mint panel switches crate and warehouse previews, supports fifteen, and names the 31-artwork crate', async () => {
   const view = page();
+  const crateImage = view.getByRole('img', { name: '111K crate' });
+  assert.equal(crateImage.querySelector('text')?.textContent, '?');
+  assert.equal(crateImage.getAttribute('viewBox'), '0 0 720 720');
   await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
   assert.ok(view.getByRole('heading', { name: '111K' }));
   assert.ok(view.getByRole('region', { name: '111K testnet mint' }));
   assert.ok(view.getByText('A crate of 20 artworks. Crate #5555 holds 31.'));
-  const crateImage = view.getByAltText('111K crate') as HTMLImageElement;
-  assert.equal(crateImage.src, previewImage('crate'));
   fireEvent.click(view.getByLabelText('Warehouse'));
   assert.ok(view.getByText('One warehouse. Eleven crates.'));
-  await waitFor(() => assert.equal((view.getByAltText('111K warehouse') as HTMLImageElement).src, previewImage('warehouse')));
+  const warehouseImage = view.getByRole('img', { name: '111K warehouse' });
+  assert.equal(warehouseImage.querySelector('text')?.textContent, '?');
+  assert.equal(warehouseImage.getAttribute('viewBox'), '0 0 720 720');
   const quantity = view.getByRole('slider', { name: /Quantity/ }) as HTMLInputElement;
   assert.equal(quantity.max, '15');
   fireEvent.change(quantity, { target: { value: '15' } });
   assert.ok(view.getByRole('button', { name: /Mint 15 warehouses.*0.0165 ETH/ }));
   assert.ok(view.getByText('Testnet only. Test ETH; no physical shipments.'));
-});
-
-test('mint previews wait for contract metadata and let failed requests retry without substitute artwork', async t => {
-  let resolvePreview!: (image: string) => void;
-  const pending = new Promise<string>(resolve => { resolvePreview = resolve; });
-  let failWarehouse = true;
-  t.mock.method(ethereumApi, 'preview', async kind => {
-    if (kind === 'crate') return pending;
-    if (failWarehouse) throw new Error('Metadata unavailable');
-    return previewImage(kind);
-  });
-  const view = page();
-  await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
-  assert.ok(view.getByText('Loading preview…'));
-  assert.equal(view.queryByAltText('111K crate'), null);
-  await act(async () => { resolvePreview(previewImage('crate')); });
-  await waitFor(() => assert.equal((view.getByAltText('111K crate') as HTMLImageElement).src, previewImage('crate')));
-
-  fireEvent.click(view.getByLabelText('Warehouse'));
-  await waitFor(() => assert.ok(view.getByText('Couldn’t load preview.')));
-  assert.equal(view.queryByAltText('111K crate'), null);
-  assert.equal(view.queryByAltText('111K warehouse'), null);
-  failWarehouse = false;
-  fireEvent.click(view.getByRole('button', { name: 'Retry preview' }));
-  await waitFor(() => assert.equal((view.getByAltText('111K warehouse') as HTMLImageElement).src, previewImage('warehouse')));
-  assert.equal(view.queryByText('Couldn’t load preview.'), null);
-});
-
-test('mint previews refresh when the configured onchain renderer changes', async t => {
-  const view = page();
-  await waitFor(() => assert.ok(view.getByAltText('111K crate')));
-  const updatedImage = previewImage('updated crate');
-  t.mock.method(ethereumApi, 'preview', async () => updatedImage);
-  await act(async () => {
-    view.client.setQueryData(['ethereum111k', 'config'], { ...config, rendererAddress: '0x4444444444444444444444444444444444444444' });
-  });
-  await waitFor(() => assert.equal((view.getByAltText('111K crate') as HTMLImageElement).src, updatedImage));
 });
 
 test('Ethereum and Solana appear in one inventory while selection dispatch stays on its own chain', async () => {

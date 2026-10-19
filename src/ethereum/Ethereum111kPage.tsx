@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_MAX_EXPECTED_IDS, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
@@ -9,7 +8,7 @@ import { Modal } from '../components/Modal';
 import { BackgroundLayerPortal } from '../components/BackgroundBlurLayer';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import type { InventoryItem } from '../types';
-import { ethereumApi } from './api';
+import { EthereumContainerPreview } from './EthereumContainerPreview';
 import { ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 
@@ -61,8 +60,6 @@ export default function Ethereum111kPage({
   const remaining = kind === 'crate' ? model.stats.data?.remainingCrates : model.stats.data?.remainingWarehouses;
   const unitPrice = kind === 'crate' ? model.stats.data?.cratePriceWei ?? model.config.cratePriceWei : model.stats.data?.warehousePriceWei ?? model.config.warehousePriceWei;
   const price = formatEtherAmount(BigInt(unitPrice) * BigInt(quantity));
-  const preview = useQuery({ queryKey: ['ethereum111k', 'preview', model.config.chainId, model.config.contractAddress, model.config.rendererAddress, kind],
-    queryFn: ({ signal }) => ethereumApi.preview(kind, signal), enabled: model.config.enabled, retry: false, staleTime: 60_000 });
   const ethereumItems = useMemo(() => model.items.filter(item => !item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const receipts = useMemo(() => model.items.filter(item => item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const inventoryItems = useMemo(() => [...ethereumItems, ...solanaInventoryItems], [ethereumItems, solanaInventoryItems]);
@@ -193,12 +190,8 @@ export default function Ethereum111kPage({
           {wallet.status === 'connecting' || wallet.status === 'restoring' ? 'Connecting…' : model.owner ? `${connectedLabel} · Disconnect` : connectedLabel}
         </button>
       </div>
-      <div className="ethereum111k__preview" key={kind} aria-busy={model.configQuery.isPending || preview.isFetching}>
-        {preview.data ? <img src={preview.data} alt={kind === 'crate' ? '111K crate' : '111K warehouse'} draggable={false} /> :
-          <div className="ethereum111k__preview-status" role="status">
-            <span>{preview.isError ? 'Couldn’t load preview.' : model.configQuery.isPending || model.config.enabled ? 'Loading preview…' : 'Preview unavailable.'}</span>
-            {preview.isError ? <button type="button" className="ghost" onClick={() => void preview.refetch()} disabled={preview.isFetching}>Retry preview</button> : null}
-          </div>}
+      <div className="ethereum111k__preview">
+        <EthereumContainerPreview kind={kind} />
       </div>
       <form className="ethereum111k__mint" onSubmit={mint}>
         <div className="ethereum111k__product">

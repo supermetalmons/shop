@@ -84,11 +84,6 @@ function transaction(value: unknown): EthereumPreparedTransaction {
 
 export const ethereumApi = {
   async config(signal?: AbortSignal) { return parseEthereumConfig(await request(ETHEREUM_API_PATHS.config, { signal })); },
-  async preview(kind: string, signal?: AbortSignal): Promise<string> {
-    const value = await request(`${ETHEREUM_API_PATHS.metadata}?${new URLSearchParams({ kind, displayId: '1' })}`, { signal });
-    if (!record(value) || typeof value.image !== 'string' || !/^data:image\/svg\+xml(?:;base64)?,/.test(value.image)) return invalid();
-    return value.image;
-  },
   async stats(signal?: AbortSignal): Promise<EthereumStats> {
     const value = await request(ETHEREUM_API_PATHS.stats, { signal });
     if (!record(value) || !['allocatedCrates', 'warehousesMinted', 'artworksMinted', 'remainingCrates', 'remainingWarehouses'].every(key => Number.isSafeInteger(value[key]) && Number(value[key]) >= 0) ||
