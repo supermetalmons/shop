@@ -34,7 +34,6 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   walletRef.current = wallet;
   scopeRef.current = scope;
   const mounted = useRef(false);
-  const autoConnected = useRef(false);
   const busy = useSyncExternalStore(
     useCallback(listener => scope ? subscribeEthereumOperation(scope, listener) : () => {}, [scope]),
     useCallback(() => scope ? readEthereumOperation(scope) : null, [scope]),
@@ -67,11 +66,6 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     ? `Transaction sent: ${pending.hash}. Browser storage failed. Keep this tab open and save this hash to recover it after a reload.` : null;
   const requiredConfirmations = pending && ['delivery', 'claim', 'cancel'].includes(pending.action) ? config.confirmationBlocks : 1;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => {
-    if (!wallet.ready || autoConnected.current) return;
-    autoConnected.current = true;
-    if (wallet.status === 'disconnected') wallet.connect();
-  }, [wallet.ready, wallet.status, wallet.connect]);
   useEffect(() => {
     setSession(scope && owner ? readEthereumSession(scope, config, owner) : null);
     setPending(scope ? readEthereumPending(scope) : null);

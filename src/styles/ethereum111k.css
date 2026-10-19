@@ -35,16 +35,27 @@
 }
 .ethereum111k__preview {
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
-  min-height: min(52svh, 520px);
+  height: min(52svh, 520px);
   padding: 24px 0;
   animation: ethereum111k-enter 280ms ease-out both;
 }
 .ethereum111k__preview img {
-  width: min(400px, 70vw);
-  max-height: 49svh;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(400px, 70vw, 100%);
+  max-height: 100%;
   object-fit: contain;
   transition: transform 220ms ease;
+}
+.ethereum111k__preview-status {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
 }
 .ethereum111k__preview:hover img {
   transform: translateY(-4px) rotate(-.7deg);
@@ -168,8 +179,11 @@
 }
 .ethereum111k__view-image {
   display: block;
-  width: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
   max-height: 60svh;
+  margin-inline: auto;
   object-fit: contain;
 }
 .ethereum111k__receipt-actions {
@@ -225,6 +239,7 @@
 }
 .ethereum111k__reveal-grid button {
   display: grid;
+  align-self: start;
   gap: 8px;
   background: none;
   border: 0;
@@ -235,6 +250,8 @@
 }
 .ethereum111k__reveal-grid img {
   width: 100%;
+  height: auto;
+  object-fit: contain;
   border-radius: 3px;
 }
 @keyframes ethereum111k-enter {
@@ -246,8 +263,7 @@
   .ethereum111k__mint { grid-template-columns: 1fr; gap: 16px; }
   .ethereum111k__product { margin-bottom: 6px; }
   .ethereum111k__test-note { text-align: left; }
-  .ethereum111k__preview { min-height: 36svh; }
-  .ethereum111k__preview img { max-height: 38svh; }
+  .ethereum111k__preview { height: 36svh; }
   .ethereum111k__reveal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .ethereum111k__selection {
     max-width: calc(100vw - 24px);

@@ -14,14 +14,16 @@ const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-libr
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111kPage.tsx');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
-const { ethereumContainerPreview } = await import('../src/ethereum/preview.ts');
 const { ethereumInventoryQueryKey, ethereumInventoryScope, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 dom.window.close();
 const clients: InstanceType<typeof QueryClient>[] = [];
 const owner = '0x1111111111111111111111111111111111111111';
 const contract = '0x3333333333333333333333333333333333333333';
 const config = resolveEthereum111kConfig({ contractAddress: contract });
-const image = ethereumContainerPreview('crate');
+function previewImage(kind: string): string {
+  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="720" viewBox="0 0 720 720"><title>${kind}</title><rect width="720" height="720" fill="#e5c986"/></svg>`)}`;
+}
+const image = previewImage('crate');
 function item(tokenId = '111112', kind: EthereumInventoryItem['kind'] = 'crate'): EthereumInventoryItem {
   return { id: ethereumAssetId(config.chainId, contract, tokenId), tokenId, kind, name: kind === 'crate_receipt' ? 'Crate receipt #1' : 'Crate #1', displayId: 1,
     chainId: config.chainId, contractAddress: contract, owner, image };
@@ -42,7 +44,7 @@ beforeEach(context => {
   t.mock.method(ethereumApi, 'stats', async () => ({ allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0,
     cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505 }));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
-  t.mock.method(ethereumApi, 'preview', async kind => ethereumContainerPreview(kind as 'crate' | 'warehouse'));
+  t.mock.method(ethereumApi, 'preview', async kind => previewImage(kind));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
 function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, initialize?: (client: InstanceType<typeof QueryClient>) => void) {
@@ -64,15 +66,52 @@ test('the mint panel switches crate and warehouse previews, supports fifteen, an
   assert.ok(view.getByRole('region', { name: '111K testnet mint' }));
   assert.ok(view.getByText('A crate of 20 artworks. Crate #5555 holds 31.'));
   const crateImage = view.getByAltText('111K crate') as HTMLImageElement;
-  assert.ok(crateImage.src.startsWith('data:image/svg+xml,'));
+  assert.equal(crateImage.src, previewImage('crate'));
   fireEvent.click(view.getByLabelText('Warehouse'));
   assert.ok(view.getByText('One warehouse. Eleven crates.'));
-  assert.ok(view.getByAltText('111K warehouse'));
+  await waitFor(() => assert.equal((view.getByAltText('111K warehouse') as HTMLImageElement).src, previewImage('warehouse')));
   const quantity = view.getByRole('slider', { name: /Quantity/ }) as HTMLInputElement;
   assert.equal(quantity.max, '15');
   fireEvent.change(quantity, { target: { value: '15' } });
   assert.ok(view.getByRole('button', { name: /Mint 15 warehouses.*0.0165 ETH/ }));
   assert.ok(view.getByText('Testnet only. Test ETH; no physical shipments.'));
+});
+
+test('mint previews wait for contract metadata and let failed requests retry without substitute artwork', async t => {
+  let resolvePreview!: (image: string) => void;
+  const pending = new Promise<string>(resolve => { resolvePreview = resolve; });
+  let failWarehouse = true;
+  t.mock.method(ethereumApi, 'preview', async kind => {
+    if (kind === 'crate') return pending;
+    if (failWarehouse) throw new Error('Metadata unavailable');
+    return previewImage(kind);
+  });
+  const view = page();
+  await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
+  assert.ok(view.getByText('Loading preview…'));
+  assert.equal(view.queryByAltText('111K crate'), null);
+  await act(async () => { resolvePreview(previewImage('crate')); });
+  await waitFor(() => assert.equal((view.getByAltText('111K crate') as HTMLImageElement).src, previewImage('crate')));
+
+  fireEvent.click(view.getByLabelText('Warehouse'));
+  await waitFor(() => assert.ok(view.getByText('Couldn’t load preview.')));
+  assert.equal(view.queryByAltText('111K crate'), null);
+  assert.equal(view.queryByAltText('111K warehouse'), null);
+  failWarehouse = false;
+  fireEvent.click(view.getByRole('button', { name: 'Retry preview' }));
+  await waitFor(() => assert.equal((view.getByAltText('111K warehouse') as HTMLImageElement).src, previewImage('warehouse')));
+  assert.equal(view.queryByText('Couldn’t load preview.'), null);
+});
+
+test('mint previews refresh when the configured onchain renderer changes', async t => {
+  const view = page();
+  await waitFor(() => assert.ok(view.getByAltText('111K crate')));
+  const updatedImage = previewImage('updated crate');
+  t.mock.method(ethereumApi, 'preview', async () => updatedImage);
+  await act(async () => {
+    view.client.setQueryData(['ethereum111k', 'config'], { ...config, rendererAddress: '0x4444444444444444444444444444444444444444' });
+  });
+  await waitFor(() => assert.equal((view.getByAltText('111K crate') as HTMLImageElement).src, updatedImage));
 });
 
 test('Ethereum and Solana appear in one inventory while selection dispatch stays on its own chain', async () => {

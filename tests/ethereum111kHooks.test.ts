@@ -13,6 +13,7 @@ let { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
+const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
 const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumSession, readEthereumSubmission, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 type Wallet = Parameters<typeof useEthereum111k>[0];
@@ -91,17 +92,63 @@ function speedUpConfirmationPolls(t: TestContext) {
     schedule(callback, delay === 4_000 ? 25 : delay, ...args));
 }
 
-test('111k auto-connect waits for quiet restoration and prompts once even in StrictMode', async () => {
+test('111k stays disconnected after wallet initialization and restoration failure, including in StrictMode', async () => {
   const disconnected = wallet(null);
   disconnected.ready = false;
   const view = harness(disconnected, true);
   assert.equal(disconnected.connections, 0);
   view.rerender({ wallet: { ...disconnected, ready: true } });
-  await waitFor(() => assert.equal(disconnected.connections, 1));
   view.rerender({ wallet: { ...disconnected, ready: true, error: 'Cancelled' } });
-  await act(async () => { await Promise.resolve(); });
-  assert.equal(disconnected.connections, 1);
+  await waitFor(() => assert.equal(view.result.current.stats.data?.saleActive, true));
+  assert.equal(disconnected.connections, 0);
 });
+
+for (const scenario of ['fresh', 'remembered', 'locked', 'unavailable'] as const) {
+  test(`111k ${scenario} wallet only requests permission after explicit connection`, async () => {
+    const requests: string[] = [];
+    const provider: EIP1193Provider = { request: async ({ method }) => {
+      requests.push(method);
+      if (method === 'eth_accounts') {
+        if (scenario === 'locked') throw new Error('Wallet locked');
+        return scenario === 'unavailable' ? [] : [owner];
+      }
+      if (method === 'eth_chainId') return '0x1';
+      if (method === 'eth_requestAccounts') return [owner];
+      throw new Error(`Unexpected wallet prompt: ${method}`);
+    } };
+    window.addEventListener('eip6963:requestProvider', () => {
+      window.dispatchEvent(new dom.window.CustomEvent('eip6963:announceProvider', { detail: {
+        info: { uuid: '111k-wallet', name: 'Ethereum wallet', rdns: 'com.example.wallet', icon: '' }, provider,
+      } }));
+    });
+    if (scenario !== 'fresh') window.localStorage.setItem('mons.shop.mi-note.ethereum-wallet', JSON.stringify({ type: 'announced', rdns: 'com.example.wallet' }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    clients.push(client);
+    const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+    const view = renderHook(() => {
+      const ethereumWallet = useMiNoteEthereumWallet(true);
+      const model = useEthereum111k(ethereumWallet, '');
+      return { wallet: ethereumWallet, model };
+    }, { wrapper, reactStrictMode: true });
+    await waitFor(() => {
+      assert.equal(view.result.current.wallet.ready, true);
+      assert.equal(view.result.current.model.stats.data?.saleActive, true);
+      if (scenario === 'remembered') assert.equal(view.result.current.model.chainId, 1);
+    });
+    assert.deepEqual(requests, scenario === 'fresh' ? [] : scenario === 'remembered' ? ['eth_accounts', 'eth_chainId'] : ['eth_accounts']);
+    assert.equal(view.result.current.wallet.error, null);
+    if (scenario === 'remembered') {
+      assert.equal(view.result.current.model.owner, owner);
+      return;
+    }
+    assert.equal(view.result.current.model.owner, null);
+    assert.equal(view.result.current.wallet.status, 'disconnected');
+    act(() => view.result.current.wallet.connect());
+    await waitFor(() => assert.equal(view.result.current.model.owner, owner));
+    assert.equal(requests.filter(method => method === 'eth_requestAccounts').length, 1);
+    assert.ok(requests.every(method => ['eth_accounts', 'eth_requestAccounts', 'eth_chainId'].includes(method)));
+  });
+}
 
 test('Ethereum inventory works without a Solana wallet and discards late results from another owner', async t => {
   let finishFirst: (result: EthereumInventoryResponse) => void = () => {};
