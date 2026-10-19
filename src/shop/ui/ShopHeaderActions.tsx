@@ -175,6 +175,16 @@ export function ShopHeaderActions({
           </button>
           <button
             type="button"
+            className="link small top__submenu-nav"
+            onClick={() => {
+              setSettingsOpen(false);
+              navigate('/111k_devnet');
+            }}
+          >
+            111K testnet
+          </button>
+          <button
+            type="button"
             className="link small top__submenu-nav top__submenu-section"
             aria-expanded={wipPickerOpened}
             onClick={() => {
