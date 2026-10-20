@@ -15,6 +15,7 @@ const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-libr
 const { default: FulfillmentApp } = await import('../src/FulfillmentApp.tsx');
 
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const MAINNET_ADMIN = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
 const ADDRESS_OPERATOR = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const SHIPPER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const ETHEREUM_DROP = '111k_devnet';
@@ -149,7 +150,7 @@ async function assertOrdinaryExports(view: ReturnType<typeof render>) {
   assert.deepEqual(Object.keys(addresses), ['card_nft_2:7']);
 }
 
-for (const [label, wallet] of [['admin', ADMIN], ['address operator', ADDRESS_OPERATOR], ['shipper', SHIPPER]] as const) {
+for (const [label, wallet] of [['admin', ADMIN], ['mainnet admin', MAINNET_ADMIN], ['address operator', ADDRESS_OPERATOR], ['shipper', SHIPPER]] as const) {
   test(`All drops excludes Ethereum requests, cards, and exports for the ${label}`, async () => {
     await installSession(wallet);
     const requests = interceptRequests();
@@ -183,6 +184,20 @@ test('the admin loads Ethereum only when selected and returning to All drops cle
   assert.equal(view.queryByText('111K · Ethereum test order'), null);
   await assertOrdinaryExports(view);
   assertOrdinaryRequests(requests, ADMIN);
+});
+
+test('the mainnet admin cannot select or request devnet drops even from a saved selection', async () => {
+  await installSession(MAINNET_ADMIN);
+  const requests = interceptRequests();
+  const view = render(createElement(AppHarness, { wallet: MAINNET_ADMIN, initialDropId: 'card_nft_binder_devnet' }));
+  await view.findByText('Order 7');
+  const selector = view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement;
+  assert.equal(selector.value, '');
+  assert.deepEqual(
+    Array.from(selector.options).map((option) => option.value).filter(Boolean).sort(),
+    listFrontendDrops().filter((drop) => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropId).sort(),
+  );
+  assertOrdinaryRequests(requests, MAINNET_ADMIN);
 });
 
 test('an Ethereum direct selection resets to All drops for another operator without requesting Ethereum', async () => {

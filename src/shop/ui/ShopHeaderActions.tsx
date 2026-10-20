@@ -1,5 +1,6 @@
 import { FaTableCellsLarge } from 'react-icons/fa6';
 import {
+  getFrontendDrop,
   isDropFamily,
   type FrontendDeploymentConfig
 } from '../../config/deployment';
@@ -19,6 +20,7 @@ import { BUILD_INFO } from './feedback';
 
 type ShopHeaderActionsProps = Pick<ShopAccount,
   'canUseAdminMenu'
+  | 'mainnetOnlyStaff'
   | 'canUseAdminViewer'
   | 'settingsRef'
   | 'settingsOpen'
@@ -46,6 +48,7 @@ type ShopHeaderActionsProps = Pick<ShopAccount,
 };
 export function ShopHeaderActions({
   canUseAdminMenu,
+  mainnetOnlyStaff,
   canUseAdminViewer,
   settingsRef,
   settingsOpen,
@@ -95,6 +98,9 @@ export function ShopHeaderActions({
   const ownerPickerValue = owner || '';
   const deliveryOrderOwnersErrorMessage = deliveryOrderOwnersError instanceof Error ? deliveryOrderOwnersError.message : '';
   const canLoadMoreOwners = Boolean(deliveryOrderOwnersHasNextPage);
+  const visibleWipRoutes = mainnetOnlyStaff
+    ? WIP_ROUTES.filter((entry) => getFrontendDrop(entry.dropId || entry.path.split('/')[1])?.solanaCluster === 'mainnet-beta')
+    : WIP_ROUTES;
 
   const walletAction = showHeaderWalletButton ? (
     <button
@@ -173,16 +179,18 @@ export function ShopHeaderActions({
           >
             {adminMenuLabel('/fulfillment')}
           </button>
-          <button
-            type="button"
-            className="link small top__submenu-nav"
-            onClick={() => {
-              setSettingsOpen(false);
-              navigate('/111k_devnet');
-            }}
-          >
-            111K testnet
-          </button>
+          {!mainnetOnlyStaff ? (
+            <button
+              type="button"
+              className="link small top__submenu-nav"
+              onClick={() => {
+                setSettingsOpen(false);
+                navigate('/111k_devnet');
+              }}
+            >
+              111K testnet
+            </button>
+          ) : null}
           <button
             type="button"
             className="link small top__submenu-nav top__submenu-section"
@@ -194,7 +202,7 @@ export function ShopHeaderActions({
             {adminMenuSectionLabel('wip', wipPickerOpened)}
           </button>
           {wipPickerOpened
-            ? WIP_ROUTES.map((entry) => (
+            ? visibleWipRoutes.map((entry) => (
               <button
                 key={entry.path}
                 type="button"
@@ -208,7 +216,7 @@ export function ShopHeaderActions({
               </button>
             ))
             : null}
-          {adminMenuDevnetDrops.length ? (
+          {!mainnetOnlyStaff && adminMenuDevnetDrops.length ? (
             <button
               type="button"
               className="link small top__submenu-nav top__submenu-section"
@@ -220,7 +228,7 @@ export function ShopHeaderActions({
               {adminMenuSectionLabel('devnet drops', devnetDropsPickerOpened)}
             </button>
           ) : null}
-          {devnetDropsPickerOpened
+          {!mainnetOnlyStaff && devnetDropsPickerOpened
             ? adminMenuDevnetDrops.map((drop) => (
               <button
                 key={drop.dropId}

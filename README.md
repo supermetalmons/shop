@@ -414,6 +414,12 @@ the same grants. `A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz` retains
 admin access to all registered drops. New mainnet drops need no additional
 fulfillment access configuration for these wallets.
 
+`ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy` has admin access to all
+mainnet drops, with devnet drops hidden and shipping-address
+viewing but no permission to edit saved fulfillment addresses. Ad hoc address
+changes during ShipStation label creation remain available. Ethereum test fulfillment remains
+restricted to `A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz`.
+
 ## Cloudflare deployment
 
 Use the repository's pinned Wrangler. Authenticate interactively with native

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach, beforeEach } from 'node:test';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { resolveAppRoute, walletVisibleShopRoute } from '../src/routes.ts';
+import { listFrontendDrops } from '../src/config/deployment.ts';
 
 const { dom } = setupFrontendDom();
 Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
@@ -11,6 +13,31 @@ const { navigate } = await import('../src/navigation.ts');
 beforeEach(() => window.history.replaceState(null, '', '/'));
 afterEach(cleanup);
 after(() => dom.window.close());
+
+test('mainnet-only staff cannot open copied devnet, testnet, or devnet preview routes', () => {
+  const wallet = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
+  const existingAdmin = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const paths = [
+    ...listFrontendDrops().filter((drop) => drop.solanaCluster === 'devnet').map((drop) => `/${drop.dropId}`),
+    '/111k_devnet',
+    '/mi_note_cards_devnet/wip',
+  ];
+  for (const pathname of paths) {
+    const route = resolveAppRoute({ pathname });
+    for (const [connectedWallet, staffWallet] of [[wallet, null], [null, wallet], [existingAdmin, wallet]]) {
+      const visible = walletVisibleShopRoute(route, connectedWallet, staffWallet);
+      assert.equal(visible.kind, 'home', pathname);
+      assert.equal(visible.path, '/', pathname);
+      assert.equal(visible.walletCluster, 'mainnet-beta', pathname);
+    }
+    assert.equal(walletVisibleShopRoute(route, existingAdmin, existingAdmin), route);
+    assert.equal(walletVisibleShopRoute(route, null, null), route);
+  }
+  for (const pathname of ['/', '/mi_note_cards', '/card_nft_2', '/mi_note_cards/wip', '/fulfillment', '/claim', '/nfc']) {
+    const route = resolveAppRoute({ pathname });
+    assert.equal(walletVisibleShopRoute(route, wallet, wallet), route, pathname);
+  }
+});
 
 test('initial aliases preserve history state and search/hash bytes when replacing the URL', t => {
   window.history.replaceState({ retained: true }, '', '/drifella_binder/?next=%2Fclaim&code=a%2Fb#receipt-1');

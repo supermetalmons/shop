@@ -81,7 +81,9 @@ export function useShopShipments({
     }
   }
   const history = useShipmentHistory({ identity: historyIdentity, initialPage, revision });
-  const deliveryOrders = history.orders;
+  const deliveryOrders = useMemo(() => account.mainnetOnlyStaff
+    ? history.orders.filter((order) => getFrontendDrop(order.dropId)?.solanaCluster === 'mainnet-beta')
+    : history.orders, [account.mainnetOnlyStaff, history.orders]);
 
   const shipmentFigureTargetsNeedingMetadata = useMemo(() => {
     const targetsByKey = new Map<string, FigureMetadataTarget>();

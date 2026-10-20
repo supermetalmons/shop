@@ -3,12 +3,14 @@ import test, { after, afterEach } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
+import { resolveDropContent } from '../src/lib/dropContent.ts';
 
 const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { useShopAccount, useShopAccountEffects } = await import('../src/shop/account/useShopAccount.ts');
 const { useShopSignIn } = await import('../src/shop/account/useShopSignIn.ts');
+const { useShopShipments } = await import('../src/shop/account/useShopShipments.ts');
 const { ADMIN_WALLETS } = await import('../src/lib/fulfillmentAccess.ts');
 const clients: InstanceType<typeof QueryClient>[] = [];
 
@@ -89,6 +91,98 @@ test('admin viewing uses its own cache and returning to the owner restores the a
   assert.equal(result.current.ownerPickerOpened, false);
   assert.equal(result.current.viewedProfile, null);
   assert.equal(result.current.owner, undefined);
+});
+
+test('mainnet-only admin inventory stays scoped across owner overrides and devnet routes', async () => {
+  const wallet = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
+  const existingAdmin = [...ADMIN_WALLETS][0];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const initial: Parameters<typeof useShopAccount>[0] = {
+    auth: { profile: { wallet }, sessionWallet: wallet, authenticated: true, deliveryRecoveryNextCheckAt: null },
+    connectedWallet: wallet,
+    stripeCheckoutDataOwner: wallet,
+    routeCluster: 'devnet',
+  };
+  const runtime: NonNullable<Parameters<typeof useShopAccount>[1]> = {
+    getAdminProfileView: async (owner) => ({ profile: { wallet: owner }, nextCursor: null }),
+    listDeliveryOrderOwners: async () => ({ owners: [], hasMore: false, nextCursor: null }),
+  };
+  const { result, rerender } = renderHook((options: typeof initial) => useShopAccount(options, runtime), {
+    initialProps: initial, wrapper,
+  });
+  assert.equal(result.current.canUseAdminViewer, true);
+  assert.equal(result.current.includeDevnetInventory, false);
+  act(() => result.current.setAdminViewedOwner(existingAdmin));
+  await waitFor(() => assert.equal(result.current.viewedProfile?.wallet, existingAdmin));
+  assert.equal(result.current.includeDevnetInventory, false);
+  rerender({ ...initial, connectedWallet: undefined });
+  assert.equal(result.current.includeDevnetInventory, false);
+  rerender({ ...initial, auth: { ...initial.auth, sessionWallet: existingAdmin } });
+  assert.equal(result.current.includeDevnetInventory, false);
+
+  const ordinaryWallet = '11111111111111111111111111111111';
+  rerender({
+    auth: { ...initial.auth, sessionWallet: ordinaryWallet },
+    connectedWallet: ordinaryWallet,
+    stripeCheckoutDataOwner: ordinaryWallet,
+    routeCluster: 'devnet',
+  });
+  assert.equal(result.current.includeDevnetInventory, true);
+  rerender({
+    auth: { ...initial.auth, sessionWallet: ordinaryWallet },
+    connectedWallet: ordinaryWallet,
+    stripeCheckoutDataOwner: ordinaryWallet,
+    routeCluster: 'mainnet-beta',
+  });
+  assert.equal(result.current.includeDevnetInventory, false);
+});
+
+test('mainnet-only admin shipment views hide devnet rows from every loaded page', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  clients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const wallet = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
+  const owner = 'viewed-owner';
+  const orders = ['card_nft_2', 'card_nft_binder_devnet', '111k_devnet'].map((dropId) => ({
+    dropId, deliveryId: 7, status: 'ready_to_ship', items: [],
+  }));
+  const options = {
+    account: {
+      canReadOwnProfile: false, isViewerMode: true, canUseAdminViewer: true, mainnetOnlyStaff: true,
+      viewedProfile: { wallet: owner, orders }, viewedProfileLoading: false, viewedProfileError: null,
+      viewedProfileNextCursor: null, viewedProfileUpdatedAt: 1,
+    },
+    auth: {
+      authSubject: wallet, sessionWallet: wallet, shipments: [], shipmentsReady: true, shipmentsError: null, loading: false,
+    },
+    stripeRecovery: { profileRecoveryPending: false, anonymousHistory: { orders: [], visible: false } },
+    source: { figureMetadataByKey: {} },
+    view: { inventoryInitialResponseReady: true, receiptItems: [], inventoryEmptyStateVisibility: 'visible' },
+    signIn: { authReady: true, walletIdleReady: true },
+    connectedWallet: wallet,
+    getDropContent: resolveDropContent,
+  } as Parameters<typeof useShopShipments>[0];
+  const { result, rerender } = renderHook(useShopShipments, { initialProps: options, wrapper });
+  await act(async () => undefined);
+  assert.deepEqual(result.current.deliveryOrders.map((order) => order.dropId), ['card_nft_2']);
+  const key = ['shipmentHistory', JSON.stringify([wallet, wallet, 'admin', owner])];
+  act(() => {
+    client.setQueryData(key, {
+      pages: [
+        { orders, nextCursor: null },
+        { orders: [
+          { dropId: 'mi_note_cards_devnet', deliveryId: 8, status: 'ready_to_ship', items: [] },
+          { dropId: 'mi_note_cards', deliveryId: 8, status: 'ready_to_ship', items: [] },
+        ], nextCursor: null },
+      ],
+      pageParams: [null, null],
+    });
+  });
+  await waitFor(() => assert.deepEqual(result.current.deliveryOrders.map((order) => order.dropId), ['card_nft_2', 'mi_note_cards']));
+  rerender({ ...options, account: { ...options.account, mainnetOnlyStaff: false } });
+  assert.equal(result.current.deliveryOrders.length, 5);
 });
 
 function signInOptions(overrides: Partial<Parameters<typeof useShopSignIn>[0]> = {}): Parameters<typeof useShopSignIn>[0] {

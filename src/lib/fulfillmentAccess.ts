@@ -4,6 +4,7 @@ import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   allowedFulfillmentDropIdsForWallet,
+  isMainnetOnlyStaffWallet,
   walletHasAdminIrlRedeemAccess,
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentAppAccess,
@@ -33,7 +34,7 @@ export const DEVNET_INVENTORY_WALLETS = new Set<string>([
   ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
   ...Object.values(DEPLOYMENT_DROPS).map(deploymentTreasuryAlias),
   '8cC8yaEuoTRfmxEopJ9ttUq8JoKR6QkNnm7UqUXPymDw',
-]);
+].filter((wallet) => !isMainnetOnlyStaffWallet(wallet)));
 
 export function hasFulfillmentAppAccess(wallet: string | null | undefined): boolean {
   return walletHasFulfillmentAppAccess(wallet, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);

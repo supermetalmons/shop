@@ -6,6 +6,8 @@ import { ADMIN_WALLETS, hasDevnetInventoryAccess, hasFulfillmentAppAccess } from
 import { profileForAuthorizedView } from '../../lib/profileState';
 import { ADMIN_OWNER_DOC_PAGE_SIZE } from './display';
 import { DEFAULT_SHIPMENT_PAGE_LIMIT } from '../../../shared/shipmentHistory.ts';
+import { isMainnetOnlyStaffWallet } from '../../../shared/fulfillmentAccess';
+import type { SolanaCluster } from '../../config/deployment';
 
 const DEFAULT_RUNTIME = { getAdminProfileView, listDeliveryOrderOwners };
 
@@ -13,10 +15,11 @@ type ShopAccountOptions = {
   auth: Pick<ReturnType<typeof useSolanaAuth>, 'profile' | 'sessionWallet' | 'authenticated' | 'deliveryRecoveryNextCheckAt'>;
   connectedWallet: string | undefined;
   stripeCheckoutDataOwner: string | undefined;
+  routeCluster?: SolanaCluster;
 };
 
 export function useShopAccount(
-  { auth, connectedWallet, stripeCheckoutDataOwner }: ShopAccountOptions,
+  { auth, connectedWallet, stripeCheckoutDataOwner, routeCluster }: ShopAccountOptions,
   runtime: typeof DEFAULT_RUNTIME = DEFAULT_RUNTIME,
 ) {
   const { getAdminProfileView, listDeliveryOrderOwners } = runtime;
@@ -31,11 +34,13 @@ export function useShopAccount(
     authenticatedWallet && hasFulfillmentAppAccess(authenticatedWallet),
   );
   const canUseAdminViewer = isAdminWallet && hasAuthenticatedAccount;
+  const mainnetOnlyStaff = isMainnetOnlyStaffWallet(connectedWallet) || isMainnetOnlyStaffWallet(authenticatedWallet);
   const owner =
     canUseAdminViewer && adminViewedOwner
       ? adminViewedOwner
       : stripeCheckoutDataOwner;
-  const includeDevnetInventory = hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner);
+  const includeDevnetInventory = !mainnetOnlyStaff &&
+    (hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner) || routeCluster === 'devnet');
   const isViewerMode = Boolean(owner && authenticatedWallet && owner !== authenticatedWallet);
   const canReadOwnProfile = Boolean(
     authenticated && owner && sessionWallet === owner && !isViewerMode,
@@ -108,7 +113,7 @@ export function useShopAccount(
     adminViewedOwner, setAdminViewedOwner,
     authenticatedWallet, hasAuthenticatedAccount, localAccountWallet,
     isAdminWallet, isSignedInWallet, canUseAdminMenu, canUseAdminViewer,
-    owner, includeDevnetInventory, isViewerMode, canReadOwnProfile,
+    owner, mainnetOnlyStaff, includeDevnetInventory, isViewerMode, canReadOwnProfile,
     settingsOpen, setSettingsOpen, ownerPickerOpened, setOwnerPickerOpened,
     devnetDropsPickerOpened, setDevnetDropsPickerOpened, wipPickerOpened, setWipPickerOpened, settingsRef,
     deliveryOrderOwners, deliveryOrderOwnersLoadingMore, deliveryOrderOwnersHasNextPage,

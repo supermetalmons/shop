@@ -104,12 +104,12 @@ function App({ route, suspended = false }: AppProps) {
     refetchStats: purchaseState.refetchStats,
     onCompleted: showSuccessHud,
   });
-  const account = useShopAccount({ auth, connectedWallet, stripeCheckoutDataOwner: stripeRecovery.dataOwner });
+  const account = useShopAccount({ auth, connectedWallet, stripeCheckoutDataOwner: stripeRecovery.dataOwner,
+    routeCluster: route.drop?.solanaCluster });
   const { owner, localAccountWallet, isViewerMode, isSignedInWallet } = account;
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
-  const includeDevnetInventory = account.includeDevnetInventory || route.drop?.solanaCluster === 'devnet';
-  const queries = useShopInventoryQueries(owner, includeDevnetInventory, isViewerMode);
+  const queries = useShopInventoryQueries(owner, account.includeDevnetInventory, isViewerMode);
   const stripeCheckoutInventoryRefreshPending = useStripeCheckoutInventoryRecovery({
     recoveredProfile: stripeRecovery.recoveredProfile,
     owner,

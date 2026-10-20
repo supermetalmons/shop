@@ -6,6 +6,7 @@ import {
   type UpcomingDropRouteConfig,
 } from './lib/dropConfig';
 import { normalizePathname } from './navigation';
+import { isMainnetOnlyStaffWallet } from '../shared/fulfillmentAccess';
 
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
@@ -165,4 +166,17 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   }
 
   return createRoute('home', '/', `/${search}${hash}`);
+}
+
+export function walletVisibleShopRoute(
+  route: ResolvedAppRoute,
+  connectedWallet: string | null | undefined,
+  staffWallet: string | null | undefined,
+): ResolvedAppRoute {
+  if (
+    (isMainnetOnlyStaffWallet(connectedWallet) || isMainnetOnlyStaffWallet(staffWallet)) &&
+    (route.drop?.solanaCluster === 'devnet' || route.upcoming?.solanaCluster === 'devnet' ||
+      route.kind === 'ethereum-drop' || route.wipExperience === 'mi_note_cards_demo')
+  ) return resolveAppRoute({ pathname: '/' });
+  return route;
 }

@@ -1,11 +1,13 @@
 import React from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import App from './App';
 import { BackgroundBlurPortal } from './components/BackgroundBlurLayer';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import { WalletContextProvider } from './wallet/WalletContext';
 import { navigate } from './navigation';
-import type { ResolvedAppRoute, ShopWipExperience } from './routes';
+import { walletVisibleShopRoute, type ResolvedAppRoute, type ShopWipExperience } from './routes';
+import { readStaffWalletSession, subscribeStaffWalletSession } from './lib/staffWalletSession';
 
 const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
@@ -117,7 +119,16 @@ type ShopRouteProps = {
   route: ResolvedAppRoute;
 };
 
-export default function ShopRoute({ route }: ShopRouteProps) {
+const staffWalletSnapshot = () => readStaffWalletSession()?.wallet ?? null;
+
+function WalletScopedShopRoute({ route: requestedRoute }: ShopRouteProps) {
+  const wallet = useWallet();
+  const staffWallet = React.useSyncExternalStore(subscribeStaffWalletSession, staffWalletSnapshot, staffWalletSnapshot);
+  const route = walletVisibleShopRoute(requestedRoute, wallet.connected ? wallet.publicKey?.toBase58() : null, staffWallet);
+  const redirectHome = route !== requestedRoute;
+  React.useEffect(() => {
+    if (redirectHome) navigate('/', { replace: true });
+  }, [redirectHome]);
   const { wipExperience } = route;
   const isWipRoute = route.kind === 'wip';
 
@@ -151,9 +162,17 @@ export default function ShopRoute({ route }: ShopRouteProps) {
   ) : null;
 
   return (
-    <WalletContextProvider cluster={route.walletCluster}>
+    <>
       {app}
       {wip ? <WipForeground>{wip}</WipForeground> : null}
+    </>
+  );
+}
+
+export default function ShopRoute({ route }: ShopRouteProps) {
+  return (
+    <WalletContextProvider cluster={route.walletCluster}>
+      <WalletScopedShopRoute route={route} />
     </WalletContextProvider>
   );
 }

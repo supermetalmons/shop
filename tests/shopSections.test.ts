@@ -22,6 +22,7 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
     showHeaderWalletButton: true,
     handleHeaderWalletSignIn: async () => { signIns += 1; },
     canUseAdminMenu: true,
+    mainnetOnlyStaff: false,
     canUseAdminViewer: false,
     settingsRef: { current: null },
     settingsOpen: true,
@@ -57,6 +58,32 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
   assert.equal(signIns, 1);
   assert.equal(activeWallet.tabIndex, 0);
   assert.ok(view.getByRole('menu', { name: 'App menu' }));
+
+  const expandedProps = {
+    ...props,
+    interactive: true,
+    canUseAdminViewer: true,
+    wipPickerOpened: true,
+    devnetDropsPickerOpened: true,
+    adminMenuDevnetDrops: [getFrontendDrop('card_nft_binder_devnet')!],
+  };
+  view.rerender(createElement(ShopHeaderActions, expandedProps));
+  assert.ok(view.getByRole('button', { name: '111K testnet' }));
+  assert.ok(view.getByRole('button', { name: 'mi_note_cards_devnet/wip' }));
+  assert.ok(view.getByRole('button', { name: 'card_nft_binder_devnet' }));
+
+  view.rerender(createElement(ShopHeaderActions, {
+    ...expandedProps,
+    mainnetOnlyStaff: true,
+    authenticatedWallet: 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy',
+  }));
+  assert.equal(view.queryByRole('button', { name: '111K testnet' }), null);
+  assert.equal(view.queryByRole('button', { name: 'mi_note_cards_devnet/wip' }), null);
+  assert.equal(view.queryByRole('button', { name: 'card_nft_binder_devnet' }), null);
+  assert.equal(view.queryByRole('button', { name: /devnet drops/ }), null);
+  assert.ok(view.getByRole('button', { name: 'fulfillment' }));
+  assert.ok(view.getByRole('button', { name: 'override address' }));
+  assert.ok(view.getByRole('button', { name: 'mi_note_cards/wip' }));
 });
 
 test('shipment rows preserve retained-data warnings and keyboard image viewing', () => {

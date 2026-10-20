@@ -52,6 +52,7 @@ const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const ADDRESS_VIEWING_ADMIN = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
 const OTHER = 'So11111111111111111111111111111111111111112';
 const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
@@ -417,7 +418,7 @@ test('Ethereum fulfillment writes reject other staff before accessing data or pr
     [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: '111k_devnet', deliveryId: 7, full: '100 Main St' }],
     ...ETHEREUM_SHIPSTATION_REQUESTS,
   ];
-  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), OTHER]) {
+  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), ADDRESS_VIEWING_ADMIN, OTHER]) {
     for (const [path, body] of requests) {
       const label = `${wallet}: ${path}`;
       let dataAccesses = 0;
@@ -1264,23 +1265,27 @@ test('fulfillment address route retries the full read and validation after a Com
 });
 
 test('fulfillment address route preserves authorization and order-state guards', async () => {
-  const adminWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
   let providerCalls = 0;
-  const denied = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
-    fulfillmentEnv,
-    FULFILLMENT_ORDER_ADDRESS_PATH,
-    {},
-    legacyFirestoreDependencies(async () => {
-      providerCalls += 1;
-      return Response.json({ error: 'unexpected' }, { status: 500 });
-    }, {
-      resolveD1AuthWalletBinding: async () => ({ wallet: adminWallet, source: 'binding' }),
-      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: adminWallet }),
-    }),
-  );
-  assert.equal(denied.response.status, 403);
-  assert.equal((await denied.response.json() as { error: { code: string } }).error.code, 'permission-denied');
+  for (const wallet of [ADMIN, ADDRESS_VIEWING_ADMIN]) {
+    const denied = await handleProfileWriteRequest(
+      request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
+      fulfillmentEnv,
+      FULFILLMENT_ORDER_ADDRESS_PATH,
+      {},
+      legacyFirestoreDependencies(async () => {
+        providerCalls += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }, {
+        resolveD1AuthWalletBinding: async () => ({ wallet, source: 'binding' }),
+        verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+      }),
+    );
+    assert.equal(denied.response.status, 403, wallet);
+    assert.deepEqual(await denied.response.json(), {
+      ok: false,
+      error: { code: 'permission-denied', message: 'Fulfillment address admin access denied.' },
+    }, wallet);
+  }
   assert.equal(providerCalls, 0);
 
   for (const [orderFields, code] of [
@@ -1970,7 +1975,7 @@ test('ShipStation shipment route releases its claim after a definitive provider 
   assert.ok(release.updateMask.fieldPaths.includes('shipstation.claimedAt'));
 });
 
-test('ShipStation shipment route releases a structured 5xx rejection and accepts a temporary correction', async () => {
+test('the new admin can correct a ShipStation address temporarily after rejection without editing the saved address', async () => {
   let claimId = '';
   let createCalls = 0;
   let correctedCreateBody: { shipments: Array<Record<string, unknown>> } | undefined;
@@ -2010,7 +2015,7 @@ test('ShipStation shipment route releases a structured 5xx rejection and accepts
           phone: '+905555555555',
         },
         items: [{ kind: 'box', refId: 1 }],
-        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: ADDRESS_VIEWING_ADMIN } : {},
       }));
     }
     if (url.pathname.endsWith('/documents:commit')) {
@@ -2032,7 +2037,9 @@ test('ShipStation shipment route releases a structured 5xx rejection and accepts
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     {},
-    legacyFirestoreDependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch, {
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADDRESS_VIEWING_ADMIN }),
+    }),
   );
 
   const rejected = await run({ dropId: 'card_nft_2', deliveryId: 7 });

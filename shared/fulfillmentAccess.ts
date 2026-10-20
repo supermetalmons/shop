@@ -9,9 +9,11 @@ export type ShipperFulfillmentAccessConfig = Readonly<{
 export type FulfillmentDropGrants = ReadonlySet<string> | readonly string[];
 
 const ETHEREUM_FULFILLMENT_ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const MAINNET_ADMIN_WALLET = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
 
 export const FULFILLMENT_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
   ETHEREUM_FULFILLMENT_ADMIN_WALLET,
+  MAINNET_ADMIN_WALLET,
 ]);
 
 export const FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
@@ -83,6 +85,10 @@ export function isStaffWalletAddress(wallet: string | null | undefined): boolean
   return Boolean(wallet && STAFF_WALLET_ADDRESS_SET.has(wallet));
 }
 
+export function isMainnetOnlyStaffWallet(wallet: string | null | undefined): boolean {
+  return wallet === MAINNET_ADMIN_WALLET;
+}
+
 export function walletHasAdminAccess(
   wallet: string | null | undefined,
   adminWallets: ReadonlySet<string>,
@@ -123,6 +129,7 @@ export function walletHasFulfillmentDropAccess(
   shipperDropIdsByWallet: ReadonlyMap<string, FulfillmentDropGrants>,
 ): boolean {
   if (!wallet) return false;
+  if (isMainnetOnlyStaffWallet(wallet) && !MAINNET_FULFILLMENT_DROP_IDS.includes(dropId)) return false;
   if (dropId === ETHEREUM_111K_DROP_ID && wallet !== ETHEREUM_FULFILLMENT_ADMIN_WALLET) return false;
   if (walletHasAdminAccess(wallet, adminWallets)) return true;
   const grants = shipperDropIdsByWallet.get(wallet);
@@ -137,7 +144,10 @@ export function walletCanViewSensitiveFulfillmentAddress(
 ): boolean {
   return (
     Boolean(wallet) &&
-    !walletHasAdminAccess(wallet, adminWallets) &&
+    (
+      !walletHasAdminAccess(wallet, adminWallets) ||
+      wallet === MAINNET_ADMIN_WALLET
+    ) &&
     walletHasFulfillmentDropAccess(wallet, dropId, adminWallets, shipperDropIdsByWallet)
   );
 }
@@ -152,6 +162,9 @@ export function allowedFulfillmentDropIdsForWallet(
   const allowedDropIds = walletHasAdminAccess(wallet, adminWallets)
     ? dropIds
     : shipperDropIdsByWallet.get(wallet) || [];
+  if (isMainnetOnlyStaffWallet(wallet)) {
+    return allowedDropIds.filter((dropId) => MAINNET_FULFILLMENT_DROP_IDS.includes(dropId));
+  }
   if (
     allowedDropIds.includes(ETHEREUM_111K_DROP_ID) &&
     !walletHasFulfillmentDropAccess(wallet, ETHEREUM_111K_DROP_ID, adminWallets, shipperDropIdsByWallet)
