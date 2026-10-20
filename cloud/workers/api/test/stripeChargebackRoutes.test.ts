@@ -62,11 +62,17 @@ test('chargeback backfill requires full administrator access before provider wor
     verifyIdentity: async () => ({ kind: 'anonymous', authSubject: 'test' }),
   });
   assert.equal(anonymous.response.status, 401);
-  const shipper = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
-    backfill,
-    verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: SHIPPER_FULFILLMENT_ACCESS[0].wallet }),
-  });
-  assert.equal(shipper.response.status, 403);
+  for (const { wallet } of SHIPPER_FULFILLMENT_ACCESS) {
+    for (const mode of ['live', 'test'] as const) {
+      const shipper = await handleStripeChargebackBackfill(backfillRequest({ mode, write: true }), env, {}, {
+        backfill,
+        verifyIdentity: async () => ({ kind: 'staff-wallet', wallet }),
+      });
+      assert.equal(shipper.response.status, 403, `${wallet}: ${mode}`);
+      assert.equal(shipper.authOutcome, 'rejected', `${wallet}: ${mode}`);
+      assert.equal(calls, 0, `${wallet}: ${mode}`);
+    }
+  }
   const expired = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     backfill,
     verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); },
@@ -91,23 +97,25 @@ test('chargeback backfill validates mode, cursor, write, and exact request field
   assert.equal(calls, 0);
 });
 
-test('chargeback backfill returns dry-run and write results with legacy cursor support', async () => {
-  const requests: StripeChargebackBackfillRequest[] = [];
-  for (const body of [{ mode: 'live' as const }, { mode: 'test' as const, cursor: 'dp_legacy', write: true }]) {
-    const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {}, {
-      verifyIdentity: adminIdentity,
-      backfill: async (input) => {
-        requests.push(input);
-        return { ...emptyPage(input), scanned: 2, unrelated: 2 };
-      },
-    });
-    assert.equal(result.response.status, 200);
-    assert.equal(result.authOutcome, 'accepted');
-    assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
-    assert.deepEqual(await result.response.json(), { ok: true, ...emptyPage(body), scanned: 2, unrelated: 2 });
-  }
-  assert.deepEqual(requests, [{ mode: 'live' }, { mode: 'test', cursor: 'dp_legacy', write: true }]);
-});
+for (const wallet of FULFILLMENT_ADMIN_WALLET_ADDRESSES) {
+  test(`chargeback backfill accepts dry-run and write requests from admin ${wallet}`, async () => {
+    const requests: StripeChargebackBackfillRequest[] = [];
+    for (const body of [{ mode: 'live' as const }, { mode: 'test' as const, cursor: 'dp_legacy', write: true }]) {
+      const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {}, {
+        verifyIdentity: async () => ({ kind: 'staff-wallet', wallet }),
+        backfill: async (input) => {
+          requests.push(input);
+          return { ...emptyPage(input), scanned: 2, unrelated: 2 };
+        },
+      });
+      assert.equal(result.response.status, 200);
+      assert.equal(result.authOutcome, 'accepted');
+      assert.equal(result.response.headers.get('Cache-Control'), 'no-store');
+      assert.deepEqual(await result.response.json(), { ok: true, ...emptyPage(body), scanned: 2, unrelated: 2 });
+    }
+    assert.deepEqual(requests, [{ mode: 'live' }, { mode: 'test', cursor: 'dp_legacy', write: true }]);
+  });
+}
 
 test('chargeback backfill preserves explicit failures and sanitizes provider exceptions', async () => {
   const failure = { disputeId: 'du_unresolved', code: 'unresolved_app_session' };

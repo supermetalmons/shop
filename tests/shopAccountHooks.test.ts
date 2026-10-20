@@ -1,3 +1,4 @@
+import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
 import { createElement, type PropsWithChildren } from 'react';
@@ -93,69 +94,89 @@ test('admin viewing uses its own cache and returning to the owner restores the a
   assert.equal(result.current.owner, undefined);
 });
 
-test('mainnet-only admin inventory stays scoped across owner overrides and devnet routes', async () => {
-  const wallet = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
-  const existingAdmin = [...ADMIN_WALLETS][0];
+for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {
+  test(`mainnet admin-shipper cannot view other customers and keeps inventory scoped (${wallet.slice(0, 4)})`, async () => {
+    const existingAdmin = [...ADMIN_WALLETS][0];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    clients.push(client);
+    const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+    const initial: Parameters<typeof useShopAccount>[0] = {
+      auth: { profile: { wallet }, sessionWallet: wallet, authenticated: true, deliveryRecoveryNextCheckAt: null },
+      connectedWallet: wallet,
+      stripeCheckoutDataOwner: wallet,
+      routeCluster: 'devnet',
+    };
+    const adminRequests: string[] = [];
+    const runtime: NonNullable<Parameters<typeof useShopAccount>[1]> = {
+      getAdminProfileView: async (owner) => {
+        adminRequests.push('profile');
+        return { profile: { wallet: owner }, nextCursor: null };
+      },
+      listDeliveryOrderOwners: async () => {
+        adminRequests.push('directory');
+        return { owners: [], hasMore: false, nextCursor: null };
+      },
+    };
+    const { result, rerender } = renderHook((options: typeof initial) => {
+      const account = useShopAccount(options, runtime);
+      useShopAccountEffects(account);
+      return account;
+    }, { initialProps: initial, wrapper });
+    assert.equal(result.current.canUseAdminMenu, true);
+    assert.equal(result.current.canUseAdminViewer, false);
+    assert.equal(result.current.includeDevnetInventory, false);
+    act(() => {
+      result.current.setSettingsOpen(true);
+      result.current.setOwnerPickerOpened(true);
+      result.current.setAdminViewedOwner(existingAdmin);
+    });
+    await waitFor(() => assert.equal(result.current.adminViewedOwner, null));
+    assert.equal(result.current.ownerPickerOpened, false);
+    assert.equal(result.current.owner, wallet);
+    assert.equal(result.current.viewedProfile?.wallet, wallet);
+    assert.equal(result.current.includeDevnetInventory, false);
+    assert.deepEqual(adminRequests, []);
+    rerender({ ...initial, connectedWallet: undefined });
+    assert.equal(result.current.includeDevnetInventory, false);
+    rerender({ ...initial, auth: { ...initial.auth, sessionWallet: existingAdmin } });
+    assert.equal(result.current.includeDevnetInventory, false);
+
+    const ordinaryWallet = '11111111111111111111111111111111';
+    rerender({
+      auth: { ...initial.auth, sessionWallet: ordinaryWallet },
+      connectedWallet: ordinaryWallet,
+      stripeCheckoutDataOwner: ordinaryWallet,
+      routeCluster: 'devnet',
+    });
+    assert.equal(result.current.includeDevnetInventory, true);
+    rerender({
+      auth: { ...initial.auth, sessionWallet: ordinaryWallet },
+      connectedWallet: ordinaryWallet,
+      stripeCheckoutDataOwner: ordinaryWallet,
+      routeCluster: 'mainnet-beta',
+    });
+    assert.equal(result.current.includeDevnetInventory, false);
+  });
+}
+
+test('mainnet-only admin-shipper shipment views hide devnet rows from every loaded page', async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   clients.push(client);
   const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
-  const initial: Parameters<typeof useShopAccount>[0] = {
-    auth: { profile: { wallet }, sessionWallet: wallet, authenticated: true, deliveryRecoveryNextCheckAt: null },
-    connectedWallet: wallet,
-    stripeCheckoutDataOwner: wallet,
-    routeCluster: 'devnet',
-  };
-  const runtime: NonNullable<Parameters<typeof useShopAccount>[1]> = {
-    getAdminProfileView: async (owner) => ({ profile: { wallet: owner }, nextCursor: null }),
-    listDeliveryOrderOwners: async () => ({ owners: [], hasMore: false, nextCursor: null }),
-  };
-  const { result, rerender } = renderHook((options: typeof initial) => useShopAccount(options, runtime), {
-    initialProps: initial, wrapper,
-  });
-  assert.equal(result.current.canUseAdminViewer, true);
-  assert.equal(result.current.includeDevnetInventory, false);
-  act(() => result.current.setAdminViewedOwner(existingAdmin));
-  await waitFor(() => assert.equal(result.current.viewedProfile?.wallet, existingAdmin));
-  assert.equal(result.current.includeDevnetInventory, false);
-  rerender({ ...initial, connectedWallet: undefined });
-  assert.equal(result.current.includeDevnetInventory, false);
-  rerender({ ...initial, auth: { ...initial.auth, sessionWallet: existingAdmin } });
-  assert.equal(result.current.includeDevnetInventory, false);
-
-  const ordinaryWallet = '11111111111111111111111111111111';
-  rerender({
-    auth: { ...initial.auth, sessionWallet: ordinaryWallet },
-    connectedWallet: ordinaryWallet,
-    stripeCheckoutDataOwner: ordinaryWallet,
-    routeCluster: 'devnet',
-  });
-  assert.equal(result.current.includeDevnetInventory, true);
-  rerender({
-    auth: { ...initial.auth, sessionWallet: ordinaryWallet },
-    connectedWallet: ordinaryWallet,
-    stripeCheckoutDataOwner: ordinaryWallet,
-    routeCluster: 'mainnet-beta',
-  });
-  assert.equal(result.current.includeDevnetInventory, false);
-});
-
-test('mainnet-only admin shipment views hide devnet rows from every loaded page', async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  clients.push(client);
-  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
   const wallet = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
-  const owner = 'viewed-owner';
+  const owner = wallet;
   const orders = ['card_nft_2', 'card_nft_binder_devnet', '111k_devnet'].map((dropId) => ({
     dropId, deliveryId: 7, status: 'ready_to_ship', items: [],
   }));
   const options = {
     account: {
-      canReadOwnProfile: false, isViewerMode: true, canUseAdminViewer: true, mainnetOnlyStaff: true,
-      viewedProfile: { wallet: owner, orders }, viewedProfileLoading: false, viewedProfileError: null,
+      canReadOwnProfile: true, isViewerMode: false, canUseAdminViewer: false, mainnetOnlyStaff: true,
+      viewedProfile: { wallet: owner }, viewedProfileLoading: false, viewedProfileError: null,
       viewedProfileNextCursor: null, viewedProfileUpdatedAt: 1,
     },
     auth: {
-      authSubject: wallet, sessionWallet: wallet, shipments: [], shipmentsReady: true, shipmentsError: null, loading: false,
+      authSubject: wallet, sessionWallet: wallet, shipments: orders, shipmentsReady: true, shipmentsError: null, loading: false,
+      shipmentsNextCursor: null, shipmentsRevision: 1,
     },
     stripeRecovery: { profileRecoveryPending: false, anonymousHistory: { orders: [], visible: false } },
     source: { figureMetadataByKey: {} },
@@ -167,7 +188,7 @@ test('mainnet-only admin shipment views hide devnet rows from every loaded page'
   const { result, rerender } = renderHook(useShopShipments, { initialProps: options, wrapper });
   await act(async () => undefined);
   assert.deepEqual(result.current.deliveryOrders.map((order) => order.dropId), ['card_nft_2']);
-  const key = ['shipmentHistory', JSON.stringify([wallet, wallet, 'admin', owner])];
+  const key = ['shipmentHistory', JSON.stringify([wallet, wallet, 'wallet', owner])];
   act(() => {
     client.setQueryData(key, {
       pages: [

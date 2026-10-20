@@ -26,7 +26,7 @@ import {
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { SHIPPER_FULFILLMENT_ACCESS } from '../../../../shared/fulfillmentAccess.ts';
+import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../../../../shared/fulfillmentAccess.ts';
 import { decodeLegacyFirestoreFixtureFields } from './commerceD1Harness.ts';
 import {
   CommerceWriteConflict,
@@ -412,47 +412,49 @@ test('profile writes preserve identity failure responses and rejected authentica
   }
 });
 
-test('Ethereum fulfillment writes reject other staff before accessing data or providers', async () => {
-  const requests: Array<[ProfileWritePath, object]> = [
-    [FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }],
-    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: '111k_devnet', deliveryId: 7, full: '100 Main St' }],
-    ...ETHEREUM_SHIPSTATION_REQUESTS,
-  ];
-  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), ADDRESS_VIEWING_ADMIN, OTHER]) {
-    for (const [path, body] of requests) {
-      const label = `${wallet}: ${path}`;
-      let dataAccesses = 0;
-      let providerCalls = 0;
-      const db = new Proxy({} as D1Database, {
-        get: () => {
-          dataAccesses += 1;
-          assert.fail('Denied Ethereum fulfillment must not access data');
-        },
-      });
-      const result = await handleProfileWriteRequest(
-        request(path, body),
-        { ...fulfillmentEnv, COMMERCE_DB: db },
-        path,
-        {},
-        d1Dependencies(async () => {
-          providerCalls += 1;
-          assert.fail('Denied Ethereum fulfillment must not contact a provider');
-        }, {
-          verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
-        }),
-      );
-      assert.equal(result.response.status, 403, label);
-      assert.deepEqual(await result.response.json(), {
-        ok: false,
-        error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
-      }, label);
-      assert.equal(result.authOutcome, 'rejected', label);
-      assert.equal(dataAccesses, 0, label);
-      assert.equal(providerCalls, 0, label);
-      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
+for (const dropId of ['111k_devnet', 'mi_note_cards_devnet', 'card_nft_binder_devnet']) {
+  test(`${dropId} fulfillment writes reject mainnet admin shippers and the address operator before accessing data or providers`, async () => {
+    const requests: Array<[ProfileWritePath, object]> = [
+      [FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }],
+      [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: '111k_devnet', deliveryId: 7, full: '100 Main St' }],
+      ...ETHEREUM_SHIPSTATION_REQUESTS,
+    ];
+    for (const wallet of [OWNER, ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES, OTHER]) {
+      for (const [path, body] of requests) {
+        const label = `${wallet}: ${path}`;
+        let dataAccesses = 0;
+        let providerCalls = 0;
+        const db = new Proxy({} as D1Database, {
+          get: () => {
+            dataAccesses += 1;
+            assert.fail('Denied fulfillment must not access data');
+          },
+        });
+        const result = await handleProfileWriteRequest(
+          request(path, { ...body, dropId }),
+          { ...fulfillmentEnv, COMMERCE_DB: db },
+          path,
+          {},
+          d1Dependencies(async () => {
+            providerCalls += 1;
+            assert.fail('Denied fulfillment must not contact a provider');
+          }, {
+            verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+          }),
+        );
+        assert.equal(result.response.status, 403, label);
+        assert.deepEqual(await result.response.json(), {
+          ok: false,
+          error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
+        }, label);
+        assert.equal(result.authOutcome, 'rejected', label);
+        assert.equal(dataAccesses, 0, label);
+        assert.equal(providerCalls, 0, label);
+        assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
+      }
     }
-  }
-});
+  });
+}
 
 test('Ethereum ShipStation operations remain disabled for the designated admin before accessing data', async () => {
   for (const [path, body] of ETHEREUM_SHIPSTATION_REQUESTS) {
@@ -1203,73 +1205,81 @@ for (const queueFails of [false, true]) {
   });
 }
 
-test('fulfillment address route encrypts the address and conditionally clears stale ShipStation rates', async () => {
-  let commit: { writes: Array<Record<string, unknown>> } | undefined;
-  const providerFetch: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/deliveryOrders/7')) {
-      return Response.json(orderDocument({
-        addressSnapshot: {
-          label: 'Home',
-          email: 'owner@example.com',
-          phone: '+15555550123',
-          country: 'United States',
-          countryCode: 'US',
-        },
-        shipstation: {},
-      }));
-    }
-    if (url.pathname.endsWith('/documents:commit')) {
-      commit = JSON.parse(String(init?.body));
-      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
-    }
-    return Response.json({ error: 'unexpected' }, { status: 500 });
-  };
-  const full = '界'.repeat(2048);
-  const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full }),
-    fulfillmentEnv,
-    FULFILLMENT_ORDER_ADDRESS_PATH,
-    {},
-    legacyFirestoreDependencies(providerFetch),
-  );
-  assert.equal(result.response.status, 200);
-  const payload = await result.response.json() as {
-    deliveryId: number;
-    address: { encrypted: string; hint: string; full: string; label?: string; email?: string; phone?: string; country?: string; countryCode?: string };
-  };
-  assert.equal(payload.deliveryId, 7);
-  assert.equal(payload.address.full, full);
-  assert.equal(payload.address.hint, '界...界界');
-  assert.equal(payload.address.label, 'Home');
-  assert.equal(payload.address.email, 'owner@example.com');
-  assert.equal(payload.address.phone, '+15555550123');
-  assert.equal(payload.address.country, 'United States');
-  assert.equal(payload.address.countryCode, 'US');
-  const cipher = parseAddressCipherPayload(payload.address.encrypted, decodeBase64);
-  assert.ok(cipher);
-  assert.equal(decryptAddressCipherText(cipher, ADDRESS_KEY_PAIR.secretKey), full);
-  const write = commit?.writes[0] as {
-    currentDocument: { updateTime: string };
-    update: { fields: { addressSnapshot: { mapValue: { fields: Record<string, { stringValue: string }> } } } };
-    updateMask: { fieldPaths: string[] };
-    updateTransforms: unknown[];
-  };
-  assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:00.000000Z');
-  assert.equal(write.update.fields.addressSnapshot.mapValue.fields.encrypted.stringValue, payload.address.encrypted);
-  assert.deepEqual(write.updateMask.fieldPaths, [
-    'addressSnapshot.encrypted',
-    'addressSnapshot.hint',
-    'fulfillmentAddressUpdatedBy',
-    'shipstation.rateQuotes',
-    'shipstation.ratesClaimId',
-    'shipstation.ratesClaimedAt',
-    'shipstation.ratesClaimedBy',
-  ]);
-  assert.deepEqual(write.updateTransforms, [
-    { fieldPath: 'fulfillmentAddressUpdatedAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
-});
+for (const wallet of [OWNER, ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES]) {
+  test(`fulfillment address edits by ${wallet} encrypt the address and clear stale ShipStation rates`, async () => {
+    let commit: { writes: Array<Record<string, unknown>> } | undefined;
+    const providerFetch: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          addressSnapshot: {
+            label: 'Home',
+            email: 'owner@example.com',
+            phone: '+15555550123',
+            country: 'United States',
+            countryCode: 'US',
+          },
+          shipstation: {},
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        commit = JSON.parse(String(init?.body));
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    };
+    const full = '界'.repeat(2048);
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full }),
+      fulfillmentEnv,
+      FULFILLMENT_ORDER_ADDRESS_PATH,
+      {},
+      legacyFirestoreDependencies(providerFetch, {
+        verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+      }),
+    );
+    assert.equal(result.response.status, 200);
+    const payload = await result.response.json() as {
+      deliveryId: number;
+      address: { encrypted: string; hint: string; full: string; label?: string; email?: string; phone?: string; country?: string; countryCode?: string };
+    };
+    assert.equal(payload.deliveryId, 7);
+    assert.equal(payload.address.full, full);
+    assert.equal(payload.address.hint, '界...界界');
+    assert.equal(payload.address.label, 'Home');
+    assert.equal(payload.address.email, 'owner@example.com');
+    assert.equal(payload.address.phone, '+15555550123');
+    assert.equal(payload.address.country, 'United States');
+    assert.equal(payload.address.countryCode, 'US');
+    const cipher = parseAddressCipherPayload(payload.address.encrypted, decodeBase64);
+    assert.ok(cipher);
+    assert.equal(decryptAddressCipherText(cipher, ADDRESS_KEY_PAIR.secretKey), full);
+    const write = commit?.writes[0] as {
+      currentDocument: { updateTime: string };
+      update: { fields: {
+        addressSnapshot: { mapValue: { fields: Record<string, { stringValue: string }> } };
+        fulfillmentAddressUpdatedBy: { stringValue: string };
+      } };
+      updateMask: { fieldPaths: string[] };
+      updateTransforms: unknown[];
+    };
+    assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:00.000000Z');
+    assert.equal(write.update.fields.addressSnapshot.mapValue.fields.encrypted.stringValue, payload.address.encrypted);
+    assert.equal(write.update.fields.fulfillmentAddressUpdatedBy.stringValue, wallet);
+    assert.deepEqual(write.updateMask.fieldPaths, [
+      'addressSnapshot.encrypted',
+      'addressSnapshot.hint',
+      'fulfillmentAddressUpdatedBy',
+      'shipstation.rateQuotes',
+      'shipstation.ratesClaimId',
+      'shipstation.ratesClaimedAt',
+      'shipstation.ratesClaimedBy',
+    ]);
+    assert.deepEqual(write.updateTransforms, [
+      { fieldPath: 'fulfillmentAddressUpdatedAt', setToServerValue: 'REQUEST_TIME' },
+    ]);
+  });
+}
 
 test('fulfillment address route retries the full read and validation after a Commerce precondition conflict', async () => {
   let reads = 0;
@@ -1317,7 +1327,7 @@ test('fulfillment address route retries the full read and validation after a Com
 
 test('fulfillment address route preserves authorization and order-state guards', async () => {
   let providerCalls = 0;
-  for (const wallet of [ADMIN, ADDRESS_VIEWING_ADMIN]) {
+  for (const wallet of [ADMIN, OTHER]) {
     const denied = await handleProfileWriteRequest(
       request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
       fulfillmentEnv,
@@ -1334,7 +1344,10 @@ test('fulfillment address route preserves authorization and order-state guards',
     assert.equal(denied.response.status, 403, wallet);
     assert.deepEqual(await denied.response.json(), {
       ok: false,
-      error: { code: 'permission-denied', message: 'Fulfillment address admin access denied.' },
+      error: {
+        code: 'permission-denied',
+        message: wallet === ADMIN ? 'Fulfillment address admin access denied.' : 'Fulfillment access denied.',
+      },
     }, wallet);
   }
   assert.equal(providerCalls, 0);

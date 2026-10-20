@@ -9,37 +9,28 @@ export type ShipperFulfillmentAccessConfig = Readonly<{
 export type FulfillmentDropGrants = ReadonlySet<string> | readonly string[];
 
 const ETHEREUM_FULFILLMENT_ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const MAINNET_ADMIN_WALLET = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
+
+export const MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES: readonly string[] = Object.freeze([
+  'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy',
+  'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
+  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+]);
+
+const MAINNET_ADMIN_SHIPPER_WALLETS = new Set(MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES);
 
 export const FULFILLMENT_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
   ETHEREUM_FULFILLMENT_ADMIN_WALLET,
-  MAINNET_ADMIN_WALLET,
+]);
+
+export const ADMIN_IRL_REDEEM_WALLET_ADDRESSES: readonly string[] = Object.freeze([
+  ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES,
 ]);
 
 export const FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
   'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+  ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES,
 ]);
-
-export const ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES: readonly string[] = Object.freeze([
-  '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
-  'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-]);
-
-const CARD_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze([
-  'card_nft_2',
-  'clear_cards',
-]);
-
-const CARD_NFT_BINDER_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
-  Object.values(DEPLOYMENT_DROPS)
-    .filter((drop) => drop.dropFamily === 'card_nft_binder')
-    .map((drop) => drop.dropId)
-    .sort(),
-);
-
-const CARD_NFT_BINDER_SHIPPER_DROP_IDS: readonly string[] = Object.freeze(
-  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS.filter((dropId) => dropId !== 'card_nft_binder_devnet'),
-);
 
 const MAINNET_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
   Object.values(DEPLOYMENT_DROPS)
@@ -49,19 +40,10 @@ const MAINNET_FULFILLMENT_DROP_IDS: readonly string[] = Object.freeze(
 );
 
 export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig[] = Object.freeze([
-  Object.freeze({
-    wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+  ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES.map((wallet) => Object.freeze({
+    wallet,
     dropIds: MAINNET_FULFILLMENT_DROP_IDS,
-  }),
-  Object.freeze({
-    wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
-    dropIds: Object.freeze([
-      'poncho_drifella',
-      'drifella_shirt',
-      ...CARD_FULFILLMENT_DROP_IDS,
-      ...CARD_NFT_BINDER_SHIPPER_DROP_IDS,
-    ]),
-  }),
+  })),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
     dropIds: MAINNET_FULFILLMENT_DROP_IDS,
@@ -71,7 +53,6 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
 export const STAFF_WALLET_ADDRESSES: readonly string[] = Object.freeze(Array.from(new Set([
   ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   ...FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
-  ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
 ])));
 
@@ -86,7 +67,7 @@ export function isStaffWalletAddress(wallet: string | null | undefined): boolean
 }
 
 export function isMainnetOnlyStaffWallet(wallet: string | null | undefined): boolean {
-  return wallet === MAINNET_ADMIN_WALLET;
+  return Boolean(wallet && MAINNET_ADMIN_SHIPPER_WALLETS.has(wallet));
 }
 
 export function walletHasAdminAccess(
@@ -144,10 +125,7 @@ export function walletCanViewSensitiveFulfillmentAddress(
 ): boolean {
   return (
     Boolean(wallet) &&
-    (
-      !walletHasAdminAccess(wallet, adminWallets) ||
-      wallet === MAINNET_ADMIN_WALLET
-    ) &&
+    !walletHasAdminAccess(wallet, adminWallets) &&
     walletHasFulfillmentDropAccess(wallet, dropId, adminWallets, shipperDropIdsByWallet)
   );
 }

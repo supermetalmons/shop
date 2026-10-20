@@ -32,8 +32,7 @@ import { z } from 'zod';
 import { dasAssetBoxId } from '../../../../shared/dasAsset.js';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import {
-  ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
-  FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  ADMIN_IRL_REDEEM_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
 } from '../../../../shared/fulfillmentAccess.js';
 import { heliusSearchAssetsHasNextPage, heliusSearchAssetsItems } from '../../../../shared/heliusDas.js';
@@ -137,10 +136,7 @@ const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
-const ADMIN_WALLETS = new Set([
-  ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
-  ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
-].map((wallet) => new PublicKey(wallet).toBase58()));
+const ADMIN_IRL_REDEEM_WALLETS = new Set(ADMIN_IRL_REDEEM_WALLET_ADDRESSES.map((wallet) => new PublicKey(wallet).toBase58()));
 
 const requestSchema = z.object({
   requestId: z.string().min(8).max(128).regex(/^[A-Za-z0-9_-]+$/),
@@ -247,7 +243,7 @@ export function readAdminIrlRedeemFinalizeRequest(
 function canonicalWallet(value: unknown): string {
   try {
     const wallet = new PublicKey(String(value || '').trim()).toBase58();
-    if (!walletHasAdminIrlRedeemAccess(wallet, ADMIN_WALLETS)) {
+    if (!walletHasAdminIrlRedeemAccess(wallet, ADMIN_IRL_REDEEM_WALLETS)) {
       throw new AdminIrlRedeemFinalizeError('permission-denied', 'Admins only.');
     }
     return wallet;

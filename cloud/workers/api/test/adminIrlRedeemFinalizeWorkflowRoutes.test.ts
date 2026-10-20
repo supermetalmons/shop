@@ -6,6 +6,7 @@ import {
   ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
   createAdminIrlRedeemFinalizeOperationId,
 } from '../../../../shared/contracts.ts';
+import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../../../../shared/fulfillmentAccess.ts';
 import {
   cleanupAdminIrlRedeemFinalizeWorkflow,
   reserveAdminIrlRedeemFinalizeWorkflow,
@@ -37,6 +38,7 @@ import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harne
 
 const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const OTHER_STAFF = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
+const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const STAFF_AUTH: RequestAuthContext = { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: OWNER } };
 const DROP_ID = 'card_nft_2';
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
@@ -133,13 +135,13 @@ function apiRequest(path: string, body: unknown, method = 'POST', signal?: Abort
   });
 }
 
-function seedPrepared(harness: ReturnType<typeof createCommerceD1Harness>): void {
+function seedPrepared(harness: ReturnType<typeof createCommerceD1Harness>, owner = OWNER): void {
   seedCommerceDocument(harness, {
     key: commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
     data: {
       adminWallet: OWNER,
       dropId: DROP_ID,
-      owner: OWNER,
+      owner,
       status: 'prepared',
       targetKind: 'pack',
       itemIds: [OWNER],
@@ -386,12 +388,93 @@ test('Admin IRL Workflow status remains readable while commerce is paused', asyn
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     statusRequest,
     activeEnv,
-    { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: OTHER_STAFF } },
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 202);
   assert.equal(status.dropId, undefined);
   assert.equal((await status.response.json() as { operationId: string }).operationId, pending.operationId);
 });
+
+for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {
+  test(`mainnet admin shipper ${wallet} can read own IRL completion and the full admin can inspect it`, async () => {
+    const harness = createCommerceD1Harness();
+    seedPrepared(harness, wallet);
+    const binding = new FakeWorkflowBinding();
+    const operationId = await adminIrlRedeemFinalizeOperationId(BODY, wallet);
+    await reserveAdminIrlRedeemFinalizeWorkflow({
+      body: BODY,
+      env: { COMMERCE_DB: harness.db },
+      operationId,
+      signal: new AbortController().signal,
+      staffWallet: wallet,
+    });
+    const stored = await new D1CommerceRepository(harness.db)
+      .getAdminIrlRedeemRequestForWorkflowStatus(operationId);
+    assert.ok(stored);
+    seedCompleted(harness, stored);
+
+    for (const viewer of [wallet, ADMIN]) {
+      const result = await handleAdminIrlRedeemFinalizeWorkflowStatus(
+        apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
+        env(harness, binding),
+        { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: viewer } },
+      );
+      assert.equal(result.response.status, 200);
+      const payload = await result.response.json() as { deliveryId: number; claimCodes: string[] };
+      assert.equal(payload.deliveryId, 7);
+      assert.deepEqual(payload.claimCodes, ['ABCDEF-1234567890']);
+    }
+    assert.equal(binding.createCalls, 0);
+  });
+
+  test(`mainnet admin shipper ${wallet} cannot inspect another wallet's pending or complete IRL operation`, async () => {
+    for (const state of ['processing', 'complete']) {
+      const harness = createCommerceD1Harness();
+      const owner = wallet === OWNER ? OTHER_STAFF : OWNER;
+      seedPrepared(harness, owner);
+      const binding = new FakeWorkflowBinding();
+      let providerReads = 0;
+      binding.beforeGet = () => { providerReads += 1; };
+      binding.instance = new FakeWorkflowInstance({ status: 'running' });
+      const operationId = await adminIrlRedeemFinalizeOperationId(BODY, owner);
+      await reserveAdminIrlRedeemFinalizeWorkflow({
+        body: BODY,
+        env: { COMMERCE_DB: harness.db },
+        operationId,
+        signal: new AbortController().signal,
+        staffWallet: owner,
+      });
+      const stored = await new D1CommerceRepository(harness.db)
+        .getAdminIrlRedeemRequestForWorkflowStatus(operationId);
+      assert.ok(stored);
+      if (state === 'complete') seedCompleted(harness, stored);
+      else seedWorkflowStarted(harness, stored);
+      const before = await new D1CommerceRepository(harness.db)
+        .getAdminIrlRedeemRequestForWorkflowStatus(operationId);
+
+      const result = await handleAdminIrlRedeemFinalizeWorkflowStatus(
+        apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
+        env(harness, binding),
+        { verifiedStaffIdentity: { kind: 'staff-wallet', wallet } },
+      );
+
+      assert.equal(result.response.status, 403, state);
+      assert.equal(result.authOutcome, 'rejected');
+      assert.deepEqual(await result.response.json(), {
+        ok: false,
+        error: {
+          code: 'permission-denied',
+          message: 'Only the requesting wallet can view this Admin IRL redeem.',
+        },
+      });
+      assert.equal(providerReads, 0);
+      assert.equal(binding.createCalls, 0);
+      assert.equal(binding.instance.restartCalls, 0);
+      assert.deepEqual(await new D1CommerceRepository(harness.db)
+        .getAdminIrlRedeemRequestForWorkflowStatus(operationId), before);
+    }
+  });
+}
 
 test('Admin IRL Workflow status leaves an observed pending create unchanged', async () => {
   const harness = createCommerceD1Harness();

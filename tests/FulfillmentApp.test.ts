@@ -1,3 +1,4 @@
+import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
 import assert from 'node:assert/strict';
 import test, { afterEach, mock } from 'node:test';
 import { createElement, useMemo, useState } from 'react';
@@ -15,9 +16,7 @@ const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-libr
 const { default: FulfillmentApp } = await import('../src/FulfillmentApp.tsx');
 
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
-const MAINNET_ADMIN = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
 const ADDRESS_OPERATOR = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
-const SHIPPER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const ETHEREUM_DROP = '111k_devnet';
 const ORDERS_PATH = '/api/fulfillment/orders';
 const MANUAL_REVIEW_PATH = '/api/fulfillment/manual-review-checkouts';
@@ -150,12 +149,17 @@ async function assertOrdinaryExports(view: ReturnType<typeof render>) {
   assert.deepEqual(Object.keys(addresses), ['card_nft_2:7']);
 }
 
-for (const [label, wallet] of [['admin', ADMIN], ['mainnet admin', MAINNET_ADMIN], ['address operator', ADDRESS_OPERATOR], ['shipper', SHIPPER]] as const) {
+for (const [label, wallet] of [
+  ['admin', ADMIN],
+  ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES.map((wallet) => [`mainnet admin-shipper ${wallet.slice(0, 4)}`, wallet]),
+  ['address operator', ADDRESS_OPERATOR],
+]) {
   test(`All drops excludes Ethereum requests, cards, and exports for the ${label}`, async () => {
     await installSession(wallet);
     const requests = interceptRequests();
     const view = render(createElement(AppHarness, { wallet }));
     await view.findByText('Order 7');
+    assert.equal(Boolean(view.queryByRole('button', { name: 'Edit address for order 7' })), wallet !== ADMIN);
     assert.equal((view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement).value, '');
     assert.equal(Boolean(view.queryByRole('option', { name: '111K · Ethereum testnet' })), wallet === ADMIN);
     assert.equal(view.queryByText('111K · Ethereum test order'), null);
@@ -186,19 +190,21 @@ test('the admin loads Ethereum only when selected and returning to All drops cle
   assertOrdinaryRequests(requests, ADMIN);
 });
 
-test('the mainnet admin cannot select or request devnet drops even from a saved selection', async () => {
-  await installSession(MAINNET_ADMIN);
-  const requests = interceptRequests();
-  const view = render(createElement(AppHarness, { wallet: MAINNET_ADMIN, initialDropId: 'card_nft_binder_devnet' }));
-  await view.findByText('Order 7');
-  const selector = view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement;
-  assert.equal(selector.value, '');
-  assert.deepEqual(
-    Array.from(selector.options).map((option) => option.value).filter(Boolean).sort(),
-    listFrontendDrops().filter((drop) => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropId).sort(),
-  );
-  assertOrdinaryRequests(requests, MAINNET_ADMIN);
-});
+for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {
+  test(`the mainnet admin-shipper cannot select or request devnet drops even from a saved selection (${wallet.slice(0, 4)})`, async () => {
+    await installSession(wallet);
+    const requests = interceptRequests();
+    const view = render(createElement(AppHarness, { wallet, initialDropId: 'card_nft_binder_devnet' }));
+    await view.findByText('Order 7');
+    const selector = view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement;
+    assert.equal(selector.value, '');
+    assert.deepEqual(
+      Array.from(selector.options).map((option) => option.value).filter(Boolean).sort(),
+      listFrontendDrops().filter((drop) => drop.solanaCluster === 'mainnet-beta').map((drop) => drop.dropId).sort(),
+    );
+    assertOrdinaryRequests(requests, wallet);
+  });
+}
 
 test('an Ethereum direct selection resets to All drops for another operator without requesting Ethereum', async () => {
   await installSession(ADDRESS_OPERATOR);

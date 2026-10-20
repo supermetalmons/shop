@@ -15,15 +15,13 @@ import {
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { SHIPPER_FULFILLMENT_ACCESS } from '../../../../shared/fulfillmentAccess.ts';
+import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../../../../shared/fulfillmentAccess.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import {
   OWNER, ADMIN, OTHER, SYSTEM_OWNER, UID, NOW_MS, tokenRequest, stringValue, integerValue,
   base64UrlJson, shipmentPage, manualReviewDocument, staffDependencies,
   fixtureStaffDependencies, d1StaffDependencies,
 } from './readTestFixtures.ts';
-
-const ADDRESS_VIEWING_ADMIN = 'ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy';
 
 test('all staff reads reject anonymous identities before accessing data', async () => {
   const cases: Array<[StaffReadPath, unknown]> = [
@@ -90,15 +88,10 @@ test('Mi Note fulfillment is visible to the designated mainnet operators without
     data: { dropId: 'mi_note_cards', deliveryId: 7, owner: OWNER, status: 'ready_to_ship', items: [] },
   });
   const cases = [
-    { wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', dropId: 'mi_note_cards', status: 200 },
-    { wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx', dropId: 'mi_note_cards', status: 200 },
+    ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES.map((wallet) => ({ wallet, dropId: 'mi_note_cards', status: 200 })),
+    { wallet: OWNER, dropId: 'mi_note_cards', status: 200 },
     { wallet: ADMIN, dropId: 'mi_note_cards', status: 200 },
-    { wallet: ADDRESS_VIEWING_ADMIN, dropId: 'mi_note_cards', status: 200 },
-    { wallet: ADDRESS_VIEWING_ADMIN, dropId: 'mi_note_cards_devnet', status: 403 },
-    { wallet: ADDRESS_VIEWING_ADMIN, dropId: 'card_nft_binder_devnet', status: 403 },
-    { wallet: 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq', dropId: 'mi_note_cards', status: 403 },
-    { wallet: '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM', dropId: 'mi_note_cards_devnet', status: 403 },
-    { wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx', dropId: 'mi_note_cards_devnet', status: 403 },
+    { wallet: OTHER, dropId: 'mi_note_cards', status: 403 },
   ];
   for (const { wallet, dropId, status } of cases) {
     const result = await handleStaffReadRequest(
@@ -118,7 +111,7 @@ test('Mi Note fulfillment is visible to the designated mainnet operators without
   }
 });
 
-test('the new admin can read encrypted mainnet shipping addresses while existing admin masking is preserved', async (context) => {
+test('mainnet admin shippers and the address operator can read encrypted addresses while existing admin masking is preserved', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   const addressKeyPair = nacl.box.keyPair();
@@ -135,7 +128,7 @@ test('the new admin can read encrypted mainnet shipping addresses while existing
         addressSnapshot: { encrypted, email: 'buyer@example.com' },
       },
     });
-    for (const wallet of [ADDRESS_VIEWING_ADMIN, ADMIN]) {
+    for (const wallet of [...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES, OWNER, ADMIN]) {
       const result = await handleStaffReadRequest(
         tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId }),
         {
@@ -151,50 +144,89 @@ test('the new admin can read encrypted mainnet shipping addresses while existing
       assert.equal(result.response.status, 200, `${wallet}: ${dropId}`);
       const payload = await result.response.json() as { orders: Array<{ address: { full: string; email?: string } }> };
       assert.equal(payload.orders.length, 1);
-      assert.equal(payload.orders[0].address.full, wallet === ADDRESS_VIEWING_ADMIN ? full : '***');
-      assert.equal(payload.orders[0].address.email, wallet === ADDRESS_VIEWING_ADMIN ? 'buyer@example.com' : undefined);
+      assert.equal(payload.orders[0].address.full, wallet === ADMIN ? '***' : full);
+      assert.equal(payload.orders[0].address.email, wallet === ADMIN ? undefined : 'buyer@example.com');
     }
   }
 });
 
-test('Ethereum fulfillment reads reject other staff before accessing data or providers', async () => {
-  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), ADDRESS_VIEWING_ADMIN, OTHER]) {
-    for (const path of [FULFILLMENT_ORDERS_PATH, FULFILLMENT_MANUAL_REVIEW_PATH] as const) {
+for (const dropId of ['111k_devnet', 'mi_note_cards_devnet', 'card_nft_binder_devnet']) {
+  test(`${dropId} fulfillment reads reject mainnet admin shippers and the address operator before accessing data or providers`, async () => {
+    for (const wallet of [OWNER, ...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES, OTHER]) {
+      for (const path of [FULFILLMENT_ORDERS_PATH, FULFILLMENT_MANUAL_REVIEW_PATH] as const) {
+        const label = `${wallet}: ${path}`;
+        let dataAccesses = 0;
+        let providerCalls = 0;
+        const db = new Proxy({} as D1Database, {
+          get: () => {
+            dataAccesses += 1;
+            assert.fail('Denied fulfillment must not access data');
+          },
+        });
+        const result = await handleStaffReadRequest(
+          tokenRequest(path, { dropId }),
+          { COMMERCE_DB: db },
+          path,
+          {},
+          d1StaffDependencies(async () => {
+            providerCalls += 1;
+            assert.fail('Denied fulfillment must not contact a provider');
+          }, {
+            verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+          }),
+        );
+        assert.equal(result.response.status, 403, label);
+        assert.deepEqual(await result.response.json(), {
+          ok: false,
+          error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
+        }, label);
+        assert.equal(result.authOutcome, 'rejected', label);
+        assert.equal(dataAccesses, 0, label);
+        assert.equal(providerCalls, 0, label);
+        assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
+      }
+    }
+  });
+}
+
+test('mainnet admin shippers and the address operator cannot read global customer profiles or owner lists', async () => {
+  const requests: Array<[StaffReadPath, object]> = [
+    [ADMIN_PROFILE_PATH, { ownerWallet: OWNER }],
+    [ADMIN_DELIVERY_ORDER_OWNERS_PATH, {}],
+  ];
+  for (const wallet of [...MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES, OWNER]) {
+    for (const [path, body] of requests) {
       const label = `${wallet}: ${path}`;
       let dataAccesses = 0;
-      let providerCalls = 0;
       const db = new Proxy({} as D1Database, {
         get: () => {
           dataAccesses += 1;
-          assert.fail('Denied Ethereum fulfillment must not access data');
+          assert.fail('Denied customer reads must not access data');
         },
       });
       const result = await handleStaffReadRequest(
-        tokenRequest(path, { dropId: '111k_devnet' }),
+        tokenRequest(path, body),
         { COMMERCE_DB: db },
         path,
         {},
-        d1StaffDependencies(async () => {
-          providerCalls += 1;
-          assert.fail('Denied Ethereum fulfillment must not contact a provider');
-        }, {
+        d1StaffDependencies(async () => assert.fail('Denied customer reads must not contact a provider'), {
           verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+          loadProfileEmail: async () => assert.fail('Denied customer reads must not load profile email'),
         }),
       );
       assert.equal(result.response.status, 403, label);
       assert.deepEqual(await result.response.json(), {
         ok: false,
-        error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
+        error: { code: 'permission-denied', message: 'Admin access denied.' },
       }, label);
       assert.equal(result.authOutcome, 'rejected', label);
       assert.equal(dataAccesses, 0, label);
-      assert.equal(providerCalls, 0, label);
       assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
     }
   }
 });
 
-test('the new admin can view customer profiles and delivery-order owners', async (context) => {
+test('the existing admin can view customer profiles and delivery-order owners', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   seedCommerceDocument(harness, {
@@ -207,7 +239,7 @@ test('the new admin can view customer profiles and delivery-order owners', async
   });
   const dependencies = d1StaffDependencies(async () => assert.fail('Unexpected provider request'), {
     loadProfileEmail: async () => 'buyer@example.com',
-    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADDRESS_VIEWING_ADMIN }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
   });
   const env = { COMMERCE_DB: harness.db };
   const profile = await handleStaffReadRequest(

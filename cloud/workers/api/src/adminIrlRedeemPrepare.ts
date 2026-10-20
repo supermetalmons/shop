@@ -30,8 +30,7 @@ import {
 } from '../../../../shared/dasAssetCollections.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import {
-  ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
-  FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  ADMIN_IRL_REDEEM_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
 } from '../../../../shared/fulfillmentAccess.js';
 import {
@@ -119,10 +118,7 @@ const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
-const ADMIN_IRL_REDEEM_WALLETS = new Set([
-  ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
-  ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
-]);
+const ADMIN_IRL_REDEEM_WALLETS = new Set(ADMIN_IRL_REDEEM_WALLET_ADDRESSES);
 
 const requestSchema = z.object({
   owner: z.string().min(1).max(64),

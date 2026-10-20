@@ -407,18 +407,30 @@ challenge once. Active challenges are reused, while Cloudflare Worker bindings
 rate-limit challenge and signature requests without storing caller counters in
 D1.
 
-Fulfillment access for `8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM` and
-`kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx` automatically includes every
-drop registered with `solanaCluster: 'mainnet-beta'`. The dashboard and API use
-the same grants. `A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz` retains
-admin access to all registered drops. New mainnet drops need no additional
-fulfillment access configuration for these wallets.
+The shared `mainnet-admin-shippers` group contains
+`ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy`,
+`AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq`, and
+`8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM`. All three have fulfillment
+access to every drop registered with `solanaCluster: 'mainnet-beta'`, full
+shipping-address visibility, order address editing, shipment status and tracking,
+manual-review checkouts, and ShipStation operations. They can redeem their own
+eligible Card NFT 2 items for IRL delivery and check their own redemption status.
+They cannot access Stripe chargeback backfill, the global customer-wallet
+directory, or the admin customer profile viewer. Devnet inventory and test routes
+are hidden for these wallets, including when they are deployment treasuries.
 
-`ETaETZU82ZFnaz3j3TKAxRRzbQvt1Bn5tnF9EGMZe5zy` has admin access to all
-mainnet drops, with devnet drops hidden and shipping-address
-viewing but no permission to edit saved fulfillment addresses. Ad hoc address
-changes during ShipStation label creation remain available. Ethereum test fulfillment remains
-restricted to `A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz`.
+`kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx` retains fulfillment access
+to every mainnet drop and order address editing, without customer profile viewing
+or admin IRL redemption. Address editing updates the delivery order snapshot,
+preserves the existing ShipStation state restrictions, and leaves the customer's
+address book unchanged. The dashboard and API share the same fulfillment grants;
+new mainnet drops need no additional configuration for these four wallets.
+
+`A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz` retains admin access to all
+registered drops, with sensitive fulfillment addresses hidden and no order address
+editing. The global customer directory, admin customer profile viewer, Stripe
+chargeback backfill, and Ethereum test fulfillment remain exclusive to this
+wallet. A87 and kPG retain devnet inventory access.
 
 ## Cloudflare deployment
 

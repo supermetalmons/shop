@@ -9,6 +9,7 @@ import {
   type AdminIrlRedeemFinalizePendingResponse,
   type AdminIrlRedeemFinalizeRecovery,
 } from '../../../../shared/contracts.js';
+import { isMainnetOnlyStaffWallet } from '../../../../shared/fulfillmentAccess.js';
 import {
   loadAdminIrlRedeemFinalizeWorkflowResult,
   readAdminIrlRedeemFinalizeRequest,
@@ -425,11 +426,21 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
-    resolveAdminIrlRedeemFinalizeStaffWallet(identity);
+    const staffWallet = resolveAdminIrlRedeemFinalizeStaffWallet(identity);
+    const loadOperation: LoadOperation = async (args) => {
+      const operation = await dependencies.loadOperation(args);
+      if (operation && isMainnetOnlyStaffWallet(staffWallet) && operation.owner !== staffWallet) {
+        throw new AdminIrlRedeemFinalizeError(
+          'permission-denied',
+          'Only the requesting wallet can view this Admin IRL redeem.',
+        );
+      }
+      return operation;
+    };
     const durable = await loadAdminIrlRedeemFinalizeDurableState(
       env,
       operationId,
-      dependencies.loadOperation,
+      loadOperation,
       deadline.signal,
     );
     let reconciliation = durable.state === 'absent' || durable.state === 'complete' ||
@@ -441,7 +452,7 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
           env,
           operationId,
           durable,
-          dependencies.loadOperation,
+          loadOperation,
           deadline.signal,
         );
     reconciliation = {
