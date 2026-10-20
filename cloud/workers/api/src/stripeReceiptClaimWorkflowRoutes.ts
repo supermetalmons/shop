@@ -139,7 +139,7 @@ async function handle(
     }
     const reserved = await raceWithSignal(dependencies.reserve(context(), code, recipient, dependencies.nowMs(), {
       allowNew: String(env.STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED) === 'true', requestId,
-      provider: { apiKey: String(env.HELIUS_API_KEY || '').trim(), providerFetch: fetch, signal: enrichment.signal },
+      provider: { apiKey: String(env.HELIUS_API_KEY || '').trim(), providerFetch: (input, init) => fetch(input, init), signal: enrichment.signal },
     }), deadline.signal);
     if (reserved.status === 'complete') return completedResponse(reserved.result);
     snapshot = reserved.snapshot;

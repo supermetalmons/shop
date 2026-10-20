@@ -43,7 +43,7 @@ function harness() {
   return { snapshot, dependencies, reservations, ensured: () => ensured };
 }
 
-test('start returns durable operation immediately and passes admission and replay identity to reservation', async () => {
+test('start returns durable operation immediately and passes admission and replay identity to reservation', async (t) => {
   const fixture = harness();
   const result = await handleStripeReceiptClaimWorkflowStart(request(body, { requestId: RECEIPT_REQUEST_ID }),
     { ...env, HELIUS_API_KEY: ' test-key ' }, {}, fixture.dependencies);
@@ -52,7 +52,10 @@ test('start returns durable operation immediately and passes admission and repla
   const provider = fixture.reservations[0]?.provider;
   assert.deepEqual(fixture.reservations, [{ allowNew: false, requestId: RECEIPT_REQUEST_ID, provider }]);
   assert.equal(provider?.apiKey, 'test-key');
-  assert.equal(provider?.providerFetch, fetch);
+  const fetched = new Response('provider response');
+  const providerFetch = t.mock.method(globalThis, 'fetch', async () => fetched);
+  assert.equal(await provider?.providerFetch('https://provider.example', { method: 'POST' }), fetched);
+  assert.deepEqual(providerFetch.mock.calls[0]?.arguments, ['https://provider.example', { method: 'POST' }]);
   assert.ok(provider?.signal instanceof AbortSignal);
   assert.equal(fixture.ensured(), 1);
 });

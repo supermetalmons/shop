@@ -64,7 +64,7 @@ function resources(args: ReceiptClaimWorkflowOnchainArgs, snapshot: ReceiptClaim
   const apiKey = String(args.env.HELIUS_API_KEY || '').trim();
   if (!apiKey) throw new StripeReceiptClaimError('unavailable', 'Receipt claiming is temporarily unavailable.');
   const signal = AbortSignal.any([args.signal, AbortSignal.timeout(Math.max(1, snapshot.operation.deadlineAtMs - Date.now()))]);
-  const provider = { apiKey, providerFetch: args.providerFetch ?? fetch, signal };
+  const provider = { apiKey, providerFetch: args.providerFetch ?? ((input, init) => fetch(input, init)), signal };
   const connection = createConnection(provider, runtime);
   const flow = claimFlowFor(snapshot.started.directFigureReceipt, runtime.itemsPerBox);
   const assignment = flow === 'openable_pack'

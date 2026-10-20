@@ -57,6 +57,12 @@ code and stored recipient, preserving its request UUID across transport retries.
 Verify the final claim and order mirrors, transaction finalization, consumed pack
 receipt, and each expected recipient-owned receipt before considering it resolved.
 
+Receipt provider defaults wrap native `fetch` before passing it to provider
+objects. Workerd requires the correct receiver for its native function; assigning
+bare `fetch` as an object property caused reconciliation to fail before network
+I/O. The runtime regression covers the default provider path, including legacy
+completed-claim enrichment, without replacing native `fetch` with a Node mock.
+
 ## Disable or roll back
 
 Deploy the compatible Worker with `--var STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED:false` first. Keep the Workflow class, binding, status routes, and scheduled recovery deployed until accepted operations settle. Do not roll back to code that resumes synchronous transfer execution for claims already owned by a Workflow. Retain the additive indexes and operation journals. Restore the compatible frontend or disable new starts while investigating; do not reset an operation's recipient or generation manually.
