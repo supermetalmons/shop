@@ -12,7 +12,7 @@ const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT 
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string;
 };
-if (deployment.protocolVersion !== 4) throw new Error('The local deployment does not support the current batch contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 5) throw new Error('The local deployment does not support the current discount contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -46,15 +46,20 @@ if ([collectionCode, rendererCode].some((code) => typeof code !== 'string' || co
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
 
-const [unboxLimit, tokenInfos, tokenURIs] = await Promise.all([
+const [unboxLimit, tokenInfos, tokenURIs, collectionStats] = await Promise.all([
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [`0x${'0'.repeat(40)}`]) }, 'latest']),
 ]);
 if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
-  typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0) {
-  throw new Error('The local collection does not implement the current batch interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+  typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
+  typeof collectionStats !== 'string' || decodeReturn(
+    ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
+    collectionStats,
+  )[9] !== 0n) {
+  throw new Error('The local collection does not implement the current discount interface. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 
 const rawConfig = JSON.parse(await readFile(resolve(root, 'cloud/workers/api/wrangler.jsonc'), 'utf8'));
@@ -118,6 +123,9 @@ try {
     paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 WHERE singleton = 1 AND authority_state = 'paused'`),
   env.COMMERCE_DB.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1 AND lease_token = ?').bind(leaseToken));
   await env.COMMERCE_DB.batch(statements);
+  await env.COMMERCE_DB.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+    paused_at_ms = NULL, chain_id = ?, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
+    .bind(deployment.chainId, contractAddress, Date.now()).run();
   const stats = await worker.fetch(`${url.origin}/ethereum/111k/stats`, { headers: { Origin: 'http://localhost:5173' } });
   if (!stats.ok) {
     throw new Error(`The local Worker could not read the deployed collection (HTTP ${stats.status}): ${await stats.text()}`);

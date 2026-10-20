@@ -17,6 +17,12 @@ const ORIGIN = 'https://mons.shop';
 const KEY = `0x${'11'.repeat(32)}`;
 const WALLET = ethereumSignerAddress(KEY);
 
+async function activateEthereumControl(db: D1Database, contract: string): Promise<void> {
+  await db.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+    paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
+    .bind(contract, Date.now()).run();
+}
+
 function ethereumRuntime() {
   const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const config = {
@@ -42,8 +48,8 @@ test('native Ethereum reconciliation and HTTP reads use the default Worker fetch
     methods.push(method);
     const results: Record<string, unknown> = {
       eth_chainId: '0x7a69', eth_blockNumber: '0x66', eth_getLogs: [],
-      eth_call: encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool'],
-        [0, 0, 0, 100000000000000n, 1100000000000000n, true]),
+      eth_call: encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
+        [0, 0, 0, 100000000000000n, 1100000000000000n, true, `0x${'ab'.repeat(32)}`, 50000000000000n, 1, 0]),
     };
     response.writeHead(Object.hasOwn(results, method) ? 200 : 400, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] }));
@@ -61,7 +67,7 @@ import { handleEthereumRequest } from ${JSON.stringify(resolve('cloud/workers/ap
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
-    if (path === '/ethereum/111k/stats') return handleEthereumRequest(request, {
+    if (path.startsWith('/ethereum/')) return handleEthereumRequest(request, {
       ...env, PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: true }) },
     }, path);
     try {
@@ -89,6 +95,19 @@ export default {
   const worker = server.getWorker<Env>('ethereum-default-fetch-runtime');
   await worker.applyD1Migrations('OPS_DB');
   await worker.applyD1Migrations('COMMERCE_DB');
+  const pausedConfig = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: ORIGIN } });
+  assert.equal((await pausedConfig.json() as { enabled: boolean }).enabled, false);
+  for (const path of [paths.deliveryPrepare, paths.deliveryConfirm, paths.claimPrepare, paths.claimConfirm]) {
+    const paused = await worker.fetch(`https://api.mons.shop${path}`, {
+      method: 'POST', headers: { Origin: ORIGIN, 'X-Mons-CSRF': '1', 'Content-Type': 'application/json' }, body: '{}',
+    });
+    assert.equal(paused.status, 503, path);
+  }
+  assert.equal((await worker.fetch('https://api.mons.shop/reconcile')).status, 200);
+  assert.deepEqual(methods, []);
+  await activateEthereumControl((await worker.getEnv()).COMMERCE_DB, contract);
+  const activeConfig = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: ORIGIN } });
+  assert.equal((await activeConfig.json() as { enabled: boolean }).enabled, true);
   const response = await worker.fetch('https://api.mons.shop/reconcile');
   assert.equal(response.status, 200, await response.clone().text());
   assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs']);
@@ -293,6 +312,7 @@ test('native D1 rejects stale Ethereum state inside the document commit', async 
     await db.batch(initialize);
 
     const contract = '0x1111111111111111111111111111111111111111';
+    await activateEthereumControl(db, contract);
     const hash = `0x${'ab'.repeat(32)}`;
     await db.prepare(`INSERT INTO ethereum_delivery_quotes (chain_id, contract_address, order_id, request_id, wallet,
       address_id, address_json, token_ids_json, items_json, fee_wei, deadline, status, transaction_hash,
@@ -301,7 +321,8 @@ test('native D1 rejects stale Ethereum state inside the document commit', async 
       .bind(contract, WALLET, hash, hash).run();
     const repository = new D1CommerceRepository(db);
     const key = commerceKeys.deliveryOrder('111k_devnet', '7');
-    await repository.run(100, unit => unit.create(key, { source: 'ethereum', owner: WALLET, status: 'ready_to_ship', irlClaims: [] }));
+    await repository.run(100, unit => unit.create(key, { source: 'ethereum', chainId: 31337, contractAddress: contract,
+      owner: WALLET, status: 'ready_to_ship', irlClaims: [] }));
     const expectation = { kind: 'delivery' as const, chainId: 31337, contractAddress: contract, id: '7',
       status: 'prepared', transactionHash: hash, blockNumber: 100, blockHash: hash, updatedAtMs: 100 };
     await assert.rejects(repository.run(200, async unit => {
@@ -345,6 +366,7 @@ test('native Ethereum reconciliation reads only eligible rows in oldest-first or
     const db = env.COMMERCE_DB;
     const queries: string[] = [];
     const contract = '0x1111111111111111111111111111111111111111';
+    await activateEthereumControl(db, contract);
     const observedDb = new Proxy(db, {
       get(target, property) {
         if (property === 'prepare') return (sql: string) => { queries.push(sql); return target.prepare(sql); };

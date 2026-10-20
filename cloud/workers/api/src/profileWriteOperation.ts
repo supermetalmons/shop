@@ -38,7 +38,8 @@ export type ProfileWriteDependencies = {
 };
 
 export type ProfileWriteEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM' |
+  'ETHEREUM_111K_CHAIN_ID' | 'ETHEREUM_111K_CONTRACT_ADDRESS'
 >>;
 
 export type ProfileWriteOperationContext = CommerceWriteCommon & {

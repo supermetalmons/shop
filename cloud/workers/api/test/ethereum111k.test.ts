@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../../../../shared/ethereum/abi.ts';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
-  type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse } from '../../../../shared/ethereum/api.ts';
+  type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
@@ -40,7 +40,7 @@ const readPaths = new Set<string>([paths.config, paths.stats, paths.inventory, p
 type Rpc = { id: number; method: string; params: unknown[] };
 type Item = { kind: number; displayId: number; owner: string };
 
-function fixture() {
+function fixture(controlActive = true) {
   const ops = new DatabaseSync(':memory:');
   ops.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
   const failures = { quoteWrite: false, publishWrite: false, deliveryRetirementAck: false, claimRetirementAck: false };
@@ -65,6 +65,9 @@ function fixture() {
       throw new Error('Injected claim retirement acknowledgement failure');
     }
   } });
+  if (controlActive) commerce.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+    paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = ? WHERE singleton = 1`)
+    .run(CONTRACT, NOW);
   const limiter: RateLimit = { limit: async () => ({ success: true }) };
   const env: EthereumEnvironment = {
     OPS_DB: d1Database(ops), COMMERCE_DB: commerce.db, ALCHEMY_MI_NOTE_API_KEY: 'test-alchemy-key',
@@ -76,6 +79,7 @@ function fixture() {
   const state = {
     now: NOW, head: 102, blockTimestamp: null as number | null, rpcChainId: null as number | null,
     expectedSigner: SIGNER, contractCode: new Set<string>(), magic: '0x1626ba7e',
+    discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 821, owner: WALLET }]]),
     receipts: new Map<string, EthereumReceipt>(), canonical: new Map<number, string>(),
@@ -139,8 +143,12 @@ function fixture() {
         return encodeAbi([batched ? 'string[]' : 'string'], batched ? [uris] : [uris[0]]);
       }
       if (selector === functionSelector('isValidSignature(bytes32,bytes)')) return encodeAbi(['bytes4'], [state.magic]);
-      if (selector === functionSelector('stats()')) return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool'],
-        [25, 2, 20, '100000000000000', '1100000000000000', true]);
+      if (selector === functionSelector('stats(address)')) {
+        const [owner] = decodeReturn(['address'], argumentsHex) as [string];
+        return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
+          [25, 2, 20, '100000000000000', '1100000000000000', true, state.discountRoot,
+            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0]);
+      }
     }
     throw new Error(`Unexpected mocked RPC: ${payload.method}`);
   };
@@ -377,6 +385,47 @@ for (const cancellation of ['deadline', 'client'] as const) {
   });
 }
 
+test('public stats include wallet discount usage with one coherent contract read and no session', async () => {
+  const f = fixture();
+  try {
+    for (const owner of [null, WALLET, OTHER_WALLET]) {
+      f.state.calls.length = 0;
+      const result = await f.request<EthereumStats>(`${paths.stats}${owner ? `?owner=${owner.toUpperCase().replace('0X', '0x')}` : ''}`);
+      assert.equal(result.response.status, 200);
+      assert.deepEqual(result.body, {
+        chainId: 31337, contractAddress: CONTRACT, owner,
+        allocatedCrates: 25, warehousesMinted: 2, artworksMinted: 20,
+        cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', saleActive: true,
+        remainingCrates: 5530, remainingWarehouses: 502,
+        discountMerkleRoot: f.state.discountRoot, discountCratePriceWei: '50000000000000',
+        discountAllowance: 3, discountUsed: owner === WALLET ? 1 : 0,
+      });
+      assert.deepEqual(f.state.calls.map(call => call.method), ['eth_chainId', 'eth_call']);
+      assert.deepEqual(f.state.calls[1].params, [{
+        to: CONTRACT, data: encodeCall('stats(address)', ['address'], [owner ?? ZERO]),
+      }, 'latest']);
+      assert.match(result.response.headers.get('cache-control') ?? '', /no-store/);
+    }
+    f.state.discountAllowance = 1;
+    f.state.discountUsed.set(WALLET, 3);
+    const reduced = await f.request<EthereumStats>(`${paths.stats}?owner=${WALLET}`);
+    assert.equal(reduced.body.discountAllowance, 1);
+    assert.equal(reduced.body.discountUsed, 3);
+    assert.equal(f.databaseCalls.requests, 0);
+  } finally { f.close(); }
+});
+
+test('stats reject invalid wallet identities before any RPC request', async () => {
+  const f = fixture();
+  try {
+    for (const owner of ['', 'invalid', ZERO, `${WALLET}00`]) {
+      const result = await f.request(`${paths.stats}?owner=${owner}`);
+      assert.equal(result.response.status, 400);
+    }
+    assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
 test('111k EOA auth is one-use, chain/origin scoped, expires, and keeps shipping addresses isolated', async () => {
   const f = fixture();
   try {
@@ -416,6 +465,131 @@ test('disabled collections clean up expired Ethereum auth without accessing the 
     assert.equal(f.ops.prepare('SELECT COUNT(*) AS n FROM ethereum_auth_challenges').get()!.n, 0);
     assert.equal(f.ops.prepare('SELECT COUNT(*) AS n FROM ethereum_auth_sessions').get()!.n, 0);
     assert.deepEqual(f.state.calls, []);
+  } finally { f.close(); }
+});
+
+test('fresh Ethereum control fails closed while account and read-only routes remain available', async () => {
+  const f = fixture(false);
+  try {
+    assert.equal((await f.request(paths.config)).body.enabled, false);
+    f.state.calls.length = 0;
+    for (const path of [paths.deliveryPrepare, paths.deliveryConfirm, paths.claimPrepare, paths.claimConfirm]) {
+      const result = await f.request(path);
+      assert.equal(result.response.status, 503, path);
+      assert.equal((result.body.error as { code: string }).code, 'unavailable');
+    }
+    assert.deepEqual(f.state.calls, []);
+    const session = await f.session();
+    await f.saveAddress(session.token);
+    assert.equal((await f.request(paths.profile, undefined, session.token)).response.status, 200);
+    assert.equal(((await f.request(paths.addresses, undefined, session.token)).body.addresses as unknown[]).length, 1);
+    assert.equal((await f.request(`${paths.inventory}?owner=${WALLET}`)).response.status, 200);
+    assert.equal((await f.request(paths.stats)).response.status, 200);
+    assert.equal((await f.request(paths.transactionsConfirm, { transactionHash: HASH })).response.status, 200);
+    f.state.calls.length = 0;
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.deepEqual(f.state.calls, []);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_reconciliation_cursor').get()!.n, 0);
+  } finally { f.close(); }
+});
+
+for (const failure of ['missing', 'malformed', 'read-error'] as const) {
+  test(`Ethereum control ${failure} disables config, mutations and reconciliation`, async () => {
+    const f = fixture();
+    try {
+      f.env.COMMERCE_DB = new Proxy(f.commerce.db, {
+        get(target, property) {
+          if (property !== 'prepare') return Reflect.get(target, property, target);
+          return (sql: string) => {
+            const statement = target.prepare(sql);
+            if (!sql.includes('FROM ethereum_111k_control')) return statement;
+            return new Proxy(statement, {
+              get(target, property) {
+                if (property !== 'first') return Reflect.get(target, property, target);
+                return async () => {
+                  if (failure === 'read-error') throw new Error('Injected control read failure');
+                  return failure === 'missing' ? null : { paused: 0 };
+                };
+              },
+            });
+          };
+        },
+      });
+      assert.equal((await f.request(paths.config)).body.enabled, false);
+      assert.equal((await f.request(paths.deliveryPrepare)).response.status, 503);
+      await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+      assert.deepEqual(f.state.calls, []);
+    } finally { f.close(); }
+  });
+}
+
+for (const reason of ['paused', 'scope-mismatch'] as const) {
+  test(`${reason} Ethereum control disables configuration, mutations and reconciliation without removing account or order data`, async () => {
+    const f = fixture();
+    try {
+      const { prepared, authentication } = await f.confirmed();
+      const order = f.order(prepared.orderId);
+      const quote = f.quoteRow(prepared.orderId);
+      const claims = f.commerce.database.prepare('SELECT * FROM ethereum_crate_claims').all();
+      f.commerce.database.prepare(`UPDATE ethereum_111k_control SET revision = revision + 1,
+        paused = ?, paused_at_ms = ?, contract_address = ? WHERE singleton = 1`)
+        .run(reason === 'paused' ? 1 : 0, reason === 'paused' ? NOW : null, reason === 'paused' ? CONTRACT : OTHER_CONTRACT);
+      assert.equal((await f.request(paths.config)).body.enabled, false);
+      f.state.calls.length = 0;
+      for (const path of [paths.deliveryPrepare, paths.deliveryConfirm, paths.claimPrepare, paths.claimConfirm]) {
+        assert.equal((await f.request(path, {}, authentication.token)).response.status, 503, path);
+      }
+      await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+      assert.deepEqual(f.state.calls, []);
+      assert.deepEqual(f.order(prepared.orderId), order);
+      assert.deepEqual(f.quoteRow(prepared.orderId), quote);
+      assert.deepEqual(f.commerce.database.prepare('SELECT * FROM ethereum_crate_claims').all(), claims);
+      assert.equal((await f.request(paths.shipments, undefined, authentication.token)).response.status, 200);
+      assert.equal(((await f.request(paths.addresses, undefined, authentication.token)).body.addresses as unknown[]).length, 1);
+      await f.saveAddress(authentication.token, 'UVWXYZABCDEFGHIJKLMN');
+      const repository = new D1CommerceRepository(f.env.COMMERCE_DB);
+      const otherDrop = commerceKeys.deliveryOrder('card_nft_2', '7');
+      await repository.run(NOW, unit => unit.create(otherDrop, { owner: 'other-wallet', status: 'processing' }));
+      assert.equal((await repository.get(otherDrop))?.data.status, 'processing');
+    } finally { f.close(); }
+  });
+}
+
+test('an existing delivery quote is not signed when the pause arrives during its validation', async () => {
+  const f = fixture();
+  try {
+    const { prepared, authentication } = await f.prepared();
+    const original = f.quoteRow(prepared.orderId);
+    f.state.afterRpc = async (call) => {
+      if (call.method !== 'eth_getBlockByNumber') return;
+      f.state.afterRpc = null;
+      f.commerce.database.prepare(`UPDATE ethereum_111k_control SET paused = 1,
+        paused_at_ms = ?, revision = revision + 1 WHERE singleton = 1`).run(NOW);
+    };
+    const result = await f.request(paths.deliveryPrepare,
+      { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID }, authentication.token);
+    assert.equal(result.response.status, 503);
+    assert.equal(result.body.signature, undefined);
+    assert.deepEqual(f.quoteRow(prepared.orderId), original);
+  } finally { f.close(); }
+});
+
+test('a pause after the mutation gate maps the native quote fence to unavailable', async () => {
+  const f = fixture();
+  try {
+    const authentication = await f.session();
+    await f.saveAddress(authentication.token);
+    f.state.afterRpc = async (call) => {
+      if (call.method !== 'eth_call') return;
+      f.state.afterRpc = null;
+      f.commerce.database.prepare(`UPDATE ethereum_111k_control SET paused = 1,
+        paused_at_ms = ?, revision = revision + 1 WHERE singleton = 1`).run(NOW);
+    };
+    const result = await f.request(paths.deliveryPrepare,
+      { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: REQUEST_ID }, authentication.token);
+    assert.equal(result.response.status, 503);
+    assert.equal((result.body.error as { code: string }).code, 'unavailable');
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 0);
   } finally { f.close(); }
 });
 
@@ -758,7 +932,7 @@ for (const kind of ['delivery', 'claim'] as const) {
         }
         await repository.run(NOW, async (unit) => {
           await unit.create(commerceKeys.deliveryOrder('111k_devnet', String(orderId)), {
-            source: 'ethereum', owner: WALLET, contractAddress: CONTRACT, status: 'ready_to_ship',
+            source: 'ethereum', owner: WALLET, chainId: 31337, contractAddress: CONTRACT, status: 'ready_to_ship',
             irlClaims: kind === 'claim' ? [{ code, boxId: index + 1, status: 'claimed' }] : [],
           });
         });
@@ -1330,7 +1504,7 @@ test('deferred deliveries rotate so later orphaned orders can be retired', async
       if (index < 20) f.state.usedOrders.add(row.order_id);
       await new D1CommerceRepository(f.env.COMMERCE_DB).run(NOW, async (unit) => {
         await unit.create(commerceKeys.deliveryOrder('111k_devnet', String(row.order_id)), {
-          source: 'ethereum', owner: WALLET, contractAddress: CONTRACT, status: 'ready_to_ship', irlClaims: [],
+          source: 'ethereum', owner: WALLET, chainId: 31337, contractAddress: CONTRACT, status: 'ready_to_ship', irlClaims: [],
         });
       });
     }
@@ -1392,7 +1566,7 @@ test('deferred claims rotate so newer orphaned claims can recover', async () => 
       VALUES (${Object.keys(oldParent).map(() => '?').join(',')})`).run(...Object.values(oldParent));
     await new D1CommerceRepository(f.env.COMMERCE_DB).run(NOW, async (unit) => {
       await unit.create(commerceKeys.deliveryOrder('111k_devnet', String(oldOrderId)), {
-        source: 'ethereum', owner: WALLET, contractAddress: CONTRACT, status: 'ready_to_ship',
+        source: 'ethereum', owner: WALLET, chainId: 31337, contractAddress: CONTRACT, status: 'ready_to_ship',
         irlClaims: Array.from({ length: 20 }, (_, i) => ({ boxId: i + 2, code: `CODE${i + 2}`, status: 'claimed' })),
       });
     });

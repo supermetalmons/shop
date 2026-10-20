@@ -31,8 +31,9 @@ contract NFT111KGasTest is TestSupport {
     function setUp() public {
         vm.chainId(31337);
         vm.warp(2_000_000_000);
-        token =
-            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), address(new NFT111KRenderer()));
+        token = new NFT111K(
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), address(new NFT111KRenderer()), bytes32(0)
+        );
         receiver = address(new MinimalGasReceiver());
         vm.deal(alice, 100 ether);
         vm.deal(receiver, 100 ether);
@@ -40,6 +41,32 @@ contract NFT111KGasTest is TestSupport {
 
     function testGasMintCrates1() public {
         _mintCrates(alice, 1, "mintCrates1");
+    }
+
+    function testGasMintCratesDiscounted1() public {
+        (address wallet, bytes32[] memory proof) = _discountFixture(1);
+        vm.prank(wallet);
+        token.mintCratesDiscounted{value: 0.00005 ether}(1, proof);
+        vm.snapshotGasLastCall("mintCratesDiscounted1");
+        assertEq(token.discountUsed(wallet), 1);
+    }
+
+    function testGasMintCratesDiscounted3() public {
+        (address wallet, bytes32[] memory proof) = _discountFixture(3);
+        vm.prank(wallet);
+        token.mintCratesDiscounted{value: 0.00015 ether}(3, proof);
+        vm.snapshotGasLastCall("mintCratesDiscounted3");
+        assertEq(token.discountUsed(wallet), 3);
+    }
+
+    function testGasMintCratesDiscounted1After1() public {
+        (address wallet, bytes32[] memory proof) = _discountFixture(3);
+        vm.prank(wallet);
+        token.mintCratesDiscounted{value: 0.00005 ether}(1, proof);
+        vm.prank(wallet);
+        token.mintCratesDiscounted{value: 0.00005 ether}(1, proof);
+        vm.snapshotGasLastCall("mintCratesDiscounted1After1");
+        assertEq(token.discountUsed(wallet), 2);
     }
 
     function testGasMintCrates15() public {
@@ -58,6 +85,14 @@ contract NFT111KGasTest is TestSupport {
     function testGasMintCrates15After240() public {
         _buyCrates(alice, 240);
         _mintCrates(alice, 15, "mintCrates15After240");
+    }
+
+    function _discountFixture(uint256 allowance) private returns (address wallet, bytes32[] memory proof) {
+        string memory fixture = vm.readFile("fixtures/discounts/proof.json");
+        wallet = vm.parseJsonAddress(fixture, ".wallet");
+        proof = vm.parseJsonBytes32Array(fixture, ".proof");
+        token.setDiscountConfig(vm.parseJsonBytes32(fixture, ".root"), allowance);
+        vm.deal(wallet, 100 ether);
     }
 
     function testGasMintCrates1AfterWarehouse() public {
@@ -526,8 +561,8 @@ contract NFT111KGasTest is TestSupport {
             uint256 artworks,
             uint256 cratePrice,
             uint256 warehousePrice,
-            bool saleActive
-        ) = token.stats();
+            bool saleActive,,,,
+        ) = token.stats(alice);
         vm.snapshotGasLastCall("stats");
         assertEq(allocated, 12);
         assertEq(warehouses, 1);
@@ -613,7 +648,7 @@ contract NFT111KGasTest is TestSupport {
             token.unboxCrates(ids);
             vm.snapshotGasLastCall(name);
         }
-        (,, uint256 count,,,) = token.stats();
+        (,, uint256 count,,,,,,,) = token.stats(address(0));
         assertEq(count, quantity * 20 + (bonus ? 11 : 0));
         (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(count);
         assertEq(kind, 1);

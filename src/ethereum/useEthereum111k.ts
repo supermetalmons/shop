@@ -15,6 +15,7 @@ import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletErro
 import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
 import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './recovery';
 import { ethereumAddressEncryptionKey } from './addressEncryption';
+import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 export type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
@@ -23,7 +24,7 @@ function isTransactionFailure(error: unknown): error is EthereumApiError {
   return error instanceof EthereumApiError && (error.code === 'transaction-reverted' || error.code === 'operation-failed');
 }
 
-export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
+export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: 'crate' | 'warehouse' = 'crate') {
   const queryClient = useQueryClient();
   const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
   const config = configQuery.data ?? DEFAULT_ETHEREUM_111K_CONFIG;
@@ -125,8 +126,24 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     const interval = setInterval(() => { void captureNonce(); }, 4_000);
     return () => { active = false; clearInterval(interval); };
   }, [wallet.provider, pending, scope, owner, config.chainId]);
-  const stats = useQuery({ queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress],
-    queryFn: ({ signal }) => ethereumApi.stats(signal), enabled: config.enabled, retry: false, refetchInterval: 30_000 });
+  const statsKey = ['ethereum111k', 'stats', config.chainId, config.contractAddress, owner];
+  const stats = useQuery({ queryKey: statsKey,
+    queryFn: ({ signal }) => ethereumApi.stats(config, owner, signal), enabled: config.enabled, retry: false, refetchInterval: 30_000 });
+  const discountRoot = stats.data?.discountMerkleRoot;
+  const discountRemaining = Math.max(0, (stats.data?.discountAllowance ?? 0) - (stats.data?.discountUsed ?? 0));
+  const discountCheckRequired = Boolean(config.enabled && owner && discountRoot &&
+    discountRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT && discountRemaining > 0);
+  const discountProof = useQuery({
+    queryKey: ['ethereum111k', 'discountProof', config.chainId, config.contractAddress, discountRoot, owner],
+    queryFn: () => ethereumDiscounts.proof(owner!, discountRoot!),
+    enabled: mintKind === 'crate' && discountCheckRequired,
+    retry: false, staleTime: Infinity,
+  });
+  const mintQuote = (kind: 'crate' | 'warehouse', quantity: number): EthereumMintQuote | null => {
+    if (!owner || !stats.data) return null;
+    if (kind === 'crate' && discountCheckRequired && !discountProof.isSuccess) return null;
+    return ethereumMintQuote(kind, quantity, stats.data, discountProof.data != null);
+  };
   const inventory = useInfiniteQuery({
     queryKey: ethereumInventoryQueryKey(scope), enabled: Boolean(scope && config.enabled),
     initialPageParam: null as string | null,
@@ -348,13 +365,35 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
     }).catch(() => {});
   };
   const transaction = (data: string, value = '0x0'): EthereumPreparedTransaction => ({ to: config.contractAddress!, data, value, chainId: config.chainId });
-  const mint = (kind: 'crate' | 'warehouse', quantity: number) => run('Confirm mint in your wallet…', async (operation, capturedScope) => {
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error('Choose a quantity from 1 to 15.');
-    if (!stats.data?.saleActive) throw new Error('Minting is not open yet.');
-    if (quantity > (kind === 'crate' ? stats.data.remainingCrates : stats.data.remainingWarehouses)) throw new Error('That quantity is no longer available. Choose fewer containers.');
-    const price = kind === 'crate' ? stats.data.cratePriceWei : stats.data.warehousePriceWei;
-    await submit(operation, capturedScope, 'mint', transaction(encodeCall(kind === 'crate' ? ETHEREUM_FUNCTIONS.mintCrates : ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [quantity]), ethereumHexQuantity(BigInt(price) * BigInt(quantity))));
-  });
+  const mint = (kind: 'crate' | 'warehouse', quantity: number, quote?: EthereumMintQuote) => {
+    const expected = quote ?? mintQuote(kind, quantity);
+    return run('Confirm mint in your wallet…', async (operation, capturedScope) => {
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error('Choose a quantity from 1 to 15.');
+      if (!expected) throw new Error('Wait for your mint price to load and try again.');
+      const current = await queryClient.fetchQuery({
+        queryKey: ['ethereum111k', 'stats', config.chainId, config.contractAddress, operation.address],
+        queryFn: ({ signal }) => ethereumApi.stats(config, operation.address, AbortSignal.any([signal, operation.signal])),
+        staleTime: 0,
+      });
+      operation.assertCurrent();
+      if (!current.saleActive) throw new Error('Minting is not open yet.');
+      if (quantity > (kind === 'crate' ? current.remainingCrates : current.remainingWarehouses)) throw new Error('That quantity is no longer available. Choose fewer containers.');
+      if (kind === 'crate' && current.discountMerkleRoot !== expected.discountMerkleRoot) {
+        throw new Error('Your mint terms changed. Check the updated price and try again.');
+      }
+      const proof = kind === 'crate' && current.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT &&
+        current.discountAllowance > current.discountUsed ? await ethereumDiscounts.proof(operation.address, current.discountMerkleRoot) : null;
+      operation.assertCurrent();
+      const latest = ethereumMintQuote(kind, quantity, current, proof !== null);
+      if (latest.discounted !== expected.discounted || latest.unitPriceWei !== expected.unitPriceWei) {
+        throw new Error('Your mint terms changed. Check the updated price and try again.');
+      }
+      const data = latest.discounted
+        ? encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [quantity, proof!])
+        : encodeCall(kind === 'crate' ? ETHEREUM_FUNCTIONS.mintCrates : ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [quantity]);
+      await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
+    });
+  };
   const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[]) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
     const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
     if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
@@ -439,11 +478,12 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string) {
   const refresh = useCallback(() => {
     if (scope) void queryClient.invalidateQueries({ queryKey: ethereumInventoryQueryKey(scope) });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] });
+    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'discountProof'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] });
   }, [scope, queryClient]);
   return {
-    config, configQuery, stats, inventory, items, scope, owner, chainId, profile, shipments, session,
+    config, configQuery, stats, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId, profile, shipments, session,
     pending, submission, storageWarning, requiredConfirmations, confirmations: confirmation.data?.confirmations ?? 0, busy, notice, error: error ?? (confirmation.error && confirmationErrorKey !== dismissedConfirmationError ? ethereumWalletError(confirmation.error) : null),
     revealed: revealed?.scope === scope ? revealed.items : null,
     closeReveal: () => setRevealed(null), clearError: () => { setError(null); setDismissedConfirmationError(confirmationErrorKey); },

@@ -1,0 +1,16 @@
+{
+  "chainId": 1,
+  "collection": "0x30f9efa712dde239a13a5fef1a8c7a6ac530a26d",
+  "blockNumber": 26235186,
+  "blockHash": "0x4824847005691067d1c180f178b124fb5224a318c54fd663bd2f6b9356a3ae6d",
+  "blockTimestamp": "2026-10-20T17:07:35.000Z",
+  "firstTokenId": 1,
+  "lastTokenId": 1369,
+  "totalSupply": 1369,
+  "holderCount": 317,
+  "additionalAddresses": [
+    "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe"
+  ],
+  "addressCount": 318,
+  "addressesSha256": "7c8b77956cacdd8ca566bd7fd112ec052f196db3e6d7c4a996f391b58be35a99"
+}

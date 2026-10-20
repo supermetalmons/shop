@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/ethereum/protocol.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
+import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import {
   ethereumAddress, ethereumBlockSnapshot, ethereumCall, ethereumCallBatch, ethereumRpc, requireEthereumContract, rpcInteger,
   verifyEthereumBlockSnapshot,
@@ -158,15 +159,25 @@ async function localOwnerInfos(context: EthereumContext, wallet: string, head: n
 }
 
 export async function ethereumPublicRead(request: Request, context: EthereumContext, path: string): Promise<unknown> {
-  if (path.endsWith('/config')) return context.config;
+  if (path.endsWith('/config')) return {
+    ...context.config,
+    enabled: context.config.enabled && await ethereum111kWritesAllowed(context.env.COMMERCE_DB, context.config, context.signal),
+  };
   requireEthereumContract(context);
   const url = new URL(request.url);
   if (path.endsWith('/stats')) {
-    const values = decodeReturn(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool'], await ethereumCall(context, encodeCall('stats()', [], [])));
+    const owner = url.searchParams.has('owner') ? ethereumAddress(url.searchParams.get('owner')) : null;
+    const values = decodeReturn(
+      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
+      await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? `0x${'0'.repeat(40)}`])),
+    );
     const allocatedCrates = Number(values[0]);
-    return { allocatedCrates, warehousesMinted: Number(values[1]), artworksMinted: Number(values[2]),
+    return { chainId: context.config.chainId, contractAddress: requireEthereumContract(context), owner,
+      allocatedCrates, warehousesMinted: Number(values[1]), artworksMinted: Number(values[2]),
       cratePriceWei: String(values[3]), warehousePriceWei: String(values[4]), saleActive: values[5],
-      remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11) };
+      remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
+      discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
+      discountAllowance: Number(values[8]), discountUsed: Number(values[9]) };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

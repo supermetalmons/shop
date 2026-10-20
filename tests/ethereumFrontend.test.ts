@@ -92,6 +92,19 @@ test('mint confirmation checks the event even when minted tokens have already mo
   }
 });
 
+test('discounted crate confirmation matches the saved discounted payment and quantity', async t => {
+  const discounted = { ...mintOperation, intent: { ...mintOperation.intent!,
+    data: encodeCall('mintCratesDiscounted(uint256,bytes32[])', ['uint256', 'bytes32[]'], [1, []]), value: '0x3' } };
+  let logs = [{ ...mintLog, data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, 1, 3]) }];
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [], logs }));
+  assert.equal((await ethereumApi.confirm(hash, config, owner, undefined, discounted)).status, 'confirmed');
+  for (const [quantity, paid] of [[1, BigInt(config.cratePriceWei)], [2, 3]]) {
+    logs = [{ ...mintLog, data: encodeAbi(['uint256', 'uint256', 'uint256'], [111112, quantity, paid]) }];
+    await assert.rejects(ethereumApi.confirm(hash, config, owner, undefined, discounted),
+      error => error instanceof EthereumApiError && error.code === 'operation-failed');
+  }
+});
+
 test('multiple successful matching mints remain ambiguous instead of failing', async t => {
   let confirmations = 1;
   const logs = [111112, 111113].map((firstToken, index) => ({ ...mintLog, logIndex: `0x${index}`,

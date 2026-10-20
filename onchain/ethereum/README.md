@@ -1,12 +1,12 @@
 # 111K contracts
 
-An ERC721A collection with public crate and warehouse sales, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
+An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
 
 The [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the live addresses and verification. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
 Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving withdrawals and emergency controls. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
-The isolated package uses only the approved `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat, ethers, viem, or forge-std dependency is needed.
+The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`; allowlist tooling uses OpenZeppelin's standard Merkle-tree generator. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat or forge-std dependency is needed.
 
 ## Check
 
@@ -26,7 +26,7 @@ npm run abi
 
 The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, treasury failure, and metadata. Delivery tests also revert a chain snapshot and change the artwork mapping to verify that an old quote cannot redeem a different physical identity.
 
-Stateful invariant tests mix purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
+Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
 
 ```sh
 npm run test:invariants:extended
@@ -63,9 +63,9 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, and `protocolVersion: 4` to `.local/deployment.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_TREASURY`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, and `protocolVersion: 5` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, `ETHEREUM_111K_LOCAL_TREASURY`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
 
-Local deployment manifest version 4 identifies the batch unpacking and batch read interfaces. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests and probes the new getters before starting. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
+Local deployment manifest version 5 identifies crate discounts and the wallet-aware `stats(address)` interface alongside batch unpacking and reads. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests and probes the getters before starting. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
 Start the isolated API from the repository root:
 
@@ -75,9 +75,21 @@ npm run dev:ethereum:api
 
 The helper reads `.local/deployment.json`, injects the public local test signer, and creates temporary databases. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
 
-Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, and warehouse price `0.0011 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in the collection until the owner calls `withdraw()`, which sends the balance to the configured treasury.
+Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in the collection until the owner calls `withdraw()`, which sends the balance to the configured treasury.
 
-`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, and `ETHEREUM_111K_TREASURY`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_TREASURY`, and `ETHEREUM_111K_DISCOUNT_ROOT`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+
+## Allowlist crate discounts
+
+`mintCratesDiscounted(uint256 quantity, bytes32[] proof)` proves the caller's address against `discountMerkleRoot` using OpenZeppelin's standard double-hashed address leaf. It accepts only the exact `quantity * discountCratePrice` payment and increments `discountUsed[msg.sender]` before receiver callbacks. Discounted purchases share public crate inventory and emit the same `CratesPurchased` event with the actual payment. Warehouses have no discounted mint entrypoint.
+
+Every eligible wallet initially receives one discounted crate. The owner can call `setDiscountConfig(root, allowance)` with an allowance from 1 through 10. Usage remains cumulative across root replacements and allowance changes, including removing and re-adding an address. Increasing the allowance from 1 to 3 gives a wallet that already used one two more discounted crates. Setting the root to zero disables discounted minting. Public purchases, transfers, and unpacking do not consume or restore discount usage.
+
+`setPrices(cratePrice, warehousePrice, discountCratePrice)` updates all three fixed prices atomically and rejects a discounted price above the public crate price. A public-price change does not automatically change the discounted price. Failed transactions revert payment, allocation, and discount usage.
+
+`stats(address wallet)` returns the existing six global statistics followed by the root, discounted crate price, allowance, and queried wallet's used count. This gives the page one coherent contract read for price and remaining allowance. Passing the zero address returns zero usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
+
+The page uses the same discount button behavior as Solana: if the selected crate quantity exceeds the remaining allowance, the entire selection uses the public mint price. There is no partial discount within a transaction.
 
 ## Supply and identities
 
@@ -95,7 +107,7 @@ Warehouse purchases reserve eleven crate identities immediately. Unpacking mints
 
 The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates or warehouses; warehouse supply checks count eleven crate allocations per warehouse. `unboxCrate` and `unboxWarehouse` retain their single-container behavior. `unboxCrates(uint256[])` opens 1–15 distinct owned crates in one transaction. Delivery accepts 1–50 items.
 
-`getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. `stats().artworksMinted` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Artwork display offsets are stored per ERC721A mint batch and preserved through ownership changes.
+`getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. The artwork count in `stats(address)` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Artwork display offsets are stored per ERC721A mint batch and preserved through ownership changes.
 
 ### Batch crate opening
 
@@ -144,7 +156,7 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ### Batch operations (2026-10-18)
 
-The [batch report](benchmarks/batch-operations.json) records the current source/toolchain hashes, all 105 verified gas snapshots, deployed code size and bounded-read response sizes. The collection runtime is 17,206 bytes, leaving 7,370 bytes below the EIP-170 limit. The renderer remains 11,775 bytes.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, 105 verified gas snapshots, deployed code size and bounded-read response sizes at that revision, before crate discounts were added. The collection runtime at that revision was 17,206 bytes, leaving 7,370 bytes below the EIP-170 limit. The renderer was 11,775 bytes. Current measurements are checked in `snapshots/NFT111KGasTest.json`.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |

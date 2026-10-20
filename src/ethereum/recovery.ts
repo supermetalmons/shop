@@ -110,8 +110,12 @@ export function matchesEthereumOperationEvent(pending: EthereumSubmission, owner
   if (pending.action !== 'mint' && pending.action !== 'delivery' && BigInt(intent.value) !== 0n) return false;
   const topic = log.topics[0]?.toLowerCase();
   if (pending.action === 'mint') {
-    for (const [signature, event] of [[ETHEREUM_FUNCTIONS.mintCrates, 'CratesPurchased'], [ETHEREUM_FUNCTIONS.mintWarehouses, 'WarehousesPurchased']]) {
-      const args = intentArguments(intent, signature, ['uint256']);
+    for (const [signature, event, types] of [
+      [ETHEREUM_FUNCTIONS.mintCrates, 'CratesPurchased', ['uint256']],
+      [ETHEREUM_FUNCTIONS.mintCratesDiscounted, 'CratesPurchased', ['uint256', 'bytes32[]']],
+      [ETHEREUM_FUNCTIONS.mintWarehouses, 'WarehousesPurchased', ['uint256']],
+    ] as const) {
+      const args = intentArguments(intent, signature, [...types]);
       if (!args || topic !== recoveryEventTopics[event] || log.topics.length !== 2) continue;
       const [, quantity, paid] = decodeReturn(['uint256', 'uint256', 'uint256'], log.data);
       return decodeReturn(['address'], log.topics[1])[0] === owner && quantity === args[0] && paid === BigInt(intent.value);

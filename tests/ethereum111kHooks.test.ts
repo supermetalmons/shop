@@ -5,7 +5,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
-import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { ETHEREUM_FUNCTIONS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumSession, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
 import type { EIP1193Provider } from '../src/wallet/injectedEthereumProviders.ts';
 
@@ -15,6 +15,7 @@ const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query
 const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
+const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
 const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumSession, readEthereumSubmission, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 type Wallet = Parameters<typeof useEthereum111k>[0];
 dom.window.close();
@@ -24,7 +25,9 @@ const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
 const hash = `0x${'ab'.repeat(32)}`;
 const config = resolveEthereum111kConfig({ contractAddress: contract });
-const statistics = { allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505 };
+const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0,
+  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505,
+  discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0 };
 const clients: InstanceType<typeof QueryClient>[] = [];
 
 beforeEach(context => {
@@ -51,7 +54,7 @@ beforeEach(context => {
     },
   } });
   t.mock.method(ethereumApi, 'config', async () => config);
-  t.mock.method(ethereumApi, 'stats', async () => statistics);
+  t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address }));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [], nextCursor: null, observedBlock: 1 }));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 1, items: [], burnedTokenIds: [] }));
 });
@@ -188,6 +191,68 @@ test('one mint transaction is captured, confirmed and reconciled through expecte
   await waitFor(() => assert.equal(view.result.current.pending, null));
   await waitFor(() => assert.equal(view.result.current.items[0]?.id, minted.id));
   assert.deepEqual(readEthereumExpected(scope), [minted.tokenId]);
+});
+
+for (const change of [
+  { discountUsed: 1 },
+  { discountCratePriceWei: '40000000000000' },
+  { discountMerkleRoot: `0x${'34'.repeat(32)}` },
+]) {
+  test(`discounted mint rejects changed terms instead of sending at public price: ${JSON.stringify(change)}`, async t => {
+    let current = { ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}` };
+    t.mock.method(ethereumApi, 'stats', async () => current);
+    t.mock.method(ethereumDiscounts, 'proof', async () => []);
+    const connected = wallet();
+    const view = harness(connected);
+    await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
+    const quote = view.result.current.mintQuote('crate', 1)!;
+    current = { ...current, ...change };
+    await act(async () => { assert.equal(await view.result.current.mint('crate', 1, quote), false); });
+    assert.equal(connected.sent.length, 0);
+    assert.equal(readEthereumPending(ethereumInventoryScope(config, owner)!), null);
+    assert.match(view.result.current.error!, /mint terms changed/);
+  });
+}
+
+test('discount usage refreshes after confirmation and never changes warehouse pricing', async t => {
+  let used = 0;
+  let confirmed = false;
+  t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, discountUsed: used }));
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: confirmed ? 'confirmed' : 'pending', confirmations: 1,
+    items: confirmed ? [token()] : [], burnedTokenIds: [] }));
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
+  assert.equal(view.result.current.mintQuote('warehouse', 1)?.discounted, false);
+  await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
+  const sent = (connected.sent[0] as [{ data: string; value: string }])[0];
+  assert.equal(sent.data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
+  assert.equal(BigInt(sent.value), 50_000_000_000_000n);
+  used = 1;
+  confirmed = true;
+  act(() => view.result.current.refresh());
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
+  assert.equal(view.result.current.stats.data?.discountUsed, 1);
+  assert.equal(view.result.current.mintQuote('warehouse', 1)?.unitPriceWei, config.warehousePriceWei);
+});
+
+test('late discount data from another wallet cannot change the current wallet quote or usage', async t => {
+  let finish!: (proof: string[] | null) => void;
+  const root = `0x${'12'.repeat(32)}`;
+  t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address, discountMerkleRoot: root }));
+  t.mock.method(ethereumDiscounts, 'proof', async address => address === owner
+    ? new Promise(resolve => { finish = resolve; }) : null);
+  const view = harness();
+  await waitFor(() => assert.ok(finish));
+  view.rerender({ wallet: wallet(other) });
+  await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
+  await act(async () => { finish([]); });
+  assert.equal(view.result.current.stats.data?.owner, other);
+  assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false);
+  view.rerender({ wallet: wallet(null) });
+  assert.equal(view.result.current.mintQuote('crate', 1), null);
 });
 
 test('a captured pending transaction recovers only for its Ethereum account', async () => {

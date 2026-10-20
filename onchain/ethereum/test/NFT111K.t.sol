@@ -91,7 +91,7 @@ contract NFT111KTest is TestSupport {
         vm.deal(bob, 100 ether);
         vm.deal(address(this), 100 ether);
         renderer = new NFT111KRenderer();
-        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), treasury, address(renderer));
+        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), treasury, address(renderer), bytes32(0));
     }
 
     function testCollectionNameSymbolAndSigningDomain() public view {
@@ -147,7 +147,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         token.unboxCrate(111112);
         assertEq(token.balanceOf(alice), 20);
-        token.setPrices(1 wei, 11 wei);
+        token.setPrices(1 wei, 11 wei, 0);
         token.setSaleActive(true);
         vm.prank(bob);
         token.mintWarehouses{value: 11 wei}(1);
@@ -733,7 +733,7 @@ contract NFT111KTest is TestSupport {
         for (uint256 displayId = 111081; displayId <= 111111; ++displayId) {
             _info(1_000_000 + displayId, 4, displayId, alice);
         }
-        (uint256 allocated, uint256 warehouses, uint256 artworks,,,) = token.stats();
+        (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
         assertEq(allocated, 5555);
         assertEq(warehouses, 504);
         assertEq(artworks, 111080);

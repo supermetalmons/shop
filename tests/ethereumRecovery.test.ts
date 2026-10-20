@@ -71,6 +71,8 @@ test('contract-wallet recovery binds every supported action to its emitted colle
   const receiptHash = ethereumReceiptIdsHash(receiptIds);
   const cases: Array<{ name: string; pending: EthereumSubmission; log: EthereumLog }> = [
     { name: 'crate mint', pending: mint(), log: mintEvent() },
+    { name: 'discounted crate mint', pending: submission('mint',
+      encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, [`0x${'12'.repeat(32)}`]]), '0x3'), log: mintEvent(1, 3) },
     { name: 'warehouse mint', pending: submission('mint', encodeCall(ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [2]), '0x16'),
       log: event('WarehousesPurchased(address,uint256,uint256,uint256)', ['address'], [owner], ['uint256', 'uint256', 'uint256'], [116667, 2, 22]) },
     { name: 'crate opening', pending: submission('unbox', encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112])),

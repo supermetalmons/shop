@@ -16,7 +16,8 @@ contract NFT111KBatchTest is TestSupport {
     function setUp() public {
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
-        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(BOB), address(new NFT111KRenderer()));
+        token =
+            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(BOB), address(new NFT111KRenderer()), bytes32(0));
     }
 
     function testBatchLimitsAndRuntimeSize() public view {
@@ -69,7 +70,7 @@ contract NFT111KBatchTest is TestSupport {
             assertEq(token.totalSupply(), supply + 311 - 15);
             assertEq(token.allocatedCrates(), 5555);
             assertEq(token.warehousesMinted(), 503);
-            (,, uint256 artworks,,,) = token.stats();
+            (,, uint256 artworks,,,,,,,) = token.stats(address(0));
             assertEq(artworks, 331);
             _assertSummary(logs[logs.length - 1], ids, 21, 311);
             assertTrue(vm.revertToState(snapshot));
@@ -276,7 +277,7 @@ contract NFT111KBatchTest is TestSupport {
     }
 
     function _state() private view returns (bytes32) {
-        (uint256 allocations, uint256 warehouses, uint256 artworks,,,) = token.stats();
+        (uint256 allocations, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
         return keccak256(abi.encode(allocations, warehouses, artworks, token.totalSupply(), token.balanceOf(ALICE)));
     }
 

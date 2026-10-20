@@ -6,7 +6,7 @@ The first version runs on a local Anvil chain or Ethereum Sepolia. It does not d
 
 Use the existing project dependencies and Foundry installation. Start from the repository root.
 
-Install the two approved contract dependencies once:
+Install the contract and allowlist tooling dependencies once:
 
 ```sh
 npm --prefix onchain/ethereum ci --ignore-scripts
@@ -27,7 +27,7 @@ npm run dev:ethereum:api
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current local deployment manifest uses `protocolVersion: 4`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the new batch getters before starting. A fresh deployment is required for batch crate opening and batch reads. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+The current local deployment manifest uses `protocolVersion: 5`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch getters and wallet-aware stats before starting. A fresh deployment is required for discounted crate minting. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
 
 Delivery quotes commit to the expected receipt identities, so a reorg that changes an artwork token's displayed number requires a fresh quote before delivery. New deliveries sort token IDs before signing without rewriting saved quotes or pending transactions.
 
@@ -64,9 +64,30 @@ Fulfillment uses existing Solana staff sign-in. The primary admin and designated
 
 Re-mined claims awaiting three confirmations show “Confirming” in fulfillment. Pending and completed claims cannot export secret codes. Ethereum reconciliation limits its Commerce database work to 400 statements per run. Delivery and claim recovery run concurrently with separate 100-statement budgets and reuse verified receipts. Both stop after 30 seconds to leave time for event discovery; unfinished work resumes on later runs.
 
+## Discounted crates
+
+The draft allowlist contains the 317 holders of Ethereum mainnet collection `0x30f9efa712dde239a13a5fef1a8c7a6ac530a26d` at finalized block `26235186`, plus `0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE`: 318 addresses total. The block hash, source collection, token range, counts, and canonical address digest are recorded in `onchain/ethereum/fixtures/discounts/source.json`; the holder list and explicit additions remain reproducible. Contract wallets and delegated EOAs are included.
+
+The initial allowance is one discounted crate per wallet, priced at 0.00005 ETH. The owner can change the total allowance to 1–10 using `setDiscountConfig(root, allowance)` without resetting usage. Setting the root to zero disables discounts. `setPrices(cratePrice, warehousePrice, discountCratePrice)` changes the three fixed prices together and rejects a discounted price above the public crate price. Changes to public prices do not automatically recalculate the discounted price.
+
+Only successful `mintCratesDiscounted(quantity, proof)` purchases consume allowance. Public crate purchases, warehouse purchases, transfers, and unboxing do not change it. Warehouses always use public pricing. The existing discounted mint button appears when the connected wallet is listed and its entire selected crate quantity fits the remaining allowance. Selecting more uses public pricing for the entire purchase, matching the Solana drops.
+
+The page loads the static Ethereum proof dataset once and reads the root, prices, allowance, and wallet usage through `GET /ethereum/111k/stats?owner=ADDRESS`, backed by one `stats(address)` contract call. It does not query the source collection while browsing. Connection, proof loading, and failed reads cannot silently submit a public-price transaction; mint terms are checked again before wallet submission. A root update requires publishing its matching proof dataset.
+
+Generate and verify the committed artifacts offline:
+
+```sh
+npm --prefix onchain/ethereum run discounts:generate
+npm --prefix onchain/ethereum run discounts:check
+```
+
+`npm --prefix onchain/ethereum run discounts:snapshot` rereads the same pinned mainnet block, with `ETHEREUM_DISCOUNT_SNAPSHOT_RPC_URL` available to select an RPC provider. It validates the complete ownership scan before writing. It does not advance the snapshot automatically.
+
+Local deployment loads the committed root from `src/ethereum/discounts/111k.json`; `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT` can override it for isolated tests. The Foundry deployment script requires `ETHEREUM_111K_DISCOUNT_ROOT`. The allowance and fixed discounted price start at their defaults on every fresh deployment.
+
 ## Sepolia configuration
 
-The [first Sepolia release](../../releases/111k-sepolia/README.md) records the deployed contracts, public configuration, and verification. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
+The [first Sepolia release](../../releases/111k-sepolia/README.md) records an earlier contract interface; discounted minting requires a new collection deployment and updated API configuration. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |
@@ -78,7 +99,36 @@ The [first Sepolia release](../../releases/111k-sepolia/README.md) records the d
 | `ETHEREUM_111K_SIGNER_SECRET` | Backend authorization key matching `quoteSigner()`; required for delivery and claims, optional while undeployed |
 | `ALCHEMY_MI_NOTE_API_KEY` | Existing server-only key for Sepolia RPC and NFT indexing |
 
-The public A11CE fixture key is exclusively for isolated local testing. Provision a separate signer for Sepolia. Apply OPS migration `0008_ethereum_profiles.sql` and Commerce migrations `0037_ethereum_111k.sql` through `0040_ethereum_reconciliation_resume.sql` using the existing reviewed migration workflow. These add Ethereum records, atomic state guards for fulfillment writes, indexes for eligible recovery work, and resumable event scans. Never use the local helper to initialize a production database.
+The public A11CE fixture key is exclusively for isolated local testing. Provision a separate signer for Sepolia. Apply OPS migration `0008_ethereum_profiles.sql` and Commerce migrations `0037_ethereum_111k.sql` through `0041_ethereum_111k_control.sql` using the existing reviewed migration workflow. These add Ethereum records, atomic state guards for fulfillment writes, indexes for eligible recovery work, resumable event scans, and scoped maintenance. Never use the local helper to initialize a production database.
+
+## Ethereum maintenance and replacement
+
+The `ethereum_111k_control` singleton starts paused with no allowed deployment. Public configuration reports minting unavailable until its chain and contract match the API configuration and it is resumed. The same control gates delivery and claim preparation/confirmation, Ethereum reconciliation, and fulfillment edits for `111k_devnet`. Database guards reject late writes from a paused or retired deployment. Other drops and shared wallet accounts remain available.
+
+Read the current revision before each transition. Pause and resume commands are dry runs unless `--write` is present:
+
+```sh
+npm run ethereum111k-control -- status
+npm run ethereum111k-control -- pause --chain-id 11155111 --contract OLD_ADDRESS --expected-revision REVISION
+npm run ethereum111k-control -- pause --chain-id 11155111 --contract OLD_ADDRESS --expected-revision REVISION --write
+```
+
+For a replacement, bind the initial paused control to the old contract, publish the API with the new contract configuration, and allow at least 65 seconds for in-flight operations to drain. Recheck the revision, then preview the reset:
+
+```sh
+npm run reset:ethereum111k -- --chain-id 11155111 --old-contract OLD_ADDRESS --expected-revision REVISION
+npm run reset:ethereum111k -- --chain-id 11155111 --old-contract OLD_ADDRESS --expected-revision REVISION --reset-id RESET_UUID --write
+```
+
+The write command rebuilds its snapshot, saves a private backup under `~/.mons-shop-backups/ethereum111k`, and deletes only the specified deployment's quotes, claims, cursor, and corresponding delivery projections/recovery records in one guarded batch. Unexpected outboxes, inventory, pack-status history, reveal submissions, or another deployment's documents stop the reset. Shared profiles, addresses, authentication data, and concurrency tombstones are preserved. If a response is uncertain, inspect status and rerun with the same reset ID to reconcile the recorded outcome.
+
+After verifying the reset and publishing the matching frontend, resume using the new contract and current revision:
+
+```sh
+npm run ethereum111k-control -- resume --chain-id 11155111 --contract NEW_ADDRESS --expected-revision REVISION --write
+```
+
+Changing the allowed contract requires the old scope to be empty. The control does not change onchain sale or redemption switches; administer those separately and leave historical contracts as explicitly intended by the release.
 
 ## API and verification
 

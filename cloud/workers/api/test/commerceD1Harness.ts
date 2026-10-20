@@ -220,6 +220,7 @@ export function createCommerceD1Harness(
     preorderCardRange1413Migration?: boolean;
     preorderCardRange1419Migration?: boolean;
     preorderCatalogMigration?: boolean;
+    ethereumControlMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -277,6 +278,7 @@ export function createCommerceD1Harness(
       for (const migration of readCommerceMigrations().slice(31)) {
         if (options.deliveryRecoveryMetadataCleanupMigration === false && migration.name >= '0033_') break;
         if (options.obsoleteIndexesMigration === false && migration.name >= '0034_') break;
+        if (options.ethereumControlMigration === false && migration.name >= '0041_') break;
         database.exec(migration.sql);
       }
     }

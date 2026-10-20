@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/ethereum/protocol.js';
 import type { EthereumDeliveryPrepareResponse, EthereumClaimPrepareResponse } from '../../../../shared/ethereum/api.js';
 import { EthereumApiError, readEthereumBody } from './ethereumError.js';
+import { requireEthereum111kWrites } from './ethereumControl.js';
 import { limitEthereumRequest, verifyEthereumSession } from './ethereumAuth.js';
 import { loadEthereumAddress } from './ethereumProfile.js';
 import {
@@ -179,6 +180,7 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
   }
   const quote = { orderId: row.order_id, wallet: row.wallet, fee: row.fee_wei, deadline: row.deadline,
     receiptIdsHash: ethereumReceiptIdsHash(deliveryReceiptIds(storedItems)) };
+  await requireEthereum111kWrites(context.env.COMMERCE_DB, context.config, context.signal);
   const signature = signDigest(secret, deliveryDigest({ ...quote, chainId: context.config.chainId, contractAddress, tokenIds }));
   return { orderId: row.order_id, expiresAtMs: row.deadline * 1000, quote, signature,
     transaction: { to: contractAddress, chainId: context.config.chainId, value: ethereumHexQuantity(row.fee_wei),
@@ -365,7 +367,9 @@ async function prepareEthereumClaim(request: Request, context: EthereumContext):
     throw new EthereumApiError('failed-precondition', 'The physical order is still confirming.');
   }
   const deadline = await authorizationDeadline(context);
-  const signature = signDigest(await signerSecret(context), crateClaimDigest({ chainId: context.config.chainId,
+  const secret = await signerSecret(context);
+  await requireEthereum111kWrites(context.env.COMMERCE_DB, context.config, context.signal);
+  const signature = signDigest(secret, crateClaimDigest({ chainId: context.config.chainId,
     contractAddress, wallet: session.wallet, receiptId: body.receiptId, claimId: claim.claim_id, deadline }));
   return { claimId: claim.claim_id, receiptId: body.receiptId, deadline, expiresAtMs: deadline * 1000, signature,
     transaction: { to: contractAddress, chainId: context.config.chainId, value: '0x0',
@@ -439,6 +443,10 @@ export async function confirmEthereumClaim(context: EthereumContext, claimId: st
 }
 
 export async function ethereumCommerce(request: Request, context: EthereumContext, path: string): Promise<unknown> {
+  if (path.endsWith('/delivery/prepare') || path.endsWith('/delivery/confirm') ||
+    path.endsWith('/claims/prepare') || path.endsWith('/claims/confirm')) {
+    await requireEthereum111kWrites(context.env.COMMERCE_DB, context.config, context.signal);
+  }
   if (path.endsWith('/delivery/prepare')) return prepareEthereumDelivery(request, context);
   if (path.endsWith('/claims/prepare')) return prepareEthereumClaim(request, context);
   if (path.endsWith('/transactions/confirm')) {

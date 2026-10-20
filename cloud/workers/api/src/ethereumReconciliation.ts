@@ -10,6 +10,7 @@ import {
 } from './ethereumRuntime.js';
 import { ethereumReceipt, ethereumTokenInfos, parseEthereumLog } from './ethereumRead.js';
 import { EthereumApiError } from './ethereumError.js';
+import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { createTimedAbortScope, isSignalCancellationError } from './boundedRequest.js';
 import { emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationResult, type ReconciliationOptions, type ReconciliationResult } from './reconciliationResult.js';
@@ -296,6 +297,7 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
       config, signal, fetch: options.fetch || ((input, init) => fetch(input, init)), nowMs: (options.nowMs || Date.now)() };
     await cleanupEthereumAuth(env.OPS_DB, context.nowMs);
     if (!config.enabled || !config.contractAddress) return summary;
+    if (!await ethereum111kWritesAllowed(context.env.COMMERCE_DB, config, signal)) return summary;
     const recentScope = createTimedAbortScope(signal, {
       timeoutMs: RECENT_RECONCILIATION_TIMEOUT_MS, timeoutMessage: 'Recent Ethereum reconciliation timed out',
     });

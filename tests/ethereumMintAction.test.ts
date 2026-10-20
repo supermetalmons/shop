@@ -251,6 +251,21 @@ test('stats arriving before config cannot submit against a fallback contract', a
   await view.settle();
 });
 
+test('the first loaded pricing terms stay pinned through connection and missing-data gaps', () => {
+  const view = harness({ priceKey: undefined, mintQuote: () => null });
+  act(() => view.result.current.mint());
+  view.update({ priceKey: '100:50:root' });
+  view.update({ priceKey: undefined });
+  assert.equal(view.result.current.pending, true);
+  view.update({ priceKey: '200:50:root', mintQuote: () => ({
+    discounted: false, unitPriceWei: '200', discountMerkleRoot: 'root',
+  }) });
+  assert.equal(view.result.current.pending, false);
+  assert.equal(view.result.current.error, 'Your mint terms changed. Check the updated price and try again.');
+  act(() => view.result.current.setWallet(connected));
+  assert.deepEqual(view.calls.quantities, []);
+});
+
 test('a fresh wallet initialization delays connection without losing the early Mint', async () => {
   const view = harness({ wallet: { ...disconnected, ready: false } });
   act(() => { view.result.current.mint(); view.result.current.mint(); });

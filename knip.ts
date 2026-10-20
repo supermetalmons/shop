@@ -48,6 +48,12 @@ const config = {
       ignoreBinaries: ['anchor', 'mkfifo', 'solana', 'forge', 'anvil'],
       ignoreExportsUsedInFile: { type: true },
     },
+    'onchain/ethereum': {
+      entry: ['scripts/*.mjs', 'fixtures/**/*.json'],
+      project: ['scripts/*.mjs', 'fixtures/**/*.json'],
+      ignoreDependencies: ['@openzeppelin/contracts', 'erc721a'],
+      ignoreBinaries: ['forge', 'anvil'],
+    },
   },
 } satisfies KnipConfig;
 

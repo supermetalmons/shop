@@ -12,9 +12,10 @@ contract Deploy111K {
         address owner = vm.envAddress("ETHEREUM_111K_OWNER");
         address signer = vm.envAddress("ETHEREUM_111K_QUOTE_SIGNER");
         address payable treasury = payable(vm.envAddress("ETHEREUM_111K_TREASURY"));
+        bytes32 discountRoot = vm.envBytes32("ETHEREUM_111K_DISCOUNT_ROOT");
         vm.startBroadcast(privateKey);
         renderer = new NFT111KRenderer();
-        token = new NFT111K(owner, signer, treasury, address(renderer));
+        token = new NFT111K(owner, signer, treasury, address(renderer), discountRoot);
         vm.stopBroadcast();
     }
 }
