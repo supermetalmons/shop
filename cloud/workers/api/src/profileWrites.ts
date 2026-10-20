@@ -72,6 +72,10 @@ import {
 } from './shipstation/common.js';
 import { shipStationLabelOperations } from './shipstation/labels.js';
 import { shipStationShipmentOperations } from './shipstation/shipments.js';
+import { ETHEREUM_111K_DROP_ID, normalizeEthereumAddress } from '../../../../shared/ethereum/protocol.js';
+import { requireEthereum111kWrites } from './ethereumControl.js';
+import { EthereumApiError } from './ethereumError.js';
+import { isEthereum111kFenceError } from '../../../../shared/ethereum/control.js';
 
 export const PROFILE_ADDRESSES_PATH = '/profile/addresses';
 const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
@@ -205,6 +209,7 @@ async function updateFulfillmentStatus(
 ): Promise<DeliveryOrderFulfillmentResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  await requireEthereumFulfillmentWrites(env, dropId, common.signal);
   const mutation = await setDeliveryOrderFulfillment({
     common,
     createNotificationJobId: dependencies.createNotificationJobId,
@@ -257,10 +262,12 @@ async function updateFulfillmentAddress(
   body: z.infer<typeof fulfillmentAddressSchema>,
   wallet: string,
   common: CommerceWriteCommon,
+  env: ProfileWriteEnv,
   addressSecret: string,
 ): Promise<UpdateFulfillmentAddressResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
+  await requireEthereumFulfillmentWrites(env, dropId, common.signal);
   if (!walletHasFulfillmentAddressAdminAccess(wallet, ADDRESS_ADMIN_WALLETS)) {
     throw new ProfileReadError('permission-denied', 403, 'Fulfillment address admin access denied.');
   }
@@ -273,6 +280,14 @@ async function updateFulfillmentAddress(
     ...encryptedAddress,
     wallet,
   });
+}
+
+async function requireEthereumFulfillmentWrites(env: ProfileWriteEnv, dropId: string, signal: AbortSignal): Promise<void> {
+  if (dropId !== ETHEREUM_111K_DROP_ID) return;
+  await requireEthereum111kWrites(env.COMMERCE_DB, {
+    chainId: Number(env.ETHEREUM_111K_CHAIN_ID || '11155111'),
+    contractAddress: normalizeEthereumAddress(env.ETHEREUM_111K_CONTRACT_ADDRESS),
+  }, signal);
 }
 
 const profileWriteOperationDefinitions = [
@@ -306,7 +321,7 @@ const profileWriteOperationDefinitions = [
     maxBytes: MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES,
     timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
     handler: (body, { wallet, common, env }) => updateFulfillmentAddress(
-      body, wallet, common,
+      body, wallet, common, env,
       typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '',
     ),
   }),
@@ -379,6 +394,12 @@ export async function handleProfileWriteRequest(
         timeoutMessage: 'Profile request timed out.',
         internalMessage: 'Profile request failed.',
         mapDomainError: (failure) => {
+          if (failure instanceof EthereumApiError || isEthereum111kFenceError(failure)) {
+            return {
+              error: new ProfileReadError('unavailable', 503, 'Ethereum service is temporarily unavailable.'),
+              authOutcome: 'provider-failure',
+            };
+          }
           if (failure instanceof ProfileReadError) {
             return {
               error: failure,

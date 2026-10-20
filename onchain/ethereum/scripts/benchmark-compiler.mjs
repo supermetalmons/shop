@@ -54,6 +54,7 @@ function createProject(label, viaIR = false, optimizerRuns = 200) {
   const directory = join(temporaryRoot, label);
   mkdirSync(directory);
   cpSync(join(packageRoot, 'src'), join(directory, 'src'), { recursive: true });
+  cpSync(join(packageRoot, 'fixtures/discounts'), join(directory, 'fixtures/discounts'), { recursive: true });
   symlinkSync(join(packageRoot, 'node_modules'), join(directory, 'node_modules'), 'dir');
   writeFileSync(join(directory, 'foundry.toml'), `[profile.default]
 src = "src"
@@ -68,7 +69,7 @@ via_ir = ${viaIR}
 evm_version = "prague"
 bytecode_hash = "none"
 gas_snapshot_emit = false
-fs_permissions = [{ access = "read", path = "./candidate" }]
+fs_permissions = [{ access = "read", path = "./candidate" }, { access = "read", path = "./fixtures" }]
 `);
   return directory;
 }
@@ -105,11 +106,11 @@ function prepareHarness() {
   mkdirSync(join(directory, 'test'));
   mkdirSync(join(directory, 'candidate'));
   const source = read(join(packageRoot, 'test/NFT111KGas.t.sol'));
-  const originalDeployment = /token =\s*new NFT111K\(address\(this\), vm.addr\(SIGNER_KEY\), payable\(address\(0xBEEF\)\), address\(new NFT111KRenderer\(\)\)\);/;
+  const originalDeployment = /token =\s*new NFT111K\(\s*address\(this\), vm.addr\(SIGNER_KEY\), payable\(address\(0xBEEF\)\), address\(new NFT111KRenderer\(\)\), bytes32\(0\)\s*\);/;
   assert.equal([...source.matchAll(new RegExp(originalDeployment, 'g'))].length, 1, 'Gas harness deployment changed');
   const harness = source.replace(originalDeployment, `address renderer = _deployCandidate("NFT111KRenderer", "");
         token = NFT111K(_deployCandidate("NFT111K", abi.encode(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer, bytes32(0)
         )));`).replace('    function setUp() public {', `    function _deployCandidate(string memory name, bytes memory arguments) internal returns (address deployed) {
         bytes memory code = abi.encodePacked(vm.getCode(string.concat("candidate/", name, ".json")), arguments);
         assembly { deployed := create(0, add(code, 32), mload(code)) }
@@ -203,7 +204,7 @@ async function deploymentMeasurements(variants) {
       };
       const renderer = await deploy('NFT111KRenderer');
       const args = [wallet, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', wallet, renderer.address]
-        .map(address => address.slice(2).padStart(64, '0')).join('');
+        .map(address => address.slice(2).padStart(64, '0')).join('') + '0'.repeat(64);
       variant.deploymentTransactions = { renderer, collection: await deploy('NFT111K', args) };
     }
   } finally {
@@ -227,7 +228,7 @@ function summarize(candidate, baseline) {
     worstWriteRegression: Math.max(0, ...writeNames.map(name => deltas[name])),
     abiUnchanged: names.every(name => candidate.artifacts[name].canonicalAbiSha256 === baseline.artifacts[name].canonicalAbiSha256),
     withinDeploymentSizeLimits: names.every(name => candidate.artifacts[name].runtimeBytes <= 24576 &&
-      candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? 128 : 0) <= 49152),
+      candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? 160 : 0) <= 49152),
     withinProjectSizeBudgets: candidate.artifacts.NFT111KRenderer.runtimeBytes <= 12 * 1024,
   };
 }
@@ -294,6 +295,7 @@ try {
     harnessSha256: harness.sha256,
     testSupportSha256: harness.testSupportSha256,
     packageLockSha256: report.toolchain.packageLockSha256,
+    discountProofSha256: hash(read(join(packageRoot, 'fixtures/discounts/proof.json'))),
     dependencies: report.toolchain.dependencies,
     forge: report.toolchain.forge,
     fixedSettings: report.reproduction.fixedSettings,

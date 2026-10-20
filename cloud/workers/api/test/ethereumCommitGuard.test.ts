@@ -15,6 +15,9 @@ const orderKey = commerceKeys.deliveryOrder('111k_devnet', '42');
 const otherKey = commerceKeys.deliveryOrder('111k_devnet', '43');
 
 function seed(harness: CommerceD1Harness): void {
+  harness.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+    paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = 1000 WHERE singleton = 1`)
+    .run(CONTRACT);
   harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
     (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
       items_json, fee_wei, deadline, status, transaction_hash, block_number, block_hash, created_at_ms, updated_at_ms)
@@ -26,7 +29,8 @@ function seed(harness: CommerceD1Harness): void {
     VALUES (?, ?, '2000001', 1, 42, 'code-hash', 'code', ?, 'claimed', ?, 100, ?, 1000)`)
     .run(delivery.chainId, CONTRACT, CLAIM_ID, HASH, BLOCK_HASH);
   seedCommerceDocuments(harness, [orderKey, otherKey].map((key) => ({ key, data: {
-    source: 'ethereum', owner: 'wallet', status: 'ready_to_ship', fulfillmentStatus: 'Preparing',
+    source: 'ethereum', chainId: 31337, contractAddress: CONTRACT,
+    owner: 'wallet', status: 'ready_to_ship', fulfillmentStatus: 'Preparing',
   } })));
 }
 

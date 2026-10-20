@@ -21,6 +21,11 @@ export const nft111KAbi = [
         "name": "renderer_",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "discountRoot",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "stateMutability": "nonpayable"
@@ -106,6 +111,19 @@ export const nft111KAbi = [
   {
     "type": "function",
     "name": "MAX_DELIVERY_ITEMS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MAX_DISCOUNT_ALLOWANCE",
     "inputs": [],
     "outputs": [
       {
@@ -307,6 +325,64 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "discountAllowance",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "discountCratePrice",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "discountMerkleRoot",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "discountUsed",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "eip712Domain",
     "inputs": [],
     "outputs": [
@@ -464,6 +540,24 @@ export const nft111KAbi = [
         "name": "quantity",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "mintCratesDiscounted",
+    "inputs": [
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "proof",
+        "type": "bytes32[]",
+        "internalType": "bytes32[]"
       }
     ],
     "outputs": [],
@@ -781,6 +875,24 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "setDiscountConfig",
+    "inputs": [
+      {
+        "name": "root",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "allowance",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setPrices",
     "inputs": [
       {
@@ -790,6 +902,11 @@ export const nft111KAbi = [
       },
       {
         "name": "warehousePrice_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "discountCratePrice_",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -865,7 +982,13 @@ export const nft111KAbi = [
   {
     "type": "function",
     "name": "stats",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
     "outputs": [
       {
         "name": "allocatedCrates_",
@@ -896,6 +1019,26 @@ export const nft111KAbi = [
         "name": "saleActive_",
         "type": "bool",
         "internalType": "bool"
+      },
+      {
+        "name": "discountMerkleRoot_",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "discountCratePrice_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "discountAllowance_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "discountUsed_",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1405,6 +1548,25 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
+    "name": "DiscountConfigUpdated",
+    "inputs": [
+      {
+        "name": "root",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "allowance",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "EIP712DomainChanged",
     "inputs": [],
     "anonymous": false
@@ -1459,6 +1621,12 @@ export const nft111KAbi = [
       },
       {
         "name": "warehousePrice",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "discountCratePrice",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -1669,6 +1837,16 @@ export const nft111KAbi = [
   },
   {
     "type": "error",
+    "name": "DiscountAllowanceExceeded",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "DiscountInactive",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "ECDSAInvalidSignature",
     "inputs": []
   },
@@ -1702,6 +1880,16 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "InvalidAuthorization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidDiscountConfig",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidDiscountProof",
     "inputs": []
   },
   {

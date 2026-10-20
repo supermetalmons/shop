@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import nacl from 'tweetnacl';
 import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument, seedCommerceDocuments } from './commerceD1Harness.ts';
 import {
@@ -247,7 +248,7 @@ test('the designated admin retains Ethereum manual-review access', async context
 });
 
 test('fulfillment exposes validated Ethereum transaction references through the staff route without raw order fields', async context => {
-  const harness = createCommerceD1Harness();
+  const harness = createCommerceD1Harness({ ethereumControlMigration: false });
   context.after(() => harness.database.close());
   const hash = `0x${'ab'.repeat(32)}`;
   const variations = [
@@ -266,6 +267,7 @@ test('fulfillment exposes validated Ethereum transaction references through the 
     },
     processedAt: { seconds: Math.floor(NOW_MS / 1000), nanos: index },
   }));
+  harness.database.exec(readFileSync('cloud/workers/api/commerce-migrations/0041_ethereum_111k_control.sql', 'utf8'));
   const result = await handleStaffReadRequest(
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: '111k_devnet' }),
     { COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: '' },

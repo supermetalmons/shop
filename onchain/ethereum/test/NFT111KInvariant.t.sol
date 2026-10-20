@@ -38,6 +38,7 @@ contract NFT111KInvariantHandler is TestSupport {
     address[3] private actors = [address(0xA110), address(0xB0B), address(0xCA10)];
     mapping(uint256 => ModelToken) private model;
     mapping(uint256 => uint256) private firstCrates;
+    mapping(address => uint256) private discountedPurchases;
     uint256[] private touched;
     DeliveryAttempt[] private deliveryAttempts;
     ClaimAttempt[] private claimAttempts;
@@ -53,7 +54,17 @@ contract NFT111KInvariantHandler is TestSupport {
     bool private paused;
 
     constructor() {
-        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()));
+        token = new NFT111K(
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()), bytes32(0)
+        );
+        bytes32 firstLeaf = _discountLeaf(actors[0]);
+        bytes32 secondLeaf = _discountLeaf(actors[1]);
+        token.setDiscountConfig(
+            firstLeaf < secondLeaf
+                ? keccak256(abi.encode(firstLeaf, secondLeaf))
+                : keccak256(abi.encode(secondLeaf, firstLeaf)),
+            3
+        );
         for (uint256 i; i < actors.length; ++i) {
             vm.deal(actors[i], 100 ether);
         }
@@ -85,6 +96,27 @@ contract NFT111KInvariantHandler is TestSupport {
     function purchaseWarehouse(uint256 actorSeed) external {
         if (allocations + 11 > MODELED_CRATE_LIMIT) return;
         _purchaseWarehouse(actors[actorSeed % actors.length]);
+    }
+
+    function purchaseCratesDiscounted(uint256 actorSeed, uint256 quantitySeed) external {
+        uint256 index = actorSeed % 2;
+        address wallet = actors[index];
+        uint256 remaining = 3 - discountedPurchases[wallet];
+        if (remaining > MODELED_CRATE_LIMIT - allocations) remaining = MODELED_CRATE_LIMIT - allocations;
+        if (remaining == 0) return;
+        uint256 quantity = quantitySeed % remaining + 1;
+        uint256 first = allocations + 1;
+        uint256 cost = quantity * 0.00005 ether;
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = _discountLeaf(actors[1 - index]);
+        vm.prank(wallet);
+        token.mintCratesDiscounted{value: cost}(quantity, proof);
+        discountedPurchases[wallet] += quantity;
+        allocations += quantity;
+        revenue += cost;
+        for (uint256 i; i < quantity; ++i) {
+            _issue(111111 + first + i, 2, first + i, wallet);
+        }
     }
 
     function unboxWarehouse(uint256 seed) external {
@@ -207,7 +239,7 @@ contract NFT111KInvariantHandler is TestSupport {
         assertEq(token.allocatedCrates(), allocations);
         assertEq(token.warehousesMinted(), warehouseCount);
         assertEq(token.remainingCrates(), 5555 - allocations);
-        (,, uint256 minted,,,) = token.stats();
+        (,, uint256 minted,,,,,,,) = token.stats(address(0));
         assertEq(minted, artworkCount);
         assertEq(address(token).balance, revenue);
         assertTrue(token.redemptionsPaused() == paused);
@@ -247,6 +279,8 @@ contract NFT111KInvariantHandler is TestSupport {
         uint256 liveTotal;
         for (uint256 i; i < actors.length; ++i) {
             assertEq(token.balanceOf(actors[i]), balances[i]);
+            assertEq(token.discountUsed(actors[i]), discountedPurchases[actors[i]]);
+            assertTrue(discountedPurchases[actors[i]] <= 3);
             liveTotal += balances[i];
         }
         assertEq(token.totalSupply(), liveTotal);
@@ -276,6 +310,10 @@ contract NFT111KInvariantHandler is TestSupport {
         for (uint256 i; i < quantity; ++i) {
             _issue(111111 + first + i, 2, first + i, wallet);
         }
+    }
+
+    function _discountLeaf(address wallet) private pure returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(wallet))));
     }
 
     function _purchaseWarehouse(address wallet) private {
@@ -495,7 +533,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](15);
+        bytes4[] memory selectors = new bytes4[](16);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -511,6 +549,7 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[12] = handler.unboxCrates.selector;
         selectors[13] = handler.rejectDuplicateBatch.selector;
         selectors[14] = handler.checkBatchRead.selector;
+        selectors[15] = handler.purchaseCratesDiscounted.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

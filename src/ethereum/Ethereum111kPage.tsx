@@ -39,8 +39,8 @@ export default function Ethereum111kPage({
   pendingRevealIds, onSolanaReveal, onSolanaView, canOpenSolanaBoxes, solanaRevealLoading,
   solanaInventoryReady, externalBusy = false, suspended = false, showToast,
 }: Ethereum111kPageProps) {
-  const model = useEthereum111k(wallet, addressEncryptionPublicKey);
   const [kind, setKind] = useState<'crate' | 'warehouse'>('crate');
+  const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind);
   const [quantity, setQuantity] = useState(1);
   const [selection, setSelection] = useState<{ scope: string | null; ids: Set<string> }>({ scope: null, ids: new Set() });
   const [viewed, setViewed] = useState<EthereumInventoryItem | null>(null);
@@ -69,12 +69,18 @@ export default function Ethereum111kPage({
     ? model.stats.data?.cratePriceWei ?? model.config.cratePriceWei
     : model.stats.data?.warehousePriceWei ?? model.config.warehousePriceWei;
   const price = formatEtherAmount(BigInt(unitPrice) * BigInt(quantity));
+  const quote = model.mintQuote(kind, quantity);
+  const discountPrice = quote?.discounted ? formatEtherAmount(BigInt(quote.unitPriceWei) * BigInt(quantity)) : price;
+  const discountError = kind === 'crate' && model.discountCheckRequired && model.discountProof.error;
   const mintDataError = model.configQuery.error && !model.configQuery.data ? 'Couldn’t load this drop. Please try again.' :
-    model.stats.error && !model.stats.data ? 'Couldn’t load availability. Please try again.' : null;
+    model.stats.error && !model.stats.data ? 'Couldn’t load availability. Please try again.' :
+    discountError ? 'Couldn’t check your mint discount. Please try again.' : null;
   const mintAction = useEthereumMintAction({
     wallet, config: model.configQuery.data, kind, quantity, remaining, saleActive: model.stats.data?.saleActive,
     loadError: mintDataError, blocked: operationBlocked,
-    suspended, onMint: model.mint,
+    priceKey: model.stats.data ? kind === 'warehouse' ? model.stats.data.warehousePriceWei :
+      [model.stats.data.cratePriceWei, model.stats.data.discountCratePriceWei, model.stats.data.discountMerkleRoot].join(':') : undefined,
+    suspended, onMint: model.mint, mintQuote: model.mintQuote,
   });
   const disabled = operationBlocked || mintAction.pending;
   const connectingWallet = wallet.status === 'connecting' || wallet.status === 'restoring' || walletPickerOpen;
@@ -221,13 +227,14 @@ export default function Ethereum111kPage({
       <EthereumMintPanel kind={kind} kindDisabled={kindDisabled}
         onKindChange={value => { if (!kindDisabled && value !== kind) { mintAction.clearError(); setKind(value); setQuantity(1); } }}
         quantity={quantity} maxQuantity={maxQuantity} remaining={remaining} total={total} price={price}
+        discountPrice={discountPrice} useDiscountMint={Boolean(quote?.discounted)}
         statusText={mintStatus} disabled={Boolean(mintDisabled)} busy={mintAction.pending}
         onQuantityChange={setQuantity} onMint={() => runAction(mintAction.mint)} />
     </div>
     <div className="ethereum111k">
       <div className="ethereum111k__status">
         {model.configQuery.error ? <div className="error" role="alert">Couldn’t load this drop. <button type="button" className="ghost" onClick={() => void model.configQuery.refetch()}>Retry</button></div> : null}
-        {model.stats.error ? <div className="error" role="alert">Couldn’t load availability. <button type="button" className="ghost" onClick={() => void model.stats.refetch()}>Retry</button></div> : null}
+        {model.stats.error || discountError ? <div className="error" role="alert">{discountError ? 'Couldn’t check your mint discount.' : 'Couldn’t load availability.'} <button type="button" className="ghost" onClick={model.refresh}>Retry</button></div> : null}
         {wallet.error && !model.owner ? <p className="error" role="alert">{wallet.error}</p> : null}
         {claimLinkKey && claimLinkHandled !== claimLinkKey ? <p className="muted small" role="status">
           {model.owner ? `Looking for crate receipt #${Number(claimReceiptId) - 2_000_000} in your wallet.` :

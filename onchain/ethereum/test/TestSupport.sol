@@ -25,6 +25,11 @@ interface Vm {
     function writeFile(string calldata path, string calldata content) external;
     function envAddress(string calldata name) external returns (address);
     function envUint(string calldata name) external returns (uint256);
+    function envBytes32(string calldata name) external returns (bytes32);
+    function readFile(string calldata path) external view returns (string memory);
+    function parseJsonBytes32(string calldata json, string calldata key) external pure returns (bytes32);
+    function parseJsonBytes32Array(string calldata json, string calldata key) external pure returns (bytes32[] memory);
+    function parseJsonAddress(string calldata json, string calldata key) external pure returns (address);
     function startBroadcast(uint256 privateKey) external;
     function stopBroadcast() external;
 }

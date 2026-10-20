@@ -14,6 +14,7 @@ function isolatedProject(directory, mutateHarness) {
   const project = join(directory, 'project');
   mkdirSync(project);
   cpSync(join(root, 'src'), join(project, 'src'), { recursive: true });
+  cpSync(join(root, 'fixtures/discounts'), join(project, 'fixtures/discounts'), { recursive: true });
   mkdirSync(join(project, 'scripts'));
   mkdirSync(join(project, 'test'));
   for (const file of ['package.json', 'foundry.toml', 'scripts/check-gas-snapshots.mjs', 'test/TestSupport.sol']) {

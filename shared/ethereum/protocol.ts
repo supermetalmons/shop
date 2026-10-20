@@ -105,6 +105,7 @@ export type EthereumDeliveryQuote = {
 
 export const ETHEREUM_FUNCTIONS = {
   mintCrates: 'mintCrates(uint256)',
+  mintCratesDiscounted: 'mintCratesDiscounted(uint256,bytes32[])',
   mintWarehouses: 'mintWarehouses(uint256)',
   unboxCrate: 'unboxCrate(uint256)',
   unboxCrates: 'unboxCrates(uint256[])',
@@ -117,5 +118,5 @@ export const ETHEREUM_FUNCTIONS = {
   tokenURI: 'tokenURI(uint256)',
   previewTokenURI: 'previewTokenURI(uint8,uint256)',
   previewTokenURIs: 'previewTokenURIs(uint8[],uint256[])',
-  stats: 'stats()',
+  stats: 'stats(address)',
 } as const;

@@ -1,0 +1,51 @@
+{
+  "chainId": 11155111,
+  "explorer": "https://sepolia.etherscan.io",
+  "status": "verified",
+  "matchType": "exact",
+  "checkedAt": "2026-10-20T19:24:36.056Z",
+  "sourceRevision": null,
+  "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
+  "compilerVersion": "0.8.30+commit.73712a01",
+  "settings": {
+    "remappings": [
+      "@openzeppelin/=node_modules/@openzeppelin/",
+      "erc721a/=node_modules/erc721a/"
+    ],
+    "optimizer": {
+      "enabled": true,
+      "runs": 1000
+    },
+    "metadata": {
+      "bytecodeHash": "none"
+    },
+    "evmVersion": "prague",
+    "libraries": {},
+    "viaIR": false,
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "metadata"
+        ]
+      }
+    }
+  },
+  "contract": {
+    "name": "NFT111K",
+    "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "sourceUrl": "https://sepolia.etherscan.io/address/0x4b3a94a144fe99954c5d55f870081e40b360cfbf#code",
+    "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
+    "sourceCount": 23,
+    "standardJsonInputSha256": "0e732779396345b3ff1acab86e2bf6326a2573b21fc7d3beab21ee692a919505",
+    "constructorArguments": "000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93000000000000000000000000cc4c8bfd93af9f36d46215a0206954bf6a14c3ca000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae9300000000000000000000000008cded8258730bda384ff198001e47a1b50f7f9d8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "localCompilation": {
+      "creationBytecodeMatchesDeploymentArtifact": true,
+      "runtimeBytecodeMatchesDeploymentArtifact": true
+    }
+  },
+  "observedUiStatus": "Source Code Verified (Exact Match)",
+  "submittedThrough": "Etherscan standard JSON browser form"
+}

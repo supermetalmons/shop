@@ -72,6 +72,8 @@
     "bootstrap:commerce": "node --import tsx scripts/ops/bootstrapCommerce.ts",
     "backfill:stripe-chargebacks": "node --import tsx scripts/ops/backfillStripeChargebacks.ts",
     "check:queue-backlogs": "node --import tsx scripts/ops/checkQueueBacklogs.ts",
+    "ethereum111k-control": "node --import tsx scripts/ops/ethereum111kControl.ts",
+    "reset:ethereum111k": "node --import tsx scripts/ops/resetEthereum111k.ts",
     "commerce-authority-control": "node --import tsx scripts/ops/commerceAuthorityControl.ts",
     "notification-outbox-control": "node --import tsx scripts/ops/notificationOutboxControl.ts",
     "pack-status-outbox-control": "node --import tsx scripts/ops/packStatusOutboxControl.ts",

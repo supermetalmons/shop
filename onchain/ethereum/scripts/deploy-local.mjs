@@ -24,6 +24,9 @@ if (await rpc('eth_chainId') !== '0x7a69') throw new Error('Local deployment req
 if (!String(await rpc('web3_clientVersion')).toLowerCase().includes('anvil')) throw new Error('Local deployment requires Anvil.');
 const [deployer] = await rpc('eth_accounts');
 const fixture = JSON.parse(await readFile(new URL('fixtures/eip712.json', root), 'utf8'));
+const discounts = JSON.parse(await readFile(new URL('../../src/ethereum/discounts/111k.json', root), 'utf8'));
+const discountRoot = process.env.ETHEREUM_111K_LOCAL_DISCOUNT_ROOT || discounts.root;
+if (!/^0x[0-9a-fA-F]{64}$/.test(discountRoot)) throw new Error('Invalid discount Merkle root.');
 const owner = process.env.ETHEREUM_111K_LOCAL_OWNER || deployer;
 const signer = process.env.ETHEREUM_111K_LOCAL_QUOTE_SIGNER || fixture.signer;
 const treasury = process.env.ETHEREUM_111K_LOCAL_TREASURY || deployer;
@@ -40,16 +43,16 @@ const send = creation => JSON.parse(run('cast', [
 const renderer = send((await artifact('NFT111KRenderer')).bytecode.object);
 if (!renderer.contractAddress || Number(renderer.status) !== 1) throw new Error('Renderer deployment failed.');
 const constructor = run('cast', [
-  'abi-encode', 'constructor(address,address,address,address)', owner, signer, treasury, renderer.contractAddress,
+  'abi-encode', 'constructor(address,address,address,address,bytes32)', owner, signer, treasury, renderer.contractAddress, discountRoot,
 ]);
 const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
 
 const result = {
-  protocolVersion: 4,
+  protocolVersion: 5,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   rendererAddress: renderer.contractAddress, deploymentBlock: Number(collection.blockNumber),
-  owner, quoteSigner: signer, treasury,
+  owner, quoteSigner: signer, treasury, discountRoot,
   rendererTransactionHash: renderer.transactionHash, collectionTransactionHash: collection.transactionHash,
 };
 const outputDirectory = new URL('.local/', root);

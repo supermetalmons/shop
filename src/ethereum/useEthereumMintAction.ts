@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ethereum111kConfig } from '../../shared/ethereum/config';
 import type { EthereumWallet } from './useEthereum111k';
+import type { EthereumMintQuote } from './discounts';
 
 type EthereumMintActionOptions = {
   wallet: EthereumWallet;
@@ -12,7 +13,9 @@ type EthereumMintActionOptions = {
   loadError?: string | null;
   blocked: boolean;
   suspended: boolean;
-  onMint: (kind: 'crate' | 'warehouse', quantity: number) => Promise<boolean>;
+  priceKey?: string;
+  mintQuote?: (kind: 'crate' | 'warehouse', quantity: number) => EthereumMintQuote | null;
+  onMint: (kind: 'crate' | 'warehouse', quantity: number, quote?: EthereumMintQuote) => Promise<boolean>;
 };
 
 type MintAttempt = {
@@ -22,6 +25,8 @@ type MintAttempt = {
   wallet: { address: string; provider: NonNullable<EthereumWallet['provider']> } | null;
   connectionStarted: boolean;
   stage: 'connecting' | 'minting';
+  quote: EthereumMintQuote | null;
+  priceKey: string | null;
 };
 
 export function useEthereumMintAction(options: EthereumMintActionOptions) {
@@ -60,6 +65,13 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
     if (current.loadError) {
       fail(current.loadError, true);
       return;
+    }
+    if (current.priceKey !== undefined) {
+      if (attempt.priceKey !== null && current.priceKey !== attempt.priceKey) {
+        fail('Your mint terms changed. Check the updated price and try again.');
+        return;
+      }
+      attempt.priceKey ??= current.priceKey;
     }
     if (current.config) {
       if (attempt.config && (current.config.chainId !== attempt.config.chainId ||
@@ -110,10 +122,12 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
     }
     if (wallet.status !== 'connected' || !attempt.wallet || !current.config ||
       current.saleActive === undefined || current.remaining === undefined) return;
+    attempt.quote ??= current.mintQuote?.(attempt.kind, attempt.quantity) ?? null;
+    if (current.mintQuote && !attempt.quote) return;
     attempt.stage = 'minting';
     setStage('minting');
     try {
-      void latest.current.onMint(attempt.kind, attempt.quantity).then(() => release(attempt), () => release(attempt));
+      void latest.current.onMint(attempt.kind, attempt.quantity, attempt.quote ?? undefined).then(() => release(attempt), () => release(attempt));
     } catch {
       release(attempt);
     }
@@ -150,6 +164,8 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
       wallet: null,
       connectionStarted: false,
       stage: 'connecting',
+      quote: current.wallet.status === 'connected' ? current.mintQuote?.(current.kind, current.quantity) ?? null : null,
+      priceKey: current.priceKey ?? null,
     };
     active.current = attempt;
     setStage('connecting');

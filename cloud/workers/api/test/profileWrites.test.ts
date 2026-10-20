@@ -485,12 +485,18 @@ test('Ethereum ShipStation operations remain disabled for the designated admin b
 test('the designated admin can update Ethereum fulfillment status', async context => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
+  const contractAddress = '0x1111111111111111111111111111111111111111';
+  harness.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+    paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = 1000 WHERE singleton = 1`)
+    .run(contractAddress);
   const key = commerceKeys.deliveryOrder('111k_devnet', '7');
   seedCommerceDocument(harness, {
     key,
     data: {
       dropId: '111k_devnet',
       source: 'ethereum',
+      chainId: 31337,
+      contractAddress,
       deliveryId: 7,
       owner: '0x1111111111111111111111111111111111111111',
       status: 'ready_to_ship',
@@ -499,7 +505,7 @@ test('the designated admin can update Ethereum fulfillment status', async contex
   });
   const result = await handleProfileWriteRequest(
     request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }),
-    { COMMERCE_DB: harness.db },
+    { COMMERCE_DB: harness.db, ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contractAddress },
     FULFILLMENT_ORDER_STATUS_PATH,
     {},
     d1Dependencies(async () => assert.fail('Ethereum status update must not contact a provider'), {
@@ -512,6 +518,51 @@ test('the designated admin can update Ethereum fulfillment status', async contex
   assert.equal(stored?.data.fulfillmentStatus, 'Preparing');
   assert.equal(stored?.data.fulfillmentUpdatedBy, ADMIN);
 });
+
+for (const maintenance of ['paused', 'scope-mismatch', 'late-pause'] as const) {
+  test(`Ethereum fulfillment edits fail with unavailable for ${maintenance}`, async context => {
+    for (const [path, body] of [
+      [FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }],
+      [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: '111k_devnet', deliveryId: 7, full: '100 Main St' }],
+    ] as const) {
+      if (maintenance === 'late-pause' && path === FULFILLMENT_ORDER_ADDRESS_PATH) continue;
+      let pauseOnCommit = false;
+      const harness = createCommerceD1Harness({ observeCall: (operation) => {
+        if (!pauseOnCommit || operation.method !== 'batch' ||
+          !operation.statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
+        pauseOnCommit = false;
+        harness.database.prepare(`UPDATE ethereum_111k_control SET paused = 1,
+          paused_at_ms = 1001, revision = revision + 1 WHERE singleton = 1`).run();
+      } });
+      context.after(() => harness.database.close());
+      const contractAddress = '0x1111111111111111111111111111111111111111';
+      harness.database.prepare(`UPDATE ethereum_111k_control SET paused = 0, revision = revision + 1,
+        paused_at_ms = NULL, chain_id = 31337, contract_address = ?, updated_at_ms = 1000 WHERE singleton = 1`)
+        .run(contractAddress);
+      const key = commerceKeys.deliveryOrder('111k_devnet', '7');
+      seedCommerceDocument(harness, { key, data: {
+        source: 'ethereum', chainId: 31337, contractAddress, deliveryId: 7,
+        owner: contractAddress, status: 'ready_to_ship', items: [],
+      } });
+      const repository = new D1CommerceRepository(harness.db);
+      const original = await repository.get(key);
+      if (maintenance === 'paused') {
+        harness.database.prepare(`UPDATE ethereum_111k_control SET paused = 1,
+          paused_at_ms = 1001, revision = revision + 1 WHERE singleton = 1`).run();
+      }
+      pauseOnCommit = maintenance === 'late-pause';
+      const result = await handleProfileWriteRequest(request(path, body), {
+        COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: ADDRESS_SECRET, ETHEREUM_111K_CHAIN_ID: '31337',
+        ETHEREUM_111K_CONTRACT_ADDRESS: maintenance === 'scope-mismatch' ? '0x9999999999999999999999999999999999999999' : contractAddress,
+      }, path, {}, d1Dependencies(async () => assert.fail('Paused Ethereum fulfillment must not contact a provider'), {
+        verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      }));
+      assert.equal(result.response.status, 503, path);
+      assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
+      assert.deepEqual(await repository.get(key), original);
+    }
+  });
+}
 
 test('address route authenticates and atomically persists the exact D1 profile address', async () => {
   let persisted: Record<string, unknown> | undefined;

@@ -16,7 +16,7 @@ struct SecurityCall {
 
 contract SecurityCollection is NFT111K {
     constructor(address owner_, address signer_, address payable treasury_, address renderer_)
-        NFT111K(owner_, signer_, treasury_, renderer_)
+        NFT111K(owner_, signer_, treasury_, renderer_, bytes32(0))
     {}
 
     function transientStateClean() external view returns (bool) {
@@ -146,7 +146,7 @@ contract SecurityReceiver {
             sourceTransferFailures++;
         }
         if (checkPurchaseTotals) {
-            (uint256 allocated, uint256 warehouses, uint256 artworks,,,) = token.stats();
+            (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
             require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
             require(token.warehousesMinted() == expectedPurchaseTotals[1], "callback warehouse count mismatch");
             require(allocated == expectedPurchaseTotals[0], "callback stats allocation mismatch");
@@ -1062,7 +1062,7 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _assertPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) internal view {
-        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,) = token.stats();
+        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,,,,,) = token.stats(address(0));
         assertEq(token.allocatedCrates(), allocated);
         assertEq(token.warehousesMinted(), warehouses);
         assertEq(actualAllocated, allocated);
@@ -1165,7 +1165,7 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _artworksMinted() internal view returns (uint256 value) {
-        (,, value,,,) = token.stats();
+        (,, value,,,,,,,) = token.stats(address(0));
     }
 
     function _info(uint256 tokenId, uint8 kind, uint256 displayId, address holder) internal view {

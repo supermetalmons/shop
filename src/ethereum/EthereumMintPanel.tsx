@@ -12,6 +12,8 @@ type EthereumMintPanelProps = {
   remaining?: number;
   total: number;
   price: string;
+  discountPrice: string;
+  useDiscountMint: boolean;
   statusText?: string;
   disabled: boolean;
   busy: boolean;
@@ -31,7 +33,7 @@ const containerPreviews = {
 };
 
 export function EthereumMintPanel({
-  kind, kindDisabled, quantity, maxQuantity, remaining, total, price, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
+  kind, kindDisabled, quantity, maxQuantity, remaining, total, price, discountPrice, useDiscountMint, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
 }: EthereumMintPanelProps) {
   const quantityLabel = `${quantity} ${kind}${quantity === 1 ? '' : 's'}`;
   const showQuantitySlider = maxQuantity > 1;
@@ -87,12 +89,12 @@ export function EthereumMintPanel({
         stripePaymentPending={false}
         submitBusy={busy}
         disabled={disabled}
-        useDiscountMint={false}
+        useDiscountMint={useDiscountMint}
         showQuantitySlider={showQuantitySlider}
         quantityLabel={quantityLabel}
         stripePaymentDisplayPriceLabel={undefined}
         totalPriceLabel={price}
-        totalDiscountPriceLabel={price}
+        totalDiscountPriceLabel={discountPrice}
         currencyLabel="ETH"
         onStripePayment={async () => {}}
       />}

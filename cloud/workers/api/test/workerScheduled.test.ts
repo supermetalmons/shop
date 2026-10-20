@@ -3,6 +3,10 @@ import test from 'node:test';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import { runScheduledReconciliations, type ScheduledReconcilers } from '../src/workerScheduled.ts';
 import { emptyReconciliationResult } from '../src/reconciliationResult.ts';
+import { createCommerceD1Harness, d1Database } from './commerceD1Harness.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 
 type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions' | 'mi_note_auth_sessions';
 const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions', 'mi_note_auth_sessions'];
@@ -67,6 +71,32 @@ function assertOpsFailures(error: unknown, failures: unknown[]): boolean {
   assert.deepEqual(opsError.errors, failures);
   return true;
 }
+
+test('Ethereum maintenance skips its chain work while every other scheduled job runs', async context => {
+  context.mock.method(console, 'log', () => {});
+  const commerce = createCommerceD1Harness();
+  const ops = new DatabaseSync(':memory:');
+  context.after(() => { commerce.database.close(); ops.close(); });
+  ops.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
+  const calls: string[] = [];
+  await runScheduledReconciliations({
+    COMMERCE_DB: commerce.db, OPS_DB: d1Database(ops),
+    ETHEREUM_111K_CHAIN_ID: '31337',
+    ETHEREUM_111K_CONTRACT_ADDRESS: '0x1111111111111111111111111111111111111111',
+    ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545',
+  } as Env, AbortSignal.timeout(10_000), {
+    ...commerceReconcilers(calls),
+    ethereum: (env, signal, options) => reconcileEthereum111k(env, signal, {
+      ...options, fetch: async () => assert.fail('Paused Ethereum cron must not access the chain'),
+    }),
+    ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
+  });
+  assert.deepEqual(calls.sort(), [
+    'notifications', 'ops', 'packStatus', 'preorders', 'receiptClaims',
+    'shippedNotifications', 'stripe', 'stripeNotifications',
+  ]);
+  assert.equal(commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_reconciliation_cursor').get()!.n, 0);
+});
 
 test('scheduled jobs report their own result counts and preserve immediate invocation order', async (context) => {
   const logs: Array<Record<string, unknown>> = [];

@@ -15,6 +15,7 @@ const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query
 const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111kPage.tsx');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
+const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
 const { ethereumInventoryQueryKey, ethereumInventoryScope, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 dom.window.close();
 const clients: InstanceType<typeof QueryClient>[] = [];
@@ -36,7 +37,9 @@ const wallet: EthereumWallet = {
 };
 function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
   return { allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
-    warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, ...overrides };
+    warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505,
+    chainId: config.chainId, contractAddress: contract, owner, discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT,
+    discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0, ...overrides };
 }
 beforeEach(context => {
   const t = context as TestContext;
@@ -75,6 +78,28 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test('crate discounts reuse the existing button state and use public pricing above the remaining allowance', async t => {
+  const discount = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
+  t.mock.method(ethereumApi, 'stats', async () => discount);
+  t.mock.method(ethereumDiscounts, 'proof', async () => []);
+  const view = page();
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Mint with discount for 0.00005 ETH. Regular price 0.0001 ETH.' })));
+  assert.ok(view.container.querySelector('.mint-panel__submit--discounted'));
+  assert.equal(view.container.querySelector('.mint-panel__submit-price-old')?.textContent, '0.0001');
+  fireEvent.change(view.getByRole('slider', { name: 'Mint quantity' }), { target: { value: '2' } });
+  assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ }));
+  assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], { ...discount, discountAllowance: 3 }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Mint with discount for 0.0001 ETH. Regular price 0.0002 ETH.' })));
+  fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
+  assert.ok(view.getByRole('button', { name: /Mint\s*1 warehouse.*0.0011 ETH/ }));
+  assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
+  fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], { ...discount, discountUsed: 1 }));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ })));
+  assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
+});
+
 async function delayedMintPage(t: TestContext, status: 'connected' | 'disconnected' | 'restoring' = 'connected') {
   const configuration = deferred<typeof config>();
   const availability = deferred<EthereumStats>();
@@ -108,6 +133,93 @@ async function delayedMintPage(t: TestContext, status: 'connected' | 'disconnect
   updateWallet = next => view.rerenderPage({ wallet: next });
   return { ...view, configuration, availability, disconnected, connected, transactions, messages, calls };
 }
+
+test('connect-and-mint waits for the connected wallet discount proof before sending its discounted crate', async t => {
+  const proof = deferred<string[] | null>();
+  t.mock.method(ethereumDiscounts, 'proof', () => proof.promise);
+  const view = await delayedMintPage(t, 'disconnected');
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ })); });
+  await act(async () => {
+    view.configuration.resolve(config);
+    view.availability.resolve(stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` }));
+    view.rerenderPage({ wallet: view.connected });
+  });
+  await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, contract, owner])?.status, 'success'));
+  assert.equal(view.transactions.length, 0);
+  assert.equal((view.getByRole('button', { name: 'Minting…' }) as HTMLButtonElement).disabled, true);
+  await act(async () => { proof.resolve([]); });
+  await waitFor(() => assert.equal(view.transactions.length, 1));
+  assert.equal(view.transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
+  assert.equal(BigInt(view.transactions[0].value), 50_000_000_000_000n);
+});
+
+for (const change of [
+  { name: 'public price', stats: { cratePriceWei: '200000000000000' }, proof: null, payment: 200_000_000_000_000n },
+  { name: 'discount price', stats: { discountCratePriceWei: '80000000000000' }, proof: [], payment: 80_000_000_000_000n },
+  { name: 'discount root', stats: { discountMerkleRoot: `0x${'34'.repeat(32)}` }, proof: [], payment: 50_000_000_000_000n },
+] satisfies { name: string; stats: Partial<EthereumStats>; proof: string[] | null; payment: bigint }[]) {
+  test(`a ${change.name} change while eligibility loads requires another Mint click`, async t => {
+    const proof = deferred<string[] | null>();
+    t.mock.method(ethereumDiscounts, 'proof', () => proof.promise);
+    const view = await delayedMintPage(t);
+    let current = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
+    t.mock.method(ethereumApi, 'stats', async () => current);
+    await act(async () => { view.configuration.resolve(config); view.availability.resolve(current); });
+    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, contract, owner])?.status, 'success'));
+    fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }));
+    assert.equal(view.transactions.length, 0);
+    current = { ...current, ...change.stats };
+    await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'stats'] }); });
+    await waitFor(() => assert.ok(view.messages.includes('Your mint terms changed. Check the updated price and try again.')));
+    await act(async () => { proof.resolve(change.proof); });
+    assert.equal(view.transactions.length, 0);
+    const button = view.container.querySelector<HTMLButtonElement>('.mint-panel button[type="submit"]')!;
+    await waitFor(() => assert.equal(button.disabled, false));
+    await act(async () => { fireEvent.click(button); });
+    await waitFor(() => assert.equal(view.transactions.length, 1));
+    assert.equal(BigInt(view.transactions[0].value), change.payment);
+  });
+}
+
+test('a failed discount proof blocks crate minting while warehouses remain available at their public price', async t => {
+  t.mock.method(ethereumDiscounts, 'proof', async () => { throw new Error('Wrong discount root'); });
+  const view = await delayedMintPage(t);
+  await act(async () => {
+    view.configuration.resolve(config);
+    view.availability.resolve(stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` }));
+  });
+  await waitFor(() => assert.ok(view.getByRole('alert').textContent?.includes('Couldn’t check your mint discount.')));
+  const button = view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement;
+  assert.equal(button.disabled, true);
+  fireEvent.click(button);
+  assert.equal(view.transactions.length, 0);
+  fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint\s*1 warehouse/ })); });
+  await waitFor(() => assert.equal(view.transactions.length, 1));
+  assert.equal(view.transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [1]));
+  assert.equal(BigInt(view.transactions[0].value), BigInt(config.warehousePriceWei));
+});
+
+test('an exhausted allowance clears a prior proof error and restores public crate minting', async t => {
+  const discount = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
+  t.mock.method(ethereumDiscounts, 'proof', async () => { throw new Error('Wrong discount root'); });
+  const view = await delayedMintPage(t);
+  await act(async () => {
+    view.configuration.resolve(config);
+    view.availability.resolve(discount);
+  });
+  await waitFor(() => assert.ok(view.getByRole('alert').textContent?.includes('Couldn’t check your mint discount.')));
+  const exhausted = { ...discount, discountUsed: 1 };
+  t.mock.method(ethereumApi, 'stats', async () => exhausted);
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], exhausted));
+  await waitFor(() => assert.equal(view.queryAllByRole('alert').length, 0));
+  const button = view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }) as HTMLButtonElement;
+  assert.equal(button.disabled, false);
+  await act(async () => { fireEvent.click(button); });
+  await waitFor(() => assert.equal(view.transactions.length, 1));
+  assert.equal(view.transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [1]));
+  assert.equal(BigInt(view.transactions[0].value), BigInt(config.cratePriceWei));
+});
 
 test('the mint panel shares the drop frame and previews the selected crate quantity', async () => {
   const view = page({ header: createElement('header', {}, 'Shop header') });
@@ -147,7 +259,7 @@ test('mint quantity follows the transaction maximum and clamps when available su
   await waitFor(() => assert.equal(quantity.max, '4'));
   fireEvent.change(quantity, { target: { value: '4' } });
   assert.ok(view.getByRole('button', { name: /Mint\s*4 crates.*0.0004 ETH/ }));
-  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress], stats({ remainingCrates: 2 })));
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner], stats({ remainingCrates: 2 })));
   await waitFor(() => assert.equal(quantity.value, '2'));
   assert.equal(quantity.max, '2');
   assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ }));
@@ -172,7 +284,7 @@ test('switching containers resets quantity and changes the preview, availability
   fireEvent.change(quantity, { target: { value: '3' } });
   assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 3);
   assert.ok(view.getByRole('button', { name: /Mint\s*3 warehouses.*0.0033 ETH/ }));
-  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress], stats({
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner], stats({
     allocatedCrates: 5543, remainingCrates: 12, warehousesMinted: 503, remainingWarehouses: 2,
   })));
   await waitFor(() => assert.equal(quantity.value, '2'));
@@ -288,7 +400,7 @@ for (const status of ['connected', 'disconnected', 'restoring'] as const) {
       [kind === 'crate' ? 'cratePriceWei' : 'warehousePriceWei']: unitPriceWei,
     })); });
     if (status === 'restoring') {
-      await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress])?.status, 'success'));
+      await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress, null])?.status, 'success'));
       assert.equal(view.transactions.length, 0);
       view.rerenderPage({ wallet: view.connected });
     }
@@ -307,7 +419,7 @@ for (const source of ['configuration', 'availability'] as const) {
     await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ })); });
     if (source === 'availability') {
       await act(async () => { view.configuration.resolve(config); });
-      await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress])?.fetchStatus, 'fetching'));
+      await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner])?.fetchStatus, 'fetching'));
     }
     await act(async () => { view[source].reject(new Error('Network unavailable')); });
     const message = source === 'configuration' ? 'Couldn’t load this drop. Please try again.' : 'Couldn’t load availability. Please try again.';
@@ -468,7 +580,7 @@ for (const ending of ['wallet cancellation', 'suspension'] as const) {
     });
     await act(async () => { view.rerenderPage({ wallet: view.connected, suspended: false }); });
     await act(async () => { view.configuration.resolve(config); });
-    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress])?.fetchStatus, 'fetching'));
+    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner])?.fetchStatus, 'fetching'));
     await act(async () => { view.availability.resolve(stats()); });
     await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
     assert.equal((view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement).disabled, false);
@@ -564,7 +676,7 @@ for (const state of ['paused', 'sold out'] as const) {
     let connections = 0;
     const view = page({ wallet: { ...wallet, address: null, provider: null, status: 'disconnected', connect() { connections++; } } });
     await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'config'])?.status, 'success'));
-    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress])?.status, 'success'));
+    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress, null])?.status, 'success'));
     const button = view.container.querySelector<HTMLButtonElement>('.mint-panel button[type="submit"]')!;
     await waitFor(() => assert.equal(button.disabled, true));
     fireEvent.click(button);

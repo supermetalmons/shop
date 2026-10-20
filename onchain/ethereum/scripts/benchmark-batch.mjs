@@ -24,7 +24,7 @@ const comparison = (batchName, separateName) => {
 const paths = [
   'src/NFT111K.sol', 'src/NFT111KRenderer.sol', 'src/INFT111KRenderer.sol',
   'test/NFT111KGas.t.sol', 'test/TestSupport.sol', 'test/NFT111KBatch.t.sol',
-  'foundry.toml', 'package-lock.json', 'snapshots/NFT111KGasTest.json', 'fixtures/metadata.json',
+  'foundry.toml', 'package-lock.json', 'snapshots/NFT111KGasTest.json', 'fixtures/metadata.json', 'fixtures/discounts/proof.json',
   'scripts/benchmark-batch.mjs',
 ];
 const report = {
