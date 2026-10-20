@@ -5,7 +5,7 @@ import type {
 } from '../types';
 import { useOverlayScrollLock } from '../hooks/useOverlayScrollLock';
 import { fulfillmentShipStationDeliveryText } from '../lib/fulfillmentShipStationRates';
-import { isRedeemedForIrlFulfillmentOrder } from '../lib/fulfillmentOrderVisibility';
+import { isInternalReceiptDeliveryOrderSource } from '../../shared/fulfillmentSources';
 import { Modal } from '../components/Modal';
 import { SHIPSTATION_PACKAGE_FIELDS } from './shipStationWorkflow';
 import { useShipStationWorkflow, type ShipStationWorkflowOptions } from './useShipStationWorkflow';
@@ -150,7 +150,7 @@ export function FulfillmentShipStationModal({ suspended, api, ...props }: Fulfil
       suspended={suspended}
     >
       <div className="modal-form">
-        {activeShipstationOrder && !isRedeemedForIrlFulfillmentOrder(activeShipstationOrder) ? (
+        {activeShipstationOrder && !isInternalReceiptDeliveryOrderSource(activeShipstationOrder.source) ? (
           <div className="fulfillment-shipstation">
             {activeShipstationOrder.shipstationShipmentId ? (
               <div className="shipstation-header-actions">

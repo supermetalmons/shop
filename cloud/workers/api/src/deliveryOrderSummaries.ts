@@ -3,6 +3,7 @@ import { parseCanonicalPositiveInteger, parsePositiveSafeInteger } from '../../.
 import type { DeliveryOrderSummary } from '../../../../shared/contracts.js';
 import type { CommerceDocumentRecord } from './commerceRepository.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { isInternalReceiptDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import { parseDropDeliveryOrderPath, type DropDeliveryOrderPathIdentity } from './dropPaths.js';
 
 function normalizeDropIdMaybe(value: unknown): string | null {
@@ -51,7 +52,7 @@ export function deliveryOrderSummaryFromDocument(document: Pick<CommerceDocument
   const dropId = normalizeDropId(document.key.dropId || '');
   const deliveryId = parseCanonicalPositiveInteger(document.key.documentId);
   const fields = document.data;
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || deliveryId === null || fields.source === 'admin_irl_redeem') return null;
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || deliveryId === null || isInternalReceiptDeliveryOrderSource(fields.source)) return null;
   const storedDropId = typeof fields.dropId === 'string' && fields.dropId
     ? normalizeDropId(fields.dropId)
     : dropId;

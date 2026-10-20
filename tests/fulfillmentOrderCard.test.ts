@@ -161,6 +161,7 @@ test('address editing respects permission, visibility, ShipStation ownership, an
     { order: order({ shipstationLabel: { labelId: 'label-42', shipmentId: 'shipment-42', status: 'completed' } }) },
     { order: order({ shipstationLabel: { labelId: 'label-42', shipmentId: 'shipment-42', status: 'processing' } }) },
     { order: order({ source: 'admin_irl_redeem' }) },
+    { order: order({ source: 'admin_receipt_issuance' }) },
   ];
   assert.ok(view.getByRole('button', { name: 'Edit address for order 42' }));
   for (const overrides of blocked) {
@@ -199,6 +200,21 @@ test('label printing stays available for existing ShipStation shipments but neve
     order: order({ source: 'admin_irl_redeem', shipstationShipmentId: 'shipment-42' }),
   })));
   assert.equal(view.queryByRole('button', { name: 'Print Label' }), null);
+});
+
+test('packing replacement receipts expose downloadable codes without shipment actions', (t) => {
+  const binder = FRONTEND_DROPS.card_nft_binder;
+  const onDownloadSecretCode = t.mock.fn<Props['onDownloadSecretCode']>();
+  const replacementOrder = order({
+    dropId: binder.dropId, source: 'admin_receipt_issuance', address: { full: 'Packing replacements' },
+    boxes: [{ boxId: 21, receiptClaimCode: 'ABCDEF-1234567890', receiptClaimStatus: 'unclaimed', dudeIds: [] }],
+  });
+  const view = render(createElement(FulfillmentOrderCard, props({ order: replacementOrder, drop: binder, onDownloadSecretCode })));
+  assert.ok(view.getByText('Packing replacements'));
+  assert.equal(view.queryByRole('button', { name: 'Print Label' }), null);
+  assert.equal(view.queryByRole('button', { name: 'Edit address for order 42' }), null);
+  fireEvent.click(view.getByRole('button', { name: 'Download PNG for secret code ABCDEF-1234567890' }));
+  assert.deepEqual(onDownloadSecretCode.mock.calls[0].arguments, [replacementOrder, { kind: 'box', index: 0 }]);
 });
 
 test('only shipped orders expose tracking, with HTTPS links and plain tracking identifiers', () => {

@@ -55,9 +55,9 @@ test('card NFT binder deployments remain Stripe-only members of the shared recei
   assert.equal(FRONTEND_DROPS.card_nft_binder.forceSoldOut, true);
   assert.equal(FRONTEND_DROPS.card_nft_binder_devnet.forceSoldOut, undefined);
   assert.equal(FRONTEND_DROPS.card_nft_binder.maxSupply, 15);
-  assert.equal(FRONTEND_DROPS.card_nft_binder.receiptMaxId, 20);
+  assert.equal(FRONTEND_DROPS.card_nft_binder.receiptMaxId, 22);
   assert.equal(API_DROPS.card_nft_binder.maxSupply, 15);
-  assert.equal(API_DROPS.card_nft_binder.receiptMaxId, 20);
+  assert.equal(API_DROPS.card_nft_binder.receiptMaxId, 22);
   assert.equal(FRONTEND_DROPS.card_nft_binder_devnet.receiptMaxId, undefined);
   assert.equal(MAINNET_BINDER.stripeLiveUnitAmountCents, 10_000);
 });

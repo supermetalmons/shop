@@ -9,7 +9,7 @@ import {
   planReadyToShipOrderNotifications,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
 } from './notifications.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
   createNotificationEmailJobV1,
@@ -63,7 +63,7 @@ export function planReadyToShipNotifications(args: ReadyNotificationPlanOptions)
   const before = parseDeliveryOrderNotificationView(args.before);
   const after = parseDeliveryOrderNotificationView(args.after);
   if (!shouldNotifyShippersForDeliveryReadyToShipWrite({
-    before, after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, 'ethereum'],
+    before, after, ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE, 'ethereum'],
   })) return [];
   const deliveryId = notificationDeliveryId(after, args.deliveryId);
   const plan = readyToShipNotificationPlan(after, args.dropId);

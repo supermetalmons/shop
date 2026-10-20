@@ -1,6 +1,7 @@
 import type { StripeCheckoutIdentity } from '../../../../shared/checkoutIdentity.js';
 import type {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE,
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceDocumentData, commerceFieldValue } from './commerceRepositoryTypes.js';
@@ -91,5 +92,25 @@ export type AdminCardDeliveryOrderFields = AdminDeliveryOrderFields & {
 export type AdminPackDeliveryOrderCreate = AdminPackDeliveryOrderFields & ReadyOrderTimestamps;
 export type AdminCardDeliveryOrderCreate = AdminCardDeliveryOrderFields & ReadyOrderTimestamps;
 
+export type AdminReceiptIssuanceDeliveryOrderFields = {
+  dropId: string;
+  source: typeof ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE;
+  status: 'ready_to_ship';
+  owner: string;
+  receiptOwner: string;
+  addressSnapshot: { label: string; country: string };
+  itemIds: string[];
+  items: Array<DeliveryItem & { kind: 'box' }>;
+  deliveryId: number;
+  quantity: number;
+  metadataIds: number[];
+  receiptsMinted: number;
+  receiptTxs: string[];
+  stripeReceiptClaimsByBoxId: Record<string, ReceiptClaim>;
+  adminReceiptIssuance: { issuanceId: string; reason: string };
+};
+
+export type AdminReceiptIssuanceDeliveryOrderCreate = AdminReceiptIssuanceDeliveryOrderFields & ReadyOrderTimestamps;
+
 export type DeliveryOrderCreate = PreparedDeliveryOrderCreate | StripeDeliveryOrderCreate |
-  AdminPackDeliveryOrderCreate | AdminCardDeliveryOrderCreate;
+  AdminPackDeliveryOrderCreate | AdminCardDeliveryOrderCreate | AdminReceiptIssuanceDeliveryOrderCreate;

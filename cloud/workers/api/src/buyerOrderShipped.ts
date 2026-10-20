@@ -1,6 +1,6 @@
 import { parseDeliveryOrderNotificationView, type DeliveryOrderNotificationView } from './deliveryOrderNotificationView.js';
 import { buildBuyerOrderShippedEmailContent } from './notificationEmails.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { isInternalReceiptDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
@@ -37,7 +37,7 @@ export type BuyerOrderShippedDecision =
 type DeliveryOrder = Record<string, unknown>;
 
 function isIgnoredSource(order: DeliveryOrderNotificationView): boolean {
-  return order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE || order.source === 'ethereum';
+  return isInternalReceiptDeliveryOrderSource(order.source) || order.source === 'ethereum';
 }
 
 function shippedWithTracking(order: DeliveryOrderNotificationView): boolean {

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { updateFulfillmentAddress } from '../api/fulfillment';
 import { Modal } from '../components/Modal';
-import { isRedeemedForIrlFulfillmentOrder } from '../lib/fulfillmentOrderVisibility';
+import { isInternalReceiptDeliveryOrderSource } from '../../shared/fulfillmentSources';
 import type { FulfillmentOrder } from '../types';
 import { fulfillmentOrderKey } from './orders';
 
@@ -36,7 +36,7 @@ export function FulfillmentAddressModal({
   const currentAddress = typeof order?.address.full === 'string' && order.address.full !== '***' ? order.address.full : '';
   const address = draft ?? currentAddress;
   const dirty = address.trim() !== currentAddress.trim();
-  const canEdit = canManage && Boolean(order && !isRedeemedForIrlFulfillmentOrder(order));
+  const canEdit = canManage && Boolean(order && !isInternalReceiptDeliveryOrderSource(order.source));
 
   useLayoutEffect(() => {
     mountedRef.current = true;

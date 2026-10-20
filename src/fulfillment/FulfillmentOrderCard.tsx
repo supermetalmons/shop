@@ -19,7 +19,8 @@ import {
 } from '../lib/fulfillmentCodes';
 import { formatFulfillmentAddressText } from '../lib/fulfillmentExports';
 import { fulfillmentBoxContentsLabel, resolveFulfillmentDirectDeliveryBoxLabel } from '../lib/fulfillmentLabels';
-import { canEditFulfillmentOrderAddress, isRedeemedForIrlFulfillmentOrder } from '../lib/fulfillmentOrderVisibility';
+import { canEditFulfillmentOrderAddress } from '../lib/fulfillmentOrderVisibility';
+import { isInternalReceiptDeliveryOrderSource } from '../../shared/fulfillmentSources';
 import { normalizeFulfillmentStatus } from '../lib/fulfillmentStatus';
 import type { FulfillmentOrder } from '../types';
 import { FulfillmentFigureTiles, FulfillmentImage } from './FulfillmentMedia';
@@ -208,7 +209,7 @@ export function FulfillmentOrderCard({
     hasAddressAccess: canAdminEditFulfillmentAddress,
   });
   const canPrintOrderLabel =
-    !isRedeemedForIrlFulfillmentOrder(order) &&
+    !isInternalReceiptDeliveryOrderSource(order.source) &&
     (Boolean(order.shipstationShipmentId) || normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
   const showOrderEmailLine =
     showContactInfo && ((order.address.full !== '***' && Boolean(order.address.email)) || canEditOrderAddress);

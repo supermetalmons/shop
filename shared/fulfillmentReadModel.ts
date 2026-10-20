@@ -9,7 +9,11 @@ import type {
   StripeCheckoutManualReviewSummary,
 } from './contracts.ts';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from './fulfillmentSources.ts';
+import {
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE,
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+} from './fulfillmentSources.ts';
 import { normalizeOptionalFulfillmentTrackingCode } from './fulfillmentTracking.ts';
 import { parseShipStationPackage } from './shipstationPackage.ts';
 import { normalizeStripeCheckoutIdentity } from './checkoutIdentity.ts';
@@ -131,6 +135,8 @@ export function fulfillmentOrderFromRecord(
     ? { chainId: order.chainId, hash: order.deliverySignature.toLowerCase() }
     : undefined;
   const isAdminIrlRedeem = source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
+  const internalOrderLabel = isAdminIrlRedeem ? ADMIN_IRL_REDEEM_LABEL
+    : source === ADMIN_RECEIPT_ISSUANCE_DELIVERY_ORDER_SOURCE ? 'Packing replacements' : undefined;
   const addressSnapshot = record(order.addressSnapshot) || {};
   const encrypted = optionalString(addressSnapshot.encrypted);
   const shipstation = record(order.shipstation) || {};
@@ -144,8 +150,8 @@ export function fulfillmentOrderFromRecord(
   let email = optionalString(addressSnapshot.email);
   let phone = optionalString(addressSnapshot.phone);
   let encryptedPayload = encrypted;
-  if (isAdminIrlRedeem) {
-    full = ADMIN_IRL_REDEEM_LABEL;
+  if (internalOrderLabel) {
+    full = internalOrderLabel;
     email = undefined;
     phone = undefined;
     encryptedPayload = undefined;
@@ -159,10 +165,10 @@ export function fulfillmentOrderFromRecord(
   }
 
   const address: FulfillmentOrderAddress = {
-    label: isAdminIrlRedeem ? ADMIN_IRL_REDEEM_LABEL : optionalString(addressSnapshot.label),
+    label: internalOrderLabel || optionalString(addressSnapshot.label),
     email,
     phone,
-    country: isAdminIrlRedeem ? ADMIN_IRL_REDEEM_LABEL : optionalString(addressSnapshot.country),
+    country: internalOrderLabel || optionalString(addressSnapshot.country),
     countryCode: optionalString(addressSnapshot.countryCode),
     hint: optionalString(addressSnapshot.hint),
     encrypted: encryptedPayload,

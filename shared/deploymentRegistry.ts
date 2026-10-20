@@ -396,7 +396,7 @@ export const DEPLOYMENT_DROPS: DeploymentDropsMap = {
     discountMintsPerWallet: 1,
     discountMerkleRoot: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925',
     maxSupply: 15,
-    receiptMaxId: 20,
+    receiptMaxId: 22,
     itemsPerBox: 0,
     maxPerTx: 1,
     namePrefix: 'binder',

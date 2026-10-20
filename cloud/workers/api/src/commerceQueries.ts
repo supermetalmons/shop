@@ -54,7 +54,8 @@ const SHIPMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.map((name) => name === 'document_
   ? `json_object(${SHIPMENT_FIELDS.map((field) => `'${field}', document_json -> '$.${field}'`).join(', ')}) AS document_json`
   : name).join(', ');
 const SHIPMENT_PREDICATE = `document_kind = 'delivery_order'
-  AND status IN ('processing', 'ready_to_ship') AND source IS NOT 'admin_irl_redeem'`;
+  AND status IN ('processing', 'ready_to_ship') AND source IS NOT 'admin_irl_redeem'
+  AND source IS NOT 'admin_receipt_issuance'`;
 export const NOTIFICATION_OUTBOX_COLUMNS = 'parent_path, family, drop_id, generation, outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms, retry_until_ms, created_at_ms, updated_at_ms, last_error_code';
 const NOTIFICATION_OUTBOX_ACTIVE_SQL = `EXISTS (
   SELECT 1 FROM commerce_authority_control AS authority

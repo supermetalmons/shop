@@ -1,6 +1,7 @@
 import type { FulfillmentOrder } from '../types';
 import {
   isAdminIrlRedeemDeliveryOrderSource,
+  isInternalReceiptDeliveryOrderSource,
 } from '../../shared/fulfillmentSources';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus';
 
@@ -41,7 +42,7 @@ export function canEditFulfillmentOrderAddress(
   return (
     options.showFullAddress &&
     options.hasAddressAccess &&
-    !isRedeemedForIrlFulfillmentOrder(order) &&
+    !isInternalReceiptDeliveryOrderSource(order.source) &&
     !order.shipstationShipmentId &&
     !hasActiveLabel &&
     !order.shipstationPurchaseUnknown
