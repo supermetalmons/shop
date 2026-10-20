@@ -4,7 +4,7 @@
   "status": "verified",
   "matchType": "exact",
   "checkedAt": "2026-10-20T19:24:36.056Z",
-  "sourceRevision": null,
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
   "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
   "compilerVersion": "0.8.30+commit.73712a01",
   "settings": {

@@ -1,0 +1,203 @@
+{
+  "releaseId": "111k-discounts-2026-10-20T19-10-56-528Z-e863bdb0",
+  "manifestSha256": "f60f396d88d32e505cee29a50e83010c5856408e50790a2dc7af68c3ed18360b",
+  "chainId": 11155111,
+  "dropId": "111k_devnet",
+  "previousContract": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+  "newContract": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "resetId": "28fa6ce8-9032-4b5e-8e87-6404287ec20f",
+  "completed": true,
+  "reconciled": false,
+  "expectedRevision": 2,
+  "deletedScopeCounts": {
+    "documents": 1,
+    "recovery": 1,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 1,
+    "claims": 1,
+    "cursors": 1
+  },
+  "drainCheck": {
+    "deploymentObservedCompleteAt": "2026-10-20T19:29:53Z",
+    "drainNotBefore": "2026-10-20T19:30:58Z",
+    "databaseResetAppliedAt": "2026-10-20T19:31:16.000Z",
+    "databaseResetAppliedAfterDrain": true
+  },
+  "initialAcceptance": {
+    "passed": false,
+    "checks": {
+      "oldScopeCleared": true,
+      "sharedProfilesAndAddressesUnchanged": true,
+      "authenticationUnchanged": false,
+      "otherDropCountsUnchanged": true,
+      "otherNativeScopesUnchanged": true,
+      "globalCommerceStayedActive": true,
+      "documentRevisionAdvanced": true,
+      "pathTombstonesRetained": true,
+      "ownerTombstonesRetained": true,
+      "packStatusUnchanged": true,
+      "noCommitGuardRemains": true,
+      "resetMarkerRecorded": true
+    },
+    "authDigestMatches": {
+      "ethereum_auth_challenges": true,
+      "ethereum_auth_sessions": true,
+      "anonymous_auth_sessions": false,
+      "auth_wallet_bindings": true
+    },
+    "evidence": {
+      "file": "maintenance-acceptance-initial.json",
+      "sha256": "fc75abb17413dbbcd4ed86141fe860f55ca2bc6c085a45bfef9eb67f7c03b81b"
+    }
+  },
+  "authenticationResolution": {
+    "existingAuthenticationPreserved": true,
+    "fullAuthenticationDigestUnchanged": false,
+    "explanation": "The initial full-table comparison differed because new anonymous guest sessions were created after the baseline. Independent canonical digests verified that all baseline anonymous sessions were byte-identical; other authentication tables were unchanged.",
+    "supplement": {
+      "capturedAt": "2026-10-20T19:32:42.522Z",
+      "baselineCapturedAt": "2026-10-20T19:20:26.729Z",
+      "baselineFileSha256": "d6433b3599e0716262e65578c0e3bc5f10b73fa41f45d3ec9d498b8ba051d767",
+      "operation": "read-only SELECT anonymous_auth_sessions; canonical digest computed in memory",
+      "baseline": {
+        "count": 1456,
+        "sha256": "9d3389e3053afe4c3226f4321c4ab0c9b9b1813a72f2779b1d5cdec3bfd8762e"
+      },
+      "currentTotalCount": 1459,
+      "currentPreBaseline": {
+        "count": 1456,
+        "sha256": "9d3389e3053afe4c3226f4321c4ab0c9b9b1813a72f2779b1d5cdec3bfd8762e"
+      },
+      "preExistingCountUnchanged": true,
+      "preExistingDigestUnchanged": true,
+      "newSessionCount": 3,
+      "newSessionCreatedAt": {
+        "min": "2026-10-20T19:24:54.920Z",
+        "max": "2026-10-20T19:32:15.987Z"
+      },
+      "newSessionRefreshedAt": {
+        "min": "2026-10-20T19:24:54.920Z",
+        "max": "2026-10-20T19:32:15.987Z"
+      },
+      "allRowsAccountedFor": true,
+      "onlyAdditionsAfterBaseline": true
+    },
+    "finalAcceptanceProof": {
+      "baselineCutoff": "2026-10-20T19:20:26.729Z",
+      "currentTotalCount": 1459,
+      "baselineCount": 1456,
+      "preExistingCountUnchanged": true,
+      "preExistingDigestUnchanged": true,
+      "allRowsAccountedFor": true,
+      "newSessionCount": 3,
+      "newSessionCreatedAt": {
+        "min": "2026-10-20T19:24:54.920Z",
+        "max": "2026-10-20T19:32:15.987Z"
+      },
+      "onlyAdditionsAfterBaseline": true
+    },
+    "evidence": [
+      {
+        "file": "anonymous-auth-supplement-1792524762523.json",
+        "sha256": "a7e86be397e02e13b67ca6fedc7c42e2dd4d9f2d1f7960319eaf150d92cd8c8d"
+      },
+      {
+        "file": "maintenance-acceptance-preserved.json",
+        "sha256": "dd9fbccb62971fdc29b6b869c0bf27ceaf3337af831cf1a9e2afd2b37809602c"
+      }
+    ]
+  },
+  "acceptance": {
+    "passed": true,
+    "checks": {
+      "oldScopeCleared": true,
+      "sharedProfilesAndAddressesUnchanged": true,
+      "authenticationPreserved": true,
+      "otherDropCountsUnchanged": true,
+      "otherNativeScopesUnchanged": true,
+      "globalCommerceStayedActive": true,
+      "documentRevisionAdvanced": true,
+      "pathTombstonesRetained": true,
+      "ownerTombstonesRetained": true,
+      "packStatusUnchanged": true,
+      "noCommitGuardRemains": true,
+      "resetMarkerRecorded": true
+    },
+    "sharedDigestMatches": {
+      "ethereum_profiles": true,
+      "ethereum_profile_addresses": true,
+      "profiles": true,
+      "profile_addresses": true
+    },
+    "authDigestMatches": {
+      "ethereum_auth_challenges": true,
+      "ethereum_auth_sessions": true,
+      "anonymous_auth_sessions": false,
+      "auth_wallet_bindings": true
+    },
+    "countsAfter": {
+      "documents": 0,
+      "recovery": 0,
+      "quotes": 0,
+      "claims": 0,
+      "cursors": 0,
+      "notifications": 0,
+      "pack_outbox": 0,
+      "inventory": 0,
+      "available_dudes": 0
+    },
+    "authorityAfter": {
+      "authority_state": "d1",
+      "revision": 23,
+      "documents_revision": 1766,
+      "paused_at_ms": null
+    },
+    "pathTombstonesRetained": 1,
+    "ownerTombstonesRetained": 1
+  },
+  "finalControl": {
+    "paused": false,
+    "revision": 4,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "resetGuardId": null,
+    "lastResetId": "28fa6ce8-9032-4b5e-8e87-6404287ec20f",
+    "updatedAtMs": 1792524796000
+  },
+  "evidence": [
+    {
+      "file": "reset-outcome.json",
+      "sha256": "77898c583e282da021f5fa88f2726ff1a90d7c967f89d2b2a9d278e201682a2c"
+    },
+    {
+      "file": "control-after-reset.json",
+      "sha256": "07d17b2439c0f5376164e0c9efc0402b1e668e52b30be8e8ec4c36f8b5835ab5"
+    },
+    {
+      "file": "maintenance-acceptance-preserved.json",
+      "sha256": "dd9fbccb62971fdc29b6b869c0bf27ceaf3337af831cf1a9e2afd2b37809602c"
+    },
+    {
+      "file": "control-open.json",
+      "sha256": "f2f71a71a6180474ab3f323b09a6f5540251ed5da202776aa2a5c1c1ffda8d53"
+    }
+  ],
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
+  "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json"
+    ]
+  }
+}

@@ -87,7 +87,7 @@ Local deployment loads the committed root from `src/ethereum/discounts/111k.json
 
 ## Sepolia configuration
 
-The [first Sepolia release](../../releases/111k-sepolia/README.md) records an earlier contract interface; discounted minting requires a new collection deployment and updated API configuration. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
+The [discount release](../../releases/111k-sepolia-discounts/README.md) records the replacement collection at `0x4b3a94a144fe99954c5d55f870081e40b360cfbf`, deployed at Sepolia block `11957341`. The [first Sepolia release](../../releases/111k-sepolia/README.md) remains a historical record of the earlier interface. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |
