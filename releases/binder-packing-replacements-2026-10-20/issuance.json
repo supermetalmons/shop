@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "issuanceId": "card-nft-binder-packing-2026-10-20",
+  "sourceCommit": "bc8f0c0d",
+  "cluster": "mainnet-beta",
+  "deliveryId": 660215303,
+  "receiptOwner": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "collection": "57rWZEQFtgsWf846fu9VjA89TkMkbmgbUvmqc8z56WLD",
+  "tree": "A84bJxATE2V1S3Gsr2VVoqLpitmfAGCXt7BAgLKp5QCF",
+  "receipts": [
+    {
+      "receiptId": 21,
+      "assetId": "6D9zZDct9EbFM8rrSASmtEqwgbVdb57apg4aPMf3cxTP",
+      "metadataUri": "https://cdn.lil.org/nft/card_nft_binder/json/rb21.json",
+      "metadataSha256": "616924dd4c5a8a2a7636d233749249bf9813a58ede4e8c77b1e48a93b5dd3067"
+    },
+    {
+      "receiptId": 22,
+      "assetId": "92rY5A5dzf4MbvPwzK8eyGwucvTU527AXsv3Qoz1sPfw",
+      "metadataUri": "https://cdn.lil.org/nft/card_nft_binder/json/rb22.json",
+      "metadataSha256": "8f10a6c3735a231d4b7dd9e641eaffdbdcd39d57629e21868d2476bccc42f439"
+    }
+  ],
+  "transaction": {
+    "signature": "U5TGLJufEyNa2Tv8ZsJEcYQieo71LLWS8bPQ6w94WNvxbkgrTwinvfPQaqHhvZ5EcK9YMJw8BVCsXGePgF32H5K",
+    "slot": 459348480,
+    "networkFeeLamports": 5000,
+    "totalCostLamports": 185000
+  },
+  "deployments": {
+    "api": "ec07e4d5-e355-46d2-ad50-0490f288f2c9",
+    "frontend": "b87f5c65-8707-496b-91c2-963b06b3c336"
+  },
+  "checks": {
+    "apiTests": 2444,
+    "runtimeTests": 36,
+    "applicationTests": 4093,
+    "existingCodeCount": 20,
+    "existingCodesUnchanged": true,
+    "claimProofsValid": true,
+    "packingExportCount": 2,
+    "ethereumContractPreserved": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf"
+  },
+  "verifiedAt": "2026-10-20T19:38:17.046Z"
+}
