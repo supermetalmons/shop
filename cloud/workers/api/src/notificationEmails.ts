@@ -39,6 +39,24 @@ export type StripeCheckoutManualReviewEmailMessage = {
   failedAt?: number;
 };
 
+export type ReceiptClaimManualReviewEmailMessage = {
+  dropId: string;
+  dropName: string;
+  cluster: string;
+  deliveryId: number;
+  boxId: number;
+  recipient: string;
+  incidentId: string;
+  incidentKind: 'legacy' | 'terminal' | 'overdue';
+  operationId?: string;
+  generation?: number;
+  startedAtMs?: number;
+  failedAtMs: number;
+  errorCode: string;
+  transactionSignature?: string;
+  transactionStatus?: string;
+};
+
 export type NotificationEmailItem = {
   label: string;
   thumbnailUrl?: string;
@@ -174,6 +192,54 @@ export function buildShipperReadyToShipEmailContent(
 
 function timestampEmailValue(value: number | undefined): string {
   return value ? new Date(value).toISOString() : 'unknown';
+}
+
+export function buildReceiptClaimManualReviewEmailContent(
+  message: ReceiptClaimManualReviewEmailMessage,
+): NotificationEmailContent {
+  const reasons: Record<string, string> = {
+    'invalid-argument': 'Stored receipt claim inputs need review.',
+    'unauthenticated': 'Receipt claim authentication needs review.',
+    'permission-denied': 'Receipt claim authorization needs review.',
+    'not-found': 'A required receipt claim record could not be found.',
+    'aborted': 'Receipt claim execution could not finish safely.',
+    'failed-precondition': 'Receipt identity, ownership, or stored state needs review.',
+    'resource-exhausted': 'Receipt claim processing exhausted an available resource.',
+    'deadline-exceeded': 'Digital receipt delivery did not complete within its 15-minute recovery window.',
+    'unavailable': 'A service needed for receipt delivery was unavailable.',
+    'internal': 'Receipt claim processing encountered an internal error.',
+    'legacy-processing': 'A previous receipt claim has no Workflow to finish its delivery.',
+  };
+  const errorCode = Object.hasOwn(reasons, message.errorCode) ? message.errorCode : 'unavailable';
+  const summary = message.incidentKind === 'legacy'
+    ? 'A previous digital receipt claim is still processing without a Workflow. Its original failure was not recorded.'
+    : message.incidentKind === 'overdue' ? reasons['deadline-exceeded'] : reasons[errorCode];
+  const details: NotificationEmailDetail[] = [
+    { label: 'Drop', value: message.dropName },
+    { label: 'Drop ID', value: message.dropId },
+    { label: 'Network', value: message.cluster },
+    { label: 'Pack / item', value: String(message.boxId) },
+    { label: 'Delivery ID', value: String(message.deliveryId) },
+    { label: 'Receiver', value: message.recipient },
+    { label: 'Incident', value: message.incidentId },
+    { label: 'Operation', value: message.operationId || 'legacy claim; no Workflow' },
+    { label: 'Generation', value: message.generation === undefined ? 'none' : String(message.generation) },
+    { label: 'Processing started', value: timestampEmailValue(message.startedAtMs) },
+    { label: 'Failure detected', value: timestampEmailValue(message.failedAtMs) },
+    { label: 'Error code', value: errorCode },
+    { label: 'Transaction', value: message.transactionSignature || 'no transaction recorded' },
+    { label: 'Transaction state', value: message.transactionStatus || 'unknown' },
+  ];
+  const fulfillmentUrl = fulfillmentAppUrlForDrop(message.dropId);
+  const footer = 'Review the recorded receiver and transaction evidence before retrying. This alert concerns digital receipts; it does not change the physical shipment or refund status.';
+  return {
+    subject: `Receipt claim needs review - ${message.dropName} #${message.boxId}`,
+    text: [summary, '', ...details.map(({ label, value }) => `${label}: ${value}`), '', footer,
+      '', `Open fulfillment: ${fulfillmentUrl}`].join('\n'),
+    html: `<p>${escapeHtml(summary)}</p><ul>${details.map(({ label, value }) =>
+      `<li><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</li>`).join('')}</ul>` +
+      `<p>${escapeHtml(footer)}</p><p><a href="${escapeHtml(fulfillmentUrl)}">Open fulfillment</a></p>`,
+  };
 }
 
 function stringifyEmailValue(value: unknown): string {

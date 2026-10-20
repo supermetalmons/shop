@@ -2,6 +2,7 @@ import { validateNotificationEmailRecipient } from './notificationSubscription.t
 
 export const NOTIFICATION_EMAIL_JOB_VERSION = 1 as const;
 export const NOTIFICATION_EMAIL_FROM = 'notifications@support.mons.shop';
+export const NOTIFICATION_MANUAL_REVIEW_EMAIL = 'development@support.mons.shop';
 export const NOTIFICATION_EMAIL_MAX_RECIPIENTS = 16;
 export const NOTIFICATION_EMAIL_MAX_SUBJECT_CHARACTERS = 512;
 export const NOTIFICATION_EMAIL_MAX_TEXT_BYTES = 32 * 1024;
@@ -13,6 +14,7 @@ export const NOTIFICATION_EMAIL_KINDS = [
   'buyer_order_shipped',
   'shipper_ready_to_ship',
   'stripe_checkout_manual_review',
+  'receipt_claim_manual_review',
 ] as const;
 
 export type NotificationEmailKind = (typeof NOTIFICATION_EMAIL_KINDS)[number];

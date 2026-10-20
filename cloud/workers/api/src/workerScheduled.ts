@@ -9,6 +9,7 @@ import { cleanupExpiredMiNoteAuthState } from './miNoteAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
+import { reconcileReceiptClaimFailureNotifications } from './receiptClaimFailureNotifications.js';
 import { reconcilePendingPreorders } from './preorders.js';
 import { reconcileEthereum111k } from './ethereumReconciliation.js';
 import {
@@ -26,6 +27,7 @@ export type ScheduledReconcilers = {
   stripeNotifications: typeof reconcilePendingStripeTerminalNotifications;
   shippedNotifications: typeof reconcilePendingShippedNotifications;
   receiptClaims: typeof reconcileReceiptClaimWorkflows;
+  receiptClaimNotifications: typeof reconcileReceiptClaimFailureNotifications;
   preorders: typeof reconcilePendingPreorders;
   ethereum: typeof reconcileEthereum111k;
 };
@@ -126,6 +128,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   stripeNotifications: reconcilePendingStripeTerminalNotifications,
   shippedNotifications: reconcilePendingShippedNotifications,
   receiptClaims: reconcileReceiptClaimWorkflows,
+  receiptClaimNotifications: reconcileReceiptClaimFailureNotifications,
   preorders: reconcilePendingPreorders,
   ethereum: reconcileEthereum111k,
 };
@@ -192,6 +195,7 @@ async function runScheduledCommerceReconciliations(
     runScheduledJob('packStatus', (onResult) => reconcilers.packStatus(env, signal, { onResult })),
     runScheduledJob('notifications', (onResult) => reconcilers.notifications(env, signal, { onResult })),
     runScheduledJob('receiptClaims', (onResult) => reconcilers.receiptClaims(env, signal, { onResult })),
+    runScheduledJob('receiptClaimNotifications', (onResult) => reconcilers.receiptClaimNotifications(env, signal, { onResult })),
     runScheduledJob('preorders', (onResult) => reconcilers.preorders(env, signal, { onResult })),
     runScheduledJob('ethereum', (onResult) => reconcilers.ethereum(env, signal, { onResult })),
   ]);

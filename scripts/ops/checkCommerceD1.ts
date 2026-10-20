@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
 import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
+import { parseReceiptClaimFailureOutboxRow } from '../../shared/receiptClaimFailureOutbox.ts';
 import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusProjectionFields.ts';
 import { parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
@@ -37,6 +38,7 @@ import {
   type CommerceSqlQuery,
 } from '../../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
+import { receiptClaimFailureDiscoveryQuery } from '../../cloud/workers/api/src/receiptClaimFailureNotifications.ts';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -491,6 +493,17 @@ export function checkCommerceD1(
     requireSearchIndex(plan, 'commerce_notification_outbox_family_due');
     requireNoTemporaryBTree(plan, 'notification outbox due');
   }
+  const receiptFailureDuePlan = rawPlan(`EXPLAIN QUERY PLAN SELECT event_id
+    FROM commerce_receipt_claim_failure_outbox INDEXED BY commerce_receipt_claim_failure_outbox_due
+    WHERE state = 'pending' AND next_attempt_at_ms <= 1 ORDER BY next_attempt_at_ms, event_id LIMIT 8`);
+  requireSearchIndex(receiptFailureDuePlan, 'commerce_receipt_claim_failure_outbox_due');
+  requireNoTemporaryBTree(receiptFailureDuePlan, 'receipt claim failure notification due');
+  for (const kind of ['legacy', 'terminal', 'overdue'] as const) {
+    const sql = receiptClaimFailureDiscoveryQuery(kind).replaceAll('?1', '1000000').replaceAll('?2', '100000').replaceAll('?3', '8');
+    const plan = rawPlan(`EXPLAIN QUERY PLAN ${sql}`);
+    requireIndex(plan, `commerce_receipt_claim_failure_${kind}_scan`);
+    requireNoTemporaryBTree(plan, `receipt claim ${kind} failure discovery`);
+  }
   const planResults = queryBatch(Object.fromEntries(plans.map((plan, index) => [String(index), plan.sql])));
   plans.forEach((plan, index) => plan.checks.forEach((check) => check(planResults[String(index)])));
 
@@ -513,6 +526,24 @@ export function checkCommerceD1(
     if (joined.parent_document_path !== row.parentPath || joined.parent_drop_id !== row.dropId || joined.parent_kind !==
       (row.family === 'stripe_terminal' ? 'stripe_checkout' : 'delivery_order')) fail('Notification outbox parent identity is invalid.');
     notificationRows += 1;
+  }
+  let receiptClaimFailureRows = 0;
+  for (const joined of commerceD1AuditRows(queryRemoteCommerceD1, {
+    table: 'commerce_receipt_claim_failure_outbox', alias: 'outbox', keys: ['event_id'],
+    columns: `outbox.*, document.document_path AS parent_document_path,
+      document.document_kind AS parent_kind, json_extract(document.document_json, '$.namespace') AS parent_namespace,
+      json_extract(document.document_json, '$.dropId') AS parent_drop_id,
+      json_extract(document.document_json, '$.deliveryId') AS parent_delivery_id,
+      json_extract(document.document_json, '$.boxId') AS parent_box_id`,
+    joins: 'LEFT JOIN commerce_documents AS document ON document.document_path = outbox.claim_path',
+  })) {
+    const row = parseReceiptClaimFailureOutboxRow(joined);
+    if (joined.parent_document_path !== row.claimPath || joined.parent_kind !== 'claim_code' ||
+      joined.parent_namespace !== 'stripe_receipt_v1' || joined.parent_drop_id !== row.snapshot.dropId ||
+      joined.parent_delivery_id !== row.snapshot.deliveryId || joined.parent_box_id !== row.snapshot.boxId) {
+      fail('Receipt claim failure notification parent identity is invalid.');
+    }
+    receiptClaimFailureRows += 1;
   }
   const recoveryControl = recoveryControls[0];
   if (recoveryControls.length !== 1 || recoveryControl.singleton !== 1 ||
@@ -582,9 +613,12 @@ export function checkCommerceD1(
     fail('Notification outbox Stripe due lookup is inconsistent.');
   }
 
-  const { notificationFailures, documentKindCounts } = queryBatch({
+  const { notificationFailures, receiptClaimFailureStates, documentKindCounts } = queryBatch({
     notificationFailures: `SELECT family, last_error_code, COUNT(*) AS count
     FROM commerce_notification_outbox WHERE state = 'failed' GROUP BY family, last_error_code ORDER BY family, last_error_code`,
+    receiptClaimFailureStates: `SELECT state, last_error_code, COUNT(*) AS count,
+      MIN(CASE WHEN state = 'pending' THEN created_at_ms END) AS oldest_pending_at_ms
+      FROM commerce_receipt_claim_failure_outbox GROUP BY state, last_error_code ORDER BY state, last_error_code`,
     documentKindCounts: `SELECT document_kind, COUNT(*) AS count
     FROM commerce_documents GROUP BY document_kind ORDER BY document_kind`,
   });
@@ -600,6 +634,8 @@ export function checkCommerceD1(
     notificationOutboxPreparation: notificationControl.preparation_state,
     notificationOutboxGroups: notificationRows,
     notificationOutboxFailures: notificationFailures,
+    receiptClaimFailureOutboxRows: receiptClaimFailureRows,
+    receiptClaimFailureOutboxStates: receiptClaimFailureStates,
     stripeCheckoutStateMode: stripeCheckoutControl.storage_mode,
     stripeCheckoutStatePreparation: stripeCheckoutControl.preparation_state,
     stripeCheckoutStateRows: stripeCheckoutRows,

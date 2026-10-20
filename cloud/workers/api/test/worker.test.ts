@@ -243,6 +243,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       },
       shippedNotifications: async () => { calls.push('shippedNotifications'); return emptyReconciliationResult(); },
       receiptClaims: async () => { calls.push('receiptClaims'); return emptyReconciliationResult(); },
+      receiptClaimNotifications: async () => { calls.push('receiptClaimNotifications'); return emptyReconciliationResult(); },
       ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
     }),
     (error: unknown) => {
@@ -251,7 +252,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       return true;
     },
   );
-  assert.deepEqual(calls.sort(), ['ethereum', 'notifications', 'ops', 'packStatus', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
+  assert.deepEqual(calls.sort(), ['ethereum', 'notifications', 'ops', 'packStatus', 'receiptClaimNotifications', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {

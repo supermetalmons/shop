@@ -56,6 +56,7 @@ test('Resend non-checkout error notification emails are enabled', () => {
   assert.equal(shouldSendResendNotificationEmail('buyer_order_shipped'), true);
   assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), true);
   assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
+  assert.equal(shouldSendResendNotificationEmail('receipt_claim_manual_review'), true);
 });
 
 test('shipped notification requires the first Shipped state with a valid HTTPS tracking link', () => {

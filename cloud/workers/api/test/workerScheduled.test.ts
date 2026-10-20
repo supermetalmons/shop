@@ -56,6 +56,7 @@ function commerceReconcilers(calls: string[] = []): Omit<ScheduledReconcilers, '
     stripeNotifications: async () => { calls.push('stripeNotifications'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     shippedNotifications: async () => { calls.push('shippedNotifications'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     receiptClaims: async () => { calls.push('receiptClaims'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
+    receiptClaimNotifications: async () => { calls.push('receiptClaimNotifications'); return emptyReconciliationResult(); },
     preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
   };
@@ -92,7 +93,7 @@ test('Ethereum maintenance skips its chain work while every other scheduled job 
     ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
   });
   assert.deepEqual(calls.sort(), [
-    'notifications', 'ops', 'packStatus', 'preorders', 'receiptClaims',
+    'notifications', 'ops', 'packStatus', 'preorders', 'receiptClaimNotifications', 'receiptClaims',
     'shippedNotifications', 'stripe', 'stripeNotifications',
   ]);
   assert.equal(commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_reconciliation_cursor').get()!.n, 0);
@@ -112,16 +113,17 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
       inspected: 6, pages: 1, stopReason: 'time-limit', hasMore: true, oldestDueAgeMs: 12_000,
     }; },
     receiptClaims: async () => { calls.push('receiptClaims'); return { ...emptyReconciliationResult(), attempted: 7, completed: 7 }; },
+    receiptClaimNotifications: async () => { calls.push('receiptClaimNotifications'); return emptyReconciliationResult(); },
     preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
     ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
   });
   assert.deepEqual(calls, [
     'stripe', 'stripeNotifications', 'shippedNotifications', 'packStatus',
-    'notifications', 'receiptClaims', 'preorders', 'ethereum', 'ops',
+    'notifications', 'receiptClaims', 'receiptClaimNotifications', 'preorders', 'ethereum', 'ops',
   ]);
   await reconciliation;
-  assert.equal(logs.length, 9);
+  assert.equal(logs.length, 10);
   for (const entry of logs) {
     assert.equal(entry.event, 'scheduled_reconciliation_job');
     assert.equal(entry.outcome, 'succeeded');
@@ -137,6 +139,7 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
     notifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 6, completed: 6, deferred: 0, skipped: 0, failed: 0,
       inspected: 6, pages: 1, stopReason: 'time-limit', hasMore: true, oldestDueAgeMs: 12_000 },
     receiptClaims: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 7, completed: 7, deferred: 0, skipped: 0, failed: 0 },
+    receiptClaimNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     preorders: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     ethereum: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     ops: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
@@ -328,7 +331,7 @@ test('OPS cleanup runs while commerce authority is pending', async () => {
   assert.deepEqual(commerceCalls, []);
   authority.resolve({ authority_state: 'd1', revision: 1, documents_revision: 0 });
   await reconciliation;
-  assert.equal(commerceCalls.length, 8);
+  assert.equal(commerceCalls.length, 9);
 });
 
 test('commerce authority failure waits for independent OPS cleanup and retains both failures', async (context) => {

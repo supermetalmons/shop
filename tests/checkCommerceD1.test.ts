@@ -295,6 +295,8 @@ test('Commerce D1 checker accepts the current schema using complete production q
       notificationOutboxPreparation: 'ready',
       notificationOutboxGroups: 0,
       notificationOutboxFailures: [],
+      receiptClaimFailureOutboxRows: 0,
+      receiptClaimFailureOutboxStates: [],
       stripeCheckoutStateMode: 'table',
       stripeCheckoutStatePreparation: 'ready',
       stripeCheckoutStateRows: 256,
@@ -358,7 +360,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
       assert.equal(queries.filter((sql) => sql === expected).length, 1, expected);
     }
-    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 6);
+    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 10);
     const smokeQuery = renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 }));
     assert.equal(queries.filter((sql) => sql === smokeQuery).length, 1);
     assert.equal(queries.filter((sql) => /\bFROM sqlite_(?:schema|master)\b/i.test(sql)).length, 1);
@@ -685,7 +687,8 @@ test('Commerce D1 checker rejects uninitialized latest schema and accepts initia
     assert.deepEqual(checkCommerceD1(localQuery(database)), {
       authorityState: 'paused', authorityRevision: 2, inventoryMode: 'rows',
       notificationOutboxMode: 'table', notificationOutboxPreparation: 'ready', notificationOutboxGroups: 0,
-      notificationOutboxFailures: [], stripeCheckoutStateMode: 'table', stripeCheckoutStatePreparation: 'ready',
+      notificationOutboxFailures: [], receiptClaimFailureOutboxRows: 0, receiptClaimFailureOutboxStates: [],
+      stripeCheckoutStateMode: 'table', stripeCheckoutStatePreparation: 'ready',
       stripeCheckoutStateRows: 0, packStatusOutboxMode: 'table', packStatusOutboxPreparation: 'ready',
       packStatusOutboxRows: 0, deliveryRecoveryStateMode: 'table', deliveryRecoveryStatePreparation: 'ready',
       deliveryRecoveryStateRows: 0, inventoryDrops: inventoryDropConfigs().length, availableDudes: fixtureAvailableDudes(),

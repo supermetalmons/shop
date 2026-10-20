@@ -836,6 +836,15 @@ email Queue accepted the jobs; provider delivery still uses its existing retries
 and dead-letter queue. Historical checkouts are not bulk backfilled; explicitly
 replayed fulfillment jobs initialize missing outboxes.
 
+Receipt-claim failures use the same error inbox and notification Queue. The
+receipt-specific outbox captures terminal Workflow failures atomically, and the
+five-minute cron detects overdue operations and abandoned legacy processing
+claims. One incident produces one stable email job; completed or superseded
+attempts are suppressed before publication. Receipt delivery retains its
+15-minute automatic window and explicit retry requirement. See
+[receipt claim failure emails](scripts/docs/receipt_claim_workflow_rollout.md#failure-emails)
+for diagnostics and recovery.
+
 Inventory, pending-box, notification-subscription, and RPC browser requests are
 accepted only from `mons.shop`, `www.mons.shop`, localhost, and `127.0.0.1`.
 Candidate and version-preview frontend origins are intentionally unsupported.

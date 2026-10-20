@@ -17,7 +17,7 @@ export type ReconciliationOptions = {
 };
 
 type ReconciliationJob = 'stripe' | 'stripeNotifications' | 'shippedNotifications' | 'packStatus' |
-  'notifications' | 'receiptClaims' | 'preorders' | 'ops';
+  'notifications' | 'receiptClaims' | 'receiptClaimNotifications' | 'preorders' | 'ops';
 
 type FailureIdentity = {
   parentPath?: string;

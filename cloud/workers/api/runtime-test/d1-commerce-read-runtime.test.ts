@@ -33,6 +33,7 @@ import {
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata } from '../../../../shared/stripeCheckoutState.ts';
 import { stripeCheckoutStateWriteStatement } from '../src/stripeCheckoutStateStore.ts';
+import { parseReceiptClaimFailureOutboxRow } from '../../../../shared/receiptClaimFailureOutbox.ts';
 
 function batchDocuments(db: D1Database, statements: Array<D1PreparedStatement | D1PreparedStatement[]>): Promise<D1Result[]> {
   return db.batch(statements.flat());
@@ -263,6 +264,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0039_ethereum_reconciliation_indexes.sql',
       '0040_ethereum_reconciliation_resume.sql',
       '0041_ethereum_111k_control.sql',
+      '0042_receipt_claim_failure_outbox.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -1242,6 +1244,47 @@ test('commerce repository reads and transaction guards run through the real D1 r
     }
     observedBatchSizes.length = 0;
     observedPreparedSql.length = 0;
+
+    await context.test('receipt failure events capture atomically and deduplicate in native D1', async () => {
+      const code = 'ALERTS-1234567890';
+      const key = commerceKeys.claimCode(code);
+      const operationId = 'src-v1-123e4567-e89b-42d3-a456-426614174044';
+      const source = {
+        namespace: 'stripe_receipt_v1', code, dropId: 'card_nft_2', deliveryId: 7, boxId: 16,
+        status: 'processing', recipient: '11111111111111111111111111111111', processingStartedAt: 0,
+        receiptClaimWorkflowV1: {
+          operationId, generation: 1, phase: 'pending', createdAtMs: 0, deadlineAtMs: 900_000,
+          error: { code: 'unavailable', message: `Sensitive claim ${code}` },
+          submission: { signature: '2'.repeat(88), signedTransactionBase64: 'private-bytes' },
+        },
+      };
+      await batchDocuments(env.COMMERCE_DB, [insertDocument(env.COMMERCE_DB, key, source)]);
+      const terminal = (phase: string, generation = 1) => env.COMMERCE_DB.prepare(`UPDATE commerce_documents
+        SET document_json = ?, version = version + 1 WHERE document_path = ?`).bind(JSON.stringify({
+        ...source, receiptClaimWorkflowV1: { ...source.receiptClaimWorkflowV1, phase, generation },
+      }), key.path);
+      const events = async () => (await env.COMMERCE_DB.prepare(`SELECT * FROM commerce_receipt_claim_failure_outbox
+        WHERE claim_path = ? ORDER BY event_id`).bind(key.path).all<Record<string, unknown>>()).results.map(parseReceiptClaimFailureOutboxRow);
+      await assert.rejects(env.COMMERCE_DB.batch([terminal('failed'), env.COMMERCE_DB.prepare('SELECT json(?)').bind('invalid-json')]));
+      assert.deepEqual(await events(), []);
+      assert.equal(await env.COMMERCE_DB.prepare(`SELECT json_extract(document_json, '$.receiptClaimWorkflowV1.phase') AS phase
+        FROM commerce_documents WHERE document_path = ?`).bind(key.path).first<string>('phase'), 'pending');
+      await terminal('manual_review').run();
+      const first = (await events())[0];
+      assert.equal(first.eventId, `${operationId}:g1`);
+      assert.equal(first.snapshot.phase, 'manual_review');
+      assert.equal(first.snapshot.signature, '2'.repeat(88));
+      assert.ok(!JSON.stringify(first.snapshot).includes(code));
+      assert.ok(!JSON.stringify(first.snapshot).includes('private-bytes'));
+      await terminal('failed').run();
+      assert.deepEqual(await events(), [first]);
+      await terminal('failed', 2).run();
+      assert.equal((await events()).length, 2);
+      assert.deepEqual((await events())[0], first);
+      await assert.rejects(env.COMMERCE_DB.prepare(`UPDATE commerce_receipt_claim_failure_outbox
+        SET snapshot_json = json_set(snapshot_json, '$.boxId', 17), revision = revision + 1 WHERE event_id = ?`)
+        .bind(first.eventId).run(), /immutable/);
+    });
 
     const pausedReadUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:24.000Z'));
     const pausedWriteUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:25.000Z'));

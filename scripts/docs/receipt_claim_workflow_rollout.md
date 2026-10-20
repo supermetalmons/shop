@@ -22,6 +22,41 @@ Operations retain a 15-minute automatic confirmation window. A terminal retryabl
 
 Legacy processing claims are adopted only after the synchronous Worker has drained. Their receiver and known submissions are preserved. A legacy claimed result remains readable. Signed transaction bytes are stored in D1 and are not returned by Workflow steps or API responses.
 
+## Failure emails
+
+Receipt delivery still has a 15-minute automatic confirmation window. Expiration
+and terminal failures require an explicit retry; notification detection does not
+advance a Workflow generation, change its deadline, or clear transaction evidence.
+
+`commerce_receipt_claim_failure_outbox` records failed Workflow generations
+atomically with the claim update. The five-minute scheduled notification pass
+also discovers overdue pending operations, terminal operations missing an intent,
+and legacy processing claims without a Workflow after 15 minutes and lease expiry.
+Legacy incidents use a hash of the claim identity and processing attempt. Repeated
+scans and failure writes reuse the same incident; a new explicit generation can
+produce a new failure email. Completed or superseded attempts are suppressed
+before publication.
+
+Emails use the existing notification queue and Resend consumer, from
+`notifications@support.mons.shop` to `development@support.mons.shop`. They contain
+the drop, item, delivery, receiver, operation, timestamps, safe error code summary,
+and recorded transaction signature. Claim codes, credential-bearing document
+paths, signed transactions, raw exceptions, and shipping details are excluded.
+
+Publication retains the existing ten-minute lease, four attempts, and six-hour
+retry window. The saved job and provider idempotency key are immutable across
+retries. These are email publication retries, not additional receipt delivery
+attempts. `queued` means Queue acceptance; `notification_email_sent` with a Resend
+message ID confirms provider acceptance. Inspect Resend delivery events for final
+mailbox delivery, and inspect the notification DLQ for exhausted queue retries.
+
+`npm run check:commerce-d1` validates failure-outbox rows and reports their states.
+Scheduled logs use `receiptClaimNotifications`; they never include claim codes.
+Recover a legacy failure through the existing claim UI/API using its original
+code and stored recipient, preserving its request UUID across transport retries.
+Verify the final claim and order mirrors, transaction finalization, consumed pack
+receipt, and each expected recipient-owned receipt before considering it resolved.
+
 ## Disable or roll back
 
 Deploy the compatible Worker with `--var STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED:false` first. Keep the Workflow class, binding, status routes, and scheduled recovery deployed until accepted operations settle. Do not roll back to code that resumes synchronous transfer execution for claims already owned by a Workflow. Retain the additive indexes and operation journals. Restore the compatible frontend or disable new starts while investigating; do not reset an operation's recipient or generation manually.

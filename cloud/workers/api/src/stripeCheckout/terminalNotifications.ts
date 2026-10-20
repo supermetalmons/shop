@@ -3,6 +3,7 @@ import { normalizeNotificationEmailRecipient } from '../notifications.js';
 import {
   createNotificationEmailJobV1,
   isNotificationEmailJobId,
+  NOTIFICATION_MANUAL_REVIEW_EMAIL,
   type NotificationEmailJobContext,
   type NotificationEmailJobV1,
 } from '../../../../../shared/notificationEmailJob.js';
@@ -10,8 +11,6 @@ import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotificat
 import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
 import type { StripeCheckoutNotificationView, StripeCheckoutTerminalState } from './readModel.js';
-
-const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'development@support.mons.shop';
 
 type CheckoutDocument = {
   path: string;
@@ -94,7 +93,7 @@ export async function prepareStripeCheckoutTerminalNotifications(args: {
     return { outcome: 'not_terminal', jobs: [] };
   }
 
-  const recipient = normalizeNotificationEmailRecipient(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
+  const recipient = normalizeNotificationEmailRecipient(NOTIFICATION_MANUAL_REVIEW_EMAIL);
   if (!recipient) return invalid('invalid_manual_review_recipient');
   const idempotencyKey = `${dropId}:${sessionId}:stripe_manual_review`;
   const context: NotificationEmailJobContext = { dropId, sessionId };

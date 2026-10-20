@@ -70,7 +70,7 @@ export function planReadyToShipOrderNotifications(args: {
 }
 
 export function shouldSendResendNotificationEmail(kind: ResendNotificationEmailKind): boolean {
-  if (kind === 'stripe_checkout_manual_review') return true;
+  if (kind === 'stripe_checkout_manual_review' || kind === 'receipt_claim_manual_review') return true;
   return RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED;
 }
 
