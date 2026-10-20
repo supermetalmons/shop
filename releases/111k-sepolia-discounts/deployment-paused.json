@@ -65,7 +65,7 @@
       "svgSha256": "d6db9adcca3b1bde3c4c143aa10b19554d245fc1b40938c82e8a9676f78ac35d"
     }
   ],
-  "sourceRevision": null,
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
   "frozenAt": "2026-10-20T19:10:56.529Z",
   "compiler": {
     "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
@@ -260,7 +260,13 @@
   ],
   "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
   "sourceAttribution": {
-    "status": "frozen-working-tree",
-    "reason": "Exact sources were frozen from a working tree before a matching source commit was recorded; use the frozen hashes to identify deployed content."
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json"
+    ]
   }
 }

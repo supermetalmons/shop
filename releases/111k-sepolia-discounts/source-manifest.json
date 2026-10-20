@@ -4,11 +4,17 @@
   "chainId": 11155111,
   "manifestSha256": "f60f396d88d32e505cee29a50e83010c5856408e50790a2dc7af68c3ed18360b",
   "frozenAt": "2026-10-20T19:10:56.529Z",
-  "sourceRevision": null,
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
   "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
   "sourceAttribution": {
-    "status": "frozen-working-tree",
-    "reason": "Exact sources were frozen from a working tree before a matching source commit was recorded; use the frozen hashes to identify deployed content."
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json"
+    ]
   },
   "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
   "treasury": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",

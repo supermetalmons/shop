@@ -1,0 +1,421 @@
+{
+  "releaseId": "111k-discounts-2026-10-20T19-10-56-528Z-e863bdb0",
+  "manifestSha256": "f60f396d88d32e505cee29a50e83010c5856408e50790a2dc7af68c3ed18360b",
+  "chainId": 11155111,
+  "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
+  "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json"
+    ]
+  },
+  "api": {
+    "name": "mons-shop-api",
+    "versionId": "3d115092-be08-4b08-86e6-f22d0cad8ef6",
+    "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
+    "deploymentObservedCompleteAt": "2026-10-20T19:29:53Z",
+    "drainNotBefore": "2026-10-20T19:30:58Z",
+    "url": "https://api.mons.shop",
+    "evidence": [
+      {
+        "file": "api-rollout.json",
+        "sha256": "df928fbc8caed3f199cb0acca817dfe0786f1ba28314df468327b487b2d8ba89"
+      },
+      {
+        "file": "api-deploy.log",
+        "sha256": "d29515806453c20d1ce20e2b6db39f691994faa9c341b5a375e393e12c5179c3"
+      }
+    ]
+  },
+  "frontend": {
+    "name": "mons-shop",
+    "versionId": "e90f533e-2845-4285-b12e-61a3798d26e2",
+    "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
+    "deploymentObservedCompleteAt": "2026-10-20T19:32:40.022Z",
+    "url": "https://mons.shop/111k_devnet",
+    "evidence": [
+      {
+        "file": "frontend-rollout.json",
+        "sha256": "ef7546a6affbc90831a675b97d7eb2b3ceaba900a4527aae13921ec0462d63ff"
+      },
+      {
+        "file": "frontend-deploy.log",
+        "sha256": "95e3904c22e3fcc1f9ed84dc2a0cd91ca263986356ff9ee1687977d854e8f027"
+      }
+    ]
+  },
+  "migrations": {
+    "commerce": [
+      "0041_ethereum_111k_control.sql"
+    ]
+  },
+  "maintenance": {
+    "passed": true,
+    "resetId": "28fa6ce8-9032-4b5e-8e87-6404287ec20f",
+    "previousContract": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+    "drainCheck": {
+      "deploymentObservedCompleteAt": "2026-10-20T19:29:53Z",
+      "drainNotBefore": "2026-10-20T19:30:58Z",
+      "databaseResetAppliedAt": "2026-10-20T19:31:16.000Z",
+      "databaseResetAppliedAfterDrain": true
+    },
+    "finalControl": {
+      "paused": false,
+      "revision": 4,
+      "pausedAtMs": null,
+      "chainId": 11155111,
+      "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "resetGuardId": null,
+      "lastResetId": "28fa6ce8-9032-4b5e-8e87-6404287ec20f",
+      "updatedAtMs": 1792524796000
+    },
+    "acceptanceChecks": {
+      "oldScopeCleared": true,
+      "sharedProfilesAndAddressesUnchanged": true,
+      "authenticationPreserved": true,
+      "otherDropCountsUnchanged": true,
+      "otherNativeScopesUnchanged": true,
+      "globalCommerceStayedActive": true,
+      "documentRevisionAdvanced": true,
+      "pathTombstonesRetained": true,
+      "ownerTombstonesRetained": true,
+      "packStatusUnchanged": true,
+      "noCommitGuardRemains": true,
+      "resetMarkerRecorded": true
+    },
+    "authenticationResolution": {
+      "existingAuthenticationPreserved": true,
+      "fullAuthenticationDigestUnchanged": false,
+      "explanation": "The initial full-table comparison differed because new anonymous guest sessions were created after the baseline. Independent canonical digests verified that all baseline anonymous sessions were byte-identical; other authentication tables were unchanged.",
+      "supplement": {
+        "capturedAt": "2026-10-20T19:32:42.522Z",
+        "baselineCapturedAt": "2026-10-20T19:20:26.729Z",
+        "baselineFileSha256": "d6433b3599e0716262e65578c0e3bc5f10b73fa41f45d3ec9d498b8ba051d767",
+        "operation": "read-only SELECT anonymous_auth_sessions; canonical digest computed in memory",
+        "baseline": {
+          "count": 1456,
+          "sha256": "9d3389e3053afe4c3226f4321c4ab0c9b9b1813a72f2779b1d5cdec3bfd8762e"
+        },
+        "currentTotalCount": 1459,
+        "currentPreBaseline": {
+          "count": 1456,
+          "sha256": "9d3389e3053afe4c3226f4321c4ab0c9b9b1813a72f2779b1d5cdec3bfd8762e"
+        },
+        "preExistingCountUnchanged": true,
+        "preExistingDigestUnchanged": true,
+        "newSessionCount": 3,
+        "newSessionCreatedAt": {
+          "min": "2026-10-20T19:24:54.920Z",
+          "max": "2026-10-20T19:32:15.987Z"
+        },
+        "newSessionRefreshedAt": {
+          "min": "2026-10-20T19:24:54.920Z",
+          "max": "2026-10-20T19:32:15.987Z"
+        },
+        "allRowsAccountedFor": true,
+        "onlyAdditionsAfterBaseline": true
+      },
+      "finalAcceptanceProof": {
+        "baselineCutoff": "2026-10-20T19:20:26.729Z",
+        "currentTotalCount": 1459,
+        "baselineCount": 1456,
+        "preExistingCountUnchanged": true,
+        "preExistingDigestUnchanged": true,
+        "allRowsAccountedFor": true,
+        "newSessionCount": 3,
+        "newSessionCreatedAt": {
+          "min": "2026-10-20T19:24:54.920Z",
+          "max": "2026-10-20T19:32:15.987Z"
+        },
+        "onlyAdditionsAfterBaseline": true
+      },
+      "evidence": [
+        {
+          "file": "anonymous-auth-supplement-1792524762523.json",
+          "sha256": "a7e86be397e02e13b67ca6fedc7c42e2dd4d9f2d1f7960319eaf150d92cd8c8d"
+        },
+        {
+          "file": "maintenance-acceptance-preserved.json",
+          "sha256": "dd9fbccb62971fdc29b6b869c0bf27ceaf3337af831cf1a9e2afd2b37809602c"
+        }
+      ]
+    }
+  },
+  "apiPausedVerification": {
+    "checkedAt": "2026-10-20T19:30:08.697Z",
+    "phase": "paused",
+    "passed": true,
+    "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "enabled": false,
+    "stats": {
+      "chainId": 11155111,
+      "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "allocatedCrates": 0,
+      "warehousesMinted": 0,
+      "artworksMinted": 0,
+      "cratePriceWei": "100000000000000",
+      "warehousePriceWei": "1100000000000000",
+      "saleActive": false,
+      "remainingCrates": 5555,
+      "remainingWarehouses": 505,
+      "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "discountCratePriceWei": "50000000000000",
+      "discountAllowance": 1,
+      "discountUsed": 0
+    },
+    "emptyInventory": true,
+    "endpoints": [
+      {
+        "path": "/health",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/config",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/stats?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/inventory?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "status": 200
+      },
+      {
+        "path": "/pack-status/card_nft_2",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/delivery/prepare",
+        "status": 503
+      },
+      {
+        "path": "/ethereum/111k/delivery/confirm",
+        "status": 503
+      },
+      {
+        "path": "/ethereum/111k/claims/prepare",
+        "status": 503
+      },
+      {
+        "path": "/ethereum/111k/claims/confirm",
+        "status": 503
+      }
+    ],
+    "evidence": {
+      "file": "http-paused.json",
+      "sha256": "e83add2f2a178956cbf094e11d1b3a2ab334d812eb7ad9395ae24834dd35cf30"
+    }
+  },
+  "apiOpenVerification": {
+    "checkedAt": "2026-10-20T19:34:12.680Z",
+    "phase": "open",
+    "passed": true,
+    "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "enabled": true,
+    "stats": {
+      "chainId": 11155111,
+      "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "allocatedCrates": 0,
+      "warehousesMinted": 0,
+      "artworksMinted": 0,
+      "cratePriceWei": "100000000000000",
+      "warehousePriceWei": "1100000000000000",
+      "saleActive": true,
+      "remainingCrates": 5555,
+      "remainingWarehouses": 505,
+      "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "discountCratePriceWei": "50000000000000",
+      "discountAllowance": 1,
+      "discountUsed": 0
+    },
+    "emptyInventory": true,
+    "endpoints": [
+      {
+        "path": "/ethereum/111k/config",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/stats?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "status": 200
+      },
+      {
+        "path": "/health",
+        "status": 200
+      },
+      {
+        "path": "/ethereum/111k/inventory?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "status": 200
+      },
+      {
+        "path": "/pack-status/card_nft_2",
+        "status": 200
+      }
+    ],
+    "evidence": {
+      "file": "http-open.json",
+      "sha256": "ce9b629676e98d4aa65b487cb14a3d2e2c49f54d827c52d6e67e0a058b21559e"
+    }
+  },
+  "liveMintSimulation": {
+    "passed": true,
+    "method": "eth_call",
+    "checkedAt": "2026-10-20T19:34:10.689Z",
+    "casesPassed": 5,
+    "signedTransactions": 0,
+    "broadcastTransactions": 0,
+    "statsUnchanged": true,
+    "supplyUnchanged": true,
+    "report": "mint-simulation.json"
+  },
+  "databaseGates": {
+    "data": "passed",
+    "ops": "passed",
+    "commerce": {
+      "passed": true,
+      "authoritativeDocuments": 15982,
+      "evidence": {
+        "file": "commerce-db-gate.log",
+        "sha256": "78cac734983670c920b0b66925341183dbd5a4abf1336ae83f3f5dc853f0a135"
+      }
+    }
+  },
+  "validation": {
+    "checkedAt": "2026-10-20T19:24:07.035Z",
+    "contractTests": 115,
+    "gasCases": 108,
+    "gasRegressionTests": 10,
+    "snapshotGeneratorTests": 6,
+    "rootTests": 4082,
+    "apiTests": 2442,
+    "nativeWorkerTests": 36,
+    "rustTests": 35,
+    "anvilLifecycle": "passed",
+    "frontendTypes": "passed",
+    "apiTypes": "passed",
+    "toolsTypes": "passed",
+    "generatedSchema": "passed",
+    "generatedAbi": "passed",
+    "deadCode": "passed",
+    "productionBuild": "passed",
+    "browserCredentialScan": "passed",
+    "apiDryRun": "passed",
+    "apiStartup": "passed",
+    "frontendDryRun": "passed",
+    "dataDatabaseGate": "passed",
+    "opsDatabaseGate": "passed",
+    "notes": [
+      "The initial repository check found the runtime migration-list fixture missing migration 0041. The fixture was corrected, all 36 native runtime tests passed, and all remaining repository check components passed."
+    ]
+  },
+  "browserVerification": {
+    "checkedAt": "2026-10-20T19:35:16.186Z",
+    "passed": true,
+    "url": "https://mons.shop/111k_devnet",
+    "browser": "Codex in-app browser",
+    "observations": {
+      "maintenanceMintUnavailable": true,
+      "maintenanceMintDisabled": true,
+      "reloadSuccessful": true,
+      "crateAvailability": "5555 / 5555",
+      "cratePriceEth": "0.0001",
+      "twoCratesPriceEth": "0.0002",
+      "warehouseAvailability": "505 / 505",
+      "warehousePriceEth": "0.0011",
+      "emptyInventory": true,
+      "emptyReceipts": true,
+      "finalSelection": "1 crate"
+    },
+    "walletTransactionsSubmitted": 0,
+    "screenshotFile": "storefront-live.png",
+    "evidence": {
+      "file": "browser-verification.json",
+      "sha256": "d80dddc414b3ed62ba0274845eb4655dac14506104c83bd13ebdebf8c5ae84e9"
+    }
+  },
+  "schedulerVerification": {
+    "checkedAt": "2026-10-20T19:35:16.695Z",
+    "passed": true,
+    "control": [
+      {
+        "singleton": 1,
+        "paused": 0,
+        "revision": 4,
+        "paused_at_ms": null,
+        "chain_id": 11155111,
+        "contract_address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "reset_guard_id": null,
+        "last_reset_id": "28fa6ce8-9032-4b5e-8e87-6404287ec20f",
+        "updated_at_ms": 1792524796000
+      }
+    ],
+    "authority": [
+      {
+        "authority_state": "d1",
+        "revision": 23,
+        "documents_revision": 1766,
+        "paused_at_ms": null
+      }
+    ],
+    "oldCounts": [
+      {
+        "quotes": 0,
+        "claims": 0,
+        "cursors": 0,
+        "documents": 0
+      }
+    ],
+    "cursor": [
+      {
+        "chain_id": 11155111,
+        "contract_address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "next_block": 11957412,
+        "scan_end_block": null
+      }
+    ],
+    "newCounts": [
+      {
+        "quotes": 0,
+        "claims": 0,
+        "documents": 0
+      }
+    ],
+    "evidence": {
+      "file": "final-reconciliation-verification.json",
+      "sha256": "23842249b05477cfcd40003e43ebf0df7a13c5be2a190ab0bd72b0571beb4833"
+    }
+  },
+  "proofAssetVerification": {
+    "checkedAt": "2026-10-20T19:32:55.184Z",
+    "assetUrl": "https://mons.shop/assets/111k-DlxnzWS0.js",
+    "httpStatus": 200,
+    "bytes": 199164,
+    "sha256": "a7590185edb5f0454c6336f62c4f34b7f43b60e51bb91e7eb52610296a170401",
+    "matchesLocalBuild": true,
+    "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "recipients": 318,
+    "evidence": {
+      "file": "proof-asset-verification.json",
+      "sha256": "4331b863f274430812640f5acd7cdc42dcf6d887058813967dc75a9432f5952d"
+    }
+  },
+  "reportedAt": "2026-10-20T19:35:36.158Z",
+  "evidence": [
+    {
+      "file": "validation.json",
+      "sha256": "57858d40a9c9e9ed73ad3a885a8d2ff73376c26578c40dea6dc2b5afb856d66d"
+    },
+    {
+      "file": "commerce-migration.log",
+      "sha256": "0c8f66da706f2b5eddaac6c87d63b5cb33c99e1fb402a0238c71ef0834ea2881"
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "releaseId": "111k-discounts-2026-10-20T19-10-56-528Z-e863bdb0",
+  "manifestSha256": "f60f396d88d32e505cee29a50e83010c5856408e50790a2dc7af68c3ed18360b",
+  "chainId": 11155111,
+  "contractAddress": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "readOnly": true,
+  "method": "eth_call",
+  "signedTransactions": 0,
+  "broadcastTransactions": 0,
+  "checkedAt": "2026-10-20T19:34:10.689Z",
+  "blockNumber": 11957406,
+  "blockHash": "0x712ff2acebfb9ff4babe4824e2fad406d3e6ec0e0fd42b823d2c4b59699a96d7",
+  "afterBlockNumber": 11957406,
+  "afterBlockHash": "0x712ff2acebfb9ff4babe4824e2fad406d3e6ec0e0fd42b823d2c4b59699a96d7",
+  "eligibleWallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+  "publicWallet": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "discountCratePriceWei": "50000000000000",
+  "proofSha256": "4eadcb18618e2d7da214dbf30524cdf4380a61102f077a7954a12a65d6d1dedf",
+  "gasLimit": "60000000",
+  "gasPriceWei": "0",
+  "cases": [
+    {
+      "name": "eligible-discount-quantity-1",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "eligible-discount-quantity-2",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "100000000000000",
+      "expected": "DiscountAllowanceExceeded",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x12b902e1",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "invalid-discount-proof",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "InvalidDiscountProof",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x51cf5b4e",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-crate-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-warehouse-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "1100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": {
+        "balanceWei": "1100000000000000",
+        "reason": "Actual sender balance is below this simulated payment"
+      }
+    }
+  ],
+  "before": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "212555374001146775",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "6",
+    "publicNonce": "1",
+    "previousSaleActive": true
+  },
+  "after": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "212555374001146775",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "6",
+    "publicNonce": "1",
+    "previousSaleActive": true
+  },
+  "statsUnchanged": true,
+  "supplyUnchanged": true,
+  "senderBalancesUnchanged": true,
+  "senderNoncesUnchanged": true,
+  "previousContract": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+  "previousSaleActive": true,
+  "passed": true,
+  "sourceRevision": "48b7a57311a5089f5ea105c75ad663e80e9bc8df",
+  "frozenBaseRevision": "4415c1a4616727980f9353accce7ccd73a4cdd19",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json"
+    ]
+  }
+}
