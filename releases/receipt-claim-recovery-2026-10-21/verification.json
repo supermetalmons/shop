@@ -1,0 +1,272 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-20T21:00:24.984Z",
+  "timezone": "Europe/Istanbul",
+  "cluster": "mainnet-beta",
+  "vault": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "sourceCommits": {
+    "failureNotifications": "e3c1b532",
+    "nativeFetchFix": "e81dcd50"
+  },
+  "deployments": {
+    "initialFailureNotifications": "4ef619e6-ae7e-453a-81a3-2340e8a60f76",
+    "activeApi": "48d14811-cad5-48a5-b404-08dae8816617"
+  },
+  "migration": "0042_receipt_claim_failure_outbox.sql",
+  "results": {
+    "claimsRecovered": 4,
+    "cardReceiptsDelivered": 12,
+    "packReceiptsBurned": 4,
+    "remainingProcessingReceiptClaims": 0,
+    "remainingLegacyReceiptClaimOrphans": 0,
+    "notificationEventsQueued": 5,
+    "notificationEventsPendingOrFailed": 0,
+    "allSixQueuesAndDlqsEmpty": true,
+    "automaticClaimWindowMinutes": 15,
+    "terminalRetryRequiresExplicitRequest": true
+  },
+  "recoveryIssue": {
+    "packId": 445,
+    "failedGeneration": 1,
+    "transactionsSubmitted": 0,
+    "errorCode": "unavailable",
+    "cause": "Workerd native fetch was invoked through a provider object with an invalid receiver. Default callbacks now use wrappers in both claim reconciliation and completed-claim enrichment.",
+    "resolvedGeneration": 2
+  },
+  "claims": [
+    {
+      "packId": 445,
+      "deliveryId": 1034437656,
+      "recipient": "5oy2HZGoGTbXYb5c2vbrVZw19PzqZEciHjvzCrut5Rv4",
+      "sourceReceiptAssetId": "27bNg1XEjQ8UFXcYsKZ1DfSt4Raci1fE9eCZLenibqs5",
+      "sourceBurned": true,
+      "assignedCardIds": [
+        416,
+        689,
+        8205
+      ],
+      "receipts": [
+        {
+          "cardId": 416,
+          "assetId": "4vvwPJqbuc7d5eBgwcc8ak3YkC6g4mgirwjuwDK7ekzR"
+        },
+        {
+          "cardId": 689,
+          "assetId": "DELv8w7Dom2MaWfVsgYPRvHPvkgEQv6CEobLsqFytSk"
+        },
+        {
+          "cardId": 8205,
+          "assetId": "9uuSKrZVA8HYpxDsiyiCTjVp5GcvdfyU48awmeHSS9AF"
+        }
+      ],
+      "claimStatus": "claimed",
+      "workflowPhase": "complete",
+      "operationId": "src-v1-99b3e148-9dd7-4dc1-b1f6-fdad7878a183",
+      "generation": 2,
+      "transactions": [
+        {
+          "signature": "5sYNL23KvGVQ2f7KgAkzRsNgtWFyBeD1zxx2wyyPGpLmRpc3Bb1pyoxjGeXDTqdrJAV1nddNTht99xdnKq9s1eHD",
+          "confirmationStatus": "finalized",
+          "slot": 459371093,
+          "error": null
+        }
+      ],
+      "verifiedSourceBurns": 1,
+      "verifiedCardMints": 3,
+      "orderClaimMirrorsVerified": true,
+      "unrelatedOrderClaimsPreserved": true,
+      "physicalFulfillmentStatus": "Shipped"
+    },
+    {
+      "packId": 1591,
+      "deliveryId": 451017635,
+      "recipient": "8NU51HFapXvY8Xjh8ASRn6bEtc71CtADye4SiJkU9HCu",
+      "sourceReceiptAssetId": "BVH8HduZhXiHbraGKhMrt71KtSjgW1Q85UThvuvWSeDg",
+      "sourceBurned": true,
+      "assignedCardIds": [
+        858,
+        9110,
+        3835
+      ],
+      "receipts": [
+        {
+          "cardId": 858,
+          "assetId": "9A9TyPd9jbUVFuVKm8EiiXRcKw5sDLiMRRbvP2swwYv1"
+        },
+        {
+          "cardId": 9110,
+          "assetId": "EMf7HJ1wHVqnsB3j5Rq5iyNtC2UsRYdTGX1K1G6uGFHH"
+        },
+        {
+          "cardId": 3835,
+          "assetId": "BfQxGZ3kcsWwysYaFpojFREd4e7CDoTgjbMkZeBix19N"
+        }
+      ],
+      "claimStatus": "claimed",
+      "workflowPhase": "complete",
+      "operationId": "src-v1-0a06c276-9ab1-49fd-a872-3e7bc44ff782",
+      "generation": 1,
+      "transactions": [
+        {
+          "signature": "4ziqYhXktG3te6LhExcQDW15pyvVzBWHtBoZ8zaFyYxbTNwqyUQtwezJ4QRE2DyMUB1vpmrq4nwbQpsPjRheo2V6",
+          "confirmationStatus": "finalized",
+          "slot": 459371209,
+          "error": null
+        }
+      ],
+      "verifiedSourceBurns": 1,
+      "verifiedCardMints": 3,
+      "orderClaimMirrorsVerified": true,
+      "unrelatedOrderClaimsPreserved": true,
+      "physicalFulfillmentStatus": "Shipped"
+    },
+    {
+      "packId": 1679,
+      "deliveryId": 1869543993,
+      "recipient": "98gwLNTn1We1NM9ye6KiFE1xMnKudRZcsEFQwKLnVesy",
+      "sourceReceiptAssetId": "562acmicfUKbW4PQkeoKq3Tu4n8xET7LkLSCScWr4K5Y",
+      "sourceBurned": true,
+      "assignedCardIds": [
+        6541,
+        6995,
+        7448
+      ],
+      "receipts": [
+        {
+          "cardId": 6541,
+          "assetId": "3B4MA4MZzQQjDxibYmvbgzpf74boKQtZ9kgjYtuEn8Aw"
+        },
+        {
+          "cardId": 6995,
+          "assetId": "A9iotdpygbySwXJrh1Em2NmBrZ6juB7XuRfPYLh5BVJA"
+        },
+        {
+          "cardId": 7448,
+          "assetId": "9M4Lb9z3DpNKWQrtzoY9FuLFTaj2aaXBUfFcwRoC2Y2i"
+        }
+      ],
+      "claimStatus": "claimed",
+      "workflowPhase": "complete",
+      "operationId": "src-v1-fde34136-a32b-4737-b3d1-d81ff5cbd25b",
+      "generation": 1,
+      "transactions": [
+        {
+          "signature": "4YmefLxdSbg2bSe1YSiXGtnMu26evDPZDjVq3DUdeHZwMSgLJKh2NCftEAvx9b2cXwFWECak5XnHGwG59MbPLguh",
+          "confirmationStatus": "finalized",
+          "slot": 459371276,
+          "error": null
+        }
+      ],
+      "verifiedSourceBurns": 1,
+      "verifiedCardMints": 3,
+      "orderClaimMirrorsVerified": true,
+      "unrelatedOrderClaimsPreserved": true,
+      "physicalFulfillmentStatus": "Shipped"
+    },
+    {
+      "packId": 2228,
+      "deliveryId": 1295179978,
+      "recipient": "HMcGCF4c1WbFM2hhqzev1kcKXREHEV44xtMRKtatq1CW",
+      "sourceReceiptAssetId": "DbBAxTTXeGCuLgaTvTg9jVpPWfckhCN1ppgqXcr6eV3g",
+      "sourceBurned": true,
+      "assignedCardIds": [
+        8798,
+        1664,
+        658
+      ],
+      "receipts": [
+        {
+          "cardId": 8798,
+          "assetId": "CKJsYUNNuQT9ef3T9mgy7t8PqVdWCfjb5AUALuXipeFe"
+        },
+        {
+          "cardId": 1664,
+          "assetId": "3XPjFvbU42AEjJTLj25NiHTC8RYdiTHiGa5isJNu5i6u"
+        },
+        {
+          "cardId": 658,
+          "assetId": "7tTBfzPN3asttScpgVCmjvUq9UyGe3fV6acgrAAn8sUQ"
+        }
+      ],
+      "claimStatus": "claimed",
+      "workflowPhase": "complete",
+      "operationId": "src-v1-5b05081d-22bf-4631-942e-5a4af1efb5b9",
+      "generation": 1,
+      "transactions": [
+        {
+          "signature": "5ed7CB34PmEvEy5BDdBDGAS7su8rkb43BNzPrPHdM8AdH5fB6ZEkhdBSa2nAJ7ZUbp9d15L2JsTQ4hhp3YHWTAAV",
+          "confirmationStatus": "finalized",
+          "slot": 459371343,
+          "error": null
+        }
+      ],
+      "verifiedSourceBurns": 1,
+      "verifiedCardMints": 3,
+      "orderClaimMirrorsVerified": true,
+      "unrelatedOrderClaimsPreserved": true,
+      "physicalFulfillmentStatus": "Shipped"
+    }
+  ],
+  "failureEmailVerification": {
+    "recipient": "development@support.mons.shop",
+    "sender": "notifications@support.mons.shop",
+    "evidence": "Resend acceptance confirmed by notification_email_sent consumer events; mailbox delivery was not independently inspected.",
+    "providerAcceptedMessages": [
+      {
+        "deliveryId": 451017635,
+        "jobId": "88dfd1b0-5360-4f92-89b9-031f0e35c5b7",
+        "resendMessageId": "01a15b0f-adbd-7da2-841a-aa856011d6c8",
+        "attempts": 1,
+        "observedAt": "2026-10-20T20:45:17.693Z"
+      },
+      {
+        "deliveryId": 1295179978,
+        "jobId": "911d2ca5-6707-445c-9ee1-cf2468f91e6b",
+        "resendMessageId": "01a15b0f-ae4d-7828-ab47-bbade37051b1",
+        "attempts": 1,
+        "observedAt": "2026-10-20T20:45:17.693Z"
+      },
+      {
+        "deliveryId": 1869543993,
+        "jobId": "b0074428-21c5-49a7-b99f-bd18731fd897",
+        "resendMessageId": "01a15b0f-aecc-7336-923a-ad627a8763d3",
+        "attempts": 1,
+        "observedAt": "2026-10-20T20:45:17.694Z"
+      },
+      {
+        "deliveryId": 1034437656,
+        "jobId": "82943558-0ea1-4c46-90c9-d58682a952c9",
+        "resendMessageId": "01a15b0f-af5d-77bc-b543-1afd2faac0db",
+        "attempts": 1,
+        "observedAt": "2026-10-20T20:45:17.694Z"
+      },
+      {
+        "deliveryId": 1034437656,
+        "jobId": "5c6eb3e6-29f1-459c-95f9-4975f2076d4e",
+        "resendMessageId": "01a15b14-3ea6-7b1f-8381-64b3b65a30c1",
+        "attempts": 1,
+        "observedAt": "2026-10-20T20:50:16.482Z"
+      }
+    ]
+  },
+  "unchangedAssets": {
+    "checkedAt": "2026-10-20T21:00:22.972Z",
+    "otherReceiptCount": 273,
+    "otherReceiptsStillInVault": 273,
+    "otherReceiptChanges": [],
+    "unboxingPendingAccountsStillPresent": true
+  },
+  "validation": {
+    "apiTestsPassed": 2488,
+    "existingRuntimeTestsPassed": 37,
+    "addedNativeFetchRuntimeTestsPassed": 1,
+    "toolingSchemaAndEmailTestsPassed": 176,
+    "apiTypecheck": true,
+    "toolsTypecheck": true,
+    "apiDryRun": true,
+    "apiStartupCheck": true,
+    "productionDatabaseIntegrityChecks": true,
+    "nativeFetchRegressionFailsWithOldDefaults": true,
+    "nativeFetchRegressionPassesWithFixedDefaults": true
+  }
+}
