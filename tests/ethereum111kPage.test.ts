@@ -3,16 +3,17 @@ import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { ETHEREUM_FUNCTIONS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import { encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
-import type { EthereumInventoryItem, EthereumInventoryResponse } from '../shared/ethereum/api.ts';
+import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumStats } from '../shared/ethereum/api.ts';
 import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111kPage.tsx');
+const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
 const { ethereumInventoryQueryKey, ethereumInventoryScope, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 dom.window.close();
@@ -33,6 +34,10 @@ const wallet: EthereumWallet = {
   ready: true, status: 'connected', wallets: [], error: null,
   connect() {}, cancel() {}, disconnect() {}, selectWallet() {},
 };
+function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
+  return { allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
+    warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, ...overrides };
+}
 beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
@@ -41,8 +46,7 @@ beforeEach(context => {
   } });
   window.history.replaceState(null, '', '/111k_devnet');
   t.mock.method(ethereumApi, 'config', async () => config);
-  t.mock.method(ethereumApi, 'stats', async () => ({ allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0,
-    cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505 }));
+  t.mock.method(ethereumApi, 'stats', async () => stats());
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
@@ -50,33 +54,224 @@ function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, i
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   clients.push(client);
   initialize?.(client);
-  return { ...render(createElement(QueryClientProvider, { client }, createElement(Ethereum111kPage, {
+  const props: Parameters<typeof Ethereum111kPage>[0] = {
     wallet, addressEncryptionPublicKey: '', solanaInventoryItems: [], solanaSelected: new Set<string>(),
     onSolanaToggle() {}, clearSolanaSelection() {}, pendingRevealIds: new Set<string>(), onSolanaReveal() {}, onSolanaView() {},
     canOpenSolanaBoxes: () => true, solanaRevealLoading: null, solanaInventoryReady: true,
     ...overrides,
-  }))), client };
+  };
+  const tree = () => createElement(QueryClientProvider, { client }, createElement(Ethereum111kPage, props));
+  const view = render(tree());
+  return { ...view, client, rerenderPage(next: Partial<typeof props>) {
+    Object.assign(props, next);
+    view.rerender(tree());
+  } };
 }
 
-test('the mint panel switches crate and warehouse previews, supports fifteen, and names the 31-artwork crate', async () => {
-  const view = page();
+test('the mint panel shares the drop frame and keeps one crate preview for up to fifteen crates', async () => {
+  const view = page({ header: createElement('header', {}, 'Shop header') });
   const crateImage = view.getByRole('img', { name: '111K crate' });
   assert.equal(crateImage.querySelector('text')?.textContent, '?');
   assert.equal(crateImage.getAttribute('viewBox'), '0 0 720 720');
-  await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
-  assert.ok(view.getByRole('heading', { name: '111K' }));
-  assert.ok(view.getByRole('region', { name: '111K testnet mint' }));
-  assert.ok(view.getByText('A crate of 20 artworks. Crate #5555 holds 31.'));
-  fireEvent.click(view.getByLabelText('Warehouse'));
-  assert.ok(view.getByText('One warehouse. Eleven crates.'));
-  const warehouseImage = view.getByRole('img', { name: '111K warehouse' });
-  assert.equal(warehouseImage.querySelector('text')?.textContent, '?');
-  assert.equal(warehouseImage.getAttribute('viewBox'), '0 0 720 720');
-  const quantity = view.getByRole('slider', { name: /Quantity/ }) as HTMLInputElement;
+  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  const frame = view.container.querySelector('.drop-page-frame--active')!;
+  assert.ok(frame.contains(view.getByText('Shop header')));
+  assert.ok(frame.contains(view.getByText('111K')));
+  assert.ok(frame.contains(view.container.querySelector('.mint-panel')));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
   assert.equal(quantity.max, '15');
   fireEvent.change(quantity, { target: { value: '15' } });
-  assert.ok(view.getByRole('button', { name: /Mint 15 warehouses.*0.0165 ETH/ }));
-  assert.ok(view.getByText('Testnet only. Test ETH; no physical shipments.'));
+  assert.ok(view.getByRole('button', { name: /Mint\s*15 crates.*0.0015 ETH/ }));
+  assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 1);
+  assert.equal(view.getByRole('img', { name: '111K crate' }), crateImage);
+  assert.equal(view.queryByRole('img', { name: '111K warehouse' }), null);
+  assert.equal(view.queryByRole('radio'), null);
+  assert.equal(view.queryByRole('button', { name: /Connect Ethereum|Disconnect Ethereum/ }), null);
+  assert.equal(view.queryByText('A crate of 20 artworks. Crate #5555 holds 31.'), null);
+  assert.equal(view.queryByText('Testnet only. Test ETH; no physical shipments.'), null);
+  assert.equal(view.container.querySelector('.ethereum111k__edition'), null);
+});
+
+test('mint quantity follows the transaction maximum and clamps when available supply falls', async t => {
+  t.mock.method(ethereumApi, 'config', async () => ({ ...config, maxMintQuantity: 4 }));
+  const view = page();
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
+  await waitFor(() => assert.equal(quantity.max, '4'));
+  fireEvent.change(quantity, { target: { value: '4' } });
+  assert.ok(view.getByRole('button', { name: /Mint\s*4 crates.*0.0004 ETH/ }));
+  act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress], stats({ remainingCrates: 2 })));
+  await waitFor(() => assert.equal(quantity.value, '2'));
+  assert.equal(quantity.max, '2');
+  assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ }));
+});
+
+test('disconnected mint connects once and submits the captured crate quantity with exact wei pricing', async t => {
+  const cratePriceWei = '123456789012345678';
+  t.mock.method(ethereumApi, 'stats', async () => stats({ cratePriceWei }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
+  const transactions: Array<{ data: string; value: string }> = [];
+  let connections = 0;
+  let startConnecting = () => {};
+  const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected',
+    connect() { connections++; startConnecting(); } };
+  const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method, params }) => {
+    if (method === 'eth_sendTransaction') {
+      transactions.push((params as Array<{ data: string; value: string }>)[0]);
+      return `0x${'ab'.repeat(32)}`;
+    }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    if (method === 'eth_getTransactionCount') return '0x7';
+    if (method === 'eth_getTransactionByHash') return null;
+    return [owner];
+  } } };
+  const view = page({ wallet: disconnected });
+  startConnecting = () => view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
+  await waitFor(() => assert.ok(view.getByRole('button', { name: /Mint\s*1 crate.*0.123456 ETH/ })));
+  fireEvent.change(view.getByRole('slider', { name: 'Mint quantity' }), { target: { value: '3' } });
+  const mintButton = view.getByRole('button', { name: /Mint\s*3 crates.*0.37037 ETH/ }) as HTMLButtonElement;
+  fireEvent.click(mintButton);
+  fireEvent.click(mintButton);
+  assert.equal(connections, 1);
+  assert.equal(mintButton.disabled, true);
+  assert.equal(transactions.length, 0);
+  view.rerenderPage({ wallet: connected });
+  await waitFor(() => assert.equal(transactions.length, 1));
+  assert.equal(transactions[0].data, encodeCall(ETHEREUM_FUNCTIONS.mintCrates, ['uint256'], [3]));
+  assert.equal(transactions[0].value, `0x${(BigInt(cratePriceWei) * 3n).toString(16)}`);
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
+  view.rerenderPage({ wallet: { ...connected } });
+  await act(async () => { await Promise.resolve(); });
+  assert.equal(transactions.length, 1);
+});
+
+test('a disconnected claim link connects within its claim dialog without initiating a mint', async t => {
+  const receipt = item('2000001', 'crate_receipt');
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [receipt], nextCursor: null, observedBlock: 10 }));
+  let connections = 0;
+  let transactions = 0;
+  const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected', connect() { connections++; } };
+  const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method }) => {
+    if (method === 'eth_sendTransaction') { transactions++; return `0x${'ab'.repeat(32)}`; }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    return [owner];
+  } } };
+  const view = page({ wallet: disconnected, claimReceiptId: receipt.tokenId, claimCode: 'ABCDEF123456' });
+  assert.ok(view.getByRole('dialog', { name: 'Claim crate contents' }));
+  fireEvent.click(view.getByRole('button', { name: 'Connect wallet' }));
+  assert.equal(connections, 1);
+  view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
+  view.rerenderPage({ wallet: connected });
+  await waitFor(() => assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, 'ABCDEF123456'));
+  assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' }));
+  assert.equal(transactions, 0);
+});
+
+test('closing a claim connection restores mint and collection actions and ignores a late wallet response', async t => {
+  const receipt = item('2000001', 'crate_receipt');
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [receipt], nextCursor: null, observedBlock: 10 }));
+  let finishConnection!: (accounts: string[]) => void;
+  const connection = new Promise<string[]>(resolve => { finishConnection = resolve; });
+  let requested = false;
+  Object.defineProperty(window, 'ethereum', { configurable: true, value: {
+    request: async ({ method }: { method: string }) => {
+      if (method === 'eth_requestAccounts') { requested = true; return connection; }
+      return method === 'eth_chainId' ? '0xaa36a7' : [owner];
+    },
+  } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  clients.push(client);
+  let currentWallet!: EthereumWallet;
+  function ClaimPage() {
+    currentWallet = useMiNoteEthereumWallet(true);
+    return createElement(Ethereum111kPage, {
+      wallet: currentWallet, claimReceiptId: receipt.tokenId, claimCode: 'ABCDEF123456',
+      addressEncryptionPublicKey: '', solanaInventoryItems: [], solanaSelected: new Set<string>(),
+      onSolanaToggle() {}, clearSolanaSelection() {}, pendingRevealIds: new Set<string>(), onSolanaReveal() {}, onSolanaView() {},
+      canOpenSolanaBoxes: () => true, solanaRevealLoading: null, solanaInventoryReady: true,
+    });
+  }
+  const view = render(createElement(QueryClientProvider, { client }, createElement(ClaimPage)));
+  const mintButton = view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement;
+  const collectionButton = view.getByRole('button', { name: 'View collection' }) as HTMLButtonElement;
+  await waitFor(() => assert.equal(mintButton.disabled, false));
+  fireEvent.click(view.getByRole('button', { name: 'Connect wallet' }));
+  await waitFor(() => assert.equal(requested, true));
+  assert.equal(currentWallet.status, 'connecting');
+  assert.equal(mintButton.disabled, true);
+  assert.equal(collectionButton.disabled, true);
+  fireEvent.click(view.getByRole('button', { name: 'Close' }));
+  assert.equal(currentWallet.status, 'disconnected');
+  assert.equal(mintButton.disabled, false);
+  assert.equal(collectionButton.disabled, false);
+  assert.equal(view.queryByRole('dialog'), null);
+  await act(async () => { finishConnection([owner]); });
+  assert.equal(currentWallet.status, 'disconnected');
+  assert.equal(currentWallet.address, null);
+  assert.equal(view.queryByRole('dialog'), null);
+});
+
+test('wallet connection errors toast once per occurrence and can repeat after clearing', () => {
+  const messages: string[] = [];
+  const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected' };
+  const error = 'Wallet connection was cancelled. Try again when you’re ready.';
+  const view = page({ wallet: disconnected, showToast: message => messages.push(message) });
+  assert.deepEqual(messages, []);
+  view.rerenderPage({ wallet: { ...disconnected, error } });
+  assert.deepEqual(messages, [error]);
+  view.rerenderPage({ wallet: { ...disconnected, error }, showToast: message => messages.push(message) });
+  assert.deepEqual(messages, [error]);
+  view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
+  assert.deepEqual(messages, [error]);
+  view.rerenderPage({ wallet: { ...disconnected, error } });
+  assert.deepEqual(messages, [error, error]);
+});
+
+for (const state of ['loading', 'paused', 'sold out'] as const) {
+  test(`disconnected mint stays disabled while availability is ${state}`, async t => {
+    t.mock.method(ethereumApi, 'stats', async () => state === 'loading'
+      ? new Promise<EthereumStats>(() => {})
+      : stats({ saleActive: state !== 'paused', remainingCrates: state === 'sold out' ? 0 : 5555 }));
+    let connections = 0;
+    const view = page({ wallet: { ...wallet, address: null, provider: null, status: 'disconnected', connect() { connections++; } } });
+    await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'config'])?.status, 'success'));
+    if (state !== 'loading') await waitFor(() => assert.equal(view.client.getQueryState(['ethereum111k', 'stats', config.chainId, config.contractAddress])?.status, 'success'));
+    const button = view.container.querySelector<HTMLButtonElement>('.mint-panel button[type="submit"]')!;
+    await waitFor(() => assert.equal(button.disabled, true));
+    fireEvent.click(button);
+    assert.equal(connections, 0);
+  });
+}
+
+test('viewing a collection connects below the mint panel while the sale is paused without minting', async t => {
+  t.mock.method(ethereumApi, 'stats', async () => stats({ saleActive: false }));
+  let connections = 0;
+  let transactions = 0;
+  let startConnecting = () => {};
+  const disconnected: EthereumWallet = { ...wallet, address: null, provider: null, status: 'disconnected',
+    connect() { connections++; startConnecting(); } };
+  const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method }) => {
+    if (method === 'eth_sendTransaction') { transactions++; return `0x${'ab'.repeat(32)}`; }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    return [owner];
+  } } };
+  const view = page({ wallet: disconnected });
+  startConnecting = () => view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
+  await waitFor(() => assert.ok(view.getByText('Minting is paused')));
+  const mintButton = view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement;
+  const collectionButton = view.getByRole('button', { name: 'View collection' }) as HTMLButtonElement;
+  assert.equal(mintButton.disabled, true);
+  assert.equal(collectionButton.disabled, false);
+  assert.equal(view.container.querySelector('.drop-page-frame--active')!.contains(collectionButton), false);
+  fireEvent.click(collectionButton);
+  fireEvent.click(collectionButton);
+  assert.equal(connections, 1);
+  assert.equal(collectionButton.disabled, true);
+  view.rerenderPage({ wallet: connected });
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
+  assert.ok(view.getByRole('button', { name: 'Refresh' }));
+  assert.equal(view.queryByRole('button', { name: 'View collection' }), null);
+  assert.equal(mintButton.disabled, true);
+  assert.equal(transactions, 0);
 });
 
 test('Ethereum and Solana appear in one inventory while selection dispatch stays on its own chain', async () => {
@@ -234,8 +429,8 @@ for (const dialog of ['delivery', 'recovery'] as const) {
 test('an unconfigured contract has a clear state and never offers a transaction', async t => {
   t.mock.method(ethereumApi, 'config', async () => resolveEthereum111kConfig());
   const view = page();
-  await waitFor(() => assert.ok(view.getByText('Testnet deployment pending')));
-  assert.equal((view.getByRole('button', { name: /Mint 1 crate/ }) as HTMLButtonElement).disabled, true);
+  await waitFor(() => assert.ok(view.getByText('Mint unavailable')));
+  assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, true);
 });
 
 test('an interrupted submission blocks minting and offers hash recovery or explicit stop tracking', async () => {
@@ -244,7 +439,7 @@ test('an interrupted submission blocks minting and offers hash recovery or expli
     intent: { to: contract, data: '0x1234', value: '0x1' } });
   const view = page();
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Recover transaction' })));
-  assert.equal((view.getByRole('button', { name: /Mint 1 crate/ }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, true);
   assert.ok(view.getByText('Check your wallet. The previous transaction may have been sent.'));
   fireEvent.click(view.getByRole('button', { name: 'Recover transaction' }));
   assert.ok(view.getByLabelText('Transaction hash'));
@@ -253,7 +448,7 @@ test('an interrupted submission blocks minting and offers hash recovery or expli
   assert.ok(view.getByText(/The original transaction may still execute/));
   fireEvent.click(view.getByRole('button', { name: 'Stop tracking this transaction' }));
   await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Recover transaction' }), null));
-  assert.equal((view.getByRole('button', { name: /Mint 1 crate/ }) as HTMLButtonElement).disabled, false);
+  assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, false);
 });
 
 for (const initialChain of ['0xaa36a7', '0x1']) for (const outcome of ['rejected', 'submitted', 'unknown'] as const) {
@@ -405,8 +600,8 @@ test('completing a transaction clears recovery state before the next transaction
     return [owner];
   } } };
   const view = page({ wallet: sendingWallet });
-  await waitFor(() => assert.ok(view.getByText('5,555 crates available')));
-  fireEvent.click(view.getByRole('button', { name: /Mint 1 crate/ }));
+  await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
+  fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
   fireEvent.click(view.getByRole('button', { name: 'Transaction changed?' }));
   fireEvent.change(view.getByLabelText('Replacement transaction hash'), { target: { value: nextHash } });
@@ -420,7 +615,7 @@ test('completing a transaction clears recovery state before the next transaction
   fireEvent.keyDown(document, { key: 'Escape' });
   assert.equal(Boolean(view.queryByRole('button', { name: 'Open crate' })), false);
 
-  fireEvent.click(view.getByRole('button', { name: /Mint 1 crate/ }));
+  fireEvent.click(view.getByRole('button', { name: /Mint\s*1 crate/ }));
   await waitFor(() => assert.equal(sends, 2));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
   assert.equal(Boolean(view.queryByRole('dialog', { name: 'Recover a pending transaction' })), false);

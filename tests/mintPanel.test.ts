@@ -6,6 +6,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 const { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, within } = await import('@testing-library/react');
 const { MintPanel } = await import('../src/components/MintPanel.tsx');
+const { MintPanelActions } = await import('../src/components/MintPanelActions.tsx');
 const { mintPanelPreviewQuantity } = await import('../src/components/MintPreview.tsx');
 const { shouldFetchMintProgress } = await import('../src/hooks/useMintProgress.ts');
 const { resolveDropXProfile } = await import('../src/lib/dropSocialLinks.ts');
@@ -146,6 +147,35 @@ test('quantity changes update the mint label, price, and submitted quantity', as
   assert.match(mint.textContent!, /3 packs.*3 SOL/);
   await act(async () => { fireEvent.click(mint); });
   assert.deepEqual(minted, [3]);
+});
+
+test('shared mint actions preserve exact ETH price text and currency in discount announcements', () => {
+  const props: Parameters<typeof MintPanelActions>[0] = {
+    formId: 'ethereum-mint',
+    showStripePaymentButton: false,
+    showMintButton: true,
+    stripePaymentPending: false,
+    submitBusy: false,
+    disabled: false,
+    useDiscountMint: false,
+    showQuantitySlider: true,
+    quantityLabel: '3 crates',
+    stripePaymentDisplayPriceLabel: undefined,
+    totalPriceLabel: '0.000300000000000003',
+    totalDiscountPriceLabel: '0.000150000000000003',
+    currencyLabel: 'ETH',
+    onStripePayment: async () => {},
+  };
+  const view = render(createElement(MintPanelActions, props));
+  assert.ok(view.getByRole('button', { name: /Mint\s*3 crates\s*0\.000300000000000003 ETH/ }));
+  assert.doesNotMatch(view.container.textContent!, /SOL/);
+
+  view.rerender(createElement(MintPanelActions, { ...props, useDiscountMint: true }));
+  const discounted = view.getByRole('button', {
+    name: 'Mint with discount for 0.000150000000000003 ETH. Regular price 0.000300000000000003 ETH.',
+  });
+  assert.match(discounted.textContent!, /0\.000300000000000003.*0\.000150000000000003.*ETH/);
+  assert.doesNotMatch(view.container.textContent!, /SOL/);
 });
 
 test('minting switches between discounted and regular prices as quantity and allowance change', async () => {

@@ -1,5 +1,5 @@
-export function EthereumContainerPreview({ kind }: { kind: 'crate' | 'warehouse' }) {
-  return <svg xmlns="http://www.w3.org/2000/svg" width="720" height="720" viewBox="0 0 720 720"
+export function EthereumContainerPreview({ kind, className }: { kind: 'crate' | 'warehouse'; className?: string }) {
+  return <svg className={className} xmlns="http://www.w3.org/2000/svg" width="720" height="720" viewBox="0 0 720 720"
     role="img" aria-label={kind === 'crate' ? '111K crate' : '111K warehouse'} focusable="false">
     <g fill="#191d29" fontFamily="Arial,Helvetica,sans-serif">
       {kind === 'crate' ? <g transform="translate(360 360) scale(1.3) translate(-360 -453)">

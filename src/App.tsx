@@ -4,6 +4,7 @@ import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 're
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
+import Ethereum111kPage from './ethereum/Ethereum111kPage';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useMiNoteEthereumWallet } from './hooks/useMiNoteEthereumWallet';
 import { useStripeCheckoutInventoryRecovery } from './hooks/useStripeCheckoutInventoryRecovery';
@@ -59,7 +60,6 @@ import { useShopDrop } from './shop/useShopDrop';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
-const Ethereum111kPage = lazy(() => import('./ethereum/Ethereum111kPage'));
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -382,8 +382,20 @@ function App({ route, suspended = false }: AppProps) {
     drop.routeDrop || drop.upcomingDropRoute || drop.normalizedCurrentPath === '/' ? 'drop-page-frame--active' : '',
     dropsPanelFrameActive ? 'drop-page-frame--drops-panel' : '',
     miNoteCardsPage ? 'drop-page-frame--mi-note-cards' : '',
-    isEthereum111kPage ? 'drop-page-frame--ethereum' : '',
   ].filter(Boolean).join(' ');
+  const shopHeader = (
+    <ShopHeader
+      onNavigateHome={drop.restoreHomeOnNextNavigation}
+      scrollHomeToTop={dropsPanelFrameActive}
+      renderRight={({ interactive }) => <ShopHeaderActions
+        {...account}
+        interactive={interactive}
+        showHeaderWalletButton={showHeaderWalletButton}
+        handleHeaderWalletSignIn={actionHandlers.handleHeaderSignIn}
+        adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
+      />}
+    />
+  );
 
   return (
     <div className="page">
@@ -396,85 +408,77 @@ function App({ route, suspended = false }: AppProps) {
           suspended={isModalLayerSuspended({ activeLayer: activeModalLayer, appSuspended: suspended, layer: 'notify', open: notifications.notifyOpen })}
         />
       )}
-      <div className={primaryFrameClassName}>
-        <ShopHeader
-          onNavigateHome={drop.restoreHomeOnNextNavigation}
-          scrollHomeToTop={dropsPanelFrameActive}
-          renderRight={({ interactive }) => <ShopHeaderActions
-            {...account}
-            interactive={interactive}
-            showHeaderWalletButton={showHeaderWalletButton}
-            handleHeaderWalletSignIn={actionHandlers.handleHeaderSignIn}
-            adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
-          />}
+      {isEthereum111kPage ? (
+        <Ethereum111kPage
+          header={shopHeader}
+          wallet={ethereumWallet}
+          claimReceiptId={route.ethereumClaimReceiptId}
+          claimCode={route.ethereumClaimCode}
+          addressEncryptionPublicKey={ADDRESS_ENCRYPTION_PUBLIC_KEY}
+          solanaInventoryItems={inventory.inventoryItems}
+          solanaSelected={selection.selected}
+          onSolanaToggle={selection.toggleSelected}
+          clearSolanaSelection={selectionState.clearSelection}
+          pendingRevealIds={inventory.pendingRevealIds}
+          onSolanaReveal={(id, rect) => {
+            const item = inventory.inventoryIndex.get(id);
+            if (item) void actionHandlers.openPendingReveal(item, rect);
+          }}
+          onSolanaView={reveal.viewItem}
+          canOpenSolanaBoxes={drop.canOpenBoxesForDropId}
+          solanaRevealLoading={reveal.revealLoading}
+          solanaInventoryReady={inventory.inventoryInitialResponseReady}
+          externalBusy={walletActionBusy}
+          suspended={Boolean(activeModalLayer) || suspended}
+          showToast={statusUiSuspended ? undefined : showToast}
         />
-        {isNfcPage ? (
-          <NfcClaimPage key={route.nfcDeepLinkCode} />
-        ) : isEthereum111kPage ? (
-          <Suspense fallback={<p className="muted" role="status">Loading 111K…</p>}>
-            <Ethereum111kPage
-              wallet={ethereumWallet}
-              claimReceiptId={route.ethereumClaimReceiptId}
-              claimCode={route.ethereumClaimCode}
-              addressEncryptionPublicKey={ADDRESS_ENCRYPTION_PUBLIC_KEY}
-              solanaInventoryItems={inventory.inventoryItems}
-              solanaSelected={selection.selected}
-              onSolanaToggle={selection.toggleSelected}
-              clearSolanaSelection={selectionState.clearSelection}
-              pendingRevealIds={inventory.pendingRevealIds}
-              onSolanaReveal={(id, rect) => {
-                const item = inventory.inventoryIndex.get(id);
-                if (item) void actionHandlers.openPendingReveal(item, rect);
-              }}
-              onSolanaView={reveal.viewItem}
-              canOpenSolanaBoxes={drop.canOpenBoxesForDropId}
-              solanaRevealLoading={reveal.revealLoading}
-              solanaInventoryReady={inventory.inventoryInitialResponseReady}
-              externalBusy={walletActionBusy}
-              suspended={Boolean(activeModalLayer) || suspended}
+      ) : (
+        <div className={primaryFrameClassName}>
+          {shopHeader}
+          {isNfcPage ? (
+            <NfcClaimPage key={route.nfcDeepLinkCode} />
+          ) : miNoteCardsPage ? (
+            <MiNoteCardsErrorBoundary>
+              <Suspense fallback={null}>
+                <MiNoteCardsGallery
+                  wallet={ethereumWallet}
+                  verification={ethereumVerification}
+                  onAdminSignIn={actionHandlers.handleHeaderSignIn}
+                  preorder={{
+                    ...preorderCheckout,
+                    purchase: actionHandlers.handlePreorder,
+                    busy: preorderCheckout.busy || walletActionBusy,
+                    phase: pendingAction?.key === 'preorder' && awaitingActionSignIn ? 'authenticating' : preorderCheckout.phase,
+                  }}
+                  onCancelPendingSignIn={pendingAction?.key === 'preorder' && awaitingActionSignIn ? continuation.cancel : undefined}
+                  showToast={statusUiSuspended ? undefined : showToast}
+                  onViewPreordered={(item, originRect, aspectRatio, sourceElement) => reveal.openImageViewer(item, originRect, {
+                    size: 'preorder', aspectRatio, sourceElement, unavailableMessage: 'Preorder image unavailable',
+                  })}
+                />
+              </Suspense>
+            </MiNoteCardsErrorBoundary>
+          ) : (
+            <ShopPurchaseSection
+              {...drop}
+              {...purchaseState}
+              {...purchaseActions}
+              handleMint={actionHandlers.handleMint}
+              handleDiscountMint={actionHandlers.handleDiscountMint}
+              walletActionBusy={walletActionBusy}
+              revealActionBusy={pendingAction?.key === 'open-box' || pendingAction?.key === 'pending-reveal' || pendingAction?.key === 'reveal'}
+              minting={purchaseActions.minting || pendingAction?.key === 'mint'}
+              discountMinting={purchaseActions.discountMinting || pendingAction?.key === 'discount'}
+              effectiveMintStats={effectiveMintStats}
+              connectedWallet={connectedWallet}
+              publicKey={publicKey}
+              walletBusy={walletBusy}
+              showToast={showToast}
+              handleOpenNotify={notifications.handleOpenNotify}
             />
-          </Suspense>
-        ) : miNoteCardsPage ? (
-          <MiNoteCardsErrorBoundary>
-            <Suspense fallback={null}>
-              <MiNoteCardsGallery
-                wallet={ethereumWallet}
-                verification={ethereumVerification}
-                onAdminSignIn={actionHandlers.handleHeaderSignIn}
-                preorder={{
-                  ...preorderCheckout,
-                  purchase: actionHandlers.handlePreorder,
-                  busy: preorderCheckout.busy || walletActionBusy,
-                  phase: pendingAction?.key === 'preorder' && awaitingActionSignIn ? 'authenticating' : preorderCheckout.phase,
-                }}
-                onCancelPendingSignIn={pendingAction?.key === 'preorder' && awaitingActionSignIn ? continuation.cancel : undefined}
-                showToast={statusUiSuspended ? undefined : showToast}
-                onViewPreordered={(item, originRect, aspectRatio, sourceElement) => reveal.openImageViewer(item, originRect, {
-                  size: 'preorder', aspectRatio, sourceElement, unavailableMessage: 'Preorder image unavailable',
-                })}
-              />
-            </Suspense>
-          </MiNoteCardsErrorBoundary>
-        ) : (
-          <ShopPurchaseSection
-            {...drop}
-            {...purchaseState}
-            {...purchaseActions}
-            handleMint={actionHandlers.handleMint}
-            handleDiscountMint={actionHandlers.handleDiscountMint}
-            walletActionBusy={walletActionBusy}
-            revealActionBusy={pendingAction?.key === 'open-box' || pendingAction?.key === 'pending-reveal' || pendingAction?.key === 'reveal'}
-            minting={purchaseActions.minting || pendingAction?.key === 'mint'}
-            discountMinting={purchaseActions.discountMinting || pendingAction?.key === 'discount'}
-            effectiveMintStats={effectiveMintStats}
-            connectedWallet={connectedWallet}
-            publicKey={publicKey}
-            walletBusy={walletBusy}
-            showToast={showToast}
-            handleOpenNotify={notifications.handleOpenNotify}
-          />
-        )}
-      </div>
+          )}
+        </div>
+      )}
       {!miNoteCardsPage && !isNfcPage && !isEthereum111kPage && (
         <ShopInventorySection
           {...inventory}

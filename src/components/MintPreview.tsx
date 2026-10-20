@@ -467,11 +467,11 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderP
                 )}
               />
             </div>
-          ) : mintBoxImageSrc ? (
+          ) : mintBoxImageSrc || renderPreviewPrimary ? (
             <div key={idx} className="mint-panel__box mint-panel__box-stack">
               <MediaWithFallback
                 key={previewPrimaryKey}
-                imageSources={[mintBoxImageSrc]}
+                imageSources={mintBoxImageSrc ? [mintBoxImageSrc] : []}
                 imageProps={{
                   className: 'mint-panel__box',
                   alt: '',

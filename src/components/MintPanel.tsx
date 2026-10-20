@@ -135,16 +135,18 @@ function MintPanelPackStatusPopover({
   );
 }
 
-function MintPanelFrame({ children, ...preview }: ComponentProps<typeof MintPreview> & { children: ReactNode }) {
+export function MintPanelFrame({
+  children, ariaLabel, ...preview
+}: ComponentProps<typeof MintPreview> & { children: ReactNode; ariaLabel?: string }) {
   return (
-    <section className="mint-panel">
+    <section className="mint-panel" aria-label={ariaLabel}>
       <MintPreview {...preview} />
       {children}
     </section>
   );
 }
 
-function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProps, 'title' | 'dropId'>) {
+export function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProps, 'title' | 'dropId'>) {
   const mintTitle = title || 'Little Swag Boxes';
   const dropXProfile = resolveDropXProfile(dropId);
   const dropXProfileLink = dropXProfile ? (
@@ -163,6 +165,50 @@ function MintPanelTitle({ title, dropId }: Pick<MintPanelPresentationProps, 'tit
       <span className="mint-panel__drop-name">{mintTitle}</span>
       {dropXProfileLink}
     </div>
+  );
+}
+
+export function MintPanelPurchaseFooter({ info, controls, actions, hasControls }: {
+  info: ReactNode;
+  controls: ReactNode;
+  actions: ReactNode;
+  hasControls: boolean;
+}) {
+  return (
+    <div className={hasControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
+      <div className="mint-panel__info">{info}</div>
+      {controls}
+      {actions}
+    </div>
+  );
+}
+
+export function MintQuantityControl({
+  quantity, max, quantityLabel, cardQuantityLabel, disabled, onChange,
+}: {
+  quantity: number;
+  max: number;
+  quantityLabel: string;
+  cardQuantityLabel?: string;
+  disabled: boolean;
+  onChange: (quantity: number) => void;
+}) {
+  return (
+    <label className="mint-panel__label">
+      <span className="mint-panel__label-text muted small">
+        {quantityLabel}
+        {cardQuantityLabel ? <span className="mint-panel__card-quantity"> ({cardQuantityLabel})</span> : null}
+      </span>
+      <input
+        type="range"
+        aria-label="Mint quantity"
+        min={1}
+        max={max}
+        value={quantity}
+        onChange={(event) => onChange(parseInt(event.target.value, 10))}
+        disabled={disabled}
+      />
+    </label>
   );
 }
 
@@ -311,8 +357,9 @@ function PurchaseMintPanel({
           packStatusDisplayLabels={packStatusDisplayLabels}
         />
       ) : (
-        <div className={showFormControls ? 'mint-panel__footer' : 'mint-panel__footer mint-panel__footer--no-slider'}>
-          <div className="mint-panel__info">
+        <MintPanelPurchaseFooter
+          hasControls={showFormControls}
+          info={<>
             <MintPanelTitle title={title} dropId={dropId} />
             <div className="mint-panel__remaining mint-panel__availability">
               <span
@@ -329,8 +376,8 @@ function PurchaseMintPanel({
               </span>
               <span> / {total} left</span>
             </div>
-          </div>
-          <form
+          </>}
+          controls={<form
             id={formId}
             className={showFormControls ? 'mint-panel__slider' : 'mint-panel__slider mint-panel__slider--hidden'}
             onSubmit={(event) => {
@@ -420,27 +467,20 @@ function PurchaseMintPanel({
                 ) : null}
               </div>
             ) : showQuantitySlider ? (
-              <label className="mint-panel__label">
-                <span className="mint-panel__label-text muted small">
-                  {quantityLabel}
-                  {cardQuantityLabel ? <span className="mint-panel__card-quantity"> ({cardQuantityLabel})</span> : null}
-                </span>
-                <input
-                  type="range"
-                  aria-label="Mint quantity"
-                  min={1}
-                  max={maxSelectable}
-                  value={quantity}
-                  onChange={(evt) => setQuantity(parseInt(evt.target.value, 10))}
-                  disabled={controlsBusy}
-                />
-              </label>
+              <MintQuantityControl
+                quantity={quantity}
+                max={maxSelectable}
+                quantityLabel={quantityLabel}
+                cardQuantityLabel={cardQuantityLabel}
+                disabled={controlsBusy}
+                onChange={setQuantity}
+              />
             ) : null}
-          </form>
-          <MintPanelActions
+          </form>}
+          actions={<MintPanelActions
             formId={formId}
             showStripePaymentButton={form.showStripePaymentButton}
-            showSolanaMintButton={form.showSolanaMintButton}
+            showMintButton={form.showSolanaMintButton}
             stripePaymentPending={form.stripePaymentPending}
             submitBusy={form.submitBusy}
             disabled={form.actionsDisabled}
@@ -454,8 +494,8 @@ function PurchaseMintPanel({
             totalPriceLabel={form.totalPriceLabel}
             totalDiscountPriceLabel={form.totalDiscountPriceLabel}
             onStripePayment={form.handleStripePaymentClick}
-          />
-        </div>
+          />}
+        />
       )}
     </MintPanelFrame>
   );

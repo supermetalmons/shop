@@ -10,7 +10,7 @@ import {
 interface MintPanelActionsProps {
   formId: string;
   showStripePaymentButton: boolean;
-  showSolanaMintButton: boolean;
+  showMintButton: boolean;
   stripePaymentPending: boolean;
   submitBusy: boolean;
   disabled: boolean;
@@ -22,6 +22,7 @@ interface MintPanelActionsProps {
   cardQuantityLabel?: string;
   stripePaymentDisplayPriceLabel: string | undefined;
   totalPriceLabel: string;
+  currencyLabel?: string;
   totalDiscountPriceLabel: string;
   onStripePayment: () => Promise<void>;
 }
@@ -190,10 +191,10 @@ function tighterActionTextFit(a: ActionTextFit, b: ActionTextFit): ActionTextFit
 }
 
 export function MintPanelActions({
-  formId, showStripePaymentButton, showSolanaMintButton, stripePaymentPending,
+  formId, showStripePaymentButton, showMintButton, stripePaymentPending,
   submitBusy, disabled, walletActionBusy = false, useDiscountMint, showQuantitySlider, quantityLabel,
   revealActionBusy = false, cardQuantityLabel,
-  stripePaymentDisplayPriceLabel, totalPriceLabel, totalDiscountPriceLabel, onStripePayment,
+  stripePaymentDisplayPriceLabel, totalPriceLabel, totalDiscountPriceLabel, currencyLabel = 'SOL', onStripePayment,
 }: MintPanelActionsProps) {
   const stripePaymentButtonRef = useRef<HTMLButtonElement | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -203,29 +204,30 @@ export function MintPanelActions({
       ? 'mint-panel__submit mint-panel__submit--discounted'
       : 'mint-panel__submit';
   const submitAriaLabel = useDiscountMint
-    ? `Mint with discount for ${totalDiscountPriceLabel} SOL. Regular price ${totalPriceLabel} SOL.` +
+    ? `Mint with discount for ${totalDiscountPriceLabel} ${currencyLabel}. Regular price ${totalPriceLabel} ${currencyLabel}.` +
       (showQuantitySlider && cardQuantityLabel ? ` ${quantityLabel} (${cardQuantityLabel}).` : '')
     : undefined;
-  const ctaStackClassName = showStripePaymentButton && showSolanaMintButton
+  const ctaStackClassName = showStripePaymentButton && showMintButton
     ? 'mint-panel__cta-stack mint-panel__cta-stack--with-payment'
     : 'mint-panel__cta-stack';
   const stripeActionTextFit = useActionTextFit(stripePaymentButtonRef, [
     showStripePaymentButton,
-    showSolanaMintButton,
+    showMintButton,
     stripePaymentPending,
     stripePaymentDisplayPriceLabel,
   ]);
   const submitActionTextFit = useActionTextFit(submitButtonRef, [
     showStripePaymentButton,
-    showSolanaMintButton,
+    showMintButton,
     submitBusy,
     useDiscountMint,
     quantityLabel,
     cardQuantityLabel,
     totalPriceLabel,
     totalDiscountPriceLabel,
+    currencyLabel,
   ]);
-  const pairedActionTextFit = showStripePaymentButton && showSolanaMintButton
+  const pairedActionTextFit = showStripePaymentButton && showMintButton
     ? tighterActionTextFit(stripeActionTextFit, submitActionTextFit)
     : showStripePaymentButton
       ? stripeActionTextFit
@@ -275,7 +277,7 @@ export function MintPanelActions({
             )}
           </button>
         ) : null}
-        {showSolanaMintButton ? (
+        {showMintButton ? (
           <button
             ref={submitButtonRef}
             type="submit"
@@ -306,10 +308,10 @@ export function MintPanelActions({
                   >
                     <span className="mint-panel__submit-price-old">{totalPriceLabel}</span>
                     <span className="mint-panel__submit-price-new">{totalDiscountPriceLabel}</span>
-                    <span className="mint-panel__submit-price-currency">SOL</span>
+                    <span className="mint-panel__submit-price-currency">{currencyLabel}</span>
                   </span>
                 ) : (
-                  <span className="mint-panel__submit-price" data-mint-action-fit="price">{totalPriceLabel} SOL</span>
+                  <span className="mint-panel__submit-price" data-mint-action-fit="price">{totalPriceLabel} {currencyLabel}</span>
                 )}
               </>
             )}

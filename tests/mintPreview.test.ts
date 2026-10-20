@@ -267,6 +267,32 @@ test('an optional primary preview preserves layout and retries after leaving a f
   assert.equal(image.hidden, true);
 });
 
+test('a custom preview needs no fallback image and stays singular as quantity changes', () => {
+  function CratePreview({ media }: { media: PrimaryMediaControls }) {
+    useEffect(() => media.onReady(), [media.onReady]);
+    return createElement('svg', { className: 'mint-panel__box', role: 'img', 'aria-label': '111K crate' });
+  }
+  const initial = props({
+    dropId: '111k_devnet',
+    boxMedia: { aspectRatio: 1 },
+    quantityLabel: '1 crate',
+    renderPreviewPrimary: (media) => createElement(CratePreview, { media }),
+    previewPrimaryKey: '111k-crate',
+  });
+  const view = render(createElement(MintPreview, initial));
+  const crate = view.getByRole('img', { name: '111K crate' });
+  const boxes = view.getByLabelText('Mint preview: 1 crate');
+  const layout = boxes.style.cssText;
+  assert.equal(boxes.style.getPropertyValue('--box-width'), boxes.style.getPropertyValue('--box-height'));
+  assert.equal(view.container.querySelector('img'), null);
+  assert.equal(requiredElement<HTMLElement>(boxes, '.mint-panel__box--fallback').hidden, true);
+
+  view.rerender(createElement(MintPreview, { ...initial, quantity: 15, quantityLabel: '15 crates' }));
+  assert.equal(view.getByRole('img', { name: '111K crate' }), crate);
+  assert.equal(view.getByLabelText('Mint preview: 15 crates').children.length, 1);
+  assert.equal(boxes.style.cssText, layout);
+});
+
 test('unchanged source URLs keep playback stable while replacements reload and removed previews stop', () => {
   const view = render(createElement(MintPreview, props()));
   const video = requiredElement<HTMLVideoElement>(view.container, 'video');
