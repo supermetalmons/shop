@@ -1,6 +1,58 @@
 .ethereum111k {
   width: 100%;
 }
+.ethereum111k__mint-kind {
+  position: absolute;
+  left: -10px;
+  bottom: calc(100% + 8px);
+  display: flex;
+  gap: 6px;
+  width: max-content;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.ethereum111k__mint-kind label {
+  position: relative;
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 36px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  cursor: pointer;
+}
+.ethereum111k__mint-kind input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+}
+.ethereum111k__mint-kind span {
+  border-bottom: 1px solid transparent;
+  transition: color 150ms ease, border-color 150ms ease;
+}
+.ethereum111k__mint-kind input:checked + span {
+  color: var(--fg);
+  border-bottom-color: currentColor;
+}
+.ethereum111k__mint-kind:not(:disabled) label:hover span {
+  color: var(--fg);
+}
+.ethereum111k__mint-kind input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.ethereum111k__mint-kind:disabled label {
+  cursor: default;
+  opacity: 0.5;
+}
 .ethereum111k__pending {
   display: flex;
   flex-wrap: wrap;

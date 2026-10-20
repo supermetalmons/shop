@@ -4,19 +4,23 @@ import type { EthereumWallet } from './useEthereum111k';
 
 type EthereumMintActionOptions = {
   wallet: EthereumWallet;
-  config: Pick<Ethereum111kConfig, 'enabled' | 'chainId' | 'contractAddress'>;
+  config?: Pick<Ethereum111kConfig, 'enabled' | 'chainId' | 'contractAddress'>;
+  kind: 'crate' | 'warehouse';
   quantity: number;
   remaining: number | undefined;
   saleActive: boolean | undefined;
+  loadError?: string | null;
   blocked: boolean;
   suspended: boolean;
-  onMint: (quantity: number) => Promise<boolean>;
+  onMint: (kind: 'crate' | 'warehouse', quantity: number) => Promise<boolean>;
 };
 
 type MintAttempt = {
+  kind: 'crate' | 'warehouse';
   quantity: number;
-  chainId: number;
-  contractAddress: string;
+  config: { chainId: number; contractAddress: string } | null;
+  wallet: { address: string; provider: NonNullable<EthereumWallet['provider']> } | null;
+  connectionStarted: boolean;
   stage: 'connecting' | 'minting';
 };
 
@@ -26,6 +30,11 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
   const mounted = useRef(false);
   const active = useRef<MintAttempt | null>(null);
   const [stage, setStage] = useState<MintAttempt['stage'] | null>(null);
+  const [error, setError] = useState<{ message: string; loadError: boolean } | null>(null);
+
+  useEffect(() => {
+    setError(current => current?.loadError && current.message !== options.loadError ? null : current);
+  }, [options.loadError]);
 
   const release = useCallback((attempt: MintAttempt) => {
     if (active.current !== attempt) return;
@@ -37,19 +46,78 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
     const attempt = active.current;
     if (!attempt || attempt.stage === 'minting') return;
     release(attempt);
-    latest.current.wallet.cancel();
+    if (attempt.connectionStarted && !attempt.wallet) latest.current.wallet.cancel();
   }, [release]);
 
-  const execute = useCallback((attempt: MintAttempt) => {
+  const advance = useCallback((attempt: MintAttempt) => {
     if (!mounted.current || active.current !== attempt || attempt.stage !== 'connecting') return;
+    const current = latest.current;
+    const fail = (message: string, loadError = false) => { setError({ message, loadError }); cancel(); };
+    if (current.suspended || current.blocked || current.kind !== attempt.kind) {
+      cancel();
+      return;
+    }
+    if (current.loadError) {
+      fail(current.loadError, true);
+      return;
+    }
+    if (current.config) {
+      if (attempt.config && (current.config.chainId !== attempt.config.chainId ||
+        current.config.contractAddress !== attempt.config.contractAddress)) {
+        fail('This drop changed. Please try minting again.');
+        return;
+      }
+      if (!current.config.enabled || !current.config.contractAddress) {
+        fail('Minting is unavailable for this drop.');
+        return;
+      }
+      attempt.config ??= { chainId: current.config.chainId, contractAddress: current.config.contractAddress };
+    }
+    if (current.saleActive === false) {
+      fail('Minting is paused.');
+      return;
+    }
+    if (current.remaining !== undefined && current.remaining < attempt.quantity) {
+      fail(current.remaining <= 0
+        ? `${attempt.kind === 'crate' ? 'Crates' : 'Warehouses'} are sold out.`
+        : `That quantity is no longer available. Choose fewer ${attempt.kind}s.`);
+      return;
+    }
+    const wallet = current.wallet;
+    if (attempt.wallet && (wallet.address !== attempt.wallet.address || wallet.provider !== attempt.wallet.provider ||
+      wallet.status === 'disconnected')) {
+      fail('Your Ethereum wallet changed. Please try minting again.');
+      return;
+    }
+    if (wallet.status === 'connected' && wallet.address && wallet.provider) {
+      attempt.wallet ??= { address: wallet.address, provider: wallet.provider };
+    } else if (wallet.status === 'connecting' || wallet.status === 'choosing') {
+      attempt.connectionStarted = true;
+    }
+    if (!wallet.ready || wallet.status === 'restoring') return;
+    if (wallet.status === 'disconnected') {
+      if (attempt.connectionStarted) {
+        fail(wallet.error ?? 'Wallet connection was cancelled. Try again when you’re ready.');
+      } else {
+        attempt.connectionStarted = true;
+        try {
+          wallet.connect();
+        } catch (cause) {
+          fail(cause instanceof Error ? cause.message : 'Unable to connect your Ethereum wallet. Please try again.');
+        }
+      }
+      return;
+    }
+    if (wallet.status !== 'connected' || !attempt.wallet || !current.config ||
+      current.saleActive === undefined || current.remaining === undefined) return;
     attempt.stage = 'minting';
     setStage('minting');
     try {
-      void latest.current.onMint(attempt.quantity).then(() => release(attempt), () => release(attempt));
+      void latest.current.onMint(attempt.kind, attempt.quantity).then(() => release(attempt), () => release(attempt));
     } catch {
       release(attempt);
     }
-  }, [release]);
+  }, [cancel, release]);
 
   useEffect(() => {
     mounted.current = true;
@@ -64,45 +132,31 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
 
   useEffect(() => {
     const attempt = active.current;
-    if (!attempt || attempt.stage !== 'connecting') return;
-    const current = latest.current;
-    if (current.suspended || current.blocked || !current.config.enabled ||
-      current.config.chainId !== attempt.chainId || current.config.contractAddress !== attempt.contractAddress ||
-      !current.saleActive || current.remaining === undefined || current.remaining < attempt.quantity ||
-      current.wallet.error || current.wallet.status === 'disconnected' || current.wallet.status === 'restoring') {
-      cancel();
-      return;
-    }
-    if (current.wallet.status === 'connected' && current.wallet.address && current.wallet.provider && current.wallet.ready) {
-      execute(attempt);
-    }
+    if (attempt) advance(attempt);
   });
 
   const mint = useCallback(() => {
     const current = latest.current;
-    if (!mounted.current || active.current || current.blocked || current.suspended ||
-      !current.config.enabled || !current.config.contractAddress || !current.saleActive ||
-      !Number.isInteger(current.quantity) || current.quantity < 1 ||
-      current.remaining === undefined || current.remaining < current.quantity || !current.wallet.ready ||
-      !['connected', 'disconnected'].includes(current.wallet.status)) return;
+    if (!mounted.current || active.current || current.blocked || current.suspended) return;
+    setError(null);
+    if (!Number.isInteger(current.quantity) || current.quantity < 1) {
+      setError({ message: 'Choose a whole-number quantity of at least 1.', loadError: false });
+      return;
+    }
     const attempt: MintAttempt = {
+      kind: current.kind,
       quantity: current.quantity,
-      chainId: current.config.chainId,
-      contractAddress: current.config.contractAddress,
+      config: null,
+      wallet: null,
+      connectionStarted: false,
       stage: 'connecting',
     };
     active.current = attempt;
-    if (current.wallet.status === 'connected' && current.wallet.address && current.wallet.provider) {
-      execute(attempt);
-      return;
-    }
     setStage('connecting');
-    try {
-      current.wallet.connect();
-    } catch {
-      cancel();
-    }
-  }, [cancel, execute]);
+    advance(attempt);
+  }, [advance]);
 
-  return { mint, cancel, connecting: stage === 'connecting', pending: stage !== null };
+  const clearError = useCallback(() => setError(null), []);
+  return { mint, cancel, connecting: stage === 'connecting', pending: stage !== null,
+    error: error && (!error.loadError || error.message === options.loadError) ? error.message : null, clearError };
 }

@@ -5,6 +5,8 @@ import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { EthereumContainerPreview } from './EthereumContainerPreview';
 
 type EthereumMintPanelProps = {
+  kind: 'crate' | 'warehouse';
+  kindDisabled: boolean;
   quantity: number;
   maxQuantity: number;
   remaining?: number;
@@ -13,21 +15,25 @@ type EthereumMintPanelProps = {
   statusText?: string;
   disabled: boolean;
   busy: boolean;
+  onKindChange: (kind: 'crate' | 'warehouse') => void;
   onQuantityChange: (quantity: number) => void;
   onMint: () => void;
 };
 
-function CratePreview({ onReady }: PrimaryMediaControls) {
+function ContainerPreview({ kind, onReady }: PrimaryMediaControls & { kind: 'crate' | 'warehouse' }) {
   useEffect(onReady, [onReady]);
-  return <EthereumContainerPreview kind="crate" className="mint-panel__box mint-panel__box--media" />;
+  return <EthereumContainerPreview kind={kind} className="mint-panel__box mint-panel__box--media" />;
 }
 
-const renderCratePreview = (controls: PrimaryMediaControls) => <CratePreview {...controls} />;
+const containerPreviews = {
+  crate: (controls: PrimaryMediaControls) => <ContainerPreview kind="crate" {...controls} />,
+  warehouse: (controls: PrimaryMediaControls) => <ContainerPreview kind="warehouse" {...controls} />,
+};
 
 export function EthereumMintPanel({
-  quantity, maxQuantity, remaining, total, price, statusText, disabled, busy, onQuantityChange, onMint,
+  kind, kindDisabled, quantity, maxQuantity, remaining, total, price, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
 }: EthereumMintPanelProps) {
-  const quantityLabel = `${quantity} crate${quantity === 1 ? '' : 's'}`;
+  const quantityLabel = `${quantity} ${kind}${quantity === 1 ? '' : 's'}`;
   const showQuantitySlider = maxQuantity > 1;
   const formId = 'ethereum-mint-form';
 
@@ -35,14 +41,20 @@ export function EthereumMintPanel({
     ariaLabel="111K testnet mint"
     quantity={quantity}
     quantityLabel={quantityLabel}
-    boxMedia={{ aspectRatio: 1, mediaScale: 1.4 }}
-    renderPreviewPrimary={renderCratePreview}
+    boxMedia={{ aspectRatio: 1, mediaScale: kind === 'crate' ? 1.4 : 1.1 }}
+    renderPreviewPrimary={containerPreviews[kind]}
     repeatPreviewPrimary
-    previewPrimaryKey="111k-crate"
+    previewPrimaryKey={`111k-${kind}`}
   >
     <MintPanelPurchaseFooter
       hasControls={showQuantitySlider}
       info={<>
+        <fieldset className="ethereum111k__mint-kind" aria-label="Container type" disabled={kindDisabled}>
+          {(['crate', 'warehouse'] as const).map(value => <label key={value}>
+            <input type="radio" name="ethereum-container" value={value} checked={kind === value} onChange={() => onKindChange(value)} />
+            <span>{value === 'crate' ? 'Crate' : 'Warehouse'}</span>
+          </label>)}
+        </fieldset>
         <MintPanelTitle title="111K" />
         <div className="mint-panel__remaining mint-panel__availability">
           {statusText ? <span role="status">{statusText}</span> : <>
@@ -64,7 +76,7 @@ export function EthereumMintPanel({
           quantity={quantity}
           max={maxQuantity}
           quantityLabel={quantityLabel}
-          disabled={disabled}
+          disabled={kindDisabled}
           onChange={onQuantityChange}
         /> : null}
       </form>}
