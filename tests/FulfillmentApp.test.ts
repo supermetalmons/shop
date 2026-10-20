@@ -1,0 +1,231 @@
+import assert from 'node:assert/strict';
+import test, { afterEach, mock } from 'node:test';
+import { createElement, useMemo, useState } from 'react';
+import { PublicKey } from '@solana/web3.js';
+import { WalletContext, type WalletContextState } from '@solana/wallet-adapter-react';
+import { WalletModalContext } from '@solana/wallet-adapter-react-ui';
+import type { FulfillmentOrder } from '../src/types.ts';
+import { listFrontendDrops } from '../src/config/deployment.ts';
+import { listAllowedFulfillmentDropIds } from '../src/lib/fulfillmentAccess.ts';
+import { readStaffWalletSession, saveStaffWalletSession, clearStaffWalletSession } from '../src/lib/staffWalletSession.ts';
+import { setupFrontendDom } from './helpers/frontendDom.ts';
+
+const { dom } = setupFrontendDom();
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { default: FulfillmentApp } = await import('../src/FulfillmentApp.tsx');
+
+const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+const ADDRESS_OPERATOR = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const SHIPPER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
+const ETHEREUM_DROP = '111k_devnet';
+const ORDERS_PATH = '/api/fulfillment/orders';
+const MANUAL_REVIEW_PATH = '/api/fulfillment/manual-review-checkouts';
+
+Object.defineProperty(globalThis, 'IntersectionObserver', {
+  configurable: true,
+  value: class {
+    constructor(private callback: IntersectionObserverCallback) {}
+    observe(target: Element) {
+      this.callback([{ isIntersecting: true, target } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+    }
+    disconnect() {}
+  },
+});
+
+afterEach(async () => {
+  cleanup();
+  await clearStaffWalletSession();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  mock.restoreAll();
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function order(dropId = 'card_nft_2'): FulfillmentOrder {
+  return {
+    dropId,
+    deliveryId: dropId === ETHEREUM_DROP ? 111 : 7,
+    owner: 'owner-wallet',
+    status: 'ready_to_ship',
+    fulfillmentStatus: 'Preparing',
+    address: { full: 'Ada\n123 Main St\nUS', countryCode: 'US' },
+    boxes: dropId === ETHEREUM_DROP ? [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: [111111] }] : [],
+    looseDudes: [],
+    ...(dropId === ETHEREUM_DROP ? { source: 'ethereum' as const } : {}),
+  };
+}
+
+async function installSession(wallet: string) {
+  return saveStaffWalletSession({
+    wallet,
+    token: `mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${(wallet === ADMIN ? 'A' : 'B').repeat(43)}`,
+    refreshedAt: Date.now(),
+    expiresAt: Date.now() + 3_600_000,
+  });
+}
+
+function AppHarness({ wallet, initialDropId = '' }: { wallet: string; initialDropId?: string }) {
+  const [selectedDropId, setSelectedDropId] = useState(initialDropId);
+  const walletState = useMemo<WalletContextState>(() => ({
+    autoConnect: false, wallets: [], wallet: null, publicKey: new PublicKey(wallet),
+    connecting: false, connected: true, disconnecting: false,
+    select: () => undefined, connect: async () => undefined, disconnect: async () => undefined,
+    sendTransaction: async () => '', signTransaction: undefined, signAllTransactions: undefined,
+    signMessage: undefined, signIn: undefined,
+  }), [wallet]);
+  return createElement(WalletContext.Provider, { value: walletState },
+    createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => undefined } },
+      createElement(FulfillmentApp, {
+        selectedDropId,
+        onSelectedDropIdChange: setSelectedDropId,
+        orderVisibilityFilter: 'all',
+        onOrderVisibilityFilterChange: () => undefined,
+      })));
+}
+
+function interceptRequests(options: { pendingEthereumOrders?: Promise<Response>; pendingEthereumReview?: Promise<Response> } = {}) {
+  const requests: Array<{ path: string; dropId?: string }> = [];
+  mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), window.location.origin).pathname;
+    const body = JSON.parse(String(init?.body || '{}')) as { dropId?: string };
+    requests.push({ path, dropId: body.dropId });
+    if (path === '/api/profile/state') {
+      const wallet = readStaffWalletSession()!.wallet;
+      return Response.json({
+        responseMode: 'profile-state', sessionWallet: wallet,
+        profile: { status: 'ready', value: { wallet } },
+        shipments: { status: 'ready', value: [] }, nextCursor: null,
+      });
+    }
+    if (path === '/api/profile/reconcile') return Response.json({ mergedStripeDeliveryOrders: 0 });
+    if (path === ORDERS_PATH) {
+      if (body.dropId === ETHEREUM_DROP && options.pendingEthereumOrders) return options.pendingEthereumOrders;
+      return Response.json({
+        orders: body.dropId === 'card_nft_2' || body.dropId === ETHEREUM_DROP ? [order(body.dropId)] : [],
+        nextCursor: null,
+      });
+    }
+    if (path === MANUAL_REVIEW_PATH) {
+      if (body.dropId === ETHEREUM_DROP && options.pendingEthereumReview) return options.pendingEthereumReview;
+      return Response.json({ checkouts: [], nextCursor: null });
+    }
+    if (path === '/ethereum/111k/metadata') {
+      return Response.json({ image: 'data:image/svg+xml;base64,PHN2Zy8+' });
+    }
+    assert.fail(`Unexpected request: ${path}`);
+  });
+  return requests;
+}
+
+function assertOrdinaryRequests(requests: ReturnType<typeof interceptRequests>, wallet: string) {
+  const expected = listAllowedFulfillmentDropIds(wallet, listFrontendDrops().map(({ dropId }) => dropId))
+    .filter((dropId) => dropId !== ETHEREUM_DROP).sort();
+  for (const path of [ORDERS_PATH, MANUAL_REVIEW_PATH]) {
+    assert.deepEqual(requests.filter((request) => request.path === path).map(({ dropId }) => dropId).sort(), expected);
+  }
+  assert.equal(requests.some(({ path, dropId }) => path.startsWith('/ethereum/') || dropId === ETHEREUM_DROP), false);
+}
+
+async function assertOrdinaryExports(view: ReturnType<typeof render>) {
+  const blobs: Blob[] = [];
+  mock.method(URL, 'createObjectURL', (blob: Blob) => {
+    blobs.push(blob);
+    return `blob:fulfillment-test-${blobs.length}`;
+  });
+  mock.method(dom.window.HTMLAnchorElement.prototype, 'click', () => undefined);
+  for (const name of ['Download Orders', 'Download Addresses [SENSITIVE]']) {
+    fireEvent.click(view.getByRole('button', { name: 'Fulfillment export menu' }));
+    assert.equal(view.getByRole('menuitem', { name: 'Download Secret Codes ZIP' }).hasAttribute('disabled'), true);
+    fireEvent.click(view.getByRole('menuitem', { name }));
+  }
+  assert.equal(blobs.length, 2);
+  const [orders, addresses] = await Promise.all(blobs.map(async (blob) => JSON.parse(await blob.text())));
+  assert.deepEqual(orders.map((entry: { orderId: string }) => entry.orderId), ['card_nft_2:7']);
+  assert.deepEqual(Object.keys(addresses), ['card_nft_2:7']);
+}
+
+for (const [label, wallet] of [['admin', ADMIN], ['address operator', ADDRESS_OPERATOR], ['shipper', SHIPPER]] as const) {
+  test(`All drops excludes Ethereum requests, cards, and exports for the ${label}`, async () => {
+    await installSession(wallet);
+    const requests = interceptRequests();
+    const view = render(createElement(AppHarness, { wallet }));
+    await view.findByText('Order 7');
+    assert.equal((view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement).value, '');
+    assert.equal(Boolean(view.queryByRole('option', { name: '111K · Ethereum testnet' })), wallet === ADMIN);
+    assert.equal(view.queryByText('111K · Ethereum test order'), null);
+    await assertOrdinaryExports(view);
+    assertOrdinaryRequests(requests, wallet);
+  });
+}
+
+test('the admin loads Ethereum only when selected and returning to All drops clears its cards and exports', async () => {
+  await installSession(ADMIN);
+  const requests = interceptRequests();
+  const view = render(createElement(AppHarness, { wallet: ADMIN }));
+  await view.findByText('Order 7');
+  requests.length = 0;
+
+  fireEvent.change(view.getByRole('combobox', { name: 'Drop' }), { target: { value: ETHEREUM_DROP } });
+  await view.findByText('111K · Ethereum test order');
+  assert.equal(view.queryByText('Order 7'), null);
+  for (const path of [ORDERS_PATH, MANUAL_REVIEW_PATH]) {
+    assert.deepEqual(requests.filter((request) => request.path === path).map(({ dropId }) => dropId), [ETHEREUM_DROP]);
+  }
+  requests.length = 0;
+
+  fireEvent.change(view.getByRole('combobox', { name: 'Drop' }), { target: { value: '' } });
+  await view.findByText('Order 7');
+  assert.equal(view.queryByText('111K · Ethereum test order'), null);
+  await assertOrdinaryExports(view);
+  assertOrdinaryRequests(requests, ADMIN);
+});
+
+test('an Ethereum direct selection resets to All drops for another operator without requesting Ethereum', async () => {
+  await installSession(ADDRESS_OPERATOR);
+  const requests = interceptRequests();
+  const view = render(createElement(AppHarness, { wallet: ADDRESS_OPERATOR, initialDropId: ETHEREUM_DROP }));
+  await view.findByText('Order 7');
+  assert.equal((view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement).value, '');
+  assert.equal(view.queryByRole('option', { name: '111K · Ethereum testnet' }), null);
+  assertOrdinaryRequests(requests, ADDRESS_OPERATOR);
+});
+
+test('switching from the admin to another operator ignores pending Ethereum orders and manual review', async () => {
+  await installSession(ADMIN);
+  const pendingOrders = deferred<Response>();
+  const pendingReview = deferred<Response>();
+  const requests = interceptRequests({
+    pendingEthereumOrders: pendingOrders.promise,
+    pendingEthereumReview: pendingReview.promise,
+  });
+  const view = render(createElement(AppHarness, { wallet: ADMIN, initialDropId: ETHEREUM_DROP }));
+  await waitFor(() => {
+    assert.equal(requests.filter(({ path, dropId }) => path === ORDERS_PATH && dropId === ETHEREUM_DROP).length, 1);
+    assert.equal(requests.filter(({ path, dropId }) => path === MANUAL_REVIEW_PATH && dropId === ETHEREUM_DROP).length, 1);
+  });
+  requests.length = 0;
+
+  await act(async () => {
+    view.rerender(createElement(AppHarness, { wallet: ADDRESS_OPERATOR }));
+    await installSession(ADDRESS_OPERATOR);
+  });
+  await view.findByText('Order 7');
+  assert.equal((view.getByRole('combobox', { name: 'Drop' }) as HTMLSelectElement).value, '');
+  assert.equal(view.queryByRole('option', { name: '111K · Ethereum testnet' }), null);
+  await act(async () => {
+    pendingOrders.resolve(Response.json({ orders: [order(ETHEREUM_DROP)], nextCursor: null }));
+    pendingReview.resolve(Response.json({
+      checkouts: [{ dropId: ETHEREUM_DROP, sessionId: 'ethereum-review', owner: 'owner-wallet', address: {} }],
+      nextCursor: null,
+    }));
+  });
+  assert.equal(view.queryByText('111K · Ethereum test order'), null);
+  assert.equal(view.queryByRole('button', { name: /Needs manual review/ }), null);
+  await assertOrdinaryExports(view);
+  assertOrdinaryRequests(requests, ADDRESS_OPERATOR);
+});

@@ -8,8 +8,10 @@ export type ShipperFulfillmentAccessConfig = Readonly<{
 
 export type FulfillmentDropGrants = ReadonlySet<string> | readonly string[];
 
+const ETHEREUM_FULFILLMENT_ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+
 export const FULFILLMENT_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
-  'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+  ETHEREUM_FULFILLMENT_ADMIN_WALLET,
 ]);
 
 export const FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES: readonly string[] = Object.freeze([
@@ -60,7 +62,7 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
   }),
   Object.freeze({
     wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-    dropIds: Object.freeze([...MAINNET_FULFILLMENT_DROP_IDS, ETHEREUM_111K_DROP_ID]),
+    dropIds: MAINNET_FULFILLMENT_DROP_IDS,
   }),
 ]);
 
@@ -121,6 +123,7 @@ export function walletHasFulfillmentDropAccess(
   shipperDropIdsByWallet: ReadonlyMap<string, FulfillmentDropGrants>,
 ): boolean {
   if (!wallet) return false;
+  if (dropId === ETHEREUM_111K_DROP_ID && wallet !== ETHEREUM_FULFILLMENT_ADMIN_WALLET) return false;
   if (walletHasAdminAccess(wallet, adminWallets)) return true;
   const grants = shipperDropIdsByWallet.get(wallet);
   return Boolean(grants && dropGrantsInclude(grants, dropId));
@@ -146,6 +149,14 @@ export function allowedFulfillmentDropIdsForWallet(
   shipperDropIdsByWallet: ReadonlyMap<string, string[]>,
 ): string[] {
   if (!wallet) return [];
-  if (walletHasAdminAccess(wallet, adminWallets)) return dropIds;
-  return shipperDropIdsByWallet.get(wallet) || [];
+  const allowedDropIds = walletHasAdminAccess(wallet, adminWallets)
+    ? dropIds
+    : shipperDropIdsByWallet.get(wallet) || [];
+  if (
+    allowedDropIds.includes(ETHEREUM_111K_DROP_ID) &&
+    !walletHasFulfillmentDropAccess(wallet, ETHEREUM_111K_DROP_ID, adminWallets, shipperDropIdsByWallet)
+  ) {
+    return allowedDropIds.filter((dropId) => dropId !== ETHEREUM_111K_DROP_ID);
+  }
+  return allowedDropIds;
 }

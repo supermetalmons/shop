@@ -13,6 +13,7 @@ import {
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { SHIPPER_FULFILLMENT_ACCESS } from '../../../../shared/fulfillmentAccess.ts';
 import {
   OWNER, ADMIN, OTHER, SYSTEM_OWNER, UID, NOW_MS, tokenRequest, stringValue, integerValue,
   base64UrlJson, shipmentPage, manualReviewDocument, staffDependencies,
@@ -107,6 +108,59 @@ test('Mi Note fulfillment is visible to the designated mainnet operators without
       assert.deepEqual(payload.orders.map((order) => [order.dropId, order.deliveryId]), [['mi_note_cards', 7]]);
     }
   }
+});
+
+test('Ethereum fulfillment reads reject other staff before accessing data or providers', async () => {
+  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), OTHER]) {
+    for (const path of [FULFILLMENT_ORDERS_PATH, FULFILLMENT_MANUAL_REVIEW_PATH] as const) {
+      const label = `${wallet}: ${path}`;
+      let dataAccesses = 0;
+      let providerCalls = 0;
+      const db = new Proxy({} as D1Database, {
+        get: () => {
+          dataAccesses += 1;
+          assert.fail('Denied Ethereum fulfillment must not access data');
+        },
+      });
+      const result = await handleStaffReadRequest(
+        tokenRequest(path, { dropId: '111k_devnet' }),
+        { COMMERCE_DB: db },
+        path,
+        {},
+        d1StaffDependencies(async () => {
+          providerCalls += 1;
+          assert.fail('Denied Ethereum fulfillment must not contact a provider');
+        }, {
+          verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+        }),
+      );
+      assert.equal(result.response.status, 403, label);
+      assert.deepEqual(await result.response.json(), {
+        ok: false,
+        error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
+      }, label);
+      assert.equal(result.authOutcome, 'rejected', label);
+      assert.equal(dataAccesses, 0, label);
+      assert.equal(providerCalls, 0, label);
+      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
+    }
+  }
+});
+
+test('the designated admin retains Ethereum manual-review access', async context => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const result = await handleStaffReadRequest(
+    tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: '111k_devnet' }),
+    { COMMERCE_DB: harness.db },
+    FULFILLMENT_MANUAL_REVIEW_PATH,
+    {},
+    d1StaffDependencies(async () => assert.fail('Empty manual review must not contact a provider'), {
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), { checkouts: [], nextCursor: null });
 });
 
 test('fulfillment exposes validated Ethereum transaction references through the staff route without raw order fields', async context => {

@@ -10,6 +10,7 @@ import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   STAFF_WALLET_ADDRESSES,
+  allowedFulfillmentDropIdsForWallet,
   isStaffWalletAddress,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
@@ -72,7 +73,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
           ...SHIPPER_BINDER_DROP_IDS,
         ],
       ],
-      [FULFILLMENT_ONLY_WALLET, [...MAINNET_DROP_IDS, '111k_devnet']],
+      [FULFILLMENT_ONLY_WALLET, MAINNET_DROP_IDS],
     ],
   );
   assert.deepEqual(STAFF_WALLET_ADDRESSES, [
@@ -143,7 +144,7 @@ test('frontend allowed-drop lists retain caller and configured array references'
     ...SHIPPER_BINDER_DROP_IDS,
   ]);
 
-  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), [...MAINNET_DROP_IDS, '111k_devnet']);
+  assert.deepEqual(listAllowedFulfillmentDropIds(FULFILLMENT_ONLY_WALLET, []), MAINNET_DROP_IDS);
   assert.deepEqual(listAllowedFulfillmentDropIds('11111111111111111111111111111111', ALL_DROP_IDS), []);
   assert.deepEqual(listAllowedFulfillmentDropIds(undefined, ALL_DROP_IDS), []);
 });
@@ -218,13 +219,38 @@ test('sensitive fulfillment addresses remain visible only to an authorized non-a
   );
 });
 
-test('Ethereum test fulfillment is limited to the admin and designated address operator', () => {
+test('Ethereum test fulfillment is limited to the designated admin in the frontend and backend', () => {
   const admins = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
   const grants = new Map(SHIPPER_FULFILLMENT_ACCESS.map(({ wallet, dropIds }) => [wallet, new Set(dropIds)]));
-  for (const wallet of [ADMIN_WALLET, FULFILLMENT_ONLY_WALLET]) {
-    assert.equal(walletHasFulfillmentDropAccess(wallet, '111k_devnet', admins, grants), true);
-  }
-  for (const wallet of [MAINNET_SHIPPER_WALLET, LIMITED_SHIPPER_WALLET, '0x1111111111111111111111111111111111111111']) {
+  const dropIds = [...ALL_DROP_IDS, '111k_devnet'];
+  assert.equal(walletHasFulfillmentDropAccess(ADMIN_WALLET, '111k_devnet', admins, grants), true);
+  assert.equal(listAllowedFulfillmentDropIds(ADMIN_WALLET, dropIds), dropIds);
+  for (const wallet of [
+    ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
+    '0x1111111111111111111111111111111111111111',
+    null,
+    undefined,
+  ]) {
     assert.equal(walletHasFulfillmentDropAccess(wallet, '111k_devnet', admins, grants), false);
+    assert.equal(listAllowedFulfillmentDropIds(wallet, dropIds).includes('111k_devnet'), false);
+    assert.equal(walletCanViewSensitiveFulfillmentAddress(wallet, '111k_devnet', admins, grants), false);
   }
+});
+
+test('generic admin and explicit shipper grants cannot bypass the Ethereum wallet restriction', () => {
+  const dropIds = ['card_nft_2', '111k_devnet'];
+  const admins = new Set([ADMIN_WALLET, ADDITIONAL_DEVNET_INVENTORY_WALLET]);
+  const shipperGrants = new Map([[FULFILLMENT_ONLY_WALLET, [...dropIds]]]);
+  const shipperSetGrants = new Map([[FULFILLMENT_ONLY_WALLET, new Set(dropIds)]]);
+
+  for (const wallet of [ADDITIONAL_DEVNET_INVENTORY_WALLET, FULFILLMENT_ONLY_WALLET]) {
+    for (const grants of [shipperGrants, shipperSetGrants]) {
+      assert.equal(walletHasFulfillmentDropAccess(wallet, '111k_devnet', admins, grants), false);
+      assert.equal(walletHasFulfillmentDropAccess(wallet, 'card_nft_2', admins, grants), true);
+    }
+    assert.deepEqual(allowedFulfillmentDropIdsForWallet(wallet, dropIds, admins, shipperGrants), ['card_nft_2']);
+  }
+  assert.deepEqual(dropIds, ['card_nft_2', '111k_devnet']);
+  assert.deepEqual(shipperGrants.get(FULFILLMENT_ONLY_WALLET), dropIds);
+  assert.equal(walletHasFulfillmentDropAccess(ADMIN_WALLET, '111k_devnet', new Set(), new Map()), false);
 });

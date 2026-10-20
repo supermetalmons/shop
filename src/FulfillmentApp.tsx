@@ -176,9 +176,12 @@ export default function FulfillmentApp({
     if (!selectedDropId) return visibleDrops;
     return [];
   }, [selectedDrop, selectedDropId, visibleDrops]);
-  const selectedDropIds = useMemo(() => selectedDropId === '111k_devnet' && hasEthereumDropAccess ? ['111k_devnet'] :
-    [...selectedDrops.map((drop) => drop.dropId), ...(!selectedDropId && hasEthereumDropAccess ? ['111k_devnet'] : [])],
-  [selectedDrops, selectedDropId, hasEthereumDropAccess]);
+  const selectedDropIds = useMemo(
+    () => selectedDropId === '111k_devnet' && hasEthereumDropAccess
+      ? ['111k_devnet']
+      : selectedDrops.map((drop) => drop.dropId),
+    [selectedDrops, selectedDropId, hasEthereumDropAccess],
+  );
   const duplicateDrop = useMemo(
     () => selectedDrops.find((drop) => normalizeDropId(drop.dropId) === LITTLE_SWAG_BOXES_DROP_ID) || null,
     [selectedDrops],

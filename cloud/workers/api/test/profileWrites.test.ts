@@ -26,6 +26,7 @@ import {
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { SHIPPER_FULFILLMENT_ACCESS } from '../../../../shared/fulfillmentAccess.ts';
 import { decodeLegacyFirestoreFixtureFields } from './commerceD1Harness.ts';
 import {
   CommerceWriteConflict,
@@ -50,6 +51,7 @@ const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
 const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const OTHER = 'So11111111111111111111111111111111111111112';
 const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
@@ -87,6 +89,13 @@ const LABEL_VOID_BODY = {
   deliveryId: 7,
   labelId: 'label-1',
 };
+const ETHEREUM_SHIPSTATION_REQUESTS: Array<[ProfileWritePath, object]> = [
+  [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
+  [FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, dropId: '111k_devnet' }],
+  [FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, { ...LABEL_VOID_BODY, dropId: '111k_devnet' }],
+  [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
+  [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: '111k_devnet', deliveryId: 7 }],
+];
 
 const SHIPSTATION_RATE = {
   rate_id: 'rate-1',
@@ -400,6 +409,107 @@ test('profile writes preserve identity failure responses and rejected authentica
       assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
     });
   }
+});
+
+test('Ethereum fulfillment writes reject other staff before accessing data or providers', async () => {
+  const requests: Array<[ProfileWritePath, object]> = [
+    [FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }],
+    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: '111k_devnet', deliveryId: 7, full: '100 Main St' }],
+    ...ETHEREUM_SHIPSTATION_REQUESTS,
+  ];
+  for (const wallet of [...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet), OTHER]) {
+    for (const [path, body] of requests) {
+      const label = `${wallet}: ${path}`;
+      let dataAccesses = 0;
+      let providerCalls = 0;
+      const db = new Proxy({} as D1Database, {
+        get: () => {
+          dataAccesses += 1;
+          assert.fail('Denied Ethereum fulfillment must not access data');
+        },
+      });
+      const result = await handleProfileWriteRequest(
+        request(path, body),
+        { ...fulfillmentEnv, COMMERCE_DB: db },
+        path,
+        {},
+        d1Dependencies(async () => {
+          providerCalls += 1;
+          assert.fail('Denied Ethereum fulfillment must not contact a provider');
+        }, {
+          verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet }),
+        }),
+      );
+      assert.equal(result.response.status, 403, label);
+      assert.deepEqual(await result.response.json(), {
+        ok: false,
+        error: { code: 'permission-denied', message: 'Fulfillment access denied.' },
+      }, label);
+      assert.equal(result.authOutcome, 'rejected', label);
+      assert.equal(dataAccesses, 0, label);
+      assert.equal(providerCalls, 0, label);
+      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, label);
+    }
+  }
+});
+
+test('Ethereum ShipStation operations remain disabled for the designated admin before accessing data', async () => {
+  for (const [path, body] of ETHEREUM_SHIPSTATION_REQUESTS) {
+    let dataAccesses = 0;
+    const db = new Proxy({} as D1Database, {
+      get: () => {
+        dataAccesses += 1;
+        assert.fail('Disabled Ethereum ShipStation must not access data');
+      },
+    });
+    const result = await handleProfileWriteRequest(
+      request(path, body),
+      { ...fulfillmentEnv, COMMERCE_DB: db },
+      path,
+      {},
+      d1Dependencies(async () => assert.fail('Disabled Ethereum ShipStation must not contact a provider'), {
+        verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      }),
+    );
+    assert.equal(result.response.status, 409, path);
+    assert.deepEqual(await result.response.json(), {
+      ok: false,
+      error: { code: 'failed-precondition', message: 'ShipStation is disabled for Ethereum test orders.' },
+    }, path);
+    assert.equal(dataAccesses, 0, path);
+    assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 }, path);
+  }
+});
+
+test('the designated admin can update Ethereum fulfillment status', async context => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const key = commerceKeys.deliveryOrder('111k_devnet', '7');
+  seedCommerceDocument(harness, {
+    key,
+    data: {
+      dropId: '111k_devnet',
+      source: 'ethereum',
+      deliveryId: 7,
+      owner: '0x1111111111111111111111111111111111111111',
+      status: 'ready_to_ship',
+      items: [],
+    },
+  });
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: '111k_devnet', deliveryId: 7, status: 'Preparing' }),
+    { COMMERCE_DB: harness.db },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    {},
+    d1Dependencies(async () => assert.fail('Ethereum status update must not contact a provider'), {
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), { deliveryId: 7, fulfillmentStatus: 'Preparing' });
+  const stored = await new D1CommerceRepository(harness.db).get(key);
+  assert.equal(stored?.data.fulfillmentStatus, 'Preparing');
+  assert.equal(stored?.data.fulfillmentUpdatedBy, ADMIN);
 });
 
 test('address route authenticates and atomically persists the exact D1 profile address', async () => {
