@@ -26,6 +26,7 @@ type MintPreviewProps = {
   quantity: number;
   quantityLabel: string;
   renderPreviewPrimary?: MintPreviewPrimaryRenderer;
+  repeatPreviewPrimary?: boolean;
   previewPrimaryKey?: string;
 };
 
@@ -256,7 +257,7 @@ function MintPanelBoxVideo({
   );
 }
 
-export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderPreviewPrimary, previewPrimaryKey }: MintPreviewProps) {
+export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderPreviewPrimary, repeatPreviewPrimary = false, previewPrimaryKey }: MintPreviewProps) {
   const previewRef = useRef<HTMLDivElement | null>(null);
   const mintBoxVideosRef = useRef<Set<HTMLVideoElement>>(new Set());
   const mintBoxVideoPlaybackActiveRef = useRef(false);
@@ -270,7 +271,7 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderP
   const mintBoxImageSrc = boxMedia?.imageSrc;
   const mintBoxVideoSources = (boxMedia?.videoSources || []).filter((source) => source.src);
   const hasMintBoxVideoSources = mintBoxVideoSources.length > 0;
-  const previewQuantity = renderPreviewPrimary ? 1 : mintPanelPreviewQuantity(dropId, quantity, hasMintBoxVideoSources);
+  const previewQuantity = renderPreviewPrimary && !repeatPreviewPrimary ? 1 : mintPanelPreviewQuantity(dropId, quantity, hasMintBoxVideoSources);
   const mintBoxVideoPosterSrc = boxMedia?.videoPosterSrc || mintBoxImageSrc;
   const mintBoxVideoFallbackImageSrcs = uniqueMediaSrcs(mintBoxVideoPosterSrc, mintBoxImageSrc);
 

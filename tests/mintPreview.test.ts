@@ -267,7 +267,7 @@ test('an optional primary preview preserves layout and retries after leaving a f
   assert.equal(image.hidden, true);
 });
 
-test('a custom preview needs no fallback image and stays singular as quantity changes', () => {
+test('a custom preview needs no fallback image and repeats with quantity only when requested', () => {
   function CratePreview({ media }: { media: PrimaryMediaControls }) {
     useEffect(() => media.onReady(), [media.onReady]);
     return createElement('svg', { className: 'mint-panel__box', role: 'img', 'aria-label': '111K crate' });
@@ -290,6 +290,16 @@ test('a custom preview needs no fallback image and stays singular as quantity ch
   view.rerender(createElement(MintPreview, { ...initial, quantity: 15, quantityLabel: '15 crates' }));
   assert.equal(view.getByRole('img', { name: '111K crate' }), crate);
   assert.equal(view.getByLabelText('Mint preview: 15 crates').children.length, 1);
+  assert.equal(boxes.style.cssText, layout);
+
+  for (const quantity of [3, 15, 1]) {
+    const quantityLabel = `${quantity} crate${quantity === 1 ? '' : 's'}`;
+    view.rerender(createElement(MintPreview, { ...initial, repeatPreviewPrimary: true, quantity, quantityLabel }));
+    assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, quantity);
+    assert.equal(view.getByLabelText(`Mint preview: ${quantityLabel}`).children.length, quantity);
+    assert.equal(view.container.querySelector('img'), null);
+    assert.ok([...boxes.querySelectorAll<HTMLElement>('.mint-panel__box--fallback')].every(element => element.hidden));
+  }
   assert.equal(boxes.style.cssText, layout);
 });
 

@@ -37,6 +37,7 @@ export function EthereumMintPanel({
     quantityLabel={quantityLabel}
     boxMedia={{ aspectRatio: 1, mediaScale: 1.4 }}
     renderPreviewPrimary={renderCratePreview}
+    repeatPreviewPrimary
     previewPrimaryKey="111k-crate"
   >
     <MintPanelPurchaseFooter

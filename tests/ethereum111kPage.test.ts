@@ -68,7 +68,7 @@ function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, i
   } };
 }
 
-test('the mint panel shares the drop frame and keeps one crate preview for up to fifteen crates', async () => {
+test('the mint panel shares the drop frame and previews the selected crate quantity', async () => {
   const view = page({ header: createElement('header', {}, 'Shop header') });
   const crateImage = view.getByRole('img', { name: '111K crate' });
   assert.equal(crateImage.querySelector('text')?.textContent, '?');
@@ -80,8 +80,13 @@ test('the mint panel shares the drop frame and keeps one crate preview for up to
   assert.ok(frame.contains(view.container.querySelector('.mint-panel')));
   const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
   assert.equal(quantity.max, '15');
+  fireEvent.change(quantity, { target: { value: '3' } });
+  assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 3);
+  assert.ok(view.getByRole('button', { name: /Mint\s*3 crates.*0.0003 ETH/ }));
   fireEvent.change(quantity, { target: { value: '15' } });
   assert.ok(view.getByRole('button', { name: /Mint\s*15 crates.*0.0015 ETH/ }));
+  assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 15);
+  fireEvent.change(quantity, { target: { value: '1' } });
   assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 1);
   assert.equal(view.getByRole('img', { name: '111K crate' }), crateImage);
   assert.equal(view.queryByRole('img', { name: '111K warehouse' }), null);
