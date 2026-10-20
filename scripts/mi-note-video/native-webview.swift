@@ -106,6 +106,8 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
     private var streamExpectedSerial: Int?
     private var streamCompletion: ((Result<CGImage, Error>) -> Void)?
     private var streamTimeout: DispatchWorkItem?
+    private var streamRefresh: DispatchWorkItem?
+    private var streamRefreshCount = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Rendering Mi Note card frames")
@@ -352,6 +354,7 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
                     if method == "screen-capture-stream" {
                         output["streamFrameNumber"] = self.streamFrames
                         output["streamFrameInfo"] = self.streamFrameInfo
+                        output["compositorRefreshes"] = self.streamRefreshCount
                     }
                     completion(.success(output))
                 } catch { completion(.failure(error)) }
@@ -524,12 +527,41 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         }
         streamExpectedSerial = serial
         streamCompletion = completion
+        streamRefreshCount = 0
         let timeout = DispatchWorkItem { [weak self] in
-            self?.failStream(CaptureFailure(message: "Persistent stream did not deliver compositor paint serial \(serial) within 8 seconds."))
+            guard let self else { return }
+            self.failStream(CaptureFailure(message: "Persistent stream did not deliver compositor paint serial \(serial) within 30 seconds after \(self.streamRefreshCount) compositor refreshes."))
         }
         streamTimeout = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: timeout)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+        scheduleStreamRefresh(serial: serial)
         consumeStreamImage()
+    }
+
+    private func scheduleStreamRefresh(serial: Int) {
+        guard streamExpectedSerial == serial, streamCompletion != nil else { return }
+        let refresh = DispatchWorkItem { [weak self] in
+            guard let self, self.streamExpectedSerial == serial, self.streamCompletion != nil, let webView = self.webView else { return }
+            do { try self.verifyPresentation() }
+            catch { self.failStream(error); return }
+            self.streamRefreshCount += 1
+            let shift = self.streamRefreshCount % 2
+            webView.callAsyncJavaScript("""
+                const marker = document.getElementById('__native_capture_serial');
+                if (!marker) throw new Error('Compositor paint marker is unavailable.');
+                marker.style.transform = `translateX(${\(shift) / devicePixelRatio}px)`;
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                return \(serial);
+                """, arguments: [:], in: nil, in: .page) { [weak self] result in
+                    guard let self, self.streamExpectedSerial == serial, self.streamCompletion != nil else { return }
+                    switch result {
+                    case .failure(let error): self.failStream(error)
+                    case .success: self.scheduleStreamRefresh(serial: serial)
+                    }
+                }
+        }
+        streamRefresh = refresh
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: refresh)
     }
 
     private func consumeStreamImage() {
@@ -538,6 +570,8 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
             guard try streamPaintSerial(buffer) == serial else { return }
             let image = try streamImage(buffer)
             streamTimeout?.cancel()
+            streamRefresh?.cancel()
+            streamRefresh = nil
             streamTimeout = nil
             streamExpectedSerial = nil
             streamCompletion = nil
@@ -594,6 +628,8 @@ final class NativeCapture: NSObject, NSApplicationDelegate, WKNavigationDelegate
         streamFailure = error
         streamTimeout?.cancel()
         streamTimeout = nil
+        streamRefresh?.cancel()
+        streamRefresh = nil
         streamExpectedSerial = nil
         let completion = streamCompletion
         streamCompletion = nil

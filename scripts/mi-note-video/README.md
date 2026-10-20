@@ -41,7 +41,7 @@ The current verified application supports foreground and offscreen capture:
 ```
 
 Its executable SHA-256 is
-`9de42b40930d75c9e2713aae53f77eedfca3daf936a47d82b8ddcd463807d8d6`.
+`e270a1def8c960e482401b12926dbbd1a857a2c559623cfeb5196468e8973b62`.
 The source capture profile SHA-256 is
 `0ff6958f98684c61f6bbdce1368ddeaf3873baf84545baba482e920d92a914c0`.
 The controller checks the verified application, runtime, and profile before a
@@ -125,6 +125,10 @@ attached to each captured pixel buffer. An incrementing pixel marker in the
 discarded gutter verifies that the compositor has produced the requested frame.
 Every capture checks dimensions, content scale, the full content rectangle, and
 opaque alpha before removing alpha without changing RGB values.
+If the compositor stalls, the stream requests a repaint of the same serial in
+the discarded gutter every two seconds, for up to 30 seconds. It still requires
+the exact requested marker before accepting a frame and records these refreshes
+in the capture receipt.
 
 The complete geometry scan warms every pose in the motion cycle. Two independent
 starting captures must match exactly. After the sequence, two consecutive rest

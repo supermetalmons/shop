@@ -18,9 +18,9 @@ export const preservedHashes = Object.freeze({
   packageLock: '30787c9a98225aa3ca68ecc788afbd881be7b6f6be170c2a90a7e1d9e5724a6d',
 });
 export const nativeAppHashes = Object.freeze({
-  app: '9de42b40930d75c9e2713aae53f77eedfca3daf936a47d82b8ddcd463807d8d6',
+  app: 'e270a1def8c960e482401b12926dbbd1a857a2c559623cfeb5196468e8973b62',
   appInfo: '72a6fe00768dd3fef9aa4d1e9ed272c44557bc84bfec76f93a5d3e25d0b0e8e7',
-  swift: 'aba9c684966c5b711f6560a0f836f166c3dc16402e6926be88e0082d593f6407',
+  swift: '2984e40f71a7dc895b8b709cac6efeb066803ad084378b1a269b2bbb190a9cfa',
   build: '727a16aebc0164528c9db3e95586c089672ff73076b39470be7bfe72994276b5',
 });
 
