@@ -233,7 +233,7 @@ test('delivery submissions block duplicates and retain address and errors for re
   submitTwice(form);
   assert.equal(onSubmit.mock.callCount(), 1);
   assert.deepEqual(onSubmit.mock.calls[0].arguments, [{
-    formatted: 'Alex Example\n1 Main Street\nBrooklyn, NY 11201\nUnited States',
+    formatted: 'Alex Example\n1 Main Street\nBrooklyn, NY, 11201\nUnited States',
     country: 'United States',
     countryCode: 'US',
     email: 'recipient@example.com',

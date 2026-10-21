@@ -10,10 +10,12 @@ import {
   buildFulfillmentSecretCodeExportEntry,
   buildFulfillmentSecretCodeExportEntries,
   countFulfillmentSecretCodeExportEntries,
+  formatFulfillmentAddressText,
 } from '../src/lib/fulfillmentExports.ts';
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
 import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
 import {
   filterFulfillmentOrdersByVisibility,
 } from '../src/lib/fulfillmentOrderVisibility.ts';
@@ -246,6 +248,39 @@ test('buildFulfillmentOrdersExport exports numeric fulfillment labels for figure
   assert.deepEqual(box.figures, [1, 90]);
   assert.equal('style' in box, false);
   assert.deepEqual(payload[0].looseFigures, [3]);
+});
+
+for (const [countryCode, country, locality, displayedLocality] of [
+  ['GB', 'United Kingdom', 'London, , SW1A 1AA', 'London, SW1A 1AA'],
+  ['HK', 'Hong Kong', 'Hong Kong, Kowloon,', 'Hong Kong, Kowloon'],
+  ['IE', 'Ireland', 'Dublin, ,', 'Dublin'],
+  ['AR', 'Argentina', '9 de Julio, ,', '9 de Julio'],
+  ['IE', 'Ireland', 'Dublin, Dublin, Leinster,', 'Dublin, Dublin, Leinster'],
+]) {
+  test(`address display and export remove empty locality slots in ${locality} without changing shipping data`, () => {
+    const streetLines = ['Ada, Example', '12 Example Road,', 'Building A,, Unit 2'];
+    const full = [...streetLines, locality, country].join('\n');
+    const order = cardOrder({ address: { full, country, countryCode } });
+    const shippingBefore = parseShipStationShipTo(full, countryCode, country);
+    assert.equal(shippingBefore.ok, true, JSON.stringify(shippingBefore));
+    const expectedLines = [...streetLines, displayedLocality, country];
+
+    assert.equal(formatFulfillmentAddressText(order.address), expectedLines.join('\n'));
+    assert.deepEqual(buildFulfillmentAddressExport([order])['card_nft_2:7'].address, expectedLines);
+
+    assert.equal(order.address.full, full);
+    assert.deepEqual(parseShipStationShipTo(order.address.full, order.address.countryCode, order.address.country), shippingBefore);
+  });
+}
+
+test('address display cleans locality slots without requiring matching country metadata', () => {
+  const full = 'Ada Example\n12 Example Road\nLondon, , SW1A 1AA\nUnited Kingdom';
+  const expected = 'Ada Example\n12 Example Road\nLondon, SW1A 1AA\nUnited Kingdom';
+  for (const address of [{ full }, { full, country: 'France', countryCode: 'FR' }]) {
+    assert.equal(formatFulfillmentAddressText(address), expected);
+    assert.deepEqual(buildFulfillmentAddressExport([cardOrder({ address })])['card_nft_2:7'].address, expected.split('\n'));
+    assert.equal(address.full, full);
+  }
 });
 
 test('buildFulfillmentAddressExport maps unique order ids to sensitive address contact entries', () => {

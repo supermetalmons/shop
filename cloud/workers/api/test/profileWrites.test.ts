@@ -1726,6 +1726,358 @@ test('ShipStation shipment route raises an international default parcel above de
   });
 });
 
+function shipStationAddressRouteFixture(full: string, countryCode?: string, country?: string) {
+  const harness = createCommerceD1Harness();
+  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+  const addressSnapshot = {
+    encrypted: encryptedAddress(full),
+    ...(countryCode ? { countryCode } : {}),
+    ...(country ? { country } : {}),
+  };
+  seedCommerceDocument(harness, { key, data: {
+    owner: OWNER,
+    deliveryId: 7,
+    status: 'ready_to_ship',
+    addressSnapshot,
+    items: [{ kind: 'dude', refId: 1 }],
+  } });
+  const shipments: Array<Record<string, unknown>> = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.hostname, 'api.shipstation.com');
+    if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+    assert.equal(url.pathname, '/v2/shipments');
+    assert.equal(init?.method, 'POST');
+    const body = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+    shipments.push(body.shipments[0]);
+    return Response.json({ shipments: [{
+      shipment_id: 'shipment-international',
+      packages: body.shipments[0].packages,
+    }] });
+  };
+  return {
+    harness,
+    key,
+    addressSnapshot,
+    shipments,
+    repository: new D1CommerceRepository(harness.db),
+    run: (addressPatch?: Record<string, string>) => handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+        dropId: 'card_nft_2',
+        deliveryId: 7,
+        ...(addressPatch ? { addressPatch } : {}),
+      }),
+      { ...fulfillmentEnv, COMMERCE_DB: harness.db },
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      {},
+      d1Dependencies(providerFetch),
+    ),
+  };
+}
+
+test('ShipStation shipment route accepts international address formats and optional fields', async (context) => {
+  const scenarios: Array<{
+    name: string;
+    full: string;
+    countryCode?: string;
+    country?: string;
+    patch?: Record<string, string>;
+    expected: Record<string, string>;
+  }> = [
+    {
+      name: 'British country name without a saved ISO code',
+      full: 'Alex\n1 Example Road\nLondon, Greater London SW1A 1AA\nUnited Kingdom',
+      expected: { city_locality: 'London', state_province: 'Greater London', postal_code: 'SW1A 1AA', country_code: 'GB' },
+    },
+    {
+      name: 'legacy Argentine postcode keeps its alphabetic suffix',
+      full: 'Alex\n1 Example Road\nBuenos Aires, Buenos Aires C1425 FQB\nArgentina',
+      countryCode: 'AR',
+      expected: { city_locality: 'Buenos Aires', state_province: 'Buenos Aires', postal_code: 'C1425 FQB', country_code: 'AR' },
+    },
+    {
+      name: 'legacy Ghana digital address stays in the postcode field',
+      full: 'Alex\n1 Example Road\nAccra, Greater Accra GA-183-8164\nGhana',
+      countryCode: 'GH',
+      expected: { city_locality: 'Accra', state_province: 'Greater Accra', postal_code: 'GA-183-8164', country_code: 'GH' },
+    },
+    {
+      name: 'legacy Saint Kitts and Nevis postcode stays separate from the region',
+      full: 'Alex\n1 Example Road\nBasseterre, Saint George Basseterre KN0101\nKN',
+      countryCode: 'KN',
+      expected: { city_locality: 'Basseterre', state_province: 'Saint George Basseterre', postal_code: 'KN0101', country_code: 'KN' },
+    },
+    {
+      name: 'legacy Saint Lucia postcode retains its prefix and spacing',
+      full: 'Alex\n1 Example Road\nCastries, Castries LC03 101\nLC',
+      countryCode: 'LC',
+      expected: { city_locality: 'Castries', state_province: 'Castries', postal_code: 'LC03 101', country_code: 'LC' },
+    },
+    {
+      name: 'legacy German postcode retains its country prefix',
+      full: 'Alex\n1 Example Road\nBerlin, Berlin D-10115\nGermany',
+      countryCode: 'DE',
+      expected: { city_locality: 'Berlin', state_province: 'Berlin', postal_code: 'D-10115', country_code: 'DE' },
+    },
+    {
+      name: 'alphabetic Bermuda postcode in a legacy locality line',
+      full: 'Alex\nPO Box HM 2469\nHamilton, HM GX\nBermuda',
+      expected: { address_line1: 'PO Box HM 2469', city_locality: 'Hamilton', state_province: '', postal_code: 'HM GX', country_code: 'BM' },
+    },
+    {
+      name: 'alphabetic Bermuda postcode on a separate line',
+      full: 'Alex\nPO Box HM 380\nHamilton\nHM BX\nBermuda',
+      expected: { address_line1: 'PO Box HM 380', city_locality: 'Hamilton', state_province: '', postal_code: 'HM BX', country_code: 'BM' },
+    },
+    {
+      name: 'compact Bermuda postcode in a legacy locality line',
+      full: 'Alex\nPO Box HM 525\nHamilton, HMCX\nBermuda',
+      expected: { address_line1: 'PO Box HM 525', city_locality: 'Hamilton', state_province: '', postal_code: 'HMCX', country_code: 'BM' },
+    },
+    {
+      name: 'German postcode before city without a saved ISO code',
+      full: 'Alex\n1 Example Road\n10115 Berlin\nGermany',
+      expected: { city_locality: 'Berlin', state_province: '', postal_code: '10115', country_code: 'DE' },
+    },
+    {
+      name: 'edited country overrides a stale country name when the saved code is absent',
+      full: 'Alex\n1 Example Road\nBerlin, 10115\nDE',
+      country: 'France',
+      expected: { city_locality: 'Berlin', state_province: '', postal_code: '10115', country_code: 'DE' },
+    },
+    {
+      name: 'edited country overrides a stale country name when the saved code is invalid',
+      full: 'Alex\n1 Example Road\nBerlin, 10115\nDE',
+      countryCode: 'INTL',
+      country: 'France',
+      expected: { city_locality: 'Berlin', state_province: '', postal_code: '10115', country_code: 'DE' },
+    },
+    {
+      name: 'a valid saved country code retains precedence',
+      full: 'Alex\n1 Example Road\nBerlin, 10115\nDE',
+      countryCode: 'FR',
+      country: 'France',
+      expected: { city_locality: 'Berlin', state_province: '', postal_code: '10115', country_code: 'FR' },
+    },
+    {
+      name: 'stored country name remains a fallback for unresolved address text',
+      full: 'Alex\n1 Example Road\nParis, 75001\nOther (International)',
+      countryCode: 'INTL',
+      country: 'France',
+      expected: { city_locality: 'Paris', state_province: '', postal_code: '75001', country_code: 'FR' },
+    },
+    {
+      name: 'legacy comma-containing Irish region',
+      full: 'Alex\n1 Example Road\nDublin, Dublin, Leinster D02 X285\nIreland',
+      expected: { city_locality: 'Dublin', state_province: 'Dublin, Leinster', postal_code: 'D02 X285', country_code: 'IE' },
+    },
+    {
+      name: 'legacy abbreviated Swiss region',
+      full: 'Alex\n1 Example Road\nZürich, Zürich, ZH 8001\nSwitzerland',
+      expected: { city_locality: 'Zürich', state_province: 'Zürich, ZH', postal_code: '8001', country_code: 'CH' },
+    },
+    {
+      name: 'legacy abbreviated Brazilian region',
+      full: 'Alex\n1 Example Road\nSão Paulo, São Paulo, SP 01310-100\nBrazil',
+      expected: { city_locality: 'São Paulo', state_province: 'São Paulo, SP', postal_code: '01310-100', country_code: 'BR' },
+    },
+    {
+      name: 'legacy abbreviated region outside the country postal patterns',
+      full: 'Alex\n1 Example Road\nTijuana, Baja California, BC 22000\nMexico',
+      expected: { city_locality: 'Tijuana', state_province: 'Baja California, BC', postal_code: '22000', country_code: 'MX' },
+    },
+    {
+      name: 'legacy Italian province abbreviation preserves the leading-zero postcode',
+      full: 'Alex\n1 Example Road\nRome, Lazio, RM 00100\nItaly',
+      expected: { city_locality: 'Rome', state_province: 'Lazio, RM', postal_code: '00100', country_code: 'IT' },
+    },
+    {
+      name: 'legacy split numeric postcode with repeated whitespace',
+      full: 'Alex\n1 Example Road\nBeirut, Beirut 1107  \t2809\nLebanon',
+      expected: { city_locality: 'Beirut', state_province: 'Beirut', postal_code: '1107 2809', country_code: 'LB' },
+    },
+    {
+      name: 'legacy split numeric postcode outside the country pattern table',
+      full: 'Alex\n1 Example Road\nAthens, Attica 105  \t58\nGreece',
+      expected: { city_locality: 'Athens', state_province: 'Attica', postal_code: '105 58', country_code: 'GR' },
+    },
+    {
+      name: 'separate split postcode keeps the preceding city out of the street address',
+      full: 'Alex\n1 Example Road\nAthens\n105 58\nGreece',
+      expected: { city_locality: 'Athens', state_province: '', postal_code: '105 58', country_code: 'GR' },
+    },
+    {
+      name: 'Argentine numeric city without a postcode',
+      full: 'Alex\n1 Example Road\n9 de Julio\nArgentina',
+      expected: { city_locality: '9 de Julio', state_province: '', postal_code: '', country_code: 'AR' },
+    },
+    {
+      name: 'Irish postcode with repeated whitespace',
+      full: 'Alex\n1 Example Road\nDublin, , D02  X285\nIreland',
+      expected: { city_locality: 'Dublin', state_province: '', postal_code: 'D02 X285', country_code: 'IE' },
+    },
+    {
+      name: 'Hong Kong without postcode',
+      full: 'Alex\n1 Example Road\nHong Kong, Kowloon\nHong Kong',
+      countryCode: 'HK',
+      expected: { city_locality: 'Hong Kong', state_province: 'Kowloon', postal_code: '', country_code: 'HK' },
+    },
+    {
+      name: 'legacy nonzero placeholder stays separate from the region without a correction patch',
+      full: 'Alex\n1 Example Road\nHong Kong, Kowloon 999077\nHong Kong',
+      countryCode: 'HK',
+      expected: { city_locality: 'Hong Kong', state_province: 'Kowloon', postal_code: '999077', country_code: 'HK' },
+    },
+    {
+      name: 'legacy placeholder postcode and region can be corrected',
+      full: 'Alex\n1 Example Road\nHong Kong, Kowloon 999077\nHong Kong',
+      countryCode: 'HK',
+      patch: { state_province: 'Kowloon', postal_code: '' },
+      expected: { city_locality: 'Hong Kong', state_province: 'Kowloon', postal_code: '', country_code: 'HK' },
+    },
+    {
+      name: 'optional region can be cleared',
+      full: 'Alex\n1 Example Road\nLondon, Greater London SW1A 1AA\nUnited Kingdom',
+      countryCode: 'GB',
+      patch: { state_province: '' },
+      expected: { city_locality: 'London', state_province: '', postal_code: 'SW1A 1AA', country_code: 'GB' },
+    },
+    {
+      name: 'both optional region and postcode can be cleared',
+      full: 'Alex\n1 Example Road\nDublin, Dublin D02 X285\nIreland',
+      countryCode: 'IE',
+      patch: { state_province: '', postal_code: '' },
+      expected: { city_locality: 'Dublin', state_province: '', postal_code: '', country_code: 'IE' },
+    },
+  ];
+  for (const scenario of scenarios) {
+    await context.test(scenario.name, async (subtest) => {
+      const fixture = shipStationAddressRouteFixture(scenario.full, scenario.countryCode, scenario.country);
+      subtest.after(() => fixture.harness.database.close());
+      const result = await fixture.run(scenario.patch);
+      assert.equal(result.response.status, 200, JSON.stringify(await result.response.json()));
+      assert.equal(fixture.shipments.length, 1);
+      assert.deepEqual(fixture.shipments[0].ship_to, {
+        name: 'Alex',
+        address_line1: '1 Example Road',
+        ...scenario.expected,
+        address_residential_indicator: 'yes',
+      });
+      assert.deepEqual(fixture.shipments[0].customs, {
+        contents: 'merchandise',
+        non_delivery: 'return_to_sender',
+        terms_of_trade_code: 'dap',
+      });
+      const stored = await fixture.repository.get(fixture.key);
+      assert.deepEqual(stored?.data.addressSnapshot, fixture.addressSnapshot);
+      assert.equal((stored?.data.shipstation as Record<string, unknown>).shipmentId, 'shipment-international');
+    });
+  }
+});
+
+test('ShipStation explicit country corrections override saved codes and address text', async (context) => {
+  const fixture = shipStationAddressRouteFixture('Alex\n1 Example Road\nBerlin, 10115\nDE', 'FR', 'France');
+  context.after(() => fixture.harness.database.close());
+  const result = await fixture.run({
+    country_code: 'US', city_locality: 'Pittsburgh', state_province: 'PA', postal_code: '15222',
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(await result.response.json()));
+  assert.deepEqual(fixture.shipments[0].ship_to, {
+    name: 'Alex', address_line1: '1 Example Road', city_locality: 'Pittsburgh', state_province: 'PA',
+    postal_code: '15222', country_code: 'US', address_residential_indicator: 'yes',
+  });
+  assert.equal(Object.hasOwn(fixture.shipments[0], 'customs'), false);
+  const stored = await fixture.repository.get(fixture.key);
+  assert.deepEqual(stored?.data.addressSnapshot, fixture.addressSnapshot);
+});
+
+test('ShipStation shipment route requires confirmation of ambiguous numeric city names', async (context) => {
+  for (const [country, city] of [['EG', '6th of October']]) {
+    await context.test(city, async (subtest) => {
+      const fixture = shipStationAddressRouteFixture(`Alex\n1 Example Road\n${city}\n${country}`, country);
+      subtest.after(() => fixture.harness.database.close());
+      const rejected = await fixture.run();
+      assert.equal(rejected.response.status, 409);
+      const payload = await rejected.response.json() as { error: { details: { kind: string; fields: string[] } } };
+      assert.deepEqual(payload.error.details, { kind: 'shipstation-address-correction', fields: ['city_locality'] });
+      assert.equal(fixture.shipments.length, 0);
+
+      const corrected = await fixture.run({ city_locality: city });
+      assert.equal(corrected.response.status, 200, JSON.stringify(await corrected.response.json()));
+      assert.equal(fixture.shipments.length, 1);
+      assert.deepEqual(fixture.shipments[0].ship_to, {
+        name: 'Alex',
+        address_line1: '1 Example Road',
+        city_locality: city,
+        state_province: '',
+        postal_code: '',
+        country_code: country,
+        address_residential_indicator: 'yes',
+      });
+      const stored = await fixture.repository.get(fixture.key);
+      assert.deepEqual(stored?.data.addressSnapshot, fixture.addressSnapshot);
+    });
+  }
+});
+
+test('ShipStation shipment route lets an operator repair a legacy international country before creating a shipment', async (context) => {
+  const fixture = shipStationAddressRouteFixture(
+    'Alex\n1 Example Road\nBerlin, Berlin 10115\nOther (International)',
+    'INTL',
+  );
+  context.after(() => fixture.harness.database.close());
+  const rejected = await fixture.run();
+  assert.equal(rejected.response.status, 409);
+  const payload = await rejected.response.json() as {
+    error: { code: string; details: { kind: string; fields: string[] } };
+  };
+  assert.equal(payload.error.code, 'failed-precondition');
+  assert.deepEqual(payload.error.details, { kind: 'shipstation-address-correction', fields: ['country_code'] });
+  assert.doesNotMatch(JSON.stringify(payload), /Alex|Example Road|Berlin/);
+  assert.equal(fixture.shipments.length, 0);
+  const released = await fixture.repository.get(fixture.key);
+  assert.equal((released?.data.shipstation as Record<string, unknown>).claimId, undefined);
+
+  const corrected = await fixture.run({ country_code: 'de' });
+  assert.equal(corrected.response.status, 200, JSON.stringify(await corrected.response.json()));
+  assert.equal(fixture.shipments.length, 1);
+  assert.deepEqual(fixture.shipments[0].ship_to, {
+    name: 'Alex',
+    address_line1: '1 Example Road',
+    city_locality: 'Berlin',
+    state_province: 'Berlin',
+    postal_code: '10115',
+    country_code: 'DE',
+    address_residential_indicator: 'yes',
+  });
+  assert.ok(fixture.shipments[0].customs);
+  const stored = await fixture.repository.get(fixture.key);
+  assert.deepEqual(stored?.data.addressSnapshot, fixture.addressSnapshot);
+});
+
+test('ShipStation shipment route still requires a US postal code and exposes a repairable field', async (context) => {
+  const fixture = shipStationAddressRouteFixture('Alex\n1 Example Road\nPittsburgh, PA\nUnited States', 'US');
+  context.after(() => fixture.harness.database.close());
+  const rejected = await fixture.run();
+  assert.equal(rejected.response.status, 409);
+  const payload = await rejected.response.json() as { error: { details: { kind: string; fields: string[] } } };
+  assert.deepEqual(payload.error.details, { kind: 'shipstation-address-correction', fields: ['postal_code'] });
+  assert.equal(fixture.shipments.length, 0);
+  const corrected = await fixture.run({ postal_code: '15222' });
+  assert.equal(corrected.response.status, 200, JSON.stringify(await corrected.response.json()));
+  assert.equal(fixture.shipments.length, 1);
+  assert.deepEqual(fixture.shipments[0].ship_to, {
+    name: 'Alex',
+    address_line1: '1 Example Road',
+    city_locality: 'Pittsburgh',
+    state_province: 'PA',
+    postal_code: '15222',
+    country_code: 'US',
+    address_residential_indicator: 'yes',
+  });
+  assert.equal(Object.hasOwn(fixture.shipments[0], 'customs'), false);
+});
+
 test('ShipStation shipment route retains its claim when final persistence conflicts after creation', async () => {
   let claimId = '';
   let finalPersistAttempts = 0;

@@ -1,6 +1,7 @@
 import type { FulfillmentOrderAddress, ShipStationAddressPatch, ShipStationEditableAddressField } from '../types';
 import { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../types';
 import { parseShipStationShipTo } from '../../shared/shipstationRates.js';
+import { countryRequiresPostalCode, countryRequiresState, normalizeCountryCode } from '../../shared/countryNormalization.ts';
 
 export type FulfillmentShipStationAddressDraft = Record<ShipStationEditableAddressField, string>;
 
@@ -12,7 +13,15 @@ export type FulfillmentShipStationAddressCorrectionSession = {
   lastAttemptedPatch: ShipStationAddressPatch;
 };
 
-const OPTIONAL_ADDRESS_FIELDS = new Set<ShipStationEditableAddressField>(['address_line2', 'address_line3']);
+export function fulfillmentShipStationAddressFieldRequired(
+  field: ShipStationEditableAddressField,
+  countryCode: string,
+): boolean {
+  if (field === 'address_line2' || field === 'address_line3') return false;
+  if (field === 'state_province') return countryRequiresState(countryCode);
+  if (field === 'postal_code') return countryRequiresPostalCode(countryCode);
+  return true;
+}
 
 function emptyAddressDraft(): FulfillmentShipStationAddressDraft {
   return {
@@ -40,8 +49,8 @@ function canonicalAddressFields(fields: readonly ShipStationEditableAddressField
 export function fulfillmentShipStationAddressDraft(
   address: FulfillmentOrderAddress,
 ): FulfillmentShipStationAddressDraft | null {
-  const parsed = parseShipStationShipTo(address.full, address.countryCode);
-  if (!parsed.ok || !parsed.shipTo) return null;
+  const parsed = parseShipStationShipTo(address.full, address.countryCode, address.country);
+  if (!parsed.shipTo) return null;
   return {
     name: parsed.shipTo.name,
     address_line1: parsed.shipTo.address_line1,
@@ -56,17 +65,30 @@ export function fulfillmentShipStationAddressDraft(
 
 export function fulfillmentShipStationAddressCorrectionFailure(
   current: FulfillmentShipStationAddressCorrectionSession | null,
-  baseline: FulfillmentShipStationAddressDraft | null,
+  parsedBaseline: FulfillmentShipStationAddressDraft | null,
   fields: readonly ShipStationEditableAddressField[],
   attemptedPatch: ShipStationAddressPatch,
+  countryCode?: string,
 ): FulfillmentShipStationAddressCorrectionSession {
-  return {
-    baseline: current ? current.baseline : baseline,
-    draft: current?.draft ?? (baseline ? { ...baseline } : emptyAddressDraft()),
+  const originalBaseline = current ? current.baseline : parsedBaseline;
+  const baseline = parsedBaseline ? {
+    ...parsedBaseline,
+    country_code: originalBaseline?.country_code ?? parsedBaseline.country_code,
+  } : originalBaseline;
+  const next: FulfillmentShipStationAddressCorrectionSession = {
+    baseline,
+    draft: parsedBaseline
+      ? { ...parsedBaseline, ...attemptedPatch }
+      : current?.draft ?? {
+        ...emptyAddressDraft(),
+        country_code: fields.includes('country_code') ? '' : normalizeCountryCode(countryCode),
+      },
     requestedFields: canonicalAddressFields([...(current?.requestedFields ?? []), ...fields]),
     visibleFields: [...fields],
     lastAttemptedPatch: { ...attemptedPatch },
   };
+  if (parsedBaseline) next.lastAttemptedPatch = fulfillmentShipStationAddressPatch(next);
+  return next;
 }
 
 export function fulfillmentShipStationAddressOtherFailure(
@@ -82,12 +104,15 @@ export function fulfillmentShipStationAddressOtherFailure(
 
 export function fulfillmentShipStationAddressPatch(
   session: FulfillmentShipStationAddressCorrectionSession,
+  targetBaseline?: FulfillmentShipStationAddressDraft | null,
 ): ShipStationAddressPatch {
   const patch: ShipStationAddressPatch = {};
   const fields = session.baseline ? SHIPSTATION_EDITABLE_ADDRESS_FIELDS : session.requestedFields;
   for (const field of fields) {
     const value = normalizedAddressValue(field, session.draft[field]);
-    if (!session.baseline || value !== session.baseline[field]) patch[field] = value;
+    const requestedValueChanged = field !== 'country_code' && targetBaseline &&
+      session.requestedFields.includes(field) && value !== targetBaseline[field];
+    if (!session.baseline || value !== session.baseline[field] || requestedValueChanged) patch[field] = value;
   }
   return patch;
 }
@@ -96,8 +121,8 @@ function visibleAddressFieldsValid(session: FulfillmentShipStationAddressCorrect
   return session.visibleFields.every((field) => {
     const value = session.draft[field].trim();
     if (value.length > 50) return false;
-    if (!OPTIONAL_ADDRESS_FIELDS.has(field) && !value) return false;
-    return field !== 'country_code' || /^[A-Za-z]{2}$/.test(value);
+    if (fulfillmentShipStationAddressFieldRequired(field, session.draft.country_code) && !value) return false;
+    return field !== 'country_code' || (value.length === 2 && Boolean(normalizeCountryCode(value)));
   });
 }
 
@@ -109,8 +134,9 @@ function addressPatchKey(patch: ShipStationAddressPatch): string {
 
 export function fulfillmentShipStationAddressCanRetry(
   session: FulfillmentShipStationAddressCorrectionSession,
+  targetBaseline?: FulfillmentShipStationAddressDraft | null,
 ): boolean {
-  const patch = fulfillmentShipStationAddressPatch(session);
+  const patch = fulfillmentShipStationAddressPatch(session, targetBaseline);
   return session.visibleFields.length > 0 &&
     visibleAddressFieldsValid(session) &&
     Object.keys(patch).length > 0 &&

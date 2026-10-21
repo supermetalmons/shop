@@ -10,6 +10,8 @@ import type { FulfillmentShipStationAddressCorrectionSession } from '../lib/fulf
 import { normalizeOptionalFulfillmentTrackingCode } from '../../shared/fulfillmentTracking.ts';
 import { defaultShipStationPackage } from '../../shared/shipstationPackage.js';
 import { buildShipStationCustomsDeclaration } from '../../shared/shipstationCustoms.js';
+import { parseShipStationShipTo } from '../../shared/shipstationRates.js';
+import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
 
 export type ShipStationPackageDraft = { length: string; width: string; height: string; weight: string };
 
@@ -22,8 +24,10 @@ export const SHIPSTATION_PACKAGE_FIELDS: { key: keyof ShipStationPackageDraft; l
 
 export function defaultShipStationPackageDraft(order: FulfillmentOrder): ShipStationPackageDraft {
   const parcel = defaultShipStationPackage(order.boxes.length + order.looseDudes.length);
-  const countryCode = String(order.address.countryCode || '').trim().toUpperCase();
-  if (!countryCode || countryCode === 'US') return shipStationPackageDraft(parcel);
+  const countryCode = parseShipStationShipTo(order.address.full, order.address.countryCode, order.address.country).shipTo?.country_code
+    || normalizeCountryCode(order.address.countryCode)
+    || normalizeCountryCode(order.address.country);
+  if (countryCode === 'US') return shipStationPackageDraft(parcel);
   const declaration = buildShipStationCustomsDeclaration(order.dropId, order.boxes.length, order.looseDudes.length);
   return shipStationPackageDraft(
     declaration && parcel.weight < declaration.minimumPackageWeightOunces

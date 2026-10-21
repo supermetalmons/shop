@@ -5,6 +5,7 @@ import type {
 } from '../types';
 import { useOverlayScrollLock } from '../hooks/useOverlayScrollLock';
 import { fulfillmentShipStationDeliveryText } from '../lib/fulfillmentShipStationRates';
+import { fulfillmentShipStationAddressFieldRequired } from '../lib/fulfillmentShipStationAddress';
 import { isInternalReceiptDeliveryOrderSource } from '../../shared/fulfillmentSources';
 import { Modal } from '../components/Modal';
 import { SHIPSTATION_PACKAGE_FIELDS } from './shipStationWorkflow';
@@ -14,12 +15,12 @@ const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/a
 
 const SHIPSTATION_ADDRESS_FIELDS: Record<
   ShipStationEditableAddressField,
-  { label: string; autoComplete: string; optional?: boolean }
+  { label: string; autoComplete: string }
 > = {
   name: { label: 'Recipient name', autoComplete: 'name' },
   address_line1: { label: 'Address line 1', autoComplete: 'address-line1' },
-  address_line2: { label: 'Address line 2', autoComplete: 'address-line2', optional: true },
-  address_line3: { label: 'Address line 3', autoComplete: 'address-line3', optional: true },
+  address_line2: { label: 'Address line 2', autoComplete: 'address-line2' },
+  address_line3: { label: 'Address line 3', autoComplete: 'address-line3' },
   city_locality: { label: 'City', autoComplete: 'address-level2' },
   state_province: { label: 'State / province', autoComplete: 'address-level1' },
   postal_code: { label: 'Postal code', autoComplete: 'postal-code' },
@@ -395,17 +396,18 @@ export function FulfillmentShipStationModal({ suspended, api, ...props }: Fulfil
             <div className="shipstation-address-correction__fields">
               {shipstationAddressCorrection.visibleFields.map((field) => {
                 const config = SHIPSTATION_ADDRESS_FIELDS[field];
+                const required = fulfillmentShipStationAddressFieldRequired(field, shipstationAddressCorrection.draft.country_code);
                 return (
                   <label key={field} className="shipstation-address-correction__field">
                     <span className="muted small">
-                      {config.label}{config.optional ? ' (optional)' : ''}
+                      {config.label}{required ? '' : ' (optional)'}
                     </span>
                     <input
                       type="text"
                       value={shipstationAddressCorrection.draft[field]}
                       onChange={(evt) => editAddress(field, evt.target.value)}
                       maxLength={field === 'country_code' ? 2 : 50}
-                      required={!config.optional}
+                      required={required}
                       disabled={activeShipstationBusy}
                       autoComplete={config.autoComplete}
                       aria-label={config.label}

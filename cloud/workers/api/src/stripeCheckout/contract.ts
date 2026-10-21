@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
 import { normalizeCountryCode } from '../../../../../shared/countryNormalization.js';
+import { formatAddressLocality } from '../../../../../shared/addressFormatting.js';
 import {
   buildStripeReceiptClaimsByBoxId,
   requireStripeReceiptClaimCode,
@@ -522,7 +523,7 @@ export function stripeFulfillmentAddressFromSession(session: any): StripeFulfill
   const state = normalizedString(address.state);
   const postalCode = normalizedString(address.postal_code || address.postalCode);
   const countryCode = normalizedString(address.country).toUpperCase();
-  const cityLine = [city, [state, postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const cityLine = formatAddressLocality(city, state, postalCode);
   const formatted = [name, line1, line2, cityLine, countryCode].filter(Boolean).join('\n');
   if (!formatted) return null;
 

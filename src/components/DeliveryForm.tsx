@@ -3,7 +3,8 @@ import { type DropFamily } from '../config/deployment';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../../shared/dropLabels.ts';
-import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
+import { countryRequiresPostalCode, countryRequiresState, normalizeCountryCode } from '../../shared/countryNormalization.ts';
+import { formatAddressLocality } from '../../shared/addressFormatting.ts';
 import {
   isDirectDeliveryItemsPerBox,
   resolveDeliveryPricing,
@@ -78,18 +79,20 @@ export function DeliveryForm({
   const [city, setCity] = useState('');
   const [state, setState] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  const [localCountryCode, setLocalCountryCode] = useState(countryCode || 'US');
+  const [localCountryCode, setLocalCountryCode] = useState(normalizeCountryCode(countryCode ?? 'US'));
   const { pending: saving, error, setError, isPending, run } = useAsyncSubmit({
     formatError: (error) => error instanceof Error ? error.message : 'Failed to ship',
   });
-  const selectedCountryCode = countryCode ?? localCountryCode;
+  const selectedCountryCode = normalizeCountryCode(countryCode ?? localCountryCode);
   const directDelivery = isDirectDeliveryItemsPerBox(shippingContext.itemsPerBox);
   const pricing = resolveDeliveryPricing(selectedCountryCode, shippingContext.itemsPerBox, shippingContext.dropFamily);
   const countryOption = useMemo(
-    () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
+    () => findCountryByCode(selectedCountryCode),
     [selectedCountryCode],
   );
-  const countryName = countryOption?.name || selectedCountryCode;
+  const countryName = countryOption?.name ?? '';
+  const requiresState = countryRequiresState(selectedCountryCode);
+  const requiresPostalCode = countryRequiresPostalCode(selectedCountryCode);
   const labelSource = {
     namePrefix: shippingContext.boxNamePrefix,
     figureNamePrefix: shippingContext.figureNamePrefix,
@@ -116,6 +119,10 @@ export function DeliveryForm({
   const handleSubmit = async (evt: FormEvent<HTMLFormElement>) => {
     evt.preventDefault();
     if (isPending() || submitDisabled || shipmentPending) return;
+    if (!countryOption) {
+      setError('Please select a country.');
+      return;
+    }
     if (!evt.currentTarget.checkValidity()) {
       setError('Please complete the required fields.');
       return;
@@ -126,10 +133,10 @@ export function DeliveryForm({
       return;
     }
     const formatted = [
-      fullName,
-      line1,
-      line2,
-      `${city}, ${state} ${postalCode}`.trim(),
+      fullName.trim(),
+      line1.trim(),
+      line2.trim(),
+      formatAddressLocality(city, state, postalCode),
       countryName,
     ]
       .filter(Boolean)
@@ -176,12 +183,12 @@ export function DeliveryForm({
           <input required value={city} onChange={(e) => setCity(e.target.value)} />
         </label>
         <label>
-          <span className="muted">State / Region</span>
-          <input required value={state} onChange={(e) => setState(e.target.value)} />
+          <span className="muted">State / Region{requiresState ? '' : ' (optional)'}</span>
+          <input required={requiresState} value={state} onChange={(e) => setState(e.target.value)} />
         </label>
         <label>
-          <span className="muted">Postal code</span>
-          <input required value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
+          <span className="muted">Postal code{requiresPostalCode ? '' : ' (optional)'}</span>
+          <input required={requiresPostalCode} value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
         </label>
         <label>
           <span className="muted">Country</span>
@@ -195,6 +202,7 @@ export function DeliveryForm({
               if (countryCode == null) setLocalCountryCode(next);
             }}
           >
+            <option value="" disabled>Select a country</option>
             {COUNTRIES.map((option) => (
               <option key={option.code} value={option.code}>
                 {countryLabel(option)}

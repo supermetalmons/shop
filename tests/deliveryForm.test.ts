@@ -4,6 +4,7 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { DropFamily } from '../shared/deploymentCore.ts';
+import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
@@ -14,7 +15,7 @@ Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, valu
 Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, value: dom.window.getComputedStyle });
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
 
-const { cleanup, render } = await import('@testing-library/react');
+const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { DeliveryForm } = await import('../src/components/DeliveryForm.tsx');
 
 afterEach(() => cleanup());
@@ -214,4 +215,82 @@ test('disabled delivery form does not infer a pending shipment', () => {
 
   assert.match(view.container.textContent || '', /Unavailable/);
   assert.doesNotMatch(view.container.textContent || '', /Shipment pending…/);
+});
+
+test('delivery form submits international addresses with only the required local fields', async () => {
+  const cases = [
+    { code: 'GB', city: 'London', region: '', postal: 'SW1A 1AA', line: 'London, , SW1A 1AA' },
+    { code: 'GB', city: 'London', region: '', postal: 'SW1A  1AA', normalizedPostal: 'SW1A 1AA', line: 'London, , SW1A 1AA' },
+    { code: 'HK', city: 'Hong Kong', region: 'Kowloon', postal: '', line: 'Hong Kong, Kowloon,' },
+    { code: 'IE', city: 'Dublin', region: '', postal: '', line: 'Dublin, ,' },
+    { code: 'IE', city: 'Dublin 1', region: '', postal: '', line: 'Dublin 1, ,' },
+    { code: 'IE', city: 'Dublin', region: '', postal: 'D02  X285', normalizedPostal: 'D02 X285', line: 'Dublin, , D02 X285' },
+    { code: 'AR', city: '9 de Julio', region: '', postal: '', line: '9 de Julio, ,' },
+    { code: 'EG', city: '6th of October', region: '', postal: '', line: '6th of October, ,' },
+    { code: 'HK', city: 'Hong Kong', region: 'District 1', postal: '', line: 'Hong Kong, District 1,' },
+    { code: 'VN', city: 'Ho Chi Minh City', region: 'District 1', postal: '', line: 'Ho Chi Minh City, District 1,' },
+    { code: 'IE', city: 'Dublin', region: 'Dublin, Leinster', postal: '', line: 'Dublin, Dublin, Leinster,' },
+    { code: 'HK', city: 'Hong Kong', region: 'Kowloon, Hong Kong', postal: '', line: 'Hong Kong, Kowloon, Hong Kong,' },
+    { code: 'HK', city: 'Hong Kong', region: 'District 1', postal: '000000', line: 'Hong Kong, District 1, 000000' },
+    { code: 'IN', city: 'Bengaluru', region: 'Karnataka', postal: '560 001', line: 'Bengaluru, Karnataka, 560 001' },
+  ];
+  for (const { code, city, region, postal, normalizedPostal = postal, line } of cases) {
+    const submissions: Array<{ formatted: string; countryCode: string }> = [];
+    const view = render(createElement(DeliveryForm, {
+      countryCode: code,
+      onSubmit: async (payload) => { submissions.push(payload); },
+    }));
+    fireEvent.change(view.getByLabelText('Email'), { target: { value: 'recipient@example.com' } });
+    fireEvent.change(view.getByLabelText('Full name'), { target: { value: 'Recipient' } });
+    fireEvent.change(view.getByLabelText('Address line 1'), { target: { value: '1 Example Street' } });
+    fireEvent.change(view.getByLabelText('City'), { target: { value: city } });
+    if (region) fireEvent.change(view.getByLabelText(/^State \/ Region/), { target: { value: region } });
+    if (postal) fireEvent.change(view.getByLabelText(/^Postal code/), { target: { value: postal } });
+    fireEvent.submit(view.container.querySelector('form')!);
+    await waitFor(() => assert.equal(submissions.length, 1));
+    assert.equal(submissions[0].countryCode, code);
+    assert.equal(submissions[0].formatted.split('\n')[2], line);
+    const parsed = parseShipStationShipTo(submissions[0].formatted, submissions[0].countryCode);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    assert.equal(parsed.shipTo?.city_locality, city);
+    assert.equal(parsed.shipTo?.state_province, region);
+    assert.equal(parsed.shipTo?.postal_code, normalizedPostal);
+    view.unmount();
+  }
+});
+
+test('a legacy international country selection must be replaced with a real destination', async () => {
+  let countryCode = 'INTL';
+  const submissions: Array<{ countryCode: string }> = [];
+  const onSubmit = async (payload: { countryCode: string }) => { submissions.push(payload); };
+  const onCountryCodeChange = (next: string) => { countryCode = next; };
+  const view = render(createElement(DeliveryForm, { countryCode, onCountryCodeChange, onSubmit }));
+  const countryPicker = view.getByLabelText('Country') as HTMLSelectElement;
+  assert.equal(countryPicker.value, '');
+  assert.equal(countryPicker.querySelector('option[value="INTL"]'), null);
+  fireEvent.submit(view.container.querySelector('form')!);
+  assert.equal(submissions.length, 0);
+  assert.match(view.container.textContent || '', /Please select a country\./);
+
+  fireEvent.change(countryPicker, { target: { value: 'JM' } });
+  assert.equal(countryCode, 'JM');
+  view.rerender(createElement(DeliveryForm, { countryCode, onCountryCodeChange, onSubmit }));
+  assert.equal(countryPicker.value, 'JM');
+  for (const [label, value] of [
+    ['Email', 'recipient@example.com'], ['Full name', 'Recipient'], ['Address line 1', '1 Example Street'],
+    ['City', 'Kingston'], ['State / Region', 'Kingston'],
+  ]) fireEvent.change(view.getByLabelText(label), { target: { value } });
+  fireEvent.submit(view.container.querySelector('form')!);
+  await waitFor(() => assert.equal(submissions.length, 1));
+  assert.equal(submissions[0].countryCode, 'JM');
+});
+
+test('delivery form keeps US state and postal requirements when switching destinations', () => {
+  const onSubmit = async () => undefined;
+  const view = render(createElement(DeliveryForm, { countryCode: 'IE', onSubmit }));
+  assert.equal((view.getByLabelText(/^State \/ Region/) as HTMLInputElement).required, false);
+  assert.equal((view.getByLabelText(/^Postal code/) as HTMLInputElement).required, false);
+  view.rerender(createElement(DeliveryForm, { countryCode: 'US', onSubmit }));
+  assert.equal((view.getByLabelText('State / Region') as HTMLInputElement).required, true);
+  assert.equal((view.getByLabelText('Postal code') as HTMLInputElement).required, true);
 });

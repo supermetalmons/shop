@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from 'react';
+import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
 import {
   addFulfillmentOrderToShipStation,
   fulfillmentShipStationAddressCorrectionDetails,
@@ -87,6 +88,13 @@ export function useShipStationWorkflow(
     () => activeShipstationOrder ? fulfillmentShipStationAddressDraft(activeShipstationOrder.address) : null,
     [activeShipstationOrder],
   );
+  const correctionCountryCode = state.addressCorrection?.draft.country_code;
+  const activeShipstationAddressTargetBaseline = useMemo(
+    () => activeShipstationOrder && correctionCountryCode !== undefined
+      ? fulfillmentShipStationAddressDraft({ ...activeShipstationOrder.address, countryCode: correctionCountryCode })
+      : activeShipstationAddressBaseline,
+    [activeShipstationOrder, activeShipstationAddressBaseline, correctionCountryCode],
+  );
   const activeShipstationPackageDraft = activeShipstationOrder
     ? state.packageEdits[activeShipstationOrderKeyResolved] ??
       (activeShipstationOrder.shipstationPackage
@@ -126,10 +134,10 @@ export function useShipStationWorkflow(
       normalizeFulfillmentStatus(activeShipstationOrder.fulfillmentStatus) !== 'Shipped',
   );
   const activeShipstationAddressPatch = state.addressCorrection
-    ? fulfillmentShipStationAddressPatch(state.addressCorrection)
+    ? fulfillmentShipStationAddressPatch(state.addressCorrection, activeShipstationAddressTargetBaseline)
     : {};
   const activeShipstationAddressCorrectionValid = Boolean(
-    state.addressCorrection && fulfillmentShipStationAddressCanRetry(state.addressCorrection),
+    state.addressCorrection && fulfillmentShipStationAddressCanRetry(state.addressCorrection, activeShipstationAddressTargetBaseline),
   );
   const activeShipstationCanGetRates = Boolean(
     activeShipstationOrder?.shipstationShipmentId && !activeShipstationHasLabel &&
@@ -181,12 +189,16 @@ export function useShipStationWorkflow(
       if (!isCurrent()) return;
       console.error(err);
       const correction = fulfillmentShipStationAddressCorrectionDetails(err);
+      const correctionBaseline = addressPatch?.country_code
+        ? fulfillmentShipStationAddressDraft({ ...activeShipstationOrder.address, countryCode: addressPatch.country_code })
+        : activeShipstationAddressBaseline;
       dispatch({
         type: 'add-failed',
         message: err instanceof Error ? err.message : 'Failed to add the order to ShipStation',
         correction: correction
           ? fulfillmentShipStationAddressCorrectionFailure(
-              state.addressCorrection, activeShipstationAddressBaseline, correction.fields, addressPatch ?? {},
+              state.addressCorrection, correctionBaseline, correction.fields, addressPatch ?? {},
+              normalizeCountryCode(activeShipstationOrder.address.countryCode) || activeShipstationOrder.address.country,
             )
           : fulfillmentShipStationAddressOtherFailure(state.addressCorrection, addressPatch ?? {}),
       });

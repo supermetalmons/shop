@@ -18,6 +18,7 @@ import { normalizeOptionalFulfillmentTrackingCode } from './fulfillmentTracking.
 import { parseShipStationPackage } from './shipstationPackage.ts';
 import { normalizeStripeCheckoutIdentity } from './checkoutIdentity.ts';
 import { normalizeStripeReceiptClaimCode } from './stripeReceiptClaims.ts';
+import { formatAddressLocality } from './addressFormatting.ts';
 
 const ADMIN_IRL_REDEEM_LABEL = 'Redeemed for IRL';
 
@@ -289,7 +290,7 @@ function stripeAddress(session: unknown): { formatted: string; country?: string;
   const state = optionalString(address.state);
   const postalCode = optionalString(address.postal_code) || optionalString(address.postalCode);
   const countryCode = optionalString(address.country)?.toUpperCase();
-  const cityLine = [city, [state, postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const cityLine = formatAddressLocality(city, state, postalCode);
   const formatted = [name, line1, line2, cityLine, countryCode].filter(Boolean).join('\n');
   if (!formatted) return null;
   const email = optionalString(customer.email) || optionalString(raw?.customer_email);

@@ -62,6 +62,20 @@ test('an unknown drop renders no order or actions', () => {
   assert.equal(view.container.childElementCount, 0);
 });
 
+for (const dropId of [cardDrop.dropId, '111k_devnet']) {
+  test(`${dropId} shows a clean address while retaining its original editable text`, () => {
+    const full = 'Ada, Example\n12 Example Road,\nLondon, , SW1A 1AA\nGB';
+    const current = order({ dropId, address: { full, countryCode: 'GB' } });
+    const view = render(createElement(FulfillmentOrderCard, props({
+      order: current,
+      drop: dropId === cardDrop.dropId ? cardDrop : undefined,
+    })));
+
+    assert.ok(view.getByText('Ada, Example 12 Example Road, London, SW1A 1AA United Kingdom'));
+    assert.equal(current.address.full, full);
+  });
+}
+
 test('Ethereum test orders display their 31 artwork contents and keep external shipping actions unavailable', async (t) => {
   t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({
     image: 'data:image/svg+xml;base64,PHN2Zy8+',

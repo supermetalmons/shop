@@ -11,6 +11,7 @@ import {
   getShipStationShipmentByExternalId,
   parseShipStationShipFrom,
   parseShipStationShipTo,
+  validateShipStationShipTo,
   shipStationExternalId,
   shipStationPackageDetails,
   ShipStationRatesProviderError,
@@ -61,8 +62,8 @@ const shipStationAddressPatchSchema = z.object({
   address_line2: z.string().trim().max(50).optional(),
   address_line3: z.string().trim().max(50).optional(),
   city_locality: z.string().trim().min(1).max(50).optional(),
-  state_province: z.string().trim().min(1).max(50).optional(),
-  postal_code: z.string().trim().min(1).max(50).optional(),
+  state_province: z.string().trim().max(50).optional(),
+  postal_code: z.string().trim().max(50).optional(),
   country_code: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/).optional(),
 }).strict().refine((value) => Object.keys(value).length > 0);
 
@@ -189,20 +190,32 @@ async function addFulfillmentOrderToShipStation(
       const full = encrypted ? decryptFulfillmentAddress(encrypted, addressSecret) : null;
       const parsed = parseShipStationShipTo(
         full,
-        addressSnapshot.countryCode,
+        body.addressPatch?.country_code ?? addressSnapshot.countryCode,
+        addressSnapshot.country,
       );
-      if (!parsed.ok || !parsed.shipTo) {
+      if (!parsed.shipTo) {
         const reason = parsed.reason || 'Could not read the delivery address';
         throw new ProfileReadError('failed-precondition', 409, `${reason}. Edit the delivery address and try again.`);
       }
       const unitCount = fulfillmentShipmentUnitCount(claim.order);
       const email = optionalString(addressSnapshot.email);
       const phone = optionalString(addressSnapshot.phone);
-      const shipTo = applyShipStationAddressPatch({
+      const corrected = validateShipStationShipTo(applyShipStationAddressPatch({
         ...parsed.shipTo,
         ...(email ? { email } : {}),
         ...(phone ? { phone } : {}),
-      }, body.addressPatch);
+      }, body.addressPatch));
+      if (!corrected.ok || !corrected.shipTo) {
+        throw new ShipStationProfileError(
+          'failed-precondition',
+          409,
+          corrected.reason || 'Correct the delivery address and try again.',
+          corrected.correctionFields?.length
+            ? { kind: 'shipstation-address-correction', fields: corrected.correctionFields }
+            : undefined,
+        );
+      }
+      const shipTo = corrected.shipTo;
       const international = shipFrom.country_code !== shipTo.country_code;
       const customsDeclaration = international
         ? requireShipStationCustomsDeclaration(dropId, claim.order)

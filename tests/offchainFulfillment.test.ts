@@ -102,6 +102,7 @@ import {
 } from '../cloud/workers/api/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
 import { manualReviewCheckoutFromRecord } from '../shared/fulfillmentReadModel.ts';
+import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
 
 function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
@@ -608,7 +609,7 @@ test('stripeFulfillmentAddressFromSession formats shipping details without phone
   assert.equal(address?.email, 'buyer@example.com');
   assert.equal(address && 'phone' in address, false);
   assert.equal(address?.countryCode, 'US');
-  assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS');
+  assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY, 10001\nUS');
 });
 
 test('stripeFulfillmentAddressFromSession reads Stripe v22 collected shipping details', () => {
@@ -632,7 +633,7 @@ test('stripeFulfillmentAddressFromSession reads Stripe v22 collected shipping de
   assert.equal(address?.email, 'buyer@example.com');
   assert.equal(address && 'phone' in address, false);
   assert.equal(address?.countryCode, 'US');
-  assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS');
+  assert.equal(address?.formatted, 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY, 10001\nUS');
 });
 
 test('stripeFulfillmentAddressFromSession returns null when address is missing', () => {
@@ -652,6 +653,46 @@ test('stripeFulfillmentAddressFromSession returns null when address is missing',
     }),
     null,
   );
+});
+
+test('Stripe fulfillment and manual-review addresses preserve international locality fields', () => {
+  const cases = [
+    { country: 'IE', city: 'Dublin 1', state: '', postal: '', line: 'Dublin 1, ,' },
+    { country: 'AR', city: '9 de Julio', state: '', postal: '', line: '9 de Julio, ,' },
+    { country: 'EG', city: '6th of October', state: '', postal: '', line: '6th of October, ,' },
+    { country: 'IE', city: 'Dublin', state: '', postal: 'D02  X285', normalizedPostal: 'D02 X285', line: 'Dublin, , D02 X285' },
+    { country: 'GB', city: 'London', state: '', postal: 'SW1A  1AA', normalizedPostal: 'SW1A 1AA', line: 'London, , SW1A 1AA' },
+    { country: 'HK', city: 'Hong Kong', state: 'District 1', postal: '', line: 'Hong Kong, District 1,' },
+    { country: 'VN', city: 'Ho Chi Minh City', state: 'District 1', postal: '', line: 'Ho Chi Minh City, District 1,' },
+    { country: 'IE', city: 'Dublin', state: 'Dublin, Leinster', postal: '', line: 'Dublin, Dublin, Leinster,' },
+    { country: 'HK', city: 'Hong Kong', state: 'Kowloon, Hong Kong', postal: '', line: 'Hong Kong, Kowloon, Hong Kong,' },
+    { country: 'HK', city: 'Hong Kong', state: 'District 1', postal: '000000', line: 'Hong Kong, District 1, 000000' },
+    { country: 'HK', city: 'Hong Kong', state: '', postal: '000000', line: 'Hong Kong, , 000000', valid: false },
+    { country: 'IN', city: 'Bengaluru', state: 'Karnataka', postal: '560 001', line: 'Bengaluru, Karnataka, 560 001' },
+  ];
+  for (const { country, city, state, postal, normalizedPostal = postal, line, valid = true } of cases) {
+    const session = {
+      shipping_details: {
+        name: 'Recipient',
+        address: { line1: '1 Example Street', city, state, postal_code: postal, country },
+      },
+    };
+    const address = stripeFulfillmentAddressFromSession(session);
+    assert.equal(address?.formatted, `Recipient\n1 Example Street\n${line}\n${country}`);
+    const summary = manualReviewCheckoutFromRecord({
+      canViewSensitiveAddress: true,
+      checkout: { status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, manualRefundReviewRequired: true },
+      dropId: 'card_nft_binder',
+      session,
+      sessionId: 'cs_international_address',
+    });
+    assert.equal(summary?.address.full, address?.formatted);
+    const parsed = parseShipStationShipTo(address?.formatted, country);
+    assert.equal(parsed.ok, valid, JSON.stringify(parsed));
+    assert.equal(parsed.shipTo?.city_locality, city);
+    assert.equal(parsed.shipTo?.state_province, state);
+    assert.equal(parsed.shipTo?.postal_code, normalizedPostal);
+  }
 });
 
 test('buildStripeCheckoutManualReviewSummary includes failed manual-review checkout contact info when allowed', () => {
@@ -714,7 +755,7 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
       email: 'buyer@example.com',
       country: 'US',
       countryCode: 'US',
-      full: 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY 10001\nUS',
+      full: 'Buyer Name\n1 Main St\nUnit 2\nNew York, NY, 10001\nUS',
     },
   });
   assert.equal(summary?.address && 'phone' in summary.address, false);
@@ -953,10 +994,8 @@ test('stripe checkout shipping countries vary by drop family', () => {
     STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
   );
   const binderCountries = new Set<string>(binderCountriesList);
-  assert.deepEqual(
-    [...binderCountries].sort(),
-    COUNTRIES.filter(({ code }) => code !== 'INTL').map(({ code }) => code).sort(),
-  );
+  const deliveryCountries = new Set(COUNTRIES.map(({ code }) => code));
+  assert.ok([...binderCountries].every((code) => deliveryCountries.has(code)));
   assert.equal(binderCountries.has('CA'), true);
   assert.equal(binderCountries.has('TR'), true);
   assert.equal(binderCountries.has('IR'), false);

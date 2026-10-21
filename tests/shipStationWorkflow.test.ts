@@ -3,6 +3,7 @@ import test, { afterEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { useCallback, useState } from 'react';
 import { fulfillmentOrderKey } from '../src/fulfillment/orders.ts';
+import { parseShipStationShipTo, validateShipStationShipTo } from '../shared/shipstationRates.ts';
 import type {
   FulfillmentOrder,
   FulfillmentShipStationRate,
@@ -214,6 +215,211 @@ test('an already-added shipment does not claim package edits were applied', asyn
   assert.equal(updated.shipstationPackage, undefined);
   assert.equal(view.result.current.workflow.activeShipstationPackageKnown, false);
   assert.match(view.result.current.workflow.shipstationError ?? '', /measurements.*were not applied/);
+});
+
+test('masked international orders use the saved country name for optional corrections', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const initial = order({
+    shipstationShipmentId: undefined,
+    address: { country: 'United Kingdom', full: '***' },
+  });
+  const add = t.mock.fn<Api['addFulfillmentOrderToShipStation']>(async () => {
+    throw new ProfileApiError({
+      code: 'failed-precondition',
+      message: 'Correct the destination region.',
+      details: { kind: 'shipstation-address-correction', fields: ['state_province'] },
+    });
+  });
+  const view = mount([initial], { addFulfillmentOrderToShipStation: add });
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.country_code, 'GB');
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, true);
+  add.mock.mockImplementation(async () => ({ deliveryId: 1, shipmentId: 'shipment-1', alreadyAdded: false }));
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.deepEqual(add.mock.calls[1].arguments[3], { state_province: '' });
+});
+
+test('legacy international countries can be corrected while preserving the saved address', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const initial = order({
+    dropId: 'little_swag_hoodies',
+    shipstationShipmentId: undefined,
+    shipstationPackage: undefined,
+    address: {
+      countryCode: 'INTL',
+      full: 'Recipient\n1 Main Street\nBerlin, Berlin 10115\nOther (International)',
+    },
+  });
+  const add = t.mock.fn<Api['addFulfillmentOrderToShipStation']>(async () => {
+    throw new ProfileApiError({
+      code: 'failed-precondition',
+      message: 'Choose the destination country for this address',
+      details: { kind: 'shipstation-address-correction', fields: ['country_code'] },
+    });
+  });
+  const view = mount([initial], { addFulfillmentOrderToShipStation: add });
+  assert.equal(view.result.current.workflow.activeShipstationPackageDraft.weight, '25');
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.address_line1, '1 Main Street');
+  act(() => view.result.current.workflow.editAddress('country_code', 'de'));
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, true);
+  add.mock.mockImplementation(async () => ({ deliveryId: 1, shipmentId: 'shipment-1', alreadyAdded: false }));
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.deepEqual(add.mock.calls[1].arguments[3], { country_code: 'DE' });
+  assert.deepEqual(view.result.current.orders[fulfillmentOrderKey(initial)].address, initial.address);
+});
+
+test('international package defaults follow edited address text before stale country names', () => {
+  const initial = order({
+    dropId: 'little_swag_hoodies',
+    shipstationShipmentId: undefined,
+    shipstationPackage: undefined,
+    address: { country: 'United States', full: 'Recipient\n1 Example Street\nBerlin, 10115\nDE' },
+  });
+  const view = mount([initial]);
+  assert.equal(view.result.current.workflow.activeShipstationPackageDraft.weight, '25');
+});
+
+test('a provider rejection refreshes the correction draft after a country change', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const initial = order({
+    shipstationShipmentId: undefined,
+    address: {
+      countryCode: 'INTL',
+      full: 'Recipient\n1 Main Street\nHong Kong, Kowloon 00000\nOther (International)',
+    },
+  });
+  let attempt = 0;
+  const add = t.mock.fn<Api['addFulfillmentOrderToShipStation']>(async () => {
+    attempt += 1;
+    if (attempt <= 2) {
+      throw new ProfileApiError({
+        code: 'failed-precondition',
+        message: 'Correct the destination address.',
+        details: {
+          kind: 'shipstation-address-correction',
+          fields: [attempt === 1 ? 'country_code' : 'state_province'],
+        },
+      });
+    }
+    return { deliveryId: 1, shipmentId: 'shipment-1', alreadyAdded: false };
+  });
+  const view = mount([initial], { addFulfillmentOrderToShipStation: add });
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  act(() => view.result.current.workflow.editAddress('country_code', 'HK'));
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.deepEqual(add.mock.calls[1].arguments[3], { country_code: 'HK' });
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.state_province, 'Kowloon');
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.postal_code, '00000');
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, false);
+  act(() => view.result.current.workflow.editAddress('state_province', 'Kowloon'));
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, false);
+  act(() => view.result.current.workflow.editAddress('state_province', 'Kowloon City'));
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, true);
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.deepEqual(add.mock.calls[2].arguments[3], { state_province: 'Kowloon City', country_code: 'HK' });
+  assert.equal(view.result.current.orders[fulfillmentOrderKey(initial)].shipstationShipmentId, 'shipment-1');
+  assert.deepEqual(view.result.current.orders[fulfillmentOrderKey(initial)].address, initial.address);
+});
+
+test('country reparsing does not restore an old city line as a street during a later retry', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const initial = order({
+    shipstationShipmentId: undefined,
+    address: {
+      countryCode: 'INTL',
+      full: 'Recipient\n1 Main Street\nToronto ON\nM5V 3A8\nOther (International)',
+    },
+  });
+  let attempt = 0;
+  const add = t.mock.fn<Api['addFulfillmentOrderToShipStation']>(async () => {
+    attempt += 1;
+    if (attempt <= 2) {
+      throw new ProfileApiError({
+        code: 'failed-precondition',
+        message: 'Correct the destination address.',
+        details: {
+          kind: 'shipstation-address-correction',
+          fields: attempt === 1 ? ['city_locality', 'state_province', 'country_code'] : [
+            'name', 'address_line1', 'address_line2', 'address_line3',
+            'city_locality', 'state_province', 'postal_code', 'country_code',
+          ],
+        },
+      });
+    }
+    return { deliveryId: 1, shipmentId: 'shipment-1', alreadyAdded: false };
+  });
+  const view = mount([initial], { addFulfillmentOrderToShipStation: add });
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.address_line2, 'Toronto ON');
+  act(() => {
+    view.result.current.workflow.editAddress('country_code', 'CA');
+    view.result.current.workflow.editAddress('city_locality', 'Toronto');
+    view.result.current.workflow.editAddress('state_province', 'ON');
+  });
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  const draft = view.result.current.workflow.shipstationAddressCorrection?.draft;
+  assert.equal(draft?.address_line2, '');
+  assert.equal(draft?.city_locality, 'Toronto');
+  assert.equal(draft?.postal_code, 'M5V 3A8');
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, false);
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(add.mock.callCount(), 2);
+  act(() => view.result.current.workflow.editAddress('address_line1', '2 Main Street'));
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.deepEqual(add.mock.calls[2].arguments[3], { address_line1: '2 Main Street', country_code: 'CA' });
+  assert.deepEqual(view.result.current.orders[fulfillmentOrderKey(initial)].address, initial.address);
+});
+
+test('a country correction preserves the displayed empty street on a successful next request', async (t) => {
+  t.mock.method(console, 'error', () => undefined);
+  const initial = order({
+    shipstationShipmentId: undefined,
+    address: {
+      countryCode: 'CA',
+      full: 'Recipient\n1 Main Street\nToronto ON\nM5V 3A8\nCanada',
+    },
+  });
+  let attempt = 0;
+  const add = t.mock.fn<Api['addFulfillmentOrderToShipStation']>(async (...args) => {
+    attempt += 1;
+    if (attempt === 1) {
+      throw new ProfileApiError({
+        code: 'failed-precondition',
+        message: 'Correct the destination address.',
+        details: {
+          kind: 'shipstation-address-correction',
+          fields: ['name', 'address_line1', 'address_line2', 'address_line3',
+            'city_locality', 'state_province', 'postal_code', 'country_code'],
+        },
+      });
+    }
+    const patch = args[3];
+    const parsed = parseShipStationShipTo(initial.address.full, patch?.country_code ?? initial.address.countryCode);
+    assert.ok(parsed.shipTo);
+    const corrected = validateShipStationShipTo({ ...parsed.shipTo, ...patch });
+    assert.equal(corrected.ok, true);
+    assert.equal(corrected.shipTo?.address_line2, '');
+    assert.equal(corrected.shipTo?.city_locality, 'Pittsburgh');
+    assert.equal(corrected.shipTo?.state_province, 'PA');
+    assert.equal(corrected.shipTo?.postal_code, '15222');
+    return { deliveryId: 1, shipmentId: 'shipment-us', alreadyAdded: false };
+  });
+  const view = mount([initial], { addFulfillmentOrderToShipStation: add });
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(view.result.current.workflow.shipstationAddressCorrection?.draft.address_line2, '');
+  act(() => {
+    view.result.current.workflow.editAddress('country_code', 'US');
+    view.result.current.workflow.editAddress('city_locality', 'Pittsburgh');
+    view.result.current.workflow.editAddress('state_province', 'PA');
+    view.result.current.workflow.editAddress('postal_code', '15222');
+  });
+  assert.equal(view.result.current.workflow.activeShipstationAddressCorrectionValid, true);
+  await act(async () => { await view.result.current.workflow.handleAddToShipStation(); });
+  assert.equal(add.mock.callCount(), 2);
+  assert.equal(add.mock.calls[1].arguments[3]?.address_line2, '');
+  assert.equal(view.result.current.orders[fulfillmentOrderKey(initial)].shipstationShipmentId, 'shipment-us');
+  assert.deepEqual(view.result.current.orders[fulfillmentOrderKey(initial)].address, initial.address);
 });
 
 for (const invalidation of ['unmount', 'switch order', 'scope invalidated'] as const) {

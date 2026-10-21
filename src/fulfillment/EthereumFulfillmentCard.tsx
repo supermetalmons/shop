@@ -5,6 +5,7 @@ import type { FulfillmentOrder } from '../types';
 import { monsApiOrigin } from '../lib/monsApiOrigin';
 import { fulfillmentOrderKey } from './orders';
 import { fulfillmentBoxSecretCode, isUsedReceiptClaimStatus } from '../lib/fulfillmentCodes';
+import { formatFulfillmentAddressText } from '../lib/fulfillmentExports';
 import type { FulfillmentSecretCodeDownloadTarget } from './useFulfillmentExports';
 
 const previews = new Map<string, Promise<string>>();
@@ -74,7 +75,7 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
         {order.fulfillmentStatus || 'Set status'}
       </button>
     </div>
-    {canShowAddress ? <div className="fulfillment-address" style={{ whiteSpace: 'pre-line' }}>{order.address.full}</div> : null}
+    {canShowAddress ? <div className="fulfillment-address" style={{ whiteSpace: 'pre-line' }}>{formatFulfillmentAddressText(order.address)}</div> : null}
     {canAdminEditFulfillmentAddress && showFullAddress && showContactInfo ? <button type="button" className="secondary-light" onClick={() => onEditAddress(order)}>Edit address</button> : null}
     <div className="muted small">Test fulfillment. Shipping labels and customer emails are disabled.</div>
     {order.fulfillmentTrackingCode ? <div className="muted small">Tracking: {order.fulfillmentTrackingCode}</div> : null}

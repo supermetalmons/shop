@@ -15,6 +15,7 @@ import {
 } from './fulfillmentCodes';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
 import { isDirectDeliveryItemsPerBox } from '../../shared/shipping.ts';
+import { formatAddressForDisplay } from '../../shared/addressFormatting.ts';
 import { findCountryByCode } from './countries';
 import {
   resolveFulfillmentDirectDeliveryBoxLabel,
@@ -101,12 +102,13 @@ export function formatFulfillmentAddressText(address: FulfillmentOrderAddress): 
   if (address.full === '***') return formattedCountry || '***';
   if (typeof address.full !== 'string') return '';
 
+  const full = formatAddressForDisplay(address.full);
   const countryCode = (address.countryCode || address.country || '').trim().toUpperCase();
-  if (!countryCode || !formattedCountry) return address.full;
+  if (!countryCode || !formattedCountry) return full;
 
-  const lines = address.full.split('\n');
+  const lines = full.split('\n');
   const finalLineIndex = lines.length - 1;
-  if (lines[finalLineIndex]?.trim().toUpperCase() !== countryCode) return address.full;
+  if (lines[finalLineIndex]?.trim().toUpperCase() !== countryCode) return full;
 
   const nextLines = [...lines];
   nextLines[finalLineIndex] = formattedCountry;
