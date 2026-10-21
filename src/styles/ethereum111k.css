@@ -1,12 +1,14 @@
 .ethereum111k {
   width: 100%;
 }
-.ethereum111k__mint-kind {
-  position: absolute;
-  left: -10px;
-  bottom: calc(100% + 8px);
+.ethereum111k__mint-title {
   display: flex;
+  align-items: center;
+  flex-shrink: 0;
   gap: 6px;
+}
+.ethereum111k__mint-kind {
+  display: flex;
   width: max-content;
   margin: 0;
   padding: 0;
@@ -14,15 +16,9 @@
 }
 .ethereum111k__mint-kind label {
   position: relative;
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  min-height: 36px;
-  padding: 10px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
+  display: block;
+  width: 44px;
+  height: 44px;
   cursor: pointer;
 }
 .ethereum111k__mint-kind input {
@@ -34,20 +30,27 @@
   opacity: 0;
 }
 .ethereum111k__mint-kind span {
-  border-bottom: 1px solid transparent;
-  transition: color 150ms ease, border-color 150ms ease;
+  display: grid;
+  place-items: center;
+  height: 100%;
+  border-radius: 4px;
 }
-.ethereum111k__mint-kind input:checked + span {
-  color: var(--fg);
-  border-bottom-color: currentColor;
+.ethereum111k__mint-kind svg {
+  display: block;
+  opacity: 0.45;
+  filter: grayscale(1);
+  transition: opacity 150ms ease, filter 150ms ease;
 }
-.ethereum111k__mint-kind:not(:disabled) label:hover span {
-  color: var(--fg);
+.ethereum111k__mint-kind input:checked + span svg {
+  opacity: 1;
+  filter: grayscale(0);
+}
+.ethereum111k__mint-kind:not(:disabled) label:hover input:not(:checked) + span svg {
+  opacity: 0.75;
 }
 .ethereum111k__mint-kind input:focus-visible + span {
   outline: 2px solid var(--accent);
-  outline-offset: 4px;
-  border-radius: 2px;
+  outline-offset: 2px;
 }
 .ethereum111k__mint-kind:disabled label {
   cursor: default;
@@ -177,5 +180,6 @@
   .ethereum111k__receipt-form input { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .ethereum111k__mint-kind svg { transition: none; }
   .ethereum111k__reveal-grid button { animation: none; }
 }

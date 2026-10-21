@@ -3,6 +3,7 @@ import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityCo
 import { MintPanelActions } from '../components/MintPanelActions';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { EthereumContainerPreview } from './EthereumContainerPreview';
+import { EthereumContainerIcon } from './EthereumContainerIcon';
 
 type EthereumMintPanelProps = {
   kind: 'crate' | 'warehouse';
@@ -51,13 +52,16 @@ export function EthereumMintPanel({
     <MintPanelPurchaseFooter
       hasControls={showQuantitySlider}
       info={<>
-        <fieldset className="ethereum111k__mint-kind" aria-label="Container type" disabled={kindDisabled}>
-          {(['crate', 'warehouse'] as const).map(value => <label key={value}>
-            <input type="radio" name="ethereum-container" value={value} checked={kind === value} onChange={() => onKindChange(value)} />
-            <span>{value === 'crate' ? 'Crate' : 'Warehouse'}</span>
-          </label>)}
-        </fieldset>
-        <MintPanelTitle title="111K" />
+        <div className="ethereum111k__mint-title">
+          <MintPanelTitle title="111K" />
+          <fieldset className="ethereum111k__mint-kind" aria-label="Container type" disabled={kindDisabled}>
+            {(['crate', 'warehouse'] as const).map(value => <label key={value} title={value === 'crate' ? 'Crate' : 'Warehouse'}>
+              <input type="radio" name="ethereum-container" value={value} aria-label={value === 'crate' ? 'Crate' : 'Warehouse'}
+                checked={kind === value} onChange={() => onKindChange(value)} />
+              <span><EthereumContainerIcon kind={value} /></span>
+            </label>)}
+          </fieldset>
+        </div>
         <div className="mint-panel__remaining mint-panel__availability">
           {statusText ? <span role="status">{statusText}</span> : <>
             <span className="mint-panel__remaining-count" style={{ minWidth: `${String(total).length}ch` }}>
