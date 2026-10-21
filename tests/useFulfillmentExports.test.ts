@@ -282,7 +282,7 @@ test('missing codes, missing targets, and used card receipts do not start PNG do
   assert.equal(inputs.setOrdersError.mock.callCount(), 0);
 });
 
-test('JSON downloads use displayed orders and current metadata before closing the menu', () => {
+test('JSON downloads use displayed orders and figure IDs before closing the menu', () => {
   const inputs = options();
   const metadataDrop = FRONTEND_DROPS.little_swag_hoodies;
   inputs.dropById.set(metadataDrop.dropId, metadataDrop);
@@ -302,7 +302,7 @@ test('JSON downloads use displayed orders and current metadata before closing th
 
   assert.deepEqual(events, ['download', 'close', 'download', 'close']);
   assert.deepEqual(files.downloadJsonFile.mock.calls[0].arguments[1], [
-    { orderId: 'little_swag_hoodies:7', country: 'United States', looseFigures: [321] },
+    { orderId: 'little_swag_hoodies:7', country: 'United States', looseFigures: [101] },
   ]);
   assert.deepEqual(files.downloadJsonFile.mock.calls[1].arguments[1], {
     'little_swag_hoodies:7': { address: ['Ada', '123 Main St', 'United States'], email: 'ada@example.com' },

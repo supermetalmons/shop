@@ -52,7 +52,7 @@ export function resolveFulfillmentFigureLabel(args: {
       ? String(args.figureId)
       : mediaId
         ? String(mediaId)
-        : fallbackName;
+        : String(args.figureId);
   const overrideArgs = {
     figureId: args.figureId,
     index: args.index ?? 0,

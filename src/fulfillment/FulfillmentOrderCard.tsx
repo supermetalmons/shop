@@ -97,6 +97,7 @@ function SecretCodeDisplay(props: {
 }
 
 function FulfillmentBoxTiles(args: {
+  dropId: string;
   boxes: Array<{ boxId: number; boxIndex: number; secretCode: string; receiptClaimStatus?: string }>;
   keyPrefix: string;
   aspectRatio: number;
@@ -106,6 +107,7 @@ function FulfillmentBoxTiles(args: {
   onDownloadSecretCode?: (boxIndex: number) => void;
 }) {
   const {
+    dropId,
     boxes,
     keyPrefix,
     aspectRatio,
@@ -122,7 +124,7 @@ function FulfillmentBoxTiles(args: {
         const hideSecretCodeDownload = isUsedReceiptClaimStatus(receiptClaimStatus);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
-            <FulfillmentImage src={imageSrc} alt={label} aspectRatio={aspectRatio} />
+            <FulfillmentImage dropId={dropId} src={imageSrc} alt={label} aspectRatio={aspectRatio} />
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
             {secretCode ? (
               <SecretCodeDisplay
@@ -307,6 +309,7 @@ export function FulfillmentOrderCard({
         {order.boxes.length ? (
           orderIsDirectDeliveryDrop ? (
             <FulfillmentBoxTiles
+              dropId={orderDrop.dropId}
               boxes={order.boxes.map((box, boxIndex) => ({
                 boxId: box.boxId,
                 boxIndex,

@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
 import type { FigureMediaConfig, FrontendDeploymentConfig } from '../config/deployment';
+import { ColorSchemeImage, useColorSchemeImageSources } from '../components/ColorSchemeImage';
 import { useFigureImage } from '../hooks/useFigureImage';
 import { resolveDropContent } from '../lib/dropContent';
 import type { FigureMetadataRecord } from '../lib/figureMetadata';
 import { resolveFulfillmentFigurePreview, type FulfillmentFigureLabelOverrideArgs } from '../lib/fulfillmentLabels';
 
 export function FulfillmentImage(props: {
+  dropId: string;
   src?: string | null;
   alt: string;
   aspectRatio: number;
@@ -14,7 +16,8 @@ export function FulfillmentImage(props: {
   return (
     <span className="fulfillment-image-frame" style={{ aspectRatio: props.aspectRatio }}>
       {props.src ? (
-        <img
+        <ColorSchemeImage
+          dropId={props.dropId}
           src={props.src}
           alt={props.alt}
           loading="lazy"
@@ -37,9 +40,13 @@ function FigureTileImage(props: {
   primarySrc?: string;
   fallbackSrc?: string;
 }) {
-  const { activeSrc, handleError } = useFigureImage(props);
+  const [primarySrc, fallbackSrc] = useColorSchemeImageSources(props.dropId, [
+    props.primarySrc || '',
+    props.fallbackSrc || '',
+  ]);
+  const { activeSrc, handleError } = useFigureImage({ ...props, primarySrc, fallbackSrc });
 
-  return <FulfillmentImage src={activeSrc} alt={props.alt} aspectRatio={props.aspectRatio} onError={handleError} />;
+  return <FulfillmentImage dropId={props.dropId} src={activeSrc} alt={props.alt} aspectRatio={props.aspectRatio} onError={handleError} />;
 }
 
 export function FulfillmentFigureTiles(args: {
