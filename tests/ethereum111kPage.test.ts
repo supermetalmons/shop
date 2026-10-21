@@ -92,11 +92,11 @@ test('crate discounts reuse the existing button state and use public pricing abo
   act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], { ...discount, discountAllowance: 3 }));
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Mint with discount for 0.0001 ETH. Regular price 0.0002 ETH.' })));
   fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
-  assert.ok(view.getByRole('button', { name: /Mint\s*1 warehouse.*0.0011 ETH/ }));
+  assert.ok(view.getByRole('button', { name: /Mint\s*2 warehouses.*0.0022 ETH/ }));
   assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
   fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
   act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, contract, owner], { ...discount, discountUsed: 1 }));
-  await waitFor(() => assert.ok(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ })));
+  await waitFor(() => assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ })));
   assert.equal(view.container.querySelector('.mint-panel__submit--discounted'), null);
 });
 
@@ -265,7 +265,7 @@ test('mint quantity follows the transaction maximum and clamps when available su
   assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ }));
 });
 
-test('switching containers resets quantity and changes the preview, availability, price and supply limit', async t => {
+test('switching containers preserves quantity unless it exceeds the available supply', async t => {
   t.mock.method(ethereumApi, 'stats', async () => stats({
     allocatedCrates: 5543, remainingCrates: 12, warehousesMinted: 502, remainingWarehouses: 3,
   }));
@@ -273,15 +273,19 @@ test('switching containers resets quantity and changes the preview, availability
   const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
   await waitFor(() => assert.equal(quantity.max, '12'));
   assert.match(view.container.querySelector('.mint-panel')!.textContent!, /12\s*\/\s*5555 left/);
-  fireEvent.change(quantity, { target: { value: '4' } });
+  fireEvent.change(quantity, { target: { value: '2' } });
   fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
-  assert.equal(quantity.value, '1');
+  assert.equal(quantity.value, '2');
   assert.equal(quantity.max, '3');
   assert.equal(view.queryByRole('img', { name: '111K crate' }), null);
-  assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 1);
+  assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 2);
   assert.match(view.container.querySelector('.mint-panel')!.textContent!, /3\s*\/\s*505 left/);
-  assert.ok(view.getByRole('button', { name: /Mint\s*1 warehouse.*0.0011 ETH/ }));
-  fireEvent.change(quantity, { target: { value: '3' } });
+  assert.ok(view.getByRole('button', { name: /Mint\s*2 warehouses.*0.0022 ETH/ }));
+  fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
+  assert.equal(quantity.value, '2');
+  fireEvent.change(quantity, { target: { value: '4' } });
+  fireEvent.click(view.getByRole('radio', { name: 'Warehouse' }));
+  assert.equal(quantity.value, '3');
   assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 3);
   assert.ok(view.getByRole('button', { name: /Mint\s*3 warehouses.*0.0033 ETH/ }));
   act(() => view.client.setQueryData(['ethereum111k', 'stats', config.chainId, config.contractAddress, owner], stats({
@@ -291,11 +295,11 @@ test('switching containers resets quantity and changes the preview, availability
   assert.equal(quantity.max, '2');
   assert.match(view.container.querySelector('.mint-panel')!.textContent!, /2\s*\/\s*505 left/);
   fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
-  assert.equal(quantity.value, '1');
+  assert.equal(quantity.value, '2');
   assert.equal(quantity.max, '12');
   assert.equal(view.queryByRole('img', { name: '111K warehouse' }), null);
-  assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 1);
-  assert.ok(view.getByRole('button', { name: /Mint\s*1 crate.*0.0001 ETH/ }));
+  assert.equal(view.getAllByRole('img', { name: '111K crate' }).length, 2);
+  assert.ok(view.getByRole('button', { name: /Mint\s*2 crates.*0.0002 ETH/ }));
 });
 
 test('a sold-out container does not block switching to one still available', async t => {

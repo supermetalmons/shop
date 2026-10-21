@@ -225,7 +225,7 @@ export default function Ethereum111kPage({
     <div className="drop-page-frame drop-page-frame--active">
       {header}
       <EthereumMintPanel kind={kind} kindDisabled={kindDisabled}
-        onKindChange={value => { if (!kindDisabled && value !== kind) { mintAction.clearError(); setKind(value); setQuantity(1); } }}
+        onKindChange={value => { if (!kindDisabled && value !== kind) { mintAction.clearError(); setKind(value); } }}
         quantity={quantity} maxQuantity={maxQuantity} remaining={remaining} total={total} price={price}
         discountPrice={discountPrice} useDiscountMint={Boolean(quote?.discounted)}
         statusText={mintStatus} disabled={Boolean(mintDisabled)} busy={mintAction.pending}
