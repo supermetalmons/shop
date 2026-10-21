@@ -1,0 +1,282 @@
+{
+  "releaseId": "111k-proceeds-2026-10-21T17-16-58-627Z-9aa1784c",
+  "manifestSha256": "fb3d6b28769b4c970dc1cd3ed565d30e02dd89393689fed6a90151f003c55c8d",
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+  "chainId": 11155111,
+  "dropId": "111k_devnet",
+  "previousContract": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "newContract": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "resetId": "d8a86bfb-bbbd-4951-9499-aaa961d12344",
+  "completed": true,
+  "reconciled": false,
+  "expectedRevision": 5,
+  "deletedScopeCounts": {
+    "documents": 0,
+    "recovery": 0,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 0,
+    "claims": 0,
+    "cursors": 1
+  },
+  "drainCheck": {
+    "deploymentObservedCompleteAt": "2026-10-21T17:33:57.903Z",
+    "drainNotBefore": "2026-10-21T17:35:02.903Z",
+    "databaseResetAppliedAt": "2026-10-21T17:35:53.000Z",
+    "databaseResetAppliedAfterDrain": true
+  },
+  "privateBackup": {
+    "created": true,
+    "mode": "0600",
+    "storedOutsideGit": true,
+    "sha256": "87e8017e34439d25d592bca2f5d2f00771c15f4418ebc51e1301e4a0619f1b38"
+  },
+  "preservation": {
+    "passed": true,
+    "checks": {
+      "oldScopeCleared": true,
+      "externalHistoryAbsent": true,
+      "sharedRecordsAccountedFor": true,
+      "authenticationAccountedFor": true,
+      "otherNativeScopesUnchanged": true,
+      "globalCommerceStayedActive": true,
+      "documentRevisionAdvanced": true,
+      "pathTombstonesRetained": true,
+      "ownerTombstonesRetained": true,
+      "packStatusUnchanged": true,
+      "noCommitGuardRemains": true,
+      "exactResetMarkerRecorded": true,
+      "resetControlStayedPaused": true
+    },
+    "identities": {
+      "ethereum_profiles": {
+        "baselineCount": 1,
+        "currentCount": 1,
+        "unchanged": 1,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 1,
+          "sha256": "4471d79775e3d09732c5ea3de0e9175c3e6778a731188c0abbccf83b48eac7fc"
+        },
+        "currentDigest": {
+          "count": 1,
+          "sha256": "4471d79775e3d09732c5ea3de0e9175c3e6778a731188c0abbccf83b48eac7fc"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "ethereum_profile_addresses": {
+        "baselineCount": 1,
+        "currentCount": 1,
+        "unchanged": 1,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 1,
+          "sha256": "78fb045d9e7f7d133e30642e3afd62cfa094886e5d4407efaaa5db70b423e023"
+        },
+        "currentDigest": {
+          "count": 1,
+          "sha256": "78fb045d9e7f7d133e30642e3afd62cfa094886e5d4407efaaa5db70b423e023"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "profiles": {
+        "baselineCount": 788,
+        "currentCount": 788,
+        "unchanged": 788,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 788,
+          "sha256": "69b4ff1ca5a21abdaab759512abc4247cd482d5946492dcdf140402f5fc31e89"
+        },
+        "currentDigest": {
+          "count": 788,
+          "sha256": "69b4ff1ca5a21abdaab759512abc4247cd482d5946492dcdf140402f5fc31e89"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "profile_addresses": {
+        "baselineCount": 547,
+        "currentCount": 547,
+        "unchanged": 547,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 547,
+          "sha256": "7a71d205a8eb11e4d6c362bb7b5ce472e355077158d97e9ca8e965c0b014cbac"
+        },
+        "currentDigest": {
+          "count": 547,
+          "sha256": "7a71d205a8eb11e4d6c362bb7b5ce472e355077158d97e9ca8e965c0b014cbac"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "ethereum_auth_challenges": {
+        "baselineCount": 0,
+        "currentCount": 0,
+        "unchanged": 0,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "currentDigest": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "ethereum_auth_sessions": {
+        "baselineCount": 0,
+        "currentCount": 0,
+        "unchanged": 0,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "currentDigest": {
+          "count": 0,
+          "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "anonymous_auth_sessions": {
+        "baselineCount": 1470,
+        "currentCount": 1468,
+        "unchanged": 1468,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 2,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 1470,
+          "sha256": "726eb70d8ca74ca3708e89d60b0604d516260477e2e4473a37a2ed82fddecdce"
+        },
+        "currentDigest": {
+          "count": 1468,
+          "sha256": "c2f8d3dba9674a3422574cd372957d5d81ef5f4a684d3175198a3b250ce66606"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": false,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      },
+      "auth_wallet_bindings": {
+        "baselineCount": 1491,
+        "currentCount": 1491,
+        "unchanged": 1491,
+        "timestampedUpdates": 0,
+        "sessionRefreshes": 0,
+        "challengeConsumptions": 0,
+        "expiredRemovals": 0,
+        "unaccountedRemovals": 0,
+        "unaccountedChanges": 0,
+        "additions": 0,
+        "additionsPredatingBaseline": 0,
+        "baselineDigest": {
+          "count": 1491,
+          "sha256": "e5051aecd5dc0719ad3f47a7bd24d84870bf0cba1cdefcddcec9fd8af3b57bc8"
+        },
+        "currentDigest": {
+          "count": 1491,
+          "sha256": "e5051aecd5dc0719ad3f47a7bd24d84870bf0cba1cdefcddcec9fd8af3b57bc8"
+        },
+        "baselineRowsAccountedFor": true,
+        "newRowsAccountedFor": true,
+        "strictlyUnchanged": true,
+        "interpretation": "Timestamped updates, session refreshes, challenge consumption, and expired removals are classified separately from preservation; unaccounted changes require investigation."
+      }
+    },
+    "otherDropCountsUnchanged": true,
+    "baselineSha256": "4c6cfc1b5f6e26878773cf725a768f36938e927d948c2b5926fa27f098775ff5",
+    "afterSnapshotSha256": "971bc6dd2b5c83bd63a2e98d880934a7cb7d8d46093b7d4e2f7ecc78e3cc3c10"
+  },
+  "controlAfterReset": {
+    "singleton": 1,
+    "paused": 1,
+    "revision": 6,
+    "paused_at_ms": 1792603565000,
+    "chain_id": 11155111,
+    "contract_address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "reset_guard_id": null,
+    "last_reset_id": "d8a86bfb-bbbd-4951-9499-aaa961d12344",
+    "updated_at_ms": 1792604153000
+  },
+  "controlAfterResume": {
+    "paused": false,
+    "revision": 7,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+    "resetGuardId": null,
+    "lastResetId": "d8a86bfb-bbbd-4951-9499-aaa961d12344",
+    "updatedAtMs": 1792604411000
+  }
+}

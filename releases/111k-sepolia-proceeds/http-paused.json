@@ -1,0 +1,199 @@
+{
+  "checkedAt": "2026-10-21T17:34:17.822Z",
+  "phase": "paused",
+  "passed": true,
+  "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "results": [
+    {
+      "path": "/health",
+      "status": 200,
+      "body": {
+        "ok": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/stats?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "status": 200,
+      "body": {
+        "chainId": 11155111,
+        "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "allocatedCrates": 0,
+        "warehousesMinted": 0,
+        "artworksMinted": 0,
+        "cratePriceWei": "100000000000000",
+        "warehousePriceWei": "1100000000000000",
+        "saleActive": false,
+        "remainingCrates": 5555,
+        "remainingWarehouses": 505,
+        "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+        "discountCratePriceWei": "50000000000000",
+        "discountAllowance": 1,
+        "discountUsed": 0
+      }
+    },
+    {
+      "path": "/pack-status/card_nft_2",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "packStatus": {
+          "dropId": "card_nft_2",
+          "total": 11133,
+          "totalInitialSupply": 3711,
+          "totalCards": 11133,
+          "cardsPerPack": 3,
+          "unsealedOnline": 2449,
+          "unsealedCards": 7347,
+          "redeemedIrl": 351,
+          "redeemedIrlNormal": 178,
+          "redeemedIrlStripe": 173,
+          "redeemedUnsealedCards": 699,
+          "redeemedCards": 1752,
+          "items": [
+            {
+              "key": "unsealed",
+              "label": "Unpacked",
+              "amount": 7347,
+              "percentage": 65.99
+            },
+            {
+              "key": "redeemed",
+              "label": "Redeemed",
+              "amount": 1752,
+              "percentage": 15.74
+            },
+            {
+              "key": "total",
+              "label": "Total",
+              "amount": 11133,
+              "percentage": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "path": "/ethereum/111k/config",
+      "status": 200,
+      "body": {
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "chainName": "Sepolia",
+        "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+        "deploymentBlock": 11963848,
+        "explorerUrl": "https://sepolia.etherscan.io",
+        "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+        "enabled": false,
+        "testnet": true,
+        "cratePriceWei": "100000000000000",
+        "warehousePriceWei": "1100000000000000",
+        "deliveryFeeWei": "100000000000000",
+        "confirmationBlocks": 3,
+        "maxMintQuantity": 15,
+        "maxUnboxQuantity": 15,
+        "maxDeliveryItems": 50
+      }
+    },
+    {
+      "path": "/ethereum/111k/inventory?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "status": 200,
+      "body": {
+        "items": [],
+        "nextCursor": null,
+        "observedBlock": 11963928
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Artwork #1",
+        "metadataSha256": "5ce94a7f8c9f2a14aec7f30ae1f3ef4160ea13d45208f61d78b2b2bb9bd605f4",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Crate #1",
+        "metadataSha256": "cbbb76d3bb9d84b846417828ae3fd4b45441272054e84be8e6a3e799958ed6ef",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=warehouse&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Warehouse #1",
+        "metadataSha256": "ed09e22c9f76536a4ef559ca49bea9291c900703a36a4170494095c50999f415",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Artwork Receipt #1",
+        "metadataSha256": "682e0dff2a5706e526a3b374867cfd1f2491404508aeeca0e7ecbfea816f15f3",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate_receipt&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Crate Receipt #1",
+        "metadataSha256": "4d2e531100d0f42dcec9dc6ddba365cddd72ac4618c08cd394d9f51cafd5c978",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/delivery/prepare",
+      "status": 503,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "unavailable",
+          "message": "Ethereum service is temporarily unavailable."
+        }
+      }
+    },
+    {
+      "path": "/ethereum/111k/delivery/confirm",
+      "status": 503,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "unavailable",
+          "message": "Ethereum service is temporarily unavailable."
+        }
+      }
+    },
+    {
+      "path": "/ethereum/111k/claims/prepare",
+      "status": 503,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "unavailable",
+          "message": "Ethereum service is temporarily unavailable."
+        }
+      }
+    },
+    {
+      "path": "/ethereum/111k/claims/confirm",
+      "status": 503,
+      "body": {
+        "ok": false,
+        "error": {
+          "code": "unavailable",
+          "message": "Ethereum service is temporarily unavailable."
+        }
+      }
+    }
+  ],
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15"
+}

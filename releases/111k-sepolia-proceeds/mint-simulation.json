@@ -1,0 +1,278 @@
+{
+  "releaseId": "111k-proceeds-2026-10-21T17-16-58-627Z-9aa1784c",
+  "manifestSha256": "fb3d6b28769b4c970dc1cd3ed565d30e02dd89393689fed6a90151f003c55c8d",
+  "chainId": 11155111,
+  "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "readOnly": true,
+  "method": "eth_call",
+  "signedTransactions": 0,
+  "broadcastTransactions": 0,
+  "checkedAt": "2026-10-21T17:39:31.011Z",
+  "blockNumber": 11963953,
+  "blockHash": "0x37eee12fb49ac313bf7032c3455dac212a55398fb42d7520d885ed4476e68b5e",
+  "afterBlockNumber": 11963954,
+  "afterBlockHash": "0xf9f99faa945517acfee29fb75b9fb9c343af04df527d8ec7a4c27b32c2b94643",
+  "eligibleWallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+  "publicWallet": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "discountCratePriceWei": "50000000000000",
+  "proofSha256": "4eadcb18618e2d7da214dbf30524cdf4380a61102f077a7954a12a65d6d1dedf",
+  "gasLimit": "60000000",
+  "gasPriceWei": "0",
+  "cases": [
+    {
+      "name": "eligible-discount-quantity-1",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "eligible-discount-quantity-2",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "100000000000000",
+      "expected": "DiscountAllowanceExceeded",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x12b902e1",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "invalid-discount-proof",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "InvalidDiscountProof",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x51cf5b4e",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-crate-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-warehouse-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "1100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": {
+        "balanceWei": "1100000000000000",
+        "reason": "Actual sender balance is below this simulated payment"
+      }
+    }
+  ],
+  "before": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "208313089001146775",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "9",
+    "publicNonce": "1",
+    "historicalSales": [
+      {
+        "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "saleActive": true
+      },
+      {
+        "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+        "saleActive": true
+      }
+    ],
+    "proceeds": {
+      "mintRecipientCount": "4",
+      "recipients": [
+        {
+          "address": "0x1111111111111111111111111111111111111111",
+          "shareBps": "5000",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x2222222222222222222222222222222222222222",
+          "shareBps": "2500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x3333333333333333333333333333333333333333",
+          "shareBps": "1500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x4444444444444444444444444444444444444444",
+          "shareBps": "1000",
+          "released": "0",
+          "releasable": "0"
+        }
+      ],
+      "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "releasableDelivery": "0",
+      "contractBalanceWei": "0"
+    }
+  },
+  "after": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "208313089001146775",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "9",
+    "publicNonce": "1",
+    "historicalSales": [
+      {
+        "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "saleActive": true
+      },
+      {
+        "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+        "saleActive": true
+      }
+    ],
+    "proceeds": {
+      "mintRecipientCount": "4",
+      "recipients": [
+        {
+          "address": "0x1111111111111111111111111111111111111111",
+          "shareBps": "5000",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x2222222222222222222222222222222222222222",
+          "shareBps": "2500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x3333333333333333333333333333333333333333",
+          "shareBps": "1500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x4444444444444444444444444444444444444444",
+          "shareBps": "1000",
+          "released": "0",
+          "releasable": "0"
+        }
+      ],
+      "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "releasableDelivery": "0",
+      "contractBalanceWei": "0"
+    }
+  },
+  "statsUnchanged": true,
+  "supplyUnchanged": true,
+  "senderBalancesUnchanged": true,
+  "senderNoncesUnchanged": true,
+  "previousContract": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "previousSaleActive": true,
+  "historicalSales": [
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "proceedsUnchanged": true,
+  "passed": true,
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+  "frozenBaseRevision": "e68b79f4f5dce21c3938c4fd80ca1d24077ca746",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json",
+      "onchain/ethereum/config/proceeds.json"
+    ]
+  }
+}

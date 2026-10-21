@@ -1,0 +1,379 @@
+{
+  "releaseId": "111k-proceeds-2026-10-21T17-16-58-627Z-9aa1784c",
+  "manifestSha256": "fb3d6b28769b4c970dc1cd3ed565d30e02dd89393689fed6a90151f003c55c8d",
+  "chainId": 11155111,
+  "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "previousContract": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "previousSaleActive": true,
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "proceedsVerification": {
+    "mintRecipientCount": "4",
+    "recipients": [
+      {
+        "address": "0x1111111111111111111111111111111111111111",
+        "shareBps": "5000",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x2222222222222222222222222222222222222222",
+        "shareBps": "2500",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x3333333333333333333333333333333333333333",
+        "shareBps": "1500",
+        "released": "0",
+        "releasable": "0"
+      },
+      {
+        "address": "0x4444444444444444444444444444444444444444",
+        "shareBps": "1000",
+        "released": "0",
+        "releasable": "0"
+      }
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+    "totalMintReceived": "0",
+    "totalMintReleased": "0",
+    "totalDeliveryReceived": "0",
+    "totalDeliveryReleased": "0",
+    "releasableDelivery": "0",
+    "contractBalanceWei": "0"
+  },
+  "ownershipRenunciationDisabled": true,
+  "historicalSales": [
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "deploymentBlock": 11963848,
+  "deploymentTransactionHash": "0xc390a1456b0fd3ab17255ab3d4a3b405d7d99247e1655ec7131b0d0549723aba",
+  "saleActive": true,
+  "totalSupply": "0",
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "discountCratePriceWei": "50000000000000",
+  "stats": [
+    "0",
+    "0",
+    "0",
+    "100000000000000",
+    "1100000000000000",
+    true,
+    "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "50000000000000",
+    "1",
+    "0"
+  ],
+  "metadataPreviews": [
+    {
+      "kind": 1,
+      "displayId": 1,
+      "name": "111K Artwork #1",
+      "metadataSha256": "137e0708924958065d2600bafb309b4609ea8160b388be7ba547de11aca607c7",
+      "svgSha256": "7924ec05b9e0ce538b700eb047822444a2da8d69f92c7045369c052e5f866e9f"
+    },
+    {
+      "kind": 2,
+      "displayId": 1,
+      "name": "111K Crate #1",
+      "metadataSha256": "79289e5cf85febc73e236d979a6b84529d7fec9e9794200d0bd32e2ede28a7ab",
+      "svgSha256": "e78258a22924159f0d6c589785a4f5fa5fb9faa44306d192a0d7f99192bd5281"
+    },
+    {
+      "kind": 3,
+      "displayId": 1,
+      "name": "111K Warehouse #1",
+      "metadataSha256": "b06e7103a49ccdb85467cf93b1785157cbcfa8fc2033ed749859613369d7aba2",
+      "svgSha256": "32e6b463f247d1922292a76dee63181379edeb189bcc7dc959f3381cefb4ced3"
+    },
+    {
+      "kind": 4,
+      "displayId": 1,
+      "name": "111K Artwork Receipt #1",
+      "metadataSha256": "c170323892a542a0aae8879e21b56e18ef053d34359b0f46199751490b608319",
+      "svgSha256": "816eabc1ca805d0f280131e5d70c4d6e13b61a0435f0659c8277496c6701b5cc"
+    },
+    {
+      "kind": 5,
+      "displayId": 1,
+      "name": "111K Crate Receipt #1",
+      "metadataSha256": "d10dd9d5830cd4550798d526627c0279a77c0d8c48a68d85750b25c3aeb19bd9",
+      "svgSha256": "d6db9adcca3b1bde3c4c143aa10b19554d245fc1b40938c82e8a9676f78ac35d"
+    }
+  ],
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+  "frozenAt": "2026-10-21T17:16:58.628Z",
+  "compiler": {
+    "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
+    "compilerVersion": "0.8.30+commit.73712a01",
+    "sourceCount": 23,
+    "settings": {
+      "remappings": [
+        "@openzeppelin/=node_modules/@openzeppelin/",
+        "erc721a/=node_modules/erc721a/"
+      ],
+      "optimizer": {
+        "enabled": true,
+        "runs": 1000
+      },
+      "metadata": {
+        "bytecodeHash": "none"
+      },
+      "evmVersion": "prague",
+      "libraries": {},
+      "viaIR": false,
+      "outputSelection": {
+        "*": {
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "metadata"
+          ]
+        }
+      }
+    },
+    "creationBytes": 22238,
+    "runtimeBytes": 19818,
+    "creationSha256": "16a6ea8f88bcf7d518f4b968668a1c813ed5b1af59bdc524c59a6f5cbc17a1be",
+    "runtimeSha256": "b6ef20875fa1d4b60675cd800d70221594c3d825a1a0f1bc62b386449e66d0e4",
+    "immutableReferences": {
+      "3946": [
+        {
+          "start": 15645,
+          "length": 32
+        }
+      ],
+      "3948": [
+        {
+          "start": 15603,
+          "length": 32
+        }
+      ],
+      "3950": [
+        {
+          "start": 15561,
+          "length": 32
+        }
+      ],
+      "3952": [
+        {
+          "start": 15726,
+          "length": 32
+        }
+      ],
+      "3954": [
+        {
+          "start": 15766,
+          "length": 32
+        }
+      ],
+      "3957": [
+        {
+          "start": 13106,
+          "length": 32
+        }
+      ],
+      "3960": [
+        {
+          "start": 13151,
+          "length": 32
+        }
+      ]
+    }
+  },
+  "verifiedBlock": 11963953,
+  "verifiedBlockHash": "0x37eee12fb49ac313bf7032c3455dac212a55398fb42d7520d885ed4476e68b5e",
+  "verifiedAt": "2026-10-21T17:39:23.223Z",
+  "contracts": {
+    "NFT111K": {
+      "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "runtimeBytes": 19818,
+      "runtimeSha256": "ed139a45b2a25b478f2d0cdcebb3ec3363d7d2bb7b342d1c89ec4c36952b49a9",
+      "runtimeKeccak256": "0xfb906d6f3e44b05a2a68f3475df81f0ecb28651b0518c2eb792e877aafdf8268",
+      "immutableReferencesChecked": true
+    },
+    "NFT111KRenderer": {
+      "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+      "reused": true,
+      "runtimeBytes": 11775,
+      "runtimeSha256": "1b2d34d1015ec1ec2baea16fa206ed84d0994a2186094f326e1917b7a723dba4",
+      "runtimeKeccak256": "0x4da8e9cf378cba761afcf3121c50bd4c64b7c3863eb84025fd1bbb4ea27937cf",
+      "immutableReferencesChecked": true
+    }
+  },
+  "transactions": [
+    {
+      "action": "deploy",
+      "hash": "0xc390a1456b0fd3ab17255ab3d4a3b405d7d99247e1655ec7131b0d0549723aba",
+      "to": null,
+      "nonce": 12,
+      "gasEstimate": "33478836",
+      "gasLimit": "40224604",
+      "gasPrice": "1000",
+      "predictedContract": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "signedAt": "2026-10-21T17:17:25.435Z",
+      "broadcastAttemptedAt": "2026-10-21T17:17:25.798Z",
+      "confirmedAt": "2026-10-21T17:18:15.767Z",
+      "confirmations": 106,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x2d3405a",
+        "logs": [
+          {
+            "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+            "topics": [
+              "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
+              "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "0x000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93"
+            ],
+            "data": "0x",
+            "blockHash": "0x9ec2d268daed37b6edff7b4d6208fb952d16b572599b75aed40c46d5dc816b91",
+            "blockNumber": "0xb68dc8",
+            "blockTimestamp": "0x6ad8f3bc",
+            "transactionHash": "0xc390a1456b0fd3ab17255ab3d4a3b405d7d99247e1655ec7131b0d0549723aba",
+            "transactionIndex": "0x14",
+            "logIndex": "0x10",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000000000000800000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000020001000000000000000000000000000080000000020000000000000000000800000000000000000001000000000000400800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000200000000000000",
+        "transactionHash": "0xc390a1456b0fd3ab17255ab3d4a3b405d7d99247e1655ec7131b0d0549723aba",
+        "transactionIndex": "0x14",
+        "blockHash": "0x9ec2d268daed37b6edff7b4d6208fb952d16b572599b75aed40c46d5dc816b91",
+        "blockNumber": "0xb68dc8",
+        "gasUsed": "0x1face71",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": null,
+        "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54"
+      }
+    },
+    {
+      "action": "pause-new-1",
+      "hash": "0x9f3cc377839c704568339f1987edcf9839cf5aec3e12a86ae4c03db6a0907335",
+      "to": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "nonce": 13,
+      "gasEstimate": "31397",
+      "gasLimit": "87677",
+      "gasPrice": "1000",
+      "signedAt": "2026-10-21T17:18:16.830Z",
+      "broadcastAttemptedAt": "2026-10-21T17:18:17.216Z",
+      "confirmedAt": "2026-10-21T17:19:06.940Z",
+      "confirmations": 102,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x1021e98",
+        "logs": [
+          {
+            "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+            "topics": [
+              "0xc75413bb803e9f5f8572b10a8262838386a1bc5db1743ff399db4f5c32f4691e"
+            ],
+            "data": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "blockHash": "0x482d0531bd92c462012fa06e7994952f14679e25aaebe39e94a7ccbbd39e4946",
+            "blockNumber": "0xb68dcc",
+            "blockTimestamp": "0x6ad8f3ec",
+            "transactionHash": "0x9f3cc377839c704568339f1987edcf9839cf5aec3e12a86ae4c03db6a0907335",
+            "transactionIndex": "0x11",
+            "logIndex": "0x10",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000",
+        "transactionHash": "0x9f3cc377839c704568339f1987edcf9839cf5aec3e12a86ae4c03db6a0907335",
+        "transactionIndex": "0x11",
+        "blockHash": "0x482d0531bd92c462012fa06e7994952f14679e25aaebe39e94a7ccbbd39e4946",
+        "blockNumber": "0xb68dcc",
+        "gasUsed": "0x7945",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "contractAddress": null
+      }
+    },
+    {
+      "action": "open-new-2",
+      "hash": "0x055a66d7c5c2f37cca380f2073c967d9f6b77a9e91b19f6bb6b178d85d5d0363",
+      "to": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "nonce": 14,
+      "gasEstimate": "31409",
+      "gasLimit": "87691",
+      "gasPrice": "1000",
+      "signedAt": "2026-10-21T17:38:39.732Z",
+      "broadcastAttemptedAt": "2026-10-21T17:38:40.086Z",
+      "confirmedAt": "2026-10-21T17:39:17.783Z",
+      "confirmations": 3,
+      "receipt": {
+        "type": "0x0",
+        "status": "0x1",
+        "cumulativeGasUsed": "0x18131ea",
+        "logs": [
+          {
+            "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+            "topics": [
+              "0xc75413bb803e9f5f8572b10a8262838386a1bc5db1743ff399db4f5c32f4691e"
+            ],
+            "data": "0x0000000000000000000000000000000000000000000000000000000000000001",
+            "blockHash": "0x60797b78bfdbaa7aa4a2d05636ce9a5214340de7458b3e9bb502d87aa691d359",
+            "blockNumber": "0xb68e2f",
+            "blockTimestamp": "0x6ad8f8a8",
+            "transactionHash": "0x055a66d7c5c2f37cca380f2073c967d9f6b77a9e91b19f6bb6b178d85d5d0363",
+            "transactionIndex": "0x2a",
+            "logIndex": "0x2d",
+            "removed": false
+          }
+        ],
+        "logsBloom": "0x00000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000800000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200000000000000",
+        "transactionHash": "0x055a66d7c5c2f37cca380f2073c967d9f6b77a9e91b19f6bb6b178d85d5d0363",
+        "transactionIndex": "0x2a",
+        "blockHash": "0x60797b78bfdbaa7aa4a2d05636ce9a5214340de7458b3e9bb502d87aa691d359",
+        "blockNumber": "0xb68e2f",
+        "gasUsed": "0x7951",
+        "effectiveGasPrice": "0x3e8",
+        "from": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+        "to": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "contractAddress": null
+      }
+    }
+  ],
+  "frozenBaseRevision": "e68b79f4f5dce21c3938c4fd80ca1d24077ca746",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json",
+      "onchain/ethereum/config/proceeds.json"
+    ]
+  }
+}

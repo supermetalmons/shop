@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-21T17:16:28.237Z",
+  "sourceBaseRevision": "e68b79f4f5dce21c3938c4fd80ca1d24077ca746",
+  "overallPassed": true,
+  "repositoryCheck": {
+    "allStagesPassed": true,
+    "initialCommandExitCode": 1,
+    "resumedAfterRepair": true,
+    "explanation": "npm run check passed all stages through API runtime, API dry run/startup, and tools typecheck, then stopped at the pre-existing production export baseline mismatch. After the approved narrow repair, check:dead-code and the remaining npm test, Rust tests, build and browser bundle validation all passed. The frontend-specific checks are a subset of these validated stages, followed by a standalone frontend dry run."
+  },
+  "repair": {
+    "file": "scripts/lib/productionExportsBaseline.mjs",
+    "runtimeBehaviorChanged": false,
+    "entries": [
+      [
+        "cloud/workers/api/src/receiptClaimFailureNotifications.ts",
+        "exports",
+        "receiptClaimFailureDiscoveryQuery"
+      ],
+      [
+        "shared/fulfillmentAccess.ts",
+        "exports",
+        "MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES"
+      ],
+      [
+        "shared/receiptClaimFailureOutbox.ts",
+        "exports",
+        "parseReceiptClaimFailureOutboxRecord"
+      ]
+    ],
+    "reason": "Existing operational and test consumers require these exports; exactly three entries were added using the established reviewed baseline."
+  },
+  "results": {
+    "frontendWorkerTests": 4,
+    "apiTests": 2523,
+    "apiRuntimeTests": 38,
+    "solidityTests": 134,
+    "gasBenchmarks": 113,
+    "ethereumTypeScriptTests": 344,
+    "ethereumEndToEndScenarios": 33,
+    "solanaRustTests": 35,
+    "rootTypeScriptTests": "passed",
+    "compilerBenchmarkRegenerationAndReproduction": "passed",
+    "deadCode": "passed (243 reviewed baseline entries)",
+    "apiDryRun": "passed",
+    "apiStartup": "passed",
+    "frontendDryRun": "passed",
+    "browserCredentialBundleValidation": "passed",
+    "databaseIntegrity": "passed: Data, Ops, and Commerce deployment gates",
+    "pendingMigrations": 0
+  },
+  "checks": [
+    {
+      "name": "repository-check",
+      "command": "npm run check",
+      "startedAt": "2026-10-21T17:09:50.710Z",
+      "completedAt": "2026-10-21T17:13:35Z",
+      "status": "failed-before-reviewed-baseline-repair",
+      "exitCode": 1,
+      "log": "repository-check.log"
+    },
+    {
+      "name": "ethereum-check",
+      "command": "npm run test:ethereum",
+      "startedAt": "2026-10-21T17:09:50.719Z",
+      "completedAt": "2026-10-21T17:11:47.759Z",
+      "status": "passed",
+      "exitCode": 0,
+      "log": "ethereum-check.log"
+    },
+    {
+      "name": "ethereum-e2e",
+      "command": "npm run test:ethereum:e2e",
+      "startedAt": "2026-10-21T17:11:47.760Z",
+      "completedAt": "2026-10-21T17:12:29.563Z",
+      "status": "passed",
+      "exitCode": 0,
+      "log": "ethereum-e2e.log"
+    },
+    {
+      "name": "dead-code-recheck",
+      "command": "npm run check:dead-code",
+      "startedAt": "2026-10-21T17:15:16.355Z",
+      "completedAt": "2026-10-21T17:15:54.187Z",
+      "status": "passed",
+      "exitCode": 0,
+      "log": "dead-code-recheck.log"
+    },
+    {
+      "name": "repository-remaining",
+      "command": "npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
+      "startedAt": "2026-10-21T17:14:27.009Z",
+      "completedAt": "2026-10-21T17:15:20.696Z",
+      "status": "passed",
+      "exitCode": 0,
+      "log": "repository-remaining.log"
+    },
+    {
+      "name": "frontend-dry-run",
+      "command": "node_modules/.bin/wrangler deploy --dry-run --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
+      "startedAt": "2026-10-21T17:15:54.187Z",
+      "completedAt": "2026-10-21T17:16:28.237Z",
+      "status": "passed",
+      "exitCode": 0,
+      "log": "frontend-dry-run.log"
+    }
+  ],
+  "logNotes": [
+    "The remaining-stage log is an excerpt; its combined command exited with status 0. Other logs preserve full command output."
+  ],
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+  "postCommitChecks": {
+    "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+    "apiReleaseChecksPassed": true,
+    "apiFinalTypesAndDryRunPassed": true,
+    "frontendFinalBuildBundleAndStrictDryRunPassed": true
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "releaseId": "111k-proceeds-2026-10-21T17-16-58-627Z-9aa1784c",
+  "chainId": 11155111,
+  "dropId": "111k_devnet",
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+  "previousContract": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+  "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "api": {
+    "service": "mons-shop-api",
+    "command": "npm run deploy:api",
+    "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+    "startedAt": "2026-10-21T17:26:40.118Z",
+    "completedAt": "2026-10-21T17:33:57.903Z",
+    "exitCode": 0,
+    "signal": null,
+    "versionId": "6f1090d5-7586-4af7-8854-6e3ea0b7750a",
+    "drainNotBefore": "2026-10-21T17:35:02.903Z",
+    "url": "https://api.mons.shop",
+    "trafficPercent": 100
+  },
+  "frontend": {
+    "service": "mons-shop",
+    "command": "wrangler deploy --strict --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
+    "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15",
+    "startedAt": "2026-10-21T17:37:30.905Z",
+    "completedAt": "2026-10-21T17:37:47.870Z",
+    "exitCode": 0,
+    "signal": null,
+    "versionId": "f5448daa-1ac7-4a06-bc3d-46a6bf3356ce",
+    "validation": "All equivalent check:frontend stages passed in validation.json; final build, bundle check, and strict dry run passed after source commit.",
+    "url": "https://mons.shop/111k_devnet",
+    "trafficPercent": 100
+  },
+  "maintenance": {
+    "resetId": "d8a86bfb-bbbd-4951-9499-aaa961d12344",
+    "drainCheck": {
+      "deploymentObservedCompleteAt": "2026-10-21T17:33:57.903Z",
+      "drainNotBefore": "2026-10-21T17:35:02.903Z",
+      "databaseResetAppliedAt": "2026-10-21T17:35:53.000Z",
+      "databaseResetAppliedAfterDrain": true
+    },
+    "resetComplete": true,
+    "preservationPassed": true,
+    "finalControl": {
+      "paused": false,
+      "revision": 7,
+      "pausedAtMs": null,
+      "chainId": 11155111,
+      "contractAddress": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "resetGuardId": null,
+      "lastResetId": "d8a86bfb-bbbd-4951-9499-aaa961d12344",
+      "updatedAtMs": 1792604411000
+    }
+  },
+  "verification": {
+    "httpPaused": {
+      "passed": true,
+      "checkedAt": "2026-10-21T17:34:17.822Z",
+      "report": "http-paused.json"
+    },
+    "httpOpen": {
+      "passed": true,
+      "checkedAt": "2026-10-21T17:40:31.639Z",
+      "report": "http-open.json"
+    },
+    "browser": {
+      "passed": true,
+      "checkedAt": "2026-10-21T17:42:38.482Z",
+      "report": "browser-acceptance.json"
+    },
+    "proofAsset": {
+      "matchesLocalBuild": true,
+      "report": "proof-asset-verification.json"
+    },
+    "explorer": {
+      "status": "verified",
+      "matchType": "exact",
+      "report": "etherscan-verification.json"
+    },
+    "readOnlyMintSimulations": {
+      "passed": true,
+      "signedTransactions": 0,
+      "broadcastTransactions": 0,
+      "report": "mint-simulation.json"
+    },
+    "scheduler": {
+      "passed": true,
+      "checkedAt": "2026-10-21T17:45:25.018Z",
+      "report": "reconciliation-verification.json",
+      "manuallyTriggered": false,
+      "nextBlock": 11963982
+    }
+  },
+  "validation": {
+    "passed": true,
+    "report": "validation.json"
+  },
+  "historicalContractsRemainActive": [
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "completedAt": "2026-10-21T17:46:33.012Z"
+}

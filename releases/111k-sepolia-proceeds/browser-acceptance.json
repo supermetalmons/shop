@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-21T17:42:38.482Z",
+  "url": "https://mons.shop/111k_devnet",
+  "passed": true,
+  "maintenanceMintDisabledObserved": true,
+  "crate": {
+    "remaining": 5555,
+    "priceEth": "0.0001",
+    "remainingVisible": true,
+    "mintEnabled": true
+  },
+  "warehouse": {
+    "remaining": 505,
+    "priceEth": "0.0011",
+    "remainingVisible": true,
+    "mintEnabled": true
+  },
+  "pageReloadVerified": true,
+  "walletTransactionsSubmitted": 0,
+  "screenshot": "storefront-live.png",
+  "sourceRevision": "1e16f0f192a39ba334cf233da0c9b1500636ca15"
+}
