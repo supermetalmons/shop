@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { parseProceedsConfig } from './proceeds-config.mjs';
 
 const root = new URL('../', import.meta.url);
 const rpcUrl = new URL(process.env.ETHEREUM_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
@@ -29,12 +30,18 @@ const discountRoot = process.env.ETHEREUM_111K_LOCAL_DISCOUNT_ROOT || discounts.
 if (!/^0x[0-9a-fA-F]{64}$/.test(discountRoot)) throw new Error('Invalid discount Merkle root.');
 const owner = process.env.ETHEREUM_111K_LOCAL_OWNER || deployer;
 const signer = process.env.ETHEREUM_111K_LOCAL_QUOTE_SIGNER || fixture.signer;
-const treasury = process.env.ETHEREUM_111K_LOCAL_TREASURY || deployer;
-for (const address of [deployer, owner, signer, treasury]) {
+const proceeds = parseProceedsConfig(JSON.parse(await readFile(new URL('config/proceeds.json', root), 'utf8')));
+const { mintRecipients, mintSharesBps, deliveryPaymentReceiver } = proceeds;
+for (const address of [deployer, owner, signer]) {
+  if (typeof address !== 'string') throw new Error('Invalid local deployment address.');
   if (!/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/.test(address)) throw new Error('Invalid local deployment address.');
 }
-
 const run = (executable, args) => execFileSync(executable, args, { cwd: fileURLToPath(root), encoding: 'utf8' }).trim();
+const collectionNonce = BigInt(await rpc('eth_getTransactionCount', [deployer, 'pending'])) + 1n;
+const predictedCollection = run('cast', ['compute-address', deployer, '--nonce', collectionNonce.toString()])
+  .match(/^Computed Address: (0x[0-9a-fA-F]{40})$/)?.[1];
+if (!predictedCollection) throw new Error('Unable to predict the collection address.');
+parseProceedsConfig(proceeds, predictedCollection);
 run('forge', ['build', '--offline']);
 const artifact = async name => JSON.parse(await readFile(new URL(`out/${name}.sol/${name}.json`, root), 'utf8'));
 const send = creation => JSON.parse(run('cast', [
@@ -43,16 +50,19 @@ const send = creation => JSON.parse(run('cast', [
 const renderer = send((await artifact('NFT111KRenderer')).bytecode.object);
 if (!renderer.contractAddress || Number(renderer.status) !== 1) throw new Error('Renderer deployment failed.');
 const constructor = run('cast', [
-  'abi-encode', 'constructor(address,address,address,address,bytes32)', owner, signer, treasury, renderer.contractAddress, discountRoot,
+  'abi-encode', 'constructor(address,address,address,address,bytes32,address[],uint256[])',
+  owner, signer, deliveryPaymentReceiver, renderer.contractAddress, discountRoot,
+  `[${mintRecipients.join(',')}]`, `[${mintSharesBps.join(',')}]`,
 ]);
 const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
 if (!collection.contractAddress || Number(collection.status) !== 1) throw new Error('Collection deployment failed.');
+if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 5,
+  protocolVersion: 6,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   rendererAddress: renderer.contractAddress, deploymentBlock: Number(collection.blockNumber),
-  owner, quoteSigner: signer, treasury, discountRoot,
+  owner, quoteSigner: signer, deliveryPaymentReceiver, mintRecipients, mintSharesBps, discountRoot,
   rendererTransactionHash: renderer.transactionHash, collectionTransactionHash: collection.transactionHash,
 };
 const outputDirectory = new URL('.local/', root);

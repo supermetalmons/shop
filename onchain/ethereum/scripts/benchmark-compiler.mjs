@@ -6,6 +6,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { encode } from '@metamask/abi-utils';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const arguments_ = process.argv.slice(2);
@@ -27,7 +28,8 @@ const environment = Object.fromEntries(Object.entries(process.env)
 const run = (directory, args) => execFileSync('forge', args, {
   cwd: directory, env: environment, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
 });
-const testCommand = ['test', '--offline', '--isolate', '--match-contract', '^NFT111KGasTest$',
+const harnessName = 'NFT111KCompilerGasTest';
+const testCommand = ['test', '--offline', '--isolate', '--match-contract', `^${harnessName}$`,
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
 const names = ['NFT111K', 'NFT111KRenderer'];
 const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200.json');
@@ -44,7 +46,7 @@ if (baselineReference) {
   assert.deepEqual(Object.keys(baselineReference.gas), expectedNames, 'Compiler baseline benchmark names changed');
 }
 const temporaryRoot = mkdtempSync(join(tmpdir(), '111k-compiler-'));
-const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim)/.test(name));
+const writeNames = expectedNames.filter(name => /^(mint|unbox|deliver|claim|release)/.test(name));
 const progress = message => process.stderr.write(message + '\n');
 const save = report => writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 const sourceHashes = directory => Object.fromEntries(readdirSync(join(directory, 'src'))
@@ -105,24 +107,38 @@ function prepareHarness() {
   const directory = createProject('harness');
   mkdirSync(join(directory, 'test'));
   mkdirSync(join(directory, 'candidate'));
-  const source = read(join(packageRoot, 'test/NFT111KGas.t.sol'));
-  const originalDeployment = /token =\s*new NFT111K\(\s*address\(this\), vm.addr\(SIGNER_KEY\), payable\(address\(0xBEEF\)\), address\(new NFT111KRenderer\(\)\), bytes32\(0\)\s*\);/;
-  assert.equal([...source.matchAll(new RegExp(originalDeployment, 'g'))].length, 1, 'Gas harness deployment changed');
-  const harness = source.replace(originalDeployment, `address renderer = _deployCandidate("NFT111KRenderer", "");
-        token = NFT111K(_deployCandidate("NFT111K", abi.encode(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer, bytes32(0)
-        )));`).replace('    function setUp() public {', `    function _deployCandidate(string memory name, bytes memory arguments) internal returns (address deployed) {
-        bytes memory code = abi.encodePacked(vm.getCode(string.concat("candidate/", name, ".json")), arguments);
+  const harness = `pragma solidity 0.8.30;
+
+import {NFT111KGasTest} from "./NFT111KGas.t.sol";
+import {NFT111K} from "../src/NFT111K.sol";
+
+interface CompilerVm {
+    function getCode(string calldata artifactPath) external returns (bytes memory);
+}
+
+contract ${harnessName} is NFT111KGasTest {
+    function _deployCollection(address[] memory recipients, uint256[] memory shares)
+        internal
+        override
+        returns (NFT111K)
+    {
+        address renderer = _deployCandidate("NFT111KRenderer", "");
+        return NFT111K(_deployCandidate("NFT111K", abi.encode(
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer, bytes32(0), recipients, shares
+        )));
+    }
+
+    function _deployCandidate(string memory name, bytes memory arguments) private returns (address deployed) {
+        bytes memory code = abi.encodePacked(CompilerVm(address(vm)).getCode(string.concat("candidate/", name, ".json")), arguments);
         assembly { deployed := create(0, add(code, 32), mload(code)) }
         require(deployed != address(0), "candidate deployment failed");
     }
-
-    function setUp() public {`);
-  const support = read(join(packageRoot, 'test/TestSupport.sol'));
-  assert.equal(support.includes('function getCode('), false, 'Test support already declares getCode');
-  writeFileSync(join(directory, 'test/NFT111KGas.t.sol'), harness);
-  writeFileSync(join(directory, 'test/TestSupport.sol'), support.replace('interface Vm {',
-    'interface Vm {\n    function getCode(string calldata artifactPath) external returns (bytes memory);'));
+}
+`;
+  for (const name of ['NFT111KGas.t.sol', 'TestSupport.sol']) {
+    cpSync(join(packageRoot, 'test', name), join(directory, 'test', name));
+  }
+  writeFileSync(join(directory, 'test', `${harnessName}.t.sol`), harness);
   run(directory, ['build', '--offline']);
   return { directory, sha256: hash(harness), testSupportSha256: hash(read(join(directory, 'test/TestSupport.sol'))) };
 }
@@ -132,7 +148,7 @@ function measurements(directory, harnessDirectory) {
     cpSync(join(directory, 'out', `${name}.sol`, `${name}.json`), join(harnessDirectory, 'candidate', `${name}.json`));
   }
   const suites = JSON.parse(run(harnessDirectory, testCommand));
-  assert.deepEqual(Object.keys(suites), ['test/NFT111KGas.t.sol:NFT111KGasTest'], 'Unexpected benchmark suite');
+  assert.deepEqual(Object.keys(suites), [`test/${harnessName}.t.sol:${harnessName}`], 'Unexpected benchmark suite');
   const results = Object.values(suites)[0].test_results;
   assert.equal(Object.keys(results).length, expectedNames.length, 'Missing benchmark results');
   const values = {};
@@ -140,7 +156,7 @@ function measurements(directory, harnessDirectory) {
     assert.equal(result.status, 'Success', `${testName} failed: ${result.reason ?? ''}`);
     const groups = Object.entries(result.gas_snapshots);
     assert.equal(groups.length, 1, `${testName}: unexpected snapshot groups`);
-    assert.equal(groups[0][0], 'NFT111KGasTest', `${testName}: unexpected snapshot group`);
+    assert.equal(groups[0][0], harnessName, `${testName}: unexpected snapshot group`);
     const entries = Object.entries(groups[0][1]);
     assert.equal(entries.length, 1, `${testName}: unexpected snapshot count`);
     const [name, value] = entries[0];
@@ -151,6 +167,18 @@ function measurements(directory, harnessDirectory) {
   }
   return Object.fromEntries(Object.entries(values).sort(([a], [b]) => a.localeCompare(b)));
 }
+
+function collectionArguments(owner, renderer, recipientCount = 4) {
+  const recipients = Array.from({ length: recipientCount }, (_, index) =>
+    `0x${(0xA00001 + index).toString(16).padStart(40, '0')}`);
+  const shares = recipientCount === 4 ? [5000, 2500, 1500, 1000] : Array(recipientCount).fill(1250);
+  return Buffer.from(encode(['address', 'address', 'address', 'address', 'bytes32', 'address[]', 'uint256[]'],
+    [owner, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', '0x000000000000000000000000000000000000beef',
+      renderer, `0x${'0'.repeat(64)}`, recipients, shares])).toString('hex');
+}
+
+const maximumCollectionArgumentBytes = collectionArguments(
+  '0x0000000000000000000000000000000000000001', '0x0000000000000000000000000000000000000002', 8).length / 2;
 
 async function deploymentMeasurements(variants) {
   const server = createServer();
@@ -200,11 +228,10 @@ async function deploymentMeasurements(variants) {
           await delay();
         }
         assert.equal(receipt?.status, '0x1', `${variant.label}: deployment failed`);
-        return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)) };
+        return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)), constructorArgumentBytes: args.length / 2 };
       };
       const renderer = await deploy('NFT111KRenderer');
-      const args = [wallet, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', wallet, renderer.address]
-        .map(address => address.slice(2).padStart(64, '0')).join('') + '0'.repeat(64);
+      const args = collectionArguments(wallet, renderer.address);
       variant.deploymentTransactions = { renderer, collection: await deploy('NFT111K', args) };
     }
   } finally {
@@ -228,7 +255,7 @@ function summarize(candidate, baseline) {
     worstWriteRegression: Math.max(0, ...writeNames.map(name => deltas[name])),
     abiUnchanged: names.every(name => candidate.artifacts[name].canonicalAbiSha256 === baseline.artifacts[name].canonicalAbiSha256),
     withinDeploymentSizeLimits: names.every(name => candidate.artifacts[name].runtimeBytes <= 24576 &&
-      candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? 160 : 0) <= 49152),
+      candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? maximumCollectionArgumentBytes : 0) <= 49152),
     withinProjectSizeBudgets: candidate.artifacts.NFT111KRenderer.runtimeBytes <= 12 * 1024,
   };
 }
@@ -255,6 +282,7 @@ const report = {
     requestedMatrix: Object.fromEntries(pipelines.map(pipeline => [pipeline, requestedRuns ?? defaultRuns[pipeline]])),
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
     fixedSettings: { solc: '0.8.30', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
+    maximumCollectionArgumentBytes,
     harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE in the original order, preserving addresses and signed calldata.',
     measurement: `All ${expectedNames.length} measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.`,
     environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.',

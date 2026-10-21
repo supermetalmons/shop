@@ -15,9 +15,14 @@ struct SecurityCall {
 }
 
 contract SecurityCollection is NFT111K {
-    constructor(address owner_, address signer_, address payable treasury_, address renderer_)
-        NFT111K(owner_, signer_, treasury_, renderer_, bytes32(0))
-    {}
+    constructor(
+        address owner_,
+        address signer_,
+        address payable deliveryReceiver_,
+        address renderer_,
+        address[] memory recipients_,
+        uint256[] memory shares_
+    ) NFT111K(owner_, signer_, deliveryReceiver_, renderer_, bytes32(0), recipients_, shares_) {}
 
     function transientStateClean() external view returns (bool) {
         return _extraData(address(0), address(0), 0) == 0 && !_reentrancyGuardEntered();
@@ -37,6 +42,8 @@ contract SecurityReceiver {
     uint256 public sourceTransferFailures;
     bool private checkPurchaseTotals;
     uint256[3] private expectedPurchaseTotals;
+    bool private checkProceeds;
+    uint256[2] private expectedProceeds;
     uint256[] private deliverySources;
     uint256[] private deliveryReceipts;
     uint256[] private unboxSources;
@@ -61,6 +68,7 @@ contract SecurityReceiver {
         transferOtherId = 0;
         sourceTransferFailures = 0;
         checkPurchaseTotals = false;
+        checkProceeds = false;
         delete deliverySources;
         delete deliveryReceipts;
         delete unboxSources;
@@ -70,6 +78,11 @@ contract SecurityReceiver {
     function expectPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) external {
         checkPurchaseTotals = true;
         expectedPurchaseTotals = [allocated, warehouses, artworks];
+    }
+
+    function expectProceeds(uint256 mintReceived, uint256 deliveryReceived) external {
+        checkProceeds = true;
+        expectedProceeds = [mintReceived, deliveryReceived];
     }
 
     function configureAttacks(SecurityCall[] calldata calls) external {
@@ -144,6 +157,10 @@ contract SecurityReceiver {
                 "unbox source transfer did not fail"
             );
             sourceTransferFailures++;
+        }
+        if (checkProceeds) {
+            require(token.totalMintReceived() == expectedProceeds[0], "callback mint proceeds mismatch");
+            require(token.totalDeliveryReceived() == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
         if (checkPurchaseTotals) {
             (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
@@ -233,7 +250,7 @@ contract NFT111KSecurityTest is TestSupport {
     uint256 internal constant ROTATED_KEY = 0xB0B;
     address internal constant ALICE = address(0xA110);
     address internal constant BOB = address(0xB0B);
-    address payable internal constant TREASURY = payable(address(0xBEEF));
+    address payable internal constant DELIVERY_RECEIVER = payable(address(0xBEEF));
     bytes32 internal constant OUTER_CLAIM = keccak256("outer physical claim");
     bytes32 internal constant INNER_CLAIM = keccak256("inner physical claim");
     bytes32 internal constant DOMAIN_TYPEHASH =
@@ -251,7 +268,14 @@ contract NFT111KSecurityTest is TestSupport {
         vm.warp(2_000_000_000);
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
-        token = new SecurityCollection(address(this), vm.addr(SIGNER_KEY), TREASURY, address(new NFT111KRenderer()));
+        token = new SecurityCollection(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            DELIVERY_RECEIVER,
+            address(new NFT111KRenderer()),
+            _proceedsRecipients(),
+            _proceedsSharesBps()
+        );
     }
 
     function testRenunciationPreservesOwnershipBeforeDuringAndAfterTransfer() public {
@@ -293,7 +317,7 @@ contract NFT111KSecurityTest is TestSupport {
         assertEq(token.pendingOwner(), address(0));
     }
 
-    function testRejectedRenunciationLeavesWithdrawPauseAndSignerRotationUsable() public {
+    function testRejectedRenunciationLeavesPayoutsPauseAndSignerRotationUsable() public {
         _buyCrates(ALICE, 1);
         token.transferOwnership(ALICE);
         vm.prank(ALICE);
@@ -306,11 +330,12 @@ contract NFT111KSecurityTest is TestSupport {
         vm.startPrank(ALICE);
         token.setRedemptionsPaused(true);
         token.setQuoteSigner(signer);
-        token.withdraw();
+        _releaseAllMint();
         vm.stopPrank();
         assertTrue(token.redemptionsPaused());
         assertEq(token.quoteSigner(), signer);
-        assertEq(TREASURY.balance, balance);
+        assertEq(token.totalMintReleased(), balance);
+        assertEq(DELIVERY_RECEIVER.balance, 0);
         assertEq(address(token).balance, 0);
         vm.prank(ALICE);
         token.setRedemptionsPaused(false);
@@ -438,7 +463,7 @@ contract NFT111KSecurityTest is TestSupport {
         assertTrue(token.usedClaims(OUTER_CLAIM));
     }
 
-    function testRedemptionPauseLeavesMintOpeningTransfersWithdrawalAndSaleControlIndependent() public {
+    function testRedemptionPauseLeavesMintOpeningTransfersPayoutsAndSaleControlIndependent() public {
         _buyCrates(ALICE, 2);
         _redeem(ALICE, _one(111113), 1);
         token.setRedemptionsPaused(true);
@@ -462,8 +487,10 @@ contract NFT111KSecurityTest is TestSupport {
         _info(2000002, 5, 2, BOB);
         _outputs(111115, 11, 2, 4, ALICE);
         uint256 balance = address(token).balance;
-        token.withdraw();
-        assertEq(TREASURY.balance, balance);
+        _releaseAllMint();
+        token.releaseDelivery();
+        assertEq(DELIVERY_RECEIVER.balance, token.totalDeliveryReceived());
+        assertEq(token.totalMintReleased() + token.totalDeliveryReleased(), balance);
         assertEq(address(token).balance, 0);
         assertTrue(token.redemptionsPaused());
         token.setRedemptionsPaused(false);
@@ -968,7 +995,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _reentry(uint256 route) internal {
         SecurityReceiver buyer = _receiver();
         SecurityCall memory call_ = _route(buyer, route);
-        SecurityCall[] memory attacks = new SecurityCall[](7);
+        SecurityCall[] memory attacks = new SecurityCall[](10);
         attacks[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         attacks[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         attacks[2] = SecurityCall(abi.encodeCall(token.unboxWarehouse, (116667)), 0);
@@ -992,10 +1019,15 @@ contract NFT111KSecurityTest is TestSupport {
             0
         );
         attacks[6] = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
+        attacks[7] = SecurityCall(abi.encodeCall(token.releaseMint, (token.mintRecipients(0))), 0);
+        attacks[8] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
+        attacks[9] =
+            SecurityCall(abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0))), token.discountCratePrice());
         buyer.configureAttacks(attacks);
+        _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);
         assertEq(buyer.callbacks(), _count(route));
-        assertEq(buyer.blockedCalls(), 7 * _count(route));
+        assertEq(buyer.blockedCalls(), 10 * _count(route));
         assertFalse(token.usedDeliveryOrders(99));
         assertFalse(token.usedClaims(INNER_CLAIM));
         _assertOutputs(route, address(buyer));
@@ -1039,6 +1071,10 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _expectRoutePurchaseTotals(SecurityReceiver buyer, uint256 route) internal {
+        buyer.expectProceeds(
+            token.totalMintReceived() + (route == 0 ? 0.0003 ether : route == 1 ? 0.0033 ether : 0),
+            token.totalDeliveryReceived() + (route == 4 ? 0.0001 ether : 0)
+        );
         if (route < 2) buyer.expectPurchaseTotals(route == 0 ? 18 : 48, route == 0 ? 1 : 4, 0);
     }
 
@@ -1145,7 +1181,22 @@ contract NFT111KSecurityTest is TestSupport {
         assertFalse(token.usedClaims(OUTER_CLAIM));
     }
 
+    function _releaseAllMint() internal {
+        address[] memory recipients = _proceedsRecipients();
+        for (uint256 i; i < recipients.length; ++i) {
+            token.releaseMint(recipients[i]);
+        }
+    }
+
     function _state(address holder) internal view returns (bytes32) {
+        bytes32 proceeds = keccak256(
+            abi.encode(
+                token.totalMintReceived(),
+                token.totalMintReleased(),
+                token.totalDeliveryReceived(),
+                token.totalDeliveryReleased()
+            )
+        );
         return keccak256(
             abi.encode(
                 token.allocatedCrates(),
@@ -1159,7 +1210,8 @@ contract NFT111KSecurityTest is TestSupport {
                 token.warehouseFirstCrate(3),
                 token.warehouseFirstCrate(4),
                 token.usedDeliveryOrders(2),
-                token.usedClaims(OUTER_CLAIM)
+                token.usedClaims(OUTER_CLAIM),
+                proceeds
             )
         );
     }

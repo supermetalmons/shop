@@ -65,7 +65,14 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     bool public saleActive = true;
     bool public redemptionsPaused;
     address public quoteSigner;
-    address payable public treasury;
+    address payable public deliveryPaymentReceiver;
+    address[] public mintRecipients;
+    mapping(address => uint256) public mintSharesBps;
+    mapping(address => uint256) public mintReleased;
+    uint256 public totalMintReceived;
+    uint256 public totalMintReleased;
+    uint256 public totalDeliveryReceived;
+    uint256 public totalDeliveryReleased;
     INFT111KRenderer public renderer;
     mapping(uint256 => uint256) public warehouseFirstCrate;
     mapping(uint256 => bool) public usedDeliveryOrders;
@@ -86,7 +93,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error AuthorizationTooLong();
     error AuthorizationAlreadyUsed();
     error InvalidAddress();
-    error TreasuryPaymentFailed();
+    error InvalidMintSplit();
+    error InvalidMintRecipient();
+    error ProceedsPaymentFailed();
     error TokenAlreadyIssued();
     error InvalidMetadataItem();
     error DiscountInactive();
@@ -114,23 +123,42 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event SaleStatusUpdated(bool active);
     event RedemptionsPauseUpdated(bool paused);
     event QuoteSignerUpdated(address indexed signer);
-    event TreasuryUpdated(address indexed treasury);
+    event DeliveryPaymentReceiverUpdated(address indexed receiver);
     event RendererUpdated(address indexed renderer);
-    event Withdrawn(address indexed treasury, uint256 amount);
+    event MintProceedsReleased(address indexed recipient, uint256 amount);
+    event DeliveryProceedsReleased(address indexed receiver, uint256 amount);
     event BatchMetadataUpdate(uint256 fromTokenId, uint256 toTokenId);
 
     constructor(
         address initialOwner,
         address signer,
-        address payable treasury_,
+        address payable deliveryPaymentReceiver_,
         address renderer_,
-        bytes32 discountRoot
+        bytes32 discountRoot,
+        address[] memory mintRecipients_,
+        uint256[] memory mintSharesBps_
     ) ERC721A("111K", "111K") Ownable(initialOwner) EIP712("111K", "2") {
-        if (signer == address(0) || treasury_ == address(0) || renderer_.code.length == 0) {
+        if (signer == address(0) || renderer_.code.length == 0) {
             revert InvalidAddress();
         }
+        uint256 count = mintRecipients_.length;
+        if (count < 2 || count > 8 || mintSharesBps_.length != count) revert InvalidMintSplit();
+        uint256 totalShares;
+        for (uint256 i; i < count; ++i) {
+            address recipient = mintRecipients_[i];
+            if (recipient == address(0) || recipient == address(this) || mintSharesBps[recipient] != 0) {
+                revert InvalidAddress();
+            }
+            uint256 share = mintSharesBps_[i];
+            if (share == 0 || share > 10_000) revert InvalidMintSplit();
+            totalShares += share;
+            mintRecipients.push(recipient);
+            mintSharesBps[recipient] = share;
+        }
+        if (totalShares != 10_000) revert InvalidMintSplit();
+        _validateDeliveryPaymentReceiver(deliveryPaymentReceiver_);
         quoteSigner = signer;
-        treasury = treasury_;
+        deliveryPaymentReceiver = deliveryPaymentReceiver_;
         renderer = INFT111KRenderer(renderer_);
         discountMerkleRoot = discountRoot;
     }
@@ -157,6 +185,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         uint256 firstCrate = allocatedCrates + 1;
         allocatedCrates += quantity * CRATES_PER_WAREHOUSE;
         warehousesMinted += quantity;
+        totalMintReceived += msg.value;
         for (uint256 i; i < quantity; ++i) {
             warehouseFirstCrate[firstWarehouse + i] = firstCrate + i * CRATES_PER_WAREHOUSE;
             _mintSpotOnce(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse + i - 1);
@@ -229,6 +258,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             else revert WrongItemKind();
         }
         if (keccak256(abi.encode(receiptIds)) != quote.receiptIdsHash) revert InvalidAuthorization();
+        totalDeliveryReceived += msg.value;
         usedDeliveryOrders[quote.orderId] = true;
         // Burn hooks must remain free of external calls so upfront ownership checks stay valid.
         for (uint256 i; i < tokenIds.length; ++i) {
@@ -262,6 +292,16 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             _mintSpotOnce(msg.sender, receiptIds[i]);
         }
         emit CrateReceiptClaimed(claimId, msg.sender, receiptId, receiptIds);
+    }
+
+    function approve(address to, uint256 tokenId) public payable override {
+        if (msg.value != 0) revert WrongPayment();
+        super.approve(to, tokenId);
+    }
+
+    function transferFrom(address from, address to, uint256 tokenId) public payable override {
+        if (msg.value != 0) revert WrongPayment();
+        super.transferFrom(from, to, tokenId);
     }
 
     function getTokenInfo(uint256 tokenId) public view returns (uint8 kind, uint256 displayId, address holder) {
@@ -389,10 +429,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit QuoteSignerUpdated(signer);
     }
 
-    function setTreasury(address payable treasury_) external onlyOwner {
-        if (treasury_ == address(0)) revert InvalidAddress();
-        treasury = treasury_;
-        emit TreasuryUpdated(treasury_);
+    function setDeliveryPaymentReceiver(address payable receiver) external onlyOwner {
+        _validateDeliveryPaymentReceiver(receiver);
+        deliveryPaymentReceiver = receiver;
+        emit DeliveryPaymentReceiverUpdated(receiver);
     }
 
     function setRenderer(address renderer_) external onlyOwner {
@@ -402,11 +442,45 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit BatchMetadataUpdate(1, CRATE_RECEIPT_OFFSET + MAX_CRATES);
     }
 
-    function withdraw() external onlyOwner nonReentrant {
-        uint256 amount = address(this).balance;
-        (bool paid,) = treasury.call{value: amount}("");
-        if (!paid) revert TreasuryPaymentFailed();
-        emit Withdrawn(treasury, amount);
+    function mintRecipientCount() external view returns (uint256) {
+        return mintRecipients.length;
+    }
+
+    function releasableMint(address recipient) public view returns (uint256) {
+        uint256 share = mintSharesBps[recipient];
+        uint256 entitlement = (totalMintReceived / 10_000) * share + ((totalMintReceived % 10_000) * share) / 10_000;
+        return entitlement - mintReleased[recipient];
+    }
+
+    function releaseMint(address recipient) external nonReentrant {
+        if (mintSharesBps[recipient] == 0) revert InvalidMintRecipient();
+        uint256 amount = releasableMint(recipient);
+        if (amount == 0) return;
+        mintReleased[recipient] += amount;
+        totalMintReleased += amount;
+        (bool paid,) = payable(recipient).call{value: amount}("");
+        if (!paid) revert ProceedsPaymentFailed();
+        emit MintProceedsReleased(recipient, amount);
+    }
+
+    function releasableDelivery() public view returns (uint256) {
+        return totalDeliveryReceived - totalDeliveryReleased;
+    }
+
+    function releaseDelivery() external nonReentrant {
+        uint256 amount = releasableDelivery();
+        if (amount == 0) return;
+        address payable receiver = deliveryPaymentReceiver;
+        totalDeliveryReleased += amount;
+        (bool paid,) = receiver.call{value: amount}("");
+        if (!paid) revert ProceedsPaymentFailed();
+        emit DeliveryProceedsReleased(receiver, amount);
+    }
+
+    function _validateDeliveryPaymentReceiver(address receiver) private view {
+        if (receiver == address(0) || receiver == address(this) || mintSharesBps[receiver] != 0) {
+            revert InvalidAddress();
+        }
     }
 
     function _checkPurchase(uint256 quantity, uint256 crateUnits, uint256 unitPrice) private view {
@@ -417,6 +491,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function _mintCrates(uint256 quantity) private {
+        totalMintReceived += msg.value;
         uint256 firstCrate = allocatedCrates + 1;
         allocatedCrates += quantity;
         for (uint256 i; i < quantity; ++i) {

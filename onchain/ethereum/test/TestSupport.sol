@@ -30,12 +30,31 @@ interface Vm {
     function parseJsonBytes32(string calldata json, string calldata key) external pure returns (bytes32);
     function parseJsonBytes32Array(string calldata json, string calldata key) external pure returns (bytes32[] memory);
     function parseJsonAddress(string calldata json, string calldata key) external pure returns (address);
+    function parseJsonAddressArray(string calldata json, string calldata key) external pure returns (address[] memory);
+    function parseJsonUintArray(string calldata json, string calldata key) external pure returns (uint256[] memory);
+    function getNonce(address account) external view returns (uint64);
+    function computeCreateAddress(address deployer, uint256 nonce) external pure returns (address);
     function startBroadcast(uint256 privateKey) external;
     function stopBroadcast() external;
 }
 
 abstract contract TestSupport {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function _proceedsRecipients() internal pure returns (address[] memory recipients) {
+        recipients = new address[](4);
+        for (uint256 i; i < recipients.length; ++i) {
+            recipients[i] = address(uint160(0xA00001 + i));
+        }
+    }
+
+    function _proceedsSharesBps() internal pure returns (uint256[] memory shares) {
+        shares = new uint256[](4);
+        shares[0] = 5000;
+        shares[1] = 2500;
+        shares[2] = 1500;
+        shares[3] = 1000;
+    }
 
     function assertEq(uint256 actual, uint256 expected) internal pure {
         require(actual == expected, "uint mismatch");

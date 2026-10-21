@@ -4,7 +4,7 @@ import {NFT111K} from "../src/NFT111K.sol";
 import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
-contract RejectingTreasury {
+contract RejectingDeliveryReceiver {
     fallback() external payable {
         revert();
     }
@@ -75,7 +75,7 @@ contract NFT111KTest is TestSupport {
     uint256 internal constant SIGNER_KEY = 0xA11CE;
     address internal alice = address(0xA110);
     address internal bob = address(0xB0B);
-    address payable internal treasury = payable(address(0xBEEF));
+    address payable internal deliveryReceiver = payable(address(0xBEEF));
     bytes32 internal constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     bytes32 internal constant DELIVERY_TYPEHASH = keccak256(
@@ -91,7 +91,15 @@ contract NFT111KTest is TestSupport {
         vm.deal(bob, 100 ether);
         vm.deal(address(this), 100 ether);
         renderer = new NFT111KRenderer();
-        token = new NFT111K(address(this), vm.addr(SIGNER_KEY), treasury, address(renderer), bytes32(0));
+        token = new NFT111K(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            deliveryReceiver,
+            address(renderer),
+            bytes32(0),
+            _proceedsRecipients(),
+            _proceedsSharesBps()
+        );
     }
 
     function testCollectionNameSymbolAndSigningDomain() public view {
@@ -113,17 +121,20 @@ contract NFT111KTest is TestSupport {
         assertEq(extensions.length, 0);
     }
 
-    function testPricesPaymentWithdrawalAndOwnership() public {
+    function testPricesPaymentReleasesAndOwnership() public {
         _buyCrates(alice, 2);
         _info(111112, 2, 1, alice);
         _info(111113, 2, 2, alice);
         assertEq(address(token).balance, 0.0002 ether);
-        assertEq(treasury.balance, 0);
-        vm.prank(alice);
-        vm.expectRevert();
-        token.withdraw();
-        token.withdraw();
-        assertEq(treasury.balance, 0.0002 ether);
+        assertEq(deliveryReceiver.balance, 0);
+        address[] memory recipients = _proceedsRecipients();
+        uint256[] memory shares = _proceedsSharesBps();
+        for (uint256 i; i < recipients.length; ++i) {
+            vm.prank(alice);
+            token.releaseMint(recipients[i]);
+            assertEq(recipients[i].balance, 0.0002 ether * shares[i] / 10000);
+        }
+        assertEq(deliveryReceiver.balance, 0);
         assertEq(address(token).balance, 0);
         token.transferOwnership(bob);
         assertEq(token.owner(), address(this));
@@ -658,15 +669,23 @@ contract NFT111KTest is TestSupport {
         _info(22, 1, 2, alice);
     }
 
-    function testRejectingTreasuryCannotBlockPurchasesAndWithdrawalCanRetry() public {
-        token.setTreasury(payable(address(new RejectingTreasury())));
+    function testRejectingDeliveryReceiverCannotBlockPurchasesOrDeliveryAndReleaseCanRetry() public {
+        token.setDeliveryPaymentReceiver(payable(address(new RejectingDeliveryReceiver())));
         _buyCrates(alice, 1);
-        vm.expectRevert(NFT111K.TreasuryPaymentFailed.selector);
-        token.withdraw();
+        _redeem(alice, _one(111112), 1);
+        vm.expectRevert(NFT111K.ProceedsPaymentFailed.selector);
+        token.releaseDelivery();
+        assertEq(address(token).balance, 0.0002 ether);
+        assertEq(token.totalDeliveryReleased(), 0);
+        address[] memory recipients = _proceedsRecipients();
+        for (uint256 i; i < recipients.length; ++i) {
+            token.releaseMint(recipients[i]);
+        }
         assertEq(address(token).balance, 0.0001 ether);
-        token.setTreasury(treasury);
-        token.withdraw();
-        assertEq(treasury.balance, 0.0001 ether);
+        token.setDeliveryPaymentReceiver(deliveryReceiver);
+        token.releaseDelivery();
+        assertEq(deliveryReceiver.balance, 0.0001 ether);
+        assertEq(address(token).balance, 0);
     }
 
     function testRendererReplacementPreservesOwnershipAndValidatesPreviews() public {

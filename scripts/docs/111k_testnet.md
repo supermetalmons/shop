@@ -27,7 +27,12 @@ npm run dev:ethereum:api
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current local deployment manifest uses `protocolVersion: 5`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch getters and wallet-aware stats before starting. A fresh deployment is required for discounted crate minting. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+The current local deployment manifest uses `protocolVersion: 6`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. A fresh deployment is required for mint splits and separate delivery proceeds. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+
+Both deployment scripts load `onchain/ethereum/config/proceeds.json`: four valid placeholder recipients at 50% / 25% / 15% / 10%, and a separate placeholder shipping receiver. Replace the placeholders before deploying for real proceeds. The configuration supports 2–8 mint recipients whose positive basis points total 10,000; addresses must be distinct and must not be the collection. Mint recipients/shares are fixed. The owner may rotate the shipping receiver using `setDeliveryPaymentReceiver(address)`, which moves all unpaid and future shipping fees to the new receiver. Treasury environment settings are no longer used.
+
+Anyone can submit `releaseMint(address)` or `releaseDelivery()` to pay the configured receiver, without access to an owner key. Read `releasableMint(address)` or `releasableDelivery()` first; zero balances are a no-op. Mint and shipping accounting remain separate, each recipient can withdraw independently, and pauses do not stop payouts. The contract no longer exposes a full-balance `withdraw()` function. See the [proceeds documentation](../../onchain/ethereum/README.md#mint-splits-and-delivery-proceeds) for rounding and accounting details.
+
 
 Delivery quotes commit to the expected receipt identities, so a reorg that changes an artwork token's displayed number requires a fresh quote before delivery. New deliveries sort token IDs before signing without rewriting saved quotes or pending transactions.
 
@@ -87,7 +92,7 @@ Local deployment loads the committed root from `src/ethereum/discounts/111k.json
 
 ## Sepolia configuration
 
-The [discount release](../../releases/111k-sepolia-discounts/README.md) records the replacement collection at `0x4b3a94a144fe99954c5d55f870081e40b360cfbf`, deployed at Sepolia block `11957341`. The [first Sepolia release](../../releases/111k-sepolia/README.md) remains a historical record of the earlier interface. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
+The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) records the replacement collection at `0x3fc9f53200d3f025dfd046490b744747749a7b54`, deployed at Sepolia block `11963848`. The [discount release](../../releases/111k-sepolia-discounts/README.md) and [first Sepolia release](../../releases/111k-sepolia/README.md) remain historical records; both older collections remain active onchain. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |

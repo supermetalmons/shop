@@ -1,10 +1,10 @@
 # 111K contracts
 
-An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, treasury, and metadata renderer.
+An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata renderer. Mint recipients and their shares are fixed at deployment.
 
-The [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the live addresses and verification. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
+The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) records the new collection and its verification. The [first Sepolia deployment](../../releases/111k-sepolia/README.md) remains the renderer's deployment record. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
-Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving withdrawals and emergency controls. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
+Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving shipping-wallet rotation and emergency controls. Proceeds releases are permissionless. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
 The contract dependencies are `erc721a@4.3.0` and `@openzeppelin/contracts@5.6.1`; allowlist tooling uses OpenZeppelin's standard Merkle-tree generator. Foundry and Solidity 0.8.30 must already be installed. Builds and tests use `--offline` and do not download compilers. No Hardhat or forge-std dependency is needed.
 
@@ -24,7 +24,7 @@ npm run build
 npm run abi
 ```
 
-The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, treasury failure, and metadata. Delivery tests also revert a chain snapshot and change the artwork mapping to verify that an old quote cannot redeem a different physical identity.
+The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also revert a chain snapshot and change the artwork mapping to verify that an old quote cannot redeem a different physical identity.
 
 Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
 
@@ -63,9 +63,9 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, and `protocolVersion: 5` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, `ETHEREUM_111K_LOCAL_TREASURY`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, the proceeds configuration, and `protocolVersion: 6` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
 
-Local deployment manifest version 5 identifies crate discounts and the wallet-aware `stats(address)` interface alongside batch unpacking and reads. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests and probes the getters before starting. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
+Local deployment manifest version 6 identifies built-in mint splits and separate delivery proceeds, alongside crate discounts, wallet-aware `stats(address)`, batch unpacking, and reads. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, probes the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
 Start the isolated API from the repository root:
 
@@ -75,9 +75,21 @@ npm run dev:ethereum:api
 
 The helper reads `.local/deployment.json`, injects the public local test signer, and creates temporary databases. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
 
-Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in the collection until the owner calls `withdraw()`, which sends the balance to the configured treasury.
+Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
 
-`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_TREASURY`, and `ETHEREUM_111K_DISCOUNT_ROOT`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, and `ETHEREUM_111K_DISCOUNT_ROOT`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+
+## Mint splits and delivery proceeds
+
+Both deployment scripts read [`config/proceeds.json`](config/proceeds.json). It starts with four valid placeholder mint addresses and shares of `5000 / 2500 / 1500 / 1000` basis points (50% / 25% / 15% / 10%), plus a different placeholder delivery receiver. Replace these placeholders before deploying for real proceeds. There are no treasury environment overrides. Configuration is validated before broadcasting, including duplicate receivers, shipping overlap, and the predicted collection address.
+
+A deployment accepts 2–8 distinct, nonzero mint recipients with positive integer basis points totaling 10,000. Their addresses and shares cannot change. Public crates, discounted crates, and warehouses credit their actual ETH payment to `totalMintReceived`; unboxing and receipt claims do not earn additional proceeds. Delivery fees only credit `totalDeliveryReceived`.
+
+`mintRecipientCount()`, `mintRecipients(index)`, and `mintSharesBps(recipient)` expose the fixed split. `mintReleased(recipient)`, `totalMintReleased`, `totalDeliveryReleased`, `releasableMint(recipient)`, and `releasableDelivery()` expose payouts and pending amounts. Each mint recipient is entitled to `floor(totalMintReceived * shareBps / 10000) - mintReleased(recipient)`. Entitlements use cumulative receipts, so small payments do not repeatedly lose rounding fractions; after everyone claims, at most seven wei remain reserved for later accrual and can remain permanently after the final sale.
+
+Anyone may call `releaseMint(address)` for a known recipient or `releaseDelivery()`. Zero pending amounts are a no-op. Callers cannot redirect or choose an amount. A failed ETH transfer reverts only that payout, and cannot block minting, delivery, or independent releases to other recipients. Sale and redemption pauses do not block releases. The old `withdraw()`, `treasury()`, and `setTreasury(address)` interfaces are removed; there is no unrestricted balance sweep. Approvals and transfers reject nonzero ETH payments. Forced ETH is not counted as either kind of revenue and cannot be recovered through these functions.
+
+The owner may call `setDeliveryPaymentReceiver(address)` to rotate the shipping wallet. The new receiver must be nonzero, different from the collection, and different from every mint recipient. It receives all unwithdrawn and future delivery fees. `DeliveryPaymentReceiverUpdated`, `MintProceedsReleased`, and `DeliveryProceedsReleased` record receiver changes and successful payments. The manifest records the initial delivery receiver; use `deliveryPaymentReceiver()` for its current value. Payouts need no new API route or customer UI and introduce no additional dependencies.
 
 ## Allowlist crate discounts
 
@@ -202,7 +214,7 @@ At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer
 
 Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [checked-in legacy/200 baseline](benchmarks/compiler-legacy-200.json) records source, harness, dependency and compiler provenance as well as all 89 measurements. Normal runs reject changed provenance or measurements; they never silently replace the baseline. In both records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-The current source has 105 benchmarks, so the preserved 89-benchmark compiler baseline intentionally fails provenance/name checks against it. Reproduce the earlier comparison from its recorded source revision. To compare modified sources, explicitly refresh the compiler baseline with `--update-baseline` as shown below before running:
+The current source has 113 benchmarks, so the preserved 89-benchmark compiler baseline intentionally fails provenance/name checks against it. Reproduce the earlier comparison from its recorded source revision. To compare modified sources, explicitly refresh the compiler baseline with `--update-baseline` as shown below before running:
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000

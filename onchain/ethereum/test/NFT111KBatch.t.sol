@@ -16,8 +16,15 @@ contract NFT111KBatchTest is TestSupport {
     function setUp() public {
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
-        token =
-            new NFT111K(address(this), vm.addr(SIGNER_KEY), payable(BOB), address(new NFT111KRenderer()), bytes32(0));
+        token = new NFT111K(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            payable(BOB),
+            address(new NFT111KRenderer()),
+            bytes32(0),
+            _proceedsRecipients(),
+            _proceedsSharesBps()
+        );
     }
 
     function testBatchLimitsAndRuntimeSize() public view {

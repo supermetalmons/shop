@@ -50,12 +50,21 @@ contract NFT111KInvariantHandler is TestSupport {
     uint256 private openedCrates;
     uint256 private claimedCrates;
     uint256 private redeemedArtworks;
-    uint256 private revenue;
+    uint256 private mintRevenue;
+    uint256 private deliveryRevenue;
+    uint256[4] private mintPaid;
+    uint256 private deliveryPaid;
     bool private paused;
 
     constructor() {
         token = new NFT111K(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xFEE)), address(new NFT111KRenderer()), bytes32(0)
+            address(this),
+            vm.addr(SIGNER_KEY),
+            payable(address(0xFEE)),
+            address(new NFT111KRenderer()),
+            bytes32(0),
+            _proceedsRecipients(),
+            _proceedsSharesBps()
         );
         bytes32 firstLeaf = _discountLeaf(actors[0]);
         bytes32 secondLeaf = _discountLeaf(actors[1]);
@@ -113,7 +122,7 @@ contract NFT111KInvariantHandler is TestSupport {
         token.mintCratesDiscounted{value: cost}(quantity, proof);
         discountedPurchases[wallet] += quantity;
         allocations += quantity;
-        revenue += cost;
+        mintRevenue += cost;
         for (uint256 i; i < quantity; ++i) {
             _issue(111111 + first + i, 2, first + i, wallet);
         }
@@ -235,13 +244,46 @@ contract NFT111KInvariantHandler is TestSupport {
         token.claimCrateReceipt(id, claimId, deadline, signature);
     }
 
+    function releaseMint(uint256 seed) external {
+        uint256 index = seed % 4;
+        address[] memory recipients = _proceedsRecipients();
+        uint256[] memory shares = _proceedsSharesBps();
+        uint256 entitlement = mintRevenue * shares[index] / 10000;
+        vm.prank(actors[seed % actors.length]);
+        token.releaseMint(recipients[index]);
+        mintPaid[index] = entitlement;
+    }
+
+    function releaseDelivery(uint256 seed) external {
+        vm.prank(actors[seed % actors.length]);
+        token.releaseDelivery();
+        deliveryPaid = deliveryRevenue;
+    }
+
     function assertState() external view {
         assertEq(token.allocatedCrates(), allocations);
         assertEq(token.warehousesMinted(), warehouseCount);
         assertEq(token.remainingCrates(), 5555 - allocations);
         (,, uint256 minted,,,,,,,) = token.stats(address(0));
         assertEq(minted, artworkCount);
-        assertEq(address(token).balance, revenue);
+        uint256 released;
+        address[] memory recipients = _proceedsRecipients();
+        uint256[] memory shares = _proceedsSharesBps();
+        for (uint256 i; i < recipients.length; ++i) {
+            uint256 entitlement = mintRevenue * shares[i] / 10000;
+            assertTrue(mintPaid[i] <= entitlement);
+            assertEq(token.mintReleased(recipients[i]), mintPaid[i]);
+            assertEq(recipients[i].balance, mintPaid[i]);
+            assertEq(token.releasableMint(recipients[i]), entitlement - mintPaid[i]);
+            released += mintPaid[i];
+        }
+        assertEq(token.totalMintReceived(), mintRevenue);
+        assertEq(token.totalMintReleased(), released);
+        assertEq(token.totalDeliveryReceived(), deliveryRevenue);
+        assertEq(token.totalDeliveryReleased(), deliveryPaid);
+        assertEq(token.deliveryPaymentReceiver().balance, deliveryPaid);
+        assertEq(token.releasableDelivery(), deliveryRevenue - deliveryPaid);
+        assertEq(address(token).balance + released + deliveryPaid, mintRevenue + deliveryRevenue);
         assertTrue(token.redemptionsPaused() == paused);
         assertTrue(allocations <= MODELED_CRATE_LIMIT);
         assertTrue(warehouseCount * 11 <= allocations);
@@ -306,7 +348,7 @@ contract NFT111KInvariantHandler is TestSupport {
         vm.prank(wallet);
         token.mintCrates{value: cost}(quantity);
         allocations += quantity;
-        revenue += cost;
+        mintRevenue += cost;
         for (uint256 i; i < quantity; ++i) {
             _issue(111111 + first + i, 2, first + i, wallet);
         }
@@ -324,7 +366,7 @@ contract NFT111KInvariantHandler is TestSupport {
         allocations += 11;
         warehouseCount = number;
         firstCrates[number] = first;
-        revenue += 0.0011 ether;
+        mintRevenue += 0.0011 ether;
         _issue(116666 + number, 3, number, wallet);
     }
 
@@ -380,7 +422,7 @@ contract NFT111KInvariantHandler is TestSupport {
         uint256 receipt = (original.kind == 1 ? 1000000 : 2000000) + original.displayId;
         _issue(receipt, original.kind == 1 ? 4 : 5, original.displayId, original.holder);
         if (original.kind == 1) ++redeemedArtworks;
-        revenue += quote.fee;
+        deliveryRevenue += quote.fee;
         consumedOrders.push(orderId);
     }
 
@@ -533,7 +575,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](16);
+        bytes4[] memory selectors = new bytes4[](18);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -550,6 +592,8 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[13] = handler.rejectDuplicateBatch.selector;
         selectors[14] = handler.checkBatchRead.selector;
         selectors[15] = handler.purchaseCratesDiscounted.selector;
+        selectors[16] = handler.releaseMint.selector;
+        selectors[17] = handler.releaseDelivery.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

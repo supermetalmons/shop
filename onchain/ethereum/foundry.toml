@@ -12,7 +12,7 @@ via_ir = false
 evm_version = "prague"
 bytecode_hash = "none"
 gas_snapshot_emit = false
-fs_permissions = [{ access = "read-write", path = "./fixtures" }]
+fs_permissions = [{ access = "read-write", path = "./fixtures" }, { access = "read", path = "./config" }]
 
 [profile.default.fuzz]
 runs = 256

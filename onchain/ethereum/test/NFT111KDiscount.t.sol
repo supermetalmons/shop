@@ -10,6 +10,7 @@ contract DiscountReceiver {
     uint256 public rejectAt;
     uint256 public observedUsed;
     uint256 public observedAllocated;
+    uint256 public observedMintReceived;
     bool public reentryBlocked;
 
     constructor(NFT111K token_) {
@@ -26,6 +27,7 @@ contract DiscountReceiver {
         ++callbacks;
         observedUsed = token.discountUsed(address(this));
         observedAllocated = token.allocatedCrates();
+        observedMintReceived = token.totalMintReceived();
         if (rejectAt == callbacks) revert("rejected");
         (bool success, bytes memory result) = address(token).call{value: token.discountCratePrice()}(
             abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0)))
@@ -46,8 +48,15 @@ contract NFT111KDiscountTest is TestSupport {
 
     function setUp() public {
         root = _pair(_leaf(ALICE), _leaf(BOB));
-        token =
-            new NFT111K(address(this), address(0x5151), payable(address(0xFEE)), address(new NFT111KRenderer()), root);
+        token = new NFT111K(
+            address(this),
+            address(0x5151),
+            payable(address(0xFEE)),
+            address(new NFT111KRenderer()),
+            root,
+            _proceedsRecipients(),
+            _proceedsSharesBps()
+        );
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
         vm.deal(STRANGER, 100 ether);
@@ -166,6 +175,7 @@ contract NFT111KDiscountTest is TestSupport {
         assertEq(token.discountUsed(ALICE), 0);
         assertEq(token.allocatedCrates(), 0);
         assertEq(address(token).balance, 0);
+        assertEq(token.totalMintReceived(), 0);
     }
 
     function testPublicPurchasesTransfersAndUnboxingDoNotChangeAllowance() public {
@@ -210,6 +220,7 @@ contract NFT111KDiscountTest is TestSupport {
         assertEq(receiver.callbacks(), 3);
         assertEq(receiver.observedUsed(), 3);
         assertEq(receiver.observedAllocated(), 3);
+        assertEq(receiver.observedMintReceived(), PRICE * 3);
         assertTrue(receiver.reentryBlocked());
         assertEq(token.discountUsed(address(receiver)), 3);
     }
@@ -223,6 +234,7 @@ contract NFT111KDiscountTest is TestSupport {
         assertEq(token.discountUsed(address(receiver)), 0);
         assertEq(token.allocatedCrates(), 0);
         assertEq(address(token).balance, 0);
+        assertEq(token.totalMintReceived(), 0);
         assertEq(token.balanceOf(address(receiver)), 0);
         receiver.purchase{value: PRICE * 3}(3, 0);
         assertEq(token.discountUsed(address(receiver)), 3);

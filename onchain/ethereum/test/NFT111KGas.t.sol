@@ -31,12 +31,83 @@ contract NFT111KGasTest is TestSupport {
     function setUp() public {
         vm.chainId(31337);
         vm.warp(2_000_000_000);
-        token = new NFT111K(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), address(new NFT111KRenderer()), bytes32(0)
-        );
+        token = _deployCollection(_proceedsRecipients(), _proceedsSharesBps());
         receiver = address(new MinimalGasReceiver());
         vm.deal(alice, 100 ether);
         vm.deal(receiver, 100 ether);
+    }
+
+    function testGasReleaseMint() public {
+        _buyCrates(alice, 1);
+        address recipient = token.mintRecipients(0);
+        token.releaseMint(recipient);
+        vm.snapshotGasLastCall("releaseMint");
+        assertEq(recipient.balance, 0.00005 ether);
+    }
+
+    function testGasReleaseMintAfterRelease() public {
+        _buyCrates(alice, 1);
+        address recipient = token.mintRecipients(0);
+        token.releaseMint(recipient);
+        _buyCrates(alice, 1);
+        token.releaseMint(recipient);
+        vm.snapshotGasLastCall("releaseMintAfterRelease");
+        assertEq(recipient.balance, 0.0001 ether);
+    }
+
+    function testGasReleaseDelivery() public {
+        _buyCrates(alice, 1);
+        uint256[] memory ids = _range(111112, 1);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, ids);
+        bytes memory signature = _deliverySignature(ids, quote);
+        vm.prank(alice);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        token.releaseDelivery();
+        vm.snapshotGasLastCall("releaseDelivery");
+        assertEq(token.deliveryPaymentReceiver().balance, quote.fee);
+        assertEq(address(token).balance, 0.0001 ether);
+    }
+
+    function testGasMintCrates1EightRecipients() public {
+        _configureEightRecipients();
+        _mintCrates(alice, 1, "mintCrates1EightRecipients");
+    }
+
+    function testGasReleaseMintEightRecipients() public {
+        _configureEightRecipients();
+        _buyCrates(alice, 1);
+        address recipient = token.mintRecipients(7);
+        token.releaseMint(recipient);
+        vm.snapshotGasLastCall("releaseMintEightRecipients");
+        assertEq(recipient.balance, 0.0000125 ether);
+    }
+
+    function _configureEightRecipients() private {
+        address[] memory recipients = new address[](8);
+        uint256[] memory shares = new uint256[](8);
+        for (uint256 i; i < 8; ++i) {
+            recipients[i] = address(uint160(0xA00001 + i));
+            shares[i] = 1250;
+        }
+        token = _deployCollection(recipients, shares);
+        assertEq(token.mintRecipientCount(), 8);
+        assertTrue(address(token).code.length <= 24576);
+    }
+
+    function _deployCollection(address[] memory recipients, uint256[] memory shares)
+        internal
+        virtual
+        returns (NFT111K)
+    {
+        return new NFT111K(
+            address(this),
+            vm.addr(SIGNER_KEY),
+            payable(address(0xBEEF)),
+            address(new NFT111KRenderer()),
+            bytes32(0),
+            recipients,
+            shares
+        );
     }
 
     function testGasMintCrates1() public {

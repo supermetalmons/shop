@@ -6,13 +6,14 @@ import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
+import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
   protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string;
 };
-if (deployment.protocolVersion !== 5) throw new Error('The local deployment does not support the current discount contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 6) throw new Error('The local deployment does not support the current proceeds contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -20,6 +21,9 @@ if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
 }
 const contractAddress = requireEthereumAddress(deployment.contractAddress);
 const rendererAddress = requireEthereumAddress(deployment.rendererAddress);
+const proceeds = parseProceedsConfig(deployment, contractAddress) as {
+  mintRecipients: string[]; mintSharesBps: number[]; deliveryPaymentReceiver: string;
+};
 if (!Number.isSafeInteger(deployment.deploymentBlock) || deployment.deploymentBlock < 0) throw new Error('Invalid deployment block.');
 const testKey = `0x${'0'.repeat(59)}a11ce`;
 const signer = ethereumSignerAddress(testKey);
@@ -60,6 +64,29 @@ if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !
     collectionStats,
   )[9] !== 0n) {
   throw new Error('The local collection does not implement the current discount interface. Run npm --prefix onchain/ethereum run deploy:local again.');
+}
+
+async function proceedsRead(signature: string, types: string[], values: unknown[], resultType: string) {
+  const result = await rpc('eth_call', [{ to: contractAddress, data: encodeCall(signature, types, values) }, 'latest']);
+  if (typeof result !== 'string') throw new Error('Invalid local proceeds contract response.');
+  return decodeReturn([resultType], result)[0];
+}
+const [recipientCount, deliveryReceiver, recipients, shares, ...accounting] = await Promise.all([
+  proceedsRead('mintRecipientCount()', [], [], 'uint256'),
+  proceedsRead('deliveryPaymentReceiver()', [], [], 'address'),
+  Promise.all(proceeds.mintRecipients.map((_, index) => proceedsRead('mintRecipients(uint256)', ['uint256'], [index], 'address'))),
+  Promise.all(proceeds.mintRecipients.map(address => proceedsRead('mintSharesBps(address)', ['address'], [address], 'uint256'))),
+  ...['totalMintReceived()', 'totalMintReleased()', 'totalDeliveryReceived()', 'totalDeliveryReleased()', 'releasableDelivery()']
+    .map(signature => proceedsRead(signature, [], [], 'uint256')),
+  ...proceeds.mintRecipients.flatMap(address => ['mintReleased(address)', 'releasableMint(address)']
+    .map(signature => proceedsRead(signature, ['address'], [address], 'uint256'))),
+]);
+parseProceedsConfig({ ...proceeds, deliveryPaymentReceiver: deliveryReceiver }, contractAddress);
+if (recipientCount !== BigInt(proceeds.mintRecipients.length) ||
+  !Array.isArray(recipients) || recipients.some((recipient, index) => recipient !== proceeds.mintRecipients[index]) ||
+  !Array.isArray(shares) || shares.some((share, index) => share !== BigInt(proceeds.mintSharesBps[index])) ||
+  accounting.some(value => typeof value !== 'bigint')) {
+  throw new Error('The local collection does not match its proceeds configuration. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 
 const rawConfig = JSON.parse(await readFile(resolve(root, 'cloud/workers/api/wrangler.jsonc'), 'utf8'));
