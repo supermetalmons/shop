@@ -5,6 +5,7 @@ import { createElement } from 'react';
 import * as THREE from 'three';
 import type { PrimaryMediaControls } from '../src/components/MediaWithFallback.tsx';
 import type { MiNotePackStar } from '../src/lib/miNotePackStars.ts';
+import { MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN } from '../src/lib/miNotePackShowcaseMotion.ts';
 import { MI_NOTE_PACK_RENDER_REGISTRY, getMiNotePackRenderSetupByPackId, restoreMiNotePackRenderCamera } from '../src/lib/miNotePackRenderSetup.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -414,7 +415,7 @@ test('enabling reduced motion during a later pack returns to static pack 1 and c
   assert.deepEqual(run.events, ['loading', 'ready']);
 });
 
-test('resizing keeps the saved image projection centered and contained without stretching', async () => {
+test('a taller canvas preserves the original pack projection and pixel budget at every viewport size', async () => {
   setMediaQueryMatches(motionQuery, true);
   const run = harness();
   await makeReady();
@@ -424,7 +425,7 @@ test('resizing keeps the saved image projection centered and contained without s
   const sourceCamera = new THREE.PerspectiveCamera();
   restoreMiNotePackRenderCamera(sourceCamera, setup);
   const points = [new THREE.Vector3(-0.4, 0.6, 0), new THREE.Vector3(0.5, -0.7, 0.03), new THREE.Vector3(0, 0, 0.02)];
-  for (const viewport of [[480, 640], [1200, 500], [320, 700]]) {
+  for (const viewport of [[160, 214], [480, 640], [1200, 500], [320, 700]]) {
     [width, height] = viewport;
     act(() => resizeObservers.forEach(observer => observer.callback()));
     advanceFrame();
@@ -432,16 +433,18 @@ test('resizing keeps the saved image projection centered and contained without s
     const scale = Math.min(width / output.width, height / output.height);
     const imageWidth = output.width * scale;
     const imageHeight = output.height * scale;
+    const canvasHeight = height * MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN;
     for (const point of points) {
       const source = point.clone().project(sourceCamera);
       const live = point.clone().project(camera);
       const x = (width - imageWidth) / 2 + (source.x + 1) * imageWidth / 2;
       const y = (height - imageHeight) / 2 + (1 - source.y) * imageHeight / 2;
       assert.ok(Math.abs((live.x + 1) * width / 2 - x) < 1e-8);
-      assert.ok(Math.abs((1 - live.y) * height / 2 - y) < 1e-8);
+      assert.ok(Math.abs((height - canvasHeight) / 2 + (1 - live.y) * canvasHeight / 2 - y) < 1e-8);
     }
-    assert.deepEqual(renderers[0].size, viewport);
-    assert.equal(renderers[0].pixelRatio, 2);
+    assert.deepEqual(renderers[0].size, [width, canvasHeight]);
+    const pixelArea = renderers[0].size[0] * renderers[0].size[1] * renderers[0].pixelRatio ** 2;
+    assert.ok(Math.abs(pixelArea - width * height * 4) < 1e-8);
     assert.equal(frames.size, 0);
   }
   width = 0;

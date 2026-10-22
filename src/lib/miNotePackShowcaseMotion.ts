@@ -1,5 +1,6 @@
 export const MI_NOTE_PACK_SHOWCASE_COLORS = ['cobalt-blue', 'emerald', 'marigold'] as const;
 export const MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS = 2.65;
+export const MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN = 1.25;
 
 const HOLD_SECONDS = 0.45;
 const TURN_SECONDS = MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS - HOLD_SECONDS;
@@ -53,6 +54,6 @@ export function sampleMiNotePackShowcase(elapsedSeconds: number, baseRotationY =
     rotationY: -TAU * turn,
     rotationZ: 0.033 * envelope * Math.sin(Math.PI * turn),
     offsetY: 0.028 * envelope,
-    scale: (1 - 0.18 * Math.sin(TAU * turn) ** 2) * (1 - 0.025 * envelope),
+    scale: 1,
   };
 }

@@ -12,7 +12,7 @@ import {
   getMiNotePackRenderSetupByPackId,
   restoreMiNotePackRenderCamera,
 } from '../lib/miNotePackRenderSetup';
-import { sampleMiNotePackShowcase } from '../lib/miNotePackShowcaseMotion';
+import { MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN, sampleMiNotePackShowcase } from '../lib/miNotePackShowcaseMotion';
 import type { PrimaryMediaControls } from './MediaWithFallback';
 
 type PackModel = ReturnType<typeof createMiNotePackModel>;
@@ -149,11 +149,12 @@ export default function MiNotePackShowcase({ media }: { media: PrimaryMediaContr
         return;
       }
       try {
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-        renderer.setSize(width, height);
+        const canvasHeight = height * MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN;
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2) / Math.sqrt(MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN));
+        renderer.setSize(width, canvasHeight);
         restoreMiNotePackRenderCamera(camera, setup);
-        camera.aspect = width / height;
-        camera.zoom = setup.camera.zoom * Math.min(width / shared.output.width, height / shared.output.height) * shared.output.height / height;
+        camera.aspect = width / canvasHeight;
+        camera.zoom = setup.camera.zoom * Math.min(width / shared.output.width, height / shared.output.height) * shared.output.height / canvasHeight;
         camera.updateProjectionMatrix();
         schedule();
       } catch {

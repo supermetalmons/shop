@@ -8,6 +8,7 @@ import {
 } from '../src/lib/miNotePackRenderSetup.ts';
 import {
   MI_NOTE_PACK_SHOWCASE_CYCLE_SECONDS,
+  MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN,
   MI_NOTE_PACK_SHOWCASE_COLORS,
   sampleMiNotePackShowcase,
 } from '../src/lib/miNotePackShowcaseMotion.ts';
@@ -84,7 +85,7 @@ test('each pack changes once at the return edge with the saved yaw included', ()
   }
 });
 
-test('hold and turn motion remains gentle, bounded, and deterministic', () => {
+test('hold and turn motion remains gentle, bounded, deterministic, and full size', () => {
   const hold = sampleMiNotePackShowcase(0.225);
   assert.ok(hold.offsetY > 0);
   assert.ok(hold.rotationX > 0);
@@ -96,23 +97,28 @@ test('hold and turn motion remains gentle, bounded, and deterministic', () => {
     assert.ok(pose.rotationY >= -TAU && pose.rotationY <= 0);
     assert.ok(Math.abs(pose.rotationZ) <= 0.033);
     assert.ok(pose.offsetY >= 0 && pose.offsetY <= 0.028);
-    assert.ok(pose.scale >= 0.7995 && pose.scale <= 1);
+    assert.equal(pose.scale, 1);
   }
 });
 
-test('every pack remains inside the saved camera framing throughout successive turns', () => {
+test('full-size packs overflow the original slot while remaining inside the taller canvas', () => {
   const setup = getMiNotePackRenderSetupByPackId(1)!;
   const camera = new THREE.PerspectiveCamera();
   restoreMiNotePackRenderCamera(camera, setup);
+  camera.aspect /= MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN;
+  camera.zoom /= MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN;
+  camera.updateProjectionMatrix();
   const baseRotation = setup.model.rotationDegrees.map(THREE.MathUtils.degToRad);
   const model = new THREE.Object3D();
   const projected = new THREE.Vector3();
   const corners = [-MI_NOTE_LEAF_WIDTH / 2, MI_NOTE_LEAF_WIDTH / 2].flatMap(x =>
     [-0.91, 0.91].flatMap(y => [0, 0.03].map(z => new THREE.Vector3(x, y, z))),
   );
+  let overflowsOriginalSlot = false;
   for (let step = 0; step <= CYCLE * 18 * 200; step++) {
     const time = step / 200;
     const pose = sampleMiNotePackShowcase(time, baseRotation[1]);
+    assert.equal(pose.scale, 1);
     model.rotation.set(
       baseRotation[0] + pose.rotationX,
       baseRotation[1] + pose.rotationY,
@@ -125,10 +131,12 @@ test('every pack remains inside the saved camera framing throughout successive t
     model.updateMatrixWorld(true);
     for (const corner of corners) {
       projected.copy(corner).applyMatrix4(model.matrixWorld).project(camera);
+      overflowsOriginalSlot ||= Math.abs(projected.y) * MI_NOTE_PACK_SHOWCASE_VERTICAL_OVERSCAN > 1;
       assert.ok(Math.abs(projected.x) < 0.99 && Math.abs(projected.y) < 0.99,
         `Pack ${pose.variantId} leaves framing at ${time}s: ${projected.x}, ${projected.y}`);
     }
   }
+  assert.ok(overflowsOriginalSlot, 'The pack should retain its full size when it exceeds the original slot');
 });
 
 test('pose and velocity stay continuous at the hold, turn, and cycle boundaries', () => {
