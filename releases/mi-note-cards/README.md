@@ -129,7 +129,7 @@ purchase transfers 250,000,000 lamports to each mint recipient. Existing shippin
 prices and the collection's 500-bps royalties are unchanged.
 
 Item metadata uses `https://cdn.lil.org/nft/mi_note_cards/json` with `fN.json`,
-`rfN.json`, `bN.json`, and `rbN.json`. The collection URI remains
+`rfN.json`, `bN.json`, and `rbN.json`. At initial deployment the collection URI remained
 `https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json`.
 The separate [metadata record](../mi-note-cards-mainnet/README.md) describes the
 4,114 hosted JSONs. Devnet retains its `/json/pre` base and original frozen records.
@@ -153,3 +153,30 @@ completed update of the 176 existing NFTs to their regular-card names and
 mainnet metadata URIs. Conversion ran while both configs were stopped and
 preserved this deployment evidence and every permanent public-inventory exclusion. Its manifest, execution
 journal, and verification records live in `preorder-upgrade/`.
+
+## Collection metadata update
+
+The mainnet collection configuration now uses
+`https://cdn.lil.org/nft/mi_note_cards/json/collection.json`, whose cover image is
+`https://cdn.lil.org/nft/mi_note_cards/square/166.jpg`. This update is scoped to
+collection `BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG` on mainnet. Devnet
+retains the preorder collection URI and its original cover image.
+
+The update finalized at slot `459986660` in transaction
+[`5Vs92TJs…MYjK9vM`](https://explorer.solana.com/tx/5Vs92TJsNgWFKARLZRysHCGsAwF9Wpe7aChEoVAgscbtE7AT7fvw7RuJogo6AWxQTY5obQy3wG8YBuJTKMYjK9vM).
+The [migration record](collection-metadata-update.json) contains the metadata
+hashes and before/after collection state. The name, authority, royalty settings,
+delegates, plugins, and collection counts were preserved. The fee was 5,000
+lamports. The temporary signer version was deleted after restoring an undeployed
+copy of the original Worker source; production routing remained unchanged.
+
+The one-off collection updater has been retired. Future operations use the
+[Worker transaction helper](../../scripts/docs/worker_transactions.md) with their
+own instructions and verification checks; this migration record remains the
+public evidence for the completed update.
+
+The original collection creation record, deployment snapshots, and completed
+preorder-conversion manifests and journals remain unchanged. Their exact source
+checks describe the earlier metadata configuration. Do not change historical
+evidence to satisfy the original creation or conversion commands, or use those
+checks as verification of the current collection metadata.

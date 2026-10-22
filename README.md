@@ -990,12 +990,19 @@ configuration.
 
 ## On-chain deployments and metadata compatibility
 
-The mainnet Mi Note Cards collection is already deployed. Verify its saved
-deployment using `scripts/newPreorderCollections/mi_note_cards.ts`:
+The mainnet Mi Note Cards collection is already deployed. Its current configuration
+uses `https://cdn.lil.org/nft/mi_note_cards/json/collection.json` with image
+`https://cdn.lil.org/nft/mi_note_cards/square/166.jpg`. The completed update and its
+finalized transaction are recorded in
+[`releases/mi-note-cards/collection-metadata-update.json`](releases/mi-note-cards/collection-metadata-update.json).
+Future one-off Solana operations can use the reusable
+[Worker transaction helper](scripts/docs/worker_transactions.md), with their own
+instructions and verification checks.
 
-```bash
-npm run deploy-preorder-collection -- mi_note_cards
-```
+The original creation record and completed preorder-conversion manifests remain
+historical evidence. Their exact configuration checks bind the original URI and
+image; do not rewrite those records or rerun the original creation/conversion
+checks as verification of the current collection metadata.
 
 For a new collection, copy the typed `NEW_PREORDER_COLLECTION` configuration
 and set its identity, expected authority public key, hosted
@@ -1008,8 +1015,10 @@ collection metadata JSON and image yourself first. Its name, symbol, description
 image, `external_url`, `seller_fee_basis_points`, and `properties.creators` must
 match the configuration; the tool validates hosted metadata and does not upload it.
 
-The deployed `mi_note_cards_devnet` collection reuses the mainnet metadata
-and authority with the devnet RPC. Verify it with:
+The deployed `mi_note_cards_devnet` collection retains
+`https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json` and its original
+`preorder/cover.jpg` image. It shares the mainnet authority and royalty settings,
+with the devnet RPC. Verify it with:
 
 ```bash
 npm run deploy-preorder-collection -- mi_note_cards_devnet

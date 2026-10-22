@@ -6,4 +6,9 @@ export const NEW_PREORDER_COLLECTION: PreorderCollectionConfig = {
   collectionId: 'mi_note_cards_devnet',
   isMainnet: false,
   solanaRpcUrl: undefined,
+  collectionMetadataUri: 'https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json',
+  collectionMetadata: {
+    ...MAINNET_COLLECTION.collectionMetadata,
+    image: 'https://cdn.lil.org/nft/mi_note_cards/preorder/cover.jpg',
+  },
 };

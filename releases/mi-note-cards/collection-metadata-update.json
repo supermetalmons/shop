@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "cluster": "mainnet-beta",
+  "genesisHash": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  "collection": "BtEknBg1b9ZLJHLTGJcadxeQhQwtdVsoPGDrc9cXwczG",
+  "authority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+  "oldUri": "https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json",
+  "newUri": "https://cdn.lil.org/nft/mi_note_cards/json/collection.json",
+  "metadata": {
+    "oldSha256": "fe0fdc48cbae41de246368cb09e4cfa1593e6260bef1ce5f3ed6c88bdde9714b",
+    "newSha256": "65963723a2595cf649be3a0dac8030151ac0eb2331d115ff0ee5c52968514d16",
+    "oldImage": "https://cdn.lil.org/nft/mi_note_cards/preorder/cover.jpg",
+    "newImage": "https://cdn.lil.org/nft/mi_note_cards/square/166.jpg"
+  },
+  "transactionSignature": "5Vs92TJsNgWFKARLZRysHCGsAwF9Wpe7aChEoVAgscbtE7AT7fvw7RuJogo6AWxQTY5obQy3wG8YBuJTKMYjK9vM",
+  "finalizedSlot": 459986660,
+  "verifiedAt": "2026-10-22T09:36:54.660Z",
+  "feeLamports": 5000,
+  "before": {
+    "updateAuthority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "name": "Mi Note Cards",
+    "uri": "https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json",
+    "numMinted": 729,
+    "currentSize": 1017,
+    "plugins": [
+      {
+        "type": 0,
+        "authorityKind": 2,
+        "authorityAddress": null,
+        "bytesHex": "00f401010000009ffa26e4c4ffedfeff1d2e0786be02cd4d8861d8110650b86bda070847ee54b06400"
+      },
+      {
+        "type": 4,
+        "authorityKind": 2,
+        "authorityAddress": null,
+        "bytesHex": "04030000000b1d24a4cc0aaf16b16b93a54a2705bcccf9849434407ee36f96ed900a2013794336d926fac92f8051f035bdfa34813052ae10ba422b2d4aaf3903f56e6800b05caa1394f2eec9c2ea9a903e79af83dfb707a24b2c663f863aba277f3834c799"
+      },
+      {
+        "type": 15,
+        "authorityKind": 3,
+        "authorityAddress": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "bytesHex": "0f"
+      }
+    ]
+  },
+  "after": {
+    "updateAuthority": "kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx",
+    "name": "Mi Note Cards",
+    "uri": "https://cdn.lil.org/nft/mi_note_cards/json/collection.json",
+    "numMinted": 729,
+    "currentSize": 1017,
+    "plugins": [
+      {
+        "type": 0,
+        "authorityKind": 2,
+        "authorityAddress": null,
+        "bytesHex": "00f401010000009ffa26e4c4ffedfeff1d2e0786be02cd4d8861d8110650b86bda070847ee54b06400"
+      },
+      {
+        "type": 4,
+        "authorityKind": 2,
+        "authorityAddress": null,
+        "bytesHex": "04030000000b1d24a4cc0aaf16b16b93a54a2705bcccf9849434407ee36f96ed900a2013794336d926fac92f8051f035bdfa34813052ae10ba422b2d4aaf3903f56e6800b05caa1394f2eec9c2ea9a903e79af83dfb707a24b2c663f863aba277f3834c799"
+      },
+      {
+        "type": 15,
+        "authorityKind": 3,
+        "authorityAddress": "BGUMAp9Gq7iTEuizy4pqaxsTyUCBK68MDfK752saRPUY",
+        "bytesHex": "0f"
+      }
+    ]
+  },
+  "worker": {
+    "sourceVersion": "6f1090d5-7586-4af7-8854-6e3ea0b7750a",
+    "temporaryVersion": "f54b05d5-86f7-4238-a32c-19061b77f862",
+    "absent": true,
+    "previewStatus": 500,
+    "productionUnchanged": true,
+    "restoredVersion": "b4366e37-e388-4017-b177-775aa29f50d4"
+  }
+}

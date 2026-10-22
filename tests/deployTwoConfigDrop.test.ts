@@ -18,6 +18,7 @@ import { parseMiNoteDropManifest, MI_NOTE_CLUSTER_GENESIS } from '../scripts/sha
 import { resolveMiNoteCollectionDelegates } from '../scripts/shared/miNoteMintResources.ts';
 import { readDeploymentDropRegistry } from '../scripts/shared/deploymentRegistry.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
+import { NEW_PREORDER_COLLECTION as DEVNET_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
 import { bubblegumTreeConfigPda, decodeMplCoreCollectionUpdateDelegates } from '../scripts/deploy-all-onchain.ts';
 import {
   buildTwoConfigDelegateUpdateInstruction, createTwoConfigDeploymentPlan, inspectTwoConfigJournalTransaction,
@@ -37,13 +38,14 @@ function recipe(mainnet = false) {
     new URL('../releases/mi-note-cards/inventory.json', import.meta.url), 'utf8',
   ))) : manifest;
   const selectedSource = mainnet ? DEPLOYMENT_DROPS.card_nft_2 : source;
+  const collection = mainnet ? NEW_PREORDER_COLLECTION : DEVNET_COLLECTION;
   return defineNewDropConfig({
     shared: { isMainnet: mainnet, dropSymbol: 'minote', sellerFeeBasisPoints: 500 },
     deploy: { reuseProgramId: true, reuseProgramIdFromDropId: selectedSource.dropId, coreCollectionPubkey: selectedManifest.sourcePreorder.collection },
     onchain: {
       dropId: selectedManifest.sourcePreorder.preorderId, dropFamily: 'mi_note_cards', metadataBase: selectedManifest.metadataBase,
       collectionMetadata: { name: 'Mi Note Cards', description: 'mi note cards', externalUrl: 'https://mons.shop',
-        image: NEW_PREORDER_COLLECTION.collectionMetadata.image, creators: NEW_PREORDER_COLLECTION.collectionMetadata.creators },
+        image: collection.collectionMetadata.image, creators: collection.collectionMetadata.creators },
       discountWhitelistCsvRelativePath: 'scripts/discounts/disabled.csv', receiptsTree: { maxDepth: 14, maxBufferSize: 64, canopyDepth: 0 },
       paymentRouting: { mintProceeds: [
         { address: PREORDER_PAYMENT_RECIPIENTS[0], percentage: 50 }, { address: PREORDER_PAYMENT_RECIPIENTS[1], percentage: 50 },
@@ -68,10 +70,10 @@ const account = (data: Buffer, owner: string, lamports = 1_000_000): AccountInfo
   data, owner: new PublicKey(owner), lamports, executable: false, rentEpoch: 0,
 });
 
-function collectionBytes(authority: PublicKey, delegates: PublicKey[]) {
-  const metadata = NEW_PREORDER_COLLECTION.collectionMetadata;
+function collectionBytes(authority: PublicKey, delegates: PublicKey[], config: ReturnType<typeof preparePreorderCollectionConfig>) {
+  const metadata = config.collectionMetadata;
   const base = Buffer.concat([Buffer.from([5]), authority.toBuffer(), str(metadata.name),
-    str(NEW_PREORDER_COLLECTION.collectionMetadataUri), int(22, 4), int(22, 4)]);
+    str(config.collectionMetadataUri), int(22, 4), int(22, 4)]);
   const plugins = [
     { type: 0, authority: Buffer.from([2]), data: Buffer.concat([Buffer.from([0]), int(500, 2), int(1, 4),
       new PublicKey(metadata.creators[0].address).toBuffer(), Buffer.from([100, 0])]) },
@@ -155,9 +157,9 @@ async function fixture(t: TestContext, mainnet = false) {
   writeFileSync(saved, JSON.stringify({ collectionMint: plan.collection, config: { authority: plan.authority } }));
   const journalPath = path.join(root, '.cache/two-config-deployments', plan.cluster, `${plan.dropId}.json`);
   const collectionConfig = preparePreorderCollectionConfig({
-    ...NEW_PREORDER_COLLECTION, collectionId: plan.dropId, isMainnet: mainnet, authority: plan.authority,
+    ...(mainnet ? NEW_PREORDER_COLLECTION : DEVNET_COLLECTION), collectionId: plan.dropId, isMainnet: mainnet, authority: plan.authority,
   }, plan.dropId);
-  const accounts = new Map<string, AccountInfo<Buffer>>([[plan.collection, account(collectionBytes(payer.publicKey, [payer.publicKey]), MPL_CORE_PROGRAM_ADDRESS)]]);
+  const accounts = new Map<string, AccountInfo<Buffer>>([[plan.collection, account(collectionBytes(payer.publicKey, [payer.publicKey], collectionConfig), MPL_CORE_PROGRAM_ADDRESS)]]);
   const simulated = new Map<string, Map<string, AccountInfo<Buffer>>>();
   const signatures = new Map<string, number>();
   const state = { sends: [] as string[], prompts: 0, confirmations: 0, simulations: 0, gateChecks: 0, manifestChecks: 0,
@@ -182,7 +184,7 @@ async function fixture(t: TestContext, mainnet = false) {
     if (instruction.programId.toBase58() === MPL_CORE_PROGRAM_ADDRESS) {
       const count = instruction.data.readUInt32LE(2);
       const delegates = Array.from({ length: count }, (_, index) => new PublicKey(instruction.data.subarray(6 + index * 32, 38 + index * 32)));
-      effects.set(plan.collection, account(collectionBytes(payer.publicKey, delegates), MPL_CORE_PROGRAM_ADDRESS));
+      effects.set(plan.collection, account(collectionBytes(payer.publicKey, delegates, collectionConfig), MPL_CORE_PROGRAM_ADDRESS));
     } else if (instruction.programId.toBase58() === plan.programId) {
       const kind = instruction.keys[0].pubkey.toBase58() === plan.mintConfig.boxMinterConfigPda ? 'mint' : 'operations';
       effects.set(instruction.keys[0].pubkey.toBase58(), roleAccount(plan, kind, config));
@@ -235,7 +237,7 @@ async function fixture(t: TestContext, mainnet = false) {
     log: () => {}, now: () => new Date('2026-10-09T00:00:00Z'),
   };
   const run = (write = true) => runTwoConfigDropDeployment({ root, dropId: plan.dropId, manifestPath, write, allowMainnet: mainnet && write }, dependencies);
-  return { root, config, plan, accounts, payer, connection, state, dependencies, run, manifestPath, journalPath, registryPath, whitelistPath };
+  return { root, config, collectionConfig, plan, accounts, payer, connection, state, dependencies, run, manifestPath, journalPath, registryPath, whitelistPath };
 }
 
 test('deployment CLI defaults to read-only and requires explicit manifest and mainnet write opt-in', () => {
@@ -478,7 +480,7 @@ test('delegates added during approval stop signing and are preserved by a fresh 
   const f = await fixture(t);
   const added = Keypair.generate().publicKey;
   f.state.afterConfirmation = () => f.accounts.set(f.plan.collection,
-    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added]), MPL_CORE_PROGRAM_ADDRESS));
+    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added], f.collectionConfig), MPL_CORE_PROGRAM_ADDRESS));
   await assert.rejects(f.run(), /Collection delegates changed after review/);
   assert.deepEqual(f.state.sends, []);
   assert.deepEqual(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions, []);
@@ -506,7 +508,7 @@ test('delegates added during approval stop signing and are preserved by a fresh 
   assert.deepEqual(await resolveMiNoteCollectionDelegates({ ...record, transactions: [] }, drop, f.plan.authority),
     [f.plan.authority, f.plan.mintConfig.boxMinterConfigPda, f.plan.operationsConfig.boxMinterConfigPda].sort());
   f.accounts.set(f.plan.collection, account(collectionBytes(f.payer.publicKey,
-    [...expected.map(value => new PublicKey(value)), Keypair.generate().publicKey]), MPL_CORE_PROGRAM_ADDRESS));
+    [...expected.map(value => new PublicKey(value)), Keypair.generate().publicKey], f.collectionConfig), MPL_CORE_PROGRAM_ADDRESS));
   await assert.rejects(f.run(), /delegate/i);
   assert.equal(readFileSync(result.recordPath, 'utf8'), recordSource);
 });
@@ -517,7 +519,7 @@ test('recovery cannot resend a signed update that removes a delegate added durin
   await assert.rejects(f.run(), /transport lost/);
   const added = Keypair.generate().publicKey;
   f.state.afterConfirmation = () => f.accounts.set(f.plan.collection,
-    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added]), MPL_CORE_PROGRAM_ADDRESS));
+    account(collectionBytes(f.payer.publicKey, [f.payer.publicKey, added], f.collectionConfig), MPL_CORE_PROGRAM_ADDRESS));
   await assert.rejects(f.run(), /Collection delegates changed after review/);
   assert.equal(f.state.sends.length, 1);
   assert.equal(JSON.parse(readFileSync(f.journalPath, 'utf8')).transactions[0].status, 'signed');

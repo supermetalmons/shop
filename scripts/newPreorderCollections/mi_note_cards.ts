@@ -5,12 +5,12 @@ export const NEW_PREORDER_COLLECTION: PreorderCollectionConfig = {
   isMainnet: true,
   solanaRpcUrl: undefined,
   authority: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
-  collectionMetadataUri: 'https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json',
+  collectionMetadataUri: 'https://cdn.lil.org/nft/mi_note_cards/json/collection.json',
   collectionMetadata: {
     name: 'Mi Note Cards',
     symbol: 'minote',
     description: 'mi note cards · physical on mons dot shop',
-    image: 'https://cdn.lil.org/nft/mi_note_cards/preorder/cover.jpg',
+    image: 'https://cdn.lil.org/nft/mi_note_cards/square/166.jpg',
     externalUrl: 'https://mons.shop',
     sellerFeeBasisPoints: 500,
     creators: [

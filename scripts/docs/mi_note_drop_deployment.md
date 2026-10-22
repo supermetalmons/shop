@@ -37,7 +37,20 @@ sales instructions belong to the mint role and are not enabled for this rehearsa
 
 The devnet metadata base is `https://cdn.lil.org/nft/mi_note_cards/json/pre`;
 mainnet uses `https://cdn.lil.org/nft/mi_note_cards/json`.
-Collection metadata continues to use the existing preorder collection URI.
+Mainnet collection metadata is configured at
+`https://cdn.lil.org/nft/mi_note_cards/json/collection.json`, with image
+`https://cdn.lil.org/nft/mi_note_cards/square/166.jpg`. Devnet retains
+`https://cdn.lil.org/nft/mi_note_cards/preorder/collection.json` and its original
+`preorder/cover.jpg` image. The completed mainnet update is documented in the
+[public migration record](../../releases/mi-note-cards/collection-metadata-update.json).
+For future one-off operations, use the [Worker transaction helper](worker_transactions.md)
+with operation-specific instructions and checks.
+
+Original collection creation records, deployment snapshots, and completed preorder
+conversion manifests remain historical evidence. Their exact configuration guards
+bind the earlier metadata; do not rewrite them to match the current URI or use
+their original creation/conversion checks to verify current collection metadata.
+
 Devnet pack and pack-receipt JSONs 628–704 may be missing; preserve their numeric
 IDs and canonical URIs. All card IDs still use the original catalog numbering.
 
@@ -169,7 +182,9 @@ The independent mainnet manifest must contain 176 excluded preorder IDs and
 `releases/mi-note-cards/inventory.json` path used by later operations. The deployer
 preserves the existing authority delegate and adds both new config PDAs before
 creating the configs. Mainnet metadata is `/json`, without devnet's `/pre` suffix.
-The collection metadata URI and all existing preorder assets remain unchanged.
+Initial setup preserved the collection metadata URI and all existing preorder
+assets. The later collection update changes only the mainnet collection URI;
+its current metadata verification is described above.
 
 After all five setup transactions finalize and the logical drop is registered:
 

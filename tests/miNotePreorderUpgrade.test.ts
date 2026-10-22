@@ -10,6 +10,7 @@ import { getPreorderConfig, PREORDER_PAYMENT_RECIPIENTS } from '../shared/preord
 import { DEPLOYMENT_DROPS, type DeploymentRegistryDrop } from '../shared/deploymentRegistry.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
 import { NEW_PREORDER_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards.ts';
+import { NEW_PREORDER_COLLECTION as DEVNET_COLLECTION } from '../scripts/newPreorderCollections/mi_note_cards_devnet.ts';
 import { preparePreorderCollectionConfig } from '../scripts/shared/preorderCollectionConfig.ts';
 import { MI_NOTE_CLUSTER_GENESIS, prepareMiNoteDropManifest, type MiNotePreorderSnapshot } from '../scripts/shared/miNoteDropManifest.ts';
 import {
@@ -60,7 +61,7 @@ async function fixture(t: TestContext, preorderId = 'mi_note_cards_devnet') {
     receiptsTreeMaxDepth: 14, receiptsTreeCanopyDepth: 0, deliveryLookupTable: Keypair.generate().publicKey.toBase58(),
     paymentRouting: { deliveryPaymentReceiver: config.cluster === 'mainnet-beta' ? PREORDER_PAYMENT_RECIPIENTS[1] : config.authority,
       mintProceeds: [{ address: PREORDER_PAYMENT_RECIPIENTS[0], percentage: 50 }, { address: PREORDER_PAYMENT_RECIPIENTS[1], percentage: 50 }] } };
-  const collectionConfig = preparePreorderCollectionConfig({ ...NEW_PREORDER_COLLECTION,
+  const collectionConfig = preparePreorderCollectionConfig({ ...(config.cluster === 'mainnet-beta' ? NEW_PREORDER_COLLECTION : DEVNET_COLLECTION),
     collectionId: config.preorderId, isMainnet: config.cluster === 'mainnet-beta', authority: config.authority }, config.preorderId);
   const deployment = { version: 1, finalizedSlot: 1000, transactions: [], collectionDelegates: [config.authority, drop.boxMinterConfigPda, drop.operationsConfig!.boxMinterConfigPda],
     drop, plan: { version: 1, dropId: drop.dropId, cluster: drop.solanaCluster, authority: config.authority, programId: drop.boxMinterProgramId,
