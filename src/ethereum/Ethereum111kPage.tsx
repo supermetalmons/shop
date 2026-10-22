@@ -1,23 +1,28 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
-import { ETHEREUM_MAX_EXPECTED_IDS, formatEtherAmount } from '../../shared/ethereum/protocol';
+import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
+import { ETHEREUM_MAX_EXPECTED_IDS, ethereumReceiptTokenId, formatEtherAmount } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
-import { DeliveryForm } from '../components/DeliveryForm';
 import { Modal } from '../components/Modal';
 import { BackgroundLayerPortal } from '../components/BackgroundBlurLayer';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
+import { navigate } from '../navigation';
 import type { InventoryItem } from '../types';
 import { EthereumMintPanel } from './EthereumMintPanel';
-import { ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
+import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 import { useEthereumMintAction } from './useEthereumMintAction';
+import { EthereumCheckoutReturn, type EthereumCheckoutReturnStatus } from './EthereumCheckoutReturn';
+import { checkoutReservesItems, useCheckoutReservations } from './checkoutReservations';
 
 export type Ethereum111kPageProps = {
   header?: ReactNode;
   wallet: EthereumWallet;
   claimReceiptId?: string;
   claimCode?: string;
+  checkoutReturnId?: string;
   addressEncryptionPublicKey: string;
   solanaInventoryItems: InventoryItem[];
   solanaSelected: Set<string>;
@@ -35,16 +40,25 @@ export type Ethereum111kPageProps = {
 };
 
 export default function Ethereum111kPage({
-  header, wallet, claimReceiptId, claimCode: linkedClaimCode, addressEncryptionPublicKey, solanaInventoryItems, solanaSelected, onSolanaToggle, clearSolanaSelection,
+  header, wallet, claimReceiptId, claimCode: linkedClaimCode, checkoutReturnId, addressEncryptionPublicKey, solanaInventoryItems, solanaSelected, onSolanaToggle, clearSolanaSelection,
   pendingRevealIds, onSolanaReveal, onSolanaView, canOpenSolanaBoxes, solanaRevealLoading,
   solanaInventoryReady, externalBusy = false, suspended = false, showToast,
 }: Ethereum111kPageProps) {
   const [kind, setKind] = useState<'crate' | 'warehouse'>('crate');
   const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind);
+  const queryClient = useQueryClient();
+  const onCheckoutConfirmed = useCallback((checkout: EthereumCheckoutStatusResponse) => {
+    const scope = ethereumInventoryScope(checkout.config, checkout.wallet);
+    if (!scope || checkout.status !== 'success' || !checkout.transactionHash) return;
+    const mintedIds = checkout.items.flatMap(item => item.kind === 'crate' || item.kind === 'artwork'
+      ? [ethereumReceiptTokenId(item.kind, item.displayId)] : []);
+    writeEthereumExpected(scope, [...new Set([...readEthereumExpected(scope), ...checkout.tokenIds, ...mintedIds])]
+      .slice(-ETHEREUM_MAX_EXPECTED_IDS));
+    if (scope === model.scope) void queryClient.cancelQueries({ queryKey: ethereumInventoryQueryKey(scope) }).then(model.refresh);
+  }, [model.refresh, model.scope, queryClient]);
   const [quantity, setQuantity] = useState(1);
   const [selection, setSelection] = useState<{ scope: string | null; ids: Set<string> }>({ scope: null, ids: new Set() });
   const [viewed, setViewed] = useState<EthereumInventoryItem | null>(null);
-  const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [receiptAction, setReceiptAction] = useState<'transfer' | 'claim' | null>(null);
   const [recipient, setRecipient] = useState('');
   const [claimCode, setClaimCode] = useState('');
@@ -53,12 +67,29 @@ export default function Ethereum111kPage({
   const [confirmDismiss, setConfirmDismiss] = useState(false);
   const [claimLinkHandled, setClaimLinkHandled] = useState<string | null>(null);
   const [dismissedClaimConnection, setDismissedClaimConnection] = useState<string | null>(null);
+  const [checkoutReturnStatus, setCheckoutReturnStatus] = useState<EthereumCheckoutReturnStatus | null>(null);
+  const checkoutReturnRef = useRef(checkoutReturnStatus);
+  const onCheckoutStatus = useCallback((status: EthereumCheckoutReturnStatus) => {
+    checkoutReturnRef.current = status;
+    setCheckoutReturnStatus(status);
+  }, []);
+  useCheckoutReservations(model.owner, model.config.chainId, model.config.contractAddress);
   const firstWalletRef = useRef<HTMLButtonElement>(null);
   const announcedError = useRef<string | null>(null);
   const previousWalletScope = useRef({ scope: model.scope, chainId: model.chainId, provider: wallet.provider });
   const selected = useMemo(() => selection.scope === model.scope ? selection.ids : new Set<string>(), [selection, model.scope]);
   const itemsById = useMemo(() => new Map(model.items.map(item => [item.id, item])), [model.items]);
   const selectedItems = useMemo(() => [...selected].map(id => itemsById.get(id)).filter((item): item is EthereumInventoryItem => Boolean(item)), [selected, itemsById]);
+  const checkoutBlocksUnbox = (items: readonly EthereumInventoryItem[], observed = checkoutReturnRef.current): boolean => {
+    if (checkoutReservesItems(items)) return true;
+    if (!checkoutReturnId || !ETHEREUM_CHECKOUT_ID.test(checkoutReturnId)) return false;
+    if (observed?.checkoutId !== checkoutReturnId) return true;
+    if (observed.status !== 'pending' && observed.status !== 'submitting') return false;
+    return items.some(item => (!observed.wallet || observed.wallet === item.owner) && observed.chainId === item.chainId &&
+      observed.contractAddress === item.contractAddress && observed.tokenIds.includes(item.tokenId));
+  };
+  const checkoutBlocksUnboxRef = useRef(checkoutBlocksUnbox);
+  checkoutBlocksUnboxRef.current = checkoutBlocksUnbox;
   const operationBlocked = Boolean(model.busy || model.pending || model.submission || externalBusy || suspended);
   const walletPickerOpen = wallet.status === 'choosing';
   const hasSubmittedTransaction = Boolean(model.pending || (model.submission && !model.busy));
@@ -96,6 +127,7 @@ export default function Ethereum111kPage({
   const selectedCrates = selectedItems.length > 0 && selectedItems.every(item => item.kind === 'crate');
   const unboxLimitExceeded = selectedCrates && selectedItems.length > model.config.maxUnboxQuantity;
   const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => ['crate', 'artwork'].includes(item.kind));
+  const checkoutUnboxBlocked = selectedItems.length > 0 && checkoutBlocksUnbox(selectedItems, checkoutReturnStatus);
   const txLink = model.pending ? ethereumExplorerTransaction(model.config, model.pending.hash) : null;
   const claimLinkKey = claimReceiptId && linkedClaimCode ? `${claimReceiptId}:${linkedClaimCode}` : null;
   const claimConnectionOpen = Boolean(claimLinkKey && claimLinkHandled !== claimLinkKey && dismissedClaimConnection !== claimLinkKey &&
@@ -120,7 +152,6 @@ export default function Ethereum111kPage({
       (previous.chainId === null || previous.chainId === model.chainId || model.chainId === model.config.chainId)) return;
     setSelection({ scope: model.scope, ids: new Set() });
     setViewed(null);
-    setDeliveryOpen(false);
     setReceiptAction(null);
     setRecoveryOpen(false);
     setConfirmDismiss(false);
@@ -144,7 +175,6 @@ export default function Ethereum111kPage({
     const receipt = model.items.find(item => item.tokenId === claimReceiptId && item.kind === 'crate_receipt');
     if (!receipt) return;
     clearSolanaSelection();
-    setDeliveryOpen(false);
     setRecoveryOpen(false);
     setConfirmDismiss(false);
     setViewed(receipt);
@@ -160,7 +190,6 @@ export default function Ethereum111kPage({
   useEffect(() => {
     if (hasSubmittedTransaction) {
       setSelection({ scope: model.scope, ids: new Set() });
-      setDeliveryOpen(false);
       setViewed(null);
       setReceiptAction(null);
     }
@@ -168,12 +197,11 @@ export default function Ethereum111kPage({
   useEffect(() => {
     if (!model.revealed) return;
     setViewed(null);
-    setDeliveryOpen(false);
     setRecoveryOpen(false);
     setReceiptAction(null);
   }, [model.revealed]);
   useEffect(() => {
-    if (!selected.size || disabled || viewed || deliveryOpen || recoveryOpen || walletPickerOpen || model.revealed) return;
+    if (!selected.size || disabled || viewed || recoveryOpen || walletPickerOpen || model.revealed) return;
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
@@ -181,7 +209,7 @@ export default function Ethereum111kPage({
     };
     document.addEventListener('keydown', dismiss);
     return () => document.removeEventListener('keydown', dismiss);
-  }, [selected.size, disabled, viewed, deliveryOpen, recoveryOpen, walletPickerOpen, model.revealed, model.scope]);
+  }, [selected.size, disabled, viewed, recoveryOpen, walletPickerOpen, model.revealed, model.scope]);
   useEffect(() => {
     if (walletPickerOpen) firstWalletRef.current?.focus();
   }, [walletPickerOpen]);
@@ -233,6 +261,7 @@ export default function Ethereum111kPage({
     </div>
     <div className="ethereum111k">
       <div className="ethereum111k__status">
+        {checkoutReturnId ? <EthereumCheckoutReturn checkoutId={checkoutReturnId} onConfirmed={onCheckoutConfirmed} onStatus={onCheckoutStatus} /> : null}
         {model.configQuery.error ? <div className="error" role="alert">Couldn’t load this drop. <button type="button" className="ghost" onClick={() => void model.configQuery.refetch()}>Retry</button></div> : null}
         {model.stats.error || discountError ? <div className="error" role="alert">{discountError ? 'Couldn’t check your mint discount.' : 'Couldn’t load availability.'} <button type="button" className="ghost" onClick={model.refresh}>Retry</button></div> : null}
         {wallet.error && !model.owner ? <p className="error" role="alert">{wallet.error}</p> : null}
@@ -285,14 +314,18 @@ export default function Ethereum111kPage({
         </section>
       </> : null}
       {selectedItems.length ? <BackgroundLayerPortal><div className="selection-panel selection-panel--inventory ethereum111k__selection">
-        <div className="selection-panel__left"><span>{selectedItems.length} selected{unboxLimitExceeded ? <small> · Open up to {model.config.maxUnboxQuantity} crates at once</small> : null}</span></div>
+        <div className="selection-panel__left"><span>{selectedItems.length} selected{unboxLimitExceeded ? <small> · Open up to {model.config.maxUnboxQuantity} crates at once</small> : null}
+          {checkoutUnboxBlocked ? <small> · {checkoutReturnId && checkoutReturnStatus?.checkoutId !== checkoutReturnId ? 'Checking redemption…' : 'Redemption pending'}</small> : null}
+        </span></div>
         <div className="selection-panel__actions">
           <button type="button" className="quiet" onClick={clear}>Cancel</button>
           {selectedItems.length === 1 ? <button type="button" onClick={() => setViewed(selectedItems[0])} disabled={mintAction.pending}>View</button> : null}
-          {selectedContainer || selectedCrates ? <button type="button" onClick={() => void runAction(() => model.unbox(selectedItems))} disabled={disabled || unboxLimitExceeded}>
+          {selectedContainer || selectedCrates ? <button type="button" onClick={() => {
+            if (!checkoutBlocksUnbox(selectedItems)) void runAction(() => model.unbox(selectedItems, () => !checkoutBlocksUnboxRef.current(selectedItems)));
+          }} disabled={disabled || unboxLimitExceeded || checkoutUnboxBlocked}>
             {selectedItems.length === 1 ? `Open ${selectedContainer!.kind}` : `Open ${selectedItems.length} crates`}
           </button> : null}
-          {canDeliver ? <button type="button" onClick={() => setDeliveryOpen(true)} disabled={disabled}>Send</button> : null}
+          {canDeliver ? <button type="button" onClick={() => navigate(checkoutEntryUrl(selectedItems.map(item => item.tokenId)))} disabled={disabled}>Send</button> : null}
         </div>
       </div></BackgroundLayerPortal> : null}
       <Modal open={claimConnectionOpen} title="Claim crate contents" onClose={() => { setDismissedClaimConnection(claimLinkKey); wallet.cancel(); }} suspended={suspended}>
@@ -339,14 +372,6 @@ export default function Ethereum111kPage({
             <button type="submit" disabled={disabled}>{model.busy ?? (receiptAction === 'transfer' ? 'Transfer' : 'Claim contents')}</button>
           </form> : null}
         </> : null}
-      </Modal>
-      <Modal open={deliveryOpen && !model.revealed} title="Send for delivery" onClose={() => { if (!model.busy) setDeliveryOpen(false); }} suspended={suspended}>
-        <p className="muted small">{selectedItems.length} selected · test order, no physical shipment.</p>
-        <DeliveryForm mode="modal" defaultEmail={model.profile.data?.email} submitDisabled={disabled || !canDeliver}
-          submitLabel={`Send for ${formatEtherAmount(model.config.deliveryFeeWei)} ETH`}
-          shippingNote={`Test delivery: ${formatEtherAmount(model.config.deliveryFeeWei)} ETH per order, up to ${model.config.maxDeliveryItems} items.`}
-          onSubmit={async address => { await runAction(() => model.deliver(selectedItems, address)); }} />
-        {model.error ? <p className="error" role="alert">{model.error}</p> : null}
       </Modal>
       <Modal open={Boolean(model.revealed)} title={revealItems[0]?.kind === 'crate' ? 'Your crates' : 'Your artworks'} onClose={model.closeReveal} className="ethereum111k__reveal" suspended={suspended}>
         <p className="muted small">{revealItems.length} {revealItems[0]?.kind === 'crate' ? 'crates' : 'artworks'}</p>

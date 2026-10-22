@@ -145,7 +145,9 @@ Inventory and transaction confirmation use contract batches of up to 150 token-i
 
 Sessions are scoped to wallet, chain, drop and browser origin. EOA and deployed ERC-1271 wallets are supported. Private routes use `X-Mons-Ethereum-Session`; POST requests also require `X-Mons-CSRF: 1`. Shipping addresses and secret codes stay offchain. The signer authorizes actions without paying gas or sending transactions.
 
-Transactions require working persistent browser storage. The app saves a submission reservation before requesting the transaction, so a reload or another tab cannot silently submit again. If saving the returned transaction hash fails, the app displays the hash and keeps the reservation. Recover using the matching transaction hash from the wallet, or explicitly stop tracking after checking the wallet.
+Crate and artwork deliveries now open the standalone [hosted checkout](111k_checkout.md). Checkout persists its quote and submission attempt on the server, supports VVV entry/return links, and completes through background reconciliation even if the page closes before reporting the transaction hash. The existing five-minute schedule remains unchanged.
+
+Other Ethereum transactions require working persistent browser storage. The app saves a submission reservation before requesting the transaction, so a reload or another tab cannot silently submit again. If saving the returned transaction hash fails, the app displays the hash and keeps the reservation. Recover using the matching transaction hash from the wallet, or explicitly stop tracking after checking the wallet.
 
 Inventory recovery retains 500 recent live IDs and 500 retained/rollback IDs per wallet/chain/contract. Requests send at most 100 expected IDs each, with two requests in flight. This preserves all 311 artworks from a maximum opening across first inclusion, stale indexing, refresh and reload. Contract-wallet confirmations remain able to return more than 311 items when a wrapper performs additional operations.
 

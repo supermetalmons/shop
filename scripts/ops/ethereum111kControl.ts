@@ -41,6 +41,7 @@ export function buildEthereum111kControlMutation(args: Ethereum111kControlArgs, 
   const requireEmpty = args.command === 'resume' && !sameScope
     ? `AND NOT EXISTS (SELECT 1 FROM commerce_documents WHERE drop_id = '111k_devnet')
        AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_quotes WHERE chain_id = ${control.chainId} AND contract_address = ${sqlString(control.contractAddress!)})
+       AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkouts WHERE chain_id = ${control.chainId} AND contract_address = ${sqlString(control.contractAddress!)})
        AND NOT EXISTS (SELECT 1 FROM ethereum_crate_claims WHERE chain_id = ${control.chainId} AND contract_address = ${sqlString(control.contractAddress!)})
        AND NOT EXISTS (SELECT 1 FROM ethereum_reconciliation_cursor WHERE chain_id = ${control.chainId} AND contract_address = ${sqlString(control.contractAddress!)})` : '';
   return `UPDATE ethereum_111k_control SET paused = ${args.command === 'pause' ? 1 : 0}, revision = revision + 1,

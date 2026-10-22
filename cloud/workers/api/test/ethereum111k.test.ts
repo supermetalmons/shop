@@ -9,12 +9,15 @@ import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSigne
 import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
+import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from '../src/ethereumCheckout.ts';
 import { ethereumCallBatch, ethereumConfig, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { planReadyToShipNotifications } from '../src/readyToShipNotifications.ts';
 import { requireShipStationEnabled } from '../src/shipstation/common.ts';
 import { createCommerceD1Harness, d1Database } from './commerceD1Harness.ts';
+import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths, type EthereumCheckoutStatusResponse,
+  type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 
 const NOW = 2_000_000_000_000;
 const ORIGIN = 'https://mons.shop';
@@ -36,7 +39,7 @@ const blockHash = (number: number) => `0x${number.toString(16).padStart(64, '0')
 const functionSelector = (signature: string) => encodeCall(signature, [], []).slice(0, 10);
 const topicNumber = (value: number | string) => encodeAbi(['uint256'], [value]);
 const topicAddress = (value: string) => encodeAbi(['address'], [value]);
-const readPaths = new Set<string>([paths.config, paths.stats, paths.inventory, paths.metadata, paths.profile, paths.shipments]);
+const readPaths = new Set<string>([paths.config, paths.stats, paths.inventory, paths.metadata, paths.profile, paths.shipments, checkoutPaths.status]);
 type Rpc = { id: number; method: string; params: unknown[] };
 type Item = { kind: number; displayId: number; owner: string };
 
@@ -78,11 +81,13 @@ function fixture(controlActive = true) {
   };
   const state = {
     now: NOW, head: 102, blockTimestamp: null as number | null, rpcChainId: null as number | null,
+    finalizedBlock: null as { number: number; timestamp: number } | null,
     expectedSigner: SIGNER, contractCode: new Set<string>(), magic: '0x1626ba7e',
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 821, owner: WALLET }]]),
     receipts: new Map<string, EthereumReceipt>(), canonical: new Map<number, string>(),
+    transactions: new Map<string, Record<string, unknown>>(), transactionCount: '0x0',
     logs: [] as EthereumLog[], calls: [] as Rpc[], batchSizes: [] as number[], urls: [] as string[], usedOrders: new Set<number>(),
     alchemyNfts: [] as Record<string, unknown>[], alchemyCursor: null as string | null,
     afterRpc: null as ((payload: Rpc, result: unknown) => Promise<void>) | null,
@@ -92,8 +97,15 @@ function fixture(controlActive = true) {
     const params = payload.params;
     if (payload.method === 'eth_chainId') return ethereumHexQuantity(state.rpcChainId ?? Number(env.ETHEREUM_111K_CHAIN_ID));
     if (payload.method === 'eth_getCode') return state.contractCode.has(String(params[0])) ? '0x60006000' : '0x';
+    if (payload.method === 'eth_getTransactionCount') return state.transactionCount;
+    if (payload.method === 'eth_getTransactionByHash') return state.transactions.get(String(params[0])) || null;
     if (payload.method === 'eth_blockNumber') return ethereumHexQuantity(state.head);
     if (payload.method === 'eth_getBlockByNumber') {
+      if (params[0] === 'finalized') {
+        const finalized = state.finalizedBlock;
+        return finalized ? { number: ethereumHexQuantity(finalized.number), hash: state.canonical.get(finalized.number) || blockHash(finalized.number),
+          timestamp: ethereumHexQuantity(finalized.timestamp) } : null;
+      }
       const number = params[0] === 'latest' ? state.head : Number(BigInt(String(params[0])));
       return { number: ethereumHexQuantity(number), hash: state.canonical.get(number) || blockHash(number),
         timestamp: ethereumHexQuantity(state.blockTimestamp ?? Math.floor(state.now / 1000)) };
@@ -260,6 +272,959 @@ function pauseRpc(f: ReturnType<typeof fixture>, matches: (payload: Rpc) => bool
 function readContext(f: ReturnType<typeof fixture>, providerFetch = f.providerFetch): EthereumContext {
   return { env: f.env, config: ethereumConfig(f.env), signal: AbortSignal.timeout(10_000), nowMs: f.state.now, fetch: providerFetch };
 }
+
+async function draftCheckout(f: ReturnType<typeof fixture>, tokenIds = ['111112'], requestId = crypto.randomUUID()) {
+  const input = { requestId, dropId: '111k_devnet', tokenIds, callbackUrl: 'https://vvv.so/callback', state: 'caller-order-42' };
+  const created = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.create, input);
+  assert.equal(created.response.status, 200, JSON.stringify(created.body));
+  return { checkout: created.body, input };
+}
+
+async function preparedCheckout(f: ReturnType<typeof fixture>, tokenIds = ['111112']) {
+  const { checkout, input } = await draftCheckout(f, tokenIds);
+  const authentication = await f.session();
+  await f.saveAddress(authentication.token);
+  const prepared = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare,
+    { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID }, authentication.token);
+  assert.equal(prepared.response.status, 200, JSON.stringify(prepared.body));
+  return { checkout, input, authentication, prepared: prepared.body };
+}
+
+async function startedCheckout(f: ReturnType<typeof fixture>, tokenIds = ['111112']) {
+  const ready = await preparedCheckout(f, tokenIds);
+  const attemptId = crypto.randomUUID();
+  const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+    { checkoutId: ready.checkout.checkoutId, attemptId, action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+  assert.equal(started.response.status, 200, JSON.stringify(started.body));
+  assert.equal(started.body.canSend, true);
+  return { ...ready, attemptId };
+}
+
+test('checkout drafts are immutable, idempotent, unconnected previews with only approved callbacks', async () => {
+  const f = fixture();
+  try {
+    const { checkout, input } = await draftCheckout(f, ['111113', '7']);
+    assert.equal(checkout.status, 'ready');
+    assert.equal(checkout.wallet, null);
+    assert.deepEqual(checkout.tokenIds, ['7', '111113']);
+    assert.equal(checkout.items.length, 2);
+    assert.equal(new URL(checkout.returnUrl!).searchParams.get('result'), 'canceled');
+    assert.equal(new URL(checkout.returnUrl!).searchParams.get('state'), input.state);
+    const retried = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.create, { ...input, tokenIds: ['7', '111113'] });
+    assert.equal(retried.response.status, 200);
+    assert.equal(retried.body.checkoutId, checkout.checkoutId);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_checkouts').get()!.n, 1);
+    assert.equal((await f.request(checkoutPaths.create, { ...input, tokenIds: ['111112'] })).response.status, 409);
+    for (const callbackUrl of ['https://evil.example/callback', 'https://vvv.so.evil.example/callback',
+      'https://vvv.so/callback?next=https://evil.example', 'javascript:alert(1)', '//evil.example/callback']) {
+      assert.equal((await f.request(checkoutPaths.create, { ...input, requestId: crypto.randomUUID(), callbackUrl })).response.status, 400);
+    }
+    for (const tokenIds of [['7', '7'], ['0'], ['1.2'], Array.from({ length: 51 }, (_, index) => String(index + 1))]) {
+      assert.equal((await f.request(checkoutPaths.create, { ...input, requestId: crypto.randomUUID(), tokenIds })).response.status, 400);
+    }
+    assert.equal((await f.request(checkoutPaths.create, { ...input, requestId: crypto.randomUUID(), dropId: '111k' })).response.status, 400);
+  } finally { f.close(); }
+});
+
+test('checkout draft writes use the narrow creation limiter without blocking public recovery reads', async () => {
+  const f = fixture();
+  try {
+    const { checkout, input } = await draftCheckout(f);
+    let creationCalls = 0;
+    f.env.STAFF_AUTH_CHALLENGE_RATE_LIMITER = { limit: async () => { creationCalls++; return { success: false }; } };
+    const limited = await f.request(checkoutPaths.create, { ...input, requestId: crypto.randomUUID() });
+    assert.equal(limited.response.status, 429);
+    assert.equal(creationCalls, 1);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_checkouts').get()!.n, 1);
+    assert.equal((await f.request(`${checkoutPaths.status}?checkoutId=${checkout.checkoutId}`)).response.status, 200);
+    assert.equal((await f.request(checkoutPaths.refresh, { checkoutId: checkout.checkoutId })).response.status, 200);
+    assert.equal(creationCalls, 1);
+  } finally { f.close(); }
+});
+
+test('checkout status exposes no private data to VVV and does not open any mutation to that origin', async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    const result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`,
+      undefined, undefined, { origin: 'https://vvv.so' });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.wallet, WALLET);
+    assert.equal(result.body.orderId, ready.prepared.orderId);
+    assert.equal(result.body.returnUrl, undefined);
+    const serialized = JSON.stringify(result.body);
+    for (const privateValue of ['encrypted-test-address', 'test@example.com', 'Test recipient', ADDRESS_ID, 'caller-order-42', ready.authentication.token]) {
+      assert.equal(serialized.includes(privateValue), false, privateValue);
+    }
+    for (const path of [checkoutPaths.create, checkoutPaths.prepare, checkoutPaths.submission, checkoutPaths.refresh, paths.profile, paths.authChallenge]) {
+      assert.equal((await f.request(path, {}, ready.authentication.token, { origin: 'https://vvv.so' })).response.status, 403, path);
+    }
+    assert.equal((await f.request(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`, undefined, undefined,
+      { origin: 'https://evil.example' })).response.status, 403);
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: ready.checkout.checkoutId, addressId: ADDRESS_ID })).response.status, 401);
+  } finally { f.close(); }
+});
+
+test('checkout ownership refresh supports a changed wallet while preparation binds one immutable address and order', async () => {
+  const f = fixture();
+  try {
+    const { checkout } = await draftCheckout(f);
+    const first = await f.session();
+    const second = await f.session(OTHER_KEY);
+    await f.saveAddress(first.token);
+    await f.saveAddress(second.token);
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID }, second.token)).response.status, 403);
+    f.state.tokens.set('111112', { kind: 2, displayId: 1, owner: OTHER_WALLET });
+    const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkout.checkoutId}`);
+    assert.equal(status.body.items[0].owner, OTHER_WALLET);
+    const input = { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID };
+    const [left, right] = await Promise.all([
+      f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare, input, second.token),
+      f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare, input, second.token),
+    ]);
+    assert.equal(left.response.status, 200, JSON.stringify(left.body));
+    assert.equal(right.response.status, 200, JSON.stringify(right.body));
+    assert.equal(left.body.orderId, right.body.orderId);
+    assert.equal(f.quoteRow(left.body.orderId).checkout_id, checkout.checkoutId);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes WHERE checkout_id = ?').get(checkout.checkoutId)!.n, 1);
+    const resumed = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare, { checkoutId: checkout.checkoutId }, second.token);
+    assert.equal(resumed.body.orderId, left.body.orderId);
+    assert.equal((await f.request(checkoutPaths.prepare, input, first.token)).response.status, 403);
+    await f.saveAddress(second.token, 'UVWXYZABCDEFGHIJKLMN');
+    assert.equal((await f.request(checkoutPaths.prepare, { ...input, addressId: 'UVWXYZABCDEFGHIJKLMN' }, second.token)).response.status, 409);
+  } finally { f.close(); }
+});
+
+test('checkout quote persistence failure never returns a transaction and retries retain the original draft', async () => {
+  const f = fixture();
+  try {
+    const { checkout } = await draftCheckout(f);
+    const auth = await f.session();
+    await f.saveAddress(auth.token);
+    f.failures.quoteWrite = true;
+    const failed = await f.request(checkoutPaths.prepare, { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID }, auth.token);
+    assert.equal(failed.response.status, 503);
+    assert.equal(failed.body.transaction, undefined);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 0);
+    f.failures.quoteWrite = false;
+    const prepared = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare,
+      { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID }, auth.token);
+    assert.equal(prepared.response.status, 200);
+    assert.equal(f.quoteRow(prepared.body.orderId).checkout_id, checkout.checkoutId);
+  } finally { f.close(); }
+});
+
+test('checkout start locks across concurrent tabs and a replay never authorizes a second wallet send', async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    const body = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline };
+    const results = await Promise.all([0, 1].map(() => f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, body, ready.authentication.token)));
+    assert.deepEqual(results.map(result => result.response.status), [200, 200]);
+    assert.equal(results.filter(result => result.body.canSend).length, 1);
+    const retry = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, body, ready.authentication.token);
+    assert.equal(retry.body.canSend, false);
+    assert.equal(retry.body.checkout.status, 'submitting');
+    assert.equal((await f.request(checkoutPaths.submission, { ...body, attemptId: crypto.randomUUID() }, ready.authentication.token)).response.status, 409);
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: ready.checkout.checkoutId }, ready.authentication.token)).response.status, 409);
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`)).body.status, 'submitting');
+  } finally { f.close(); }
+});
+
+test('checkout start requires the prepared deadline and rejects a quote renewed by another client', async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    const body = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start' };
+    assert.equal((await f.request(checkoutPaths.submission, body, ready.authentication.token)).response.status, 400);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    const renewed = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare,
+      { checkoutId: ready.checkout.checkoutId }, ready.authentication.token);
+    assert.equal(renewed.response.status, 200);
+    assert.ok(renewed.body.quote.deadline > ready.prepared.quote.deadline);
+    const stale = await f.request(checkoutPaths.submission,
+      { ...body, quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(stale.response.status, 409);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_checkout_attempts').get()!.n, 0);
+    const current = { ...body, quoteDeadline: renewed.body.quote.deadline };
+    const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, current, ready.authentication.token);
+    assert.equal(started.response.status, 200);
+    assert.equal(started.body.canSend, true);
+    const repeated = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, current, ready.authentication.token);
+    assert.equal(repeated.response.status, 200);
+    assert.equal(repeated.body.canSend, false);
+    assert.equal((await f.request(checkoutPaths.submission,
+      { ...body, quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token)).response.status, 409);
+  } finally { f.close(); }
+});
+
+test('checkout start cannot reuse an earlier attempt ID for a renewed quote', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const attempt = { checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId };
+    assert.equal((await f.request(checkoutPaths.submission,
+      { ...attempt, action: 'reject' }, ready.authentication.token)).response.status, 200);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    const renewed = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare,
+      { checkoutId: ready.checkout.checkoutId }, ready.authentication.token);
+    assert.equal(renewed.response.status, 200);
+    assert.ok(renewed.body.quote.deadline > ready.prepared.quote.deadline);
+    const repeated = await f.request(checkoutPaths.submission,
+      { ...attempt, action: 'start', quoteDeadline: renewed.body.quote.deadline }, ready.authentication.token);
+    assert.equal(repeated.response.status, 409);
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId)!.status, 'rejected');
+  } finally { f.close(); }
+});
+
+test('checkout start reserves overlapping items atomically across separate sessions while disjoint selections proceed', async () => {
+  const f = fixture();
+  try {
+    const left = await preparedCheckout(f, ['7', '111112']);
+    const right = await preparedCheckout(f, ['111112', '111113']);
+    const disjoint = await preparedCheckout(f, ['111113']);
+    const [first, second] = await Promise.all([left, right].map(ready => f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token)));
+    const outcomes = [first, second];
+    assert.deepEqual(outcomes.map(outcome => outcome.response.status).sort(), [200, 409]);
+    assert.equal(outcomes.filter(outcome => outcome.body.canSend).length, 1);
+    const winning = first.response.status === 200 ? left : right;
+    const losing = first.response.status === 200 ? second : first;
+    assert.equal((losing.body as unknown as { error: { details: { blockingCheckoutId: string } } }).error.details.blockingCheckoutId, winning.checkout.checkoutId);
+    if (winning === right) {
+      const winnerAttempt = (second.body as EthereumCheckoutSubmissionResponse).checkout.attempt!;
+      await f.request(checkoutPaths.submission, { checkoutId: right.checkout.checkoutId, attemptId: winnerAttempt.attemptId, action: 'reject' }, right.authentication.token);
+      const startLeft = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+        { checkoutId: left.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: left.prepared.quote.deadline }, left.authentication.token);
+      assert.equal(startLeft.body.canSend, true);
+    }
+    const independent = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId: disjoint.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: disjoint.prepared.quote.deadline }, disjoint.authentication.token);
+    assert.equal(independent.response.status, 200, JSON.stringify(independent.body));
+    assert.equal(independent.body.canSend, true);
+  } finally { f.close(); }
+});
+
+test('checkout revalidates ownership before reserving a wallet send', async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    f.state.tokens.set('111112', { kind: 2, displayId: 1, owner: OTHER_WALLET });
+    const started = await f.request(checkoutPaths.submission,
+      { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(started.response.status, 409);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_checkout_attempts').get()!.n, 0);
+  } finally { f.close(); }
+});
+
+for (const phase of ['initial', 'late'] as const) test(`checkout preparation identifies overlapping submissions at the ${phase} guard`, async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    const { checkout } = await draftCheckout(f);
+    const input = { checkoutId: checkout.checkoutId, addressId: ADDRESS_ID };
+    if (phase === 'late') assert.equal((await f.request(checkoutPaths.prepare, input, ready.authentication.token)).response.status, 200);
+    const paused = phase === 'late' ? pauseRpc(f, payload => payload.method === 'eth_getBlockByNumber' && payload.params[0] === 'latest') : null;
+    const pending = paused ? f.request(checkoutPaths.prepare, input, ready.authentication.token) : null;
+    if (paused) await paused.paused;
+    const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(started.body.canSend, true);
+    paused?.resume();
+    const result = await (pending ?? f.request(checkoutPaths.prepare, input, ready.authentication.token));
+    assert.equal(result.response.status, 409, JSON.stringify(result.body));
+    assert.equal((result.body.error as { details: { blockingCheckoutId: string } }).details.blockingCheckoutId, ready.checkout.checkoutId);
+    assert.equal(result.body.signature, undefined);
+  } finally { f.close(); }
+});
+
+test('canonical reverted and completed checkouts release overlapping item reservations', async () => {
+  const f = fixture();
+  try {
+    const next = await preparedCheckout(f);
+    const previous = await startedCheckout(f);
+    const start = () => f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId: next.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: next.prepared.quote.deadline }, next.authentication.token);
+    assert.equal((await start()).response.status, 409);
+    setCheckoutTransaction(f, previous.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId: previous.checkout.checkoutId, attemptId: previous.attemptId, action: 'report', transactionHash: HASH }, previous.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    const failed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: previous.checkout.checkoutId });
+    assert.equal(failed.body.status, 'failed');
+    const allowed = await start();
+    assert.equal(allowed.response.status, 200, JSON.stringify(allowed.body));
+    assert.equal(allowed.body.canSend, true);
+    await f.request(checkoutPaths.submission, { checkoutId: next.checkout.checkoutId,
+      attemptId: allowed.body.checkout.attempt!.attemptId, action: 'reject' }, next.authentication.token);
+    const log = f.deliveryLog(previous.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.order(previous.prepared.orderId)!.status, 'ready_to_ship');
+    const afterSuccess = await start();
+    assert.equal(afterSuccess.response.status, 200, JSON.stringify(afterSuccess.body));
+    assert.equal(afterSuccess.body.canSend, true);
+  } finally { f.close(); }
+});
+
+test('checkout rejection cannot erase a reported hash and missing receipts remain pending in durable storage', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const body = { checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId };
+    const report = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { ...body, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    assert.equal(report.response.status, 200);
+    assert.equal(report.body.checkout.status, 'pending');
+    assert.equal(report.body.checkout.transactionHash, HASH);
+    assert.equal(f.quoteRow(ready.prepared.orderId).transaction_hash, null);
+    assert.equal((await f.request(checkoutPaths.submission, { ...body, action: 'reject' }, ready.authentication.token)).response.status, 409);
+    const refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(refreshed.response.status, 200, JSON.stringify(refreshed.body));
+    assert.equal(refreshed.body.status, 'pending');
+    assert.equal(refreshed.body.transactionHash, HASH);
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.commerce.database.prepare('SELECT transaction_hash FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!.transaction_hash, HASH);
+  } finally { f.close(); }
+});
+
+test('checkout rejection followed by a late report explicitly fails instead of pretending the hash was saved', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const body = { checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId };
+    assert.equal((await f.request(checkoutPaths.submission, { ...body, action: 'reject' }, ready.authentication.token)).response.status, 200);
+    assert.equal((await f.request(checkoutPaths.submission, { ...body, action: 'report', transactionHash: HASH }, ready.authentication.token)).response.status, 409);
+    const resumed = await f.request<EthereumDeliveryPrepareResponse>(checkoutPaths.prepare, { checkoutId: ready.checkout.checkoutId }, ready.authentication.token);
+    assert.equal(resumed.response.status, 200);
+    assert.equal(resumed.body.orderId, ready.prepared.orderId);
+  } finally { f.close(); }
+});
+
+for (const recovery of ['scheduled', 'foreground'] as const) test(`checkout ${recovery} recovery releases an abandoned attempt only after unused authorization is finalized expired`, async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    f.state.now = (ready.prepared.quote.deadline + 3600) * 1000;
+    f.state.head = 1000;
+    f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+    if (recovery === 'scheduled') await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    else assert.equal((await f.request(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId })).response.status, 200);
+    const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
+    assert.equal(status.body.status, 'failed');
+    assert.equal(status.body.transactionHash, null);
+    assert.equal(status.body.attempt!.status, 'failed');
+    assert.equal(new URL(status.body.returnUrl!).searchParams.get('result'), 'failed');
+    const attempt = f.commerce.database.prepare('SELECT status, block_number, block_hash FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!;
+    assert.deepEqual({ ...attempt }, { status: 'expired', block_number: 990, block_hash: blockHash(990) });
+    assert.ok(f.state.calls.some(call => call.method === 'eth_call' && typeof call.params[1] === 'object' &&
+      JSON.stringify(call.params[1]) === JSON.stringify({ blockHash: blockHash(990), requireCanonical: true })));
+    const authentication = await f.session();
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: ready.checkout.checkoutId }, authentication.token)).response.status, 409);
+    assert.equal((await f.request(paths.deliveryPrepare, { tokenIds: ['111112'], addressId: ADDRESS_ID,
+      requestId: ready.checkout.checkoutId }, authentication.token)).response.status, 409);
+    const checkedTime = f.state.now;
+    f.state.now = NOW;
+    assert.equal((await f.request(checkoutPaths.submission, { checkoutId: ready.checkout.checkoutId,
+      attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline }, authentication.token)).response.status, 409);
+    setCheckoutTransaction(f, ready.prepared);
+    assert.equal((await f.request(checkoutPaths.submission, { checkoutId: ready.checkout.checkoutId,
+      attemptId: crypto.randomUUID(), action: 'recover', transactionHash: HASH }, authentication.token)).response.status, 409);
+    f.state.now = checkedTime;
+    const next = await startedCheckout(f);
+    assert.notEqual(next.checkout.checkoutId, ready.checkout.checkoutId);
+    const expiredLegacy = await f.request(paths.deliveryPrepare, { tokenIds: ['111112'], addressId: ADDRESS_ID,
+      requestId: ready.checkout.checkoutId }, authentication.token);
+    assert.equal(expiredLegacy.response.status, 409);
+    assert.equal((expiredLegacy.body.error as { details?: unknown }).details, undefined);
+  } finally { f.close(); }
+});
+
+for (const safety of ['before-deadline', 'no-finalized-block', 'provider-error', 'snapshot-reorg', 'quote-renewal'] as const) {
+  test(`checkout expiry keeps an abandoned attempt unresolved for ${safety}`, async () => {
+    const f = fixture();
+    try {
+      const ready = await startedCheckout(f);
+      f.state.now = (ready.prepared.quote.deadline + 3600) * 1000;
+      f.state.head = 1000;
+      f.state.finalizedBlock = safety === 'no-finalized-block' ? null : {
+        number: 990, timestamp: ready.prepared.quote.deadline + (safety === 'before-deadline' ? 0 : 1),
+      };
+      f.state.afterRpc = async (payload) => {
+        if (safety === 'provider-error' && payload.method === 'eth_getBlockByNumber' && payload.params[0] === 'finalized') throw new Error('Finality unavailable');
+        if (payload.method !== 'eth_call' || typeof payload.params[1] !== 'object') return;
+        if (safety === 'snapshot-reorg') f.state.canonical.set(990, blockHash(9999));
+        if (safety === 'quote-renewal') f.commerce.database.prepare(`UPDATE ethereum_delivery_quotes SET deadline = deadline + 10000,
+          updated_at_ms = updated_at_ms + 1 WHERE order_id = ?`).run(ready.prepared.orderId);
+      };
+      const refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+      assert.equal(refreshed.response.status, 200, JSON.stringify(refreshed.body));
+      assert.equal(refreshed.body.status, 'submitting');
+      assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!.status, 'started');
+    } finally { f.close(); }
+  });
+}
+
+test('a finalized used order remains reserved and recovers its successful redemption instead of expiring', async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const ready = await startedCheckout(f);
+    f.state.now = (ready.prepared.quote.deadline + 3600) * 1000;
+    f.state.head = 1000;
+    f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+    f.state.usedOrders.add(ready.prepared.orderId);
+    let refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(refreshed.body.status, 'submitting');
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.tokens.delete('111112');
+    refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(refreshed.response.status, 200, JSON.stringify(refreshed.body));
+    assert.equal(refreshed.body.status, 'success');
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!.status, 'started');
+    assert.equal(f.order(ready.prepared.orderId)!.status, 'ready_to_ship');
+  } finally { f.close(); }
+});
+
+test('expiry cannot discard a transaction hash reported while finalized state is being checked', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    f.state.finalizedBlock = { number: 100, timestamp: ready.prepared.quote.deadline + 1 };
+    const paused = pauseRpc(f, payload => payload.method === 'eth_call' && typeof payload.params[1] === 'object');
+    const refresh = f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    await paused.paused;
+    const reported = await f.request(checkoutPaths.submission, { checkoutId: ready.checkout.checkoutId,
+      attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    assert.equal(reported.response.status, 200);
+    paused.resume();
+    const result = await refresh;
+    assert.equal(result.body.status, 'pending');
+    assert.equal(result.body.transactionHash, HASH);
+    const attempt = f.commerce.database.prepare('SELECT status, transaction_hash FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!;
+    assert.deepEqual({ ...attempt }, { status: 'submitted', transaction_hash: HASH });
+  } finally { f.close(); }
+});
+
+test('legacy delivery preparation cannot renew a checkout quote while its transaction is unresolved', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    const renewed = await f.request(paths.deliveryPrepare, { tokenIds: ['111112'], addressId: ADDRESS_ID,
+      requestId: ready.checkout.checkoutId }, ready.authentication.token);
+    assert.equal(renewed.response.status, 409);
+    assert.equal(f.quoteRow(ready.prepared.orderId).deadline, ready.prepared.quote.deadline);
+  } finally { f.close(); }
+});
+
+test('a checkout submission that starts during legacy quote renewal prevents the deadline update and signature', async () => {
+  const f = fixture();
+  try {
+    const ready = await preparedCheckout(f);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    const paused = pauseRpc(f, payload => payload.method === 'eth_getBlockByNumber' && payload.params[0] === 'latest');
+    const renewed = f.request(paths.deliveryPrepare, { tokenIds: ['111112'], addressId: ADDRESS_ID,
+      requestId: ready.checkout.checkoutId }, ready.authentication.token);
+    await paused.paused;
+    f.state.now = (ready.prepared.quote.deadline - 1) * 1000;
+    const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, {
+      checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline,
+    }, ready.authentication.token);
+    assert.equal(started.response.status, 200);
+    assert.equal(started.body.canSend, true);
+    paused.resume();
+    const result = await renewed;
+    assert.equal(result.response.status, 409);
+    assert.equal(result.body.signature, undefined);
+    assert.equal(f.quoteRow(ready.prepared.orderId).deadline, ready.prepared.quote.deadline);
+  } finally { f.close(); }
+});
+
+for (const receiptStatus of ['0x0', '0x1']) test(`contract-wallet outer transaction ${receiptStatus} resolves only after finalized unused expiry`, async () => {
+  const f = fixture();
+  try {
+    f.state.contractCode.add(WALLET);
+    const ready = await startedCheckout(f);
+    setCheckoutTransaction(f, ready.prepared, HASH, { from: OTHER_WALLET, to: WALLET, input: '0x1234', value: '0x0' });
+    await f.request(checkoutPaths.submission, { checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId,
+      action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.set(HASH, { ...f.state.receipts.get(HASH)!, from: OTHER_WALLET, to: WALLET, status: receiptStatus });
+    f.state.finalizedBlock = { number: 100, timestamp: ready.prepared.quote.deadline - 1 };
+    let refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(refreshed.response.status, 200, JSON.stringify(refreshed.body));
+    assert.equal(refreshed.body.status, 'pending');
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!.status, 'submitted');
+    f.state.now = (ready.prepared.quote.deadline + 3600) * 1000;
+    f.state.head = 1000;
+    f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    refreshed = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
+    assert.equal(refreshed.body.status, 'failed');
+    assert.equal(refreshed.body.transactionHash, HASH);
+    const attempt = f.commerce.database.prepare('SELECT status, block_hash, transaction_hash FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!;
+    assert.deepEqual({ ...attempt }, { status: 'expired', block_hash: blockHash(990), transaction_hash: HASH });
+  } finally { f.close(); }
+});
+
+for (const recovery of ['scheduled', 'foreground'] as const) test(`checkout ${recovery} recovery completes after closing before the hash report without wallet authentication`, async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const ready = await startedCheckout(f);
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.head = 102;
+    f.state.tokens.delete('111112');
+    f.ops.exec('DELETE FROM ethereum_auth_sessions');
+    if (recovery === 'scheduled') await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    else assert.equal((await f.request(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId })).response.status, 200);
+    const result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`,
+      undefined, undefined, { origin: 'https://vvv.so' });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.status, 'success');
+    assert.equal(result.body.transactionHash, HASH);
+    assert.equal(result.body.confirmations, 3);
+    assert.equal(result.body.items[0].tokenId, '111112');
+    assert.equal(f.order(ready.prepared.orderId)!.status, 'ready_to_ship');
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.commerce.database.prepare("SELECT COUNT(*) AS n FROM commerce_documents WHERE document_kind = 'delivery_order'").get()!.n, 1);
+  } finally { f.close(); }
+});
+
+test('checkout reports real confirmations, waits for publication, and stops advertising success after a reorg', async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const ready = await startedCheckout(f);
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.head = 100;
+    let result = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(result.body.status, 'pending');
+    assert.equal(result.body.confirmations, 1);
+    f.state.head = 102;
+    f.failures.publishWrite = true;
+    assert.equal((await f.request(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId })).response.status, 503);
+    result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
+    assert.equal(result.body.status, 'pending');
+    assert.equal(result.body.confirmations, 3);
+    f.failures.publishWrite = false;
+    result = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(result.body.status, 'success');
+    f.state.canonical.set(100, blockHash(999));
+    result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`);
+    assert.equal(result.body.status, 'pending');
+    assert.equal(result.body.confirmations, 0);
+  } finally { f.close(); }
+});
+
+for (const includedBlock of [100, 103]) test(`checkout status rejects stale publication after demotion at block ${includedBlock}`, async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.head = 102;
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'success');
+    const reorgLog = { ...log, blockNumber: ethereumHexQuantity(includedBlock), blockHash: blockHash(includedBlock) };
+    f.setReceipt(HASH, [reorgLog], includedBlock);
+    f.state.logs = [reorgLog];
+    f.state.head = includedBlock;
+    const paused = pauseRpc(f, payload => payload.method === 'eth_getTransactionReceipt');
+    const pending = f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`);
+    await paused.paused;
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'pending');
+    f.state.head = includedBlock + 2;
+    paused.resume();
+    const result = await pending;
+    assert.equal(result.body.confirmations, 3);
+    assert.equal(result.body.status, 'pending');
+    assert.equal(new URL(result.body.returnUrl!).searchParams.get('result'), 'pending');
+    assert.equal(f.quoteRow(ready.prepared.orderId).published_at_ms, null);
+    assert.equal(f.order(ready.prepared.orderId)!.status, 'processing');
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'success');
+    assert.equal(f.order(ready.prepared.orderId)!.status, 'ready_to_ship');
+  } finally { f.close(); }
+});
+
+for (const change of ['reactivated', 'started', 'rejected', 'confirmed'] as const) test(`checkout status keeps a stale failure pending after the checkout is ${change}`, async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission,
+      { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'failed');
+    const attempt = f.commerce.database.prepare('SELECT * FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId) as EthereumCheckoutAttemptRow;
+    let canonicalReads = 0;
+    const paused = pauseRpc(f, rpc => rpc.method === 'eth_getBlockByNumber' && rpc.params[0] === '0x64' && ++canonicalReads === 2);
+    const pending = f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`);
+    await paused.paused;
+    if (change === 'reactivated') {
+      f.state.canonical.set(100, blockHash(999));
+      f.state.receipts.delete(HASH);
+      await reconcileEthereumCheckoutAttempt(readContext(f), attempt);
+      assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+        .get(ready.attemptId)!.status, 'submitted');
+    } else if (change === 'confirmed') {
+      const transactionHash = `0x${'cc'.repeat(32)}`;
+      const log = f.deliveryLog(ready.prepared, ['111112'], ['2000001'], transactionHash);
+      f.setReceipt(transactionHash, [log]);
+      f.state.logs = [log];
+      assert.equal((await f.request(paths.deliveryConfirm,
+        { orderId: ready.prepared.orderId, transactionHash }, ready.authentication.token)).body.status, 'confirmed');
+    } else {
+      const attemptId = crypto.randomUUID();
+      f.state.transactionCount = '0x1';
+      const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+        { checkoutId, attemptId, action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+      assert.equal(started.body.canSend, true);
+      if (change === 'rejected') {
+        assert.equal((await f.request(checkoutPaths.submission, { checkoutId, attemptId, action: 'reject' }, ready.authentication.token)).response.status, 200);
+      }
+    }
+    paused.resume();
+    const result = await pending;
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.status, 'pending');
+    assert.equal(new URL(result.body.returnUrl!).searchParams.get('result'), 'pending');
+    const fresh = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`);
+    assert.equal(fresh.body.status, change === 'reactivated' ? 'pending' : change === 'started' ? 'submitting' : change === 'rejected' ? 'prepared' : 'success');
+  } finally { f.close(); }
+});
+
+for (const reported of [false, true]) test(`pending checkout refresh verifies and projects its ${reported ? 'reported' : 'discovered'} delivery once`, async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    if (reported) await f.request(checkoutPaths.submission,
+      { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.head = 100;
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'pending');
+    f.state.calls = [];
+    f.databaseCalls.statements = 0;
+    const previousUpdate = Number(f.quoteRow(ready.prepared.orderId).updated_at_ms);
+    const result = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.status, 'pending');
+    assert.equal(result.body.confirmations, 1);
+    assert.equal(f.state.calls.filter(call => call.method === 'eth_getTransactionReceipt').length, 1);
+    assert.ok(f.state.calls.length <= 5);
+    assert.ok(f.databaseCalls.statements <= 16);
+    assert.equal(Number(f.quoteRow(ready.prepared.orderId).updated_at_ms), previousUpdate + 1);
+    assert.equal(f.state.calls.some(call => call.method === 'eth_getLogs'), false);
+  } finally { f.close(); }
+});
+
+test('checkout lost-hash recovery verifies immutable transaction intent and nonce and never enables another send', async () => {
+  const f = fixture();
+  try {
+    f.state.transactionCount = '0x4';
+    const ready = await startedCheckout(f);
+    const input = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'recover', transactionHash: HASH };
+    setCheckoutTransaction(f, ready.prepared, HASH, { nonce: '0x3' });
+    assert.equal((await f.request(checkoutPaths.submission, input, ready.authentication.token)).response.status, 409);
+    setCheckoutTransaction(f, ready.prepared, HASH, { nonce: '0x4', value: '0x0' });
+    assert.equal((await f.request(checkoutPaths.submission, input, ready.authentication.token)).response.status, 409);
+    setCheckoutTransaction(f, ready.prepared, HASH, { nonce: '0x4' });
+    const recovered = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, input, ready.authentication.token);
+    assert.equal(recovered.response.status, 200, JSON.stringify(recovered.body));
+    assert.equal(recovered.body.canSend, false);
+    assert.equal(recovered.body.checkout.transactionHash, HASH);
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?').get(ready.attemptId)!.status, 'superseded');
+    assert.equal((await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission, input, ready.authentication.token)).body.canSend, false);
+  } finally { f.close(); }
+});
+
+test('checkout replacement validates the original nonce, tracks cancellation, and reopens uncertainty after a reorg', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId: ready.checkout.checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    const replacement = `0x${'cc'.repeat(32)}`;
+    setCheckoutTransaction(f, ready.prepared, replacement, { to: WALLET, input: '0x', value: '0x0', nonce: '0x1' });
+    const body = { checkoutId: ready.checkout.checkoutId, attemptId: crypto.randomUUID(), action: 'recover', transactionHash: replacement };
+    assert.equal((await f.request(checkoutPaths.submission, body, ready.authentication.token)).response.status, 409);
+    setCheckoutTransaction(f, ready.prepared, replacement, { to: WALLET, input: '0x', value: '0x0' });
+    assert.equal((await f.request(checkoutPaths.submission, body, ready.authentication.token)).response.status, 200);
+    f.setReceipt(replacement, []);
+    let result = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.status, 'failed');
+    assert.equal(result.body.transactionHash, replacement);
+    f.state.canonical.set(100, blockHash(999));
+    result = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId: ready.checkout.checkoutId });
+    assert.equal(result.body.status, 'pending');
+  } finally { f.close(); }
+});
+
+function setCheckoutTransaction(f: ReturnType<typeof fixture>, prepared: EthereumDeliveryPrepareResponse,
+  hash = HASH, fields: Record<string, unknown> = {}) {
+  f.state.transactions.set(hash, { hash, from: prepared.quote.wallet, to: prepared.transaction.to,
+    input: prepared.transaction.data, value: prepared.transaction.value, nonce: '0x0', chainId: '0x7a69', ...fields });
+}
+
+test('foreground checkout reads and retry guards find an older orphan across failure-history pages', async () => {
+  const f = fixture();
+  try {
+    const next = await preparedCheckout(f);
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'failed');
+    for (let index = 0; index < 10; index++) {
+      const hash = blockHash(2000 + index);
+      f.setReceipt(hash, []);
+      f.state.receipts.get(hash)!.status = '0x0';
+      f.commerce.database.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
+        (attempt_id, checkout_id, order_id, wallet, status, transaction_hash, quote_deadline, block_number, block_hash,
+          verified_at_block, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, 'reverted', ?, ?, 100, ?, 102, ?, ?)`)
+        .run(crypto.randomUUID(), checkoutId, ready.prepared.orderId, WALLET, hash, ready.prepared.quote.deadline, blockHash(100), NOW, NOW);
+    }
+    const rejectedAttemptId = crypto.randomUUID();
+    const retry = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId, attemptId: rejectedAttemptId, action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(retry.body.canSend, true, JSON.stringify(retry.body));
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: rejectedAttemptId, action: 'reject' }, ready.authentication.token);
+    f.state.receipts.delete(HASH);
+    const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`);
+    assert.equal(status.body.status, 'pending');
+    assert.equal(status.body.transactionHash, HASH);
+    assert.equal(status.body.attempt?.attemptId, ready.attemptId);
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId)!.status, 'reverted');
+    for (const candidate of [ready, next]) {
+      const started = await f.request(checkoutPaths.submission, { checkoutId: candidate.checkout.checkoutId,
+        attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: candidate.prepared.quote.deadline }, candidate.authentication.token);
+      assert.equal(started.response.status, 409, JSON.stringify(started.body));
+      assert.equal((started.body.error as { details: { blockingCheckoutId: string } }).details.blockingCheckoutId, checkoutId);
+    }
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    for (const candidate of [ready, next]) {
+      assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: candidate.checkout.checkoutId }, candidate.authentication.token)).response.status, 409);
+      assert.equal(f.quoteRow(candidate.prepared.orderId).deadline, candidate.prepared.quote.deadline);
+    }
+    for (const requestId of [checkoutId, crypto.randomUUID()]) {
+      assert.equal((await f.request(paths.deliveryPrepare,
+        { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId }, ready.authentication.token)).response.status, 409);
+    }
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 2);
+    const refreshed = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId });
+    assert.equal(refreshed.body.status, 'pending');
+    assert.equal(refreshed.body.transactionHash, HASH);
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId)!.status, 'submitted');
+    f.state.receipts.delete(blockHash(2000));
+    f.state.head = 1000;
+    f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'failed');
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE transaction_hash = ?')
+      .get(blockHash(2000))!.status, 'reverted');
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE transaction_hash = ?')
+      .get(blockHash(2000))!.status, 'reverted');
+    f.commerce.database.prepare(`UPDATE ethereum_delivery_checkout_attempts SET status = 'submitted'
+      WHERE transaction_hash = ?`).run(blockHash(2000));
+    assert.notEqual((await startedCheckout(f)).checkout.checkoutId, checkoutId);
+  } finally { f.close(); }
+});
+
+test('checkout expiry fences an older failure already being reconciled', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    await f.request(checkoutPaths.refresh, { checkoutId });
+    const retry = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId, attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(retry.body.canSend, true);
+    const earlier = f.commerce.database.prepare('SELECT * FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId) as EthereumCheckoutAttemptRow;
+    f.state.receipts.delete(HASH);
+    f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+    f.state.head = 1000;
+    f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+    const paused = pauseRpc(f, payload => payload.method === 'eth_getTransactionReceipt');
+    const reconciliation = reconcileEthereumCheckoutAttempt(readContext(f), earlier);
+    await paused.paused;
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'failed');
+    paused.resume();
+    await reconciliation;
+    assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId)!.status, 'reverted');
+    f.state.calls = [];
+    await reconcileEthereumCheckoutAttempt(readContext(f), earlier);
+    assert.equal(f.state.calls.length, 0);
+    assert.notEqual((await startedCheckout(f)).checkout.checkoutId, checkoutId);
+  } finally { f.close(); }
+});
+
+for (const reported of [false, true]) test(`an orphaned published checkout blocks overlapping retries with ${reported ? 'a reported' : 'an unreported'} hash`, async () => {
+  const f = fixture();
+  try {
+    f.state.head = 98;
+    const next = await preparedCheckout(f);
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    if (reported) await f.request(checkoutPaths.submission,
+      { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    const log = f.deliveryLog(ready.prepared);
+    f.setReceipt(HASH, [log]);
+    f.state.logs = [log];
+    f.state.head = 102;
+    f.state.tokens.delete('111112');
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'success');
+    f.state.receipts.delete(HASH);
+    f.state.logs = [];
+    f.state.tokens.set('111112', { kind: 2, displayId: 1, owner: WALLET });
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`)).body.status, 'pending');
+    assert.equal(f.quoteRow(ready.prepared.orderId).status, 'confirmed');
+    assert.notEqual(f.quoteRow(ready.prepared.orderId).published_at_ms, null);
+    const started = await f.request(checkoutPaths.submission, { checkoutId: next.checkout.checkoutId,
+      attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: next.prepared.quote.deadline }, next.authentication.token);
+    assert.equal(started.response.status, 409, JSON.stringify(started.body));
+    assert.equal((started.body.error as { details: { blockingCheckoutId: string } }).details.blockingCheckoutId, checkoutId);
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: next.checkout.checkoutId }, next.authentication.token)).response.status, 409);
+    assert.equal((await f.request(paths.deliveryPrepare,
+      { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: crypto.randomUUID() }, ready.authentication.token)).response.status, 409);
+  } finally { f.close(); }
+});
+
+for (const action of ['start', 'legacy-prepare'] as const) test(`a concurrently reopened checkout failure blocks ${action}`, async () => {
+  const f = fixture();
+  try {
+    const next = await preparedCheckout(f);
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    await f.request(checkoutPaths.refresh, { checkoutId });
+    const paused = pauseRpc(f, payload => action === 'start' ? payload.method === 'eth_getTransactionCount' :
+      payload.method === 'eth_getBlockByNumber' && payload.params[0] === 'latest');
+    const pending = action === 'start' ? f.request(checkoutPaths.submission, { checkoutId: next.checkout.checkoutId,
+      attemptId: crypto.randomUUID(), action: 'start', quoteDeadline: next.prepared.quote.deadline }, next.authentication.token) :
+      f.request(paths.deliveryPrepare, { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: crypto.randomUUID() }, ready.authentication.token);
+    await paused.paused;
+    f.state.receipts.delete(HASH);
+    await f.request(checkoutPaths.refresh, { checkoutId });
+    paused.resume();
+    const result = await pending;
+    assert.equal(result.response.status, 409, JSON.stringify(result.body));
+    assert.equal((result.body.error as { details: { blockingCheckoutId: string } }).details.blockingCheckoutId, checkoutId);
+    assert.equal(result.body.signature, undefined);
+    assert.equal(result.body.canSend, undefined);
+    assert.equal(f.commerce.database.prepare('SELECT COUNT(*) AS n FROM ethereum_delivery_quotes').get()!.n, 2);
+  } finally { f.close(); }
+});
+
+test('checkout preparation keeps proof-only conflicts generic and retryable', async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.get(HASH)!.status = '0x0';
+    await f.request(checkoutPaths.refresh, { checkoutId });
+    const paused = pauseRpc(f, payload => payload.method === 'eth_getBlockByNumber' && payload.params[0] === 'latest');
+    const input = { tokenIds: ['111112'], addressId: ADDRESS_ID, requestId: crypto.randomUUID() };
+    const pending = f.request(paths.deliveryPrepare, input, ready.authentication.token);
+    await paused.paused;
+    const attempt = f.commerce.database.prepare('SELECT * FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+      .get(ready.attemptId) as EthereumCheckoutAttemptRow;
+    await reconcileEthereumCheckoutAttempt(readContext(f), attempt);
+    paused.resume();
+    const result = await pending;
+    assert.equal(result.response.status, 409);
+    assert.equal((result.body.error as { details?: unknown }).details, undefined);
+    assert.equal(result.body.signature, undefined);
+    assert.equal((await f.request(paths.deliveryPrepare, input, ready.authentication.token)).response.status, 200);
+  } finally { f.close(); }
+});
+
+for (const resolution of ['expiry', 'replacement'] as const) test(`a reactivated checkout attempt survives a newer rejection through ${resolution}`, async () => {
+  const f = fixture();
+  try {
+    const ready = await startedCheckout(f);
+    const checkoutId = ready.checkout.checkoutId;
+    setCheckoutTransaction(f, ready.prepared);
+    await f.request(checkoutPaths.submission, { checkoutId, attemptId: ready.attemptId, action: 'report', transactionHash: HASH }, ready.authentication.token);
+    f.setReceipt(HASH, []);
+    f.state.receipts.set(HASH, { ...f.state.receipts.get(HASH)!, status: '0x0' });
+    assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'failed');
+    f.state.transactionCount = '0x1';
+    const rejectedAttemptId = crypto.randomUUID();
+    const started = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+      { checkoutId, attemptId: rejectedAttemptId, action: 'start', quoteDeadline: ready.prepared.quote.deadline }, ready.authentication.token);
+    assert.equal(started.body.canSend, true);
+    assert.equal((await f.request(checkoutPaths.submission,
+      { checkoutId, attemptId: rejectedAttemptId, action: 'reject' }, ready.authentication.token)).response.status, 200);
+    f.state.receipts.delete(HASH);
+    await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    const status = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${checkoutId}`);
+    assert.equal(status.body.status, 'pending');
+    assert.equal(status.body.attempt?.attemptId, ready.attemptId);
+    assert.equal(status.body.transactionHash, HASH);
+    assert.equal(new URL(status.body.returnUrl!).searchParams.get('result'), 'pending');
+    assert.equal((await f.request(checkoutPaths.prepare, { checkoutId }, ready.authentication.token)).response.status, 409);
+    if (resolution === 'expiry') {
+      f.state.now = (ready.prepared.quote.deadline + 1) * 1000;
+      f.state.head = 1000;
+      f.state.finalizedBlock = { number: 990, timestamp: ready.prepared.quote.deadline + 1 };
+      const expired = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId });
+      assert.equal(expired.response.status, 200, JSON.stringify(expired.body));
+      assert.equal(expired.body.status, 'failed');
+      assert.equal(expired.body.attempt?.attemptId, ready.attemptId);
+      assert.equal(new URL(expired.body.returnUrl!).searchParams.get('result'), 'failed');
+      assert.equal((await f.request(checkoutPaths.prepare, { checkoutId }, ready.authentication.token)).response.status, 409);
+    } else {
+      const replacement = `0x${'cc'.repeat(32)}`;
+      setCheckoutTransaction(f, ready.prepared, replacement);
+      const recovered = await f.request<EthereumCheckoutSubmissionResponse>(checkoutPaths.submission,
+        { checkoutId, attemptId: crypto.randomUUID(), action: 'recover', transactionHash: replacement }, ready.authentication.token);
+      assert.equal(recovered.response.status, 200, JSON.stringify(recovered.body));
+      assert.equal(recovered.body.canSend, false);
+      assert.equal(recovered.body.checkout.transactionHash, replacement);
+      assert.equal(f.commerce.database.prepare('SELECT status FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+        .get(ready.attemptId)!.status, 'superseded');
+      f.setReceipt(replacement, [f.deliveryLog(ready.prepared, ['111112'], ['2000001'], replacement)]);
+      assert.equal((await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.refresh, { checkoutId })).body.status, 'success');
+    }
+  } finally { f.close(); }
+});
 
 function pauseCommerceBatch(f: ReturnType<typeof fixture>, matches: () => boolean) {
   const database = f.env.COMMERCE_DB;

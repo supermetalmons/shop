@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
-import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createD1MaintenanceRunner } from '../scripts/shared/d1MaintenanceRunner.ts';
 
@@ -144,4 +149,43 @@ test('raw command execution preserves multi-statement writes verbatim', () => {
     return envelope([[], []]);
   });
   assert.deepEqual(runner.executeCommand(sql), [[], []]);
+});
+
+test('large named batches retain one Wrangler command and result mapping without SQL in process arguments', () => {
+  const sql = `SELECT '${'界'.repeat(12000)}' AS value`;
+  let calls = 0;
+  const runner = createD1MaintenanceRunner('commerce', (file, args, options) => {
+    calls++;
+    assert.equal(file, process.execPath);
+    assert.deepEqual(args.slice(0, 4), ['--no-warnings', '--require', resolve('scripts/shared/d1CommandInput.cjs'),
+      createRequire(import.meta.url).resolve('wrangler')]);
+    assert.equal(args[args.indexOf('--command') + 1], 'MONS_D1_SQL_STDIN');
+    assert.equal(args.includes('--file'), false);
+    assert.ok(!args.some(value => value.includes('界')));
+    assert.deepEqual(options.stdio, ['pipe', 'pipe', 'pipe']);
+    assert.equal(options.input, `${sql};\nSELECT 2 WHERE 0`);
+    return envelope([[{ value: 1 }], []]);
+  });
+  assert.deepEqual(runner.queryBatch({ large: sql, empty: 'SELECT 2 WHERE 0' }), { large: [{ value: 1 }], empty: [] });
+  assert.equal(calls, 1);
+});
+
+test('large SQL reaches the CLI unchanged through stdin beyond operating-system argument limits', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'd1-command-input-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const cli = join(directory, 'cli.cjs');
+  writeFileSync(cli, `const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
+assert.equal(require.main, module);
+const sql = process.argv[process.argv.indexOf('--command') + 1];
+process.stdout.write(JSON.stringify({ bytes: Buffer.byteLength(sql), hash: createHash('sha256').update(sql).digest('hex') }));`);
+  const input = `SELECT '${'界\n\"; literal'.repeat(100000)}'`;
+  const preload = resolve('scripts/shared/d1CommandInput.cjs');
+  const result = JSON.parse(execFileSync(process.execPath, ['--require', preload, cli, '--command', 'MONS_D1_SQL_STDIN'], {
+    encoding: 'utf8', input, maxBuffer: 1024 * 1024,
+  }));
+  assert.deepEqual(result, { bytes: Buffer.byteLength(input), hash: createHash('sha256').update(input).digest('hex') });
+  assert.throws(() => execFileSync(process.execPath, ['--require', preload, cli, '--command', 'wrong-input'], {
+    encoding: 'utf8', input: '', stdio: ['pipe', 'pipe', 'pipe'],
+  }), /Invalid D1 command input/);
 });

@@ -16,6 +16,7 @@ const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
+const { rememberCheckoutReservation } = await import('../src/ethereum/checkoutReservations.ts');
 const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumSession, readEthereumSubmission, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 type Wallet = Parameters<typeof useEthereum111k>[0];
 dom.window.close();
@@ -79,6 +80,7 @@ function wallet(address: string | null = owner): Wallet & { sent: unknown[]; con
   const result: Wallet & { sent: unknown[]; connections: number } = {
     address, provider: address ? provider : null, status: address ? 'connected' : 'disconnected', ready: true,
     wallets: [], error: null, connect() { result.connections++; }, disconnect() {}, cancel() {}, selectWallet() {},
+    chooseWallet() {}, changeAccount() {}, checkAccount() {},
     sent, connections: 0,
   };
   return result;
@@ -484,6 +486,35 @@ test('unboxing reveals artwork at first inclusion without waiting for fulfillmen
   assert.equal(view.result.current.revealed?.[0].displayId, 821);
   assert.equal(view.result.current.pending, null);
   assert.equal(connected.sent.length, 1);
+});
+
+test('unboxing checks new checkout reservations after the final wallet network read', async t => {
+  let finishNetwork!: (chainId: string) => void;
+  const finalNetwork = new Promise<string>(resolve => { finishNetwork = resolve; });
+  let nonceRead = false;
+  let finalNetworkReads = 0;
+  const connected = wallet();
+  const request = connected.provider!.request;
+  t.mock.method(connected.provider!, 'request', async args => {
+    if (args.method === 'eth_getTransactionCount') nonceRead = true;
+    if (args.method === 'eth_chainId' && nonceRead && ++finalNetworkReads === 2) return finalNetwork;
+    return request(args);
+  });
+  const view = harness(connected);
+  await waitFor(() => assert.equal(view.result.current.chainId, config.chainId));
+  let opening!: Promise<boolean>;
+  await act(async () => { opening = view.result.current.unbox(token()); });
+  await waitFor(() => assert.equal(finalNetworkReads, 2));
+  rememberCheckoutReservation({ checkoutId: '11111111-1111-4111-8111-111111111111',
+    dropId: '111k_devnet', chainId: config.chainId, contractAddress: contract, config,
+    tokenIds: ['111112'], items: [token()], unavailableTokenIds: [], wallet: owner, status: 'pending', orderId: 42,
+    transactionHash: hash, confirmations: 0, requiredConfirmations: 3, quoteExpiresAtMs: Date.now() + 60_000,
+    attempt: { attemptId: '22222222-2222-4222-8222-222222222222', status: 'submitted', transactionHash: hash } });
+  await act(async () => { finishNetwork('0xaa36a7'); assert.equal(await opening, false); });
+  assert.equal(connected.sent.length, 0);
+  assert.match(view.result.current.error!, /redemption status/);
+  assert.equal(readEthereumPending(view.result.current.scope!), null);
+  assert.equal(readEthereumSubmission(view.result.current.scope!), null);
 });
 
 for (const count of [1, 15, 16, 50]) {
@@ -1304,6 +1335,28 @@ function savedSession(address: string): EthereumSession {
   saveEthereumSession(ethereumInventoryScope(config, address)!, session);
   return session;
 }
+
+test('cached sign-in cannot restore a session rejected by concurrent delivery finalization', async t => {
+  const session = savedSession(owner);
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'delivery', orderId: 42, submittedAt: Date.now() });
+  t.mock.method(ethereumApi, 'profile', async current => ({ wallet: current.address, addresses: [] }));
+  t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 3, items: [], burnedTokenIds: [] }));
+  let rejectFinalization: ((cause: Error) => void) | undefined;
+  const finalize = t.mock.method(ethereumApi, 'confirmDelivery', () => new Promise((_resolve, reject) => { rejectFinalization = reject; }));
+  const view = harness();
+  await waitFor(() => assert.ok(rejectFinalization));
+
+  await act(async () => {
+    rejectFinalization!(new EthereumApiError(401, 'Session expired', null, session.token));
+    assert.equal(await view.result.current.signIn(), true);
+  });
+
+  assert.equal(view.result.current.session, null);
+  assert.equal(readEthereumSession(scope, config, owner), null);
+  assert.equal(finalize.mock.callCount(), 1);
+});
 
 test('a late delivery 401 cannot clear the session restored for another account', async t => {
   const originalSession = savedSession(owner);

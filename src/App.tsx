@@ -4,6 +4,7 @@ import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 're
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
+import { ADDRESS_ENCRYPTION_PUBLIC_KEY } from './config/addressEncryption';
 import Ethereum111kPage from './ethereum/Ethereum111kPage';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useMiNoteEthereumWallet } from './hooks/useMiNoteEthereumWallet';
@@ -58,7 +59,6 @@ import { useShopFeedback } from './shop/ui/useShopFeedback';
 import { useShopNotifications } from './shop/ui/useShopNotifications';
 import { useShopDrop } from './shop/useShopDrop';
 
-const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
 
 class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -414,6 +414,7 @@ function App({ route, suspended = false }: AppProps) {
           wallet={ethereumWallet}
           claimReceiptId={route.ethereumClaimReceiptId}
           claimCode={route.ethereumClaimCode}
+          checkoutReturnId={route.ethereumCheckoutReturnId}
           addressEncryptionPublicKey={ADDRESS_ENCRYPTION_PUBLIC_KEY}
           solanaInventoryItems={inventory.inventoryItems}
           solanaSelected={selection.selected}

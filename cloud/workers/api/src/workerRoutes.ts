@@ -41,6 +41,7 @@ import { profileRoutes } from './workerRoutes/profile.js';
 import { staffRoutes } from './workerRoutes/staff.js';
 import { ethereumRoutes } from './ethereumRoutes.js';
 import { ETHEREUM_SESSION_HEADER } from '../../../../shared/ethereum/api.js';
+import { applyEthereumCheckoutStatusCors } from './ethereumCheckoutOrigin.js';
 
 export type { MatchedWorkerRoute, WorkerRouteResult } from './workerRoutes/support.js';
 
@@ -124,6 +125,7 @@ export function workerRoutePreflightResponse(
   request: Request,
 ): Response | undefined {
   if (request.method !== 'OPTIONS') return undefined;
+  if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request, new Response(null, { status: 204 }));
   if (route.cors === 'mi-note') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
   if (route.cors === 'ethereum') return handleProfileCorsPreflight(request, undefined, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
   if (route.cors === 'profile') return handleProfileCorsPreflight(request);
@@ -158,6 +160,7 @@ export function applyWorkerRouteCors(
   request: Request,
   response: Response,
 ): Response {
+  if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request, response);
   if (route.cors === 'mi-note') return applyProfileCors(request, response, 'GET, POST, OPTIONS', MI_NOTE_SESSION_HEADER);
   if (route.cors === 'ethereum') return applyProfileCors(request, response, 'GET, POST, OPTIONS', ETHEREUM_SESSION_HEADER);
   return route.cors === 'profile' || route.cors === 'staff-auth'
@@ -187,6 +190,8 @@ export function unexpectedWorkerRouteResponse(
     }, 500);
   }
   if (route.unexpectedError === 'profile') {
+    if (route.cors === 'ethereum-checkout-status') return applyEthereumCheckoutStatusCors(request,
+      sharedJsonResponse({ ok: false, error: { code: 'unavailable', message: 'Service is temporarily unavailable.' } }, 503));
     return applyProfileCors(request, publicJsonResponse({
       ok: false,
       error: {

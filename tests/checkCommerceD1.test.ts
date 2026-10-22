@@ -1428,9 +1428,9 @@ test('Commerce D1 batches small checks and preserves paged payload validation in
       let commands = 0;
       let batches = 0;
       const pages = new Map<string, number[]>();
-      const runner = createD1MaintenanceRunner('commerce', (_file, args) => {
+      const runner = createD1MaintenanceRunner('commerce', (_file, args, options) => {
         commands += 1;
-        const sql = args[args.indexOf('--command') + 1];
+        const sql = options.input === undefined ? args[args.indexOf('--command') + 1] : String(options.input);
         const statements = sql.split(';\n');
         if (statements.length > 1) batches += 1;
         return JSON.stringify(statements.map((statement) => {

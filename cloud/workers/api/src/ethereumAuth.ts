@@ -33,16 +33,17 @@ export type EthereumSession = {
   expires_at_ms: number;
 };
 
-export function ethereumRequestOrigin(request: Request): string {
+export function ethereumRequestOrigin(request: Request, isAllowedOrigin = isAllowedProfileOrigin): string {
   const origin = request.headers.get('Origin') || (request.method === 'GET'
     ? new URL(request.headers.get('Referer') || request.url).origin
     : '');
-  if (!origin || !isAllowedProfileOrigin(origin)) throw new EthereumApiError('permission-denied', 'Origin is not allowed.');
+  if (!origin || !isAllowedOrigin(origin)) throw new EthereumApiError('permission-denied', 'Origin is not allowed.');
   return origin;
 }
 
-export async function limitEthereumRequest(request: Request, context: EthereumContext, operation: string, limiter: RateLimit): Promise<void> {
-  const origin = ethereumRequestOrigin(request);
+export async function limitEthereumRequest(request: Request, context: EthereumContext, operation: string, limiter: RateLimit,
+  isAllowedOrigin = isAllowedProfileOrigin): Promise<void> {
+  const origin = ethereumRequestOrigin(request, isAllowedOrigin);
   const ip = request.headers.get('CF-Connecting-IP') || (['localhost', '127.0.0.1'].includes(new URL(origin).hostname) ? 'local' : '');
   if (!ip) throw new EthereumApiError('unavailable', 'Ethereum verification is temporarily unavailable.');
   const key = await sha256Hex(`ethereum:${operation}:${origin}:${ip}`);

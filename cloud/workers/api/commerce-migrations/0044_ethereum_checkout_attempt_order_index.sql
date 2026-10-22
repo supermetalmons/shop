@@ -1,0 +1,2 @@
+CREATE INDEX ethereum_delivery_checkout_attempts_order
+ON ethereum_delivery_checkout_attempts(order_id);

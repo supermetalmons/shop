@@ -14,6 +14,7 @@ import './styles.css';
 
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
+const CheckoutPage = React.lazy(() => import('./checkout/CheckoutPage'));
 
 function RoutedApp() {
   const route = useAppRoute();
@@ -31,6 +32,13 @@ type RoutedContentProps = {
 };
 
 function RoutedContent({ route }: RoutedContentProps) {
+  if (route.kind === 'checkout') {
+    return (
+      <React.Suspense fallback={null}>
+        <CheckoutPage key={`${route.checkoutId ?? ''}:${route.checkoutSearch ?? ''}`} checkoutId={route.checkoutId} search={route.checkoutSearch ?? ''} />
+      </React.Suspense>
+    );
+  }
   if (route.kind === 'notify') {
     return (
       <React.Suspense fallback={null}>

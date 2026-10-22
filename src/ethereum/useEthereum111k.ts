@@ -7,6 +7,7 @@ import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumHexQuantity } fr
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
+import { authenticateEthereumWallet } from './auth';
 import {
   clearEthereumInventoryRecovery, clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumInventoryExpected, readEthereumOperation, readEthereumPending,
   readEthereumSession, readEthereumSubmission, replaceEthereumInventoryRecovery, reserveEthereumSubmission, restoreEthereumExpected, runEthereumOperation, saveEthereumSession, subscribeEthereumOperation, subscribeEthereumPending, withEthereumSubmissionLock, writeEthereumExpected, writeEthereumStorage, type EthereumAction, type EthereumPendingTransaction, type EthereumSubmission,
@@ -16,6 +17,7 @@ import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
 import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './recovery';
 import { ethereumAddressEncryptionKey } from './addressEncryption';
 import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
+import { checkoutReservesItems } from './checkoutReservations';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 export type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
@@ -317,28 +319,12 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       return false;
     }
   };
-  const authenticate = async (operation: ReturnType<typeof ethereumOperation>, capturedScope: string): Promise<EthereumSession> => {
-    const existing = readEthereumSession(capturedScope, config, operation.address);
-    if (existing) {
-      operation.assertCurrent();
-      if (mounted.current && scopeRef.current === capturedScope) setSession(existing);
-      return existing;
-    }
-    await operation.ensureNetwork();
-    const challenge = await ethereumApi.challenge(operation.address, config, operation.signal);
-    operation.assertCurrent();
-    const message = `0x${Array.from(new TextEncoder().encode(challenge.message), byte => byte.toString(16).padStart(2, '0')).join('')}`;
-    const signature = await operation.provider.request({ method: 'personal_sign', params: [message, operation.address] });
-    operation.assertCurrent();
-    if (typeof signature !== 'string') throw new Error('Your wallet did not return a signature.');
-    const verified = await ethereumApi.verify(challenge.challengeId, signature, operation.signal);
-    operation.assertCurrent();
-    if (verified.address !== operation.address || verified.chainId !== config.chainId || verified.expiresAtMs <= Date.now()) throw new Error('The Ethereum session does not match your wallet.');
-    saveEthereumSession(capturedScope, verified);
-    if (mounted.current && scopeRef.current === capturedScope) setSession(verified);
-    return verified;
-  };
-  const submit = async (operation: ReturnType<typeof ethereumOperation>, capturedScope: string, action: EthereumAction, transaction: EthereumPreparedTransaction, details: { orderId?: number; claimId?: string } = {}) => {
+  const authenticate = (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) =>
+    authenticateEthereumWallet(operation, config, capturedScope, verified => {
+      if (mounted.current && scopeRef.current === capturedScope) setSession(verified);
+    });
+  const submit = async (operation: ReturnType<typeof ethereumOperation>, capturedScope: string, action: EthereumAction,
+    transaction: EthereumPreparedTransaction, details: { orderId?: number; claimId?: string } = {}, beforeSend?: () => void) => {
     if (ethereumAddress(transaction.to) !== config.contractAddress || transaction.chainId !== config.chainId) throw new Error('The transaction targets a different collection.');
     await operation.ensureNetwork();
     const nonce = await operation.provider.request({ method: 'eth_getTransactionCount', params: [operation.address, 'pending'] });
@@ -348,7 +334,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       intent: { to: transaction.to, data: transaction.data, value: transaction.value }, ...details };
     let reserved = false;
     let hash: string;
-    try { hash = await operation.send(transaction, () => { reserveEthereumSubmission(submission); reserved = true; }); }
+    try { hash = await operation.send(transaction, () => { beforeSend?.(); reserveEthereumSubmission(submission); reserved = true; }); }
     catch (cause) {
       if (reserved && cause && typeof cause === 'object' && 'code' in cause && cause.code === 4001) writeEthereumStorage(`${capturedScope}:pending`, null);
       throw cause;
@@ -394,17 +380,21 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
     });
   };
-  const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[]) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
+  const unbox = (selected: EthereumInventoryItem | readonly EthereumInventoryItem[], canOpen?: () => boolean) => run('Confirm opening in your wallet…', async (operation, capturedScope) => {
     const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
     if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
       items.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
         (item.kind !== 'crate' && !(items.length === 1 && item.kind === 'warehouse')))) {
       throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse.`);
     }
+    const assertAvailable = () => {
+      if (checkoutReservesItems(items) || canOpen?.() === false) throw new Error('Check the redemption status of your selected items before opening them.');
+    };
+    assertAvailable();
     const data = items.length === 1
       ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
       : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [items.map(item => item.tokenId)]);
-    await submit(operation, capturedScope, 'unbox', transaction(data));
+    await submit(operation, capturedScope, 'unbox', transaction(data), {}, assertAvailable);
   });
   const deliver = (selected: EthereumInventoryItem[], address: EthereumDeliveryAddress) => run('Confirm delivery in your wallet…', async (operation, capturedScope) => {
     if (!selected.length || selected.length > config.maxDeliveryItems || selected.some(item => item.owner !== operation.address || !['artwork', 'crate'].includes(item.kind))) throw new Error('Choose up to 50 artworks or crates for delivery.');

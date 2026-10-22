@@ -75,14 +75,16 @@ export async function runResetEthereum111k(argv: string[], overrides: Partial<De
     const completed = snapshot.control.resetGuardId === null && snapshot.control.paused
       && snapshot.control.revision === args.expectedRevision + 1 && snapshot.control.chainId === args.scope.chainId
       && snapshot.control.contractAddress === args.scope.contractAddress && Object.values(snapshot.counts).every(count => count === 0)
-      && snapshot.quotes.length === 0 && snapshot.claims.length === 0 && snapshot.cursors.length === 0;
+      && snapshot.quotes.length === 0 && snapshot.claims.length === 0 && snapshot.cursors.length === 0
+      && snapshot.checkouts.length === 0 && snapshot.attempts.length === 0;
     if (!completed) throw new Error('Previous reset ID exists but its outcome cannot be confirmed.');
     return { dryRun: !args.write, completed: true, reconciled: true, resetId: args.resetId, control: snapshot.control };
   }
   await externalPreflight();
   const plan = buildEthereum111kResetPlan(snapshot, args.scope, args.expectedRevision, args.resetId ?? deps.resetId());
   const summary = { resetId: plan.resetId, scope: plan.scope, expectedRevision: plan.expectedRevision,
-    counts: { ...snapshot.counts, quotes: snapshot.quotes.length, claims: snapshot.claims.length, cursors: snapshot.cursors.length } };
+    counts: { ...snapshot.counts, quotes: snapshot.quotes.length, checkouts: snapshot.checkouts.length,
+      attempts: snapshot.attempts.length, claims: snapshot.claims.length, cursors: snapshot.cursors.length } };
   if (!args.write) return { dryRun: true, ...summary, pausedForMs: snapshot.databaseNowMs - snapshot.control.pausedAtMs! };
   const batch = buildEthereum111kResetBatch(plan);
   const backupPath = deps.backup(plan, args.backupDirectory);

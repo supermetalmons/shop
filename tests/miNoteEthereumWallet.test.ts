@@ -22,9 +22,9 @@ afterEach(() => {
 
 function makeWallet(uuid = 'first', rdns = 'com.example.wallet') {
   const listeners = new Map<string, Set<EthereumProviderListener>>();
-  const requests: Array<{ method: string; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
+  const requests: Array<{ method: string; params?: unknown[] | Record<string, unknown>; resolve: (value: unknown) => void; reject: (error: unknown) => void }> = [];
   const provider: EIP1193Provider = {
-    request: ({ method }) => new Promise((resolve, reject) => { requests.push({ method, resolve, reject }); }),
+    request: ({ method, params }) => new Promise((resolve, reject) => { requests.push({ method, params, resolve, reject }); }),
     on(event, listener) {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(listener);
@@ -558,4 +558,289 @@ test('repeated discovery allows newly installed wallets time to announce alongsi
   const second = makeWallet('late', 'org.late');
   window.addEventListener('eip6963:requestProvider', () => { window.setTimeout(second.announce, 30); });
   assert.deepEqual((await listInjectedEthereumProviders()).map((wallet) => wallet.info.uuid), ['first', 'late']);
+});
+
+test('explicit wallet selection shows even one provider and cancel preserves the connected account', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(wallet);
+  await settle(wallet);
+  act(() => result.current.chooseWallet());
+  await waitFor(() => assert.equal(result.current.wallets.length, 1));
+  assert.equal(result.current.status, 'choosing');
+  assert.equal(result.current.address, ADDRESS.toLowerCase());
+  act(() => wallet.emit('accountsChanged', [OTHER_ADDRESS]));
+  assert.equal(result.current.status, 'choosing');
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  act(() => result.current.cancel());
+  assert.equal(result.current.status, 'connected');
+  assert.equal(result.current.provider, wallet.wallet.provider);
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.equal(result.current.wallets.length, 0);
+  assert.equal(wallet.requests.length, 1);
+  assert.equal(wallet.listenerCount(), 3);
+});
+
+test('explicit selection of a single legacy wallet remembers the legacy provider', async () => {
+  const wallet = makeWallet();
+  setLegacy(wallet);
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.chooseWallet());
+  await waitFor(() => assert.equal(result.current.wallets.length, 1));
+  assert.equal(wallet.requests.length, 0);
+  act(() => result.current.selectWallet(result.current.wallets[0]));
+  await settle(wallet);
+  assert.equal(result.current.status, 'connected');
+  assert.deepEqual(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!), { type: 'legacy' });
+});
+
+test('choosing another provider promotes it only after connection and ignores the old provider afterward', async () => {
+  const first = makeWallet();
+  first.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(first);
+  await settle(first);
+  const second = makeWallet('second', 'org.second');
+  second.install();
+  act(() => result.current.chooseWallet());
+  await waitFor(() => assert.equal(result.current.wallets.length, 2));
+  act(() => result.current.selectWallet(result.current.wallets[1]));
+  assert.equal(result.current.provider, first.wallet.provider);
+  assert.equal(result.current.status, 'connecting');
+  assert.equal(first.listenerCount(), 3);
+  await settle(second, 0, [OTHER_ADDRESS]);
+  assert.equal(result.current.provider, second.wallet.provider);
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.equal(first.listenerCount(), 0);
+  assert.equal(second.listenerCount(), 3);
+  act(() => first.emit('accountsChanged', [ADDRESS]));
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.deepEqual(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!), { type: 'announced', rdns: 'org.second' });
+});
+
+for (const scenario of ['cancel', 'reject'] as const) {
+  test(`${scenario} during another provider connection preserves the latest established account`, async () => {
+    const first = makeWallet();
+    first.install();
+    const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+    act(() => result.current.connect());
+    await waitForRequests(first);
+    await settle(first);
+    const second = makeWallet('second', 'org.second');
+    second.install();
+    act(() => result.current.chooseWallet());
+    await waitFor(() => assert.equal(result.current.wallets.length, 2));
+    act(() => result.current.selectWallet(result.current.wallets[1]));
+    act(() => first.emit('accountsChanged', [OTHER_ADDRESS]));
+    if (scenario === 'cancel') {
+      act(() => result.current.cancel());
+      await settle(second);
+    } else await act(async () => { second.requests[0].reject({ code: 4001 }); });
+    assert.equal(result.current.status, 'connected');
+    assert.equal(result.current.address, OTHER_ADDRESS);
+    assert.equal(result.current.provider, first.wallet.provider);
+    assert.equal(first.listenerCount(), 3);
+    assert.equal(second.listenerCount(), 0);
+    assert.deepEqual(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!), { type: 'announced', rdns: first.wallet.info.rdns });
+  });
+}
+
+for (const loss of ['refresh failure', 'disconnect', 'empty accounts'] as const) {
+  for (const outcome of ['reject', 'empty', 'connect'] as const) {
+    test(`replacement ${outcome} remains recoverable after the previous wallet reports ${loss}`, async () => {
+      const first = makeWallet();
+      first.install();
+      const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+      act(() => result.current.connect());
+      await waitForRequests(first);
+      await settle(first);
+      const second = makeWallet('second', 'org.second');
+      second.install();
+      act(() => result.current.chooseWallet());
+      await waitFor(() => assert.equal(result.current.wallets.length, 2));
+      act(() => result.current.selectWallet(result.current.wallets[1]));
+      await waitForRequests(second);
+      if (loss === 'refresh failure') {
+        act(() => first.emit('chainChanged', '0x1'));
+        await waitForRequests(first, 2);
+        await act(async () => { first.requests[1].reject(new Error('Provider unavailable')); });
+      } else act(() => first.emit(loss === 'disconnect' ? 'disconnect' : 'accountsChanged', []));
+      assert.equal(result.current.status, 'connecting');
+      assert.equal(result.current.address, null);
+      assert.equal(result.current.provider, null);
+      await act(async () => {
+        if (outcome === 'reject') second.requests[0].reject({ code: 4001 });
+        else second.requests[0].resolve(outcome === 'connect' ? [OTHER_ADDRESS] : []);
+      });
+      assert.equal(first.listenerCount(), 0);
+      if (outcome === 'connect') {
+        assert.equal(result.current.status, 'connected');
+        assert.equal(result.current.provider, second.wallet.provider);
+        assert.equal(result.current.address, OTHER_ADDRESS);
+        assert.equal(second.listenerCount(), 3);
+      } else {
+        assert.equal(result.current.status, 'disconnected');
+        assert.equal(result.current.provider, null);
+        assert.equal(result.current.address, null);
+        assert.equal(second.listenerCount(), 0);
+        act(() => result.current.connect());
+        await waitFor(() => assert.equal(result.current.status, 'choosing'));
+        act(() => result.current.selectWallet(result.current.wallets[1]));
+        await waitForRequests(second, 2);
+        await settle(second, 1, [OTHER_ADDRESS]);
+        assert.equal(result.current.status, 'connected');
+        assert.equal(result.current.provider, second.wallet.provider);
+        assert.equal(result.current.address, OTHER_ADDRESS);
+      }
+    });
+  }
+}
+
+for (const event of ['disconnect', 'accountsChanged'] as const) test(`${event} cancels a pending reconnection to the same provider`, async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(wallet);
+  await settle(wallet);
+  act(() => result.current.chooseWallet());
+  await waitFor(() => assert.equal(result.current.wallets.length, 1));
+  act(() => result.current.selectWallet(result.current.wallets[0]));
+  await waitForRequests(wallet, 2);
+  act(() => wallet.emit(event, []));
+  await settle(wallet, 1);
+  assert.equal(result.current.status, 'disconnected');
+  assert.equal(result.current.address, null);
+  assert.equal(wallet.listenerCount(), 0);
+});
+
+test('account change asks for permissions once and derives the account from a fresh eth_accounts response', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(wallet);
+  await settle(wallet);
+  act(() => {
+    result.current.changeAccount();
+    result.current.changeAccount();
+  });
+  assert.equal(wallet.requests.length, 2);
+  assert.equal(wallet.requests[1].method, 'wallet_requestPermissions');
+  assert.deepEqual(wallet.requests[1].params, [{ eth_accounts: {} }]);
+  assert.equal(result.current.status, 'connecting');
+  assert.equal(result.current.address, ADDRESS.toLowerCase());
+  await settle(wallet, 1, [{ parentCapability: 'eth_accounts' }]);
+  assert.equal(wallet.requests[2].method, 'eth_accounts');
+  await settle(wallet, 2, [OTHER_ADDRESS]);
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.equal(result.current.status, 'connected');
+  assert.equal(result.current.error, null);
+});
+
+for (const code of [4001, 4200, -32601, -32002]) {
+  test(`account permission error ${code} keeps the existing connection and provides a useful fallback`, async () => {
+    const wallet = makeWallet();
+    wallet.install();
+    const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+    act(() => result.current.connect());
+    await waitForRequests(wallet);
+    await settle(wallet);
+    act(() => result.current.changeAccount());
+    await act(async () => { wallet.requests[1].reject({ code }); });
+    assert.equal(result.current.address, ADDRESS.toLowerCase());
+    assert.equal(result.current.provider, wallet.wallet.provider);
+    assert.equal(result.current.status, 'connected');
+    assert.equal(wallet.listenerCount(), 3);
+    assert.match(result.current.error ?? '', code === 4001 ? /cancelled/ : /Check account/);
+    assert.equal(wallet.requests.length, 2);
+    act(() => result.current.checkAccount());
+    assert.equal(wallet.requests[2].method, 'eth_accounts');
+    await settle(wallet, 2, [OTHER_ADDRESS]);
+    assert.equal(result.current.address, OTHER_ADDRESS);
+    assert.equal(result.current.error, null);
+  });
+}
+
+test('unchanged accounts after permission or manual checks explain how to switch in the wallet', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(wallet);
+  await settle(wallet);
+  act(() => result.current.changeAccount());
+  await settle(wallet, 1, []);
+  await settle(wallet, 2);
+  assert.equal(result.current.status, 'connected');
+  assert.match(result.current.error ?? '', /same account.*Select another account.*Check account/);
+  act(() => result.current.checkAccount());
+  await settle(wallet, 3);
+  assert.match(result.current.error ?? '', /same account/);
+});
+
+test('account and chain events supersede stale account-change reads', async () => {
+  const wallet = makeWallet();
+  wallet.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(wallet);
+  await settle(wallet);
+  act(() => result.current.changeAccount());
+  await settle(wallet, 1, []);
+  act(() => wallet.emit('accountsChanged', [OTHER_ADDRESS]));
+  await settle(wallet, 2);
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.equal(result.current.error, null);
+  act(() => result.current.checkAccount());
+  act(() => wallet.emit('chainChanged', '0x1'));
+  await settle(wallet, 4, [ADDRESS]);
+  await settle(wallet, 3, [OTHER_ADDRESS]);
+  assert.equal(result.current.address, ADDRESS.toLowerCase());
+});
+
+for (const scenario of ['cancel', 'disconnect', 'deactivate', 'unmount'] as const) {
+  test(`${scenario} prevents an old account permission response from continuing`, async () => {
+    const wallet = makeWallet();
+    wallet.install();
+    const { result, rerender, unmount } = renderHook(({ active }) => useMiNoteEthereumWallet(active), { initialProps: { active: true } });
+    act(() => result.current.connect());
+    await waitForRequests(wallet);
+    await settle(wallet);
+    act(() => result.current.changeAccount());
+    if (scenario === 'cancel') act(() => result.current.cancel());
+    else if (scenario === 'disconnect') act(() => result.current.disconnect());
+    else if (scenario === 'deactivate') rerender({ active: false });
+    else unmount();
+    await settle(wallet, 1, []);
+    assert.equal(wallet.requests.length, 2);
+    if (scenario === 'cancel' || scenario === 'deactivate') {
+      assert.equal(result.current.address, ADDRESS.toLowerCase());
+      assert.equal(result.current.status, 'connected');
+    } else assert.equal(wallet.listenerCount(), 0);
+  });
+}
+
+test('a newer provider connection is not affected by a pending account permission response', async () => {
+  const first = makeWallet();
+  first.install();
+  const { result } = renderHook(() => useMiNoteEthereumWallet(true));
+  act(() => result.current.connect());
+  await waitForRequests(first);
+  await settle(first);
+  act(() => result.current.changeAccount());
+  act(() => result.current.cancel());
+  const second = makeWallet('second', 'org.second');
+  second.install();
+  act(() => result.current.chooseWallet());
+  await waitFor(() => assert.equal(result.current.wallets.length, 2));
+  act(() => result.current.selectWallet(result.current.wallets[1]));
+  await settle(second, 0, [OTHER_ADDRESS]);
+  await settle(first, 1, []);
+  assert.equal(first.requests.length, 2);
+  assert.equal(result.current.address, OTHER_ADDRESS);
+  assert.equal(result.current.provider, second.wallet.provider);
 });

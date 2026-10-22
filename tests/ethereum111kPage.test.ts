@@ -3,11 +3,11 @@ import test, { afterEach, beforeEach, type TestContext } from 'node:test';
 import { createElement } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { ETHEREUM_FUNCTIONS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import { encodeCall } from '../shared/ethereum/abi.ts';
-import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumStats } from '../shared/ethereum/api.ts';
 import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
+import type { EthereumCheckoutStatusResponse } from '../shared/ethereum/checkout.ts';
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
@@ -16,7 +16,9 @@ const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111k
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
-const { ethereumInventoryQueryKey, ethereumInventoryScope, writeEthereumStorage } = await import('../src/ethereum/state.ts');
+const { ethereumInventoryQueryKey, ethereumInventoryScope, readEthereumExpected, readEthereumPending, readEthereumSubmission, writeEthereumExpected, writeEthereumStorage } = await import('../src/ethereum/state.ts');
+const { checkoutApi, CheckoutApiError } = await import('../src/checkout/api.ts');
+const { checkoutReservesItems, observeCheckoutReservation, rememberCheckoutReservation } = await import('../src/ethereum/checkoutReservations.ts');
 dom.window.close();
 const clients: InstanceType<typeof QueryClient>[] = [];
 const owner = '0x1111111111111111111111111111111111111111';
@@ -34,6 +36,7 @@ const wallet: EthereumWallet = {
   address: owner, provider: { request: async ({ method }) => method === 'eth_chainId' ? '0xaa36a7' : method === 'eth_getTransactionCount' ? '0x7' : [owner] },
   ready: true, status: 'connected', wallets: [], error: null,
   connect() {}, cancel() {}, disconnect() {}, selectWallet() {},
+  chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };
 function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
   return { allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
@@ -44,6 +47,7 @@ function stats(overrides: Partial<EthereumStats> = {}): EthereumStats {
 beforeEach(context => {
   const t = context as TestContext;
   ({ dom } = setupFrontendDom());
+  Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
   Object.defineProperty(navigator, 'locks', { configurable: true, value: {
     request: async (_name: string, _options: unknown, callback: (lock: object) => Promise<unknown>) => callback({}),
   } });
@@ -77,6 +81,373 @@ function deferred<T>() {
   const promise = new Promise<T>((success, failure) => { resolve = success; reject = failure; });
   return { promise, resolve, reject };
 }
+
+const returnedCheckoutId = '11111111-1111-4111-8111-111111111111';
+const returnedAttemptId = '22222222-2222-4222-8222-222222222222';
+function returnedCheckout(overrides: Partial<EthereumCheckoutStatusResponse> = {}): EthereumCheckoutStatusResponse {
+  return { checkoutId: returnedCheckoutId, dropId: '111k_devnet', chainId: config.chainId, contractAddress: contract, config,
+    tokenIds: ['111112'], items: [item()], unavailableTokenIds: [], wallet: owner, status: 'pending', orderId: 42,
+    transactionHash: `0x${'ab'.repeat(32)}`, confirmations: 0, requiredConfirmations: 3, quoteExpiresAtMs: Date.now() + 600000,
+    attempt: { attemptId: returnedAttemptId, status: 'submitted', transactionHash: `0x${'ab'.repeat(32)}` }, ...overrides };
+}
+
+test('confirmed checkout receipts survive lagging inventory indexing, refreshes, and a reorg', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const sources = [item(), { ...item('332', 'artwork'), displayId: 821, name: 'Artwork #821' }];
+  const receipts = [item('2000001', 'crate_receipt'), { ...item('1000821', 'artwork_receipt'), displayId: 821, name: 'Artwork receipt #821' }];
+  const recovery = { hash: `0x${'cd'.repeat(32)}`, sourceIds: ['99'], mintedIds: ['77'] };
+  writeEthereumExpected(scope, ['77'], recovery);
+  const fresh = deferred<EthereumCheckoutStatusResponse>();
+  let response = fresh.promise;
+  t.mock.method(checkoutApi, 'status', () => response);
+  let reverted = false;
+  const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+    items: (reverted ? sources : receipts).filter(token => expected.includes(token.tokenId)), nextCursor: null, observedBlock: 10,
+  }));
+  const view = page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.equal(view.client.getQueryState(ethereumInventoryQueryKey(scope))?.fetchStatus, 'idle'));
+  assert.equal(view.queryByRole('button', { name: 'View Crate receipt #1' }), null);
+  const successful = returnedCheckout({ status: 'success', confirmations: 3, tokenIds: sources.map(token => token.tokenId), items: sources });
+  await act(async () => { fresh.resolve(successful); });
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
+  assert.ok(view.getByRole('button', { name: 'View Artwork receipt #821' }));
+  assert.deepEqual(readEthereumExpected(scope), ['77', '111112', '332', '2000001', '1000821']);
+  assert.deepEqual(JSON.parse(window.localStorage.getItem(`ethereum111k:${scope}:expected`)!).recovery, recovery);
+  const refreshed = inventory.mock.callCount();
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Refresh' })); });
+  await waitFor(() => assert.ok(inventory.mock.callCount() > refreshed));
+  assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' }));
+  assert.ok(view.getByRole('button', { name: 'View Artwork receipt #821' }));
+  reverted = true;
+  response = Promise.resolve({ ...successful, status: 'pending', confirmations: 0 });
+  await act(async () => {
+    await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', returnedCheckoutId] });
+    fireEvent.click(view.getByRole('button', { name: 'Refresh' }));
+  });
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${sources[1].id}"]`)));
+  assert.equal(view.queryByRole('button', { name: 'View Crate receipt #1' }), null);
+  reverted = false;
+  response = Promise.resolve(successful);
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', returnedCheckoutId] }); });
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
+});
+
+test('checkout confirmation replaces an in-flight inventory read that predates the receipt hints', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const initialInventory = deferred<EthereumInventoryResponse>();
+  const fresh = deferred<EthereumCheckoutStatusResponse>();
+  t.mock.method(checkoutApi, 'status', () => fresh.promise);
+  const receipt = item('2000001', 'crate_receipt');
+  const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => {
+    if (!expected.includes(receipt.tokenId)) return initialInventory.promise;
+    return { items: [receipt], nextCursor: null, observedBlock: 11 };
+  });
+  const view = page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.equal(view.client.getQueryState(ethereumInventoryQueryKey(scope))?.fetchStatus, 'fetching'));
+  await act(async () => { fresh.resolve(returnedCheckout({ status: 'success', confirmations: 3 })); });
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
+  assert.ok(inventory.mock.callCount() >= 2);
+  await act(async () => { initialInventory.resolve({ items: [], nextCursor: null, observedBlock: 10 }); });
+  assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' }));
+});
+
+for (const connected of [false, true]) test(`checkout receipt hints stay with their owner while ${connected ? 'another wallet is connected' : 'disconnected'}`, async t => {
+  const otherOwner = '0x2222222222222222222222222222222222222222';
+  const scope = ethereumInventoryScope(config, owner)!;
+  const otherScope = ethereumInventoryScope(config, otherOwner)!;
+  const otherContractScope = ethereumInventoryScope({ ...config, contractAddress: otherOwner }, owner)!;
+  writeEthereumExpected(scope, ['88']);
+  writeEthereumExpected(otherScope, ['99']);
+  writeEthereumExpected(otherContractScope, ['77']);
+  const fresh = deferred<EthereumCheckoutStatusResponse>();
+  t.mock.method(checkoutApi, 'status', () => fresh.promise);
+  const receipt = item('2000001', 'crate_receipt');
+  const inventory = t.mock.method(ethereumApi, 'inventory', async (_config, requestedOwner, _cursor, _signal, expected = []) => ({
+    items: requestedOwner === owner && expected.includes(receipt.tokenId) ? [receipt] : [], nextCursor: null, observedBlock: 10,
+  }));
+  const initialWallet: EthereumWallet = connected ? { ...wallet, address: otherOwner } :
+    { ...wallet, address: null, provider: null, status: 'disconnected' };
+  const view = page({ checkoutReturnId: returnedCheckoutId, wallet: initialWallet });
+  if (connected) await waitFor(() => assert.equal(view.client.getQueryState(ethereumInventoryQueryKey(otherScope))?.fetchStatus, 'idle'));
+  const beforeConfirmation = inventory.mock.callCount();
+  await act(async () => { fresh.resolve(returnedCheckout({ status: 'success', confirmations: 3 })); });
+  await waitFor(() => assert.deepEqual(readEthereumExpected(scope), ['88', '111112', '2000001']));
+  assert.deepEqual(readEthereumExpected(otherScope), ['99']);
+  assert.deepEqual(readEthereumExpected(otherContractScope), ['77']);
+  assert.equal(inventory.mock.callCount(), beforeConfirmation);
+  view.rerenderPage({ wallet });
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'View Crate receipt #1' })));
+});
+
+test('checkout receipt hints honor the existing expected ID bound', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumExpected(scope, Array.from({ length: ETHEREUM_MAX_EXPECTED_IDS }, (_, index) => String(index + 1)));
+  t.mock.method(checkoutApi, 'status', async () => returnedCheckout({ status: 'success', confirmations: 3 }));
+  page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.equal(readEthereumExpected(scope).at(-1), '2000001'));
+  assert.equal(readEthereumExpected(scope).length, ETHEREUM_MAX_EXPECTED_IDS);
+});
+
+async function selectCrate(view: ReturnType<typeof page>, tokenId = '111112') {
+  const id = item(tokenId).id;
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${id}"]`)));
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${id}"]`)!);
+  return view.getByRole('button', { name: 'Open crate' }) as HTMLButtonElement;
+}
+
+test('a returned redemption blocks opening its same crate before status loads and while pending, without blocking mint', async t => {
+  const response = deferred<EthereumCheckoutStatusResponse>();
+  t.mock.method(checkoutApi, 'status', () => response.promise);
+  const sent: unknown[] = [];
+  const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method, params }) => {
+    if (method === 'eth_sendTransaction') { sent.push(params); return `0x${'cd'.repeat(32)}`; }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    if (method === 'eth_getTransactionCount') return '0x8';
+    return [owner];
+  } } };
+  const view = page({ checkoutReturnId: returnedCheckoutId, wallet: connected });
+  const open = await selectCrate(view);
+  assert.equal(open.disabled, true);
+  assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, false);
+  await act(async () => { response.resolve(returnedCheckout()); });
+  await waitFor(() => assert.ok(view.getByText(/Your redemption is pending/)));
+  assert.equal(open.disabled, true);
+  await act(async () => { fireEvent.click(open); });
+  assert.equal(sent.length, 0);
+});
+
+for (const cachedState of ['ready', 'prepared'] as const) for (const outcome of ['pending', 'unavailable'] as const) {
+  test(`cached ${cachedState} return cannot open a crate before a fresh ${outcome} result`, async t => {
+    const fresh = deferred<EthereumCheckoutStatusResponse>();
+    t.mock.method(checkoutApi, 'status', () => fresh.promise);
+    let sends = 0;
+    const connected: EthereumWallet = { ...wallet, provider: { request: async ({ method }) => {
+      if (method === 'eth_sendTransaction') { sends++; return `0x${'cd'.repeat(32)}`; }
+      if (method === 'eth_chainId') return '0xaa36a7';
+      if (method === 'eth_getTransactionCount') return '0x8';
+      return [owner];
+    } } };
+    const cached = returnedCheckout({ status: cachedState, wallet: cachedState === 'ready' ? null : owner,
+      orderId: cachedState === 'ready' ? null : 42, transactionHash: null, attempt: null });
+    const view = page({ checkoutReturnId: returnedCheckoutId, wallet: connected }, client => client.setQueryData(
+      ['ethereum-checkout', 'return', returnedCheckoutId], cached));
+    const open = await selectCrate(view);
+    assert.equal(checkoutReservesItems([item()]), false);
+    assert.equal(open.disabled, true);
+    await act(async () => { fireEvent.click(open); });
+    assert.equal(sends, 0);
+    await act(async () => {
+      if (outcome === 'pending') fresh.resolve(returnedCheckout());
+      else fresh.reject(new Error('Network unavailable'));
+    });
+    await waitFor(() => assert.ok(view.getByText(outcome === 'pending' ? /Your redemption is pending/ : /Couldn’t check your checkout/)));
+    assert.equal(open.disabled, true);
+    await act(async () => { fireEvent.click(open); });
+    assert.equal(sends, 0);
+    const scope = ethereumInventoryScope(config, owner)!;
+    assert.equal(readEthereumPending(scope), null);
+    assert.equal(readEthereumSubmission(scope), null);
+  });
+}
+
+for (const reserved of [false, true]) test(`leaving a deleted draft return ${reserved ? 'preserves an independent reservation' : 'restores collection opening'}`, async t => {
+  const pending = returnedCheckout({ checkoutId: '44444444-4444-4444-8444-444444444444' });
+  t.mock.method(checkoutApi, 'status', async id => {
+    if (id === pending.checkoutId) return pending;
+    throw new CheckoutApiError(404, 'Checkout not found.', null, 'not-found');
+  });
+  if (reserved) rememberCheckoutReservation(pending);
+  window.history.replaceState(null, '', `/111k_devnet?checkout_id=${returnedCheckoutId}&result=canceled`);
+  const view = page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.ok(view.getByText('This checkout has expired or no longer exists.')));
+  assert.equal((await selectCrate(view)).disabled, true);
+  const link = view.getByRole('link', { name: 'Continue to collection' }) as HTMLAnchorElement;
+  let destination: string | undefined;
+  document.addEventListener('click', event => {
+    assert.equal(event.defaultPrevented, false);
+    event.preventDefault();
+    destination = link.href;
+  }, { once: true });
+  fireEvent.click(link);
+  assert.equal(destination, 'https://mons.shop/111k_devnet');
+  window.history.replaceState(null, '', destination);
+  view.unmount();
+  const collection = page();
+  assert.equal(window.location.search, '');
+  assert.equal((await selectCrate(collection)).disabled, reserved);
+  assert.equal(checkoutReservesItems([item()]), reserved);
+});
+
+for (const unrelated of ['token', 'wallet'] as const) test(`a pending checkout for another ${unrelated} does not block opening this crate`, async t => {
+  t.mock.method(checkoutApi, 'status', async () => returnedCheckout(unrelated === 'token'
+    ? { tokenIds: ['111113'], items: [item('111113')] }
+    : { wallet: '0x2222222222222222222222222222222222222222' }));
+  const view = page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.ok(view.getByText(/Your redemption is pending/)));
+  const open = await selectCrate(view);
+  assert.equal(open.disabled, false);
+});
+
+for (const discovered of ['matching', 'other token', 'other wallet', 'unknown return'] as const) {
+  test(`opening rechecks checkout state discovered during wallet checks (${discovered})`, async t => {
+    const nonce = deferred<string>();
+    const status = deferred<EthereumCheckoutStatusResponse>();
+    let requestedNonce = false;
+    let sends = 0;
+    const checkout = returnedCheckout(discovered === 'other token' ? { tokenIds: ['111113'], items: [item('111113')] } :
+      discovered === 'other wallet' ? { wallet: '0x2222222222222222222222222222222222222222' } : {});
+    t.mock.method(checkoutApi, 'status', () => discovered === 'unknown return' ? status.promise : Promise.resolve(checkout));
+    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
+    t.mock.method(wallet.provider!, 'request', async ({ method }) => {
+      if (method === 'eth_sendTransaction') { sends++; return `0x${'cd'.repeat(32)}`; }
+      if (method === 'eth_chainId') return '0xaa36a7';
+      if (method === 'eth_getTransactionCount') { requestedNonce = true; return nonce.promise; }
+      if (method === 'eth_getTransactionByHash') return null;
+      return [owner];
+    });
+    const view = page();
+    const open = await selectCrate(view);
+    await act(async () => { fireEvent.click(open); });
+    await waitFor(() => assert.equal(requestedNonce, true));
+    await act(async () => {
+      if (discovered === 'unknown return') view.rerenderPage({ checkoutReturnId: returnedCheckoutId });
+      else rememberCheckoutReservation(checkout);
+      nonce.resolve('0x7');
+    });
+    if (discovered === 'matching' || discovered === 'unknown return') {
+      await waitFor(() => assert.ok(view.getByText(/Check the redemption status/)));
+      assert.equal(sends, 0);
+      const scope = ethereumInventoryScope(config, owner)!;
+      assert.equal(readEthereumPending(scope), null);
+      assert.equal(readEthereumSubmission(scope), null);
+    } else await waitFor(() => assert.equal(sends, 1));
+  });
+}
+
+for (const terminal of ['success', 'failed'] as const) test(`a known pending reservation survives a fetch error and clears after ${terminal}`, async t => {
+  let response: EthereumCheckoutStatusResponse | Error = returnedCheckout();
+  t.mock.method(checkoutApi, 'status', async () => { if (response instanceof Error) throw response; return response; });
+  const view = page({ checkoutReturnId: returnedCheckoutId });
+  await waitFor(() => assert.ok(view.getByText(/Your redemption is pending/)));
+  const open = await selectCrate(view);
+  assert.equal(open.disabled, true);
+  response = new Error('Network unavailable');
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', returnedCheckoutId] }); });
+  await waitFor(() => assert.ok(view.getByText(/Couldn’t check your checkout/)));
+  assert.equal(open.disabled, true);
+  assert.equal(checkoutReservesItems([item()]), true);
+  response = returnedCheckout({ status: terminal, ...(terminal === 'failed'
+    ? { attempt: { attemptId: returnedAttemptId, status: 'failed', transactionHash: `0x${'ab'.repeat(32)}` } }
+    : { confirmations: 3 }) });
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereum-checkout', 'return', returnedCheckoutId] }); });
+  await waitFor(() => assert.equal(open.disabled, false));
+  assert.equal(checkoutReservesItems([item()]), false);
+});
+
+test('pending checkout reservations survive ordinary Back and page remount without a return parameter', async t => {
+  const response = returnedCheckout();
+  t.mock.method(checkoutApi, 'status', async () => response);
+  assert.equal(rememberCheckoutReservation(response), true);
+  const first = page();
+  assert.equal((await selectCrate(first)).disabled, true);
+  first.unmount();
+  const returned = page();
+  assert.equal((await selectCrate(returned)).disabled, true);
+  assert.equal(window.location.search, '');
+});
+
+test('cross-tab checkout storage events block an already selected crate and stale terminal cleanup cannot remove a new attempt', async t => {
+  let response = returnedCheckout();
+  t.mock.method(checkoutApi, 'status', async () => response);
+  let sends = 0;
+  t.mock.method(wallet.provider!, 'request', async ({ method }) => {
+    if (method === 'eth_sendTransaction') { sends++; return `0x${'cd'.repeat(32)}`; }
+    if (method === 'eth_chainId') return '0xaa36a7';
+    if (method === 'eth_getTransactionCount') return '0x8';
+    return [owner];
+  });
+  const view = page();
+  const open = await selectCrate(view);
+  assert.equal(open.disabled, false);
+  const key = `mons.shop.ethereum-checkout-reservation:${returnedCheckoutId}:${returnedAttemptId}`;
+  window.localStorage.setItem(key, JSON.stringify({ checkoutId: response.checkoutId, chainId: response.chainId,
+    contractAddress: response.contractAddress, wallet: response.wallet, tokenIds: response.tokenIds, attemptId: returnedAttemptId }));
+  await act(async () => { fireEvent.click(open); });
+  assert.equal(sends, 0);
+  await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key })); });
+  await waitFor(() => assert.equal(open.disabled, true));
+  const nextAttemptId = '33333333-3333-4333-8333-333333333333';
+  response = returnedCheckout({ attempt: { attemptId: nextAttemptId, status: 'started', transactionHash: null } });
+  await act(async () => {
+    const observe = observeCheckoutReservation(returnedCheckoutId);
+    rememberCheckoutReservation(response);
+    observe(returnedCheckout({ status: 'failed' }));
+  });
+  assert.equal(checkoutReservesItems([item()]), true);
+  assert.equal(open.disabled, true);
+  assert.ok(Object.keys(window.localStorage).some(key => key.startsWith(`mons.shop.ethereum-checkout-reservation:${returnedCheckoutId}:${nextAttemptId}`)));
+});
+
+test('cached terminal reservation data cannot clear a restored pending checkout before a fresh read', async t => {
+  const pending = returnedCheckout();
+  const fresh = deferred<EthereumCheckoutStatusResponse>();
+  let response = fresh.promise;
+  t.mock.method(checkoutApi, 'status', () => response);
+  rememberCheckoutReservation(pending);
+  const view = page({}, client => client.setQueryData(
+    ['ethereumCheckoutReservation', returnedCheckoutId, returnedAttemptId], returnedCheckout({ status: 'failed' })));
+  const open = await selectCrate(view);
+  assert.equal(open.disabled, true);
+  assert.equal(checkoutReservesItems([item()]), true);
+  await act(async () => { fresh.resolve(pending); });
+  assert.equal(checkoutReservesItems([item()]), true);
+  response = Promise.resolve(returnedCheckout({ status: 'failed' }));
+  await act(async () => { await view.client.refetchQueries({ queryKey: ['ethereumCheckoutReservation', returnedCheckoutId] }); });
+  await waitFor(() => assert.equal(open.disabled, false));
+  assert.equal(checkoutReservesItems([item()]), false);
+});
+
+test('a delayed terminal read cannot clear the same attempt restored while its observer remains mounted', async t => {
+  const reads: ReturnType<typeof deferred<EthereumCheckoutStatusResponse>>[] = [];
+  t.mock.method(checkoutApi, 'status', () => {
+    const read = deferred<EthereumCheckoutStatusResponse>();
+    reads.push(read);
+    return read.promise;
+  });
+  const pending = returnedCheckout();
+  rememberCheckoutReservation(pending);
+  const view = page();
+  const open = await selectCrate(view);
+  await waitFor(() => assert.equal(reads.length, 1));
+  await act(async () => {
+    observeCheckoutReservation(returnedCheckoutId)(returnedCheckout({ status: 'failed' }));
+    rememberCheckoutReservation(pending);
+  });
+  await act(async () => { reads[0].resolve(returnedCheckout({ status: 'failed' })); });
+  assert.equal(checkoutReservesItems([item()]), true);
+  assert.equal(open.disabled, true);
+  let refetch!: Promise<void>;
+  await act(async () => { refetch = view.client.refetchQueries({ queryKey: ['ethereumCheckoutReservation', returnedCheckoutId] }); });
+  await waitFor(() => assert.equal(reads.length, 2));
+  await act(async () => { reads[1].resolve(pending); await refetch; });
+  assert.equal(checkoutReservesItems([item()]), true);
+  assert.equal(open.disabled, true);
+});
+
+test('a newer live pending observation prevents an older terminal read from clearing its reservation', async t => {
+  const fresh = deferred<EthereumCheckoutStatusResponse>();
+  const newer = deferred<EthereumCheckoutStatusResponse>();
+  t.mock.method(checkoutApi, 'status', () => fresh.promise);
+  const pending = returnedCheckout();
+  rememberCheckoutReservation(pending);
+  const view = page();
+  const open = await selectCrate(view);
+  const observed = newer.promise.then(observeCheckoutReservation(returnedCheckoutId));
+  await act(async () => { newer.resolve(pending); await observed; });
+  await act(async () => { fresh.resolve(returnedCheckout({ status: 'failed' })); });
+  assert.equal(checkoutReservesItems([item()]), true);
+  assert.equal(open.disabled, true);
+});
 
 test('crate discounts reuse the existing button state and use public pricing above the remaining allowance', async t => {
   const discount = stats({ discountMerkleRoot: `0x${'12'.repeat(32)}` });
@@ -484,11 +855,13 @@ test('a queued mint blocks newly loaded inventory actions until it fails', async
   fireEvent.click(crate);
   assert.equal(crate.getAttribute('aria-pressed'), 'true');
   fireEvent.click(view.getByRole('button', { name: 'Send' }));
-  assert.ok(view.getByRole('dialog', { name: 'Send for delivery' }));
+  assert.equal(window.location.pathname, '/checkout');
+  assert.equal(window.location.search, '?drop=111k_devnet&ids=111112');
+  assert.equal(view.queryByRole('dialog'), null);
   assert.equal(view.transactions.length, 0);
 });
 
-test('a queued mint disables existing selection actions and cancellation restores the delivery flow', async t => {
+test('a queued mint disables existing selection actions and cancellation restores checkout navigation', async t => {
   const view = await delayedMintPage(t);
   await act(async () => { view.configuration.resolve(config); });
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
@@ -502,13 +875,15 @@ test('a queued mint disables existing selection actions and cancellation restore
     fireEvent.click(action);
   }
   assert.equal(view.queryByRole('dialog'), null);
+  assert.equal(window.location.pathname, '/111k_devnet');
   await act(async () => { window.dispatchEvent(new window.Event('pagehide')); });
   assert.equal(send.disabled, false);
   fireEvent.click(send);
-  assert.ok(view.getByRole('dialog', { name: 'Send for delivery' }));
+  assert.equal(window.location.pathname, '/checkout');
+  assert.equal(window.location.search, '?drop=111k_devnet&ids=111112');
   await act(async () => { view.availability.resolve(stats()); });
   await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
-  assert.ok(view.getByRole('dialog', { name: 'Send for delivery' }));
+  assert.equal(view.queryByRole('dialog'), null);
   assert.equal(view.transactions.length, 0);
 });
 
@@ -740,6 +1115,54 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
   assert.equal(view.queryByRole('button', { name: 'Open crate' }), null);
 });
 
+for (const selection of [
+  { name: 'crate', tokens: [item()], expected: '111112' },
+  { name: 'artwork', tokens: [{ ...item('332', 'artwork'), displayId: 332, name: 'Artwork #332' }], expected: '332' },
+  { name: 'mixed crate and artwork', tokens: [
+    { ...item('111113'), displayId: 2, name: 'Crate #2' },
+    { ...item('553', 'artwork'), displayId: 553, name: 'Artwork #553' },
+    item(),
+  ], expected: '553,111112,111113' },
+]) {
+  test(`sending a ${selection.name} selection opens checkout with onchain token IDs and no transaction`, async t => {
+    const methods: string[] = [];
+    const sendingWallet: EthereumWallet = { ...wallet, provider: { request: async args => {
+      methods.push(args.method);
+      return wallet.provider!.request(args);
+    } } };
+    const prepare = t.mock.method(ethereumApi, 'prepareDelivery');
+    const saveAddress = t.mock.method(ethereumApi, 'saveAddress');
+    t.mock.method(ethereumApi, 'inventory', async () => ({ items: selection.tokens, nextCursor: null, observedBlock: 10 }));
+    const view = page({ wallet: sendingWallet });
+    await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, selection.tokens.length));
+    for (const token of selection.tokens) fireEvent.click(view.container.querySelector(`[data-inventory-id="${token.id}"]`)!);
+    fireEvent.click(view.getByRole('button', { name: 'Send' }));
+    assert.equal(window.location.pathname, '/checkout');
+    assert.deepEqual([...new URLSearchParams(window.location.search)], [['drop', '111k_devnet'], ['ids', selection.expected]]);
+    assert.equal(view.queryByRole('dialog'), null);
+    assert.equal(prepare.mock.callCount(), 0);
+    assert.equal(saveAddress.mock.callCount(), 0);
+    assert.equal(methods.some(method => ['eth_sendTransaction', 'personal_sign', 'wallet_switchEthereumChain'].includes(method)), false);
+  });
+}
+
+test('warehouses and receipts keep their existing actions without offering checkout', async t => {
+  const warehouse = { ...item('116667', 'warehouse'), name: 'Warehouse #1' };
+  const receipt = item('2000001', 'crate_receipt');
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [warehouse, receipt], nextCursor: null, observedBlock: 10 }));
+  const view = page();
+  await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
+  fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
+  assert.ok(view.getByRole('button', { name: 'Open warehouse' }));
+  assert.equal(view.queryByRole('button', { name: 'Send' }), null);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  fireEvent.click(view.getByRole('button', { name: 'View Crate receipt #1' }));
+  assert.ok(view.getByRole('button', { name: 'Claim crate contents' }));
+  assert.ok(view.getByRole('button', { name: 'Transfer receipt' }));
+  assert.equal(view.queryByRole('button', { name: 'Send' }), null);
+  assert.equal(window.location.pathname, '/111k_devnet');
+});
+
 test('crate opening is capped at fifteen without truncating fifty-item delivery selections', async t => {
   const crates = Array.from({ length: 51 }, (_, index) => ({ ...item(String(111112 + index)), displayId: index + 1, name: `Crate #${index + 1}` }));
   const artwork = { ...item('1', 'artwork'), name: 'Artwork #1' };
@@ -832,45 +1255,35 @@ test('claim-link codes survive an unrelated cross-tab transaction and stay scope
   assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, '');
 });
 
-for (const dialog of ['delivery', 'recovery'] as const) {
-  test(`a deferred claim link replaces the ${dialog} dialog and keeps the claim field focused`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    const crate = item();
-    const receipt = item('2000001', 'crate_receipt');
-    let finishInventory!: (response: EthereumInventoryResponse) => void;
-    const inventoryResponse = new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
-    t.mock.method(ethereumApi, 'inventory', () => inventoryResponse);
-    if (dialog === 'recovery') {
-      writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'ab'.repeat(32)}`, action: 'mint', submittedAt: Date.now() });
-      t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
-    }
-    window.history.replaceState(null, '', '/111k_devnet?receiptId=2000001&claim=ABCDEF123456');
-    const view = page({ claimReceiptId: '2000001', claimCode: 'ABCDEF123456' }, client => {
-      client.setQueryData(['ethereum111k', 'config'], config);
-      client.setQueryData(ethereumInventoryQueryKey(scope), {
-        pageParams: [null], pages: [{ items: [crate], nextCursor: null, observedBlock: 10 }],
-      });
+test('a deferred claim link replaces the recovery dialog and keeps the claim field focused', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const crate = item();
+  const receipt = item('2000001', 'crate_receipt');
+  let finishInventory!: (response: EthereumInventoryResponse) => void;
+  const inventoryResponse = new Promise<EthereumInventoryResponse>(resolve => { finishInventory = resolve; });
+  t.mock.method(ethereumApi, 'inventory', () => inventoryResponse);
+  writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'ab'.repeat(32)}`, action: 'mint', submittedAt: Date.now() });
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
+  window.history.replaceState(null, '', '/111k_devnet?receiptId=2000001&claim=ABCDEF123456');
+  const view = page({ claimReceiptId: '2000001', claimCode: 'ABCDEF123456' }, client => {
+    client.setQueryData(['ethereum111k', 'config'], config);
+    client.setQueryData(ethereumInventoryQueryKey(scope), {
+      pageParams: [null], pages: [{ items: [crate], nextCursor: null, observedBlock: 10 }],
     });
-    const previousTitle = dialog === 'delivery' ? 'Send for delivery' : 'Recover a pending transaction';
-    if (dialog === 'delivery') {
-      fireEvent.click(view.container.querySelector(`[data-inventory-id="${crate.id}"]`)!);
-      fireEvent.click(view.getByRole('button', { name: 'Send' }));
-    } else {
-      await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
-      fireEvent.click(view.getByRole('button', { name: 'Transaction changed?' }));
-      fireEvent.click(view.getByRole('button', { name: 'Stop tracking…' }));
-    }
-    assert.ok(view.getByRole('dialog', { name: previousTitle }));
-    await act(async () => { finishInventory({ items: [crate, receipt], nextCursor: null, observedBlock: 11 }); });
-    await waitFor(() => assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' })));
-    assert.equal(view.queryAllByRole('dialog').length, 1);
-    assert.equal(view.queryByRole('dialog', { name: previousTitle }), null);
-    const claimInput = view.getByLabelText('Crate claim code') as HTMLInputElement;
-    assert.equal(claimInput.value, 'ABCDEF123456');
-    act(() => claimInput.focus());
-    assert.equal(document.activeElement, claimInput);
   });
-}
+  await waitFor(() => assert.ok(view.getByRole('button', { name: 'Transaction changed?' })));
+  fireEvent.click(view.getByRole('button', { name: 'Transaction changed?' }));
+  fireEvent.click(view.getByRole('button', { name: 'Stop tracking…' }));
+  assert.ok(view.getByRole('dialog', { name: 'Recover a pending transaction' }));
+  await act(async () => { finishInventory({ items: [crate, receipt], nextCursor: null, observedBlock: 11 }); });
+  await waitFor(() => assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' })));
+  assert.equal(view.queryAllByRole('dialog').length, 1);
+  assert.equal(view.queryByRole('dialog', { name: 'Recover a pending transaction' }), null);
+  const claimInput = view.getByLabelText('Crate claim code') as HTMLInputElement;
+  assert.equal(claimInput.value, 'ABCDEF123456');
+  act(() => claimInput.focus());
+  assert.equal(document.activeElement, claimInput);
+});
 
 test('an unconfigured contract has a clear state and never offers a transaction', async t => {
   t.mock.method(ethereumApi, 'config', async () => resolveEthereum111kConfig());
@@ -896,77 +1309,6 @@ test('an interrupted submission blocks minting and offers hash recovery or expli
   await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Recover transaction' }), null));
   assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, false);
 });
-
-for (const initialChain of ['0xaa36a7', '0x1']) for (const outcome of ['rejected', 'submitted', 'unknown'] as const) {
-  test(`delivery drafts from chain ${initialChain} survive wallet approval and handle ${outcome} submissions`, async t => {
-    const scope = ethereumInventoryScope(config, owner)!;
-    window.sessionStorage.setItem(`ethereum111k:${scope}:session`, JSON.stringify({
-      token: 'session', address: owner, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000,
-    }));
-    t.mock.method(ethereumApi, 'profile', async () => ({ wallet: owner, addresses: [] }));
-    t.mock.method(ethereumApi, 'shipments', async () => ({ orders: [] }));
-    t.mock.method(ethereumApi, 'saveAddress', async body => ({ address: { ...body, id: 'A'.repeat(20) } }));
-    t.mock.method(ethereumApi, 'prepareDelivery', async ids => {
-      const deadline = Math.floor(Date.now() / 1000) + 600;
-      const signature = `0x${'ab'.repeat(65)}`;
-      const receiptIdsHash = ethereumReceiptIdsHash(['2000001']);
-      return { orderId: 42, expiresAtMs: deadline * 1000, signature,
-        quote: { orderId: 42, wallet: owner, fee: config.deliveryFeeWei, deadline, receiptIdsHash },
-        transaction: { to: contract, chainId: config.chainId, value: `0x${BigInt(config.deliveryFeeWei).toString(16)}`,
-          data: encodeCall('redeemForDelivery(uint256[],(uint256,address,uint256,uint256,bytes32),bytes)',
-            ['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'],
-            [ids, [42, owner, config.deliveryFeeWei, deadline, receiptIdsHash], signature]) } };
-    });
-    t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 0, items: [], burnedTokenIds: [] }));
-    let approve: ((hash: string) => void) | undefined;
-    let reject: ((error: Error) => void) | undefined;
-    let currentChain = initialChain;
-    const chainListeners = new Set<(chain: unknown) => void>();
-    const changeChain = (chain: string) => { currentChain = chain; chainListeners.forEach(listener => listener(chain)); };
-    const sendingWallet: EthereumWallet = { ...wallet, provider: {
-      on(event, listener) { if (event === 'chainChanged') chainListeners.add(listener); },
-      removeListener(event, listener) { if (event === 'chainChanged') chainListeners.delete(listener); },
-      request: async ({ method }) => {
-        if (method === 'wallet_switchEthereumChain') { changeChain('0xaa36a7'); return null; }
-        if (method === 'eth_sendTransaction') return new Promise<string>((resolve, fail) => { approve = resolve; reject = fail; });
-        if (method === 'eth_chainId') return currentChain;
-        if (method === 'eth_getTransactionCount') return '0x7';
-        if (method === 'eth_getTransactionByHash') return null;
-        return [owner];
-      },
-    } };
-    const view = page({ wallet: sendingWallet, addressEncryptionPublicKey: 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=' });
-    await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${item().id}"]`)));
-    fireEvent.click(view.container.querySelector(`[data-inventory-id="${item().id}"]`)!);
-    fireEvent.click(view.getByRole('button', { name: 'Send' }));
-    const fields = { Email: 'test@example.com', 'Full name': 'Example User', 'Address line 1': '123 Example Street',
-      City: 'Portland', 'State / Region': 'OR', 'Postal code': '97201' };
-    for (const [label, value] of Object.entries(fields)) fireEvent.change(view.getByLabelText(label), { target: { value } });
-    const nameInput = view.getByLabelText('Full name');
-    fireEvent.click(view.getByRole('button', { name: /Send for .* ETH/ }));
-    await waitFor(() => assert.ok(approve && reject));
-    assert.ok(view.getAllByRole('radio').every(input => input.matches(':disabled')));
-    assert.ok(view.getByRole('dialog', { name: 'Send for delivery' }));
-    assert.equal(view.getByLabelText('Full name'), nameInput);
-    await act(async () => {
-      if (outcome === 'submitted') approve!(`0x${'ab'.repeat(32)}`);
-      else reject!(outcome === 'rejected' ? Object.assign(new Error('Rejected'), { code: 4001 }) : new Error('Wallet connection failed'));
-    });
-    if (outcome === 'rejected') {
-      await waitFor(() => assert.ok(view.getAllByText('Request cancelled in your wallet.').length));
-      assert.equal(view.getByLabelText('Full name'), nameInput);
-      for (const [label, value] of Object.entries(fields)) assert.equal((view.getByLabelText(label) as HTMLInputElement).value, value);
-      assert.ok(view.getByText('1 selected · test order, no physical shipment.'));
-      assert.equal((view.getByRole('button', { name: /Send for .* ETH/ }) as HTMLButtonElement).disabled, false);
-      act(() => changeChain('0x1'));
-      assert.equal(view.queryByRole('dialog', { name: 'Send for delivery' }), null);
-      assert.equal(view.queryByRole('button', { name: 'Send' }), null);
-    } else {
-      await waitFor(() => assert.equal(view.queryByRole('dialog', { name: 'Send for delivery' }), null));
-      assert.ok(view.getByRole('button', { name: outcome === 'submitted' ? 'Transaction changed?' : 'Recover transaction' }));
-    }
-  });
-}
 
 test('interrupted-submission recovery retains rejected hashes and closes after successful verification', async t => {
   const scope = ethereumInventoryScope(config, owner)!;

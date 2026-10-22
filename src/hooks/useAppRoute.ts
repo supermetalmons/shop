@@ -15,7 +15,10 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.walletCluster === b.walletCluster &&
   a.ethereumDropId === b.ethereumDropId &&
   a.ethereumClaimReceiptId === b.ethereumClaimReceiptId &&
-  a.ethereumClaimCode === b.ethereumClaimCode;
+  a.ethereumClaimCode === b.ethereumClaimCode &&
+  a.checkoutId === b.checkoutId &&
+  a.checkoutSearch === b.checkoutSearch &&
+  a.ethereumCheckoutReturnId === b.ethereumCheckoutReturnId;
 
 function resolveCurrentRoute(): ResolvedAppRoute {
   const route = resolveAppRoute({

@@ -19,6 +19,7 @@ import {
 } from './ethereumRead.js';
 import { matchesSha256Hex, sha256Hex } from './sessionSecrets.js';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from './commerceRepository.js';
+import { blockingEthereumCheckout, inspectEthereumCheckoutFailures, requireResolvedEthereumCheckoutFailures } from './ethereumCheckoutAttempts.js';
 
 export type EthereumDeliveryRow = {
   chain_id: number; contract_address: string; order_id: number; request_id: string; wallet: string;
@@ -26,6 +27,7 @@ export type EthereumDeliveryRow = {
   deadline: number; status: 'prepared' | 'pending' | 'confirmed'; transaction_hash: string | null;
   block_number: number | null; block_hash: string | null; created_at_ms: number; updated_at_ms: number;
   published_at_ms: number | null; verified_at_block: number | null;
+  checkout_id?: string | null;
 };
 
 export type EthereumClaimRow = {
@@ -39,7 +41,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 const decimalId = z.string().regex(/^[1-9][0-9]{0,77}$/);
 const hash = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 
-async function loadEthereumDelivery(context: EthereumContext, orderId: number): Promise<EthereumDeliveryRow> {
+export async function loadEthereumDelivery(context: EthereumContext, orderId: number): Promise<EthereumDeliveryRow> {
   const row = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
     WHERE chain_id = ? AND contract_address = ? AND order_id = ?`)
     .bind(context.config.chainId, requireEthereumContract(context), orderId).first<EthereumDeliveryRow>();
@@ -126,14 +128,44 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
   const body = await readEthereumBody(request, context.signal, z.object({
     tokenIds: z.array(decimalId).min(1).max(50), addressId: z.string().regex(/^[A-Za-z0-9]{20}$/), requestId: z.string().regex(UUID),
   }).strict());
+  return prepareEthereumDeliveryQuote(context, session.wallet, body);
+}
+
+export async function prepareEthereumDeliveryQuote(context: EthereumContext, wallet: string,
+  body: { tokenIds: string[]; addressId: string; requestId: string },
+  checkout?: { checkoutId: string; items: readonly Pick<EthereumTokenInfo, 'tokenId' | 'kind' | 'displayId'>[] }): Promise<EthereumDeliveryPrepareResponse> {
   const ids = body.tokenIds.map(normalizeEthereumTokenId);
   if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) throw new EthereumApiError('invalid-argument', 'Choose distinct owned artworks or crates.');
   const tokenIds = ids as string[];
   const contractAddress = requireEthereumContract(context);
   const secret = await signerSecret(context);
-  let row = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
-    WHERE chain_id = ? AND contract_address = ? AND wallet = ? AND request_id = ?`)
-    .bind(context.config.chainId, contractAddress, session.wallet, body.requestId).first<EthereumDeliveryRow>();
+  const loadPrepared = () => checkout
+    ? context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes WHERE checkout_id = ?`)
+      .bind(checkout.checkoutId).first<EthereumDeliveryRow>()
+    : context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
+      WHERE chain_id = ? AND contract_address = ? AND wallet = ? AND request_id = ?`)
+      .bind(context.config.chainId, contractAddress, wallet, body.requestId).first<EthereumDeliveryRow>();
+  let row = await loadPrepared();
+  if (row && (row.wallet !== wallet || row.chain_id !== context.config.chainId || row.contract_address !== contractAddress)) {
+    throw new EthereumApiError('permission-denied', 'This checkout belongs to a different wallet or collection.');
+  }
+  const failures = await inspectEthereumCheckoutFailures(context, { wallet, tokenIdsJson: JSON.stringify(tokenIds) });
+  requireResolvedEthereumCheckoutFailures(failures);
+  const assertCheckoutAvailable = async (prepared: EthereumDeliveryRow | null) => {
+    if (!await context.env.COMMERCE_DB.prepare(`SELECT 1 WHERE ${failures.sql}
+      AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts
+        WHERE checkout_id = ? AND status IN ('started', 'submitted', 'expired'))`)
+      .bind(...failures.values, prepared?.checkout_id ?? null).first()) {
+      const expired = prepared?.checkout_id && await context.env.COMMERCE_DB.prepare(`SELECT 1 FROM ethereum_delivery_checkout_attempts
+        WHERE checkout_id = ? AND status = 'expired' LIMIT 1`).bind(prepared.checkout_id).first();
+      const blockingCheckoutId = expired ? null : await blockingEthereumCheckout(context, { wallet, tokenIdsJson: JSON.stringify(tokenIds) });
+      throw new EthereumApiError('failed-precondition', blockingCheckoutId
+        ? 'Some selected items already have a pending redemption. Return to that checkout to track or recover it.'
+        : 'This checkout is already being checked or has expired. Return to it before starting again.',
+      blockingCheckoutId ? { blockingCheckoutId } : undefined);
+    }
+  };
+  await assertCheckoutAvailable(row);
   if (row && (row.address_id !== body.addressId || row.token_ids_json !== JSON.stringify(tokenIds))) {
     throw new EthereumApiError('failed-precondition', 'This delivery request was already used for a different selection.');
   }
@@ -141,10 +173,14 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
   const [used] = row ? decodeReturn(['bool'], await ethereumCall(context, encodeCall('usedDeliveryOrders(uint256)', ['uint256'], [row.order_id]))) : [false];
   if (used) throw new EthereumApiError('failed-precondition', 'This delivery is already onchain. Wait for its confirmation.');
   const items = await ethereumTokenInfos(context, tokenIds);
-  if (items.length !== tokenIds.length || items.some((item) => item.owner !== session.wallet || !['artwork', 'crate'].includes(item.kind))) {
+  if (items.length !== tokenIds.length || items.some((item) => item.owner !== wallet || !['artwork', 'crate'].includes(item.kind))) {
     throw new EthereumApiError('permission-denied', 'Only owned artworks and crates can be delivered.');
   }
-  const address = await loadEthereumAddress(context, session.wallet, body.addressId);
+  if (checkout && (checkout.items.length !== items.length || checkout.items.some((item, index) =>
+    item.tokenId !== items[index].tokenId || item.kind !== items[index].kind || item.displayId !== items[index].displayId))) {
+    throw new EthereumApiError('failed-precondition', 'The selected items changed onchain. Start a new checkout.');
+  }
+  const address = await loadEthereumAddress(context, wallet, body.addressId);
   const deadline = await authorizationDeadline(context);
   if (!row) {
     for (let attempt = 0; attempt < 16; attempt++) {
@@ -153,24 +189,27 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
       if (existing) continue;
       const result = await context.env.COMMERCE_DB.prepare(`INSERT OR IGNORE INTO ethereum_delivery_quotes
         (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json, items_json,
-         fee_wei, deadline, status, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?)`)
-        .bind(context.config.chainId, contractAddress, orderId, body.requestId, session.wallet, body.addressId,
+         fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ? WHERE ${failures.sql}`)
+        .bind(context.config.chainId, contractAddress, orderId, body.requestId, wallet, body.addressId,
           JSON.stringify(address), JSON.stringify(tokenIds), JSON.stringify(items), context.config.deliveryFeeWei,
-          deadline, context.nowMs, context.nowMs).run();
-      row = await context.env.COMMERCE_DB.prepare(`SELECT * FROM ethereum_delivery_quotes
-        WHERE chain_id = ? AND contract_address = ? AND wallet = ? AND request_id = ?`)
-        .bind(context.config.chainId, contractAddress, session.wallet, body.requestId).first<EthereumDeliveryRow>();
+          deadline, context.nowMs, context.nowMs, checkout?.checkoutId ?? null, ...failures.values).run();
+      row = await loadPrepared();
       if (row) break;
+      await assertCheckoutAvailable(row);
       if (result.meta.changes === 1) throw new EthereumApiError('unavailable', 'Delivery preparation is temporarily unavailable.');
     }
     if (!row) throw new EthereumApiError('unavailable', 'Delivery preparation is temporarily unavailable.');
-    if (row.address_id !== body.addressId || row.token_ids_json !== JSON.stringify(tokenIds)) {
+    if (row.wallet !== wallet || row.address_id !== body.addressId || row.token_ids_json !== JSON.stringify(tokenIds)) {
       throw new EthereumApiError('failed-precondition', 'This delivery request was already used for a different selection.');
     }
   } else if (row.deadline <= Math.floor(context.nowMs / 1000)) {
     await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_quotes SET deadline = ?, updated_at_ms = MAX(updated_at_ms + 1, ?)
-      WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND deadline = ? AND status != 'confirmed'`)
-      .bind(deadline, context.nowMs, context.config.chainId, contractAddress, row.order_id, row.deadline).run();
+      WHERE chain_id = ? AND contract_address = ? AND order_id = ? AND deadline = ? AND status != 'confirmed'
+        AND (checkout_id IS NULL OR NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS attempt
+          WHERE attempt.checkout_id = ethereum_delivery_quotes.checkout_id AND attempt.status IN ('started', 'submitted', 'expired')))
+        AND ${failures.sql}`)
+      .bind(deadline, context.nowMs, context.config.chainId, contractAddress, row.order_id, row.deadline, ...failures.values).run();
     row = await loadEthereumDelivery(context, row.order_id);
   }
   const storedItems = deliveryItems(row);
@@ -181,6 +220,7 @@ async function prepareEthereumDelivery(request: Request, context: EthereumContex
   const quote = { orderId: row.order_id, wallet: row.wallet, fee: row.fee_wei, deadline: row.deadline,
     receiptIdsHash: ethereumReceiptIdsHash(deliveryReceiptIds(storedItems)) };
   await requireEthereum111kWrites(context.env.COMMERCE_DB, context.config, context.signal);
+  await assertCheckoutAvailable(row);
   const signature = signDigest(secret, deliveryDigest({ ...quote, chainId: context.config.chainId, contractAddress, tokenIds }));
   return { orderId: row.order_id, expiresAtMs: row.deadline * 1000, quote, signature,
     transaction: { to: contractAddress, chainId: context.config.chainId, value: ethereumHexQuantity(row.fee_wei),
@@ -306,7 +346,7 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
   });
 }
 
-function requireMatchingDelivery(event: Extract<EthereumDecodedEvent, { name: 'DeliveryRedeemed' }>, row: EthereumDeliveryRow): void {
+export function requireMatchingDelivery(event: Extract<EthereumDecodedEvent, { name: 'DeliveryRedeemed' }>, row: EthereumDeliveryRow): void {
   const expectedReceipts = deliveryReceiptIds(deliveryItems(row));
   if (event.wallet !== row.wallet || event.fee !== row.fee_wei || JSON.stringify(event.tokenIds) !== row.token_ids_json ||
     JSON.stringify(event.receiptIds) !== JSON.stringify(expectedReceipts)) {

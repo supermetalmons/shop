@@ -265,6 +265,8 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0040_ethereum_reconciliation_resume.sql',
       '0041_ethereum_111k_control.sql',
       '0042_receipt_claim_failure_outbox.sql',
+      '0043_ethereum_checkout.sql',
+      '0044_ethereum_checkout_attempt_order_index.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

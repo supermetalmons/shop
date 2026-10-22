@@ -24,6 +24,7 @@ const ETH_SESSION = { token: 'test-token', address: ADDRESS, preorderId: 'mi_not
 const WALLET: ComponentProps<typeof Gallery>['wallet'] = {
   address: ADDRESS, provider: { request: async () => [] }, status: 'connected', ready: true, wallets: [], error: null,
   connect: () => {}, selectWallet: () => {}, cancel: () => {}, disconnect: () => {},
+  chooseWallet: () => {}, changeAccount: () => {}, checkAccount: () => {},
 };
 const VERIFICATION: ComponentProps<typeof Gallery>['verification'] = { ready: true, session: ETH_SESSION, verifying: false, error: null, verify: async () => {}, invalidate: () => {} };
 function MiNoteCardsGallery(props: Omit<ComponentProps<typeof Gallery>, 'wallet' | 'verification'> & Partial<Pick<ComponentProps<typeof Gallery>, 'wallet' | 'verification'>>) {

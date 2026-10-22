@@ -15,6 +15,46 @@ beforeEach(() => window.history.replaceState(null, '', '/'));
 afterEach(cleanup);
 after(() => dom.window.close());
 
+test('checkout entries and sessions remain standalone and track query and history changes', () => {
+  const firstId = '78f6e575-2779-43be-9829-03e8df204532';
+  const secondId = 'e630e5e4-77f3-494a-abfd-6b59883e6e1c';
+  window.history.replaceState(null, '', '/checkout?drop=111k_devnet&ids=1');
+  const view = renderHook(useAppRoute);
+  assert.equal(view.result.current.kind, 'checkout');
+  assert.equal(view.result.current.checkoutSearch, '?drop=111k_devnet&ids=1');
+  assert.equal(view.result.current.drop, null);
+  act(() => navigate('/checkout?drop=111k_devnet&ids=2'));
+  assert.equal(view.result.current.checkoutSearch, '?drop=111k_devnet&ids=2');
+  act(() => navigate(`/checkout/${firstId}`, { replace: true }));
+  assert.equal(view.result.current.checkoutId, firstId);
+  act(() => navigate(`/checkout/${secondId}`));
+  assert.equal(view.result.current.checkoutId, secondId);
+  act(() => {
+    window.history.replaceState(null, '', `/checkout/${firstId}`);
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.equal(view.result.current.checkoutId, firstId);
+  act(() => {
+    window.history.replaceState(null, '', '/checkout?drop=invalid&ids=1');
+    window.dispatchEvent(new dom.window.PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  assert.equal(view.result.current.kind, 'checkout');
+  assert.equal(view.result.current.checkoutSearch, '?drop=invalid&ids=1');
+  assert.equal(resolveAppRoute({ pathname: '/checkout/not-a-valid-id' }).kind, 'checkout');
+});
+
+test('Ethereum checkout returns track identity without trusting callback result hints', () => {
+  window.history.replaceState(null, '', '/111k_devnet?checkout_id=first&result=pending');
+  const view = renderHook(useAppRoute);
+  assert.equal(view.result.current.ethereumCheckoutReturnId, 'first');
+  const initial = view.result.current;
+  act(() => navigate('/111k_devnet?checkout_id=first&result=success'));
+  assert.equal(view.result.current, initial);
+  act(() => navigate('/111k_devnet?checkout_id=second&result=success'));
+  assert.equal(view.result.current.ethereumCheckoutReturnId, 'second');
+  assert.equal(view.result.current.kind, 'ethereum-drop');
+});
+
 for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {
   test(`mainnet-only staff cannot open copied devnet, testnet, or devnet preview routes (${wallet.slice(0, 4)})`, () => {
     const existingAdmin = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';

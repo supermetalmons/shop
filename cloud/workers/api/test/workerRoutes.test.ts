@@ -8,7 +8,7 @@ import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIP
 
 type ExpectedExactRoute = readonly [
   pathname: string,
-  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'pack-status',
+  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'ethereum-checkout-status' | 'pack-status',
   profileOriginGate: boolean,
   staff: 'skip' | 'optional' | 'required',
   commerceMutation: boolean,
@@ -87,6 +87,11 @@ const EXPECTED_EXACT_ROUTES = [
   ['/ethereum/111k/delivery/confirm', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/delivery/confirm'],
   ['/ethereum/111k/claims/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/claims/prepare'],
   ['/ethereum/111k/claims/confirm', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/claims/confirm'],
+  ['/ethereum/111k/checkout/create', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/create'],
+  ['/ethereum/111k/checkout/status', 'ethereum-checkout-status', false, 'skip', false, 'profile', '/ethereum/111k/checkout/status'],
+  ['/ethereum/111k/checkout/prepare', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/prepare'],
+  ['/ethereum/111k/checkout/submission', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/submission'],
+  ['/ethereum/111k/checkout/refresh', 'ethereum', true, 'skip', true, 'profile', '/ethereum/111k/checkout/refresh'],
 ] satisfies readonly ExpectedExactRoute[];
 
 function routeContract(pathname: string) {

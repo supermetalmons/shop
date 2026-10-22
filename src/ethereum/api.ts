@@ -1,5 +1,5 @@
 import {
-  ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER,
+  ETHEREUM_API_PATHS,
   type Ethereum111kConfig, type EthereumAuthChallenge, type EthereumClaimPrepareResponse,
   type EthereumConfirmationResponse, type EthereumDeliveryConfirmResponse, type EthereumDeliveryPrepareResponse, type EthereumInventoryItem,
   type EthereumInventoryResponse, type EthereumPreparedTransaction, type EthereumProfileResponse,
@@ -9,7 +9,7 @@ import {
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
 import { ethereumAssetId, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
-import { monsApiOrigin } from '../lib/monsApiOrigin';
+import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
@@ -25,19 +25,8 @@ function record(value: unknown): value is Record<string, unknown> {
 function invalid(): never { throw new Error('The Ethereum service returned an invalid response.'); }
 function amount(value: unknown): value is string { return typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value); }
 
-async function request(path: string, options: { body?: unknown; session?: EthereumSession | null; signal?: AbortSignal } = {}): Promise<unknown> {
-  const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
-  const response = await fetch(`${monsApiOrigin()}${path}`, {
-    method: options.body === undefined ? 'GET' : 'POST',
-    headers: {
-      Accept: 'application/json',
-      ...(options.body !== undefined ? { 'Content-Type': 'application/json', 'X-Mons-CSRF': '1' } : {}),
-      ...(options.session ? { [ETHEREUM_SESSION_HEADER]: options.session.token } : {}),
-    },
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-    cache: 'no-store', signal,
-  });
-  const value: unknown = await response.json();
+async function request(path: string, options: EthereumRequestOptions = {}): Promise<unknown> {
+  const { response, value } = await requestEthereumJson(path, options);
   if (!response.ok) {
     const detail = record(value) && record(value.error) ? value.error : value;
     const message = record(detail) && typeof detail.message === 'string' ? detail.message :
@@ -50,7 +39,7 @@ async function request(path: string, options: { body?: unknown; session?: Ethere
   return value;
 }
 
-function parseEthereumConfig(value: unknown): Ethereum111kConfig {
+export function parseEthereumConfig(value: unknown): Ethereum111kConfig {
   if (!record(value) || value.dropId !== '111k_devnet' || typeof value.chainId !== 'number' || ![11155111, 31337].includes(value.chainId) ||
     typeof value.chainName !== 'string' || typeof value.enabled !== 'boolean' || value.testnet !== true ||
     (value.contractAddress !== null && !normalizeEthereumAddress(value.contractAddress)) || (value.enabled && value.contractAddress === null) ||
@@ -65,7 +54,7 @@ function parseEthereumConfig(value: unknown): Ethereum111kConfig {
   return { ...value, contractAddress: normalizeEthereumAddress(value.contractAddress) } as Ethereum111kConfig;
 }
 
-function parseEthereumInventoryItem(value: unknown, config: Ethereum111kConfig, owner: string): EthereumInventoryItem {
+export function parseEthereumInventoryItem(value: unknown, config: Ethereum111kConfig, owner: string): EthereumInventoryItem {
   if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
     normalizeEthereumAddress(value.owner) !== owner || typeof value.tokenId !== 'string' || normalizeEthereumTokenId(value.tokenId) !== value.tokenId ||
     !ETHEREUM_ITEM_KINDS.includes(value.kind as EthereumInventoryItem['kind']) || typeof value.name !== 'string' ||

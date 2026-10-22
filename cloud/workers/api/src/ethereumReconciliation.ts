@@ -10,6 +10,8 @@ import {
 } from './ethereumRuntime.js';
 import { ethereumReceipt, ethereumTokenInfos, parseEthereumLog } from './ethereumRead.js';
 import { EthereumApiError } from './ethereumError.js';
+import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from './ethereumCheckout.js';
+import { cleanupExpiredEthereumCheckouts } from './ethereumCheckoutCleanup.js';
 import { ethereum111kWritesAllowed } from './ethereumControl.js';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { createTimedAbortScope, isSignalCancellationError } from './boundedRequest.js';
@@ -178,6 +180,37 @@ async function reconcileRecentClaims(context: EthereumContext, summary: Reconcil
   }
 }
 
+async function reconcileCheckoutAttempts(context: EthereumContext, summary: ReconciliationResult, failures: unknown[], budget: QueryBudget): Promise<void> {
+  const attempts = await context.env.COMMERCE_DB.prepare(`SELECT attempt.* FROM ethereum_delivery_checkout_attempts AS attempt
+    JOIN ethereum_delivery_quotes AS quote ON quote.order_id = attempt.order_id
+    WHERE quote.chain_id = ? AND quote.contract_address = ?
+      AND (quote.status != 'confirmed' OR quote.published_at_ms IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM ethereum_delivery_checkout_attempts AS terminal
+        WHERE terminal.checkout_id = attempt.checkout_id AND terminal.status = 'expired')
+      AND (attempt.status IN ('started', 'submitted') OR attempt.status IN ('reverted', 'failed') AND
+        (attempt.verified_at_block IS NULL OR attempt.verified_at_block < attempt.block_number + ${REORG_WINDOW_BLOCKS}))
+    ORDER BY attempt.checked_at_ms ASC, attempt.rowid ASC LIMIT 20`)
+    .bind(context.config.chainId, context.config.contractAddress).all<EthereumCheckoutAttemptRow>();
+  for (const attempt of attempts.results) {
+    context.signal.throwIfAborted();
+    try {
+      await context.env.COMMERCE_DB.prepare(`UPDATE ethereum_delivery_checkout_attempts SET checked_at_ms = MAX(checked_at_ms + 1, ?)
+        WHERE attempt_id = ?`).bind(context.nowMs, attempt.attempt_id).run();
+      await reconcileEthereumCheckoutAttempt(context, attempt);
+      recordReconciliationOutcome(summary, 'completed');
+    } catch (error) {
+      context.signal.throwIfAborted();
+      if (budget.exhausted) { recordReconciliationOutcome(summary, 'deferred'); break; }
+      if (error instanceof CommerceWriteConflict || error instanceof EthereumApiError && error.code === 'failed-precondition') {
+        recordReconciliationOutcome(summary, 'deferred');
+        continue;
+      }
+      recordReconciliationOutcome(summary, 'failed');
+      failures.push(error);
+    }
+  }
+}
+
 type ReconciliationEvent = Extract<EthereumDecodedEvent, { name: 'DeliveryRedeemed' | 'CrateReceiptClaimed' }>;
 
 function eventKey(event: ReconciliationEvent): string {
@@ -298,11 +331,13 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     await cleanupEthereumAuth(env.OPS_DB, context.nowMs);
     if (!config.enabled || !config.contractAddress) return summary;
     if (!await ethereum111kWritesAllowed(context.env.COMMERCE_DB, config, signal)) return summary;
+    await cleanupExpiredEthereumCheckouts(context);
     const recentScope = createTimedAbortScope(signal, {
       timeoutMs: RECENT_RECONCILIATION_TIMEOUT_MS, timeoutMessage: 'Recent Ethereum reconciliation timed out',
     });
     const recentContext = { ...context, signal: recentScope.signal };
     const recentBudgets: QueryBudget[] = [
+      { remaining: 100, exhausted: false, limited: false },
       { remaining: 100, exhausted: false, limited: false },
       { remaining: 100, exhausted: false, limited: false },
     ];
@@ -312,7 +347,7 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
       const headRequest = ethereumRpc(recentContext, 'eth_blockNumber', []).then((value) => { head = rpcInteger(value); });
       const results = await Promise.allSettled([
         headRequest,
-        ...[reconcileRecentDeliveries, reconcileRecentClaims].map((reconcile, index) => {
+        ...[reconcileRecentDeliveries, reconcileRecentClaims, reconcileCheckoutAttempts].map((reconcile, index) => {
           const phaseBudget = recentBudgets[index];
           return reconcile({ ...recentContext, env: { ...env, COMMERCE_DB: budgetedDatabase(env.COMMERCE_DB, phaseBudget) } },
             summary, failures, phaseBudget);

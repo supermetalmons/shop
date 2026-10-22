@@ -35,7 +35,7 @@ export function parseEthereumLog(value: unknown): EthereumLog {
   return row as EthereumLog;
 }
 
-export async function ethereumReceipt(context: EthereumContext, hash: string): Promise<{ receipt: EthereumReceipt | null; confirmations: number }> {
+export async function ethereumReceipt(context: EthereumContext, hash: string, allowReverted = false): Promise<{ receipt: EthereumReceipt | null; confirmations: number }> {
   const raw = await ethereumRpc(context, 'eth_getTransactionReceipt', [hash]);
   if (raw === null) return { receipt: null, confirmations: 0 };
   if (!raw || typeof raw !== 'object') throw new EthereumApiError('unavailable', 'Invalid Ethereum transaction receipt.');
@@ -50,7 +50,7 @@ export async function ethereumReceipt(context: EthereumContext, hash: string): P
   ]);
   const canonical = canonicalRaw && typeof canonicalRaw === 'object' ? canonicalRaw as Record<string, unknown> : null;
   if (!canonical || canonical.hash !== row.blockHash) return { receipt: null, confirmations: 0 };
-  if (row.status !== '0x1') throw new EthereumApiError('failed-precondition', 'The Ethereum transaction reverted.', { kind: 'transaction-reverted' });
+  if (row.status !== '0x1' && !allowReverted) throw new EthereumApiError('failed-precondition', 'The Ethereum transaction reverted.', { kind: 'transaction-reverted' });
   const logs = row.logs.map(parseEthereumLog);
   return { receipt: { ...row, logs } as EthereumReceipt, confirmations: Math.max(0, rpcInteger(headRaw) - block + 1) };
 }

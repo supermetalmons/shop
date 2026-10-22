@@ -11,10 +11,12 @@ import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog 
 import { checksumEthereumAddress, crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { crateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_MAX_METADATA_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
 import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
+import { ETHEREUM_CHECKOUT_PATHS, type EthereumCheckoutStatusResponse, type EthereumCheckoutPrepareResponse, type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import { parseProceedsConfig } from '../../../../onchain/ethereum/scripts/proceeds-config.mjs';
 import { createCommerceD1Harness, d1Database } from '../test/commerceD1Harness.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
+import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 
 type Receipt = { status: string; transactionHash: string; blockNumber: string; blockHash: string; contractAddress: string | null; gasUsed: string; logs: EthereumLog[] };
@@ -33,7 +35,7 @@ const port = await new Promise<number>((done, reject) => {
     server.close(error => error ? reject(error) : done(address.port));
   });
 });
-const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', '31337', '--hardfork', 'prague', '--enable-tx-gas-limit', '--silent'], { stdio: ['ignore', 'pipe', 'pipe'] });
+const anvil = spawn('anvil', ['--host', '127.0.0.1', '--port', String(port), '--chain-id', '31337', '--hardfork', 'prague', '--enable-tx-gas-limit', '--silent'], { stdio: ['ignore', 'ignore', 'pipe'] });
 let anvilError = '';
 anvil.stderr.on('data', data => { anvilError += String(data); });
 anvil.on('error', error => { anvilError += error.message; });
@@ -41,7 +43,8 @@ const rpcUrl = `http://127.0.0.1:${port}`;
 const cratesUnboxedTopic = `0x${bytesToHex(keccak_256(new TextEncoder().encode('CratesUnboxed(address,bytes32,uint256,uint256)')))}`;
 let rpcId = 0;
 async function rpc<T>(method: string, params: unknown[] = []): Promise<T> {
-  const response = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }), signal: AbortSignal.timeout(15_000) })
+    .catch(error => { throw new Error(`Local RPC ${method} failed`, { cause: error }); });
   const body = await response.json() as { result?: T; error?: { message: string } };
   if (!response.ok || body.error || body.result === undefined) throw new Error(body.error?.message || `RPC ${method} failed`);
   return body.result;
@@ -136,6 +139,7 @@ try {
   const transact = (wallet: string, signature: string, types: string[], args: unknown[], value = 0n) => send(wallet, encodeCall(signature, types, args), contract, value);
   const gas: Record<string, string> = { deploy: BigInt(deployment.gasUsed).toString(), renderer: BigInt(rendererReceipt.gasUsed).toString() };
   const batching: Record<string, number> = {};
+  const checkoutRecovery: Array<{ recovery: string; checkoutId: string; orderId: number; transactionHash: string; fulfillmentOrders: number; confirmations: number }> = [];
   for (const [name, expected] of [
     ['MAX_UNBOX_QUANTITY', ETHEREUM_MAX_UNBOX_QUANTITY],
     ['MAX_TOKEN_INFO_BATCH_SIZE', ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE],
@@ -474,6 +478,122 @@ try {
     const mixedOrder = mixedShipments.orders.find(order => order.deliveryId === mixedPrepared.orderId);
     assert.deepEqual(mixedOrder?.items, [{ kind: 'box', refId: 5 }, { kind: 'dude', refId: 2 }, { kind: 'dude', refId: 22 }]);
     gas.apiSignedMixedDelivery = BigInt(mixed.gasUsed).toString();
+
+    environment.ETHEREUM_111K_DEPLOYMENT_BLOCK = String(Number(BigInt(await rpc<string>('eth_blockNumber'))));
+    const publicCheckout = async (checkoutId: string) => {
+      const path = `${ETHEREUM_CHECKOUT_PATHS.status}?${new URLSearchParams({ checkoutId })}`;
+      const response = await handleEthereumRequest(new Request(`https://mons.shop${path}`, {
+        headers: { Origin: 'https://vvv.so', 'CF-Connecting-IP': '192.0.2.112' },
+      }), environment, ETHEREUM_CHECKOUT_PATHS.status);
+      assert.equal(response.status, 200, 'An external caller can read checkout status without a wallet session');
+      const status = await response.json() as EthereumCheckoutStatusResponse;
+      assert.doesNotMatch(JSON.stringify(status), /111k-test@example\.test|111 Example Street|Local test|addressSnapshot|addressId|encrypted|cipherText/);
+      assert.equal(status.returnUrl, undefined, 'Public caller status does not expose private callback state');
+      return status;
+    };
+    const totalFulfillmentOrders = () => Number((commerce.database.prepare(`SELECT COUNT(*) AS count FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND drop_id = '111k_devnet'`).get() as { count: number }).count);
+    const checkoutOrders = (deliveryId: number) => commerce.database.prepare(`SELECT document_json FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND drop_id = '111k_devnet' AND document_id = ?`).all(String(deliveryId)) as Array<{ document_json: string }>;
+    const assertPublishedCheckout = (status: EthereumCheckoutStatusResponse, quote: EthereumCheckoutPrepareResponse, transactionHash: string,
+      tokenIds: string[], previousOrders: number) => {
+      assert.equal(status.status, 'success');
+      assert.equal(status.orderId, quote.orderId);
+      assert.equal(status.transactionHash, transactionHash);
+      assert.ok(status.confirmations >= status.requiredConfirmations);
+      const orders = checkoutOrders(quote.orderId);
+      assert.equal(orders.length, 1);
+      assert.equal(totalFulfillmentOrders(), previousOrders + 1);
+      const order = JSON.parse(orders[0].document_json) as {
+        source: string; testnet: boolean; status: string; owner: string; addressId: string;
+        deliverySignature: string; items: Array<{ tokenId: string }>;
+      };
+      assert.equal(order.source, 'ethereum');
+      assert.equal(order.testnet, true);
+      assert.equal(order.status, 'ready_to_ship');
+      assert.equal(order.owner, buyer.toLowerCase());
+      assert.equal(order.addressId, saved.address.id);
+      assert.equal(order.deliverySignature, transactionHash);
+      assert.deepEqual(order.items.map(item => item.tokenId), tokenIds);
+      const quoteRow = commerce.database.prepare('SELECT status, transaction_hash, published_at_ms FROM ethereum_delivery_quotes WHERE checkout_id = ?')
+        .get(status.checkoutId) as { status: string; transaction_hash: string; published_at_ms: number | null };
+      assert.equal(quoteRow.status, 'confirmed');
+      assert.equal(quoteRow.transaction_hash, transactionHash);
+      assert.ok(quoteRow.published_at_ms !== null);
+    };
+    let checkoutSession = session;
+    for (const recovery of ['scheduled reconciliation', 'anonymous refresh'] as const) {
+      const tokenIds = recovery === 'scheduled reconciliation' ? ['3', '111117'] : ['111118'];
+      if (recovery === 'anonymous refresh') {
+        const challenge = await api<EthereumAuthChallenge>(ETHEREUM_API_PATHS.authChallenge, { dropId: '111k_devnet', address: buyer, chainId: 31337 });
+        const signature = await rpc<string>('personal_sign', [`0x${Buffer.from(challenge.message).toString('hex')}`, buyer]);
+        checkoutSession = await api<EthereumSession>(ETHEREUM_API_PATHS.authVerify, { challengeId: challenge.challengeId, signature });
+      }
+      const request = { requestId: crypto.randomUUID(), dropId: '111k_devnet', tokenIds,
+        callbackUrl: 'https://vvv.so/callback', state: `test-${recovery.replaceAll(' ', '-')}` };
+      const created = await api<EthereumCheckoutStatusResponse>(ETHEREUM_CHECKOUT_PATHS.create, request);
+      const duplicate = await api<EthereumCheckoutStatusResponse>(ETHEREUM_CHECKOUT_PATHS.create, request);
+      assert.equal(created.status, 'ready');
+      assert.deepEqual(created.tokenIds, tokenIds);
+      assert.deepEqual(duplicate, created);
+      assert.equal((commerce.database.prepare('SELECT COUNT(*) AS count FROM ethereum_delivery_checkouts WHERE request_id = ?')
+        .get(request.requestId) as { count: number }).count, 1);
+      const quote = await api<EthereumCheckoutPrepareResponse>(ETHEREUM_CHECKOUT_PATHS.prepare,
+        { checkoutId: created.checkoutId, addressId: saved.address.id }, checkoutSession);
+      const resumedQuote = await api<EthereumCheckoutPrepareResponse>(ETHEREUM_CHECKOUT_PATHS.prepare,
+        { checkoutId: created.checkoutId }, checkoutSession);
+      assert.deepEqual(resumedQuote, quote);
+      const beforeOrders = totalFulfillmentOrders();
+      assert.equal(checkoutOrders(quote.orderId).length, 0);
+      const attemptId = crypto.randomUUID();
+      const attempt = { checkoutId: created.checkoutId, attemptId, action: 'start', quoteDeadline: quote.quote.deadline };
+      const started = await api<EthereumCheckoutSubmissionResponse>(ETHEREUM_CHECKOUT_PATHS.submission, attempt, checkoutSession);
+      const repeated = await api<EthereumCheckoutSubmissionResponse>(ETHEREUM_CHECKOUT_PATHS.submission, attempt, checkoutSession);
+      assert.equal(started.canSend, true);
+      assert.equal(repeated.canSend, false);
+      assert.equal(started.checkout.status, 'submitting');
+      assert.equal(started.checkout.transactionHash, null);
+      ops.prepare('DELETE FROM ethereum_auth_sessions').run();
+      assert.equal((ops.prepare('SELECT COUNT(*) AS count FROM ethereum_auth_sessions').get() as { count: number }).count, 0);
+      let transactionHash!: string;
+      await rpc('evm_setAutomine', [false]);
+      try {
+        const transaction = { from: buyer, to: quote.transaction.to, data: quote.transaction.data, value: quote.transaction.value };
+        const gas = await rpc<string>('eth_estimateGas', [transaction]);
+        transactionHash = await rpc<string>('eth_sendTransaction', [{ ...transaction, gas }]);
+        assert.equal(await rpc('eth_getTransactionReceipt', [transactionHash]), null);
+        const waiting = await publicCheckout(created.checkoutId);
+        assert.equal(waiting.status, 'submitting');
+        assert.equal(waiting.transactionHash, null);
+        assert.equal(waiting.attempt?.attemptId, attemptId);
+        assert.equal(checkoutOrders(quote.orderId).length, 0);
+        const refreshed = await api<EthereumCheckoutStatusResponse>(ETHEREUM_CHECKOUT_PATHS.refresh, { checkoutId: created.checkoutId });
+        assert.equal(refreshed.status, 'submitting');
+        assert.equal(refreshed.transactionHash, null);
+        await rpc('anvil_mine', [3]);
+      } finally { await rpc('evm_setAutomine', [true]); }
+      const receipt = await mined(transactionHash);
+      gas[recovery === 'scheduled reconciliation' ? 'checkoutLostHashScheduled' : 'checkoutLostHashRefresh'] = BigInt(receipt.gasUsed).toString();
+      const unreported = commerce.database.prepare('SELECT status, transaction_hash FROM ethereum_delivery_checkout_attempts WHERE attempt_id = ?')
+        .get(attemptId) as { status: string; transaction_hash: string | null };
+      assert.deepEqual({ ...unreported }, { status: 'started', transaction_hash: null });
+      if (recovery === 'scheduled reconciliation') {
+        const reconciled = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000));
+        assert.equal(reconciled.failed, 0);
+        assert.ok(reconciled.completed > 0);
+      } else {
+        const refreshed = await api<EthereumCheckoutStatusResponse>(ETHEREUM_CHECKOUT_PATHS.refresh, { checkoutId: created.checkoutId });
+        assertPublishedCheckout(refreshed, quote, transactionHash, tokenIds, beforeOrders);
+      }
+      const recovered = await publicCheckout(created.checkoutId);
+      assertPublishedCheckout(recovered, quote, transactionHash, tokenIds, beforeOrders);
+      const replay = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000));
+      assert.equal(replay.failed, 0);
+      assertPublishedCheckout(await publicCheckout(created.checkoutId), quote, transactionHash, tokenIds, beforeOrders);
+      assert.equal((ops.prepare('SELECT COUNT(*) AS count FROM ethereum_auth_sessions').get() as { count: number }).count, 0);
+      checkoutRecovery.push({ recovery, checkoutId: recovered.checkoutId, orderId: quote.orderId,
+        transactionHash, fulfillmentOrders: checkoutOrders(quote.orderId).length, confirmations: recovered.confirmations });
+    }
   } finally { commerce.database.close(); ops.close(); }
 
   const canonicalLogs = await rpc<EthereumLog[]>('eth_getLogs', [{ address: contract, fromBlock: deployment.blockNumber, toBlock: 'latest' }]);
@@ -566,7 +686,7 @@ try {
     await writeFile(resolve(output, `${preview.name}.svg`), svg);
     await writeFile(resolve(output, `${preview.name}.json`), JSON.stringify(metadata, null, 2));
   }
-  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, batching, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'all five onchain SVG types'] };
+  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, batching, checkoutRecovery, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'fixed item numbers across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'stale artwork identity quote reverts before burning; fresh quote succeeds', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details', 'all five onchain SVG types'] };
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

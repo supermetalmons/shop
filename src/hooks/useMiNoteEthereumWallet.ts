@@ -26,6 +26,7 @@ type WalletSession = {
   established: boolean;
   revision: number;
   cleanup: () => void;
+  applyAccounts: (accounts: unknown, showEmptyError: boolean) => void;
 };
 
 const disconnectedState: WalletState = { address: null, provider: null, status: 'disconnected', wallets: [], error: null };
@@ -60,6 +61,16 @@ function connectionError(error: unknown): string {
   return 'Unable to connect your Ethereum wallet. Please try again.';
 }
 
+const accountSwitchInstruction = 'Select another account in your wallet, then choose Check account.';
+
+function accountChangeError(error: unknown): string {
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
+  if (code === 4001) return 'Account change was cancelled. Your current wallet is still connected.';
+  if (code === -32002) return 'A request is already open. Check your Ethereum wallet, then choose Check account.';
+  if (code === 4200 || code === -32601) return `This wallet cannot open an account selector here. ${accountSwitchInstruction}`;
+  return `Unable to check your Ethereum account. ${accountSwitchInstruction}`;
+}
+
 function legacyWallet(): EIP6963ProviderDetail | null {
   const provider = getLegacyInjectedProvider();
   return provider ? { info: { uuid: 'legacy', name: 'Ethereum wallet', icon: '', rdns: '' }, provider } : null;
@@ -74,6 +85,7 @@ export function useMiNoteEthereumWallet(active: boolean) {
   const mounted = useRef(false);
   const operation = useRef(0);
   const sessionRef = useRef<WalletSession | null>(null);
+  const pendingSessionRef = useRef<WalletSession | null>(null);
   activeRef.current = active;
 
   const update = useCallback((next: WalletState) => {
@@ -87,49 +99,93 @@ export function useMiNoteEthereumWallet(active: boolean) {
     session?.cleanup();
   }, []);
 
+  const releasePendingSession = useCallback(() => {
+    const session = pendingSessionRef.current;
+    pendingSessionRef.current = null;
+    session?.cleanup();
+  }, []);
+
   const cancel = useCallback(() => {
     operation.current += 1;
+    releasePendingSession();
     const session = sessionRef.current;
     if (session?.established) {
-      if (stateRef.current.status === 'connecting') {
+      if (stateRef.current.status === 'connecting' || stateRef.current.status === 'choosing') {
         session.revision += 1;
-        update({ ...stateRef.current, status: 'connected' });
+        update({ ...stateRef.current, status: 'connected', wallets: [], error: null });
       }
       return;
     }
     releaseSession();
     update(disconnectedState);
-  }, [releaseSession, update]);
+  }, [releasePendingSession, releaseSession, update]);
 
   const disconnect = useCallback(() => {
     operation.current += 1;
+    releasePendingSession();
     releaseSession();
     rememberWallet(null);
     update(disconnectedState);
-  }, [releaseSession, update]);
+  }, [releasePendingSession, releaseSession, update]);
 
-  const readWallet = useCallback((provider: EIP1193Provider, remembered: RememberedWallet | null, interactive: boolean) => {
+  const readWallet = useCallback((provider: EIP1193Provider, remembered: RememberedWallet | null, interactive: boolean, preserveEstablished = false) => {
     const established = sessionRef.current?.established === true && stateRef.current.provider === provider;
-    releaseSession();
-    const session: WalletSession = { remembered, established, revision: 0, cleanup: () => {} };
-    sessionRef.current = session;
-    const current = () => mounted.current && sessionRef.current === session && (session.established || activeRef.current);
+    releasePendingSession();
+    const replacing = preserveEstablished && sessionRef.current?.established === true;
+    const session: WalletSession = { remembered, established, revision: 0, cleanup: () => {}, applyAccounts: () => {} };
+    if (replacing) pendingSessionRef.current = session;
+    else {
+      releaseSession();
+      sessionRef.current = session;
+    }
+    const current = () => mounted.current && (sessionRef.current === session && (session.established || activeRef.current) ||
+      pendingSessionRef.current === session && activeRef.current);
+    const restoreEstablished = (error: string | null) => {
+      const connected = Boolean(sessionRef.current?.established && stateRef.current.address && stateRef.current.provider);
+      update({ ...(connected ? stateRef.current : disconnectedState), status: connected ? 'connected' : 'disconnected', wallets: [], error });
+    };
+    const disconnectSession = () => {
+      if (sessionRef.current === session && pendingSessionRef.current) {
+        releaseSession();
+        rememberWallet(null);
+        update({ ...disconnectedState, status: 'connecting' });
+      } else disconnect();
+    };
     const applyAccounts = (accounts: unknown, showEmptyError: boolean) => {
       if (!current()) return;
       const address = firstAccount(accounts);
       if (!address) {
-        disconnect();
-        if (showEmptyError) update({ ...disconnectedState, error: 'No Ethereum account is available. Unlock your wallet and try again.' });
+        if (pendingSessionRef.current === session) {
+          releasePendingSession();
+          restoreEstablished(showEmptyError ? 'No Ethereum account is available. Unlock your wallet and try again.' : null);
+          return;
+        }
+        disconnectSession();
+        if (showEmptyError) update({ ...stateRef.current, error: 'No Ethereum account is available. Unlock your wallet and try again.' });
         return;
+      }
+      if (pendingSessionRef.current === session) {
+        pendingSessionRef.current = null;
+        releaseSession();
+        sessionRef.current = session;
       }
       session.established = true;
       rememberWallet(session.remembered);
-      update({ address, provider, status: 'connected', wallets: [], error: null });
+      const choosing = stateRef.current.status === 'choosing';
+      update({ address, provider, status: choosing ? 'choosing' : pendingSessionRef.current ? 'connecting' : 'connected',
+        wallets: choosing ? stateRef.current.wallets : [], error: null });
     };
+    session.applyAccounts = applyAccounts;
     const fail = (error: unknown, showError: boolean) => {
       if (!current()) return;
+      if (pendingSessionRef.current === session) {
+        releasePendingSession();
+        restoreEstablished(showError ? connectionError(error) : null);
+        return;
+      }
       releaseSession();
-      update({ ...disconnectedState, error: showError ? connectionError(error) : null });
+      update({ ...disconnectedState, status: pendingSessionRef.current ? 'connecting' : 'disconnected',
+        error: showError ? connectionError(error) : null });
     };
     const readAccounts = async (method: 'eth_accounts' | 'eth_requestAccounts', showError: boolean) => {
       const revision = ++session.revision;
@@ -144,7 +200,11 @@ export function useMiNoteEthereumWallet(active: boolean) {
       session.revision += 1;
       applyAccounts(accounts, false);
     };
-    const disconnected: EthereumProviderListener = () => { if (current()) disconnect(); };
+    const disconnected: EthereumProviderListener = () => {
+      if (!current()) return;
+      if (pendingSessionRef.current === session) fail(new Error('Disconnected'), true);
+      else disconnectSession();
+    };
     const chainChanged: EthereumProviderListener = () => {
       if (current() && (session.established || !interactive)) void readAccounts('eth_accounts', false);
     };
@@ -164,7 +224,57 @@ export function useMiNoteEthereumWallet(active: boolean) {
     } catch (error) {
       fail(error, interactive);
     }
-  }, [disconnect, releaseSession, update]);
+  }, [disconnect, releasePendingSession, releaseSession, update]);
+
+  const chooseWallet = useCallback(() => {
+    if (!mounted.current || !activeRef.current || !['connected', 'disconnected'].includes(stateRef.current.status)) return;
+    const attempt = ++operation.current;
+    update({ ...stateRef.current, status: 'choosing', wallets: [], error: null });
+    void listInjectedEthereumProviders().then(wallets => {
+      if (!mounted.current || !activeRef.current || operation.current !== attempt) return;
+      const fallback = wallets.length ? null : legacyWallet();
+      const choices = fallback ? [fallback] : wallets;
+      if (choices.length) update({ ...stateRef.current, status: 'choosing', wallets: choices });
+      else update({ ...stateRef.current, status: sessionRef.current?.established ? 'connected' : 'disconnected',
+        error: 'No Ethereum wallet found. Install a wallet extension or open this page in your wallet’s browser.' });
+    }).catch((error: unknown) => {
+      if (mounted.current && activeRef.current && operation.current === attempt) {
+        update({ ...stateRef.current, status: sessionRef.current?.established ? 'connected' : 'disconnected', wallets: [], error: connectionError(error) });
+      }
+    });
+  }, [update]);
+
+  const requestAccount = useCallback((permissions: boolean) => {
+    const wallet = stateRef.current;
+    const session = sessionRef.current;
+    if (!mounted.current || !activeRef.current || wallet.status !== 'connected' || !wallet.provider || !session?.established) return;
+    const provider = wallet.provider;
+    const attempt = ++operation.current;
+    let revision = session.revision;
+    const current = () => mounted.current && activeRef.current && operation.current === attempt &&
+      sessionRef.current === session && stateRef.current.provider === provider;
+    update({ ...wallet, status: 'connecting', error: null });
+    void (async () => {
+      try {
+        if (permissions) {
+          await provider.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
+          if (!current()) return;
+        }
+        revision = ++session.revision;
+        const accounts = await provider.request({ method: 'eth_accounts' });
+        if (!current() || session.revision !== revision) return;
+        session.applyAccounts(accounts, true);
+        if (current() && firstAccount(accounts) === wallet.address) {
+          update({ ...stateRef.current, error: `Your wallet is still using the same account. ${accountSwitchInstruction}` });
+        }
+      } catch (error) {
+        if (current() && session.revision === revision) update({ ...stateRef.current, status: 'connected', error: accountChangeError(error) });
+      }
+    })();
+  }, [update]);
+
+  const changeAccount = useCallback(() => requestAccount(true), [requestAccount]);
+  const checkAccount = useCallback(() => requestAccount(false), [requestAccount]);
 
   const connect = useCallback(() => {
     if (!mounted.current || !activeRef.current) return;
@@ -200,8 +310,9 @@ export function useMiNoteEthereumWallet(active: boolean) {
     if (!mounted.current || !activeRef.current || stateRef.current.status !== 'choosing') return;
     if (!stateRef.current.wallets.includes(wallet)) return;
     operation.current += 1;
-    update({ ...disconnectedState, status: 'connecting' });
-    readWallet(wallet.provider, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } : null, true);
+    update({ ...stateRef.current, status: 'connecting', wallets: [], error: null });
+    readWallet(wallet.provider, wallet.info.rdns ? { type: 'announced', rdns: wallet.info.rdns } :
+      wallet.info.uuid === 'legacy' ? { type: 'legacy' } : null, true, true);
   }, [readWallet, update]);
 
   useEffect(() => {
@@ -209,9 +320,10 @@ export function useMiNoteEthereumWallet(active: boolean) {
     return () => {
       mounted.current = false;
       operation.current += 1;
+      releasePendingSession();
       releaseSession();
     };
-  }, [releaseSession]);
+  }, [releasePendingSession, releaseSession]);
 
   useEffect(() => {
     if (!active) {
@@ -247,5 +359,5 @@ export function useMiNoteEthereumWallet(active: boolean) {
   }, [active, activationScope, cancel, readWallet, update]);
 
   const ready = state.status !== 'restoring' && (sessionRef.current?.established === true || initializedScope === activationScope);
-  return { ...state, ready, connect, selectWallet, cancel, disconnect };
+  return { ...state, ready, connect, chooseWallet, changeAccount, checkAccount, selectWallet, cancel, disconnect };
 }

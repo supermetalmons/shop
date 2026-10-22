@@ -17,6 +17,63 @@ const NEXT = { ...SCOPE, contractAddress: `0x${'12'.repeat(20)}` };
 const RESET = '00000000-0000-4000-8000-000000000041';
 const ORDER = commerceKeys.deliveryOrder('111k_devnet', '42');
 const OTHER = commerceKeys.deliveryOrder('mi-note', '43');
+const CHECKOUT = '00000000-0000-4000-8000-000000000042';
+const ATTEMPT = '00000000-0000-4000-8000-000000000043';
+
+function seedCheckout(harness: CommerceD1Harness, scope = SCOPE, linked = true) {
+  activate(harness, scope);
+  const id = linked ? CHECKOUT : '00000000-0000-4000-8000-000000000044';
+  harness.database.prepare(`INSERT INTO ethereum_delivery_checkouts
+    (checkout_id, request_id, origin, drop_id, chain_id, contract_address, token_ids_json, items_json,
+      callback_url, callback_state, created_block, created_at_ms, expires_at_ms)
+    VALUES (?, ?, 'https://mons.shop', '111k_devnet', ?, ?, '["1"]', '[]', 'https://vvv.so/callback', 'opaque', 1, 1000, 5000)`)
+    .run(id, id, scope.chainId, scope.contractAddress);
+  if (linked) {
+    harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
+      (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
+        items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
+      VALUES (?, ?, 43, ?, 'wallet', 'checkout-address', '{}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?)`)
+      .run(scope.chainId, scope.contractAddress, id, id);
+    harness.database.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
+      (attempt_id, checkout_id, order_id, wallet, status, quote_deadline, expected_nonce, created_at_ms, updated_at_ms)
+      VALUES (?, ?, 43, 'wallet', 'started', 2000, '0x0', 1000, 1000)`).run(ATTEMPT, id);
+  }
+  activate(harness);
+  pause(harness);
+}
+
+function seedDrafts(harness: CommerceD1Harness, count: number, options: { state?: string; native?: boolean } = {}) {
+  activate(harness);
+  const checkout = harness.database.prepare(`INSERT INTO ethereum_delivery_checkouts
+    (checkout_id, request_id, origin, drop_id, chain_id, contract_address, token_ids_json, items_json,
+      callback_url, callback_state, created_block, created_at_ms, expires_at_ms)
+    VALUES (?, ?, 'https://mons.shop', '111k_devnet', ?, ?, '["1"]', '[]', 'https://vvv.so/callback', ?, 1, 1000, 5000)`);
+  const quote = harness.database.prepare(`INSERT INTO ethereum_delivery_quotes
+    (chain_id, contract_address, order_id, request_id, wallet, address_id, address_json, token_ids_json,
+      items_json, fee_wei, deadline, status, created_at_ms, updated_at_ms, checkout_id)
+    VALUES (?, ?, ?, ?, 'wallet', 'private-address', '{"address":"private"}', '["1"]', '[]', '0', 2000, 'prepared', 1000, 1000, ?)`);
+  const attempt = harness.database.prepare(`INSERT INTO ethereum_delivery_checkout_attempts
+    (attempt_id, checkout_id, order_id, wallet, status, quote_deadline, created_at_ms, updated_at_ms)
+    VALUES (?, ?, ?, 'wallet', 'started', 2000, 1000, 1000)`);
+  const claim = harness.database.prepare(`INSERT INTO ethereum_crate_claims
+    (chain_id, contract_address, receipt_id, crate_id, order_id, code_hash, code, claim_id, status, updated_at_ms)
+    VALUES (?, ?, ?, ?, ?, 'code-hash', 'private-code', ?, 'available', 1000)`);
+  const ids: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const id = `00000000-0000-4000-8000-${(10_000 + index).toString(16).padStart(12, '0')}`;
+    ids.push(id);
+    checkout.run(id, id, SCOPE.chainId, SCOPE.contractAddress, options.state ?? 'opaque');
+    if (options.native) {
+      quote.run(SCOPE.chainId, SCOPE.contractAddress, 10_000 + index, id, id);
+      attempt.run(id, id, 10_000 + index);
+      claim.run(SCOPE.chainId, SCOPE.contractAddress, String(2_000_001 + index), index + 1, 10_000 + index, id);
+    }
+  }
+  if (options.native) harness.database.prepare('INSERT INTO ethereum_reconciliation_cursor (chain_id, contract_address, next_block) VALUES (?, ?, 123)')
+    .run(SCOPE.chainId, SCOPE.contractAddress);
+  pause(harness);
+  return ids;
+}
 
 function query(harness: CommerceD1Harness) {
   return (sql: string) => harness.database.prepare(sql).all();
@@ -161,6 +218,181 @@ test('reset atomically deletes only old-scope rows and recovery while keeping ot
   assert.ok(globalRevision + 1 > pathBefore);
   assert.equal(query(harness)('SELECT * FROM commerce_commit_guards').length, 0);
   assert.equal(query(harness)('SELECT authority_state FROM commerce_authority_control')[0].authority_state, 'd1');
+});
+
+test('reset snapshots and deletes checkout attempts before their quote while preserving another deployment', async context => {
+  const h = fixture(context);
+  seed(h);
+  seedCheckout(h);
+  seedCheckout(h, NEXT, false);
+  const resetPlan = await plan(h);
+  assert.equal(resetPlan.snapshot.checkouts.length, 1);
+  assert.equal(resetPlan.snapshot.attempts.length, 1);
+  await queryBatch(h)(buildEthereum111kResetBatch(resetPlan));
+  const after = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+  assert.equal(ethereum111kResetOutcome(resetPlan, after), 'completed');
+  assert.deepEqual(after.checkouts, []);
+  assert.deepEqual(after.attempts, []);
+  assert.deepEqual(after.quotes, []);
+  assert.equal(query(h)(`SELECT * FROM ethereum_delivery_checkouts WHERE contract_address = '${NEXT.contractAddress}'`).length, 1);
+});
+
+for (const count of [200, 1200]) test(`reset handles ${count} anonymous drafts in bounded atomic assertions`, async context => {
+  const h = fixture(context);
+  seedDrafts(h, count);
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  for (const [key, sql] of Object.entries(batch)) assert.ok(Buffer.byteLength(sql) < 100_000, key);
+  const assertions = Object.entries(batch).filter(([key]) => key.startsWith('assert_ethereum_delivery_checkouts_'));
+  assert.ok(assertions.length >= Math.ceil(count / 100));
+  for (const [, sql] of assertions) assert.ok(Buffer.byteLength(sql) <= 64_000);
+  await queryBatch(h)(batch);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'completed');
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('reset assertion byte limits account for UTF-8 and SQL escaping', async context => {
+  const h = fixture(context);
+  seedDrafts(h, 200, { state: "é'".repeat(256) });
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  const assertions = Object.entries(batch).filter(([key]) => key.startsWith('assert_ethereum_delivery_checkouts_'));
+  assert.ok(assertions.length > 2);
+  for (const [, sql] of assertions) assert.ok(Buffer.byteLength(sql) <= 64_000);
+  await queryBatch(h)(batch);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'completed');
+});
+
+test('reset accepts the exact assertion byte limit and stops before reading rows after an oversized assertion', async context => {
+  const h = fixture(context);
+  seedDrafts(h, 1, { state: '' });
+  const resetPlan = await plan(h);
+  const assertion = 'assert_ethereum_delivery_checkouts_0';
+  const padding = 64_000 - Buffer.byteLength(buildEthereum111kResetBatch(resetPlan)[assertion]);
+  const row = resetPlan.snapshot.checkouts[0];
+  row.callback_state = 'é'.repeat(Math.floor(padding / 2)) + 'x'.repeat(padding % 2);
+  assert.equal(Buffer.byteLength(buildEthereum111kResetBatch(resetPlan)[assertion]), 64_000);
+
+  row.callback_state += 'x';
+  const later = { ...row, checkout_id: '00000000-0000-4000-8000-000000000001' };
+  Object.defineProperty(later, 'callback_state', { enumerable: true, get() { assert.fail('Later rows must not be serialized after the size limit is exceeded.'); } });
+  resetPlan.snapshot.checkouts.push(later);
+  assert.throws(() => buildEthereum111kResetBatch(resetPlan), /snapshot row exceeds the assertion size limit/);
+});
+
+test('reset chunks quote, checkout, attempt, claim and cursor checks without exposing private fields', async context => {
+  const h = fixture(context);
+  seedDrafts(h, 501, { native: true });
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  for (const table of ['ethereum_delivery_quotes', 'ethereum_delivery_checkouts', 'ethereum_delivery_checkout_attempts', 'ethereum_crate_claims', 'ethereum_reconciliation_cursor']) {
+    assert.ok(Object.keys(batch).some(key => key.startsWith(`assert_${table}_`)), table);
+  }
+  for (const [key, sql] of Object.entries(batch)) {
+    assert.ok(Buffer.byteLength(sql) < 100_000, key);
+    if (key.startsWith('guard')) assert.ok(Buffer.byteLength(sql) <= 64_000, key);
+    assert.equal(sql.includes(String(resetPlan.snapshot.quotes[0].address_json)), false);
+    assert.equal(sql.includes(String(resetPlan.snapshot.claims[0].code)), false);
+  }
+  await queryBatch(h)(batch);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'completed');
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('reset retains every document and recovery guard until large parent deletion completes', async context => {
+  const h = fixture(context);
+  seedDrafts(h, 201, { native: true });
+  activate(h);
+  seedCommerceDocuments(h, Array.from({ length: 201 }, (_, index) => ({
+    key: commerceKeys.deliveryOrder('111k_devnet', String(10_000 + index)),
+    data: { source: 'ethereum', ...SCOPE, owner: 'wallet', status: 'processing' },
+  })));
+  pause(h);
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  const guards = Object.entries(batch).filter(([key]) => key.startsWith('guard_documents_'));
+  assert.ok(guards.length >= 3);
+  for (const [, sql] of guards) assert.ok(Buffer.byteLength(sql) <= 64_000);
+  await queryBatch(h)(batch);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'completed');
+  assert.equal(query(h)('SELECT * FROM commerce_documents').length, 0);
+  assert.equal(query(h)('SELECT * FROM commerce_delivery_recovery').length, 0);
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('a changed native row in a later guard shard rolls back every earlier guard', async context => {
+  const h = fixture(context);
+  seedDrafts(h, 501, { native: true });
+  const resetPlan = await plan(h);
+  h.database.exec('DROP TRIGGER ethereum_crate_claims_control_update');
+  h.database.prepare('UPDATE ethereum_crate_claims SET updated_at_ms = 1001 WHERE receipt_id = ?').run('2000501');
+  const before = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+  await assert.rejects(async () => queryBatch(h)(buildEthereum111kResetBatch(resetPlan)));
+  const after = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+  assert.deepEqual({ ...after, databaseNowMs: 0 }, { ...before, databaseNowMs: 0 });
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('a changed row in a later assertion chunk aborts the entire reset', async context => {
+  const h = fixture(context);
+  const ids = seedDrafts(h, 1200);
+  const resetPlan = await plan(h);
+  h.database.exec('DROP TRIGGER ethereum_delivery_checkouts_immutable');
+  h.database.prepare('UPDATE ethereum_delivery_checkouts SET callback_state = ? WHERE checkout_id = ?').run('changed', ids.at(-1)!);
+  const before = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+  await assert.rejects(async () => queryBatch(h)(buildEthereum111kResetBatch(resetPlan)), /malformed JSON/);
+  const after = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+  assert.deepEqual({ ...after, databaseNowMs: 0 }, { ...before, databaseNowMs: 0 });
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('a failure after large reset deletions rolls back every row and guard', async context => {
+  const h = fixture(context);
+  seed(h);
+  seedCheckout(h);
+  seedDrafts(h, 1200);
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  batch.cursors = "SELECT json('forced failure after large reset deletions')";
+  await assert.rejects(async () => queryBatch(h)(batch), /malformed JSON/);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'unchanged');
+  assert.equal(query(h)('SELECT * FROM commerce_commit_guards').length, 0);
+});
+
+test('changed checkout or attempt snapshots prevent reset and failures restore their foreign-key links', async context => {
+  for (const [table, sql] of [
+    ['ethereum_delivery_checkouts', "UPDATE ethereum_delivery_checkouts SET callback_state = 'changed'"],
+    ['ethereum_delivery_checkout_attempts', 'UPDATE ethereum_delivery_checkout_attempts SET updated_at_ms = 1001'],
+  ]) {
+    const h = fixture(context);
+    seed(h);
+    seedCheckout(h);
+    const resetPlan = await plan(h);
+    for (const row of query(h)(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = '${table}'`)) {
+      h.database.exec(`DROP TRIGGER ${row.name}`);
+    }
+    h.database.exec(sql);
+    const before = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+    await assert.rejects(async () => queryBatch(h)(buildEthereum111kResetBatch(resetPlan)));
+    const after = await readEthereum111kSnapshot(queryBatch(h), SCOPE);
+    assert.deepEqual({ ...after, databaseNowMs: 0 }, { ...before, databaseNowMs: 0 });
+  }
+  const h = fixture(context);
+  seed(h);
+  seedCheckout(h);
+  const resetPlan = await plan(h);
+  const batch = buildEthereum111kResetBatch(resetPlan);
+  batch.quotes = "SELECT json('forced failure after attempt deletion')";
+  await assert.rejects(async () => queryBatch(h)(batch), /malformed JSON/);
+  assert.equal(ethereum111kResetOutcome(resetPlan, await readEthereum111kSnapshot(queryBatch(h), SCOPE)), 'unchanged');
+});
+
+test('changing deployment scope refuses an unprepared checkout until reset', async context => {
+  const h = fixture(context);
+  seedCheckout(h, SCOPE, false);
+  const control = parseEthereum111kControl(query(h)(ETHEREUM_111K_CONTROL_SQL)[0]);
+  await assert.rejects(runEthereum111kControl(['resume', '--chain-id', String(NEXT.chainId), '--contract', NEXT.contractAddress,
+    '--expected-revision', String(control.revision), '--write'], { query: query(h) }), /not confirmed/);
 });
 
 test('stale document, recovery, native, count, cursor and control expectations abort every mutation', async context => {

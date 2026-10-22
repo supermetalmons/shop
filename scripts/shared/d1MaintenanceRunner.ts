@@ -1,4 +1,5 @@
 import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +22,8 @@ const wranglerBinary = resolve(
   '.bin',
   process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler',
 );
+const wranglerCommandInput = fileURLToPath(new URL('./d1CommandInput.cjs', import.meta.url));
+const require = createRequire(import.meta.url);
 
 export function createD1MaintenanceRunner(
   database: D1MaintenanceDatabase,
@@ -32,17 +35,21 @@ export function createD1MaintenanceRunner(
   function execute(inputFlag: '--command' | '--file', input: string): D1MaintenanceRow[][] {
     let output: string;
     try {
-      output = executeFile(wranglerBinary, [
-        'd1', 'execute', `mons-shop-${database}`, '--remote', inputFlag, input,
+      const useStdin = inputFlag === '--command' && Buffer.byteLength(input, 'utf8') >= 16_000;
+      const args = [
+        'd1', 'execute', `mons-shop-${database}`, '--remote', inputFlag, useStdin ? 'MONS_D1_SQL_STDIN' : input,
         '--config', 'cloud/workers/api/wrangler.jsonc',
         '--env-file', 'cloud/workers/api/release.env',
         '--json',
-      ], {
+      ];
+      output = executeFile(useStdin ? process.execPath : wranglerBinary, useStdin
+        ? ['--no-warnings', '--require', wranglerCommandInput, require.resolve('wrangler'), ...args] : args, {
         cwd: repoRoot,
         encoding: 'utf8',
         env: process.env,
         maxBuffer: (commerce ? 64 : 32) * 1024 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+        ...(useStdin ? { input } : {}),
         timeout: 10 * 60_000,
       }).trim();
     } catch (error) {

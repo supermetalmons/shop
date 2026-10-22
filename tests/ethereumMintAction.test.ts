@@ -16,6 +16,7 @@ const config = { enabled: true, chainId: 11155111, contractAddress: '0x333333333
 const disconnected: EthereumWallet = {
   address: null, provider: null, ready: true, status: 'disconnected', wallets: [], error: null,
   connect() {}, cancel() {}, disconnect() {}, selectWallet() {},
+  chooseWallet() {}, changeAccount() {}, checkAccount() {},
 };
 const connected: EthereumWallet = { ...disconnected, status: 'connected', address, provider };
 

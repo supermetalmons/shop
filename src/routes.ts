@@ -52,6 +52,7 @@ type AppRouteKind =
   | 'home'
   | 'drop'
   | 'ethereum-drop'
+  | 'checkout'
   | 'upcoming'
   | 'claim'
   | 'nfc'
@@ -74,6 +75,9 @@ export type ResolvedAppRoute = {
   ethereumDropId?: '111k_devnet';
   ethereumClaimReceiptId?: string;
   ethereumClaimCode?: string;
+  checkoutId?: string;
+  checkoutSearch?: string;
+  ethereumCheckoutReturnId?: string;
 };
 
 type AppRouteLocation = {
@@ -130,6 +134,12 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
+  if (path === '/checkout' || path.startsWith('/checkout/')) {
+    return createRoute('checkout', path, replacementHref, {
+      checkoutId: path === '/checkout' ? undefined : path.slice('/checkout/'.length),
+      checkoutSearch: search,
+    });
+  }
   if (path === '/111k_devnet') {
     const params = new URLSearchParams(search);
     const receiptId = params.get('receiptId') ?? '';
@@ -137,6 +147,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
     const validClaim = /^200[0-9]{4}$/.test(receiptId) && Number(receiptId) > 2_000_000 && Number(receiptId) <= 2_005_555 && /^[0-9a-fA-F]{12}$/.test(claimCode);
     return createRoute('ethereum-drop', path, replacementHref, {
       ethereumDropId: '111k_devnet',
+      ethereumCheckoutReturnId: params.get('checkout_id') ?? undefined,
       ...(validClaim ? { ethereumClaimReceiptId: receiptId, ethereumClaimCode: claimCode.toUpperCase() } : {}),
     });
   }
