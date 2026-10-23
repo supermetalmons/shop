@@ -182,6 +182,11 @@
   position: relative;
 }
 
+.mint-panel__preview--mi-note-cards > .mint-panel__boxes > .mint-panel__box-stack {
+  transform: scale(0.9);
+  transform-origin: center;
+}
+
 .mint-panel__box-stack > .mint-panel__box {
   position: absolute;
   inset: 0;
