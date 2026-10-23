@@ -20,24 +20,6 @@
   height: 100%;
 }
 
-.mi-note-demo__status {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  align-content: center;
-  gap: 8px;
-  color: color-mix(in srgb, var(--fg) 62%, transparent);
-  font-size: 12px;
-  text-align: center;
-}
-
-.mi-note-demo__status button {
-  font-size: inherit;
-}
-
 .mi-note-demo__controls {
   position: fixed;
   z-index: 1120;

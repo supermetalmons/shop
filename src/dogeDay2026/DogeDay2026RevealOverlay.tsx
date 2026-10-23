@@ -27,7 +27,6 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
   const [stage, setStage] = useState<RevealStage>('sealed');
   const [assetsReady, setAssetsReady] = useState(false);
   const [error, setError] = useState(false);
-  const [retryKey, setRetryKey] = useState(0);
   const cardKey = cards[0] ? dogeDay2026CardIdentityKey(cards[0]) : '';
 
   useEffect(() => {
@@ -72,7 +71,7 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
       sceneRef.current?.dispose();
       sceneRef.current = null;
     };
-  }, [cardKey, resetKey, retryKey]);
+  }, [cardKey, resetKey]);
 
   useEffect(() => {
     sceneRef.current?.setCardReady(cardReady);
@@ -93,15 +92,10 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
   return (
     <div className="doge-day-2026-reveal-overlay" data-stage={stage}>
       <div className="doge-day-2026-reveal-overlay__scene" ref={hostRef} aria-hidden="true" />
-      <div className={error ? 'doge-day-2026-reveal-overlay__error' : 'doge-day-2026-reveal-overlay__sr-only'}>
+      <div className="doge-day-2026-reveal-overlay__sr-only">
         <p role="status" aria-live="polite" aria-atomic="true">
           {status}
         </p>
-        {error && (
-          <button type="button" className="doge-day-2026-reveal-overlay__retry" onClick={() => setRetryKey((current) => current + 1)}>
-            Retry
-          </button>
-        )}
       </div>
       <button
         ref={boxButtonRef}

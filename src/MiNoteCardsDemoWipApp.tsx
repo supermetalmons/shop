@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ModalFocusScope } from './components/ModalFocusScope';
 import WipInteractiveCard from './components/WipInteractiveCard';
 import type { DrifCardConfig } from './drifCards';
@@ -11,17 +11,9 @@ import './styles/mi-note-cards-demo-wip.css';
 function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string }) {
   const assets = useMiNoteCardAssets([card]);
   const [imageReady, setImageReady] = useState(false);
-  const [displayFailed, setDisplayFailed] = useState(false);
   const [touchResting, setTouchResting] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const failed = Boolean(assets.error) || displayFailed;
+  const failed = Boolean(assets.error);
   const ready = assets.ready && imageReady && !failed;
-
-  useEffect(() => {
-    if (!assets.ready || imageReady || displayFailed) return;
-    const timer = window.setTimeout(() => setDisplayFailed(true), 10_000);
-    return () => window.clearTimeout(timer);
-  }, [assets.ready, imageReady, displayFailed]);
 
   return (
     <div className="mi-note-demo__preview" aria-busy={!ready && !failed}>
@@ -34,7 +26,6 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
         onPointerCancel={() => setTouchResting(true)}
       >
         <WipInteractiveCard
-          key={attempt}
           card={card}
           interactive={ready}
           onImageReadyChange={setImageReady}
@@ -43,21 +34,6 @@ function DemoCardPreview({ card, name }: { card: DrifCardConfig; name: string })
           imageAlt={name}
         />
       </div>
-      {!ready && (
-        <div className="mi-note-demo__status" role={failed ? 'alert' : 'status'}>
-          {failed ? (
-            <>
-              <span>Unable to load this card.</span>
-              <button type="button" className="link" onClick={() => {
-                setImageReady(false);
-                setDisplayFailed(false);
-                setAttempt((value) => value + 1);
-                assets.retry();
-              }}>Retry</button>
-            </>
-          ) : 'Loading…'}
-        </div>
-      )}
     </div>
   );
 }

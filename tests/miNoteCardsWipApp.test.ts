@@ -513,7 +513,7 @@ test('invalid card ID drafts preserve both displayed cards and the open folder s
   assert.equal(viewer().props.state, opened);
 });
 
-test('Retry keeps edited IDs and drafts while Reset replaces both inputs with the same default effect', t => {
+test('failures keep edited IDs and drafts while Reset replaces both inputs with the same default effect', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   const view = render(createElement(MiNoteCardsWipApp));
@@ -530,8 +530,9 @@ test('Retry keeps edited IDs and drafts while Reset replaces both inputs with th
     assert.deepEqual([left.value, right.value], ['', '1431']);
   };
   act(() => viewer().props.onError(new Error('Lost renderer')));
-  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
   assertSelection();
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(view.queryByRole('button', { name: 'Retry' }), null);
   assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.deepEqual(renderedMiNoteCards().map(({ id }) => id), ['1145', '1144']);
@@ -565,7 +566,7 @@ test('modal Escape delegates to the active viewer before navigating away', () =>
   assert.equal(viewer().calls.filter(call => call === 'escape').length, 5);
 });
 
-test('Mi Note cards keep their assets and random appearance through retry, while reset resamples', t => {
+test('Mi Note cards wait quietly for assets and Reset recovers renderer failures', t => {
   let random = 0.1;
   t.mock.method(Math, 'random', () => random);
   const view = render(createElement(MiNoteCardsWipApp));
@@ -578,7 +579,7 @@ test('Mi Note cards keep their assets and random appearance through retry, while
   assert.equal(viewer().props.state.stage, 'unsealed');
   assert.equal(viewer().props.state.folderPose, 0);
   assert.equal((view.getByRole('button', { name: 'Open Mi Note Cards folder' }) as HTMLButtonElement).disabled, true);
-  assert.equal(view.getByText('Loading cards…').getAttribute('role'), 'status');
+  assert.equal(view.queryByRole('status'), null);
   assert.equal(view.queryByRole('button', { name: 'View left card' }), null);
   act(() => viewer().props.onCardsReadyChange(true));
   assert.equal(viewer().props.state.stage, 'interactive');
@@ -591,16 +592,21 @@ test('Mi Note cards keep their assets and random appearance through retry, while
   assert.equal(viewer().props.star, initialStar);
   assert.deepEqual(renderedMiNoteCards(), initialCards);
   const failed = viewer();
+  act(() => failed.props.onBackgroundTap?.());
+  assert.ok(view.container.querySelector('.wip-controls--hidden'));
   act(() => failed.props.onError(new Error('Lost renderer')));
   assert.equal(viewer().props.interactionEnabled, false);
-  assert.match(view.getByRole('alert').textContent!, /Unable to load this pack/);
-  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(view.container.querySelector('.wip-controls--hidden'), null);
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.notEqual(viewer(), failed);
   assert.equal(failed.mounted, false);
-  assert.equal(viewer().props.color, failed.props.color);
-  assert.equal(viewer().props.star.id, failed.props.star.id);
+  assert.equal(viewer().props.color, MI_NOTE_PACK_VARIANTS[2].color);
+  assert.equal(viewer().props.star, MI_NOTE_PACK_STARS[2]);
   assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
-  assert.deepEqual(renderedMiNoteCards(), initialCards);
+  const resetCards = renderedMiNoteCards();
+  assert.notDeepEqual(resetCards, initialCards);
+  assert.deepEqual(resetCards.map(({ id }) => id), ['1145', '1144']);
   assert.equal(viewer().props.state.stage, 'sealed');
   assert.equal(viewer().props.state.taps, 0);
   assert.equal(view.queryByRole('alert'), null);
@@ -613,13 +619,8 @@ test('Mi Note cards keep their assets and random appearance through retry, while
   assert.equal(view.queryByRole('alert'), null);
   assert.equal(viewer().props.interactionEnabled, false);
   makeReady();
-  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
-  assert.equal(viewer().props.color, MI_NOTE_PACK_VARIANTS[2].color);
-  assert.equal(viewer().props.star, MI_NOTE_PACK_STARS[2]);
-  assert.equal(viewer().props.cardEffect, MI_NOTE_CARDS_DEFAULT);
-  const resetCards = renderedMiNoteCards();
-  assert.notDeepEqual(resetCards, initialCards);
-  assert.deepEqual(resetCards.map(({ id }) => id), ['1145', '1144']);
+  assert.equal(viewer().props.interactionEnabled, true);
+  assert.deepEqual(renderedMiNoteCards(), resetCards);
   assert.equal(viewer().props.state.taps, 0);
 });
 
@@ -676,7 +677,7 @@ test('card-loading errors recover after an ID edit without closing the pack or c
     instance.props.onCardsReadyChange(false);
     instance.props.onCardsError(new Error('Missing mask'));
   });
-  assert.ok(view.getByRole('alert'));
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(instance.props.interactionEnabled, false);
   const input = view.getByRole('spinbutton', { name: 'Left card ID' }) as HTMLInputElement;
   fireEvent.change(input, { target: { value: input.value === '1' ? '2' : '1' } });
@@ -692,6 +693,6 @@ test('card-loading errors recover after an ID edit without closing the pack or c
     instance.props.onError(new Error('Lost renderer'));
     instance.props.onCardsError(null);
   });
-  assert.ok(view.getByRole('alert'));
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(instance.props.interactionEnabled, false);
 });

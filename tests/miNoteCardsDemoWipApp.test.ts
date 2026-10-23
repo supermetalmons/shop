@@ -13,7 +13,6 @@ type AssetState = { ready: boolean; error: Error | null };
 type AssetInstance = {
   cards: readonly DrifCardConfig[];
   mounted: boolean;
-  retryCount: number;
   setState: (state: AssetState) => void;
 };
 
@@ -38,7 +37,7 @@ function FakeInteractiveCard(props: CardProps) {
 function useFakeAssets(cards: readonly DrifCardConfig[]) {
   const [state, setState] = useState<AssetState>({ ready: false, error: null });
   const record = useRef<AssetInstance | null>(null);
-  if (!record.current) record.current = { cards, mounted: false, retryCount: 0, setState };
+  if (!record.current) record.current = { cards, mounted: false, setState };
   const instance = record.current;
   instance.cards = cards;
   useLayoutEffect(() => {
@@ -46,13 +45,7 @@ function useFakeAssets(cards: readonly DrifCardConfig[]) {
     instance.mounted = true;
     return () => { instance.mounted = false; };
   }, []);
-  return {
-    ...state,
-    retry() {
-      instance.retryCount += 1;
-      setState({ ready: false, error: null });
-    },
-  };
+  return state;
 }
 
 const bridgeKey = '__miNoteCardsDemoWipAppTest';
@@ -184,34 +177,45 @@ test('valid ID edits update immediately and invalid drafts preserve the last dis
   assertCard(1430);
 });
 
-test('loading waits for the card image and Retry retains the chosen ID and default effect', t => {
+test('loading and failed cards stay hidden without status UI and changing ID recovers', t => {
   t.mock.method(Math, 'random', () => 0);
   const view = render(createElement(MiNoteCardsDemoWipApp));
-  fireEvent.change(view.getByRole('spinbutton', { name: 'Card ID' }), { target: { value: '1430' } });
-  assert.equal(view.getByRole('status').textContent, 'Loading…');
+  const input = view.getByRole('spinbutton', { name: 'Card ID' });
+  fireEvent.change(input, { target: { value: '1430' } });
+  const preview = () => view.container.querySelector('.mi-note-demo__preview') as HTMLElement;
+  const displayedCard = () => view.container.querySelector('.mi-note-demo__card') as HTMLElement;
+  assert.equal(view.queryByRole('status'), null);
+  assert.equal(preview().getAttribute('aria-busy'), 'true');
+  assert.equal(displayedCard().style.visibility, 'hidden');
   assert.equal(card().props.interactive, false);
   act(() => assets().setState({ ready: true, error: null }));
-  assert.ok(view.getByRole('status'));
+  assert.equal(displayedCard().style.visibility, 'hidden');
   assert.equal(card().props.interactive, false);
   act(() => card().props.onImageReadyChange?.(true));
   assert.equal(view.queryByRole('status'), null);
+  assert.equal(preview().getAttribute('aria-busy'), 'false');
+  assert.equal(displayedCard().style.visibility, 'visible');
   assert.equal(card().props.interactive, true);
   act(() => assets().setState({ ready: false, error: new Error('Missing CDN asset') }));
-  assert.match(view.getByRole('alert').textContent!, /Unable to load this card/);
+  assert.equal(view.queryByRole('alert'), null);
+  assert.equal(view.queryByRole('button', { name: 'Retry' }), null);
+  assert.equal(preview().getAttribute('aria-busy'), 'false');
+  assert.equal(displayedCard().style.visibility, 'hidden');
   assert.equal(card().props.interactive, false);
   const failed = card();
   const failedAssets = assets();
-  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
+  fireEvent.change(input, { target: { value: '712' } });
   assert.equal(failed.mounted, false);
-  assert.equal(assets(), failedAssets);
-  assert.equal(failedAssets.retryCount, 1);
+  assert.equal(failedAssets.mounted, false);
   assert.equal(view.queryByRole('alert'), null);
-  assert.ok(view.getByRole('status'));
-  assertCard(1430);
+  assert.equal(view.queryByRole('status'), null);
+  assert.equal(preview().getAttribute('aria-busy'), 'true');
+  assertCard(712);
   act(() => assets().setState({ ready: true, error: null }));
   assert.equal(card().props.interactive, false);
   act(() => card().props.onImageReadyChange?.(true));
   assert.equal(view.queryByRole('status'), null);
+  assert.equal(displayedCard().style.visibility, 'visible');
   assert.equal(card().props.interactive, true);
 });
 
@@ -239,7 +243,6 @@ for (const [endEvent, action] of [['pointerup', 'release'], ['pointercancel', 'c
     assert.equal(card().props.interactive, true);
     assert.equal(card(), initialCard);
     assert.equal(assets(), initialAssets);
-    assert.equal(initialAssets.retryCount, 0);
     assert.equal(view.queryByRole('status'), null);
   });
 }

@@ -25,14 +25,14 @@ function MiNotePackOpening({
   star,
   cardEffect,
   controlsRef,
-  onRetry,
+  onError,
   onBackgroundTap,
 }: {
   selection: ReturnType<typeof sampleMiNotePack>;
   star: MiNotePackStar;
   cardEffect: DrifCardConfig['effect'];
   controlsRef: RefObject<MiNotePackControls | null>;
-  onRetry: () => void;
+  onError: () => void;
   onBackgroundTap: () => void;
 }) {
   const [state, dispatch] = useReducer(reduceMiNoteReveal, undefined, createMiNoteRevealState);
@@ -49,16 +49,12 @@ function MiNotePackOpening({
   const ready = viewerReady && cardsReady && !error;
 
   useEffect(() => dispatch({ type: 'ready', ready }), [ready]);
+  useEffect(() => {
+    if (error) onError();
+  }, [error, onError]);
 
   const folderInteractive = isMiNoteFolderInteractive(state);
   const openingLocked = state.stage !== 'sealed' && !folderInteractive;
-  const note = error
-    ? 'Unable to load this pack.'
-    : !viewerReady
-      ? 'Loading…'
-      : openingLocked && !ready
-        ? 'Loading cards…'
-        : '';
   const packLabel = state.stage === 'sealed'
     ? `Open Mi Note Cards pack (${MI_NOTE_OPEN_TAPS - state.taps} ${state.taps === MI_NOTE_OPEN_TAPS - 1 ? 'tap' : 'taps'} remaining)`
     : state.folderPose === 1 ? 'Close Mi Note Cards folder' : 'Open Mi Note Cards folder';
@@ -149,12 +145,6 @@ function MiNotePackOpening({
           </button>
         )}
       </div>
-      {note && (
-        <div className="mi-note-wip__status" role={error ? 'alert' : 'status'}>
-          {note}
-          {error && <button type="button" className="link" onClick={onRetry}>Retry</button>}
-        </div>
-      )}
     </div>
   );
 }
@@ -196,9 +186,7 @@ export default function MiNoteCardsWipApp() {
       };
     });
   }, []);
-  const handleRetry = useCallback(() => {
-    setRound((previous) => ({ ...previous, generation: previous.generation + 1 }));
-  }, []);
+  const handleError = useCallback(() => setFocused(false), []);
   const handleCardIdChange = useCallback((index: 0 | 1, value: string) => {
     const id = Number(value);
     setRound((previous) => {
@@ -244,7 +232,7 @@ export default function MiNoteCardsWipApp() {
         star={round.star}
         cardEffect={MI_NOTE_CARDS_DEFAULT}
         controlsRef={controlsRef}
-        onRetry={handleRetry}
+        onError={handleError}
         onBackgroundTap={handleBackgroundTap}
       />
       <div className={`wip-controls${focused ? ' wip-controls--hidden' : ''}`} aria-hidden={focused || undefined} inert={focused || undefined}>

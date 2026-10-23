@@ -268,14 +268,6 @@ export default function ClearCardWipApp() {
                 onPackBreak={handlePackBreak}
               />
             </Suspense>
-            {status === 'error' ? (
-              <div
-                className="clear-card-wip__status clear-card-wip__status--error"
-                role="alert"
-              >
-                Unable to display 3D card.
-              </div>
-            ) : null}
           </div>
         </div>
       </div>

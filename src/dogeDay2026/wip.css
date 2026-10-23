@@ -27,29 +27,8 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.doge-day-2026-reveal-overlay__error {
-  position: absolute;
-  z-index: 1;
-  top: 50%;
-  right: 72px;
-  left: 72px;
-  transform: translateY(-50%);
-  color: inherit;
-  text-align: center;
-  pointer-events: none;
-  font-size: 12px;
-  font-weight: 300;
-  line-height: 1.35;
-}
-
-.doge-day-2026-reveal-overlay__error p {
-  margin: 0;
-  opacity: 0.5;
-}
-
 button.doge-day-2026-wip-close-btn,
 button.doge-day-2026-wip-reset-btn,
-button.doge-day-2026-reveal-overlay__retry,
 button.doge-day-2026-reveal-overlay__activate {
   z-index: 2;
   padding: 8px;
@@ -100,13 +79,6 @@ button.doge-day-2026-wip-reset-btn:active:not(:disabled) {
   pointer-events: none;
 }
 
-button.doge-day-2026-reveal-overlay__retry {
-  margin-top: 8px;
-  pointer-events: auto;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
 button.doge-day-2026-reveal-overlay__activate,
 .doge-day-2026-reveal-overlay__sr-only {
   position: absolute;
@@ -131,7 +103,6 @@ button.doge-day-2026-reveal-overlay__activate:focus-visible {
 
 button.doge-day-2026-wip-close-btn:focus-visible,
 button.doge-day-2026-wip-reset-btn:focus-visible,
-button.doge-day-2026-reveal-overlay__retry:focus-visible,
 button.doge-day-2026-reveal-overlay__activate:focus-visible {
   outline: 1px solid currentColor;
   outline-offset: 3px;

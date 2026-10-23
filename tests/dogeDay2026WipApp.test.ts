@@ -166,11 +166,12 @@ test('Doge scene statuses stay visually hidden and announce the interactive card
   assert.equal(scenes.length, 1);
   act(() => scene.options.onError(new Error('Context lost')));
   assert.equal(view.getByRole('status').textContent, 'Unable to load this pack.');
-  assert.equal(view.getByRole('status').parentElement?.className, 'doge-day-2026-reveal-overlay__error');
+  assert.equal(view.getByRole('status').parentElement?.className, 'doge-day-2026-reveal-overlay__sr-only');
+  assert.equal(view.queryByRole('button', { name: 'Retry' }), null);
   assert.equal(view.getByRole<HTMLButtonElement>('button', { name: 'Reset card tilt' }).disabled, true);
 });
 
-test('Doge scene failures restore Close and Reset and keep them accessible after Retry fails', () => {
+test('Doge scene failures restore Close and Reset and keep them accessible after Reset fails', () => {
   const view = render(createElement(DogeDay2026WipApp));
   const first = scenes[0];
   const controls = view.container.querySelector('.doge-day-2026-wip-controls')!;
@@ -182,8 +183,8 @@ test('Doge scene failures restore Close and Reset and keep them accessible after
   assert.equal(controls.hasAttribute('inert'), false);
   assert.ok(view.getByRole('button', { name: 'Close wip overlay' }));
   assert.ok(view.getByRole('button', { name: 'Reset opening' }));
-  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
-  assert.equal(scenes[1].options.card, first.options.card);
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
+  assert.notEqual(scenes[1].options.card, first.options.card);
   act(() => scenes[1].options.onError(new Error('Texture failed again')));
   assert.equal(view.getByRole('status').textContent, 'Unable to load this pack.');
   assert.equal(controls.classList.contains('doge-day-2026-wip-controls--hidden'), false);
@@ -191,7 +192,7 @@ test('Doge scene failures restore Close and Reset and keep them accessible after
   assert.equal(controls.hasAttribute('inert'), false);
   fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.equal(scenes.length, 3);
-  assert.notEqual(scenes[2].options.card, first.options.card);
+  assert.notEqual(scenes[2].options.card, scenes[1].options.card);
   fireEvent.click(view.getByRole('button', { name: 'Close wip overlay' }));
   assert.equal(window.location.pathname, '/');
 });
@@ -213,17 +214,17 @@ test('Doge synchronous scene construction failures restore controls after a focu
   assert.equal(window.location.pathname, '/');
 });
 
-test('Doge retries the same selected card and ignores callbacks from disposed scenes', () => {
+test('Doge resets a failed scene and ignores callbacks from disposed scenes', () => {
   const view = render(createElement(DogeDay2026WipApp));
   finishReadinessDelay();
   const first = scenes[0];
   act(() => first.options.onError(new Error('Texture failed')));
   assert.equal(view.getByRole('status').textContent, 'Unable to load this pack.');
-  fireEvent.click(view.getByRole('button', { name: 'Retry' }));
+  fireEvent.click(view.getByRole('button', { name: 'Reset opening' }));
   assert.equal(scenes.length, 2);
   assert.equal(first.disposed, true);
-  assert.equal(scenes[1].options.card, first.options.card);
-  assert.equal(scenes[1].options.cardReady, true);
+  assert.notEqual(scenes[1].options.card, first.options.card);
+  assert.equal(scenes[1].options.cardReady, false);
   assert.equal(view.container.querySelectorAll('canvas').length, 1);
   act(() => scenes[1].options.onBackgroundTap());
   assert.ok(view.container.querySelector('.doge-day-2026-wip-controls--hidden'));

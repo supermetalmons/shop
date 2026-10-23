@@ -17,10 +17,9 @@ const MiNoteCardsDemoWipApp = React.lazy(() => import('./MiNoteCardsDemoWipApp')
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;
-  status: 'loading' | 'error';
 };
 
-function WipRouteShell({ experience, status }: WipRouteShellProps) {
+function WipRouteShell({ experience }: WipRouteShellProps) {
   const clearCard = experience === 'clear_cards';
   const miNoteCardsDemo = experience === 'mi_note_cards_demo';
   const handleClose = () => navigate('/');
@@ -38,23 +37,6 @@ function WipRouteShell({ experience, status }: WipRouteShellProps) {
         outline: 'none',
       }}
     >
-      {status === 'error' || !clearCard ? (
-        <div
-          role={status === 'error' ? 'alert' : 'status'}
-          aria-live="polite"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'grid',
-            placeItems: 'center',
-            color: 'color-mix(in srgb, var(--fg) 52%, transparent)',
-            fontSize: 12,
-            lineHeight: 1.35,
-          }}
-        >
-          {status === 'error' ? 'Unable to load preview.' : 'Loading…'}
-        </div>
-      ) : null}
       <button
         type="button"
         className="wip-close-btn"
@@ -92,7 +74,7 @@ class WipRouteErrorBoundary extends React.Component<
 
   render() {
     if (this.state.failed) {
-      return <WipRouteShell experience={this.props.experience} status="error" />;
+      return <WipRouteShell experience={this.props.experience} />;
     }
     return this.props.children;
   }
@@ -148,7 +130,7 @@ function WalletScopedShopRoute({ route: requestedRoute }: ShopRouteProps) {
   const app = <App route={route} suspended={isWipRoute} />;
   const wip = wipExperience ? (
     <WipRouteErrorBoundary key={wipExperience} experience={wipExperience}>
-      <React.Suspense fallback={<WipRouteShell experience={wipExperience} status="loading" />}>
+      <React.Suspense fallback={<WipRouteShell experience={wipExperience} />}>
         {wipExperience === 'clear_cards' ? (
           <ClearCardWipApp />
         ) : wipExperience === 'mi_note_cards' ? (

@@ -104,23 +104,6 @@
   transform: translate3d(0, 0, 0) scale(1);
 }
 
-.clear-card-wip__status {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: color-mix(in srgb, var(--fg) 52%, transparent);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.35;
-  letter-spacing: 0;
-  pointer-events: none;
-}
-
-.clear-card-wip__status--error {
-  color: #b42318;
-}
-
 .clear-card-wip__model-pickers {
   position: fixed;
   top: max(18px, env(safe-area-inset-top, 0px));
@@ -704,10 +687,6 @@
 
   .lighting-lab__snapshot-meta--error {
     color: #ff8b84;
-  }
-
-  .clear-card-wip__status--error {
-    color: #ff6961;
   }
 }
 

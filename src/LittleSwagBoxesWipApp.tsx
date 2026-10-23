@@ -370,9 +370,7 @@ export default function LittleSwagBoxesWipApp() {
                           type="video/webm"
                         />
                       </video>
-                    ) : (
-                      <div className="reveal-overlay__still reveal-overlay__still--placeholder" />
-                    )}
+                    ) : null}
                   </div>
                 </div>
               );
@@ -409,9 +407,7 @@ export default function LittleSwagBoxesWipApp() {
                 className="reveal-overlay__image"
                 draggable={false}
               />
-            ) : (
-              <div className="reveal-overlay__image reveal-overlay__image--placeholder" aria-hidden="true" />
-            )}
+            ) : null}
           </button>
         </div>
       </div>
