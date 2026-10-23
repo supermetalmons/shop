@@ -472,7 +472,7 @@ test('full-width canvas pointer mapping follows the rendered card for hover and 
   const center = bounds.getCenter(new THREE.Vector2());
   pointer('pointermove', bounds.max.x - 12, center.y, 1000);
   drainFrames();
-  assert.equal(run.host.style.cursor, 'default');
+  assert.equal(run.host.style.cursor, 'pointer');
   assert.notDeepEqual(run.renderer.snapshots.at(-1)!.cardMatrix, settled.cardMatrix);
   pointer('pointerdown', center.x, center.y, 2000);
   pointer('pointerup', center.x, center.y, 2100);

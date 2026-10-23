@@ -105,6 +105,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
   let inspectingCardIndex: number | null = null;
   let pointerCardIndex: number | null = null;
   let pointerTarget: 'pack' | 'card' | 'background' = 'background';
+  let mousePosition: Pick<PackPointerEvent, 'clientX' | 'clientY'> | null = null;
   let hitX = 0;
   let hitY = 0;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -191,7 +192,6 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
       resetTilt();
       options.onReveal();
     }
-    if (changed && flow.stage === 'revealed') host.style.cursor = 'default';
     if (changed) options.onStageChange(flow.stage, flow.hitCount);
   }
   function cardTransitioning() {
@@ -251,19 +251,27 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     options.onHit();
     invalidate();
   }
-  function intersect(event: PackPointerEvent) {
+  function intersect(event: Pick<PackPointerEvent, 'clientX' | 'clientY'>, includeRevealingCards = false) {
     const rect = host.getBoundingClientRect();
     pointer.set((event.clientX - rect.left) / width * 2 - 1, 1 - (event.clientY - rect.top) / height * 2);
     raycaster.setFromCamera(pointer, camera);
     hits.length = 0;
-    if (flow.stage === 'revealed') {
+    if (flow.stage === 'revealed' || includeRevealingCards) {
       cards.forEach(({ group }) => {
         if (group.visible) raycaster.intersectObject(group, true, hits);
       });
       hits.sort((a, b) => b.object.renderOrder - a.object.renderOrder || a.distance - b.distance);
     }
-    else if (packRoot.visible) raycaster.intersectObject(pack.group, true, hits);
+    if (flow.stage !== 'revealed' && packRoot.visible) raycaster.intersectObject(pack.group, true, hits);
     return hits[0];
+  }
+  function updateCursor(event?: PackPointerEvent) {
+    if (disposed || failed) return;
+    if (event) {
+      if (!event.isPrimary || event.pointerType !== 'mouse') return;
+      mousePosition = { clientX: event.clientX, clientY: event.clientY };
+    }
+    host.style.cursor = mousePosition && intersect(mousePosition, true) ? 'pointer' : '';
   }
   const input = createMiNoteCardInput(() => {
     if (disposed || failed) return;
@@ -275,6 +283,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     maxTapMovementPx: 8,
     onStart(event) {
       if (disposed || failed) return false;
+      updateCursor(event);
       const hit = intersect(event);
       pointerTarget = hit ? (flow.stage === 'revealed' ? 'card' : 'pack') : 'background';
       pointerCardIndex = pointerTarget === 'card' ? hit.object.userData.cardIndex as number : null;
@@ -307,6 +316,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
         }
       }
       if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
+      updateCursor(event);
       invalidate();
     },
   });
@@ -326,18 +336,16 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
   }
   function pointerMove(event: PointerEvent) {
     input.onPointerMove(event);
+    updateCursor(event);
     if (!event.isPrimary || event.pointerType !== 'mouse' || inspectingPointer !== null
       || reducedMotion.matches || flow.stage === 'opening') return;
-    const hit = intersect(event);
-    const index = flow.stage === 'revealed' ? hit?.object.userData.cardIndex as number | undefined : undefined;
-    host.style.cursor = hit ? (flow.stage === 'revealed'
-      ? index !== undefined && canInspect(index) && cardCount > 1 && cardFlow.stage !== 'row' ? 'pointer' : 'default'
-      : 'pointer') : '';
     if (cardFlow.stage === 'row') {
       cards.forEach((_card, cardIndex) => aimCard(event, cardIndex));
     } else aimCard(event, cardFlow.activeIndex);
   }
   function pointerLeave() {
+    mousePosition = null;
+    updateCursor();
     if (inspectingPointer !== null) return;
     resetTilt();
     invalidate();
@@ -385,6 +393,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
       renderer.render(scene, camera);
     } catch (error) { fail(error); return; }
     if (failed) return;
+    updateCursor();
     if (firstFrame) {
       firstFrame = false;
       options.onReady();

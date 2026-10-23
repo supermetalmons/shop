@@ -291,6 +291,31 @@ export function createDogeFoilPackModel(cardCount: 1 | 2 | 3 = 1) {
   const left = new THREE.Mesh(createFoilGeometry(-1, false), material);
   const right = new THREE.Mesh(createFoilGeometry(1, false), material);
   const seal = new THREE.Mesh(createFoilGeometry(0, true), material);
+  for (const mesh of [left, right, seal]) {
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.boundingBox!.expandByVector(new THREE.Vector3(0.24, 0.12, 0.35));
+    mesh.geometry.boundingBox!.getBoundingSphere(mesh.geometry.boundingSphere!);
+    mesh.getVertexPosition = (index, target) => {
+      target.fromBufferAttribute(mesh.geometry.attributes.position, index);
+      const { x, y } = target;
+      const hit = uniforms.uHit.value;
+      if (hit > 0) {
+        const dx = (x - uniforms.uHitPoint.value.x) * 1.4;
+        const dy = y - uniforms.uHitPoint.value.y;
+        const dent = Math.exp(-(dx * dx + dy * dy) * 2.2);
+        target.z -= hit * dent * (0.16 + 0.035 * Math.sin(uniforms.uVariant.value * 2));
+        target.z += hit * Math.sin(y * 5 + uniforms.uVariant.value) * Math.sin(x * 3) * 0.035;
+      }
+      const tear = uniforms.uTear.value;
+      const panel = mesh.geometry.attributes.aPanel.getX(index);
+      const wave = THREE.MathUtils.smoothstep(y / HEIGHT + 0.5, 1.10 - tear * 1.9, 1.34 - tear * 1.9);
+      const peel = wave * THREE.MathUtils.smoothstep(tear, 0.10, 0.95) * Math.abs(panel);
+      target.x += panel * peel * 0.24;
+      target.z += peel * 0.12 * (1 - Math.abs(x) / HALF_WIDTH);
+      target.y -= peel * 0.12;
+      return target;
+    };
+  }
   left.name = 'foil-left';
   right.name = 'foil-right';
   seal.name = 'foil-top-seal';

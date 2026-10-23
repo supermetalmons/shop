@@ -63,7 +63,7 @@ test('foil pack stays within the mobile geometry budget with real front, back an
   assert.ok(parts.length <= 4);
   assert.ok(parts.reduce((total, part) => total + part.geometry.attributes.position.count, 0) < 5_000);
   assert.equal(new Set(parts.map((part) => part.material)).size, 1);
-  const bounds = new THREE.Box3().setFromObject(model.group);
+  const bounds = new THREE.Box3().setFromObject(model.group, true);
   const size = bounds.getSize(new THREE.Vector3());
   assert.ok(Math.abs(size.x - 2.45) < 0.001);
   assert.ok(Math.abs(size.y - 3.75) < 0.001);
