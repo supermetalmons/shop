@@ -5,8 +5,8 @@ const HEIGHT = 3.75;
 const HALF_WIDTH = WIDTH / 2;
 const HALF_HEIGHT = HEIGHT / 2;
 const SEAL_Y = 1.61;
-const BODY_COLUMNS = 24;
-const BODY_ROWS = 32;
+const BODY_COLUMNS = 48;
+const BODY_ROWS = 24;
 
 export type DogeFoilPackPose = {
   hit: number;
@@ -22,10 +22,6 @@ function ease(value: number) {
   return t * t * (3 - 2 * t);
 }
 
-function tearEdge(y: number) {
-  return Math.sin(y * 19.3) * 0.027 + Math.sin(y * 43.7) * 0.016;
-}
-
 function sealEdge(x: number) {
   return SEAL_Y + Math.sin(x * 34.1) * 0.017 + Math.sin(x * 71.7) * 0.008;
 }
@@ -38,7 +34,9 @@ function foilDepth(x: number, y: number) {
     + Math.sin(x * 37 - y * 12) * 0.0025;
   const edgeWrinkles = (1 - ease(across / 0.7)) * Math.sin(y * 27 + x * 4) * 0.016;
   const crimp = (1 - body) * (0.008 + 0.009 * Math.cos((x + HALF_WIDTH) * Math.PI * 48 / WIDTH));
-  return 0.018 + puff * 0.175 + body * (folds + edgeWrinkles) + crimp;
+  const shoulder = ease((HALF_WIDTH - Math.abs(x)) / 0.045);
+  const cavity = shoulder * ease((y + 1.74) / 0.16) * ease((1.67 - y) / 0.18) * 0.13;
+  return Math.max(cavity, 0.018 + puff * 0.175 + body * (folds + edgeWrinkles) + crimp);
 }
 
 function createPrintTexture(cardCount: 1 | 2 | 3) {
@@ -130,40 +128,30 @@ function createPrintTexture(cardCount: 1 | 2 | 3) {
   return texture;
 }
 
-function createFoilGeometry(side: number, strip: boolean) {
+function createFoilGeometry(face: 'front' | 'rear' | 'seal') {
   const positions: number[] = [];
   const uvs: number[] = [];
-  const panels: number[] = [];
   const indices: number[] = [];
-  const columns = strip ? 80 : BODY_COLUMNS;
+  const strip = face === 'seal';
+  const columns = BODY_COLUMNS;
   const rows = strip ? 4 : BODY_ROWS;
-
   const addVertex = (x: number, y: number, z: number, front: boolean) => {
     positions.push(x, y, z);
-    uvs.push((front ? (x / WIDTH + 0.5) : (0.5 - x / WIDTH) + 1) * 0.5, y / HEIGHT + 0.5);
-    panels.push(strip ? 0 : side);
+    uvs.push((front ? x / WIDTH + 0.5 : 1.5 - x / WIDTH) * 0.5, y / HEIGHT + 0.5);
   };
   const sample = (column: number, row: number) => {
-    const u = column / columns;
+    const x = (column / columns - 0.5) * WIDTH;
     const v = row / rows;
-    if (strip) {
-      const x = (u - 0.5) * WIDTH;
-      const lower = sealEdge(x);
-      const serration = (column % 2) * 0.012;
-      const y = THREE.MathUtils.lerp(lower, HALF_HEIGHT - serration, v);
-      const z = 0.022 + (column % 2) * 0.016 + Math.sin(v * Math.PI) * 0.006;
-      return { x, y, z };
-    }
-    const yBase = THREE.MathUtils.lerp(-HALF_HEIGHT, SEAL_Y, v);
-    const middle = tearEdge(yBase);
-    const x = side < 0 ? THREE.MathUtils.lerp(-HALF_WIDTH, middle, u) : THREE.MathUtils.lerp(middle, HALF_WIDTH, u);
-    const y = yBase + (sealEdge(x) - SEAL_Y) * v ** 16 + (row === 0 ? (column % 2) * 0.012 : 0);
-    return { x, y, z: foilDepth(x, y) };
+    const y = strip
+      ? THREE.MathUtils.lerp(sealEdge(x), HALF_HEIGHT - (column % 2) * 0.012, v)
+      : THREE.MathUtils.lerp(-HALF_HEIGHT + (column % 2) * 0.012, sealEdge(x), v);
+    const z = strip
+      ? THREE.MathUtils.lerp(foilDepth(x, sealEdge(x)), 0.022 + (column % 2) * 0.016, v)
+      : foilDepth(x, y);
+    return { x, y, z };
   };
-
-  for (let face = 0; face < 2; face += 1) {
+  const addFace = (front: boolean) => {
     const offset = positions.length / 3;
-    const front = face === 0;
     for (let row = 0; row <= rows; row += 1) {
       for (let column = 0; column <= columns; column += 1) {
         const { x, y, z } = sample(column, row);
@@ -178,15 +166,16 @@ function createFoilGeometry(side: number, strip: boolean) {
         else indices.push(a, b, a + 1, a + 1, b, b + 1);
       }
     }
-  }
-
+  };
+  if (face !== 'rear') addFace(true);
+  if (face !== 'front') addFace(false);
   const addRim = (horizontal: boolean, edge: number, reverse: boolean) => {
     const count = horizontal ? columns : rows;
     const offset = positions.length / 3;
     for (let i = 0; i <= count; i += 1) {
       const { x, y, z } = sample(horizontal ? i : edge, horizontal ? edge : i);
-      addVertex(x, y, z, true);
-      addVertex(x, y, -z, true);
+      addVertex(x, y, face === 'rear' ? 0 : z, face !== 'rear');
+      addVertex(x, y, face === 'front' ? 0 : -z, face !== 'rear');
     }
     for (let i = 0; i < count; i += 1) {
       const a = offset + i * 2;
@@ -195,45 +184,31 @@ function createFoilGeometry(side: number, strip: boolean) {
     }
   };
   addRim(true, 0, false);
-  addRim(true, rows, true);
-  if (strip || side < 0) addRim(false, 0, true);
-  if (strip || side > 0) addRim(false, columns, false);
-
+  if (strip) addRim(true, rows, true);
+  addRim(false, 0, true);
+  addRim(false, columns, false);
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geometry.setAttribute('aPanel', new THREE.Float32BufferAttribute(panels, 1));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  geometry.boundingBox!.expandByVector(new THREE.Vector3(4, 2, 0.6));
   geometry.computeBoundingSphere();
+  geometry.boundingBox!.getBoundingSphere(geometry.boundingSphere!);
   return geometry;
 }
 
 const vertexShader = `
-uniform float uHit;
-uniform vec2 uHitPoint;
-uniform float uVariant;
-uniform float uTear;
-attribute float aPanel;
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
 varying vec3 vPosition;
 void main() {
   vUv = uv;
-  vec3 p = position;
-  vec2 delta = p.xy - uHitPoint;
-  float dent = exp(-dot(delta * vec2(1.4, 1.0), delta * vec2(1.4, 1.0)) * 2.2);
-  p.z -= uHit * dent * (0.16 + 0.035 * sin(uVariant * 2.0));
-  p.z += uHit * sin(p.y * 5.0 + uVariant) * sin(p.x * 3.0) * 0.035;
-  float wave = smoothstep(1.10 - uTear * 1.9, 1.34 - uTear * 1.9, position.y / 3.75 + 0.5);
-  float peel = wave * smoothstep(0.10, 0.95, uTear) * abs(aPanel);
-  p.x += aPanel * peel * 0.24;
-  p.z += peel * 0.12 * (1.0 - abs(position.x) / 1.225);
-  p.y -= peel * 0.12;
-  vPosition = p;
+  vPosition = position;
   vNormal = normalize(normalMatrix * normal);
-  vec4 viewPosition = modelViewMatrix * vec4(p, 1.0);
+  vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
   vViewPosition = viewPosition.xyz;
   gl_Position = projectionMatrix * viewPosition;
 }
@@ -242,7 +217,6 @@ void main() {
 const fragmentShader = `
 uniform sampler2D uPrint;
 uniform float uHit;
-uniform float uOpacity;
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vViewPosition;
@@ -267,7 +241,7 @@ void main() {
   float printed = printColor.a * (gl_FrontFacing ? 1.0 : 0.0);
   vec3 ink = printColor.rgb * (0.65 + key * 0.35) + (rim * 0.12 + key * 0.035);
   vec3 color = mix(silver, ink, printed);
-  gl_FragColor = vec4(color, uOpacity);
+  gl_FragColor = vec4(color, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
 }
@@ -277,68 +251,57 @@ export function createDogeFoilPackModel(cardCount: 1 | 2 | 3 = 1) {
   const group = new THREE.Group();
   group.name = 'doge-day-2026-foil-pack';
   const rig = new THREE.Group();
+  const sleeve = new THREE.Group();
   group.add(rig);
+  rig.add(sleeve);
   const print = createPrintTexture(cardCount);
-  const uniforms = {
-    uPrint: { value: print },
-    uHit: { value: 0 },
-    uHitPoint: { value: new THREE.Vector2() },
-    uVariant: { value: 0 },
-    uTear: { value: 0 },
-    uOpacity: { value: 1 },
-  };
-  const material = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader, side: THREE.DoubleSide, transparent: true, forceSinglePass: true });
-  const left = new THREE.Mesh(createFoilGeometry(-1, false), material);
-  const right = new THREE.Mesh(createFoilGeometry(1, false), material);
-  const seal = new THREE.Mesh(createFoilGeometry(0, true), material);
-  for (const mesh of [left, right, seal]) {
-    mesh.geometry.computeBoundingBox();
-    mesh.geometry.boundingBox!.expandByVector(new THREE.Vector3(0.24, 0.12, 0.35));
-    mesh.geometry.boundingBox!.getBoundingSphere(mesh.geometry.boundingSphere!);
-    mesh.getVertexPosition = (index, target) => {
-      target.fromBufferAttribute(mesh.geometry.attributes.position, index);
-      const { x, y } = target;
-      const hit = uniforms.uHit.value;
-      if (hit > 0) {
-        const dx = (x - uniforms.uHitPoint.value.x) * 1.4;
-        const dy = y - uniforms.uHitPoint.value.y;
-        const dent = Math.exp(-(dx * dx + dy * dy) * 2.2);
-        target.z -= hit * dent * (0.16 + 0.035 * Math.sin(uniforms.uVariant.value * 2));
-        target.z += hit * Math.sin(y * 5 + uniforms.uVariant.value) * Math.sin(x * 3) * 0.035;
-      }
-      const tear = uniforms.uTear.value;
-      const panel = mesh.geometry.attributes.aPanel.getX(index);
-      const wave = THREE.MathUtils.smoothstep(y / HEIGHT + 0.5, 1.10 - tear * 1.9, 1.34 - tear * 1.9);
-      const peel = wave * THREE.MathUtils.smoothstep(tear, 0.10, 0.95) * Math.abs(panel);
-      target.x += panel * peel * 0.24;
-      target.z += peel * 0.12 * (1 - Math.abs(x) / HALF_WIDTH);
-      target.y -= peel * 0.12;
-      return target;
-    };
-  }
-  left.name = 'foil-left';
-  right.name = 'foil-right';
+  const uniforms = { uPrint: { value: print }, uHit: { value: 0 } };
+  const material = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader, side: THREE.DoubleSide });
+  const front = new THREE.Mesh(createFoilGeometry('front'), material);
+  const rear = new THREE.Mesh(createFoilGeometry('rear'), material);
+  const seal = new THREE.Mesh(createFoilGeometry('seal'), material);
+  front.name = 'foil-front';
+  rear.name = 'foil-rear';
   seal.name = 'foil-top-seal';
-  left.frustumCulled = right.frustumCulled = seal.frustumCulled = false;
-  rig.add(left, right, seal);
+  const parts = [front, rear, seal].map(mesh => ({
+    mesh,
+    base: new Float32Array(mesh.geometry.attributes.position.array),
+  }));
+  parts.forEach(({ mesh }) => { mesh.frustumCulled = false; });
+  sleeve.add(front, rear);
+  rig.add(seal);
   let disposed = false;
+  let exitDistance = 7.25;
+  let discardStart = 0;
+  let distanceStart = 0;
+  let previousDiscard = 0;
+  let currentDistance = 0;
+  let previousHit = NaN;
+  let previousX = NaN;
+  let previousY = NaN;
+  let previousVariant = NaN;
+  let previousTear = NaN;
 
   return {
     group,
-    update({ hit, hitX, hitY, variant, tear, discard }: DogeFoilPackPose) {
+    setExitDistance(distance: number) {
+      if (disposed || !Number.isFinite(distance)) return;
+      const nextDistance = Math.max(7.25, distance);
+      if (nextDistance === exitDistance) return;
+      exitDistance = nextDistance;
+      if (previousDiscard > 0) {
+        discardStart = previousDiscard;
+        distanceStart = currentDistance;
+      }
+    },
+    update({ hit, hitX, hitY, variant, tear, discard }: DogeFoilPackPose, preserveResizeMotion = true) {
       if (disposed) return;
       const pulse = THREE.MathUtils.clamp(hit, 0, 1);
       const ripping = THREE.MathUtils.clamp(tear, 0, 1);
       const falling = THREE.MathUtils.clamp(discard, 0, 1);
-      const opening = ease((ripping - 0.3) / 0.7);
-      const unseal = ease(ripping / 0.42);
       const kind = ((Math.floor(variant) % 3) + 3) % 3;
       const direction = hitX < 0 ? -1 : 1;
       uniforms.uHit.value = pulse;
-      uniforms.uHitPoint.value.set(THREE.MathUtils.clamp(hitX, -1, 1) * HALF_WIDTH, THREE.MathUtils.clamp(hitY, -1, 1) * HALF_HEIGHT);
-      uniforms.uVariant.value = variant;
-      uniforms.uTear.value = ripping;
-      uniforms.uOpacity.value = 1 - falling;
       rig.visible = falling < 1;
       rig.position.set(
         pulse * direction * (kind === 2 ? 0.075 : 0.025),
@@ -348,23 +311,70 @@ export function createDogeFoilPackModel(cardCount: 1 | 2 | 3 = 1) {
       rig.rotation.set(
         pulse * (kind === 0 ? -0.12 : hitY * 0.07),
         pulse * direction * (kind === 2 ? 0.15 : kind === 1 ? -0.11 : 0.065),
-        pulse * direction * (kind === 2 ? 0.085 : 0.035) - falling * Math.PI * 8 / 180,
+        pulse * direction * (kind === 2 ? 0.085 : 0.035),
       );
       rig.scale.set(1 - pulse * (kind === 1 ? 0.075 : 0.025), 1 - pulse * (kind === 0 ? 0.055 : 0.025), 1 + pulse * (kind === 1 ? 0.1 : 0));
-      rig.scale.multiplyScalar(1 - falling * 0.1);
-      left.position.set(-opening * 0.1, -opening * 0.06, -opening * 0.03);
-      right.position.set(opening * 0.1, -opening * 0.06, -opening * 0.03);
-      left.rotation.set(opening * 0.04, -opening * 0.18, opening * 0.035);
-      right.rotation.set(-opening * 0.04, opening * 0.18, -opening * 0.035);
-      seal.position.set(unseal * 0.16, unseal * 0.16 - opening * 0.2, unseal * 0.1);
-      seal.rotation.set(unseal * 0.34, -unseal * 0.16, -unseal * 0.12);
+      if (!preserveResizeMotion || falling < previousDiscard || falling === 0) {
+        discardStart = 0;
+        distanceStart = 0;
+      }
+      const remaining = discardStart < 1 ? (falling - discardStart) / (1 - discardStart) : 0;
+      const distance = THREE.MathUtils.lerp(distanceStart, Math.max(exitDistance, distanceStart), remaining);
+      previousDiscard = falling;
+      currentDistance = distance;
+      const cleared = ease((distance - 3.2) / 1.3);
+      sleeve.position.y = -distance;
+      sleeve.rotation.z = -cleared * Math.PI * 8 / 180;
+      sleeve.scale.setScalar(1 - cleared * 0.1);
+      seal.position.set(distance, distance, 0);
+      if (pulse === previousHit && hitX === previousX && hitY === previousY
+        && variant === previousVariant && ripping === previousTear) return;
+      previousHit = pulse;
+      previousX = hitX;
+      previousY = hitY;
+      previousVariant = variant;
+      previousTear = ripping;
+      const pointX = THREE.MathUtils.clamp(hitX, -1, 1) * HALF_WIDTH;
+      const pointY = THREE.MathUtils.clamp(hitY, -1, 1) * HALF_HEIGHT;
+      const mouth = ease((ripping - 0.15) / 0.65);
+      for (const { mesh, base } of parts) {
+        const attribute = mesh.geometry.attributes.position as THREE.BufferAttribute;
+        const positions = attribute.array;
+        for (let offset = 0; offset < base.length; offset += 3) {
+          const x = base[offset];
+          const y = base[offset + 1];
+          const z = base[offset + 2];
+          let px = x;
+          let py = y;
+          let pz = z;
+          if (mesh === seal) {
+            const release = ease((ripping - (0.5 - x / WIDTH) * 0.28) / 0.72);
+            px += release * (0.35 + ripping * 2.8);
+            py += release * (0.24 + ripping * 1.35);
+            pz += release * 0.22;
+          } else {
+            const lip = mouth * ease((y - 1.13) / 0.48);
+            const shoulder = ease((HALF_WIDTH - Math.abs(x)) / 0.045);
+            pz += Math.sign(z) * lip * shoulder * 0.16;
+          }
+          if (pulse > 0) {
+            const dx = (x - pointX) * 1.4;
+            const dy = y - pointY;
+            pz -= pulse * Math.exp(-(dx * dx + dy * dy) * 2.2) * (0.16 + 0.035 * Math.sin(variant * 2));
+            pz += pulse * Math.sin(y * 5 + variant) * Math.sin(x * 3) * 0.035;
+          }
+          positions[offset] = px;
+          positions[offset + 1] = py;
+          positions[offset + 2] = pz;
+        }
+        attribute.needsUpdate = true;
+        mesh.geometry.computeVertexNormals();
+      }
     },
     dispose() {
       if (disposed) return;
       disposed = true;
-      left.geometry.dispose();
-      right.geometry.dispose();
-      seal.geometry.dispose();
+      for (const { mesh } of parts) mesh.geometry.dispose();
       material.dispose();
       print.dispose();
       group.clear();

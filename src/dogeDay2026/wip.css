@@ -13,6 +13,73 @@
   outline: none;
 }
 
+.doge-day-2026-opening-inspector {
+  position: absolute;
+  z-index: 3;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  width: min(380px, calc(100% - 24px));
+  padding: 8px 12px;
+  transform: translateX(-50%);
+  border-radius: 8px;
+  background: rgb(24 24 28 / 88%);
+  color: #fff;
+  font: 11px/1.4 monospace;
+}
+
+.doge-day-2026-opening-inspector__steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.doge-day-2026-opening-inspector button,
+.doge-day-2026-opening-inspector select {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 12%);
+  color: inherit;
+  font: inherit;
+}
+
+.doge-day-2026-opening-inspector button:disabled {
+  opacity: 0.35;
+}
+
+.doge-day-2026-opening-inspector input {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  touch-action: pan-x;
+}
+
+.doge-day-2026-opening-frames {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  overflow: auto;
+  padding: 12px;
+  background: #25262b;
+  touch-action: pan-x pan-y;
+}
+
+.doge-day-2026-opening-frames > button {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: block;
+  margin-bottom: 12px;
+}
+
+.doge-day-2026-opening-frames img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto 16px;
+}
+
 .doge-day-2026-reveal-overlay,
 .doge-day-2026-reveal-overlay__scene {
   position: absolute;

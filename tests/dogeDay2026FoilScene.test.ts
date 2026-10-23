@@ -3,7 +3,7 @@ import { registerHooks } from 'node:module';
 import test, { after, afterEach, beforeEach, type TestContext } from 'node:test';
 import * as THREE from 'three';
 import type { DrifCardConfig } from '../src/drifCards.ts';
-import type { DogeFoilPose } from '../src/dogeDay2026/foilPackFlow.ts';
+import { sampleDogeFoilOpening, type DogeFoilPose } from '../src/dogeDay2026/foilPackFlow.ts';
 import { calcPonchoDrifellaRevealTargetRect, ponchoDrifellaRevealOverlayStyleVars } from '../src/lib/revealOverlayLayout.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -49,10 +49,13 @@ function createTestPack() {
   const pack = {
     group,
     poses: [] as DogeFoilPose[],
+    resizeMotion: [] as boolean[],
     disposeCount: 0,
-    update(pose: DogeFoilPose) {
+    setExitDistance() {},
+    update(pose: DogeFoilPose, preserveResizeMotion = true) {
       assert.equal(pack.disposeCount, 0);
       pack.poses.push({ ...pose });
+      pack.resizeMotion.push(preserveResizeMotion);
     },
     dispose() {
       pack.disposeCount += 1;
@@ -1201,4 +1204,155 @@ test('card faces occlude rear foil during opening and switch to ordered layering
     }
     run.controller.dispose();
   }
+});
+
+test('opening inspection samples exact frames without advancing time, replaying sounds, or reallocating the scene', async () => {
+  const run = harness(true, { width: 900, height: 900 }, 3);
+  run.controller.setInspectionTime(0);
+  drainFrames();
+  assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => !card.visible));
+  await warmCard(run);
+  drainFrames();
+  const fixedMatrices: number[][] = [];
+  for (const elapsed of [1000 / 60, 500, 783.333333333, 1250, 1300, 650]) {
+    run.controller.setInspectionTime(elapsed);
+    advanceFrame(60_000);
+    const snapshot = run.renderer.snapshots.at(-1)!;
+    assert.deepEqual(snapshot.pose, {
+      hit: 0, hitX: 0, hitY: 0, variant: 0, ...sampleDogeFoilOpening(elapsed),
+    });
+    assert.equal(snapshot.packVisible, elapsed < 1300);
+    assert.ok(snapshot.cards.every(card => card.visible));
+    assert.ok(snapshot.cards.every(card => card.frontDepthWrite === (elapsed < 1300)
+      && card.backDepthWrite === (elapsed < 1300)));
+    if (!fixedMatrices.length) fixedMatrices.push(...snapshot.cards.map(card => card.matrix));
+    else assert.deepEqual(snapshot.cards.map(card => card.matrix), fixedMatrices);
+    assert.equal(frames.size, 0);
+    run.controller.activate();
+    assert.equal(frames.size, 0);
+  }
+  assert.deepEqual(run.events, ['ready']);
+  assert.equal(run.renderer.compileCount, 1);
+  assert.equal(run.renderer.snapshots.filter(snapshot => snapshot.offscreen).length, 3);
+  run.controller.setInspectionTime(null);
+  drainFrames();
+  assert.equal(run.stages.at(-1), 'sealed');
+  run.controller.activate();
+  assert.equal(run.events.at(-1), 'hit');
+});
+
+test('opening inspection waits for GPU readiness and resumes the same requested frame after a hidden tab', async () => {
+  const run = harness(true);
+  run.controller.setInspectionTime(925);
+  drainFrames();
+  assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => !card.visible));
+  await warmCard(run);
+  drainFrames();
+  assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => card.visible));
+  Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+  document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  run.controller.setInspectionTime(1100);
+  assert.equal(frames.size, 0);
+  Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+  document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  advanceFrame(60_000);
+  assert.equal(run.renderer.snapshots.at(-1)!.pose!.discard, sampleDogeFoilOpening(1100).discard);
+  assert.equal(frames.size, 0);
+  run.controller.dispose();
+  run.controller.setInspectionTime(500);
+  assert.equal(frames.size, 0);
+});
+
+test('inspection contact sheets capture all 79 opening frames with the existing renderer and restore the selected time', async (t) => {
+  const run = harness(true);
+  run.controller.setInspectionTime(600);
+  assert.deepEqual(run.controller.captureOpeningFrames(), []);
+  await warmCard(run);
+  drainFrames();
+  let captures = 0;
+  let sheetCount = 0;
+  const contexts = [] as string[];
+  const crops: number[][] = [];
+  t.mock.method(dom.window.HTMLCanvasElement.prototype, 'getContext', ((kind: string) => {
+    contexts.push(kind);
+    return { fillRect() {}, fillText() {}, drawImage(_canvas: unknown, ...dimensions: number[]) { captures += 1; crops.push(dimensions); } };
+  }) as typeof dom.window.HTMLCanvasElement.prototype.getContext);
+  t.mock.method(dom.window.HTMLCanvasElement.prototype, 'toDataURL', () => `data:image/png;base64,sheet-${sheetCount++}`);
+  const start = run.renderer.snapshots.length;
+  assert.equal(run.controller.captureOpeningFrames().length, 4);
+  assert.equal(captures, 79);
+  assert.ok(crops.every(crop => crop.length === 8 && crop[0] > 0 && crop[2] < 900 && crop[3] === 900));
+  assert.deepEqual(contexts, ['2d', '2d', '2d', '2d']);
+  assert.equal(renderers.length, 1);
+  const snapshots = run.renderer.snapshots.slice(start);
+  assert.equal(snapshots.length, 80);
+  assert.ok(run.pack.resizeMotion.slice(-80).every(preserve => !preserve));
+  snapshots.slice(0, -1).forEach((snapshot, index) => {
+    const opening = sampleDogeFoilOpening(index * 1000 / 60);
+    assert.equal(snapshot.pose!.tear, opening.tear);
+    assert.equal(snapshot.pose!.discard, opening.discard);
+  });
+  assert.equal(snapshots.at(-1)!.pose!.discard, sampleDogeFoilOpening(600).discard);
+  assert.deepEqual(run.events, ['ready']);
+  assert.equal(frames.size, 0);
+});
+
+test('inspection capture discards partial sheets when context loss precedes its DOM event', async (t) => {
+  const run = harness(true);
+  run.controller.setInspectionTime(600);
+  await warmCard(run);
+  drainFrames();
+  let rendered = 0;
+  let copied = 0;
+  let sheets = 0;
+  t.mock.method(dom.window.HTMLCanvasElement.prototype, 'getContext', (() => ({
+    fillRect() {}, fillText() {},
+    drawImage() {
+      assert.equal(run.renderer.contextLost, false);
+      copied += 1;
+    },
+  })) as typeof dom.window.HTMLCanvasElement.prototype.getContext);
+  t.mock.method(dom.window.HTMLCanvasElement.prototype, 'toDataURL', () => `data:image/png;base64,sheet-${sheets++}`);
+  run.renderer.onRender = offscreen => {
+    if (!offscreen && ++rendered === 22) run.renderer.contextLost = true;
+  };
+  assert.deepEqual(run.controller.captureOpeningFrames(), []);
+  assert.equal(rendered, 22);
+  assert.equal(copied, 21);
+  assert.equal(sheets, 1);
+  assert.deepEqual(run.events, ['ready', 'error']);
+  run.renderer.loseContext();
+  run.controller.setInspectionTime(800);
+  run.controller.setCardReady(true);
+  run.controller.activate();
+  assert.deepEqual(run.controller.captureOpeningFrames(), []);
+  assert.deepEqual(run.events, ['ready', 'error']);
+  assert.equal(rendered, 22);
+  assert.equal(frames.size, 0);
+});
+
+test('inspection density overrides preserve native sizing outside inspection and restore the actual display density', async () => {
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 });
+  const run = harness(true, { width: 390, height: 844 });
+  await warmCard(run);
+  drainFrames();
+  run.controller.setInspectionDensity(3);
+  drainFrames();
+  assert.equal(run.renderer.drawingBuffer.density, 2);
+  run.controller.setInspectionTime(800);
+  drainFrames();
+  assert.equal(run.renderer.drawingBuffer.density, 3);
+  assert.equal(run.renderer.domElement.width, 390 * 3);
+  run.controller.setInspectionDensity(1);
+  drainFrames();
+  assert.equal(run.renderer.drawingBuffer.density, 1);
+  run.controller.setInspectionDensity(null);
+  drainFrames();
+  assert.equal(run.renderer.drawingBuffer.density, 2);
+  run.controller.setInspectionDensity(3);
+  run.controller.setInspectionTime(null);
+  drainFrames();
+  assert.equal(run.renderer.drawingBuffer.density, 2);
+  assert.equal(run.renderer.compileCount, 1);
+  assert.equal(frames.size, 0);
 });

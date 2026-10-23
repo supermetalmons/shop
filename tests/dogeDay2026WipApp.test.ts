@@ -12,6 +12,8 @@ type FakeScene = {
   options: SceneOptions;
   activations: number;
   readiness: boolean[];
+  inspectionTimes: (number | null)[];
+  inspectionDensities: (number | null)[];
   disposed: boolean;
 };
 const { dom } = setupFrontendDom();
@@ -19,6 +21,7 @@ Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.wind
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 let scenes: FakeScene[] = [];
 let sceneConstructionError: Error | null = null;
+let development = false;
 const playedSounds: string[] = [];
 let nextTimer = 0;
 const timers = new Map<number, { callback: () => void; delay: number }>();
@@ -28,6 +31,7 @@ const bridge = '__dogeDay2026WipAppTest';
 Object.defineProperty(globalThis, bridge, {
   configurable: true,
   value: {
+    isDevelopment: () => development,
     createScene(host: HTMLDivElement, options: SceneOptions) {
       if (sceneConstructionError) {
         const error = sceneConstructionError;
@@ -36,11 +40,14 @@ Object.defineProperty(globalThis, bridge, {
       }
       const canvas = document.createElement('canvas');
       host.append(canvas);
-      const scene = { options, activations: 0, readiness: [], disposed: false } as FakeScene;
+      const scene = { options, activations: 0, readiness: [], inspectionTimes: [], inspectionDensities: [], disposed: false } as FakeScene;
       scenes.push(scene);
       return {
         activate: () => { scene.activations += 1; },
         setCardReady: (ready: boolean) => { scene.readiness.push(ready); },
+        setInspectionTime: (time: number | null) => { scene.inspectionTimes.push(time); },
+        setInspectionDensity: (density: number | null) => { scene.inspectionDensities.push(density); },
+        captureOpeningFrames: () => [`data:image/png;base64,${options.cards.length}-cards`],
         dispose: () => { scene.disposed = true; canvas.remove(); },
       };
     },
@@ -57,6 +64,11 @@ const imports = registerHooks({
     return nextResolve(specifier, context);
   },
   load(url, context, nextLoad) {
+    if (url.endsWith('/dogeDay2026/DogeDay2026WipApp.tsx')) {
+      const loaded = nextLoad(url, context);
+      const source = typeof loaded.source === 'string' ? loaded.source : Buffer.from(loaded.source as Uint8Array).toString();
+      return { ...loaded, source: source.replace('import.meta.env?.DEV', `globalThis.${bridge}.isDevelopment()`) };
+    }
     let source: string | undefined;
     if (url.endsWith('/dogeDay2026/foilPackScene.ts')) source = `export const createDogeFoilScene = globalThis.${bridge}.createScene;`;
     else if (url.endsWith('/lib/SoundPlayer.ts')) source = `export const soundPlayer = globalThis.${bridge}.soundPlayer;`;
@@ -71,6 +83,7 @@ imports.deregister();
 beforeEach((t: TestContext) => {
   scenes = [];
   sceneConstructionError = null;
+  development = false;
   playedSounds.length = 0;
   timers.clear();
   frames.clear();
@@ -427,4 +440,118 @@ test('Doge recreates a three-card scene when a later card changes', () => {
   assert.equal(scenes.length, 2);
   assert.equal(scenes[0].disposed, true);
   assert.equal(scenes[1].options.cards[2], getDogeDay2026StarterCard(4));
+});
+
+test('Doge inspection time updates reuse the scene and lock reveal interactions', () => {
+  const cards = [getDogeDay2026StarterCard(1)!];
+  const props = { cards, cardReady: true, boxLabel: 'pack', resetKey: 0 };
+  const view = render(createElement(DogeDay2026RevealOverlay, { ...props, inspectionTimeMs: 500 }));
+  assert.equal(scenes[0].options.inspectionTimeMs, 500);
+  assert.deepEqual(scenes[0].inspectionTimes, [500]);
+  view.rerender(createElement(DogeDay2026RevealOverlay, { ...props, inspectionTimeMs: 1000 }));
+  assert.equal(scenes.length, 1);
+  assert.deepEqual(scenes[0].inspectionTimes, [500, 1000]);
+  fireEvent.click(view.getByRole('button', { name: 'Hit the pack' }));
+  assert.equal(scenes[0].activations, 0);
+  view.rerender(createElement(DogeDay2026RevealOverlay, props));
+  assert.deepEqual(scenes[0].inspectionTimes, [500, 1000, null]);
+  fireEvent.click(view.getByRole('button', { name: 'Hit the pack' }));
+  assert.equal(scenes[0].activations, 1);
+});
+
+test('Doge inspection capture readiness waits for GPU warmup and resets on scene replacement or failure', () => {
+  const readiness: boolean[] = [];
+  const props = {
+    cards: [getDogeDay2026StarterCard(1)!], cardReady: true, boxLabel: 'pack', resetKey: 0,
+    inspectionTimeMs: 500, inspectionDensity: 3, onInspectionReady: (ready: boolean) => readiness.push(ready),
+  };
+  const view = render(createElement(DogeDay2026RevealOverlay, props));
+  assert.equal(scenes[0].options.inspectionDensity, 3);
+  assert.deepEqual(scenes[0].inspectionDensities, [3]);
+  assert.deepEqual(readiness, [false]);
+  act(() => scenes[0].options.onReady());
+  assert.deepEqual(readiness, [false]);
+  act(() => scenes[0].options.onGpuReady?.());
+  assert.deepEqual(readiness, [false, true]);
+  view.rerender(createElement(DogeDay2026RevealOverlay, { ...props, inspectionDensity: 2 }));
+  assert.deepEqual(scenes[0].inspectionDensities, [3, 2]);
+  view.rerender(createElement(DogeDay2026RevealOverlay, { ...props, resetKey: 1 }));
+  assert.deepEqual(readiness, [false, true, false]);
+  act(() => scenes[0].options.onGpuReady?.());
+  assert.deepEqual(readiness, [false, true, false]);
+  act(() => scenes[1].options.onGpuReady?.());
+  act(() => scenes[1].options.onError(new Error('Lost context')));
+  assert.deepEqual(readiness, [false, true, false, true, false]);
+});
+
+test('Doge ignores the inspection query outside a development build', () => {
+  window.history.replaceState(null, '', '/doge_day_2026/wip?inspectOpening=1');
+  const view = render(createElement(DogeDay2026WipApp));
+  assert.equal(view.queryByRole('group', { name: 'Opening frame inspection' }), null);
+  assert.equal(scenes[0].options.inspectionTimeMs, undefined);
+  assert.equal(scenes[0].options.cardReady, false);
+});
+
+test('Doge frame viewer isolates focus, blocks preview shortcuts, and restores its trigger after Escape or Close', () => {
+  development = true;
+  window.history.replaceState(null, '', '/doge_day_2026/wip?inspectOpening=1');
+  const view = render(createElement(DogeDay2026WipApp));
+  assert.equal(view.getByRole<HTMLButtonElement>('button', { name: 'Loading frames…' }).disabled, true);
+  act(() => scenes[0].options.onGpuReady?.());
+  const trigger = view.getByRole<HTMLButtonElement>('button', { name: 'Frames' });
+  const picker = view.getByRole('button', { name: '3 card pack' });
+  const density = view.getByRole('combobox', { name: 'Inspection pixel density' });
+  const reveal = view.getByRole('button', { name: 'Hit the pack' });
+  trigger.focus();
+  fireEvent.click(trigger);
+  assert.ok(view.getByRole('dialog', { name: 'Opening frames at 60 Hz' }));
+  const close = view.getByRole('button', { name: 'Close frames' });
+  assert.equal(document.activeElement, close);
+  for (const control of [picker, density, reveal]) assert.ok(control.closest('[inert][aria-hidden="true"]'));
+  fireEvent.keyDown(close, { key: 'Tab' });
+  assert.equal(document.activeElement, close);
+  fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+  assert.equal(document.activeElement, close);
+  fireEvent.keyDown(window, { key: 'r', code: 'KeyR' });
+  fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+  assert.equal(scenes.length, 1);
+  assert.equal(scenes[0].activations, 0);
+  fireEvent.keyDown(close, { key: 'Escape' });
+  assert.equal(view.queryByRole('dialog', { name: 'Opening frames at 60 Hz' }), null);
+  assert.equal(window.location.pathname, '/doge_day_2026/wip');
+  assert.equal(document.activeElement, trigger);
+  assert.equal(picker.closest('[inert]'), null);
+  fireEvent.click(trigger);
+  fireEvent.click(view.getByRole('button', { name: 'Close frames' }));
+  assert.equal(document.activeElement, trigger);
+  fireEvent.click(trigger);
+  act(() => scenes[0].options.onError(new Error('Lost context')));
+  fireEvent.click(view.getByRole('button', { name: 'Close frames' }));
+  assert.equal(document.activeElement, view.getByRole('dialog', { name: 'Doge Day 2026 pack preview' }));
+});
+
+test('Doge clears captured sheets when their card count, density, or round changes', () => {
+  development = true;
+  window.history.replaceState(null, '', '/doge_day_2026/wip?inspectOpening=1');
+  const view = render(createElement(DogeDay2026WipApp));
+  const capture = () => {
+    act(() => scenes.at(-1)!.options.onGpuReady?.());
+    fireEvent.click(view.getByRole('button', { name: 'Frames' }));
+    assert.ok(view.getByRole('dialog', { name: 'Opening frames at 60 Hz' }));
+  };
+  const picker = view.getByRole('button', { name: '3 card pack' });
+  const density = view.getByRole('combobox', { name: 'Inspection pixel density' });
+  const reset = view.getByRole('button', { name: 'Reset opening' });
+  capture();
+  fireEvent.click(picker);
+  assert.equal(view.queryByRole('img'), null);
+  assert.equal(scenes.at(-1)!.options.cards.length, 3);
+  capture();
+  fireEvent.change(density, { target: { value: '3' } });
+  assert.equal(view.queryByRole('img'), null);
+  assert.equal(scenes.at(-1)!.inspectionDensities.at(-1), 3);
+  capture();
+  fireEvent.click(reset);
+  assert.equal(view.queryByRole('img'), null);
+  assert.equal(scenes.length, 3);
 });

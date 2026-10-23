@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DogeDay2026RevealOverlay } from './DogeDay2026RevealOverlay';
 import { DOGE_DAY_2026_WIP_CONFIG, DOGE_DAY_2026_WIP_SOUNDS, pickDogeDay2026ClickSound } from './starterConfig';
 import { getDogeDay2026StarterCard } from './starterCards';
@@ -25,9 +25,21 @@ function randomCardIds(packSize: PackSize, previousFirst?: number) {
 }
 
 export default function DogeDay2026WipApp() {
+  const [inspectionEnabled] = useState(() => Boolean(import.meta.env?.DEV)
+    && new URLSearchParams(window.location.search).get('inspectOpening') === '1');
+  const [inspectionTimeMs, setInspectionTimeMs] = useState(0);
+  const [inspectionFrames, setInspectionFrames] = useState<string[]>([]);
+  const [inspectionReady, setInspectionReady] = useState(false);
+  const [inspectionDensity, setInspectionDensity] = useState<number | undefined>();
+  const inspectionCaptureRef = useRef<(() => string[]) | null>(null);
+  const inspectionFramesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const closeFramesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const framesWereOpenRef = useRef(false);
+  const framesOpen = inspectionEnabled && inspectionFrames.length > 0;
   const [round, setRound] = useState(() => ({
     packSize: DOGE_DAY_2026_WIP_CONFIG.itemsPerPack as PackSize,
-    cardIds: randomCardIds(DOGE_DAY_2026_WIP_CONFIG.itemsPerPack),
+    cardIds: inspectionEnabled ? [1, 2, 3].slice(0, DOGE_DAY_2026_WIP_CONFIG.itemsPerPack)
+      : randomCardIds(DOGE_DAY_2026_WIP_CONFIG.itemsPerPack),
     resetKey: 0,
   }));
   const [cardReady, setCardReady] = useState(false);
@@ -93,29 +105,38 @@ export default function DogeDay2026WipApp() {
   }, []);
 
   useEffect(() => {
+    if (inspectionEnabled) {
+      setCardReady(true);
+      return;
+    }
     const { cardReadyMinDelayMs, cardReadyMaxDelayMs } = DOGE_DAY_2026_WIP_CONFIG;
     const delay = cardReadyMinDelayMs + Math.floor(Math.random() * (cardReadyMaxDelayMs - cardReadyMinDelayMs + 1));
     const timeoutId = window.setTimeout(() => setCardReady(true), delay);
     return () => window.clearTimeout(timeoutId);
-  }, [round.resetKey]);
+  }, [round.resetKey, inspectionEnabled]);
 
   const handleReset = useCallback(() => {
-    setCardReady(false);
+    setInspectionFrames([]);
+    setCardReady(inspectionEnabled);
+    setInspectionTimeMs(0);
     setRound((current) => ({
       ...current,
-      cardIds: randomCardIds(current.packSize, current.cardIds[0]),
+      cardIds: inspectionEnabled ? [1, 2, 3].slice(0, current.packSize)
+        : randomCardIds(current.packSize, current.cardIds[0]),
       resetKey: current.resetKey + 1,
     }));
-  }, []);
+  }, [inspectionEnabled]);
   const handlePackSizeChange = useCallback((packSize: PackSize) => {
     if (packSize === round.packSize) return;
-    setCardReady(false);
+    setInspectionFrames([]);
+    setCardReady(inspectionEnabled);
     setRound((current) => ({
       packSize,
-      cardIds: randomCardIds(packSize, current.cardIds[0]),
+      cardIds: inspectionEnabled ? [1, 2, 3].slice(0, packSize)
+        : randomCardIds(packSize, current.cardIds[0]),
       resetKey: current.resetKey + 1,
     }));
-  }, [round.packSize]);
+  }, [round.packSize, inspectionEnabled]);
 
   const handleClose = useCallback(() => {
     navigate('/');
@@ -123,10 +144,20 @@ export default function DogeDay2026WipApp() {
   }, []);
   const handleBackgroundTap = useCallback(() => setFocusedMode((current) => !current), []);
   const handleSceneError = useCallback(() => setFocusedMode(false), []);
+  const handleCloseFrames = useCallback(() => setInspectionFrames([]), []);
+
+  useLayoutEffect(() => {
+    if (framesOpen) closeFramesButtonRef.current?.focus({ preventScroll: true });
+    else if (framesWereOpenRef.current) {
+      const trigger = inspectionFramesButtonRef.current;
+      (trigger?.disabled ? trigger.closest<HTMLElement>('[role="dialog"]') : trigger)?.focus({ preventScroll: true });
+    }
+    framesWereOpenRef.current = framesOpen;
+  }, [framesOpen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey || isKeyboardShortcutTarget(event.target)) return;
+      if (framesOpen || event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey || isKeyboardShortcutTarget(event.target)) return;
       if (event.code === 'KeyR' || event.key === 'r' || event.key === 'R') {
         event.preventDefault();
         handleReset();
@@ -137,32 +168,104 @@ export default function DogeDay2026WipApp() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleReset]);
+  }, [handleReset, framesOpen]);
 
   return (
     <ModalFocusScope
       className={`doge-day-2026-wip-page${focusedMode ? ' doge-day-2026-wip-page--focused' : ''}`}
-      ariaLabel={`${DOGE_DAY_2026_WIP_CONFIG.collectionName} pack preview`}
+      ariaLabel={framesOpen ? 'Opening frames at 60 Hz' : `${DOGE_DAY_2026_WIP_CONFIG.collectionName} pack preview`}
       focusTarget="scope"
-      onEscape={handleClose}
+      onEscape={framesOpen ? handleCloseFrames : handleClose}
     >
-      <DogeDay2026RevealOverlay
-        boxLabel={DOGE_DAY_2026_WIP_CONFIG.packLabel}
-        cards={currentCards}
-        cardReady={cardReady}
-        boxButtonRef={revealButtonRef}
-        resetKey={round.resetKey}
-        onPlayClick={playClickSound}
-        onPlayReveal={playRevealSound}
-        onPlayCardSwipe={playCardSwipeSound}
-        onPlayCardSpread={playCardSpreadSound}
-        onBackgroundTap={handleBackgroundTap}
-        onError={handleSceneError}
-      />
+      <div inert={framesOpen || undefined} aria-hidden={framesOpen || undefined}>
+        <DogeDay2026RevealOverlay
+          boxLabel={DOGE_DAY_2026_WIP_CONFIG.packLabel}
+          cards={currentCards}
+          cardReady={cardReady}
+          boxButtonRef={revealButtonRef}
+          resetKey={round.resetKey}
+          inspectionTimeMs={inspectionEnabled ? inspectionTimeMs : undefined}
+          inspectionDensity={inspectionEnabled ? inspectionDensity : undefined}
+          inspectionCaptureRef={inspectionEnabled ? inspectionCaptureRef : undefined}
+          onInspectionReady={inspectionEnabled ? setInspectionReady : undefined}
+          onPlayClick={playClickSound}
+          onPlayReveal={playRevealSound}
+          onPlayCardSwipe={playCardSwipeSound}
+          onPlayCardSpread={playCardSpreadSound}
+          onBackgroundTap={handleBackgroundTap}
+          onError={handleSceneError}
+        />
+      </div>
+      {inspectionEnabled && (
+        <div
+          className="doge-day-2026-opening-inspector"
+          role="group"
+          aria-label="Opening frame inspection"
+          inert={framesOpen || undefined}
+          aria-hidden={framesOpen || undefined}
+        >
+          <div className="doge-day-2026-opening-inspector__steps">
+            <button
+              type="button"
+              aria-label="Previous opening frame"
+              disabled={inspectionTimeMs <= 0}
+              onClick={() => setInspectionTimeMs(current => Math.max(0, (Math.round(current * 60 / 1000) - 1) * 1000 / 60))}
+            >Previous</button>
+            <output aria-live="polite">{inspectionTimeMs.toFixed(2)} ms · {Math.round(inspectionTimeMs * 60 / 1000)} / 78</output>
+            <button
+              type="button"
+              aria-label="Next opening frame"
+              disabled={inspectionTimeMs >= 1300}
+              onClick={() => setInspectionTimeMs(current => Math.min(1300, (Math.round(current * 60 / 1000) + 1) * 1000 / 60))}
+            >Next</button>
+          </div>
+          <input
+            type="range"
+            aria-label="Opening frame"
+            min="0"
+            max="78"
+            step="1"
+            value={Math.round(inspectionTimeMs * 60 / 1000)}
+            onChange={event => setInspectionTimeMs(Math.min(1300, Number(event.currentTarget.value) * 1000 / 60))}
+          />
+          <div className="doge-day-2026-opening-inspector__steps">
+            <button
+              ref={inspectionFramesButtonRef}
+              type="button"
+              disabled={!inspectionReady}
+              onClick={() => setInspectionFrames(inspectionCaptureRef.current?.() ?? [])}
+            >{inspectionReady ? 'Frames' : 'Loading frames…'}</button>
+            <label>
+              Resolution{' '}
+              <select
+                aria-label="Inspection pixel density"
+                value={inspectionDensity ?? 'native'}
+                onChange={event => {
+                  setInspectionFrames([]);
+                  setInspectionDensity(event.currentTarget.value === 'native' ? undefined : Number(event.currentTarget.value));
+                }}
+              >
+                <option value="native">Native</option>
+                <option value="1">1×</option>
+                <option value="2">2×</option>
+                <option value="3">3×</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      )}
+      {framesOpen && (
+        <div className="doge-day-2026-opening-frames" role="region" aria-label="Opening frames at 60 Hz">
+          <button ref={closeFramesButtonRef} type="button" onClick={handleCloseFrames}>Close frames</button>
+          {inspectionFrames.map((source, index) => (
+            <img key={index} src={source} alt={`Opening frames ${index * 20}–${Math.min(index * 20 + 19, 78)}`} />
+          ))}
+        </div>
+      )}
       <div
         className={`doge-day-2026-wip-controls${focusedMode ? ' doge-day-2026-wip-controls--hidden' : ''}`}
-        aria-hidden={focusedMode || undefined}
-        inert={focusedMode || undefined}
+        aria-hidden={focusedMode || framesOpen || undefined}
+        inert={focusedMode || framesOpen || undefined}
       >
         <button type="button" className="doge-day-2026-wip-close-btn" onClick={handleClose} aria-label="Close wip overlay">
           Close

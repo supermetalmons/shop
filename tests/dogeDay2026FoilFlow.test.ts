@@ -6,6 +6,7 @@ import {
   hitDogeFoilFlow,
   readyDogeFoilFlow,
   sampleDogeFoilFlow,
+  sampleDogeFoilOpening,
   type DogeFoilFlowState,
 } from '../src/dogeDay2026/foilPackFlow.ts';
 
@@ -90,24 +91,22 @@ test('revoking readiness before recovery prevents opening', () => {
   assert.equal(sampleDogeFoilFlow(state, 10_000).tear, 0);
 });
 
-test('final sequence tears, holds for 420 ms, then accelerates the pack down before allowing interaction', () => {
+test('final sequence tears for 500 ms then accelerates the pack down for 800 ms before allowing interaction', () => {
   const start = 4000;
   const state = readyDogeFoilFlow(waitingFlow(), true, start);
   const tearing = sampleDogeFoilFlow(state, start + 250);
   assert.equal(tearing.tear, 0.5);
   assert.equal(tearing.discard, 0);
   assert.ok(sampleDogeFoilFlow(state, start + 499).tear < 1);
-  for (const elapsed of [500, 710, 919, 920]) {
-    const held = sampleDogeFoilFlow(state, start + elapsed);
-    assert.equal(held.tear, 1);
-    assert.equal(held.discard, 0);
-    assert.equal(held.cardInteractive, false);
-  }
-  const discardAt = (elapsed: number) => sampleDogeFoilFlow(state, start + 920 + elapsed).discard;
+  const torn = sampleDogeFoilFlow(state, start + 500);
+  assert.equal(torn.tear, 1);
+  assert.equal(torn.discard, 0);
+  assert.equal(torn.cardInteractive, false);
+  const discardAt = (elapsed: number) => sampleDogeFoilFlow(state, start + 500 + elapsed).discard;
   assert.ok(discardAt(1) > 0);
-  const firstQuarter = discardAt(95);
-  const midpoint = discardAt(190);
-  const lastQuarter = discardAt(285);
+  const firstQuarter = discardAt(200);
+  const midpoint = discardAt(400);
+  const lastQuarter = discardAt(600);
   assert.ok(firstQuarter > 0 && firstQuarter < midpoint);
   assert.ok(midpoint < 0.5 && midpoint < lastQuarter && lastQuarter < 1);
   assert.ok(lastQuarter - midpoint > midpoint - firstQuarter);
@@ -124,16 +123,40 @@ test('final sequence tears, holds for 420 ms, then accelerates the pack down bef
   assert.equal(readyDogeFoilFlow(revealed, true, 100_000), revealed);
 });
 
+test('opening sampler matches live frames and stays continuous across tear and discard boundaries', () => {
+  const start = 4000;
+  const opening = readyDogeFoilFlow(waitingFlow(), true, start);
+  let previous = sampleDogeFoilOpening(0);
+  for (let elapsed = 0; elapsed <= DOGE_FOIL_OPEN_DURATION_MS + 1; elapsed += 1) {
+    const sampled = sampleDogeFoilOpening(elapsed);
+    const live = sampleDogeFoilFlow(opening, start + elapsed);
+    assert.deepEqual(sampled, { tear: live.tear, discard: live.discard, cardInteractive: live.cardInteractive });
+    assert.ok(sampled.tear >= previous.tear && sampled.tear <= 1);
+    assert.ok(sampled.discard >= previous.discard && sampled.discard <= 1);
+    assert.ok(sampled.tear - previous.tear < 0.01);
+    assert.ok(sampled.discard - previous.discard < 0.01);
+    assert.equal(sampled.cardInteractive, elapsed >= DOGE_FOIL_OPEN_DURATION_MS);
+    previous = sampled;
+  }
+  for (const elapsed of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.deepEqual(sampleDogeFoilOpening(elapsed), { tear: 0, discard: 0, cardInteractive: false });
+  }
+  assert.deepEqual(sampleDogeFoilOpening(100_000), { tear: 1, discard: 1, cardInteractive: true });
+});
+
 test('lost readiness freezes an opening and resuming preserves its pose and remaining duration', () => {
-  const opening = readyDogeFoilFlow(waitingFlow(), true, 4000);
-  const before = sampleDogeFoilFlow(opening, 5000);
-  const paused = readyDogeFoilFlow(opening, false, 5000);
-  assert.equal(paused.stage, 'opening');
-  assert.deepEqual(sampleDogeFoilFlow(paused, 100_000), before);
-  const resumed = readyDogeFoilFlow(paused, true, 100_000);
-  assert.deepEqual(sampleDogeFoilFlow(resumed, 100_000), before);
-  assert.equal(advanceDogeFoilFlow(resumed, 100_299).stage, 'opening');
-  assert.equal(advanceDogeFoilFlow(resumed, 100_300).stage, 'revealed');
+  for (const elapsed of [249, 499, 500, 501, 900, 1000, 1299]) {
+    const opening = readyDogeFoilFlow(waitingFlow(), true, 4000);
+    const before = sampleDogeFoilFlow(opening, 4000 + elapsed);
+    const paused = readyDogeFoilFlow(opening, false, 4000 + elapsed);
+    assert.equal(paused.stage, 'opening');
+    assert.deepEqual(sampleDogeFoilFlow(paused, 100_000), before);
+    const resumed = readyDogeFoilFlow(paused, true, 100_000);
+    assert.deepEqual(sampleDogeFoilFlow(resumed, 100_000), before);
+    const finishesAt = 100_000 + DOGE_FOIL_OPEN_DURATION_MS - elapsed;
+    assert.equal(advanceDogeFoilFlow(resumed, finishesAt - 1).stage, 'opening');
+    assert.equal(advanceDogeFoilFlow(resumed, finishesAt).stage, 'revealed');
+  }
 });
 
 test('reduced motion shortens recovery and reveal while preserving the same readiness gate', () => {
@@ -145,6 +168,17 @@ test('reduced motion shortens recovery and reveal while preserving the same read
   }
   assert.equal(state.stage, 'waiting');
   state = readyDogeFoilFlow(state, true, 1000);
+  assert.equal(sampleDogeFoilFlow(state, 1050).tear, 0.5);
+  assert.equal(sampleDogeFoilFlow(state, 1099).discard, 0);
+  const torn = sampleDogeFoilFlow(state, 1100);
+  assert.equal(torn.tear, 1);
+  assert.equal(torn.discard, 0);
+  assert.ok(sampleDogeFoilFlow(state, 1101).discard > 0);
+  const paused = readyDogeFoilFlow(state, false, 1150);
+  assert.deepEqual(sampleDogeFoilFlow(paused, 2000), sampleDogeFoilFlow(state, 1150));
+  const resumed = readyDogeFoilFlow(paused, true, 2000);
+  assert.equal(advanceDogeFoilFlow(resumed, 2109).stage, 'opening');
+  assert.equal(advanceDogeFoilFlow(resumed, 2110).stage, 'revealed');
   assert.equal(advanceDogeFoilFlow(state, 1259).stage, 'opening');
   assert.equal(advanceDogeFoilFlow(state, 1260).stage, 'revealed');
 });

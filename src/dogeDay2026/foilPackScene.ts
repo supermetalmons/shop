@@ -11,7 +11,7 @@ import {
 } from './cardStackFlow';
 import {
   advanceDogeFoilFlow, createDogeFoilFlow, hitDogeFoilFlow,
-  readyDogeFoilFlow, sampleDogeFoilFlow,
+  readyDogeFoilFlow, sampleDogeFoilFlow, sampleDogeFoilOpening,
 } from './foilPackFlow';
 
 export type DogeCardSceneState = {
@@ -23,8 +23,11 @@ export type DogeCardSceneState = {
 type SceneOptions = {
   cards: readonly DrifCardConfig[];
   cardReady: boolean;
+  inspectionTimeMs?: number;
+  inspectionDensity?: number;
   onStageChange: (stage: 'sealed' | 'hit' | 'waiting' | 'opening' | 'revealed', hits: number) => void;
   onReady: () => void;
+  onGpuReady?: () => void;
   onError: (error: Error) => void;
   onHit: () => void;
   onReveal: () => void;
@@ -108,6 +111,8 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
   let mousePosition: Pick<PackPointerEvent, 'clientX' | 'clientY'> | null = null;
   let hitX = 0;
   let hitY = 0;
+  let inspectionTime = options.inspectionTimeMs ?? null;
+  let inspectionDensity = options.inspectionDensity ?? null;
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let flow = createDogeFoilFlow({ reducedMotion: reducedMotion.matches });
   let cardFlow = createDogeCardStackFlow({ count: cardCount, reducedMotion: reducedMotion.matches });
@@ -219,7 +224,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     });
   }
   function canInspect(index: number) {
-    return flow.stage === 'revealed' && flow.ready && !cardTransitioning()
+    return inspectionTime === null && flow.stage === 'revealed' && flow.ready && !cardTransitioning()
       && (cardFlow.stage === 'row' || index === cardFlow.activeIndex);
   }
   function advanceCards() {
@@ -234,7 +239,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     invalidate();
   }
   function activate() {
-    if (disposed || failed || firstFrame) return;
+    if (disposed || failed || firstFrame || inspectionTime !== null) return;
     if (flow.stage === 'revealed') {
       if (cardTransitioning() || !flow.ready) return;
       if (cardCount > 1 && cardFlow.stage !== 'row') {
@@ -274,7 +279,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     host.style.cursor = mousePosition && intersect(mousePosition, true) ? 'pointer' : '';
   }
   const input = createMiNoteCardInput(() => {
-    if (disposed || failed) return;
+    if (disposed || failed || inspectionTime !== null) return;
     if (pointerTarget === 'background') options.onBackgroundTap();
     else if (flow.stage !== 'revealed') activate();
     else if (pointerCardIndex === cardFlow.activeIndex) advanceCards();
@@ -282,7 +287,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     maxTapDurationMs: 600,
     maxTapMovementPx: 8,
     onStart(event) {
-      if (disposed || failed) return false;
+      if (disposed || failed || inspectionTime !== null) return false;
       updateCursor(event);
       const hit = intersect(event);
       pointerTarget = hit ? (flow.stage === 'revealed' ? 'card' : 'pack') : 'background';
@@ -362,16 +367,19 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     const elapsed = lastFrameTime ? stamp - lastFrameTime : 16.67;
     const dt = Math.min(elapsed, 50) / 1000;
     lastFrameTime = stamp;
-    time += dt * 1000;
-    commit(advanceDogeFoilFlow(flow, time));
-    if (flow.stage === 'revealed' && flow.ready) cardTime += dt * 1000;
-    commitCardFlow(advanceDogeCardStackFlow(cardFlow, cardTime));
+    if (inspectionTime === null) {
+      time += dt * 1000;
+      commit(advanceDogeFoilFlow(flow, time));
+      if (flow.stage === 'revealed' && flow.ready) cardTime += dt * 1000;
+      commitCardFlow(advanceDogeCardStackFlow(cardFlow, cardTime));
+    }
     if (disposed || failed) return;
-    const pose = sampleDogeFoilFlow(flow, time);
-    packRoot.visible = flow.stage !== 'revealed';
+    const pose = inspectionTime === null ? sampleDogeFoilFlow(flow, time) : {
+      hit: 0, hitX: 0, hitY: 0, variant: 0, ...sampleDogeFoilOpening(inspectionTime),
+    };
+    packRoot.visible = inspectionTime === null ? flow.stage !== 'revealed' : pose.discard < 1;
     cardBackMaterial.depthWrite = packRoot.visible;
-    pack.update(pose);
-    packRoot.position.y = -pose.discard * (1440 / 520 * 2 * 1.42);
+    pack.update(pose, inspectionTime === null);
     const cardPoses = sampleDogeCardStackFlow(cardFlow, cardTime, { viewportWidth: width, viewportHeight: height, cardWidthPx, cardCenterY });
     let tiltMoving = false;
     cards.forEach((card, index) => {
@@ -398,13 +406,14 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
       firstFrame = false;
       options.onReady();
     }
-    const moving = flow.stage === 'hit' || (flow.stage === 'opening' && flow.ready)
-      || (cardTransitioning() && flow.ready) || tiltMoving;
+    const moving = inspectionTime === null && (flow.stage === 'hit' || (flow.stage === 'opening' && flow.ready)
+      || (cardTransitioning() && flow.ready) || tiltMoving);
     if (moving) invalidate();
     else lastFrameTime = 0;
   }
   function updateDrawingBuffer() {
-    const nextDensity = Math.min(window.devicePixelRatio || 1, 3);
+    const nextDensity = inspectionTime !== null && inspectionDensity !== null
+      ? inspectionDensity : Math.min(window.devicePixelRatio || 1, 3);
     if (density === nextDensity && renderer.domElement.width === Math.floor(width * density)
       && renderer.domElement.height === Math.floor(height * density)) return;
     density = nextDensity;
@@ -424,6 +433,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
     const frameTop = Math.min(Math.max(gutter, height - frameSize - gutter), Math.max(gutter, Math.round((height - frameSize) / 2) - lift));
     cardWidthPx = Math.max(1, Math.round(frameSize * 520 / 1440));
     cardCenterY = frameTop + Math.round(frameSize * 372 / 1440) + Math.round(frameSize * 728 / 1440) / 2;
+    pack.setExitDistance(Math.max(7.25, ((height - cardCenterY) * 2 / cardWidthPx) / (4.08 / 3.75) + 2.2));
     const worldPerPixel = 2 / cardWidthPx;
     stage.position.y = (height / 2 - cardCenterY) * worldPerPixel;
     const verticalSpan = height * worldPerPixel;
@@ -464,7 +474,7 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
   const observer = new ResizeObserver(resize);
   observer.observe(host);
   resize();
-  options.onStageChange(flow.stage, flow.hitCount);
+  options.onStageChange(inspectionTime === null ? flow.stage : inspectionTime >= 1300 ? 'revealed' : 'opening', flow.hitCount);
   reportCardState();
 
   void Promise.all(cards.map((card, index) => card.surface.setEffect(options.cards[index].effect))).then(() => {
@@ -511,12 +521,70 @@ export function createDogeFoilScene(host: HTMLDivElement, options: SceneOptions)
       return;
     }
     gpuReady = true;
+    options.onGpuReady?.();
     commit(readyDogeFoilFlow(flow, ready, time));
     invalidate();
   }).catch(fail);
 
   return {
     activate,
+    setInspectionTime(value: number | null) {
+      if (disposed || failed) return;
+      inspectionTime = value === null ? null : Number.isFinite(value) ? Math.max(0, Math.min(1300, value)) : 0;
+      resetTilt(true);
+      lastFrameTime = 0;
+      options.onStageChange(inspectionTime === null ? flow.stage : inspectionTime >= 1300 ? 'revealed' : 'opening', flow.hitCount);
+      invalidate();
+    },
+    setInspectionDensity(value: number | null) {
+      if (disposed || failed) return;
+      inspectionDensity = value === null || !Number.isFinite(value) ? null : Math.max(1, Math.min(3, value));
+      invalidate();
+    },
+    captureOpeningFrames() {
+      if (disposed || failed || !gpuReady || inspectionTime === null || document.hidden) return [];
+      const previousTime = inspectionTime;
+      const cropWidth = Math.min(width, cardWidthPx * 2.7);
+      const cropLeft = (width - cropWidth) / 2;
+      const tileWidth = Math.min(256, cropWidth);
+      const tileHeight = Math.round(tileWidth * height / cropWidth);
+      const labelHeight = 24;
+      const sheets: string[] = [];
+      cancelAnimationFrame(frame);
+      frame = 0;
+      try {
+        for (let first = 0; first < 79; first += 20) {
+          const canvas = document.createElement('canvas');
+          canvas.width = tileWidth * 5;
+          canvas.height = (tileHeight + labelHeight) * 4;
+          const context = canvas.getContext('2d');
+          if (!context) return [];
+          context.fillStyle = '#25262b';
+          context.fillRect(0, 0, canvas.width, canvas.height);
+          context.font = '12px monospace';
+          for (let index = first; index < Math.min(first + 20, 79); index += 1) {
+            inspectionTime = index * 1000 / 60;
+            render(performance.now());
+            if (failed) return [];
+            if (renderer.getContext().isContextLost()) {
+              fail(new Error('The 3D display was interrupted. Please retry.'));
+              return [];
+            }
+            const x = (index - first) % 5 * tileWidth;
+            const y = Math.floor((index - first) / 5) * (tileHeight + labelHeight);
+            context.drawImage(renderer.domElement, cropLeft * density, 0, cropWidth * density, height * density,
+              x, y, tileWidth, tileHeight);
+            context.fillStyle = '#fff';
+            context.fillText(`${index} · ${inspectionTime.toFixed(2)} ms`, x + 8, y + tileHeight + 16);
+          }
+          sheets.push(canvas.toDataURL('image/png'));
+        }
+      } finally {
+        inspectionTime = previousTime;
+        render(performance.now());
+      }
+      return sheets;
+    },
     setCardReady(value: boolean) {
       if (disposed || failed) return;
       ready = value;

@@ -10,6 +10,10 @@ type DogeDay2026RevealOverlayProps = {
   cardReady: boolean;
   boxLabel: string;
   resetKey: string | number;
+  inspectionTimeMs?: number;
+  inspectionDensity?: number;
+  inspectionCaptureRef?: RefObject<(() => string[]) | null>;
+  onInspectionReady?: (ready: boolean) => void;
   boxButtonRef?: RefObject<HTMLButtonElement | null>;
   onPlayClick?: () => void;
   onPlayReveal?: () => void;
@@ -39,17 +43,21 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
     let active = true;
     setStage('sealed');
     setAssetsReady(false);
+    propsRef.current.onInspectionReady?.(false);
     setError(false);
     setCardState({ mode: 'stack', activeCardIndex: 0, transitioning: false });
     const handleError = () => {
       if (!active) return;
       setError(true);
+      propsRef.current.onInspectionReady?.(false);
       propsRef.current.onError?.();
     };
     try {
       sceneRef.current = createDogeFoilScene(host, {
         cards: sceneCards,
         cardReady: propsRef.current.cardReady,
+        inspectionTimeMs: propsRef.current.inspectionTimeMs,
+        inspectionDensity: propsRef.current.inspectionDensity,
         onStageChange: (nextStage) => {
           if (active) setStage(nextStage);
         },
@@ -58,6 +66,9 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
         },
         onReady: () => {
           if (active) setAssetsReady(true);
+        },
+        onGpuReady: () => {
+          if (active) propsRef.current.onInspectionReady?.(true);
         },
         onError: handleError,
         onHit: () => {
@@ -76,6 +87,9 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
           if (active) propsRef.current.onBackgroundTap?.();
         },
       });
+      if (propsRef.current.inspectionCaptureRef) {
+        propsRef.current.inspectionCaptureRef.current = () => sceneRef.current?.captureOpeningFrames() ?? [];
+      }
     } catch {
       handleError();
     }
@@ -83,12 +97,21 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
       active = false;
       sceneRef.current?.dispose();
       sceneRef.current = null;
+      if (propsRef.current.inspectionCaptureRef) propsRef.current.inspectionCaptureRef.current = null;
     };
   }, [cardKey, resetKey]);
 
   useEffect(() => {
     sceneRef.current?.setCardReady(cardReady);
   }, [cardReady]);
+
+  useEffect(() => {
+    sceneRef.current?.setInspectionTime(props.inspectionTimeMs ?? null);
+  }, [props.inspectionTimeMs]);
+
+  useEffect(() => {
+    sceneRef.current?.setInspectionDensity(props.inspectionDensity ?? null);
+  }, [props.inspectionDensity]);
 
   const multipleCards = cards.length > 1;
   const rowVisible = cardState.mode === 'row';
@@ -98,7 +121,7 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
       ? 'Show all cards'
       : 'Next card';
   const actionLabel = stage === 'revealed' ? cardAction : `Hit the ${boxLabel}`;
-  const activationBlocked = error || stage === 'opening' || cardState.transitioning || !cards.length;
+  const activationBlocked = error || props.inspectionTimeMs !== undefined || stage === 'opening' || cardState.transitioning || !cards.length;
   const cardStatus = !multipleCards
     ? 'Your card is ready and interactive. Drag to tilt.'
     : cardState.transitioning

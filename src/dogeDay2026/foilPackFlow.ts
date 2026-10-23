@@ -1,7 +1,7 @@
 const DOGE_FOIL_HIT_DURATION_MS = 300;
 const DOGE_FOIL_TEAR_DURATION_MS = 500;
-const DOGE_FOIL_DISCARD_START_MS = DOGE_FOIL_TEAR_DURATION_MS + 420;
-const DOGE_FOIL_DISCARD_DURATION_MS = 380;
+const DOGE_FOIL_DISCARD_START_MS = DOGE_FOIL_TEAR_DURATION_MS;
+const DOGE_FOIL_DISCARD_DURATION_MS = 800;
 const DOGE_FOIL_OPEN_DURATION_MS = DOGE_FOIL_DISCARD_START_MS + DOGE_FOIL_DISCARD_DURATION_MS;
 
 const MINIMUM_HITS = 3;
@@ -56,18 +56,16 @@ function smooth(value: number) {
 }
 
 function discardEase(value: number) {
-  const x = clamp(value);
-  let low = 0;
-  let high = 1;
-  for (let index = 0; index < 12; index += 1) {
-    const t = (low + high) / 2;
-    const curveX = 3 * (1 - t) ** 2 * t * 0.55 + 3 * (1 - t) * t * t + t ** 3;
-    if (curveX < x) low = t;
-    else high = t;
-  }
-  if (x === 0 || x === 1) return x;
-  const t = (low + high) / 2;
-  return 3 * (1 - t) * t * t * 0.45 + t ** 3;
+  return clamp(value) ** 3;
+}
+
+export function sampleDogeFoilOpening(elapsedMs: number): Pick<DogeFoilPose, 'tear' | 'discard' | 'cardInteractive'> {
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0;
+  return {
+    tear: smooth(elapsed / DOGE_FOIL_TEAR_DURATION_MS),
+    discard: discardEase((elapsed - DOGE_FOIL_DISCARD_START_MS) / DOGE_FOIL_DISCARD_DURATION_MS),
+    cardInteractive: elapsed >= DOGE_FOIL_OPEN_DURATION_MS,
+  };
 }
 
 function eventTime(state: DogeFoilFlowState, nowMs: number) {
@@ -155,8 +153,9 @@ export function sampleDogeFoilFlow(state: DogeFoilFlowState, nowMs: number): Dog
     const elapsed = current.stage === 'revealed'
       ? DOGE_FOIL_OPEN_DURATION_MS
       : (now - current.phaseStartedAtMs) * DOGE_FOIL_OPEN_DURATION_MS / openDuration(current);
-    pose.tear = smooth(elapsed / DOGE_FOIL_TEAR_DURATION_MS);
-    pose.discard = discardEase((elapsed - DOGE_FOIL_DISCARD_START_MS) / DOGE_FOIL_DISCARD_DURATION_MS);
+    const opening = sampleDogeFoilOpening(elapsed);
+    pose.tear = opening.tear;
+    pose.discard = opening.discard;
   }
   return pose;
 }
