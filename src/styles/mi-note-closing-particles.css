@@ -1,4 +1,6 @@
 .mi-note-closing-particles {
+  --particle-glow: 0 0 3px #387ce999, 0 0 7px #4388e655, 0 0 12px #65a3ee26;
+  --particle-opacity-scale: 1.175;
   position: fixed;
   inset: 0;
   z-index: 1130;
@@ -6,7 +8,7 @@
   pointer-events: none;
   user-select: none;
   contain: strict;
-  color: #c9c65c;
+  color: #246bce;
 }
 
 .mi-note-closing-particles__light {
@@ -15,7 +17,7 @@
   height: calc(var(--size) * 1.2);
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 3px #faffb5cc, 0 0 7px #e9f35f99, 0 0 12px #e1ec443d;
+  box-shadow: var(--particle-glow);
   filter: blur(calc(var(--size) * 0.12));
   opacity: 0;
   animation: mi-note-closing-light linear both;
@@ -49,7 +51,7 @@
     transform: translate3d(0, 0, 0);
   }
   16%, 30% {
-    opacity: var(--alpha);
+    opacity: calc(var(--alpha) * var(--particle-opacity-scale));
   }
   100% {
     opacity: 0;
@@ -59,6 +61,8 @@
 
 @media (prefers-color-scheme: dark) {
   .mi-note-closing-particles {
+    --particle-glow: 0 0 3px #faffb5cc, 0 0 7px #e9f35f99, 0 0 12px #e1ec443d;
+    --particle-opacity-scale: 1;
     color: #eef58a;
   }
 }
