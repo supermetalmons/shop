@@ -53,9 +53,6 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
-  isTransientShopRpcError,
-} from '../../../../shared/solanaRpcProxy.js';
-import {
   canDeliverItemKind,
   calculateDeliveryLamports,
   normalizeDeliveryUnitsPerBox,
@@ -78,11 +75,15 @@ import {
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
-  createSolanaProvider,
   parseSolanaRpcAccount,
   SolanaProviderError,
-  type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import {
+  createSolanaReadProvider,
+  SOLANA_TRANSIENT_RPC_READ_RETRY,
+  SOLANA_REST_READ_RETRY,
+  type SolanaReadProviderContext as ProviderContext,
+} from './solanaReadProvider.js';
 import { readLatestBlockhashWithContext, readSolanaLookupTable } from './solanaRpcReads.js';
 import { isTransactionEncodingTooLarge, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import {
@@ -110,10 +111,8 @@ import {
 export const DELIVERY_PREPARE_PATH = '/delivery/prepare';
 
 const REQUEST_MAX_BYTES = 4096;
-const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
-const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const PROVIDER_CONCURRENCY = 3;
 const ASSET_FETCH_MAX_ATTEMPTS = 6;
 const ASSET_FETCH_MAX_WAIT_MS = 12_000;
@@ -122,7 +121,6 @@ const MAX_DELIVERY_ITEMS = 32;
 const MAX_DELIVERY_ID_ATTEMPTS = 16;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
@@ -154,13 +152,6 @@ type DeliveryRuntime = {
   itemsPerBox: number;
   maxSupply: number;
   maxDudeId: number;
-};
-
-type ProviderContext = {
-  apiKey: string;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
-  attemptTimeoutMs?: number;
 };
 
 type OnchainState = {
@@ -321,39 +312,8 @@ function clusterSharesCollection(runtime: DeliveryRuntime): boolean {
     candidate.collectionMint === runtime.collectionMint.toBase58());
 }
 
-const PROVIDER_RETRY: SolanaRetryPolicy = {
-  attempts: 2,
-  delayMs: () => 100,
-  shouldRetry: (failure) =>
-    failure.kind === 'network' ||
-    failure.kind === 'timeout' ||
-    failure.kind === 'body' ||
-    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)) ||
-    (failure.kind === 'rpc' && isTransientShopRpcError({
-      code: failure.rpcCode,
-      message: failure.message,
-      ...(failure.rpcData === undefined ? {} : { data: failure.rpcData }),
-    })),
-};
-
-const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
-  ...PROVIDER_RETRY,
-  shouldRetry: (failure, attemptNumber) =>
-    failure.kind === 'invalid-response' ||
-    (failure.kind !== 'rpc' && PROVIDER_RETRY.shouldRetry(failure, attemptNumber)),
-};
-
 function provider(context: ProviderContext, runtime: DeliveryRuntime) {
-  return createSolanaProvider({
-    apiKey: context.apiKey,
-    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    cluster: runtime.cluster,
-    fetch: context.providerFetch,
-    maxResponseBytes: PROVIDER_MAX_BYTES,
-    requestId: (method) => `delivery-prepare-${method}`,
-    retry: PROVIDER_RETRY,
-    signal: context.signal,
-  });
+  return createSolanaReadProvider(context, runtime.cluster, 'delivery-prepare', SOLANA_TRANSIENT_RPC_READ_RETRY);
 }
 
 function translateProviderError(
@@ -411,7 +371,7 @@ async function fetchAsset(
         capDelayToRemaining: true,
         maxElapsedMs: ASSET_FETCH_MAX_WAIT_MS,
       },
-      restRetry: PROVIDER_REST_RETRY,
+      restRetry: SOLANA_REST_READ_RETRY,
     });
   } catch (error) {
     throw translateProviderError(context, error);
@@ -420,7 +380,7 @@ async function fetchAsset(
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
   try {
-    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES });
   } catch (error) {
     if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
       throw new DeliveryPrepareError('failed-precondition', `${label} is invalid.`);

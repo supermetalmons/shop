@@ -5,6 +5,7 @@ import { EthereumApiError, readEthereumBody } from './ethereumError.js';
 import { ethereumAddress, ethereumCall, ethereumRpc, type EthereumContext } from './ethereumRuntime.js';
 import { isAllowedProfileOrigin } from './profileReadSupport.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
+import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 
 const ETHEREUM_SESSION_HEADER = 'X-Mons-Ethereum-Session';
 const CHALLENGE_TTL_MS = 300_000;
@@ -143,8 +144,10 @@ export async function ethereumAuth(request: Request, context: EthereumContext, p
   return { ok: true };
 }
 
-export async function cleanupEthereumAuth(db: D1Database, nowMs: number): Promise<void> {
-  await db.batch(['ethereum_auth_sessions', 'ethereum_auth_challenges'].map((table) => db.prepare(
-    `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE expires_at_ms <= ? LIMIT 500)`,
-  ).bind(nowMs)));
+export async function cleanupEthereumAuth(db: D1Database, nowMs: number): Promise<{
+  sessionsDeleted: number; challengesDeleted: number; limitReached: boolean; hasMore: boolean;
+}> {
+  const { deletedCounts: [sessionsDeleted, challengesDeleted], limitReached, hasMore } =
+    await cleanupExpiredOpsRecords(db, ['ethereumAuthSessions', 'ethereumAuthChallenges'], nowMs);
+  return { sessionsDeleted, challengesDeleted, limitReached, hasMore };
 }

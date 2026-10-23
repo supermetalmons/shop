@@ -6,6 +6,7 @@ import { reconcilePendingReadyToShipNotifications } from './readyToShipNotificat
 import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransferRateLimit.js';
 import { cleanupExpiredStaffAuthState } from './staffWalletAuth.js';
 import { cleanupExpiredMiNoteAuthState } from './miNoteAuth.js';
+import { cleanupEthereumAuth } from './ethereumAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
 import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDispatch.js';
@@ -92,6 +93,16 @@ async function cleanupScheduledOpsState(
       }
       if (result.limitReached && result.hasMore) {
         errorLog({ event: 'mi_note_auth_cleanup_backlog', ...result });
+      }
+      return result.limitReached && result.hasMore;
+    },
+    async function cleanupEthereumAuthState() {
+      const result = await cleanupEthereumAuth(env.OPS_DB, Date.now());
+      if (result.challengesDeleted > 0 || result.sessionsDeleted > 0) {
+        log({ event: 'ethereum_auth_cleanup_completed', ...result });
+      }
+      if (result.limitReached && result.hasMore) {
+        errorLog({ event: 'ethereum_auth_cleanup_backlog', ...result });
       }
       return result.limitReached && result.hasMore;
     },

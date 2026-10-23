@@ -1,6 +1,6 @@
 import type { StripeReceiptClaimResult } from '../../../../shared/contracts.js';
 import { normalizeStripeReceiptClaimCode } from '../../../../shared/stripeReceiptClaims.js';
-import { commerceFieldValue, commerceKeys, type CommerceDocumentData, type CommerceDocumentRecord } from './commerceRepository.js';
+import { commerceFieldValue, commerceKeyFromPath, commerceKeys, type CommerceDocumentData, type CommerceDocumentRecord } from './commerceRepository.js';
 import { readCommerceRecord, runCommerceTransaction, type CommerceRepositoryContext } from './commerceTransactions.js';
 import { StripeReceiptClaimError } from './stripeReceiptClaimErrors.js';
 import { activeDirectCardReceiptClaimSignatures, type DirectCardReceiptClaimSubmission } from './adminIrlCardReceipt.js';
@@ -75,18 +75,46 @@ export async function loadReceiptClaimWorkflow(context: CommerceRepositoryContex
   return document ? snapshot(document) : null;
 }
 
-export async function queryDueReceiptClaimWorkflows(db: D1Database, nowMs: number, limit = 20): Promise<string[]> {
-  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+type ReceiptClaimWorkflowDueCursor = Readonly<{ documentPath: string; nextAttemptAtMs: number }>;
+export type ReceiptClaimWorkflowDueCandidate = ReceiptClaimWorkflowDueCursor & Readonly<{ operationId: unknown }>;
+
+function validReceiptClaimWorkflowDueCursor(value: ReceiptClaimWorkflowDueCursor): boolean {
+  try {
+    return Number.isFinite(value.nextAttemptAtMs) &&
+      typeof value.documentPath === 'string' && commerceKeyFromPath(value.documentPath)?.kind === 'claim_code';
+  } catch {
+    return false;
+  }
+}
+
+export async function queryDueReceiptClaimWorkflows(
+  db: D1Database,
+  nowMs: number,
+  limit = 20,
+  startAfter?: ReceiptClaimWorkflowDueCursor,
+): Promise<ReceiptClaimWorkflowDueCandidate[]> {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+    (startAfter !== undefined && !validReceiptClaimWorkflowDueCursor(startAfter))) {
     throw new StripeReceiptClaimError('invalid-argument', 'Invalid receipt claim recovery query.');
   }
-  const rows = await db.prepare(`SELECT json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') AS operation_id
+  const rows = await db.prepare(`SELECT document_path,
+      json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs') AS next_attempt_at_ms,
+      json_extract(document_json, '$.receiptClaimWorkflowV1.operationId') AS operation_id
     FROM commerce_documents INDEXED BY commerce_receipt_claim_workflow_due
     WHERE document_kind = 'claim_code' AND json_extract(document_json, '$.receiptClaimWorkflowV1.phase') = 'pending'
-      AND json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs') <= ?
+      AND json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs') BETWEEN ? AND ?
+      ${startAfter ? "AND (json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path) > (?, ?)" : ''}
       AND EXISTS (SELECT 1 FROM commerce_authority_control WHERE singleton = 1 AND authority_state = 'd1')
     ORDER BY json_extract(document_json, '$.receiptClaimWorkflowV1.nextAttemptAtMs'), document_path LIMIT ?`)
-    .bind(nowMs, limit).all<{ operation_id: string }>();
-  return rows.results.map((row) => row.operation_id).filter(isReceiptClaimWorkflowOperationId);
+    .bind(-Number.MAX_VALUE, nowMs, ...(startAfter ? [startAfter.nextAttemptAtMs, startAfter.documentPath] : []), limit)
+    .all<{ document_path: string; next_attempt_at_ms: number; operation_id: unknown }>();
+  return rows.results.map((row) => {
+    const candidate = { documentPath: row.document_path, nextAttemptAtMs: row.next_attempt_at_ms, operationId: row.operation_id };
+    if (!validReceiptClaimWorkflowDueCursor(candidate)) {
+      throw new StripeReceiptClaimError('unavailable', 'Receipt claim recovery data is invalid.');
+    }
+    return candidate;
+  });
 }
 
 async function mutate(

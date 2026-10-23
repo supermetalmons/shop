@@ -6,6 +6,26 @@ type OpsExpiryCleanupStatement = {
 };
 
 export const OPS_EXPIRY_CLEANUP_STATEMENTS = {
+  ethereumAuthSessions: {
+    tableName: 'ethereum_auth_sessions',
+    indexName: 'ethereum_auth_sessions_expiry',
+    limit: 500,
+    sql: `DELETE FROM ethereum_auth_sessions
+      WHERE rowid IN (
+        SELECT rowid FROM ethereum_auth_sessions
+        WHERE expires_at_ms <= ? ORDER BY expires_at_ms, rowid LIMIT ?
+      )`,
+  },
+  ethereumAuthChallenges: {
+    tableName: 'ethereum_auth_challenges',
+    indexName: 'ethereum_auth_challenges_expiry',
+    limit: 500,
+    sql: `DELETE FROM ethereum_auth_challenges
+      WHERE rowid IN (
+        SELECT rowid FROM ethereum_auth_challenges
+        WHERE expires_at_ms <= ? ORDER BY expires_at_ms, rowid LIMIT ?
+      )`,
+  },
   miNoteAuthSessions: {
     tableName: 'mi_note_auth_sessions',
     indexName: 'mi_note_auth_sessions_expires_at_ms',

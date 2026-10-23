@@ -4637,6 +4637,70 @@ test('preorder indexing recovery failure preserves successfully fetched inventor
   assert.deepEqual(body.items.map((item) => item.id), [assetId('mainnet-kept')]);
 });
 
+test('preorder recovery shares recent history across address batches and starts the first reads together', async () => {
+  const config = getPreorderConfig('mi_note_cards')!;
+  const assets = Array.from({ length: 17 }, (_, index) => ({ id: index + 1, address: assetId(`shared-preorder-${index}`) }));
+  const firstRequestedStarted = Promise.withResolvers<void>();
+  let recentReads = 0;
+  const requestedBatches: string[][] = [];
+  const commerceDb = d1Database((sql) => {
+    const statement = {} as D1PreparedStatement;
+    let bindings: unknown[] = [];
+    statement.bind = (...values) => { bindings = values; return statement; };
+    statement.first = async () => ({ authority_state: 'd1', revision: 1, documents_revision: 0 }) as never;
+    statement.all = async <T>() => {
+      let selected = [] as typeof assets;
+      if (sql.includes('ORDER BY preorder.created_at_ms DESC LIMIT 15')) {
+        recentReads += 1;
+        await firstRequestedStarted.promise;
+        selected = assets.slice(-15).reverse();
+      } else if (sql.includes('json_each(?) AS expected')) {
+        const addresses = JSON.parse(String(bindings.at(-1))) as string[];
+        requestedBatches.push(addresses);
+        firstRequestedStarted.resolve();
+        selected = assets.filter(asset => addresses.includes(asset.address));
+      }
+      return { success: true,
+        meta: { duration: 0, size_after: 0, rows_read: 0, rows_written: 0, last_row_id: 0, changed_db: false, changes: 0 },
+        results: selected.map(asset => ({ preorder_id: config.preorderId, status: 'succeeded', confirmed_slot: 500 + asset.id,
+          assets_json: JSON.stringify([asset]) })) as T[],
+      };
+    };
+    return statement;
+  });
+  const checkedBatches: string[][] = [];
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.method === 'getMultipleAccounts') {
+      const addresses = body.params[0] as string[];
+      checkedBatches.push(addresses);
+      assert.equal(body.params[1].commitment, 'finalized');
+      const selected = addresses.map(address => assets.find(asset => asset.address === address)!);
+      assert.equal(body.params[1].minContextSlot, Math.max(...selected.map(asset => 500 + asset.id)));
+      return rpcResult(body.id, { context: { slot: 1000 },
+        value: selected.map(asset => preorderInventoryAccount(config.preorderId, asset.id)),
+      });
+    }
+    return rpcCursorSearchResult(body, body.params?.grouping?.[1] === config.collection ? assets.map(asset => ({
+      id: asset.address, interface: 'MplCoreAsset', burnt: false, ownership: { owner: OWNER },
+      grouping: [{ group_key: 'collection', group_value: config.collection }],
+      content: { json_uri: preorderMetadataUri(config, asset.id) },
+    })) : []);
+  };
+  const response = await handleRequest(request('/inventory', {
+    owner: OWNER, includePreorderResolutions: true, includePreorderResolutionSlots: true,
+  }), env({ commerceDb }), quietDependencies(providerFetch));
+  assert.equal(response.status, 200);
+  const body = await response.json() as import('../../../../shared/shopApi.ts').ShopInventoryResponse;
+  const addresses = assets.map(asset => asset.address);
+  assert.equal(recentReads, 1);
+  assert.deepEqual(requestedBatches, [addresses.slice(0, 15), addresses.slice(15)]);
+  assert.deepEqual(checkedBatches, requestedBatches);
+  assert.deepEqual(body.items.map(item => [item.id, item.kind]), addresses.map(address => [address, 'preorder']));
+  assert.deepEqual(body.resolvedPreorderAssetIds, addresses.slice(0, 15));
+  assert.deepEqual(body.preorderAssetResolutions, addresses.slice(0, 15).map(id => ({ id, slot: 1000, owned: true })));
+});
+
 test('completed preorder inventory survives failed or timed-out indexing recovery', async (context) => {
   const preorder = getPreorderConfig('mi_note_cards_devnet')!;
   const source = {

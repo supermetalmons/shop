@@ -4,7 +4,7 @@ import { Keypair } from '@solana/web3.js';
 import miNoteCatalog from '../../../../mi_note_cards.json';
 import { getPreorderConfig, PREORDER_CARD_COUNT, PREORDER_CONFIGS } from '../../../../shared/preorders.ts';
 import { handlePreorderRequest, reconcilePendingPreorders } from '../src/preorders.ts';
-import { PreorderStore, listPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
+import { PreorderStore, listPreorderInventoryAssets, listRecentPreorderInventoryAssets, publicPreorder } from '../src/preorderStore.ts';
 import { MiNoteAuthError } from '../src/miNoteAuth.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { loadMiNoteEligibility } from '../src/miNoteEligibility.ts';
@@ -1638,8 +1638,15 @@ for (const preorderId of ['mi_note_cards', 'mi_note_cards_devnet']) {
   }
 }
 
-test('bounded preorder inventory candidates prioritize requested older assets without losing confirmation evidence', async () => {
-  const h = harness();
+test('bounded preorder inventory candidates prioritize requested older assets without losing confirmation evidence', async context => {
+  let recentReads = 0;
+  let requestedReads = 0;
+  const h = harness({ observeCall(call) {
+    if (call.method !== 'all') return;
+    if (call.sql.includes('ORDER BY preorder.created_at_ms DESC LIMIT 15')) recentReads += 1;
+    if (call.sql.includes('json_each(?) AS expected')) requestedReads += 1;
+  } });
+  context.after(() => h.database.close());
   const orders = [];
   for (let id = 1; id <= 17; id += 1) {
     h.time(1000 + id);
@@ -1654,6 +1661,22 @@ test('bounded preorder inventory candidates prioritize requested older assets wi
   const requested = await listPreorderInventoryAssets(h.db, BUYER, [orders[0].assets[0].address]);
   assert.equal(requested.length, 15);
   assert.deepEqual(requested[0], { ...orders[0].assets[0], preorderId: config.preorderId, status: 'submitted', confirmedSlot: 501 });
+  const batches = [
+    [orders[0].assets[0].address, orders[16].assets[0].address, orders[0].assets[0].address],
+    [orders[1].assets[0].address],
+  ];
+  const expectedBatches = await Promise.all(batches.map(addresses => listPreorderInventoryAssets(h.db, BUYER, addresses)));
+  recentReads = 0;
+  requestedReads = 0;
+  const recentAssets = listRecentPreorderInventoryAssets(h.db, BUYER);
+  const sharedBatches = await Promise.all(batches.map(addresses => listPreorderInventoryAssets(h.db, BUYER, addresses, recentAssets)));
+  assert.deepEqual(sharedBatches, expectedBatches);
+  assert.equal(recentReads, 1);
+  assert.equal(requestedReads, batches.length);
+  for (const assets of sharedBatches) {
+    assert.equal(assets.length, 15);
+    assert.equal(new Set(assets.map(asset => asset.address)).size, 15);
+  }
   assert.deepEqual(await listPreorderInventoryAssets(h.db, OTHER, [orders[0].assets[0].address]), []);
   await h.store.finish(orders[0], 'failed', 2000);
   assert.equal((await listPreorderInventoryAssets(h.db, BUYER, [orders[0].assets[0].address])).some((asset) => asset.id === 1), false);

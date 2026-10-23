@@ -8,12 +8,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 
-type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions' | 'mi_note_auth_sessions';
-const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions', 'mi_note_auth_sessions'];
+type CleanupTable = 'rate_limit_buckets' | 'staff_auth_sessions' | 'anonymous_auth_sessions' | 'mi_note_auth_sessions' | 'ethereum_auth_sessions';
+const CLEANUP_TABLES: CleanupTable[] = ['rate_limit_buckets', 'staff_auth_sessions', 'anonymous_auth_sessions', 'mi_note_auth_sessions', 'ethereum_auth_sessions'];
 
 function cleanupDatabase(options: {
   onBatch?: (table: CleanupTable) => void | Promise<void>;
-  deleted?: Partial<Record<CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges', number>>;
+  deleted?: Partial<Record<CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges' | 'ethereum_auth_challenges', number>>;
   hasMore?: boolean;
 } = {}) {
   const calls: CleanupTable[] = [];
@@ -33,7 +33,7 @@ function cleanupDatabase(options: {
         await options.onBatch?.(table);
         return statements.map(({ sql }) => {
           const deletedTable = sql.match(/^DELETE FROM (\w+)/)?.[1];
-          const deleted = options.deleted?.[deletedTable as CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges'] || 0;
+          const deleted = options.deleted?.[deletedTable as CleanupTable | 'staff_auth_challenges' | 'mi_note_auth_challenges' | 'ethereum_auth_challenges'] || 0;
           return {
             success: true,
             meta: { changes: deleted },
@@ -405,6 +405,7 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   const staffCount = OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions.limit;
   const anonymousCount = OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.limit;
   const miNoteCount = OPS_EXPIRY_CLEANUP_STATEMENTS.miNoteAuthChallenges.limit;
+  const ethereumCount = OPS_EXPIRY_CLEANUP_STATEMENTS.ethereumAuthSessions.limit;
   const harness = cleanupDatabase({
     deleted: {
       rate_limit_buckets: rateLimitCount,
@@ -413,6 +414,8 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
       anonymous_auth_sessions: anonymousCount,
       mi_note_auth_sessions: 1,
       mi_note_auth_challenges: miNoteCount,
+      ethereum_auth_sessions: ethereumCount,
+      ethereum_auth_challenges: 2,
     },
     hasMore: true,
   });
@@ -431,25 +434,28 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   const staffCounts = { sessionsDeleted: staffCount, challengesDeleted: 2, limitReached: true, hasMore: true };
   const anonymousCounts = { deletedCount: anonymousCount, limitReached: true, hasMore: true };
   const miNoteCounts = { sessionsDeleted: 1, challengesDeleted: miNoteCount, limitReached: true, hasMore: true };
+  const ethereumCounts = { sessionsDeleted: ethereumCount, challengesDeleted: 2, limitReached: true, hasMore: true };
   const jobLogs = logs.filter((entry) => entry.event === 'scheduled_reconciliation_job');
   assert.equal(jobLogs.length, 1);
   assert.equal(jobLogs[0].job, 'ops');
   assert.equal(jobLogs[0].outcome, 'succeeded');
   assert.deepEqual(Object.fromEntries(['attempted', 'completed', 'deferred', 'skipped', 'failed']
     .map((field) => [field, jobLogs[0][field]])), {
-    attempted: 4, completed: 0, deferred: 4, skipped: 0, failed: 0,
+    attempted: 5, completed: 0, deferred: 5, skipped: 0, failed: 0,
   });
   assert.deepEqual(logs.filter((entry) => entry.event !== 'scheduled_reconciliation_job'), [
     { event: 'receipt_transfer_rate_limit_cleanup_completed', deletedCount: rateLimitCount, limitReached: true, hasMore: true },
     { event: 'staff_auth_cleanup_completed', ...staffCounts },
     { event: 'anonymous_auth_cleanup_completed', ...anonymousCounts },
     { event: 'mi_note_auth_cleanup_completed', ...miNoteCounts },
+    { event: 'ethereum_auth_cleanup_completed', ...ethereumCounts },
   ]);
   assert.deepEqual(errors, [
     { event: 'receipt_transfer_rate_limit_cleanup_backlog', deletedCount: rateLimitCount },
     { event: 'staff_auth_cleanup_backlog', ...staffCounts },
     { event: 'anonymous_auth_cleanup_backlog', ...anonymousCounts },
     { event: 'mi_note_auth_cleanup_backlog', ...miNoteCounts },
+    { event: 'ethereum_auth_cleanup_backlog', ...ethereumCounts },
   ]);
 });
 

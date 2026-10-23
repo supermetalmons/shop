@@ -10,8 +10,10 @@ import {
   loadReceiptClaimWorkflow,
   markReceiptClaimWorkflowDispatched,
   queryDueReceiptClaimWorkflows,
+  type ReceiptClaimWorkflowDueCandidate,
 } from './stripeReceiptClaimWorkflowStore.js';
 import {
+  isReceiptClaimWorkflowOperationId,
   receiptClaimWorkflowInstanceId,
   type ReceiptClaimWorkflowPayload,
   type ReceiptClaimWorkflowSnapshot,
@@ -159,16 +161,35 @@ export async function reconcileReceiptClaimWorkflows(
     ensure?: typeof ensureReceiptClaimWorkflowRunning;
     load?: typeof loadReceiptClaimWorkflow;
     nowMs?: () => number;
+    monotonicNowMs?: () => number;
   } & ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
-  return drainReconciliationCandidates({
+  const dueAtMs = nowMs();
+  const queryDue = overrides.queryDue || queryDueReceiptClaimWorkflows;
+  return drainReconciliationCandidates<ReceiptClaimWorkflowDueCandidate>({
     signal,
     cancellationMode: 'throw',
     onResult: overrides.onResult,
-    loadCandidates: () => (overrides.queryDue || queryDueReceiptClaimWorkflows)(env.COMMERCE_DB, nowMs(), 8),
+    paging: {
+      monotonicNowMs: overrides.monotonicNowMs,
+      loadPage: (startAfter, limit) => queryDue(env.COMMERCE_DB, dueAtMs, limit, startAfter),
+      candidateKey: (candidate) => candidate.documentPath,
+      probeBacklog: async () => {
+        const [oldest] = await queryDue(env.COMMERCE_DB, dueAtMs, 1);
+        const oldestDueAgeMs = oldest && Number.isSafeInteger(oldest.nextAttemptAtMs) && oldest.nextAttemptAtMs >= 0
+          ? Math.max(0, nowMs() - oldest.nextAttemptAtMs) : null;
+        return { hasMore: Boolean(oldest), oldestDueAgeMs };
+      },
+    },
     failureMessage: 'Receipt claim Workflow reconciliation failed',
-    processCandidate: async (operationId) => {
+    processCandidate: async ({ operationId, nextAttemptAtMs }) => {
+      if (!Number.isSafeInteger(nextAttemptAtMs) || nextAttemptAtMs < 0) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Receipt claim recovery timestamp is invalid.');
+      }
+      if (!isReceiptClaimWorkflowOperationId(operationId)) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Receipt claim recovery operation ID is invalid.');
+      }
       const snapshot = await (overrides.load || loadReceiptClaimWorkflow)(receiptClaimWorkflowContext(env, signal, nowMs()), operationId);
       if (!snapshot) return 'skipped';
       const current = await (overrides.ensure || ensureReceiptClaimWorkflowRunning)(env, snapshot, signal);
@@ -180,6 +201,8 @@ export async function reconcileReceiptClaimWorkflows(
       }
       return outcome;
     },
-    onFailure: (operationId, error) => reportReconciliationFailure('receiptClaims', { operationId }, error),
+    onFailure: (candidate, error) => reportReconciliationFailure('receiptClaims', {
+      ...(isReceiptClaimWorkflowOperationId(candidate.operationId) ? { operationId: candidate.operationId } : {}),
+    }, error),
   });
 }

@@ -565,9 +565,10 @@ test('delivery preparation reports an oversized transaction before reserving an 
   assert.equal(createCalled, false);
 });
 
-test('delivery asset reads request collection grouping and retain the legacy REST fallback', async () => {
+test('delivery asset reads request collection grouping and retry the legacy REST fallback', async () => {
   const runtime = deliveryPrepareTestHooks.buildRuntime(DROP);
   const requests: Array<{ url: string; body?: unknown }> = [];
+  let restCalls = 0;
   const result = await deliveryPrepareTestHooks.fetchAsset({
     apiKey: 'helius-test-key',
     providerFetch: async (input, init) => {
@@ -583,7 +584,8 @@ test('delivery asset reads request collection grouping and retain the legacy RES
           error: { code: -32601, message: 'method not found' },
         });
       }
-      return Response.json([asset()]);
+      restCalls += 1;
+      return restCalls === 1 ? new Response(null, { status: 503 }) : Response.json([asset()]);
     },
     signal: new AbortController().signal,
   }, runtime, ASSET.toBase58());
@@ -599,6 +601,8 @@ test('delivery asset reads request collection grouping and retain the legacy RES
   });
   assert.match(requests[1].url, /^https:\/\/api\.helius\.xyz\/v0\/assets\?/);
   assert.match(requests[1].url, /cluster=devnet/);
+  assert.equal(requests.length, 3);
+  assert.equal(restCalls, 2);
 });
 
 test('delivery asset reads tolerate multi-second indexing lag', async (t) => {

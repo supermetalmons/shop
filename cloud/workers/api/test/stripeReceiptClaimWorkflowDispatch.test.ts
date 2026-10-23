@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ensureReceiptClaimWorkflowRunning, inspectReceiptClaimWorkflow, reconcileReceiptClaimWorkflows, ReceiptClaimWorkflowRecoveryPending } from '../src/stripeReceiptClaimWorkflowDispatch.ts';
 import { StripeReceiptClaimError } from '../src/stripeReceiptClaimErrors.ts';
+import { commerceKeys } from '../src/commerceRepository.ts';
+import { queryDueReceiptClaimWorkflows, type ReceiptClaimWorkflowDueCandidate } from '../src/stripeReceiptClaimWorkflowStore.ts';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import type { ReceiptClaimWorkflowSnapshot } from '../src/stripeReceiptClaimWorkflowState.ts';
 import { RECEIPT_OPERATION_ID, RECEIPT_REQUEST_ID, RECEIPT_RETRY_ID, RECEIPT_RESULT, receiptWorkflowSnapshot } from './stripeReceiptClaimWorkflowFixtures.ts';
 
@@ -50,6 +53,35 @@ function harness() {
     observe: (value: typeof observation) => { observation = value; },
     setTime: (value: number) => { nowMs = value; },
     loseCreateAcknowledgement: (value: boolean) => { createError = value ? new Error('lost acknowledgement') : undefined; } };
+}
+
+function dueCandidate(index: number, operationId: unknown = `src-v1-123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`): ReceiptClaimWorkflowDueCandidate {
+  return { documentPath: commerceKeys.claimCode(`ABCDEF-${String(index).padStart(10, '0')}`).path, nextAttemptAtMs: 1000, operationId };
+}
+
+function recoveryFixture(context: test.TestContext, count: number) {
+  const fixture = createCommerceD1Harness();
+  context.after(() => fixture.database.close());
+  const env = { ...harness().env, COMMERCE_DB: fixture.db };
+  const candidates = Array.from({ length: count }, (_, index) => dueCandidate(index));
+  let version = 0;
+  const save = (candidate: ReceiptClaimWorkflowDueCandidate, phase = 'pending') => {
+    seedCommerceDocument(fixture, { key: commerceKeys.claimCode(candidate.documentPath.split('/')[1]), version: ++version, data: {
+      receiptClaimWorkflowV1: { phase, nextAttemptAtMs: candidate.nextAttemptAtMs, operationId: candidate.operationId as string | null },
+    } });
+  };
+  candidates.forEach((candidate) => save(candidate));
+  const load = async (_context: unknown, operationId: string) => {
+    const snapshot = receiptWorkflowSnapshot();
+    snapshot.operation.operationId = operationId;
+    return snapshot;
+  };
+  const complete = async (_env: unknown, snapshot: ReceiptClaimWorkflowSnapshot) => {
+    save(candidates.find((candidate) => candidate.operationId === snapshot.operation.operationId)!, 'complete');
+    snapshot.operation.phase = 'complete';
+    return snapshot;
+  };
+  return { env, candidates, save, load, complete, database: fixture.database };
 }
 
 test('creation acknowledgement loss leaves dispatch recoverable with the same instance id', async () => {
@@ -209,11 +241,158 @@ test('cron repairs persisted work without a client retry token', async () => {
   const fixture = harness();
   let called = 0;
   const count = await reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
-    queryDue: async () => [RECEIPT_OPERATION_ID], load: fixture.dependencies.load,
+    queryDue: async () => [dueCandidate(0, RECEIPT_OPERATION_ID)], load: fixture.dependencies.load,
+    nowMs: () => 1000,
     ensure: async (_env, snapshot, _signal, requestId) => { called += 1; assert.equal(requestId, undefined); return snapshot; },
   });
   assert.equal(called, 1);
-  assert.deepEqual(count, { attempted: 1, completed: 0, deferred: 1, skipped: 0, failed: 0 });
+  assert.deepEqual(count, { attempted: 1, completed: 0, deferred: 1, skipped: 0, failed: 0,
+    inspected: 1, pages: 1, stopReason: 'drained', hasMore: true, oldestDueAgeMs: 0 });
+});
+
+test('receipt recovery advances past a failing first page and probes behind its cursor with a fixed cutoff', async (context) => {
+  context.mock.method(console, 'error', () => {});
+  const fixture = recoveryFixture(context, 13);
+  fixture.save({ ...fixture.candidates[12], nextAttemptAtMs: 2001 });
+  const failures = new Set(fixture.candidates.slice(0, 8).map((candidate) => candidate.operationId));
+  const loaded: string[] = [];
+  const queries: Array<{ cutoff: number; limit: number; after: string | undefined }> = [];
+  let now = 2000;
+  let summary: unknown;
+  await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+    nowMs: () => now,
+    queryDue: async (db, cutoff, limit = 20, cursor) => {
+      queries.push({ cutoff, limit, after: cursor?.documentPath });
+      return queryDueReceiptClaimWorkflows(db, cutoff, limit, cursor);
+    },
+    load: async (commerce, operationId) => {
+      now = 3000;
+      loaded.push(operationId);
+      if (failures.has(operationId)) throw new Error('Recovery is temporarily unavailable');
+      return fixture.load(commerce, operationId);
+    },
+    ensure: fixture.complete,
+    onResult: (result) => { summary = result; },
+  }), (error: unknown) => error instanceof AggregateError && error.errors.length === 8);
+  assert.deepEqual(loaded, fixture.candidates.slice(0, 12).map((candidate) => candidate.operationId));
+  assert.deepEqual(queries, [
+    { cutoff: 2000, limit: 8, after: undefined },
+    { cutoff: 2000, limit: 8, after: fixture.candidates[7].documentPath },
+    { cutoff: 2000, limit: 1, after: undefined },
+  ]);
+  assert.deepEqual(summary, { attempted: 12, completed: 4, deferred: 0, skipped: 0, failed: 8,
+    inspected: 12, pages: 2, stopReason: 'failed', hasMore: true, oldestDueAgeMs: 2000 });
+});
+
+test('invalid receipt operation IDs fail individually without hiding later rows or logging claim codes', async (context) => {
+  const logs: unknown[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => { logs.push(entry); });
+  const fixture = recoveryFixture(context, 9);
+  for (const [index, candidate] of fixture.candidates.slice(0, 8).entries()) {
+    fixture.save({ ...candidate, operationId: index === 0 ? 'private-invalid-operation' : null });
+  }
+  const loaded: string[] = [];
+  let summary: unknown;
+  await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+    nowMs: () => 2000,
+    load: async (commerce, operationId) => { loaded.push(operationId); return fixture.load(commerce, operationId); },
+    ensure: fixture.complete,
+    onResult: (result) => { summary = result; },
+  }), (error: unknown) => error instanceof AggregateError && error.errors.length === 8);
+  assert.deepEqual(loaded, [fixture.candidates[8].operationId]);
+  assert.deepEqual(summary, { attempted: 9, completed: 1, deferred: 0, skipped: 0, failed: 8,
+    inspected: 9, pages: 2, stopReason: 'failed', hasMore: true, oldestDueAgeMs: 1000 });
+  assert.equal(logs.length, 8);
+  assert.doesNotMatch(JSON.stringify(logs), /claimCodes|ABCDEF|private-invalid-operation/);
+});
+
+for (const nextAttemptAtMs of [-1, 0.5]) for (const badCount of [1, 8]) {
+  test(`receipt recovery advances past ${badCount} malformed timestamps of ${nextAttemptAtMs}`, async (context) => {
+    const logs: unknown[] = [];
+    context.mock.method(console, 'error', (entry: unknown) => { logs.push(entry); });
+    const fixture = recoveryFixture(context, badCount + 1);
+    for (const candidate of fixture.candidates.slice(0, badCount)) {
+      fixture.save({ ...candidate, nextAttemptAtMs });
+    }
+    const loaded: string[] = [];
+    const cursors: Array<{ documentPath: string; nextAttemptAtMs: number } | undefined> = [];
+    let summary: unknown;
+    await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+      nowMs: () => 2000,
+      queryDue: async (db, cutoff, limit = 20, cursor) => {
+        if (limit !== 1) cursors.push(cursor && { documentPath: cursor.documentPath, nextAttemptAtMs: cursor.nextAttemptAtMs });
+        return queryDueReceiptClaimWorkflows(db, cutoff, limit, cursor);
+      },
+      load: async (commerce, operationId) => { loaded.push(operationId); return fixture.load(commerce, operationId); },
+      ensure: fixture.complete,
+      onResult: (result) => { summary = result; },
+    }), (error: unknown) => error instanceof AggregateError && error.errors.length === badCount);
+    assert.deepEqual(loaded, [fixture.candidates[badCount].operationId]);
+    assert.deepEqual(cursors, badCount === 8
+      ? [undefined, { documentPath: fixture.candidates[7].documentPath, nextAttemptAtMs }]
+      : [undefined]);
+    assert.deepEqual(summary, { attempted: badCount + 1, completed: 1, deferred: 0, skipped: 0, failed: badCount,
+      inspected: badCount + 1, pages: badCount === 8 ? 2 : 1, stopReason: 'failed', hasMore: true, oldestDueAgeMs: null });
+    assert.equal(logs.length, badCount);
+    assert.doesNotMatch(JSON.stringify(logs), /claimCodes|ABCDEF/);
+  });
+}
+
+test('receipt recovery excludes non-finite timestamps without blocking healthy work or its backlog probe', async (context) => {
+  const fixture = recoveryFixture(context, 9);
+  const poisoned = fixture.candidates.slice(0, 8);
+  for (const candidate of poisoned) {
+    const raw = `{"receiptClaimWorkflowV1":{"phase":"pending","nextAttemptAtMs":-1e999,"operationId":${JSON.stringify(candidate.operationId)}}}`;
+    fixture.database.prepare('UPDATE commerce_documents SET document_json = ?, version = version + 1 WHERE document_path = ?')
+      .run(raw, candidate.documentPath);
+  }
+  const readPoisoned = () => poisoned.map(candidate => fixture.database.prepare(
+    'SELECT * FROM commerce_documents WHERE document_path = ?',
+  ).get(candidate.documentPath));
+  const before = readPoisoned();
+  const loaded: string[] = [];
+  const result = await reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+    nowMs: () => 2000,
+    load: async (commerce, operationId) => { loaded.push(operationId); return fixture.load(commerce, operationId); },
+    ensure: fixture.complete,
+  });
+  assert.deepEqual(loaded, [fixture.candidates[8].operationId]);
+  assert.deepEqual(result, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0,
+    inspected: 1, pages: 1, stopReason: 'drained', hasMore: false, oldestDueAgeMs: null });
+  assert.deepEqual(readPoisoned(), before);
+});
+
+test('receipt recovery uses the shared inspection limit and reports a remaining backlog', async (context) => {
+  const fixture = recoveryFixture(context, 33);
+  let completed = 0;
+  const result = await reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+    nowMs: () => 2000,
+    load: fixture.load,
+    ensure: async (env, snapshot) => { completed += 1; return fixture.complete(env, snapshot); },
+  });
+  assert.equal(completed, 32);
+  assert.deepEqual(result, { attempted: 32, completed: 32, deferred: 0, skipped: 0, failed: 0,
+    inspected: 32, pages: 4, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 1000 });
+});
+
+test('receipt recovery finishes active work at its soft time limit before probing the backlog', async (context) => {
+  const fixture = recoveryFixture(context, 2);
+  let monotonic = 0;
+  const completed: string[] = [];
+  const result = await reconcileReceiptClaimWorkflows(fixture.env, new AbortController().signal, {
+    nowMs: () => 2000,
+    monotonicNowMs: () => monotonic,
+    load: fixture.load,
+    ensure: async (env, snapshot) => {
+      monotonic = 20_000;
+      const result = await fixture.complete(env, snapshot);
+      completed.push(result.operation.operationId);
+      return result;
+    },
+  });
+  assert.deepEqual(completed, [fixture.candidates[0].operationId]);
+  assert.deepEqual(result, { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0,
+    inspected: 1, pages: 1, stopReason: 'time-limit', hasMore: true, oldestDueAgeMs: 1000 });
 });
 
 test('cron cancellation before discovery never queries and reports an empty result', async () => {
@@ -224,7 +403,8 @@ test('cron cancellation before discovery never queries and reports an empty resu
     queryDue: async () => assert.fail('cancelled discovery must not query'),
     onResult: (result) => { summaries.push(result); },
   }), (error: unknown) => error === cancellation);
-  assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 }]);
+  assert.deepEqual(summaries, [{ attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0,
+    inspected: 0, pages: 0, stopReason: 'cancelled', hasMore: null, oldestDueAgeMs: null }]);
 });
 
 test('cron cancellation between operations preserves its reason after an earlier failure', async () => {
@@ -232,20 +412,22 @@ test('cron cancellation between operations preserves its reason after an earlier
   const controller = new AbortController();
   const cancellation = new Error('cancelled');
   const failure = new Error('load failed');
+  const candidates = [0, 1, 2].map((index) => dueCandidate(index));
   const loaded: string[] = [];
   const summaries: unknown[] = [];
   await assert.rejects(reconcileReceiptClaimWorkflows(fixture.env, controller.signal, {
-    queryDue: async () => ['failed', 'pending', 'unvisited'],
+    queryDue: async () => candidates,
     load: async (_context, operationId) => {
       loaded.push(operationId);
-      if (operationId === 'failed') throw failure;
+      if (operationId === candidates[0].operationId) throw failure;
       return fixture.snapshot;
     },
     ensure: async (_env, snapshot) => { controller.abort(cancellation); return snapshot; },
     onResult: (result) => { summaries.push(result); },
   }), (error: unknown) => error === cancellation);
-  assert.deepEqual(loaded, ['failed', 'pending']);
-  assert.deepEqual(summaries, [{ attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1 }]);
+  assert.deepEqual(loaded, candidates.slice(0, 2).map((candidate) => candidate.operationId));
+  assert.deepEqual(summaries, [{ attempted: 2, completed: 0, deferred: 1, skipped: 0, failed: 1,
+    inspected: 2, pages: 1, stopReason: 'cancelled', hasMore: null, oldestDueAgeMs: null }]);
 });
 
 test('Workflow paused and unknown statuses are active; inspection errors are not absence', async () => {

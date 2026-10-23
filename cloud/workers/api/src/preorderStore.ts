@@ -57,36 +57,67 @@ type PreorderInventoryAsset = PreorderOrder['assets'][number] & {
   confirmedSlot: number | null;
 };
 
+type PreorderInventoryRow = {
+  preorder_id: string;
+  assets_json: string;
+  status: 'submitted' | 'succeeded';
+  confirmed_slot: number | null;
+};
+
+const PREORDER_INVENTORY_COLUMNS = `preorder.preorder_id, preorder.status, preorder.confirmed_slot,
+  (SELECT COALESCE(json_group_array(json_object('id', claim.card_id, 'address', json_extract(asset.value, '$.address'))), '[]')
+    FROM json_each(preorder.assets_json) AS asset JOIN commerce_preorder_claims AS claim
+      ON claim.order_id = preorder.order_id AND claim.cluster = preorder.cluster AND claim.collection = preorder.collection
+        AND claim.card_id = json_extract(asset.value, '$.id')
+    WHERE json_type(asset.value, '$.id') = 'integer' AND json_type(asset.value, '$.address') = 'text') AS assets_json`;
+
+function preorderInventoryScope(): { sql: string; values: string[] } {
+  const scopes = PREORDER_CONFIGS.filter(config => config.enabled);
+  return {
+    sql: scopes.map(() => '(preorder.preorder_id = ? AND preorder.cluster = ? AND preorder.collection = ?)').join(' OR ') || '0',
+    values: scopes.flatMap(config => [config.preorderId, config.cluster, config.collection]),
+  };
+}
+
+function preorderInventoryAssets(rows: PreorderInventoryRow[]): PreorderInventoryAsset[] {
+  return rows.flatMap((row) => (JSON.parse(row.assets_json) as PreorderOrder['assets'])
+    .map((asset) => ({ ...asset, preorderId: row.preorder_id, status: row.status, confirmedSlot: row.confirmed_slot })));
+}
+
+export async function listRecentPreorderInventoryAssets(db: D1Database, buyer: string): Promise<PreorderInventoryAsset[]> {
+  const scope = preorderInventoryScope();
+  const result = await db.prepare(`SELECT ${PREORDER_INVENTORY_COLUMNS} FROM commerce_preorder_orders AS preorder
+    WHERE (${scope.sql}) AND preorder.buyer = ? AND
+      (preorder.status = 'succeeded' OR (preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL))
+    ORDER BY preorder.created_at_ms DESC LIMIT 15`).bind(...scope.values, buyer).all<PreorderInventoryRow>();
+  return preorderInventoryAssets(result.results);
+}
+
+async function listRequestedPreorderInventoryAssets(
+  db: D1Database, buyer: string, expected: readonly string[],
+): Promise<PreorderInventoryAsset[]> {
+  if (!expected.length) return [];
+  const scope = preorderInventoryScope();
+  const result = await db.prepare(`SELECT ${PREORDER_INVENTORY_COLUMNS} FROM commerce_preorder_orders AS preorder
+    WHERE (${scope.sql}) AND (preorder.status = 'succeeded' OR
+      (preorder.buyer = ? AND preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL)) AND EXISTS (
+      SELECT 1 FROM json_each(preorder.assets_json) AS asset JOIN json_each(?) AS expected
+        ON json_extract(asset.value, '$.address') = expected.value
+    ) LIMIT 15`).bind(...scope.values, buyer, JSON.stringify(expected)).all<PreorderInventoryRow>();
+  return preorderInventoryAssets(result.results).filter((asset) => expected.includes(asset.address));
+}
+
 export async function listPreorderInventoryAssets(
   db: D1Database, buyer: string, expectedAddresses: readonly string[] = [],
+  recentAssets?: Promise<readonly PreorderInventoryAsset[]>,
 ): Promise<PreorderInventoryAsset[]> {
-  type Row = { preorder_id: string; assets_json: string; status: 'submitted' | 'succeeded'; confirmed_slot: number | null };
   const expected = [...new Set(expectedAddresses)].slice(0, 15);
-  const scopes = PREORDER_CONFIGS.filter(config => config.enabled);
-  const scope = scopes.map(() => '(preorder.preorder_id = ? AND preorder.cluster = ? AND preorder.collection = ?)').join(' OR ') || '0';
-  const scopeValues = scopes.flatMap(config => [config.preorderId, config.cluster, config.collection]);
-  const columns = `preorder.preorder_id, preorder.status, preorder.confirmed_slot,
-    (SELECT COALESCE(json_group_array(json_object('id', claim.card_id, 'address', json_extract(asset.value, '$.address'))), '[]')
-      FROM json_each(preorder.assets_json) AS asset JOIN commerce_preorder_claims AS claim
-        ON claim.order_id = preorder.order_id AND claim.cluster = preorder.cluster AND claim.collection = preorder.collection
-          AND claim.card_id = json_extract(asset.value, '$.id')
-      WHERE json_type(asset.value, '$.id') = 'integer' AND json_type(asset.value, '$.address') = 'text') AS assets_json`;
   const [recent, requested] = await Promise.all([
-    db.prepare(`SELECT ${columns} FROM commerce_preorder_orders AS preorder
-      WHERE (${scope}) AND preorder.buyer = ? AND
-        (preorder.status = 'succeeded' OR (preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL))
-      ORDER BY preorder.created_at_ms DESC LIMIT 15`).bind(...scopeValues, buyer).all<Row>(),
-    expected.length ? db.prepare(`SELECT ${columns} FROM commerce_preorder_orders AS preorder
-      WHERE (${scope}) AND (preorder.status = 'succeeded' OR
-        (preorder.buyer = ? AND preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL)) AND EXISTS (
-        SELECT 1 FROM json_each(preorder.assets_json) AS asset JOIN json_each(?) AS expected
-          ON json_extract(asset.value, '$.address') = expected.value
-      ) LIMIT 15`).bind(...scopeValues, buyer, JSON.stringify(expected)).all<Row>() : Promise.resolve({ results: [] as Row[] }),
+    recentAssets ?? listRecentPreorderInventoryAssets(db, buyer),
+    listRequestedPreorderInventoryAssets(db, buyer, expected),
   ]);
-  const assets = (rows: Row[]) => rows.flatMap((row) => (JSON.parse(row.assets_json) as PreorderOrder['assets'])
-    .map((asset) => ({ ...asset, preorderId: row.preorder_id, status: row.status, confirmedSlot: row.confirmed_slot })));
   const candidates = new Map<string, PreorderInventoryAsset>();
-  for (const asset of [...assets(requested.results).filter((asset) => expected.includes(asset.address)), ...assets(recent.results)]) {
+  for (const asset of [...requested, ...recent]) {
     if (!candidates.has(asset.address)) candidates.set(asset.address, asset);
   }
   return [...candidates.values()].slice(0, 15);

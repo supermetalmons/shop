@@ -342,13 +342,56 @@ test('IRL claim provider adapters bound responses and retry transient reads once
       providerFetch: async () => new Response('{}', {
         headers: {
           'Content-Type': 'application/json',
-          'Content-Length': String(8 * 1024 * 1024 + 1),
+          'Content-Length': String(2 * 1024 * 1024 + 1),
         },
       }),
     }, runtime, 'getLatestBlockhash', []),
     (error) => (error as { code?: unknown }).code === 'unavailable',
   );
 
+});
+
+test('IRL claim does not retry transient RPC errors', async () => {
+  const runtime = irlClaimTestHooks.buildRuntime(DROP);
+  let calls = 0;
+  await assert.rejects(irlClaimTestHooks.rpcCall({
+    apiKey: 'helius-key',
+    signal: new AbortController().signal,
+    providerFetch: async (_input, init) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body)) as { id: string };
+      assert.equal(body.id, 'irl-claim-getLatestBlockhash');
+      return Response.json({
+        jsonrpc: '2.0', id: body.id,
+        error: { code: -32005, message: 'temporarily unavailable' },
+      });
+    },
+  }, runtime, 'getLatestBlockhash', []), (error) => (error as { code?: unknown }).code === 'unavailable');
+  assert.equal(calls, 1);
+});
+
+test('IRL claim does not retry transient REST proof failures', async () => {
+  const runtime = irlClaimTestHooks.buildRuntime(DROP);
+  let rpcCalls = 0;
+  let restCalls = 0;
+  await assert.rejects(irlClaimTestHooks.fetchAssetProof({
+    apiKey: 'helius-key',
+    signal: new AbortController().signal,
+    providerFetch: async (_input, init) => {
+      if (init?.body) {
+        rpcCalls += 1;
+        const body = JSON.parse(String(init.body)) as { id: string };
+        return Response.json({
+          jsonrpc: '2.0', id: body.id,
+          error: { code: -32601, message: 'method not found' },
+        });
+      }
+      restCalls += 1;
+      return new Response(null, { status: 503 });
+    },
+  }, runtime, CERTIFICATE.toBase58()), (error) => (error as { code?: unknown }).code === 'unavailable');
+  assert.equal(rpcCalls, 1);
+  assert.equal(restCalls, 1);
 });
 
 test('IRL claim provider attempt scope aborts independently of the overall request', async () => {

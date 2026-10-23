@@ -197,7 +197,107 @@ test('receipt claim reservations arbitrate recipients and retain one operation f
   await assert.rejects(reserveReceiptClaimWorkflow(fixture.context, CODE, 'another-recipient', NOW), /original receiver/);
   const repeated = await reserveReceiptClaimWorkflow(fixture.context, CODE, RECIPIENT, NOW + 100_000, { allowNew: false });
   assert.equal(repeated.status, 'pending');
-  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW), [first.snapshot.operation.operationId]);
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW), [{
+    operationId: first.snapshot.operation.operationId,
+    documentPath: commerceKeys.claimCode(CODE).path,
+    nextAttemptAtMs: NOW,
+  }]);
+});
+
+test('receipt recovery keysets advance through due-time ties using the existing index', async (t) => {
+  const queries: string[] = [];
+  const fixture = createCommerceD1Harness({ observeStatement: ({ sql }) => { queries.push(sql); } });
+  t.after(() => fixture.database.close());
+  const candidates = [NOW - 1, NOW, NOW, NOW + 1].map((nextAttemptAtMs, index) => {
+    const key = commerceKeys.claimCode(`ABCDEF-${String(index).padStart(10, '0')}`);
+    const operationId = `src-v1-123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`;
+    seedCommerceDocument(fixture, { key, data: { receiptClaimWorkflowV1: {
+      phase: 'pending', operationId, nextAttemptAtMs,
+    } } });
+    return { operationId, documentPath: key.path, nextAttemptAtMs };
+  });
+  const first = await queryDueReceiptClaimWorkflows(fixture.db, NOW, 2);
+  assert.deepEqual(first, candidates.slice(0, 2));
+  const next = await queryDueReceiptClaimWorkflows(fixture.db, NOW, 2, first[1]);
+  assert.deepEqual(next, candidates.slice(2, 3));
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 1), [candidates[0]]);
+  for (const [index, bindings] of [[0, [-Number.MAX_VALUE, NOW, 2]], [1, [-Number.MAX_VALUE, NOW, NOW, first[1].documentPath, 2]]] as const) {
+    const plan = fixture.database.prepare(`EXPLAIN QUERY PLAN ${queries[index]}`).all(...bindings);
+    const details = plan.map((row) => String(row.detail)).join('\n');
+    assert.match(details, /SEARCH commerce_documents USING INDEX commerce_receipt_claim_workflow_due/);
+    assert.doesNotMatch(details, /TEMP B-TREE/);
+  }
+});
+
+test('receipt recovery keeps invalid operation IDs in its page so their cursor remains usable', async (t) => {
+  const fixture = createCommerceD1Harness();
+  t.after(() => fixture.database.close());
+  const values = [null, 123, 'invalid', 'src-v1-123e4567-e89b-42d3-a456-426614174000'];
+  for (const [index, operationId] of values.entries()) {
+    seedCommerceDocument(fixture, { key: commerceKeys.claimCode(`ABCDEF-${String(index).padStart(10, '0')}`), data: {
+      receiptClaimWorkflowV1: { phase: 'pending', operationId, nextAttemptAtMs: NOW },
+    } });
+  }
+  const first = await queryDueReceiptClaimWorkflows(fixture.db, NOW, 3);
+  assert.deepEqual(first.map((candidate) => candidate.operationId), values.slice(0, 3));
+  const next = await queryDueReceiptClaimWorkflows(fixture.db, NOW, 3, first[2]);
+  assert.deepEqual(next.map((candidate) => candidate.operationId), values.slice(3));
+});
+
+test('receipt recovery rejects invalid cursors and limits before querying', async () => {
+  const db = { prepare: () => assert.fail('Invalid query must not reach D1') } as unknown as D1Database;
+  const cursor = { documentPath: commerceKeys.claimCode(CODE).path, nextAttemptAtMs: NOW };
+  const malformed: unknown[] = [null, {},
+    ...[NaN, Infinity, -Infinity, '1000', null, true, false].map((nextAttemptAtMs) => ({ ...cursor, nextAttemptAtMs })),
+    { ...cursor, documentPath: 'invalid' }, { ...cursor, documentPath: commerceKeys.deliveryOrder(DROP, '1').path }];
+  for (const value of malformed) {
+    await assert.rejects(queryDueReceiptClaimWorkflows(db, NOW, 8, value as typeof cursor), { code: 'invalid-argument' });
+  }
+  for (const limit of [0, -1, 0.5, 101]) {
+    await assert.rejects(queryDueReceiptClaimWorkflows(db, NOW, limit), { code: 'invalid-argument' });
+  }
+  for (const cutoff of [-1, 0.5, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(queryDueReceiptClaimWorkflows(db, cutoff), { code: 'invalid-argument' });
+  }
+});
+
+test('receipt recovery pages past malformed numeric timestamps using their original sort keys', async (t) => {
+  const fixture = createCommerceD1Harness();
+  t.after(() => fixture.database.close());
+  const candidates = [-1e100, -1, 0.5, NOW].map((nextAttemptAtMs, index) => {
+    const key = commerceKeys.claimCode(`ABCDEF-${String(index).padStart(10, '0')}`);
+    const operationId = `src-v1-123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`;
+    seedCommerceDocument(fixture, { key, data: {
+      receiptClaimWorkflowV1: { phase: 'pending', operationId, nextAttemptAtMs },
+    } });
+    return { operationId, documentPath: key.path, nextAttemptAtMs };
+  });
+  for (const [index, candidate] of candidates.entries()) {
+    assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 1, candidates[index - 1]), [candidate]);
+  }
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 1, candidates.at(-1)), []);
+});
+
+test('receipt recovery excludes overflowing JSON timestamps without excluding finite sort keys', async (t) => {
+  const fixture = createCommerceD1Harness();
+  t.after(() => fixture.database.close());
+  const candidates = ['-1e999', String(-Number.MAX_VALUE), '-1', '1000', '1e999'].map((literal, index) => {
+    const key = commerceKeys.claimCode(`ABCDEF-${String(index).padStart(10, '0')}`);
+    const operationId = `src-v1-123e4567-e89b-42d3-a456-${String(index).padStart(12, '0')}`;
+    seedCommerceDocument(fixture, { key, data: {} });
+    fixture.database.prepare(`UPDATE commerce_documents SET document_json = ?, version = version + 1
+      WHERE document_path = ?`).run(
+      `{"receiptClaimWorkflowV1":{"phase":"pending","operationId":"${operationId}","nextAttemptAtMs":${literal}}}`,
+      key.path,
+    );
+    return { operationId, documentPath: key.path, nextAttemptAtMs: Number(literal) };
+  });
+  const finite = candidates.slice(1, 4);
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 8), finite);
+  for (const [index, candidate] of finite.entries()) {
+    assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 1, finite[index - 1]), [candidate]);
+  }
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 1, finite.at(-1)), []);
 });
 
 test('receipt claim reservations reject missing and inconsistent records without writing', async (t) => {
@@ -423,6 +523,11 @@ test('completed receipt claim results remain readable while commerce is paused',
   if (reserved.status !== 'pending') return assert.fail();
   const result = { processed: true, dropId: DROP, deliveryId: 7, receiptKind: 'box' as const, receiptsTransferred: 1, receiptTxs: [] };
   await completeReceiptClaimWorkflow(fixture.context, reserved.snapshot, result);
+  seedCommerceDocument(fixture, { key: commerceKeys.claimCode('ABCDEF-0000000001'), data: {
+    receiptClaimWorkflowV1: { phase: 'pending', operationId: 'src-v1-123e4567-e89b-42d3-a456-426614174000', nextAttemptAtMs: NOW },
+  } });
+  const [due] = await queryDueReceiptClaimWorkflows(fixture.db, NOW);
+  assert.ok(due);
   fixture.database.exec(`INSERT INTO commerce_authority_control_lease (
       singleton, lease_token, acquired_at_ms, expires_at_ms
     ) VALUES (1, '00000000-0000-4000-8000-000000000717',
@@ -433,6 +538,8 @@ test('completed receipt claim results remain readable while commerce is paused',
   const stored = await loadReceiptClaimWorkflow(fixture.context, reserved.snapshot.operation.operationId);
   assert.equal(stored?.operation.phase, 'complete');
   assert.deepEqual(stored?.operation.result, result);
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW), []);
+  assert.deepEqual(await queryDueReceiptClaimWorkflows(fixture.db, NOW, 8, due), []);
 });
 
 test('uncertain receipt claim failures remain locked and retries require a new request token', async (t) => {

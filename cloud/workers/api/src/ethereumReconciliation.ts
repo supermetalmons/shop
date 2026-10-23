@@ -1,6 +1,5 @@
 import { decodeEventLogs, decodeReturn, encodeCall, ETHEREUM_EVENT_TOPICS, type EthereumDecodedEvent } from '../../../../shared/ethereum/abi.js';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
-import { cleanupEthereumAuth } from './ethereumAuth.js';
 import {
   confirmEthereumClaim, confirmEthereumDelivery, retireEthereumDelivery, type EthereumClaimRow, type EthereumDeliveryRow,
 } from './ethereumCommerce.js';
@@ -328,7 +327,6 @@ export async function reconcileEthereum111k(env: EthereumEnvironment, signal: Ab
     const budget: QueryBudget = { remaining: 400, exhausted: false, limited: false };
     const context: EthereumContext = { env: { ...env, COMMERCE_DB: budgetedDatabase(env.COMMERCE_DB, budget) },
       config, signal, fetch: options.fetch || ((input, init) => fetch(input, init)), nowMs: (options.nowMs || Date.now)() };
-    await cleanupEthereumAuth(env.OPS_DB, context.nowMs);
     if (!config.enabled || !config.contractAddress) return summary;
     if (!await ethereum111kWritesAllowed(context.env.COMMERCE_DB, config, signal)) return summary;
     await cleanupExpiredEthereumCheckouts(context);

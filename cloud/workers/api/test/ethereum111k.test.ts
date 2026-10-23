@@ -9,6 +9,7 @@ import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSigne
 import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
+import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
 import { reconcileEthereumCheckoutAttempt, type EthereumCheckoutAttemptRow } from '../src/ethereumCheckout.ts';
 import { ethereumCallBatch, ethereumConfig, type EthereumContext, type EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { ethereumInventoryItems, ethereumTokenInfos, type EthereumLog, type EthereumReceipt } from '../src/ethereumRead.ts';
@@ -1419,7 +1420,7 @@ test('111k EOA auth is one-use, chain/origin scoped, expires, and keeps shipping
   } finally { f.close(); }
 });
 
-test('disabled collections clean up expired Ethereum auth without accessing the chain', async () => {
+test('Ethereum auth cleanup runs independently of disabled collection reconciliation', async () => {
   const f = fixture();
   try {
     f.env.ETHEREUM_111K_CONTRACT_ADDRESS = '';
@@ -1427,6 +1428,9 @@ test('disabled collections clean up expired Ethereum auth without accessing the 
     f.state.now = session.expiresAtMs;
     f.state.calls.length = 0;
     await reconcileEthereum111k(f.env, AbortSignal.timeout(10_000), { fetch: f.providerFetch, nowMs: () => f.state.now });
+    assert.deepEqual(await cleanupEthereumAuth(f.env.OPS_DB, f.state.now), {
+      sessionsDeleted: 1, challengesDeleted: 1, limitReached: false, hasMore: false,
+    });
     assert.equal(f.ops.prepare('SELECT COUNT(*) AS n FROM ethereum_auth_challenges').get()!.n, 0);
     assert.equal(f.ops.prepare('SELECT COUNT(*) AS n FROM ethereum_auth_sessions').get()!.n, 0);
     assert.deepEqual(f.state.calls, []);

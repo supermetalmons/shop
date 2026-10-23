@@ -40,7 +40,7 @@ import { getPreorderConfig, preorderImageUrl } from '../../../../shared/preorder
 import { resolveClaimedPreorderAsset } from '../../../../shared/preorderAssetIdentity.js';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
 import { decodePreorderAssetAccount } from './preorderTransaction.js';
-import { listPreorderInventoryAssets } from './preorderStore.js';
+import { listPreorderInventoryAssets, listRecentPreorderInventoryAssets } from './preorderStore.js';
 import { MAX_INVENTORY_SERIALIZED_ITEM_BYTES } from './inventoryLimits.js';
 import {
   PUBLIC_RATE_LIMITS,
@@ -488,10 +488,12 @@ async function mergeRecentPreorderItems(
     const expected = [...new Set([...expectedAssetGroups(request.expectedAssetIds).flatMap((group) => group.ids),
       ...[...items.values()].filter(item => item.kind === 'preorder').map(item => item.id)])];
     const checked = new Set<string>();
+    let recentAssets: ReturnType<typeof listRecentPreorderInventoryAssets> | undefined;
     for (let offset = 0; offset < Math.max(1, expected.length); offset += SHOP_EXPECTED_ASSET_IDS_MAX) {
       recoveryScope.signal.throwIfAborted();
       const addresses = expected.slice(offset, offset + SHOP_EXPECTED_ASSET_IDS_MAX);
-      const recent = await raceWithSignal(listPreorderInventoryAssets(db, request.owner, addresses), recoveryScope.signal);
+      recentAssets ??= listRecentPreorderInventoryAssets(db, request.owner);
+      const recent = await raceWithSignal(listPreorderInventoryAssets(db, request.owner, addresses, recentAssets), recoveryScope.signal);
       const candidates = recent.filter((asset) => {
         const config = getPreorderConfig(asset.preorderId);
         return !checked.has(asset.address) && config?.enabled && scopes.some((scope) => scope.solanaCluster === config.cluster && scope.collectionMint === config.collection);

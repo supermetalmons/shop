@@ -81,11 +81,15 @@ import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './a
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
-  createSolanaProvider,
   parseSolanaRpcAccount,
   SolanaProviderError,
-  type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import {
+  createSolanaReadProvider,
+  SOLANA_READ_RETRY,
+  SOLANA_SINGLE_ATTEMPT,
+  type SolanaReadProviderContext as ProviderContext,
+} from './solanaReadProvider.js';
 import { readLatestBlockhashWithContext, readSolanaLookupTable } from './solanaRpcReads.js';
 import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
@@ -94,11 +98,8 @@ import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 export const IRL_CLAIM_PREPARE_PATH = '/claims/irl/prepare';
 
 const REQUEST_MAX_BYTES = 1024;
-const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
-const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const HELIUS_ASSETS_PAGE_LIMIT = HELIUS_SEARCH_ASSETS_PAGE_LIMITS[0];
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
 const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
@@ -149,13 +150,6 @@ type CommerceReadContext = {
   providerFetch: ProfileProviderFetch;
   signal: AbortSignal;
   [key: string]: unknown;
-};
-
-type ProviderContext = {
-  apiKey: string;
-  attemptTimeoutMs?: number;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
 };
 
 type OnchainState = {
@@ -293,33 +287,8 @@ function clusterSharesCollection(runtime: IrlClaimRuntime): boolean {
   return Object.values(API_DROPS).filter((drop) => collectionScopeKey(drop) === key).length > 1;
 }
 
-const PROVIDER_RETRY: SolanaRetryPolicy = {
-  attempts: 2,
-  delayMs: () => 100,
-  shouldRetry: (failure) =>
-    failure.kind === 'network' ||
-    failure.kind === 'timeout' ||
-    failure.kind === 'body' ||
-    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)),
-};
-
-const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
-  attempts: 1,
-  delayMs: () => 100,
-  shouldRetry: () => false,
-};
-
 function provider(context: ProviderContext, runtime: IrlClaimRuntime) {
-  return createSolanaProvider({
-    apiKey: context.apiKey,
-    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    cluster: runtime.cluster,
-    fetch: context.providerFetch,
-    maxResponseBytes: PROVIDER_MAX_BYTES,
-    requestId: (method) => `irl-claim-${method}`,
-    retry: PROVIDER_RETRY,
-    signal: context.signal,
-  });
+  return createSolanaReadProvider(context, runtime.cluster, 'irl-claim', SOLANA_READ_RETRY);
 }
 
 function translateProviderError(
@@ -430,7 +399,7 @@ async function fetchAssetProof(
 ): Promise<Record<string, unknown>> {
   try {
     return await provider(context, runtime).getAssetProof(assetId, {
-      restRetry: PROVIDER_REST_RETRY,
+      restRetry: SOLANA_SINGLE_ATTEMPT,
     });
   } catch (error) {
     throw translateProviderError(context, error, assetId);
@@ -439,7 +408,7 @@ async function fetchAssetProof(
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
   try {
-    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES });
   } catch (error) {
     if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
       throw new IrlClaimError('failed-precondition', `${label} is invalid.`);

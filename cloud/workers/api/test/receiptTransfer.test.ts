@@ -406,12 +406,56 @@ test('receipt transfer provider adapter retries transient JSON-RPC reads and bou
       providerFetch: async () => new Response('{}', {
         headers: {
           'Content-Type': 'application/json',
-          'Content-Length': String(8 * 1024 * 1024 + 1),
+          'Content-Length': String(2 * 1024 * 1024 + 1),
         },
       }),
     }, runtime, 'getLatestBlockhash', []),
     (error) => (error as { code?: unknown }).code === 'unavailable',
   );
+});
+
+test('receipt transfer does not retry transient RPC errors', async () => {
+  const runtime = receiptTransferTestHooks.buildRuntime(DROP);
+  let calls = 0;
+  await assert.rejects(receiptTransferTestHooks.rpcCall({
+    apiKey: 'helius-key',
+    signal: new AbortController().signal,
+    providerFetch: async (_input, init) => {
+      calls += 1;
+      const body = JSON.parse(String(init?.body)) as { id: string };
+      assert.equal(body.id, 'receipt-transfer-getLatestBlockhash');
+      return Response.json({
+        jsonrpc: '2.0', id: body.id,
+        error: { code: -32005, message: 'temporarily unavailable' },
+      });
+    },
+  }, runtime, 'getLatestBlockhash', []), (error) => (error as { code?: unknown }).code === 'unavailable');
+  assert.equal(calls, 1);
+});
+
+test('receipt transfer retries transient REST proof failures once', async () => {
+  const runtime = receiptTransferTestHooks.buildRuntime(DROP);
+  let rpcCalls = 0;
+  let restCalls = 0;
+  const result = await receiptTransferTestHooks.fetchAssetProof({
+    apiKey: 'helius-key',
+    signal: new AbortController().signal,
+    providerFetch: async (_input, init) => {
+      if (init?.body) {
+        rpcCalls += 1;
+        const body = JSON.parse(String(init.body)) as { id: string };
+        return Response.json({
+          jsonrpc: '2.0', id: body.id,
+          error: { code: -32601, message: 'method not found' },
+        });
+      }
+      restCalls += 1;
+      return restCalls === 1 ? new Response(null, { status: 503 }) : Response.json(proof());
+    },
+  }, runtime, CERTIFICATE.toBase58());
+  assert.deepEqual(result, proof());
+  assert.equal(rpcCalls, 1);
+  assert.equal(restCalls, 2);
 });
 
 test('receipt transfer provider preserves abort-first and provider-first outcomes', async () => {

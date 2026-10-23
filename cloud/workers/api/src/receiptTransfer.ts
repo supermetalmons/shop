@@ -40,9 +40,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
-import {
-  HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
-} from '../../../../shared/heliusDas.js';
+import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
@@ -80,21 +78,22 @@ import {
 import { isRecord, type ApiErrorCode } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
-  createSolanaProvider,
   parseSolanaRpcAccount,
   SolanaProviderError,
-  type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import {
+  createSolanaReadProvider,
+  SOLANA_READ_RETRY,
+  SOLANA_REST_READ_RETRY,
+  type SolanaReadProviderContext as ProviderContext,
+} from './solanaReadProvider.js';
 import { readLatestBlockhash, readSolanaLookupTable } from './solanaRpcReads.js';
 import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 
 export const RECEIPT_TRANSFER_PREPARE_PATH = '/receipts/transfer/prepare';
 
 const REQUEST_MAX_BYTES = 1024;
-const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
-const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
 const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
@@ -146,13 +145,6 @@ type RateLimitContext = {
   database: ReceiptTransferRateLimitD1Database;
   nowMs: number;
   signal: AbortSignal;
-};
-
-type ProviderContext = {
-  apiKey: string;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
-  attemptTimeoutMs?: number;
 };
 
 type OnchainState = {
@@ -271,33 +263,8 @@ function buildRuntime(config: ApiDropConfig): ReceiptTransferRuntime {
   };
 }
 
-const PROVIDER_RETRY: SolanaRetryPolicy = {
-  attempts: 2,
-  delayMs: () => 100,
-  shouldRetry: (failure) =>
-    failure.kind === 'network' ||
-    failure.kind === 'timeout' ||
-    failure.kind === 'body' ||
-    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)),
-};
-
-const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
-  ...PROVIDER_RETRY,
-  shouldRetry: (failure, attemptNumber) =>
-    failure.kind === 'invalid-response' || PROVIDER_RETRY.shouldRetry(failure, attemptNumber),
-};
-
 function provider(context: ProviderContext, runtime: ReceiptTransferRuntime) {
-  return createSolanaProvider({
-    apiKey: context.apiKey,
-    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    cluster: runtime.cluster,
-    fetch: context.providerFetch,
-    maxResponseBytes: PROVIDER_MAX_BYTES,
-    requestId: (method) => `receipt-transfer-${method}`,
-    retry: PROVIDER_RETRY,
-    signal: context.signal,
-  });
+  return createSolanaReadProvider(context, runtime.cluster, 'receipt-transfer', SOLANA_READ_RETRY);
 }
 
 function translateProviderError(
@@ -362,7 +329,7 @@ async function fetchAsset(
 ): Promise<DasAsset> {
   try {
     return await provider(context, runtime).getAsset(assetId, {
-      restRetry: PROVIDER_REST_RETRY,
+      restRetry: SOLANA_REST_READ_RETRY,
     });
   } catch (error) {
     throw translateProviderError(context, error, assetId);
@@ -376,7 +343,7 @@ async function fetchAssetProof(
 ): Promise<Record<string, unknown>> {
   try {
     return await provider(context, runtime).getAssetProof(assetId, {
-      restRetry: PROVIDER_REST_RETRY,
+      restRetry: SOLANA_REST_READ_RETRY,
     });
   } catch (error) {
     throw translateProviderError(context, error, assetId);
@@ -385,7 +352,7 @@ async function fetchAssetProof(
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
   try {
-    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES });
   } catch (error) {
     if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
       throw new ReceiptTransferError('failed-precondition', `${label} is invalid.`);

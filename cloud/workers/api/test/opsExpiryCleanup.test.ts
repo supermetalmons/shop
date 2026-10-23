@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import { cleanupExpiredOpsRecords } from '../src/opsExpiryCleanup.ts';
+import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
+import { d1Database } from './commerceD1Harness.ts';
 
 function database(response: unknown, failure?: Error) {
   const prepared: Array<{ sql: string; values: unknown[] }> = [];
@@ -36,6 +40,43 @@ function deleted(changes: unknown) {
 function backlog(hasMore: unknown) {
   return { success: true, results: [{ has_more: hasMore }] };
 }
+
+test('Ethereum auth cleanup bounds expiry deletes and preserves unexpired records', async (context) => {
+  const sqlite = new DatabaseSync(':memory:');
+  context.after(() => sqlite.close());
+  sqlite.exec(readFileSync('cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql', 'utf8'));
+  const wallet = `0x${'1'.repeat(40)}`;
+  const challenge = sqlite.prepare(`INSERT INTO ethereum_auth_challenges
+    (challenge_id, wallet, chain_id, drop_id, origin, message, issued_at_ms, expires_at_ms)
+    VALUES (?, ?, 31337, '111k_devnet', 'http://localhost', 'sign', 0, ?)`);
+  const session = sqlite.prepare(`INSERT INTO ethereum_auth_sessions
+    (session_id, challenge_id, secret_hash, wallet, chain_id, drop_id, origin, created_at_ms, expires_at_ms)
+    VALUES (?, ?, 'hash', ?, 31337, '111k_devnet', 'http://localhost', 0, ?)`);
+  for (let index = 0; index < 502; index += 1) {
+    const id = String(index);
+    const expiresAt = index === 501 ? 1_001 : 1_000;
+    challenge.run(id, wallet, expiresAt);
+    session.run(id, id, wallet, expiresAt);
+  }
+  const db = d1Database(sqlite);
+  assert.deepEqual(await cleanupEthereumAuth(db, 1_000), {
+    sessionsDeleted: 500, challengesDeleted: 500, limitReached: true, hasMore: true,
+  });
+  for (const table of ['ethereum_auth_sessions', 'ethereum_auth_challenges']) {
+    assert.deepEqual(sqlite.prepare(`SELECT expires_at_ms FROM ${table} ORDER BY rowid`).all()
+      .map((row) => row.expires_at_ms), [1_000, 1_001]);
+  }
+  assert.deepEqual(await cleanupEthereumAuth(db, 1_000), {
+    sessionsDeleted: 1, challengesDeleted: 1, limitReached: false, hasMore: false,
+  });
+  assert.deepEqual(await cleanupEthereumAuth(db, 1_000), {
+    sessionsDeleted: 0, challengesDeleted: 0, limitReached: false, hasMore: false,
+  });
+  for (const table of ['ethereum_auth_sessions', 'ethereum_auth_challenges']) {
+    assert.deepEqual(sqlite.prepare(`SELECT expires_at_ms FROM ${table}`).all()
+      .map((row) => row.expires_at_ms), [1_001]);
+  }
+});
 
 test('OPS expiry cleanup keeps grouped deletes and one backlog query in the same batch', async () => {
   const limit = OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthChallenges.limit;
