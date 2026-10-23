@@ -1,10 +1,10 @@
 # 111K Sepolia Seaport release
 
-Release status: **in progress**. These initial records document a confirmed, paused deployment. Application cutover, sale opening, final mint simulations, and final source attribution are not asserted complete by these records.
+The release is complete: Etherscan verified the contract source as an exact match, both services are published, and the application is active on the new collection. The [application release record](application-release.json) contains the verification evidence.
 
 This release adds default Seaport approval with holder opt-out on Ethereum Sepolia, chain `11155111`. The [previous proceeds collection](../111k-sepolia-proceeds/README.md), [discount collection](../111k-sepolia-discounts/README.md), and [first collection](../111k-sepolia/README.md) remain active; the renderer is reused. Existing fixed mint splits, the separate delivery receiver, and the discount allowlist are preserved.
 
-Contract source revision: unrecorded; exact frozen working tree hashes are recorded in source-manifest.json.
+Contract source revision: f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b.
 
 The frozen base revision is `4364727013a19090ea528b662607e1ac36064cd8`. It identifies HEAD at freeze time. The [source manifest](source-manifest.json) records the actual Solidity source hashes, compiler-input/artifact hashes, seven constructor arguments, the exact proceeds configuration, and allowlist provenance.
 
@@ -24,8 +24,32 @@ The frozen base revision is `4364727013a19090ea528b662607e1ac36064cd8`. It ident
 - Public crate and warehouse prices: 0.0001 and 0.0011 test ETH.
 - Allowlist: 318 wallets from the pinned holder snapshot and the explicit additional wallet.
 
-The [deployment record](deployment.json) contains the observed deployment and administration receipts, compiler settings, runtime hashes, and verification state. The most recent included verification observed the new sale paused with zero supply at block 11978552. All included transactions have at least three canonical confirmations according to their verification records. All three historical sales were active at each recorded verification block.
+The [deployment record](deployment.json) contains the observed deployment and administration receipts, compiler settings, runtime hashes, and verification state. The most recent included verification observed the new sale open with zero supply at block 11978660. All included transactions have at least three canonical confirmations according to their verification records. All three historical sales were active at each recorded verification block.
 
 - [Paused-sale verification](deployment-paused.json): block 11978552, 2026-10-23T18:47:11.143Z.
+- [Open-sale verification](deployment-open.json): block 11978660, 2026-10-23T19:08:48.710Z.
 
-The local standard JSON compilation exactly matched both frozen artifacts. Explorer source publication and application rollout are separate checks; this report builder does not infer either outcome.
+The [read-only mint simulations](mint-simulation.json) passed all five cases and observed unchanged supply, stats, and proceeds. No mint transaction was signed or broadcast by that helper.
+
+The local standard JSON compilation exactly matched both frozen artifacts. [Etherscan verification](etherscan-verification.json) independently confirmed an exact source match.
+
+## Application rollout
+
+Both services were published from source revision `f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b` and each serves 100% of traffic. The [application release record](application-release.json) contains the observed versions and acceptance evidence.
+
+| Service | Version |
+| --- | --- |
+| API `mons-shop-api` | `d6e51db2-b4fe-44dc-80b1-a9c9c167731e` |
+| Frontend `mons-shop` | `886d4dea-9cac-4411-b09f-d68f78a78f1f` |
+
+## Reset
+
+Scoped reset `63e851e5-ccfc-46b3-9f2f-388f0b7f0d40` retired 2 delivery orders, 2 recovery records, 2 quotes, 2 crate claims, 16 checkout URLs, 2 checkout attempts, and 1 reconciliation cursor from the previous collection. It was applied at 2026-10-23T19:04:23.000Z, after the API drain deadline 2026-10-23T19:03:49.739Z.
+
+No database backup was created, as requested. The [preservation audit](reset-verification.json) accounted for shared identities, retained concurrency tombstones, preserved unrelated drops, and confirmed that global Commerce stayed active. Ethereum control resumed on the new collection at revision 10. All three historical onchain sales remained active.
+
+## Acceptance
+
+[Validation](validation.json), [paused HTTP checks](http-paused.json), [open HTTP checks](http-open.json), and [browser acceptance](browser-acceptance.json) passed. Seven fulfillment and checkout mutation endpoints returned 503 during maintenance. The deployed [proof asset](proof-asset-verification.json) matched the local build. [Etherscan verification](etherscan-verification.json) confirmed an exact source match.
+
+The five [read-only mint simulations](mint-simulation.json) passed without signing or broadcasting mint transactions. [Normal scheduled reconciliation](reconciliation-verification.json) advanced the new cursor to block 11978668; the old scope remained empty and reconciliation was not triggered manually.

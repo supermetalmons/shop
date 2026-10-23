@@ -1,0 +1,291 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "chainId": 11155111,
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "readOnly": true,
+  "method": "eth_call",
+  "signedTransactions": 0,
+  "broadcastTransactions": 0,
+  "checkedAt": "2026-10-23T19:08:57.249Z",
+  "blockNumber": 11978660,
+  "blockHash": "0xa29011659a762930b1e13ddd877613bbdb0c6c81cda74b549056ddd7dcf6b8a2",
+  "afterBlockNumber": 11978661,
+  "afterBlockHash": "0xa7eecfc6d34fc00d19dc75d03470f92ca5efb801db0d2bc47121f07126ba6110",
+  "eligibleWallet": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+  "publicWallet": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "discountCratePriceWei": "50000000000000",
+  "proofSha256": "4eadcb18618e2d7da214dbf30524cdf4380a61102f077a7954a12a65d6d1dedf",
+  "gasLimit": "60000000",
+  "gasPriceWei": "0",
+  "cases": [
+    {
+      "name": "eligible-discount-quantity-1",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "eligible-discount-quantity-2",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "100000000000000",
+      "expected": "DiscountAllowanceExceeded",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x12b902e1",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "invalid-discount-proof",
+      "from": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "valueWei": "50000000000000",
+      "expected": "InvalidDiscountProof",
+      "passed": true,
+      "outcome": "reverted",
+      "revertSelector": "0x51cf5b4e",
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-crate-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": null
+    },
+    {
+      "name": "public-warehouse-quantity-1",
+      "from": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "valueWei": "1100000000000000",
+      "expected": "success",
+      "passed": true,
+      "outcome": "success",
+      "revertSelector": null,
+      "senderBalanceOverride": {
+        "balanceWei": "1100000000000000",
+        "reason": "Actual sender balance is below this simulated payment"
+      }
+    }
+  ],
+  "before": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "166977060037248556",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "27",
+    "publicNonce": "1",
+    "historicalSales": [
+      {
+        "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "saleActive": true
+      },
+      {
+        "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "saleActive": true
+      },
+      {
+        "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+        "saleActive": true
+      }
+    ],
+    "proceeds": {
+      "mintRecipientCount": "4",
+      "recipients": [
+        {
+          "address": "0x1111111111111111111111111111111111111111",
+          "shareBps": "5000",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x2222222222222222222222222222222222222222",
+          "shareBps": "2500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x3333333333333333333333333333333333333333",
+          "shareBps": "1500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x4444444444444444444444444444444444444444",
+          "shareBps": "1000",
+          "released": "0",
+          "releasable": "0"
+        }
+      ],
+      "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "releasableDelivery": "0",
+      "contractBalanceWei": "0"
+    }
+  },
+  "after": {
+    "eligibleStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "publicStats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      true,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0"
+    ],
+    "totalSupply": "0",
+    "eligibleBalanceWei": "166977060037248556",
+    "publicBalanceWei": "999997518499000",
+    "eligibleNonce": "27",
+    "publicNonce": "1",
+    "historicalSales": [
+      {
+        "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+        "saleActive": true
+      },
+      {
+        "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+        "saleActive": true
+      },
+      {
+        "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+        "saleActive": true
+      }
+    ],
+    "proceeds": {
+      "mintRecipientCount": "4",
+      "recipients": [
+        {
+          "address": "0x1111111111111111111111111111111111111111",
+          "shareBps": "5000",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x2222222222222222222222222222222222222222",
+          "shareBps": "2500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x3333333333333333333333333333333333333333",
+          "shareBps": "1500",
+          "released": "0",
+          "releasable": "0"
+        },
+        {
+          "address": "0x4444444444444444444444444444444444444444",
+          "shareBps": "1000",
+          "released": "0",
+          "releasable": "0"
+        }
+      ],
+      "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "releasableDelivery": "0",
+      "contractBalanceWei": "0"
+    }
+  },
+  "statsUnchanged": true,
+  "supplyUnchanged": true,
+  "senderBalancesUnchanged": true,
+  "senderNoncesUnchanged": true,
+  "previousContract": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "previousSaleActive": true,
+  "historicalSales": [
+    {
+      "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "saleActive": true
+    },
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "proceedsUnchanged": true,
+  "passed": true,
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+  "frozenBaseRevision": "4364727013a19090ea528b662607e1ac36064cd8",
+  "sourceAttribution": {
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json",
+      "onchain/ethereum/config/proceeds.json"
+    ]
+  },
+  "releaseStatus": "contract-verified"
+}

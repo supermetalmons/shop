@@ -1,0 +1,44 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "chainId": 11155111,
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+  "checkedAt": "2026-10-23T19:11:10.545Z",
+  "passed": true,
+  "resetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+  "manuallyTriggered": false,
+  "deploymentBlock": 11978544,
+  "oldScopeCounts": {
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "documents": 0
+  },
+  "newScopeCounts": {
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "documents": 0
+  },
+  "oldCursorCount": 0,
+  "nextBlock": 11978668,
+  "control": {
+    "paused": false,
+    "revision": 10,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+    "resetGuardId": null,
+    "lastResetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+    "updatedAtMs": 1792782561000
+  },
+  "authority": {
+    "authority_state": "d1",
+    "revision": 23,
+    "documents_revision": 1884,
+    "paused_at_ms": null
+  }
+}

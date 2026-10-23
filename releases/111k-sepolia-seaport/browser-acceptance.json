@@ -1,0 +1,26 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "checkedAt": "2026-10-23T19:10:53.905Z",
+  "url": "https://mons.shop/111k_devnet",
+  "passed": true,
+  "maintenanceMintDisabledObserved": true,
+  "crate": {
+    "remaining": 5555,
+    "priceEth": "0.0001",
+    "remainingVisible": true,
+    "mintEnabled": true
+  },
+  "warehouse": {
+    "remaining": 505,
+    "priceEth": "0.0011",
+    "remainingVisible": true,
+    "mintEnabled": true
+  },
+  "pageReloadVerified": true,
+  "walletTransactionsSubmitted": 0,
+  "screenshot": "storefront-live.png",
+  "chainId": 11155111
+}

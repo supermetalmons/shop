@@ -1,0 +1,119 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "chainId": 11155111,
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+  "dropId": "111k_devnet",
+  "releaseStatus": "complete",
+  "completedAt": "2026-10-23T19:11:10.545Z",
+  "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "previousContract": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "api": {
+    "service": "mons-shop-api",
+    "command": "npm run deploy:api",
+    "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+    "startedAt": "2026-10-23T18:55:10.868Z",
+    "completedAt": "2026-10-23T19:02:44.739Z",
+    "exitCode": 0,
+    "versionId": "d6e51db2-b4fe-44dc-80b1-a9c9c167731e",
+    "deploymentId": "1619d755-73df-42c1-8711-8583ab16743e",
+    "deploymentCreatedAt": "2026-10-23T19:02:34.5135Z",
+    "trafficPercent": 100,
+    "drainNotBefore": "2026-10-23T19:03:49.739Z",
+    "url": "https://api.mons.shop"
+  },
+  "frontend": {
+    "service": "mons-shop",
+    "command": "npm run deploy",
+    "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+    "startedAt": "2026-10-23T19:06:08.111Z",
+    "completedAt": "2026-10-23T19:07:24.046Z",
+    "exitCode": 0,
+    "versionId": "886d4dea-9cac-4411-b09f-d68f78a78f1f",
+    "deploymentId": "04e4251d-3d56-43e9-a69d-008d9a4085ca",
+    "deploymentCreatedAt": "2026-10-23T19:07:16.653298Z",
+    "trafficPercent": 100,
+    "url": "https://mons.shop/111k_devnet"
+  },
+  "maintenance": {
+    "resetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+    "backupCreated": false,
+    "resetComplete": true,
+    "preservationPassed": true,
+    "drainCheck": {
+      "apiCompletedAt": "2026-10-23T19:02:44.739Z",
+      "drainNotBefore": "2026-10-23T19:03:49.739Z",
+      "databaseResetAppliedAt": "2026-10-23T19:04:23.000Z",
+      "databaseResetAppliedAfterDrain": true,
+      "controlPauseDrainSatisfied": true
+    },
+    "finalControl": {
+      "paused": false,
+      "revision": 10,
+      "pausedAtMs": null,
+      "chainId": 11155111,
+      "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+      "resetGuardId": null,
+      "lastResetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+      "updatedAtMs": 1792782561000
+    },
+    "report": "reset-verification.json"
+  },
+  "verification": {
+    "httpPaused": {
+      "passed": true,
+      "checkedAt": "2026-10-23T19:03:14.422Z",
+      "report": "http-paused.json"
+    },
+    "httpOpen": {
+      "passed": true,
+      "checkedAt": "2026-10-23T19:09:30.432Z",
+      "report": "http-open.json"
+    },
+    "browser": {
+      "passed": true,
+      "checkedAt": "2026-10-23T19:10:53.905Z",
+      "report": "browser-acceptance.json"
+    },
+    "proofAsset": {
+      "matchesLocalBuild": true,
+      "report": "proof-asset-verification.json"
+    },
+    "explorer": {
+      "status": "verified",
+      "matchType": "exact",
+      "report": "etherscan-verification.json"
+    },
+    "readOnlyMintSimulations": {
+      "passed": true,
+      "signedTransactions": 0,
+      "broadcastTransactions": 0,
+      "report": "mint-simulation.json"
+    },
+    "scheduler": {
+      "passed": true,
+      "manuallyTriggered": false,
+      "nextBlock": 11978668,
+      "report": "reconciliation-verification.json"
+    }
+  },
+  "validation": {
+    "passed": true,
+    "report": "validation.json"
+  },
+  "historicalContractsRemainActive": [
+    {
+      "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "saleActive": true
+    },
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "checkedAt": "2026-10-23T19:08:57.646Z",
+  "passed": true,
+  "assetUrl": "https://mons.shop/assets/111k-DlxnzWS0.js",
+  "httpStatus": 200,
+  "bytes": 199164,
+  "sha256": "a7590185edb5f0454c6336f62c4f34b7f43b60e51bb91e7eb52610296a170401",
+  "matchesLocalBuild": true,
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "recipients": 318,
+  "chainId": 11155111
+}

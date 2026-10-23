@@ -4,11 +4,18 @@
   "chainId": 11155111,
   "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
   "frozenAt": "2026-10-23T18:44:02.376Z",
-  "sourceRevision": null,
+  "sourceRevision": "f4fd7c1ca3587ee0a551ccb7bef9ed9539e6e59b",
   "frozenBaseRevision": "4364727013a19090ea528b662607e1ac36064cd8",
   "sourceAttribution": {
-    "status": "frozen-working-tree",
-    "reason": "Exact sources were frozen from a working tree before a matching source commit was recorded; use the frozen hashes to identify deployed content."
+    "status": "matched-commit",
+    "reason": null,
+    "frozenFilesChecked": [
+      "onchain/ethereum/src/INFT111KRenderer.sol",
+      "onchain/ethereum/src/NFT111K.sol",
+      "onchain/ethereum/src/NFT111KRenderer.sol",
+      "src/ethereum/discounts/111k.json",
+      "onchain/ethereum/config/proceeds.json"
+    ]
   },
   "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
   "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
@@ -326,5 +333,5 @@
     "holdersSha256": "2ffc544e2a7594e0ed6117eb1bef2dc55ec95396ddc1e455ef0dcfbabdd93240",
     "regeneratesFrozenArtifact": true
   },
-  "releaseStatus": "in-progress"
+  "releaseStatus": "contract-verified"
 }
