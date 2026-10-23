@@ -41,7 +41,7 @@ function foilDepth(x: number, y: number) {
   return 0.018 + puff * 0.175 + body * (folds + edgeWrinkles) + crimp;
 }
 
-function createPrintTexture() {
+function createPrintTexture(cardCount: 1 | 2 | 3) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 1024;
   const context = canvas.getContext('2d');
@@ -108,7 +108,7 @@ function createPrintTexture() {
   context.font = '900 78px Helvetica, Arial, sans-serif';
   context.fillText('2026', 256, 816);
   context.font = '600 17px Helvetica, Arial, sans-serif';
-  context.fillText('1 CARD PACK', 256, 882);
+  context.fillText(`${cardCount} CARD PACK`, 256, 882);
   context.lineWidth = 2;
   context.strokeRect(574, 144, 388, 734);
   context.font = '900 55px Helvetica, Arial, sans-serif';
@@ -273,12 +273,12 @@ void main() {
 }
 `;
 
-export function createDogeFoilPackModel() {
+export function createDogeFoilPackModel(cardCount: 1 | 2 | 3 = 1) {
   const group = new THREE.Group();
   group.name = 'doge-day-2026-foil-pack';
   const rig = new THREE.Group();
   group.add(rig);
-  const print = createPrintTexture();
+  const print = createPrintTexture(cardCount);
   const uniforms = {
     uPrint: { value: print },
     uHit: { value: 0 },

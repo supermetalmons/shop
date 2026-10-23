@@ -29,6 +29,7 @@
 
 button.doge-day-2026-wip-close-btn,
 button.doge-day-2026-wip-reset-btn,
+.doge-day-2026-wip-pack-picker button,
 button.doge-day-2026-reveal-overlay__activate {
   z-index: 2;
   padding: 8px;
@@ -73,7 +74,39 @@ button.doge-day-2026-wip-reset-btn:active:not(:disabled) {
   opacity: 0.8;
 }
 
-.doge-day-2026-wip-controls--hidden > button {
+.doge-day-2026-wip-pack-picker {
+  position: absolute;
+  z-index: 2;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transform: translateX(-50%);
+  color: color-mix(in srgb, var(--fg) 40%, transparent);
+  font-size: 12px;
+  transition: opacity 160ms ease, visibility 160ms ease;
+}
+
+.doge-day-2026-wip-pack-picker button {
+  width: 36px;
+  height: 32px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--fg) 48%, transparent);
+}
+
+.doge-day-2026-wip-pack-picker button[aria-pressed='true'] {
+  color: var(--fg);
+}
+
+.doge-day-2026-wip-pack-picker button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--fg);
+  box-shadow: none;
+}
+
+.doge-day-2026-wip-controls--hidden > * {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -103,9 +136,20 @@ button.doge-day-2026-reveal-overlay__activate:focus-visible {
 
 button.doge-day-2026-wip-close-btn:focus-visible,
 button.doge-day-2026-wip-reset-btn:focus-visible,
+.doge-day-2026-wip-pack-picker button:focus-visible,
 button.doge-day-2026-reveal-overlay__activate:focus-visible {
   outline: 1px solid currentColor;
   outline-offset: 3px;
+}
+
+@media (max-width: 540px) {
+  .doge-day-2026-wip-pack-picker {
+    bottom: max(42px, calc(env(safe-area-inset-bottom) + 32px));
+  }
+
+  button.doge-day-2026-reveal-overlay__activate:focus-visible {
+    bottom: max(82px, calc(env(safe-area-inset-bottom) + 72px));
+  }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -116,7 +160,8 @@ button.doge-day-2026-reveal-overlay__activate:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   button.doge-day-2026-wip-close-btn,
-  button.doge-day-2026-wip-reset-btn {
+  button.doge-day-2026-wip-reset-btn,
+  .doge-day-2026-wip-pack-picker {
     transition: none;
   }
 }

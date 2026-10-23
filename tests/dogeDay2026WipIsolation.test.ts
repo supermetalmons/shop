@@ -8,7 +8,7 @@ import { DOGE_DAY_2026_WIP_CONFIG, DOGE_DAY_2026_WIP_SOUNDS } from '../src/dogeD
 test('Doge WIP retains independent copies of all 207 Poncho cards', () => {
   assert.equal(DOGE_DAY_2026_WIP_CONFIG.collectionName, 'Doge Day 2026');
   assert.equal(DOGE_DAY_2026_WIP_CONFIG.cardCount, 207);
-  assert.equal(DOGE_DAY_2026_WIP_CONFIG.itemsPerPack, 1);
+  assert.equal(DOGE_DAY_2026_WIP_CONFIG.itemsPerPack, 2);
   for (let id = 1; id <= 207; id += 1) {
     const doge = getDogeDay2026StarterCard(id)!;
     const poncho = getDrifCardByFigureId(id)!;

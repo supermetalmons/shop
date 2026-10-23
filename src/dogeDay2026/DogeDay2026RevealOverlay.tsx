@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { DrifCardConfig } from '../drifCards';
-import { createDogeFoilScene } from './foilPackScene';
+import { createDogeFoilScene, type DogeCardSceneState } from './foilPackScene';
 import { dogeDay2026CardIdentityKey } from './starterCards';
 
 type RevealStage = 'sealed' | 'hit' | 'waiting' | 'opening' | 'revealed';
@@ -13,6 +13,8 @@ type DogeDay2026RevealOverlayProps = {
   boxButtonRef?: RefObject<HTMLButtonElement | null>;
   onPlayClick?: () => void;
   onPlayReveal?: () => void;
+  onPlayCardSwipe?: () => void;
+  onPlayCardSpread?: () => void;
   onBackgroundTap?: () => void;
   onError?: () => void;
 };
@@ -27,16 +29,18 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
   const [stage, setStage] = useState<RevealStage>('sealed');
   const [assetsReady, setAssetsReady] = useState(false);
   const [error, setError] = useState(false);
-  const cardKey = cards[0] ? dogeDay2026CardIdentityKey(cards[0]) : '';
+  const [cardState, setCardState] = useState<DogeCardSceneState>({ mode: 'stack', activeCardIndex: 0, transitioning: false });
+  const cardKey = JSON.stringify(cards.map(dogeDay2026CardIdentityKey));
 
   useEffect(() => {
     const host = hostRef.current;
-    const card = propsRef.current.cards[0];
-    if (!host || !card) return;
+    const sceneCards = propsRef.current.cards;
+    if (!host || !sceneCards.length) return;
     let active = true;
     setStage('sealed');
     setAssetsReady(false);
     setError(false);
+    setCardState({ mode: 'stack', activeCardIndex: 0, transitioning: false });
     const handleError = () => {
       if (!active) return;
       setError(true);
@@ -44,10 +48,13 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
     };
     try {
       sceneRef.current = createDogeFoilScene(host, {
-        card,
+        cards: sceneCards,
         cardReady: propsRef.current.cardReady,
         onStageChange: (nextStage) => {
           if (active) setStage(nextStage);
+        },
+        onCardStateChange: (nextState) => {
+          if (active) setCardState(nextState);
         },
         onReady: () => {
           if (active) setAssetsReady(true);
@@ -58,6 +65,12 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
         },
         onReveal: () => {
           if (active) propsRef.current.onPlayReveal?.();
+        },
+        onCardSwipe: () => {
+          if (active) propsRef.current.onPlayCardSwipe?.();
+        },
+        onCardSpread: () => {
+          if (active) propsRef.current.onPlayCardSpread?.();
         },
         onBackgroundTap: () => {
           if (active) propsRef.current.onBackgroundTap?.();
@@ -77,20 +90,36 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
     sceneRef.current?.setCardReady(cardReady);
   }, [cardReady]);
 
+  const multipleCards = cards.length > 1;
+  const rowVisible = cardState.mode === 'row';
+  const cardAction = !multipleCards || rowVisible
+    ? 'Reset card tilt'
+    : cardState.activeCardIndex === cards.length - 1
+      ? 'Show all cards'
+      : 'Next card';
+  const actionLabel = stage === 'revealed' ? cardAction : `Hit the ${boxLabel}`;
+  const activationBlocked = error || stage === 'opening' || cardState.transitioning || !cards.length;
+  const cardStatus = !multipleCards
+    ? 'Your card is ready and interactive. Drag to tilt.'
+    : cardState.transitioning
+      ? cardState.mode === 'spreading' ? 'Showing all cards…' : 'Showing the next card…'
+      : rowVisible
+        ? `All ${cards.length} cards are ready and interactive. Drag any card to tilt.`
+        : `Card ${cardState.activeCardIndex + 1} of ${cards.length}. Drag to tilt. ${cardAction}.`;
   const status = error
     ? 'Unable to load this pack.'
     : stage === 'revealed'
-      ? 'Your card is ready and interactive. Drag to tilt.'
+      ? cardStatus
       : stage === 'opening'
         ? 'Opening…'
         : stage === 'waiting'
-          ? 'Getting your card ready…'
+          ? multipleCards ? 'Getting your cards ready…' : 'Getting your card ready…'
           : !assetsReady
             ? 'Loading pack…'
             : 'Tap the pack';
 
   return (
-    <div className="doge-day-2026-reveal-overlay" data-stage={stage}>
+    <div className="doge-day-2026-reveal-overlay" data-stage={stage} data-card-mode={cardState.mode}>
       <div className="doge-day-2026-reveal-overlay__scene" ref={hostRef} aria-hidden="true" />
       <div className="doge-day-2026-reveal-overlay__sr-only">
         <p role="status" aria-live="polite" aria-atomic="true">
@@ -101,11 +130,14 @@ export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
         ref={boxButtonRef}
         type="button"
         className="doge-day-2026-reveal-overlay__activate"
-        aria-label={stage === 'revealed' ? 'Reset card tilt' : `Hit the ${boxLabel}`}
-        disabled={error || stage === 'opening' || !cards.length}
-        onClick={() => sceneRef.current?.activate()}
+        aria-label={actionLabel}
+        aria-disabled={activationBlocked || undefined}
+        disabled={error || !cards.length}
+        onClick={() => {
+          if (!activationBlocked) sceneRef.current?.activate();
+        }}
       >
-        {stage === 'revealed' ? 'Reset card tilt' : `Hit the ${boxLabel}`}
+        {actionLabel}
       </button>
     </div>
   );

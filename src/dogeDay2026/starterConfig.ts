@@ -1,7 +1,7 @@
 export const DOGE_DAY_2026_WIP_CONFIG = Object.freeze({
   collectionName: 'Doge Day 2026',
   cardCount: 207,
-  itemsPerPack: 1,
+  itemsPerPack: 2,
   packCount: 1,
   packLabel: 'pack',
   cardReadyMinDelayMs: 1_000,
@@ -19,6 +19,8 @@ export const DOGE_DAY_2026_WIP_SOUNDS = Object.freeze({
     `${STARTER_MEDIA_BASE_URL}/sounds/hit3.mp3`,
   ]),
   reveal: `${STARTER_MEDIA_BASE_URL}/sounds/crash.mp3`,
+  cardSwipe: 'https://cdn.lil.org/nft/card_nft_2/sounds/swipe.mp3',
+  cardSpread: 'https://cdn.lil.org/nft/card_nft_2/sounds/spread.mp3',
 });
 
 export function pickDogeDay2026ClickSound(random: () => number = Math.random) {

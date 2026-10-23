@@ -9,23 +9,35 @@ import { navigate } from '../navigation';
 import { ModalFocusScope } from '../components/ModalFocusScope';
 import './wip.css';
 
-function randomCardId(previous?: number) {
+type PackSize = 1 | 2 | 3;
+
+function randomCardIds(packSize: PackSize, previousFirst?: number) {
   const count = DOGE_DAY_2026_WIP_CONFIG.cardCount;
-  if (previous === undefined) return Math.floor(Math.random() * count) + 1;
-  return ((previous - 1 + Math.floor(Math.random() * (count - 1)) + 1) % count) + 1;
+  const first = previousFirst === undefined
+    ? Math.floor(Math.random() * count) + 1
+    : ((previousFirst - 1 + Math.floor(Math.random() * (count - 1)) + 1) % count) + 1;
+  const selected = [first];
+  const available = Array.from({ length: count }, (_, index) => index + 1).filter((id) => id !== first);
+  while (selected.length < packSize) {
+    selected.push(available.splice(Math.floor(Math.random() * available.length), 1)[0]);
+  }
+  return selected;
 }
 
 export default function DogeDay2026WipApp() {
-  const [cardId, setCardId] = useState(randomCardId);
+  const [round, setRound] = useState(() => ({
+    packSize: DOGE_DAY_2026_WIP_CONFIG.itemsPerPack as PackSize,
+    cardIds: randomCardIds(DOGE_DAY_2026_WIP_CONFIG.itemsPerPack),
+    resetKey: 0,
+  }));
   const [cardReady, setCardReady] = useState(false);
   const [focusedMode, setFocusedMode] = useState(false);
-  const [resetKey, setResetKey] = useState(0);
   const soundInitPromiseRef = useRef<Promise<void> | null>(null);
   const revealButtonRef = useRef<HTMLButtonElement | null>(null);
-  const currentCards = useMemo(() => {
-    const card = getDogeDay2026StarterCard(cardId);
-    return card ? [card] : [];
-  }, [cardId]);
+  const currentCards = useMemo(
+    () => round.cardIds.map((cardId) => getDogeDay2026StarterCard(cardId)!),
+    [round.cardIds],
+  );
 
   const ensureSoundReady = useCallback(() => {
     if (soundPlayer.isInitialized) return Promise.resolve();
@@ -58,8 +70,23 @@ export default function DogeDay2026WipApp() {
     }
   }, []);
 
+  const playCardMotionSound = useCallback((url: string) => {
+    void ensureSoundReady().then(() => soundPlayer.playSound(
+      url,
+      DOGE_DAY_2026_WIP_CONFIG.clickVolume,
+    )).catch(() => {});
+  }, [ensureSoundReady]);
+  const playCardSwipeSound = useCallback(() => {
+    playCardMotionSound(DOGE_DAY_2026_WIP_SOUNDS.cardSwipe);
+  }, [playCardMotionSound]);
+  const playCardSpreadSound = useCallback(() => {
+    playCardMotionSound(DOGE_DAY_2026_WIP_SOUNDS.cardSpread);
+  }, [playCardMotionSound]);
+
   useEffect(() => {
     void soundPlayer.preloadSound(DOGE_DAY_2026_WIP_SOUNDS.reveal);
+    void soundPlayer.preloadSound(DOGE_DAY_2026_WIP_SOUNDS.cardSwipe);
+    void soundPlayer.preloadSound(DOGE_DAY_2026_WIP_SOUNDS.cardSpread);
     DOGE_DAY_2026_WIP_SOUNDS.click.forEach((url) => {
       void soundPlayer.preloadSound(url);
     });
@@ -70,13 +97,25 @@ export default function DogeDay2026WipApp() {
     const delay = cardReadyMinDelayMs + Math.floor(Math.random() * (cardReadyMaxDelayMs - cardReadyMinDelayMs + 1));
     const timeoutId = window.setTimeout(() => setCardReady(true), delay);
     return () => window.clearTimeout(timeoutId);
-  }, [resetKey]);
+  }, [round.resetKey]);
 
   const handleReset = useCallback(() => {
     setCardReady(false);
-    setCardId((current) => randomCardId(current));
-    setResetKey((current) => current + 1);
+    setRound((current) => ({
+      ...current,
+      cardIds: randomCardIds(current.packSize, current.cardIds[0]),
+      resetKey: current.resetKey + 1,
+    }));
   }, []);
+  const handlePackSizeChange = useCallback((packSize: PackSize) => {
+    if (packSize === round.packSize) return;
+    setCardReady(false);
+    setRound((current) => ({
+      packSize,
+      cardIds: randomCardIds(packSize, current.cardIds[0]),
+      resetKey: current.resetKey + 1,
+    }));
+  }, [round.packSize]);
 
   const handleClose = useCallback(() => {
     navigate('/');
@@ -112,9 +151,11 @@ export default function DogeDay2026WipApp() {
         cards={currentCards}
         cardReady={cardReady}
         boxButtonRef={revealButtonRef}
-        resetKey={resetKey}
+        resetKey={round.resetKey}
         onPlayClick={playClickSound}
         onPlayReveal={playRevealSound}
+        onPlayCardSwipe={playCardSwipeSound}
+        onPlayCardSpread={playCardSpreadSound}
         onBackgroundTap={handleBackgroundTap}
         onError={handleSceneError}
       />
@@ -126,6 +167,28 @@ export default function DogeDay2026WipApp() {
         <button type="button" className="doge-day-2026-wip-close-btn" onClick={handleClose} aria-label="Close wip overlay">
           Close
         </button>
+        <div className="doge-day-2026-wip-pack-picker" role="group" aria-label="Cards per pack">
+          <button
+            type="button"
+            aria-label="1 card pack"
+            aria-pressed={round.packSize === 1}
+            onClick={() => handlePackSizeChange(1)}
+          >1</button>
+          <span aria-hidden="true">/</span>
+          <button
+            type="button"
+            aria-label="2 card pack"
+            aria-pressed={round.packSize === 2}
+            onClick={() => handlePackSizeChange(2)}
+          >2</button>
+          <span aria-hidden="true">/</span>
+          <button
+            type="button"
+            aria-label="3 card pack"
+            aria-pressed={round.packSize === 3}
+            onClick={() => handlePackSizeChange(3)}
+          >3</button>
+        </div>
         <button type="button" className="doge-day-2026-wip-reset-btn" onClick={handleReset} aria-label="Reset opening">
           Reset
         </button>

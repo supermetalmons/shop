@@ -65,11 +65,12 @@ function createTestPack() {
 }
 const packs: ReturnType<typeof createTestPack>[] = [];
 
-function createTestSurface(_card: DrifCardConfig, options: { loadTexture: (source: string) => Promise<THREE.Texture> }) {
+function createTestSurface(card: DrifCardConfig, options: { loadTexture: (source: string) => Promise<THREE.Texture> }) {
   const loaded = deferred();
   const texture = new THREE.Texture();
   const material = new THREE.ShaderMaterial({ uniforms: { uFront: { value: texture } } });
   const surface = {
+    card,
     loaded,
     loadTexture: options.loadTexture,
     material,
@@ -87,6 +88,17 @@ function createTestSurface(_card: DrifCardConfig, options: { loadTexture: (sourc
 }
 const surfaces: ReturnType<typeof createTestSurface>[] = [];
 
+type CardSnapshot = {
+  imageSrc: string;
+  matrix: number[];
+  rotation: { x: number; y: number };
+  bounds: THREE.Box2;
+  visible: boolean;
+  renderOrder: number;
+  frontDepthWrite: boolean;
+  backDepthWrite: boolean;
+};
+
 class FakeWebGLRenderer {
   domElement = document.createElement('canvas');
   capabilities = { maxTextureSize: 4096 };
@@ -98,12 +110,16 @@ class FakeWebGLRenderer {
   disposeCount = 0;
   contextLossCount = 0;
   uploadedTextures = new Set<THREE.Texture>();
+  resourceDisposals = new Map<THREE.BufferGeometry | THREE.Material, number>();
   target: THREE.WebGLRenderTarget | null = null;
   drawingBuffer = { width: 1, height: 1, density: 1 };
   drawingBuffers: typeof this.drawingBuffer[] = [];
   renders: { offscreen: boolean; visibleCard: boolean }[] = [];
   snapshots: {
     packMatrix: number[];
+    packVisible: boolean;
+    cards: CardSnapshot[];
+    offscreen: boolean;
     cardMatrix: number[];
     cardRotation: { x: number; y: number };
     cardBounds: THREE.Box2;
@@ -136,39 +152,65 @@ class FakeWebGLRenderer {
     camera.updateMatrixWorld(true);
     const pack = packs.find(candidate => scene.getObjectById(candidate.group.id));
     assert.ok(pack?.group.parent);
-    let cardFront: THREE.Mesh | undefined;
+    const cardFronts: THREE.Mesh[] = [];
+    const visibleFronts = new Set<THREE.Object3D>();
     let particleSystems = 0;
     scene.traverse(object => {
-      if (object instanceof THREE.Mesh && surfaces.some(surface => surface.material === object.material)) cardFront = object;
+      if (object instanceof THREE.Mesh) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const resource of [object.geometry, ...materials] as (THREE.BufferGeometry | THREE.Material)[]) {
+          if (this.resourceDisposals.has(resource)) continue;
+          this.resourceDisposals.set(resource, 0);
+          resource.addEventListener('dispose', () => this.resourceDisposals.set(resource, this.resourceDisposals.get(resource)! + 1));
+        }
+      }
+      if (object instanceof THREE.Mesh && surfaces.some(surface => surface.material === object.material)) cardFronts.push(object);
       if (object instanceof THREE.Points) particleSystems += 1;
     });
-    assert.ok(cardFront?.parent);
-    cardFront.geometry.computeBoundingBox();
-    const bounds = cardFront.geometry.boundingBox!;
-    const projectedBounds = new THREE.Box2();
-    for (const x of [bounds.min.x, bounds.max.x]) {
-      for (const y of [bounds.min.y, bounds.max.y]) {
-        const point = new THREE.Vector3(x, y, 0).applyMatrix4(cardFront.matrixWorld).project(camera);
-        projectedBounds.expandByPoint(new THREE.Vector2(
-          (point.x + 1) * this.drawingBuffer.width / 2 + Number.parseFloat(this.domElement.style.left || '0'),
-          (1 - point.y) * this.drawingBuffer.height / 2,
-        ));
+    scene.traverseVisible(object => visibleFronts.add(object));
+    const cards = cardFronts.map(cardFront => {
+      assert.ok(cardFront.parent);
+      assert.ok(!Array.isArray(cardFront.material));
+      const cardBack = cardFront.parent.children.find(object => object instanceof THREE.Mesh
+        && !Array.isArray(object.material) && object.material.side === THREE.BackSide) as THREE.Mesh | undefined;
+      assert.ok(cardBack && !Array.isArray(cardBack.material));
+      cardFront.geometry.computeBoundingBox();
+      const bounds = cardFront.geometry.boundingBox!;
+      const projectedBounds = new THREE.Box2();
+      for (const x of [bounds.min.x, bounds.max.x]) {
+        for (const y of [bounds.min.y, bounds.max.y]) {
+          const point = new THREE.Vector3(x, y, 0).applyMatrix4(cardFront.matrixWorld).project(camera);
+          projectedBounds.expandByPoint(new THREE.Vector2(
+            (point.x + 1) * this.drawingBuffer.width / 2 + Number.parseFloat(this.domElement.style.left || '0'),
+            (1 - point.y) * this.drawingBuffer.height / 2,
+          ));
+        }
       }
-    }
+      return {
+        imageSrc: surfaces.find(surface => surface.material === cardFront.material)!.card.imageSrc,
+        matrix: cardFront.parent.matrixWorld.toArray(),
+        rotation: { x: cardFront.parent.rotation.x, y: cardFront.parent.rotation.y },
+        bounds: projectedBounds,
+        visible: visibleFronts.has(cardFront),
+        renderOrder: cardFront.renderOrder,
+        frontDepthWrite: cardFront.material.depthWrite,
+        backDepthWrite: cardBack.material.depthWrite,
+      };
+    });
+    assert.ok(cards.length);
+    const offscreen = this.target !== null;
     this.snapshots.push({
       packMatrix: pack.group.parent.matrixWorld.toArray(),
-      cardMatrix: cardFront.parent.matrixWorld.toArray(),
-      cardRotation: { x: cardFront.parent.rotation.x, y: cardFront.parent.rotation.y },
-      cardBounds: projectedBounds,
+      packVisible: visibleFronts.has(pack.group),
+      cards,
+      offscreen,
+      cardMatrix: cards[0]!.matrix,
+      cardRotation: cards[0]!.rotation,
+      cardBounds: cards[0]!.bounds,
       particleSystems,
       pose: pack.poses.at(-1),
     });
-    let visibleCard = false;
-    scene.traverseVisible(object => {
-      if (object instanceof THREE.Mesh && surfaces.some(surface => surface.material === object.material)) visibleCard = true;
-    });
-    const offscreen = this.target !== null;
-    this.renders.push({ offscreen, visibleCard });
+    this.renders.push({ offscreen, visibleCard: cards.some(card => card.visible) });
     this.onRender?.(offscreen);
   }
   dispose() { this.disposeCount += 1; }
@@ -222,11 +264,14 @@ afterEach(async () => {
   assert.ok(packs.every(pack => pack.disposeCount === 1));
   assert.ok(surfaces.every(surface => surface.disposeCount === 1));
   assert.ok(renderers.every(renderer => renderer.disposeCount === 1 && renderer.contextLossCount === 1));
+  for (const renderer of renderers) {
+    assert.ok([...renderer.resourceDisposals.values()].every(count => count === 1), 'Every rendered material and geometry should be disposed exactly once');
+  }
   document.body.replaceChildren();
 });
 after(() => { Reflect.deleteProperty(globalThis, bridge); dom.window.close(); });
 
-function harness(cardReady = true, viewport = { width: 900, height: 900 }) {
+function harness(cardReady = true, viewport = { width: 900, height: 900 }, cardCount = 1) {
   const host = document.createElement('div');
   Object.defineProperties(host, {
     clientWidth: { value: viewport.width },
@@ -235,9 +280,11 @@ function harness(cardReady = true, viewport = { width: 900, height: 900 }) {
   document.body.append(host);
   const events: string[] = [];
   const stages: string[] = [];
-  const card = { imageSrc: '/front.png', textureSrc: '/mask.png', effect: { effectKey: 'lighting-only' } } as DrifCardConfig;
+  const cardStates: { mode: 'stack' | 'cycling' | 'spreading' | 'row'; activeCardIndex: number; transitioning: boolean }[] = [];
+  const cards = Array.from({ length: cardCount }, (_, index) => ({ imageSrc: `/front-${index}.png`, textureSrc: '/mask.png', effect: { effectKey: 'lighting-only' } } as DrifCardConfig));
+  const surfaceStart = surfaces.length;
   const controller = createDogeFoilScene(host, {
-    card,
+    cards,
     cardReady,
     onStageChange(stage) { stages.push(stage); },
     onReady() { events.push('ready'); },
@@ -245,9 +292,12 @@ function harness(cardReady = true, viewport = { width: 900, height: 900 }) {
     onHit() { events.push('hit'); },
     onReveal() { events.push('reveal'); },
     onBackgroundTap() { events.push('background'); },
+    onCardStateChange(state) { cardStates.push({ ...state }); },
+    onCardSwipe() { events.push('swipe'); },
+    onCardSpread() { events.push('spread'); },
   });
   controllers.push(controller);
-  return { host, controller, events, stages, renderer: renderers.at(-1)!, surface: surfaces.at(-1)!, pack: packs.at(-1)! };
+  return { host, controller, events, stages, cards, cardStates, renderer: renderers.at(-1)!, surface: surfaces[surfaceStart]!, surfaces: surfaces.slice(surfaceStart), pack: packs.at(-1)! };
 }
 
 async function flush() {
@@ -268,7 +318,7 @@ function drainFrames() {
 }
 
 async function warmCard(run: ReturnType<typeof harness>) {
-  run.surface.loaded.resolve();
+  run.surfaces.forEach(surface => surface.loaded.resolve());
   await flush();
   assert.equal(run.renderer.compileCount, 1);
 }
@@ -283,11 +333,11 @@ async function revealCard(run: ReturnType<typeof harness>) {
   assert.equal(run.stages.at(-1), 'revealed');
 }
 
-function cardPointer(t: TestContext, run: ReturnType<typeof harness>) {
+function cardPointer(t: TestContext, run: ReturnType<typeof harness>, cardIndex = 0) {
   const rect = new dom.window.DOMRect(120, 80, run.host.clientWidth, run.host.clientHeight);
   t.mock.method(run.host, 'getBoundingClientRect', () => rect);
   Object.assign(run.host, { setPointerCapture() {}, hasPointerCapture() { return false; }, releasePointerCapture() {} });
-  const bounds = run.renderer.snapshots.at(-1)!.cardBounds.clone();
+  const bounds = run.renderer.snapshots.at(-1)!.cards[cardIndex]!.bounds.clone();
   const center = bounds.getCenter(new THREE.Vector2());
   const halfSize = bounds.getSize(new THREE.Vector2()).multiplyScalar(0.5);
   let timeStamp = 1000;
@@ -304,8 +354,8 @@ function cardPointer(t: TestContext, run: ReturnType<typeof harness>) {
   };
 }
 
-function assertCardTilt(run: ReturnType<typeof harness>, x: number, y: number) {
-  const rotation = run.renderer.snapshots.at(-1)!.cardRotation;
+function assertCardTilt(run: ReturnType<typeof harness>, x: number, y: number, cardIndex = 0) {
+  const rotation = run.renderer.snapshots.at(-1)!.cards[cardIndex]!.rotation;
   assert.ok(Math.abs(rotation.x - x) < 0.00001, `Expected pitch ${x}, received ${rotation.x}`);
   assert.ok(Math.abs(rotation.y - y) < 0.00001, `Expected yaw ${y}, received ${rotation.y}`);
 }
@@ -374,8 +424,7 @@ test('retina desktop and phone canvases retain native resolution after slow anim
       assert.equal(frames.size, 0);
     }
     assert.equal(run.stages.at(-1), 'revealed');
-    const targetRect = calcPonchoDrifellaRevealTargetRect(viewport.width, viewport.height);
-    const canvasWidth = Math.min(viewport.width, targetRect.width);
+    const canvasWidth = viewport.width;
     assert.ok(run.renderer.drawingBuffers.every(buffer => buffer.density === viewport.density));
     assert.equal(run.renderer.drawingBuffers.length, 1);
     assert.deepEqual(run.renderer.drawingBuffer, { width: canvasWidth, height: viewport.height, density: viewport.density });
@@ -397,7 +446,7 @@ test('display density changes refresh the drawing buffer on the next active fram
   assert.equal(run.renderer.drawingBuffers.length, 2);
 });
 
-test('cropped canvas pointer mapping follows the rendered card for hover and taps', async (t) => {
+test('full-width canvas pointer mapping follows the rendered card for hover and taps', async (t) => {
   const run = harness(true, { width: 1920, height: 1080 });
   const hostRect = new dom.window.DOMRect(120, 80, 1920, 1080);
   t.mock.method(run.host, 'getBoundingClientRect', () => hostRect);
@@ -819,4 +868,337 @@ test('a background tap released after failure cannot hide the restored controls'
   run.host.dispatchEvent(pointerEvent('pointerup', 2100));
   assert.deepEqual(run.events, ['ready', 'background', 'error']);
   assert.equal(frames.size, 0);
+});
+
+
+for (const cardCount of [2, 3]) {
+  const expectedSounds = [...Array<string>(cardCount - 1).fill('swipe'), 'spread'];
+
+  test(`${cardCount}-card packs wait for every decoded surface and individually warm each card before opening`, async () => {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    drainFrames();
+    for (let hit = 0; hit < 3; hit += 1) {
+      run.controller.activate();
+      drainFrames();
+    }
+    assert.equal(run.stages.at(-1), 'waiting');
+    run.surfaces.forEach((surface, index) => { if (index !== 1) surface.loaded.resolve(); });
+    await flush();
+    assert.equal(run.renderer.compileCount, 0);
+    assert.equal(run.events.includes('reveal'), false);
+    assert.equal(frames.size, 0);
+    run.renderer.onCompile = () => {
+      assert.equal(run.renderer.uploadedTextures.size, cardCount);
+      assert.equal(run.stages.at(-1), 'waiting');
+    };
+    run.renderer.onRender = offscreen => {
+      if (offscreen) {
+        assert.equal(run.stages.at(-1), 'waiting');
+        assert.equal(run.events.includes('reveal'), false);
+      }
+    };
+    await warmCard(run);
+    const warmed = run.renderer.snapshots.filter(snapshot => snapshot.offscreen);
+    assert.deepEqual(warmed.map(snapshot => snapshot.cards.filter(card => card.visible).map(card => card.imageSrc)),
+      run.cards.map(card => [card.imageSrc]));
+    assert.equal(run.stages.at(-1), 'opening');
+    drainFrames();
+    assert.equal(run.stages.at(-1), 'revealed');
+    assert.equal(run.events.filter(event => event === 'reveal').length, 1);
+    assert.deepEqual(run.cardStates.at(-1), { mode: 'stack', activeCardIndex: 0, transitioning: false });
+    assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => card.visible));
+  });
+
+  test(`${cardCount}-card browsing ignores opening and rapid activations, cycles through every card, then spreads in original order`, async () => {
+    const run = harness(true, { width: 1440, height: 900 }, cardCount);
+    await warmCard(run);
+    drainFrames();
+    for (let hit = 0; hit < 2; hit += 1) {
+      run.controller.activate();
+      drainFrames();
+    }
+    run.controller.activate();
+    while (run.stages.at(-1) !== 'opening') advanceFrame();
+    run.controller.activate();
+    run.controller.activate();
+    assert.equal(run.events.includes('swipe'), false);
+    drainFrames();
+    for (let index = 0; index < cardCount; index += 1) {
+      const before = run.renderer.snapshots.at(-1)!.cards[index]!.bounds.getCenter(new THREE.Vector2());
+      run.controller.activate();
+      const mode = index < cardCount - 1 ? 'cycling' : 'spreading';
+      assert.equal(run.cardStates.at(-1)!.mode, mode);
+      assert.equal(run.cardStates.at(-1)!.transitioning, true);
+      const eventCount = run.events.length;
+      run.controller.activate();
+      run.controller.activate();
+      assert.equal(run.events.length, eventCount);
+      for (let frame = 0; frame < 6; frame += 1) advanceFrame(50);
+      if (index < cardCount - 1) {
+        const during = run.renderer.snapshots.at(-1)!.cards[index]!.bounds.getCenter(new THREE.Vector2());
+        assert.ok(during.x < before.x, 'The current card should travel left while cycling');
+      }
+      for (let frame = 0; frame < 5; frame += 1) advanceFrame(50);
+      assert.equal(run.cardStates.at(-1)!.mode, mode, 'The transition should still be active before 560 ms');
+      advanceFrame(50);
+      assert.equal(run.cardStates.at(-1)!.mode, index < cardCount - 1 ? 'stack' : 'row');
+      assert.equal(run.cardStates.at(-1)!.transitioning, false);
+      if (index < cardCount - 1) assert.equal(run.cardStates.at(-1)!.activeCardIndex, index + 1);
+      drainFrames();
+    }
+    assert.deepEqual(run.events.filter(event => event === 'swipe' || event === 'spread'), expectedSounds);
+    const row = run.renderer.snapshots.at(-1)!.cards;
+    assert.deepEqual(row.map(card => card.imageSrc), run.cards.map(card => card.imageSrc));
+    assert.equal(row.length, cardCount);
+    assert.equal(row.filter(card => card.visible).length, cardCount);
+    row.slice(1).forEach((card, index) => assert.ok(row[index]!.bounds.max.x < card.bounds.min.x));
+    const before = row.map(card => card.matrix);
+    run.controller.activate();
+    drainFrames();
+    assert.equal(run.cardStates.at(-1)!.mode, 'row');
+    assert.deepEqual(run.renderer.snapshots.at(-1)!.cards.map(card => card.matrix), before);
+  });
+
+  test(`${cardCount}-card taps advance the stack while drags, cancelled pointers, and long presses do not`, async (t) => {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    await revealCard(run);
+    const pointer = cardPointer(t, run);
+    pointer('pointerdown', 0, 0);
+    pointer('pointermove', 0.7, -0.6, 'mouse', 1);
+    drainFrames();
+    assertCardTilt(run, 0.144, -0.21);
+    pointer('pointerup', 0.7, -0.6);
+    drainFrames();
+    assert.equal(run.cardStates.at(-1)!.activeCardIndex, 0);
+    assert.equal(run.events.includes('swipe'), false);
+    pointer('pointerdown', 0, 0, 'touch');
+    pointer('pointermove', -0.5, 0.6, 'touch', 1);
+    pointer('pointercancel', -0.5, 0.6, 'touch');
+    drainFrames();
+    assertCardTilt(run, 0, 0);
+    pointer('pointerdown', 0, 0);
+    for (let move = 0; move < 13; move += 1) pointer('pointermove', 0, 0, 'mouse', 1);
+    pointer('pointerup', 0, 0);
+    drainFrames();
+    assert.equal(run.events.includes('swipe'), false);
+    pointer('pointerdown', 0, 0, 'touch');
+    pointer('pointerup', 0, 0, 'touch');
+    assert.equal(run.cardStates.at(-1)!.mode, 'cycling');
+    drainFrames();
+    assert.equal(run.cardStates.at(-1)!.activeCardIndex, 1);
+    assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => card.rotation.x === 0 && card.rotation.y === 0));
+    assert.equal(run.events.filter(event => event === 'swipe').length, 1);
+    assert.equal(run.events.includes('background'), false);
+  });
+
+  test(`${cardCount}-card row cards tilt independently and card taps keep the completed row displayed`, async (t) => {
+    const run = harness(true, { width: 1440, height: 900 }, cardCount);
+    await revealCard(run);
+    for (let index = 0; index < cardCount; index += 1) {
+      run.controller.activate();
+      drainFrames();
+    }
+    const resting = run.renderer.snapshots.at(-1)!.cards.map(card => card.matrix);
+    const pointer = cardPointer(t, run, 1);
+    pointer('pointermove', 0.7, -0.6);
+    drainFrames();
+    assertCardTilt(run, 0.144, -0.21, 1);
+    run.renderer.snapshots.at(-1)!.cards.forEach((card, index) => {
+      if (index !== 1) assert.deepEqual(card.matrix, resting[index]);
+    });
+    pointer('pointerdown', 0.7, -0.6);
+    pointer('pointerup', 0.7, -0.6);
+    drainFrames();
+    assert.equal(run.cardStates.at(-1)!.mode, 'row');
+    assert.deepEqual(run.events.filter(event => event === 'swipe' || event === 'spread'), expectedSounds);
+    run.controller.activate();
+    drainFrames();
+    assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => card.rotation.x === 0 && card.rotation.y === 0));
+    pointer('pointerdown', 0, 2, 'touch');
+    pointer('pointerup', 0, 2, 'touch');
+    drainFrames();
+    assert.equal(run.events.filter(event => event === 'background').length, 1);
+  });
+
+  test(`${cardCount}-card row hover stays stable at each card edge and resets outside its resting bounds`, async (t) => {
+    const run = harness(true, { width: 1440, height: 900 }, cardCount);
+    await revealCard(run);
+    for (let index = 0; index < cardCount; index += 1) {
+      run.controller.activate();
+      drainFrames();
+    }
+    for (let cardIndex = 0; cardIndex < cardCount; cardIndex += 1) {
+      const pointer = cardPointer(t, run, cardIndex);
+      for (const [x, y] of [[-0.99, 0], [0.99, 0], [0, -0.99], [0, 0.99]]) {
+        for (let move = 0; move < 6; move += 1) {
+          pointer('pointermove', x, y);
+          drainFrames();
+          assertCardTilt(run, -y * 0.24, -x * 0.3, cardIndex);
+          for (let other = 0; other < cardCount; other += 1) {
+            if (other !== cardIndex) assertCardTilt(run, 0, 0, other);
+          }
+        }
+      }
+      pointer('pointermove', 0, 1.05);
+      drainFrames();
+      assert.ok(run.renderer.snapshots.at(-1)!.cards.every(card => card.rotation.x === 0 && card.rotation.y === 0));
+    }
+  });
+
+  test(`the ${cardCount}-card row matches reference framing and fits square, desktop, phone, and landscape canvases`, async () => {
+    for (const viewport of [
+      { width: 900, height: 900 },
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+      { width: 844, height: 390 },
+    ]) {
+      const run = harness(true, viewport, cardCount);
+      await revealCard(run);
+      for (let index = 0; index < cardCount; index += 1) {
+        run.controller.activate();
+        drainFrames();
+      }
+      const targetRect = calcPonchoDrifellaRevealTargetRect(viewport.width, viewport.height);
+      const reference = ponchoDrifellaRevealOverlayStyleVars({
+        originRect: targetRect,
+        targetRect,
+        viewport: { ...viewport, left: 0, top: 0 },
+        cardCount,
+      });
+      const rowWidth = Number.parseFloat(reference['--poncho-card-row-width']!);
+      const rowHeight = Number.parseFloat(reference['--poncho-card-row-height']!);
+      const rowTop = Number.parseFloat(reference['--poncho-card-row-top']!);
+      const row = run.renderer.snapshots.at(-1)!.cards;
+      assert.equal(row.length, cardCount);
+      assert.equal(row.filter(card => card.visible).length, cardCount);
+      row.forEach((card, index) => {
+        const leftKey = `--poncho-card-row-left-${index}` as '--poncho-card-row-left-0' | '--poncho-card-row-left-1' | '--poncho-card-row-left-2';
+        assert.ok(Math.abs(card.bounds.min.x - Number.parseFloat(reference[leftKey]!)) <= 1);
+        assert.ok(Math.abs(card.bounds.min.y - rowTop) <= 1);
+        assert.ok(Math.abs(card.bounds.getSize(new THREE.Vector2()).x - rowWidth) <= 1);
+        assert.ok(Math.abs(card.bounds.getSize(new THREE.Vector2()).y - rowHeight) <= 1.001, `Card height at ${viewport.width}×${viewport.height}: received ${card.bounds.getSize(new THREE.Vector2()).y}, expected ${rowHeight}`);
+        assert.ok(card.bounds.getSize(new THREE.Vector2()).x <= viewport.width * (cardCount === 2 ? 0.36 : 0.21) + 1);
+        assert.ok(card.bounds.min.x >= 0 && card.bounds.max.x <= viewport.width);
+        assert.ok(card.bounds.min.y >= 0 && card.bounds.max.y <= viewport.height);
+      });
+      assert.equal(run.renderer.drawingBuffer.width, viewport.width);
+      assert.equal(Number.parseFloat(run.renderer.domElement.style.left), 0);
+      run.controller.dispose();
+    }
+  });
+
+  test(`reduced motion skips card travel and still progresses through the ${cardCount}-card sequence`, async () => {
+    setMediaQueryMatches(motionQuery, true);
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    await revealCard(run);
+    for (let index = 0; index < cardCount; index += 1) {
+      run.controller.activate();
+      advanceFrame();
+      assert.equal(run.cardStates.at(-1)!.transitioning, false);
+      assert.equal(run.cardStates.at(-1)!.mode, index < cardCount - 1 ? 'stack' : 'row');
+      assert.equal(frames.size, 0);
+    }
+    assert.deepEqual(run.events.filter(event => event === 'swipe' || event === 'spread'), expectedSounds);
+  });
+
+  test(`${cardCount}-card cycling pauses in hidden tabs without skipping the remaining animation on return`, async () => {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    await revealCard(run);
+    run.controller.activate();
+    for (let index = 0; index < 4; index += 1) advanceFrame(50);
+    const before = run.renderer.snapshots.at(-1)!.cards.map(card => card.matrix);
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+    assert.equal(frames.size, 0);
+    advanceFrame(60_000);
+    assert.deepEqual(run.renderer.snapshots.at(-1)!.cards.map(card => card.matrix), before);
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+    advanceFrame();
+    assert.equal(run.cardStates.at(-1)!.mode, 'cycling');
+    drainFrames();
+    assert.deepEqual(run.cardStates.at(-1), { mode: 'stack', activeCardIndex: 1, transitioning: false });
+    assert.equal(run.events.filter(event => event === 'swipe').length, 1);
+  });
+
+  test(`disposing a partially loaded ${cardCount}-card scene prevents late warming and state callbacks`, async () => {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    run.surfaces[0]!.loaded.resolve();
+    await flush();
+    const states = run.cardStates.slice();
+    run.controller.dispose();
+    run.controller.dispose();
+    run.surfaces.slice(1).forEach(surface => surface.loaded.resolve());
+    await flush();
+    assert.equal(run.renderer.compileCount, 0);
+    assert.equal(run.renderer.renders.length, 0);
+    assert.deepEqual(run.events, []);
+    assert.deepEqual(run.cardStates, states);
+    assert.ok(run.surfaces.every(surface => surface.disposeCount === 1));
+    assert.equal(run.host.children.length, 0);
+    run.controller.activate();
+    run.controller.setCardReady(true);
+    assert.equal(frames.size, 0);
+  });
+
+  test(`failure of one ${cardCount}-card surface blocks all warming and reports a single recoverable error`, async () => {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    run.surfaces[1]!.loaded.reject(new Error('Artwork failed'));
+    await flush();
+    run.surfaces.forEach((surface, index) => { if (index !== 1) surface.loaded.resolve(); });
+    await flush();
+    assert.deepEqual(run.events, ['error']);
+    assert.equal(run.renderer.compileCount, 0);
+    assert.equal(run.renderer.renders.length, 0);
+    run.controller.activate();
+    run.controller.setCardReady(true);
+    assert.equal(frames.size, 0);
+    run.controller.dispose();
+    assert.ok(run.surfaces.every(surface => surface.disposeCount === 1));
+  });
+}
+
+test('context loss while warming the second card prevents the third warm render and opening', async () => {
+  const run = harness(true, { width: 900, height: 900 }, 3);
+  let warmed = 0;
+  run.renderer.onRender = offscreen => {
+    if (offscreen && ++warmed === 2) run.renderer.loseContext();
+  };
+  await warmCard(run);
+  assert.equal(warmed, 2);
+  assert.deepEqual(run.events, ['error']);
+  assert.equal(run.renderer.target, null);
+  assert.equal(frames.size, 0);
+  run.controller.dispose();
+  assert.ok(run.surfaces.every(surface => surface.disposeCount === 1));
+});
+
+
+test('card faces occlude rear foil during opening and switch to ordered layering after reveal', async () => {
+  for (const cardCount of [1, 2, 3]) {
+    const run = harness(true, { width: 900, height: 900 }, cardCount);
+    await revealCard(run);
+    if (cardCount > 1) {
+      for (let index = 0; index < cardCount; index += 1) {
+        run.controller.activate();
+        drainFrames();
+      }
+    }
+    const visibleFrames = run.renderer.snapshots.filter(snapshot => !snapshot.offscreen
+      && snapshot.cards.some(card => card.visible));
+    const opening = visibleFrames.filter(snapshot => snapshot.packVisible);
+    const revealed = visibleFrames.filter(snapshot => !snapshot.packVisible);
+    assert.ok(opening.some(snapshot => snapshot.pose!.tear > 0 && snapshot.pose!.tear < 1));
+    assert.ok(opening.some(snapshot => snapshot.pose!.discard > 0 && snapshot.pose!.discard < 1));
+    assert.ok(revealed.length > 0);
+    for (const snapshot of opening) {
+      assert.ok(snapshot.cards.every(card => card.frontDepthWrite && card.backDepthWrite),
+        'Front and back faces must write depth while the foil can pass behind them');
+    }
+    for (const snapshot of revealed) {
+      assert.ok(snapshot.cards.every(card => !card.frontDepthWrite && !card.backDepthWrite),
+        'Revealed faces must use render order so tilted cards cannot cut through the stack');
+    }
+    run.controller.dispose();
+  }
 });

@@ -7,8 +7,9 @@ const restingPose: DogeFoilPackPose = { hit: 0, hitX: 0, hitY: 0, variant: 0, te
 
 function setupCanvas(t: TestContext) {
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const printedText: string[] = [];
   const context = {
-    fillText() {},
+    fillText(text: string) { printedText.push(text); },
     beginPath() {},
     moveTo() {},
     lineTo() {},
@@ -30,6 +31,7 @@ function setupCanvas(t: TestContext) {
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
     else Reflect.deleteProperty(globalThis, 'document');
   });
+  return printedText;
 }
 
 function meshes(group: THREE.Group) {
@@ -39,6 +41,19 @@ function meshes(group: THREE.Group) {
   });
   return result;
 }
+
+test('foil pack print reflects its selected card count', (t) => {
+  const printedText = setupCanvas(t);
+  const single = createDogeFoilPackModel();
+  t.after(() => single.dispose());
+  assert.ok(printedText.includes('1 CARD PACK'));
+  for (const cardCount of [2, 3] as const) {
+    printedText.length = 0;
+    const multiple = createDogeFoilPackModel(cardCount);
+    t.after(() => multiple.dispose());
+    assert.deepEqual(printedText.filter((text) => text.endsWith('CARD PACK')), [`${cardCount} CARD PACK`]);
+  }
+});
 
 test('foil pack stays within the mobile geometry budget with real front, back and rim depth', (t) => {
   setupCanvas(t);
