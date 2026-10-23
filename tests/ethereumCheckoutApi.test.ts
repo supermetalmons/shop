@@ -13,7 +13,7 @@ let dom: ReturnType<typeof setupFrontendDom>['dom'];
 beforeEach(() => { ({ dom } = setupFrontendDom()); });
 afterEach(() => { dom.window.close(); });
 
-function snapshot(state: string): EthereumCheckoutStatusResponse {
+function snapshot(state: string, callbackUrl = 'https://vvv.so/callback'): EthereumCheckoutStatusResponse {
   return {
     checkoutId, dropId: '111k_devnet', chainId: config.chainId, contractAddress: config.contractAddress!, config,
     tokenIds: ['1'], items: [{ id: ethereumAssetId(config.chainId, config.contractAddress!, '1'), chainId: config.chainId,
@@ -21,7 +21,7 @@ function snapshot(state: string): EthereumCheckoutStatusResponse {
       kind: 'crate', displayId: 1, name: 'Crate #1', image: 'data:image/svg+xml,%3Csvg%2F%3E' }],
     unavailableTokenIds: [], wallet: null, status: 'ready', orderId: null, transactionHash: null, confirmations: 0,
     requiredConfirmations: config.confirmationBlocks, quoteExpiresAtMs: null, attempt: null,
-    returnUrl: checkoutReturnUrl({ callbackUrl: 'https://vvv.so/callback', checkoutId, state,
+    returnUrl: checkoutReturnUrl({ callbackUrl, checkoutId, state,
       result: 'canceled', chainId: config.chainId }),
   };
 }
@@ -49,11 +49,24 @@ for (const operation of ['create', 'status'] as const) {
     await assert.rejects(request(), /invalid response/);
   });
 
+  test(`checkout ${operation} accepts return paths on both VVV origins`, async context => {
+    let response = snapshot('opaque');
+    context.mock.method(globalThis, 'fetch', async () => Response.json(response));
+    for (const host of ['vvv.so', 'www.vvv.so']) {
+      response = snapshot('opaque', `https://${host}/111k-sepolia-test/floor`);
+      const checkout = await request('opaque');
+      assert.equal(checkout.returnUrl, response.returnUrl);
+      assert.equal(new URL(checkout.returnUrl!).searchParams.get('state'), 'opaque');
+    }
+  });
+
   test(`checkout ${operation} still rejects unsafe callbacks`, async context => {
     let response = snapshot('opaque');
     context.mock.method(globalThis, 'fetch', async () => Response.json(response));
     for (const callback of ['https://evil.example/callback', 'https://user@vvv.so/callback',
-      'https://vvv.so:8443/callback', 'https://vvv.so/other', 'https://vvv.so/callback#fragment']) {
+      'https://vvv.so:8443/callback', 'https://other.vvv.so/111k', 'https://vvv.so/callback#fragment',
+      'http://www.vvv.so/111k', 'https://www.vvv.so.evil.example/111k', 'https://user@www.vvv.so/111k',
+      'https://www.vvv.so:8443/111k', 'https://www.vvv.so/111k#fragment']) {
       response = snapshot('opaque');
       const url = new URL(callback);
       url.search = new URL(response.returnUrl!).search;

@@ -327,6 +327,28 @@ test('checkout drafts are immutable, idempotent, unconnected previews with only 
   } finally { f.close(); }
 });
 
+test('checkout creation preserves every approved VVV path and callback result fields', async () => {
+  const f = fixture();
+  try {
+    for (const host of ['vvv.so', 'www.vvv.so']) {
+      for (const path of ['/', '/callback', '/111k', '/111k/floor', '/111k-sepolia-test', '/111k-sepolia-test/floor', '/any/nested/path/']) {
+        const callbackUrl = `https://${host}${path}`;
+        const created = await f.request<EthereumCheckoutStatusResponse>(checkoutPaths.create, {
+          requestId: crypto.randomUUID(), dropId: '111k_devnet', tokenIds: ['111112'], callbackUrl, state: 'caller+42/next',
+        });
+        assert.equal(created.response.status, 200, callbackUrl);
+        const returned = new URL(created.body.returnUrl!);
+        assert.equal(returned.origin, `https://${host}`);
+        assert.equal(returned.pathname, path);
+        assert.equal(returned.searchParams.get('checkout_id'), created.body.checkoutId);
+        assert.equal(returned.searchParams.get('result'), 'canceled');
+        assert.equal(returned.searchParams.get('chain_id'), String(created.body.chainId));
+        assert.equal(returned.searchParams.get('state'), 'caller+42/next');
+      }
+    }
+  } finally { f.close(); }
+});
+
 test('checkout draft writes use the narrow creation limiter without blocking public recovery reads', async () => {
   const f = fixture();
   try {
@@ -343,25 +365,29 @@ test('checkout draft writes use the narrow creation limiter without blocking pub
   } finally { f.close(); }
 });
 
-test('checkout status exposes no private data to VVV and does not open any mutation to that origin', async () => {
+test('checkout status exposes no private data to either VVV origin and does not open any mutation', async () => {
   const f = fixture();
   try {
     const ready = await preparedCheckout(f);
-    const result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`,
-      undefined, undefined, { origin: 'https://vvv.so' });
-    assert.equal(result.response.status, 200);
-    assert.equal(result.body.wallet, WALLET);
-    assert.equal(result.body.orderId, ready.prepared.orderId);
-    assert.equal(result.body.returnUrl, undefined);
-    const serialized = JSON.stringify(result.body);
-    for (const privateValue of ['encrypted-test-address', 'test@example.com', 'Test recipient', ADDRESS_ID, 'caller-order-42', ready.authentication.token]) {
-      assert.equal(serialized.includes(privateValue), false, privateValue);
+    for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
+      const result = await f.request<EthereumCheckoutStatusResponse>(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`,
+        undefined, undefined, { origin });
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.wallet, WALLET);
+      assert.equal(result.body.orderId, ready.prepared.orderId);
+      assert.equal(result.body.returnUrl, undefined);
+      const serialized = JSON.stringify(result.body);
+      for (const privateValue of ['encrypted-test-address', 'test@example.com', 'Test recipient', ADDRESS_ID, 'caller-order-42', ready.authentication.token]) {
+        assert.equal(serialized.includes(privateValue), false, privateValue);
+      }
+      for (const path of [checkoutPaths.create, checkoutPaths.prepare, checkoutPaths.submission, checkoutPaths.refresh, paths.profile, paths.authChallenge]) {
+        assert.equal((await f.request(path, {}, ready.authentication.token, { origin })).response.status, 403, path);
+      }
     }
-    for (const path of [checkoutPaths.create, checkoutPaths.prepare, checkoutPaths.submission, checkoutPaths.refresh, paths.profile, paths.authChallenge]) {
-      assert.equal((await f.request(path, {}, ready.authentication.token, { origin: 'https://vvv.so' })).response.status, 403, path);
+    for (const origin of ['https://evil.example', 'https://other.vvv.so', 'https://www.vvv.so.evil.example', 'http://www.vvv.so', 'https://www.vvv.so:8443']) {
+      assert.equal((await f.request(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`, undefined, undefined,
+        { origin })).response.status, 403, origin);
     }
-    assert.equal((await f.request(`${checkoutPaths.status}?checkoutId=${ready.checkout.checkoutId}`, undefined, undefined,
-      { origin: 'https://evil.example' })).response.status, 403);
     assert.equal((await f.request(checkoutPaths.prepare, { checkoutId: ready.checkout.checkoutId, addressId: ADDRESS_ID })).response.status, 401);
   } finally { f.close(); }
 });

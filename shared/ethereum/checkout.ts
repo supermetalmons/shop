@@ -70,6 +70,10 @@ export function normalizeCheckoutTokenIds(value: unknown): string[] {
   return (ids as string[]).sort((left, right) => BigInt(left) < BigInt(right) ? -1 : 1);
 }
 
+export function isEthereumCheckoutPartnerOrigin(origin: string): boolean {
+  return origin === 'https://vvv.so' || origin === 'https://www.vvv.so';
+}
+
 export function normalizeCheckoutCallback(value: unknown, origin: string): string {
   let source: URL;
   try { source = new URL(origin); } catch { throw new Error('Invalid checkout origin.'); }
@@ -82,10 +86,10 @@ export function normalizeCheckoutCallback(value: unknown, origin: string): strin
   if (raw.startsWith('/') && raw !== '/111k_devnet') throw new Error('This checkout return URL is not allowed.');
   let url: URL;
   try { url = new URL(raw, origin); } catch { throw new Error('Invalid checkout return URL.'); }
-  if (url.username || url.password || url.search || url.hash) throw new Error('This checkout return URL is not allowed.');
+  if (url.username || url.password || url.href.includes('?') || url.href.includes('#')) throw new Error('This checkout return URL is not allowed.');
   const internal = url.origin === origin && url.pathname === '/111k_devnet';
   const production = url.href === 'https://mons.shop/111k_devnet';
-  const partner = url.href === 'https://vvv.so/callback';
+  const partner = isEthereumCheckoutPartnerOrigin(url.origin);
   if (!internal && !production && !partner) throw new Error('This checkout return URL is not allowed.');
   return url.href;
 }

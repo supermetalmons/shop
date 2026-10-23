@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { formatEtherAmount } from '../../shared/ethereum/protocol';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
+import { isEthereumCheckoutPartnerOrigin } from '../../shared/ethereum/checkout';
 import { DeliveryForm } from '../components/DeliveryForm';
 import { ShopHeader } from '../components/ShopHeader';
 import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
@@ -29,7 +30,7 @@ export function CheckoutPageContent({ wallet, ...location }: CheckoutLocation & 
   if (model.uncertain && returnUrl) returnUrl.searchParams.set('result', 'pending');
   const canReturn = Boolean(returnUrl && (!model.busy || pending || terminal || model.uncertain));
   let returnLabel = 'Return to mons.shop';
-  if (checkout?.returnUrl && new URL(checkout.returnUrl).hostname === 'vvv.so') returnLabel = 'Return to VVV';
+  if (returnUrl && isEthereumCheckoutPartnerOrigin(returnUrl.origin)) returnLabel = 'Return to VVV';
   useEffect(() => { if (choosing) firstWallet.current?.focus(); }, [choosing]);
 
   return <div className="page">

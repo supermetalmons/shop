@@ -1,8 +1,9 @@
+import { isEthereumCheckoutPartnerOrigin } from '../../../../shared/ethereum/checkout.js';
 import { isAllowedProfileOrigin } from './profileReadSupport.js';
 import { EthereumApiError, ethereumErrorResponse } from './ethereumError.js';
 
 export function isAllowedEthereumCheckoutStatusOrigin(origin: string): boolean {
-  return origin === 'https://vvv.so' || isAllowedProfileOrigin(origin);
+  return isEthereumCheckoutPartnerOrigin(origin) || isAllowedProfileOrigin(origin);
 }
 
 export function applyEthereumCheckoutStatusCors(request: Request, response: Response): Response {

@@ -29,8 +29,16 @@ test('checkout entry rejects unsupported drops, duplicate query parameters and m
   assert.deepEqual(normalizeCheckoutTokenIds(['9007199254740993', '2']), ['2', '9007199254740993']);
 });
 
-test('checkout callbacks only allow exact registered endpoints and explicit local returns', () => {
-  for (const callback of ['https://vvv.so/callback', '/111k_devnet', 'https://mons.shop/111k_devnet']) {
+test('checkout callbacks allow every path on both VVV origins and explicit Mons returns', () => {
+  for (const host of ['vvv.so', 'www.vvv.so']) {
+    for (const path of ['', '/', '/callback', '/111k', '/111k/floor', '/111k-sepolia-test', '/111k-sepolia-test/floor', '/any/nested/path/']) {
+      const callback = `https://${host}${path}`;
+      assert.equal(normalizeCheckoutCallback(callback, origin), new URL(callback).href);
+      const search = new URLSearchParams({ drop: '111k_devnet', ids: '1', callback_url: callback });
+      assert.equal(parseCheckoutEntry(`?${search}`, origin).callbackUrl, new URL(callback).href);
+    }
+  }
+  for (const callback of ['/111k_devnet', 'https://mons.shop/111k_devnet']) {
     assert.equal(normalizeCheckoutCallback(callback, origin), new URL(callback, origin).href);
   }
   assert.equal(normalizeCheckoutCallback(undefined, 'http://localhost:5173'), 'http://localhost:5173/111k_devnet');
@@ -38,7 +46,10 @@ test('checkout callbacks only allow exact registered endpoints and explicit loca
     'https://candidate-mons-shop.lil-org.workers.dev/111k_devnet');
   for (const callback of ['https://evil.example/callback', 'https://vvv.so.evil.example/callback',
     'https://vvv.so@evil.example/callback', 'https://user@vvv.so/callback', 'https://vvv.so/callback?next=https://evil.example',
-    'https://vvv.so/callback#fragment', 'https://vvv.so/other', 'http://vvv.so/callback', 'https://vvv.so:8443/callback',
+    'https://vvv.so/callback#fragment', 'https://other.vvv.so/111k', 'http://vvv.so/callback', 'https://vvv.so:8443/callback',
+    'http://www.vvv.so/111k', 'https://www.vvv.so.evil.example/111k', 'https://user:pass@www.vvv.so/111k',
+    'https://www.vvv.so:8443/111k', 'https://www.vvv.so/111k?next=elsewhere', 'https://www.vvv.so/111k#fragment',
+    'https://vvv.so/111k?', 'https://www.vvv.so/111k#', '//vvv.so/111k',
     '//evil.example', '/111k_devnet?next=evil', 'javascript:alert(1)', 'data:text/html,test',
     'https://mons.shop/other', 'https://localhost/111k_devnet', ' https://vvv.so/callback']) {
     assert.throws(() => normalizeCheckoutCallback(callback, origin), undefined, callback);

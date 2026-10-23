@@ -125,6 +125,17 @@ test('disconnected checkout previews selected items and never falls back to SOL 
   assert.equal(submissions.length, 0);
 });
 
+for (const host of ['vvv.so', 'www.vvv.so']) {
+  test(`checkout labels and preserves the return destination on ${host}`, async () => {
+    server.returnUrl = checkoutReturnUrl({ callbackUrl: `https://${host}/111k-sepolia-test/floor`, checkoutId,
+      result: 'canceled', state: 'caller-42', chainId: config.chainId });
+    const view = render(createElement(QueryClientProvider, { client: client() },
+      createElement(CheckoutPageContent, { checkoutId, search: '', wallet: wallet(null) })));
+    const link = await view.findByRole('link', { name: 'Return to VVV' });
+    assert.equal((link as HTMLAnchorElement).href, server.returnUrl);
+  });
+}
+
 test('switching from a wrong wallet preserves the address draft and exact selected items', async () => {
   const query = client();
   const tree = (currentWallet: EthereumWallet) => createElement(QueryClientProvider, { client: query },

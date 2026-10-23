@@ -138,22 +138,29 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
       assert.match(preflight.headers.get('access-control-allow-headers') || '', /X-Mons-Ethereum-Session/i);
       assert.match(preflight.headers.get('access-control-allow-headers') || '', /X-Mons-CSRF/i);
     }
-    const resultPreflight = await worker.fetch(`https://api.mons.shop${checkoutPaths.status}`, {
-      method: 'OPTIONS', headers: { Origin: 'https://vvv.so', 'Access-Control-Request-Method': 'GET' },
-    });
-    assert.equal(resultPreflight.status, 204);
-    assert.equal(resultPreflight.headers.get('access-control-allow-origin'), 'https://vvv.so');
-    assert.equal(resultPreflight.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
-    assert.doesNotMatch(resultPreflight.headers.get('access-control-allow-headers') || '', /Session|Authorization/i);
-    const missingCheckout = await worker.fetch(`https://api.mons.shop${checkoutPaths.status}?checkoutId=10000000-0000-4000-8000-000000000001`, {
-      headers: { Origin: 'https://vvv.so', 'CF-Connecting-IP': '203.0.113.42' },
-    });
-    assert.equal(missingCheckout.status, 404);
-    assert.equal(missingCheckout.headers.get('access-control-allow-origin'), 'https://vvv.so');
-    for (const path of [checkoutPaths.create, checkoutPaths.prepare, checkoutPaths.submission, checkoutPaths.refresh, paths.profile, paths.authChallenge]) {
-      const forbidden = await worker.fetch(`https://api.mons.shop${path}`, { method: 'OPTIONS', headers: { Origin: 'https://vvv.so' } });
-      assert.equal(forbidden.status, 403, path);
-      assert.notEqual(forbidden.headers.get('access-control-allow-origin'), 'https://vvv.so');
+    for (const origin of ['https://vvv.so', 'https://www.vvv.so']) {
+      const resultPreflight = await worker.fetch(`https://api.mons.shop${checkoutPaths.status}`, {
+        method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'GET' },
+      });
+      assert.equal(resultPreflight.status, 204);
+      assert.equal(resultPreflight.headers.get('access-control-allow-origin'), origin);
+      assert.equal(resultPreflight.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
+      assert.doesNotMatch(resultPreflight.headers.get('access-control-allow-headers') || '', /Session|Authorization/i);
+      const missingCheckout = await worker.fetch(`https://api.mons.shop${checkoutPaths.status}?checkoutId=10000000-0000-4000-8000-000000000001`, {
+        headers: { Origin: origin, 'CF-Connecting-IP': '203.0.113.42' },
+      });
+      assert.equal(missingCheckout.status, 404);
+      assert.equal(missingCheckout.headers.get('access-control-allow-origin'), origin);
+      for (const path of [checkoutPaths.create, checkoutPaths.prepare, checkoutPaths.submission, checkoutPaths.refresh, paths.profile, paths.authChallenge]) {
+        const forbidden = await worker.fetch(`https://api.mons.shop${path}`, { method: 'OPTIONS', headers: { Origin: origin } });
+        assert.equal(forbidden.status, 403, path);
+        assert.notEqual(forbidden.headers.get('access-control-allow-origin'), origin);
+      }
+    }
+    for (const origin of ['https://other.vvv.so', 'https://www.vvv.so.evil.example', 'http://www.vvv.so', 'https://www.vvv.so:8443']) {
+      const forbidden = await worker.fetch(`https://api.mons.shop${checkoutPaths.status}`, { method: 'OPTIONS', headers: { Origin: origin } });
+      assert.equal(forbidden.status, 403, origin);
+      assert.notEqual(forbidden.headers.get('access-control-allow-origin'), origin);
     }
     const publicConfig = await worker.fetch(`https://api.mons.shop${paths.config}`, { headers: { Origin: ORIGIN } });
     assert.equal(publicConfig.status, 200);
