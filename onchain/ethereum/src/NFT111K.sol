@@ -34,6 +34,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     uint256 public constant MAX_ARTWORKS = 111_111;
+    address public constant SEAPORT = 0x0000000000000068F116a894984e2DB1123eB395;
     uint256 public constant MAX_CRATES = 5_555;
     uint256 public constant MAX_WAREHOUSES = 505;
     uint256 public constant CRATES_PER_WAREHOUSE = 11;
@@ -78,6 +79,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
     mapping(address => uint256) public discountUsed;
+    mapping(address => bool) private seaportApprovalRevoked;
     uint24 private transient pendingArtworkOffset;
 
     error InvalidQuantity();
@@ -297,6 +299,18 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     function approve(address to, uint256 tokenId) public payable override {
         if (msg.value != 0) revert WrongPayment();
         super.approve(to, tokenId);
+    }
+
+    function isApprovedForAll(address holder, address operator) public view override returns (bool) {
+        if (operator == SEAPORT && (block.chainid == 1 || block.chainid == 11155111)) {
+            return !seaportApprovalRevoked[holder];
+        }
+        return super.isApprovedForAll(holder, operator);
+    }
+
+    function setApprovalForAll(address operator, bool approved) public override {
+        if (operator == SEAPORT) seaportApprovalRevoked[_msgSenderERC721A()] = !approved;
+        super.setApprovalForAll(operator, approved);
     }
 
     function transferFrom(address from, address to, uint256 tokenId) public payable override {

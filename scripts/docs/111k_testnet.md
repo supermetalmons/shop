@@ -92,7 +92,7 @@ Local deployment loads the committed root from `src/ethereum/discounts/111k.json
 
 ## Sepolia configuration
 
-The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) records the replacement collection at `0x3fc9f53200d3f025dfd046490b744747749a7b54`, deployed at Sepolia block `11963848`. The [discount release](../../releases/111k-sepolia-discounts/README.md) and [first Sepolia release](../../releases/111k-sepolia/README.md) remain historical records; both older collections remain active onchain. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
+The [Seaport release](../../releases/111k-sepolia-seaport/README.md) records the replacement collection at `0xea8f813d8844cfdd6bd917e2efda0b18c0c79497`, deployed at Sepolia block `11978544`, with default Seaport 1.6 approval and holder revocation. The [proceeds release](../../releases/111k-sepolia-proceeds/README.md), [discount release](../../releases/111k-sepolia-discounts/README.md), and [first Sepolia release](../../releases/111k-sepolia/README.md) remain historical records; all three older collections remain active onchain. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |
@@ -125,7 +125,7 @@ npm run reset:ethereum111k -- --chain-id 11155111 --old-contract OLD_ADDRESS --e
 npm run reset:ethereum111k -- --chain-id 11155111 --old-contract OLD_ADDRESS --expected-revision REVISION --reset-id RESET_UUID --write
 ```
 
-The write command rebuilds its snapshot, saves a private backup under `~/.mons-shop-backups/ethereum111k`, and deletes only the specified deployment's quotes, claims, cursor, and corresponding delivery projections/recovery records in one guarded batch. Unexpected outboxes, inventory, pack-status history, reveal submissions, or another deployment's documents stop the reset. Shared profiles, addresses, authentication data, and concurrency tombstones are preserved. If a response is uncertain, inspect status and rerun with the same reset ID to reconcile the recorded outcome.
+The write command rebuilds its snapshot, saves a private backup under `~/.mons-shop-backups/ethereum111k`, and deletes only the specified deployment's quotes, checkouts, checkout attempts, claims, cursor, and corresponding delivery projections/recovery records in one guarded batch. Unexpected outboxes, inventory, pack-status history, reveal submissions, or another deployment's documents stop the reset. Shared profiles, addresses, authentication data, and concurrency tombstones are preserved. If a response is uncertain, inspect status and rerun with the same reset ID to reconcile the recorded outcome.
 
 After verifying the reset and publishing the matching frontend, resume using the new contract and current revision:
 

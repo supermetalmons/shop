@@ -1,0 +1,330 @@
+{
+  "schemaVersion": 1,
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "chainId": 11155111,
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "frozenAt": "2026-10-23T18:44:02.376Z",
+  "sourceRevision": null,
+  "frozenBaseRevision": "4364727013a19090ea528b662607e1ac36064cd8",
+  "sourceAttribution": {
+    "status": "frozen-working-tree",
+    "reason": "Exact sources were frozen from a working tree before a matching source commit was recorded; use the frozen hashes to identify deployed content."
+  },
+  "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+  "authorizationSigner": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "proceedsPath": "onchain/ethereum/config/proceeds.json",
+  "proceedsSha256": "a2526ac727f44d32328f83f3e53d58fe23cc17977aad9fb75fbb8d8d89eacfeb",
+  "historicalContracts": [
+    "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+    "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+    "0x6acc38d2ab61a06882be5d964a69efefe23058b3"
+  ],
+  "rendererAddress": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+  "seaportAddress": "0x0000000000000068f116a894984e2db1123eb395",
+  "previousContract": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+  "constructorTypes": [
+    "address",
+    "address",
+    "address",
+    "address",
+    "bytes32",
+    "address[]",
+    "uint256[]"
+  ],
+  "constructorValues": [
+    "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+    "0x5555555555555555555555555555555555555555",
+    "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    [
+      5000,
+      2500,
+      1500,
+      1000
+    ]
+  ],
+  "constructorArguments": "000000000000000000000000d58d143ca63d9baccc33fdf69ea203f59c58ae93000000000000000000000000cc4c8bfd93af9f36d46215a0206954bf6a14c3ca000000000000000000000000555555555555555555555555555555555555555500000000000000000000000008cded8258730bda384ff198001e47a1b50f7f9d8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000180000000000000000000000000000000000000000000000000000000000000000400000000000000000000000011111111111111111111111111111111111111110000000000000000000000002222222222222222222222222222222222222222000000000000000000000000333333333333333333333333333333333333333300000000000000000000000044444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000138800000000000000000000000000000000000000000000000000000000000009c400000000000000000000000000000000000000000000000000000000000005dc00000000000000000000000000000000000000000000000000000000000003e8",
+  "constructorArgumentsEncoding": "ABI-encoded hexadecimal without the 0x prefix",
+  "frozenFilesSha256": {
+    "NFT111K.artifact.json": "e6e6942e92f2e9c423529e631dba7ecbffd40b148a765ddb459953234f85e8dd",
+    "NFT111K.standard-input.json": "5d22ecaba1e3844bbdfea9687ec8f258aca41661f94f8ed469147475bafc69e2",
+    "NFT111K.compiler-output.json": "97f5410c7fa5b8cc55090a4dd361a7d2b16956f869ec423d6f3c5f9102919ae3",
+    "NFT111KRenderer.artifact.json": "3673b088f2abf3e3a3bf436a425458b4b4b5a94b349638a0fedfcfaab482eb14",
+    "NFT111KRenderer.standard-input.json": "b3608093136e06fefdb106d67f553057eb32bb40e6d017689e443ab704b1915a",
+    "NFT111KRenderer.compiler-output.json": "e0c530a6753954ae2f776be0d02612f005822bbf44f7a219ae59aefa633547fe",
+    "proceeds.config.json": "a2526ac727f44d32328f83f3e53d58fe23cc17977aad9fb75fbb8d8d89eacfeb",
+    "NFT111K.constructor-arguments.txt": "6f3273bbb2f0febbaf27007831faca845383c03ce67d41ccfff348c54e5b9e7a"
+  },
+  "sourceHashes": {
+    "node_modules/@openzeppelin/contracts/access/Ownable.sol": {
+      "sha256": "38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81",
+      "keccak256": "0xff6d0bb2e285473e5311d9d3caacb525ae3538a80758c10649a4d61029b017bb"
+    },
+    "node_modules/@openzeppelin/contracts/access/Ownable2Step.sol": {
+      "sha256": "c75345d7b9feef17ae29f2a800ca2f65f8021cf80436a41d6ec00f57f5180f36",
+      "keccak256": "0xdcad8898fda432696597752e8ec361b87d85c82cb258115427af006dacf7128c"
+    },
+    "node_modules/@openzeppelin/contracts/interfaces/IERC5267.sol": {
+      "sha256": "f89772d2d4fafcbef8b73bb10ee9a3373edec2eedb2f1b302320915b351dc3d1",
+      "keccak256": "0xfb223a85dd0b2175cfbbaa325a744e2cd74ecd17c3df2b77b0722f991d2725ee"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Bytes.sol": {
+      "sha256": "3ce9120a27934c75a074cb785d3a88868069ef6529dbe4dc6b845af0836f3c70",
+      "keccak256": "0xf80e4b96b6849936ea0fabd76cf81b13d7276295fddb1e1c07afb3ddf650b0ac"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Context.sol": {
+      "sha256": "847fda5460fee70f56f4200f59b82ae622bb03c79c77e67af010e31b7e2cc5b6",
+      "keccak256": "0x493033a8d1b176a037b2cc6a04dad01a5c157722049bbecf632ca876224dd4b2"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Panic.sol": {
+      "sha256": "270fc8401c1a13fae6a7a4a2dd6e381b95d658896701e51f0d3e2688acab3dec",
+      "keccak256": "0xf7fe324703a64fc51702311dc51562d5cb1497734f074e4f483bfb6717572d7a"
+    },
+    "node_modules/@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol": {
+      "sha256": "cff7c20aed945d939b764d876adbd42e1b7725d62d5b1f2bd303db237567b575",
+      "keccak256": "0x8b95459390767d84c984d18faee298ce913e69cf0be8d2fe7785e2ad487ffed8"
+    },
+    "node_modules/@openzeppelin/contracts/utils/ShortStrings.sol": {
+      "sha256": "1cfa08d3c551e9ec0b9cd249b09987f04e7e90f352e1a5e3b0d6a3bc426b3de7",
+      "keccak256": "0x0768b3bdb701fe4994b3be932ca8635551dfebe04c645f77500322741bebf57c"
+    },
+    "node_modules/@openzeppelin/contracts/utils/StorageSlot.sol": {
+      "sha256": "75704538dcb223239280c6726d9a31cf769a7816718517c997fc7d63bdb70778",
+      "keccak256": "0xcf74f855663ce2ae00ed8352666b7935f6cddea2932fdf2c3ecd30a9b1cd0e97"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Strings.sol": {
+      "sha256": "e318709bbe73a7831d64c1351e8bdc43780b245f25191234e361e6ab9b98c67b",
+      "keccak256": "0x1fdc2de9585ab0f1c417f02a873a2b6343cd64bb7ffec6b00ffa11a4a158d9e8"
+    },
+    "node_modules/@openzeppelin/contracts/utils/TransientSlot.sol": {
+      "sha256": "ea92f361d697ba8b1fbd322b4d84b989998862c21fbebfa4b45289dc94a9eea2",
+      "keccak256": "0xac673fa1e374d9e6107504af363333e3e5f6344d2e83faf57d9bfd41d77cc946"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/ECDSA.sol": {
+      "sha256": "ba7c2d314fcd61c9783e0b3f0c664d004b76b408fda6a84edc8267d17c5012d6",
+      "keccak256": "0xbeb5cad8aaabe0d35d2ec1a8414d91e81e5a8ca679add4cf57e2f33476861f40"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/EIP712.sol": {
+      "sha256": "2845caaaf70757b6cce612ae4ffbec2c382cb3d1cb9765c98fa649c0f5f1c794",
+      "keccak256": "0x8440117ea216b97a7bad690a67449fd372c840d073c8375822667e14702782b4"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/Hashes.sol": {
+      "sha256": "ecdbce11c5ecdf32b306e26b8ab1b878327c08154b4ccd04518b6b64b298cf31",
+      "keccak256": "0x8cbd338f083224b4b6f0ff42cbda641a0a6c31ffcdca197452b97fe4d0918269"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/MerkleProof.sol": {
+      "sha256": "fd5635e85da7518bf1a153eaa99d3fad8bb6700f9d5d9cb70ddde75935cb122c",
+      "keccak256": "0x5e27273c7ebdbcfe7d2bad2866feb635a49db139abfe5643bdeacec4a0880225"
+    },
+    "node_modules/@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol": {
+      "sha256": "538a0d7c4f0ec5a8562f58561890f7b49d14580674ecf58bc5f505b45c73df65",
+      "keccak256": "0x6d8579873b9650426bfbd2a754092d1725049ca05e4e3c8c2c82dd9f3453129d"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/Math.sol": {
+      "sha256": "bdfdbe133991c0c78042957ff5cd97167926fcaf6d15664f3835a076cb066457",
+      "keccak256": "0x59973a93b1f983f94e10529f46ca46544a9fec2b5f56fb1390bbe9e0dc79f857"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol": {
+      "sha256": "5779bc848bde39f1ad7bc02b4f708a0040888e0083b1a33f119cd94639350134",
+      "keccak256": "0xc8cae21c9ae4a46e5162ff9bf5b351d6fa6a6eba72d515f3bc1bdfeda7fdf083"
+    },
+    "node_modules/@openzeppelin/contracts/utils/math/SignedMath.sol": {
+      "sha256": "1ed50b1056af886752f0fb48a0165d381e69bb4a4b18b893b066dc144a7e08d7",
+      "keccak256": "0xb1970fac7b64e6c09611e6691791e848d5e3fe410fa5899e7df2e0afd77a99e3"
+    },
+    "node_modules/erc721a/contracts/ERC721A.sol": {
+      "sha256": "79a309548fceac7996545154fc705947728932b187794e4de4fd9c354b156ac0",
+      "keccak256": "0xede758d13ccce2f54a4bcd16816456109b290759d43988205539cf632f4c8a55"
+    },
+    "node_modules/erc721a/contracts/IERC721A.sol": {
+      "sha256": "cd411799895996e5c1ec6074306ef0b75c42e8ae1b969aa36757640433fdc144",
+      "keccak256": "0xc9a2a00612e0d121aef3f716877ada17177d5b2d5a4c780d22cade46da2ff294"
+    },
+    "src/INFT111KRenderer.sol": {
+      "sha256": "25ee08675b3b8fa174d800d0a8fd59663a82631d2bf5231eab6dca8a727c769d",
+      "keccak256": "0xa4094a12cf6ae6decdd29de37093b5515e22d4c799abeaa6961215d3af4c3d33"
+    },
+    "src/NFT111K.sol": {
+      "sha256": "51b3dd963e1ade1a56f503f2a86a14e9b20db93c464bdbdb7aa6aa75b7bd2368",
+      "keccak256": "0x42b6f544d6ecefa93cef1fa678b5c9966c1743a47faf343e58aedbe574e6f47a"
+    },
+    "node_modules/@openzeppelin/contracts/utils/Base64.sol": {
+      "sha256": "1c143572893f50f04fe8e507d89f9997cd3242102ba4200c8de0803ecbaf8cec",
+      "keccak256": "0xe802369c4d2d254590d371eca16c8d247d7e0782ad2faaaa0180159ea8e736af"
+    },
+    "src/NFT111KRenderer.sol": {
+      "sha256": "1cd6f937209b65f6163c75d3397196dc3828aee8f92b1884c47e0ed0f9b614cf",
+      "keccak256": "0xe4823d2c7059cef69728052395b4da63daa39eb1564b9e5a2de2adbcd45f40aa"
+    }
+  },
+  "compiledContracts": {
+    "NFT111K": {
+      "fullyQualifiedName": "src/NFT111K.sol:NFT111K",
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "sourceCount": 23,
+      "settings": {
+        "remappings": [
+          "@openzeppelin/=node_modules/@openzeppelin/",
+          "erc721a/=node_modules/erc721a/"
+        ],
+        "optimizer": {
+          "enabled": true,
+          "runs": 1000
+        },
+        "metadata": {
+          "bytecodeHash": "none"
+        },
+        "evmVersion": "prague",
+        "libraries": {},
+        "viaIR": false,
+        "outputSelection": {
+          "*": {
+            "*": [
+              "abi",
+              "evm.bytecode",
+              "evm.deployedBytecode",
+              "metadata"
+            ]
+          }
+        }
+      },
+      "creationBytes": 22441,
+      "runtimeBytes": 20021,
+      "creationSha256": "cb63077c800aa283da361caab3baa0720ed5d845b42744531c2a69591a66f8ef",
+      "runtimeSha256": "bb3c73a47b4d0bf4f745a5dace2d01018cdf52e98691cd90a3be3bd7291236d9",
+      "immutableReferences": {
+        "3946": [
+          {
+            "start": 15848,
+            "length": 32
+          }
+        ],
+        "3948": [
+          {
+            "start": 15806,
+            "length": 32
+          }
+        ],
+        "3950": [
+          {
+            "start": 15764,
+            "length": 32
+          }
+        ],
+        "3952": [
+          {
+            "start": 15929,
+            "length": 32
+          }
+        ],
+        "3954": [
+          {
+            "start": 15969,
+            "length": 32
+          }
+        ],
+        "3957": [
+          {
+            "start": 13202,
+            "length": 32
+          }
+        ],
+        "3960": [
+          {
+            "start": 13247,
+            "length": 32
+          }
+        ]
+      }
+    },
+    "NFT111KRenderer": {
+      "fullyQualifiedName": "src/NFT111KRenderer.sol:NFT111KRenderer",
+      "compilerVersion": "0.8.30+commit.73712a01",
+      "sourceCount": 9,
+      "settings": {
+        "remappings": [
+          "@openzeppelin/=node_modules/@openzeppelin/",
+          "erc721a/=node_modules/erc721a/"
+        ],
+        "optimizer": {
+          "enabled": true,
+          "runs": 1000
+        },
+        "metadata": {
+          "bytecodeHash": "none"
+        },
+        "evmVersion": "prague",
+        "libraries": {},
+        "viaIR": false,
+        "outputSelection": {
+          "*": {
+            "*": [
+              "abi",
+              "evm.bytecode",
+              "evm.deployedBytecode",
+              "metadata"
+            ]
+          }
+        }
+      },
+      "creationBytes": 11803,
+      "runtimeBytes": 11775,
+      "creationSha256": "2a584ef921702ef2799758736a1c5e0e3c432707b25b71fc4680ad1f1e1c5642",
+      "runtimeSha256": "1b2d34d1015ec1ec2baea16fa206ed84d0994a2186094f326e1917b7a723dba4"
+    }
+  },
+  "reusedRenderer": {
+    "address": "0x08cded8258730bda384ff198001e47a1b50f7f9d",
+    "sourceRevision": "972d74785b28e7e3e9d1c329439c94dfe0ea766a",
+    "priorRelease": "../111k-sepolia",
+    "redeployed": false
+  },
+  "allowlist": {
+    "root": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "recipientCount": 318,
+    "artifactPath": "src/ethereum/discounts/111k.json",
+    "artifactSha256": "a1daf47d60ed412c5ca8109cf3ce1510c88309749d94dd0e8bc8a71e5aa36186",
+    "provenance": {
+      "chainId": 1,
+      "collection": "0x30f9efa712dde239a13a5fef1a8c7a6ac530a26d",
+      "blockNumber": 26235186,
+      "blockHash": "0x4824847005691067d1c180f178b124fb5224a318c54fd663bd2f6b9356a3ae6d",
+      "blockTimestamp": "2026-10-20T17:07:35.000Z",
+      "firstTokenId": 1,
+      "lastTokenId": 1369,
+      "totalSupply": 1369,
+      "holderCount": 317,
+      "additionalAddresses": [
+        "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe"
+      ],
+      "addressCount": 318,
+      "addressesSha256": "7c8b77956cacdd8ca566bd7fd112ec052f196db3e6d7c4a996f391b58be35a99"
+    },
+    "provenanceSha256": "fcc1d44b2e8717963bc68d44759c32c81a529f1ce757ead69f5c8ea3160d0247",
+    "holdersSha256": "2ffc544e2a7594e0ed6117eb1bef2dc55ec95396ddc1e455ef0dcfbabdd93240",
+    "regeneratesFrozenArtifact": true
+  },
+  "releaseStatus": "in-progress"
+}

@@ -224,6 +224,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "SEAPORT",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "WAREHOUSE_TOKEN_START",
     "inputs": [],
     "outputs": [
@@ -536,7 +549,7 @@ export const nft111KAbi = [
     "name": "isApprovedForAll",
     "inputs": [
       {
-        "name": "owner",
+        "name": "holder",
         "type": "address",
         "internalType": "address"
       },

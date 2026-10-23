@@ -1,0 +1,17 @@
+{
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "manifestSha256": "402761b5e2fcbbc5bdad3f7a8c90e50c7de2ac102158c2e248394948838d8380",
+  "chainId": 11155111,
+  "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "status": "verified",
+  "matchType": "exact",
+  "observedText": "Source Code Verified (Exact Match)",
+  "contractName": "NFT111K",
+  "compilerVersion": "v0.8.30+commit.73712a01",
+  "method": "Etherscan browser standard JSON upload",
+  "url": "https://sepolia.etherscan.io/address/0xea8f813d8844cfdd6bd917e2efda0b18c0c79497#code",
+  "verifiedAt": "2026-10-23T18:52:58.014Z",
+  "sourceInputSha256": "5d22ecaba1e3844bbdfea9687ec8f258aca41661f94f8ed469147475bafc69e2",
+  "constructorArgumentsSha256": "6f3273bbb2f0febbaf27007831faca845383c03ce67d41ccfff348c54e5b9e7a",
+  "screenshot": "etherscan-exact-match.png"
+}

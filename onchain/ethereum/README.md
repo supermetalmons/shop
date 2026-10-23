@@ -2,7 +2,7 @@
 
 An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata renderer. Mint recipients and their shares are fixed at deployment.
 
-The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) records the new collection and its verification. The [first Sepolia deployment](../../releases/111k-sepolia/README.md) remains the renderer's deployment record. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
+The [Seaport release](../../releases/111k-sepolia-seaport/README.md) records the latest collection and its verification. The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) remains a historical collection record, and the [first Sepolia deployment](../../releases/111k-sepolia/README.md) remains the renderer's deployment record. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
 Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving shipping-wallet rotation and emergency controls. Proceeds releases are permissionless. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
@@ -78,6 +78,24 @@ The helper reads `.local/deployment.json`, injects the public local test signer,
 Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
 
 `script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, and `ETHEREUM_111K_DISCOUNT_ROOT`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+
+## Seaport trading
+
+Future deployments automatically approve Seaport 1.6 at `0x0000000000000068F116a894984e2DB1123eB395` on Ethereum mainnet (chain ID 1) and Sepolia (11155111). `isApprovedForAll(holder, SEAPORT)` returns true by default, allowing direct Seaport trades without an initial `setApprovalForAll` transaction. Other chains, including local Anvil, retain explicit approvals. Existing deployments are non-upgradeable and retain their original approval behavior.
+
+Each holder can revoke this default with `setApprovalForAll(SEAPORT, false)` and restore it with `setApprovalForAll(SEAPORT, true)`. These calls emit the standard `ApprovalForAll` event. Revocation remains in effect for that wallet across mints, unboxing, redemption, and incoming transfers. Other holders retain their own approval settings. As with ordinary ERC721 approvals, revoking an operator does not clear a separately granted token-specific approval.
+
+The fixed Seaport operator is authorized for every token kind: artworks, crates, warehouses, and receipts. Seaport still validates order authorization and settlement; a seller normally signs an offchain listing and the buyer submits the fulfillment transaction. Unboxing, delivery, and receipt claims still require the actual token owner. The collection owner cannot replace or extend the automatically approved operator.
+
+The NFT transfer must use direct Seaport routing: a seller's listing uses a zero `conduitKey`, while a seller accepting an offer uses a zero `fulfillerConduitKey`. Conduits, including OpenSea's conduit, require separate explicit approvals. Integrations must query `isApprovedForAll` before requesting approval; the default permission does not emit an initial `ApprovalForAll` event. This removes the NFT approval step only; ERC20 payment approvals and settlement transactions retain their normal requirements.
+
+`NFT111KSeaportTest` covers automatic approvals, transfers, revocation, other operators and chains, and owner-only product actions offline. The optional fork suite checks signed order fulfillment, invalid signatures, and revocation against the deployed Seaport 1.6 contract. Set `ETHEREUM_RPC_URL` to an Ethereum mainnet or Sepolia RPC and run:
+
+```sh
+forge test --offline --match-contract '^NFT111KSeaportForkTest$' --fork-url "$ETHEREUM_RPC_URL" --gas-snapshot-emit=false
+```
+
+These tests deploy and trade only inside the local fork. They are explicitly skipped in ordinary offline runs without an active fork. Add `--fork-block-number` to pin a reproducible chain snapshot.
 
 ## Mint splits and delivery proceeds
 

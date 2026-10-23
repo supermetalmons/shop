@@ -1,0 +1,138 @@
+{
+  "validatedAt": "2026-10-23T18:49:22.056Z",
+  "baseCommit": "4364727013a19090ea528b662607e1ac36064cd8",
+  "contractSourceSha256": "51b3dd963e1ade1a56f503f2a86a14e9b20db93c464bdbdb7aa6aa75b7bd2368",
+  "environment": {
+    "node": "v26.5.0",
+    "npm": "11.17.0",
+    "wrangler": "4.120.0"
+  },
+  "checks": [
+    {
+      "command": "npm --prefix onchain/ethereum run build",
+      "status": "passed"
+    },
+    {
+      "command": "node onchain/ethereum/scripts/generate-abi.mjs --check",
+      "status": "passed"
+    },
+    {
+      "command": "npm run test:ethereum",
+      "status": "passed",
+      "counts": {
+        "contractPassed": 142,
+        "localForkSkipped": 3,
+        "gasBenchmarks": 113,
+        "clientPassed": 474
+      }
+    },
+    {
+      "command": "forge test --offline --match-contract ^NFT111KSeaportForkTest$ --fork-url [RPC] --fork-block-number 26257031 --gas-snapshot-emit=false",
+      "network": "mainnet",
+      "status": "passed",
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "command": "forge test --offline --match-contract ^NFT111KSeaportForkTest$ --fork-url [RPC] --fork-block-number 11978371 --gas-snapshot-emit=false",
+      "network": "sepolia",
+      "status": "passed",
+      "counts": {
+        "passed": 3,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "command": "npm run test:ethereum:e2e",
+      "status": "passed",
+      "counts": {
+        "scenarios": 37
+      }
+    },
+    {
+      "command": "npm run check",
+      "status": "initial_typecheck_tools_failure_resolved_by_targeted_repair",
+      "passedBeforeFailure": [
+        "types:frontend-worker:check",
+        "typecheck:frontend-worker",
+        "test:frontend-worker (4)",
+        "typecheck",
+        "check:db-generated",
+        "types:api:check",
+        "typecheck:api",
+        "test:api (2600)",
+        "test:api:runtime (38)",
+        "dry-run:api",
+        "startup:api"
+      ]
+    },
+    {
+      "command": "npm run typecheck:tools",
+      "status": "passed_after_test_type_repairs"
+    },
+    {
+      "command": "node --import tsx --test --test-reporter=spec tests/dogeDay2026FoilScene.test.ts tests/dogeDay2026WipApp.test.ts",
+      "status": "passed_after_test_type_repairs",
+      "counts": {
+        "passed": 76,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "command": "npm run check:dead-code",
+      "status": "passed"
+    },
+    {
+      "command": "npm test",
+      "status": "passed",
+      "counts": {
+        "passed": 4617,
+        "failed": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "command": "npm run test:onchain",
+      "status": "passed",
+      "counts": {
+        "passed": 35,
+        "failed": 0
+      }
+    },
+    {
+      "command": "npm run build",
+      "status": "passed"
+    },
+    {
+      "command": "npm run validate:browser-bundle",
+      "status": "passed"
+    },
+    {
+      "command": "npx wrangler deploy --dry-run --strict --config wrangler.jsonc --env-file cloud/workers/frontend/release.env",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    },
+    {
+      "command": "forge fmt --check src/NFT111K.sol test/NFT111KSeaport.t.sol test/NFT111KSeaportFork.t.sol",
+      "status": "passed"
+    }
+  ],
+  "nonBlockingObservations": [
+    "Whole-project forge fmt --check reports an existing long-line formatting difference in unchanged script/Deploy111K.s.sol:21. Changed Solidity files pass formatting.",
+    "Production build retains existing >500kB chunk warning."
+  ],
+  "releaseId": "111k-seaport-2026-10-23T18-44-02-375Z-e8c3a1fc",
+  "passed": true,
+  "typeOnlyRepairs": [
+    "tests/dogeDay2026FoilScene.test.ts",
+    "tests/dogeDay2026WipApp.test.ts"
+  ]
+}
