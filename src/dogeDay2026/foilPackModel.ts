@@ -5,6 +5,7 @@ const HEIGHT = 3.75;
 const HALF_WIDTH = WIDTH / 2;
 const HALF_HEIGHT = HEIGHT / 2;
 const SEAL_Y = 1.61;
+const SEAL_COLUMNS = 80;
 const BODY_COLUMNS = 48;
 const BODY_ROWS = 24;
 
@@ -133,47 +134,65 @@ function createFoilGeometry(face: 'front' | 'rear' | 'seal') {
   const uvs: number[] = [];
   const indices: number[] = [];
   const strip = face === 'seal';
-  const columns = BODY_COLUMNS;
-  const rows = strip ? 4 : BODY_ROWS;
+  const rows = strip ? 2 : BODY_ROWS;
+  const columnsAt = (row: number) => strip && row > 0 ? SEAL_COLUMNS : BODY_COLUMNS;
   const addVertex = (x: number, y: number, z: number, front: boolean) => {
     positions.push(x, y, z);
     uvs.push((front ? x / WIDTH + 0.5 : 1.5 - x / WIDTH) * 0.5, y / HEIGHT + 0.5);
   };
   const sample = (column: number, row: number) => {
+    const columns = columnsAt(row);
     const x = (column / columns - 0.5) * WIDTH;
-    const v = row / rows;
+    const v = strip && row === 1 ? 0.25 : row / rows;
     const y = strip
       ? THREE.MathUtils.lerp(sealEdge(x), HALF_HEIGHT - (column % 2) * 0.012, v)
       : THREE.MathUtils.lerp(-HALF_HEIGHT + (column % 2) * 0.012, sealEdge(x), v);
     const z = strip
-      ? THREE.MathUtils.lerp(foilDepth(x, sealEdge(x)), 0.022 + (column % 2) * 0.016, v)
+      ? THREE.MathUtils.lerp(foilDepth(x, sealEdge(x)), 0.022 + (column % 2) * 0.016, Math.min(1, v * 4))
+        + Math.sin(v * Math.PI) * 0.006
       : foilDepth(x, y);
     return { x, y, z };
   };
   const addFace = (front: boolean) => {
-    const offset = positions.length / 3;
+    const rowStarts: number[] = [];
     for (let row = 0; row <= rows; row += 1) {
-      for (let column = 0; column <= columns; column += 1) {
+      rowStarts.push(positions.length / 3);
+      for (let column = 0; column <= columnsAt(row); column += 1) {
         const { x, y, z } = sample(column, row);
         addVertex(x, y, front ? z : -z, front);
       }
     }
+    const triangle = (a: number, b: number, c: number) => {
+      if (front) indices.push(a, b, c);
+      else indices.push(a, c, b);
+    };
     for (let row = 0; row < rows; row += 1) {
-      for (let column = 0; column < columns; column += 1) {
-        const a = offset + row * (columns + 1) + column;
-        const b = a + columns + 1;
-        if (front) indices.push(a, a + 1, b, a + 1, b + 1, b);
-        else indices.push(a, b, a + 1, a + 1, b, b + 1);
+      const lowerColumns = columnsAt(row);
+      const upperColumns = columnsAt(row + 1);
+      let lower = 0;
+      let upper = 0;
+      while (lower < lowerColumns || upper < upperColumns) {
+        const a = rowStarts[row] + lower;
+        const b = rowStarts[row + 1] + upper;
+        if (upper === upperColumns || lower < lowerColumns && (lower + 1) * upperColumns <= (upper + 1) * lowerColumns) {
+          triangle(a, a + 1, b);
+          lower += 1;
+        } else {
+          triangle(a, b + 1, b);
+          upper += 1;
+        }
       }
     }
   };
   if (face !== 'rear') addFace(true);
   if (face !== 'front') addFace(false);
   const addRim = (horizontal: boolean, edge: number, reverse: boolean) => {
-    const count = horizontal ? columns : rows;
+    const count = horizontal ? columnsAt(edge) : rows;
     const offset = positions.length / 3;
     for (let i = 0; i <= count; i += 1) {
-      const { x, y, z } = sample(horizontal ? i : edge, horizontal ? edge : i);
+      const row = horizontal ? edge : i;
+      const column = horizontal ? i : edge === 0 ? 0 : columnsAt(row);
+      const { x, y, z } = sample(column, row);
       addVertex(x, y, face === 'rear' ? 0 : z, face !== 'rear');
       addVertex(x, y, face === 'front' ? 0 : -z, face !== 'rear');
     }
@@ -186,7 +205,7 @@ function createFoilGeometry(face: 'front' | 'rear' | 'seal') {
   addRim(true, 0, false);
   if (strip) addRim(true, rows, true);
   addRim(false, 0, true);
-  addRim(false, columns, false);
+  addRim(false, BODY_COLUMNS, false);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));

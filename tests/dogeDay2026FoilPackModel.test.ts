@@ -65,7 +65,8 @@ test('foil pack stays within the mobile geometry budget with real front, back an
   const parts = meshes(model.group);
   assert.ok(parts.length <= 4);
   assert.deepEqual(parts.map(part => part.name).sort(), ['foil-front', 'foil-rear', 'foil-top-seal']);
-  assert.ok(parts.reduce((total, part) => total + part.geometry.attributes.position.count, 0) < 5_000);
+  assert.ok(parts.reduce((total, part) => total + part.geometry.attributes.position.count, 0) <= 3_552);
+  assert.ok(parts.reduce((total, part) => total + part.geometry.index!.count / 3, 0) <= 5_968);
   assert.equal(new Set(parts.map((part) => part.material)).size, 1);
   assert.equal(parts[0].material.transparent, false);
   assert.equal(parts[0].material.depthTest, true);
@@ -81,6 +82,57 @@ test('foil pack stays within the mobile geometry budget with real front, back an
       assert.ok(Array.from(attribute.array).every(Number.isFinite));
     }
   }
+});
+
+test('the detailed top seal matches both sleeve seams and has closed, consistently wound triangles', t => {
+  setupCanvas(t);
+  const model = createDogeFoilPackModel();
+  t.after(() => model.dispose());
+  const parts = meshes(model.group);
+  const seal = parts.find(part => part.name === 'foil-top-seal')!;
+  const points = (part: typeof seal) => Array.from({ length: part.geometry.attributes.position.count }, (_, index) =>
+    new THREE.Vector3().fromBufferAttribute(part.geometry.attributes.position, index));
+  const key = (point: THREE.Vector3) => point.toArray().join(',');
+  const sealPoints = points(seal);
+  for (const [name, sign] of [['foil-front', 1], ['foil-rear', -1]] as const) {
+    const edge = new Map<number, THREE.Vector3>();
+    for (const point of points(parts.find(part => part.name === name)!)) {
+      if (Math.sign(point.z) === sign && (!edge.has(point.x) || point.y > edge.get(point.x)!.y)) edge.set(point.x, point);
+    }
+    const top = Math.max(...Array.from(edge.values(), point => point.y));
+    const seam = new Set(sealPoints.filter(point => point.y <= top && Math.sign(point.z) === sign).map(key));
+    assert.deepEqual([...seam].sort(), Array.from(edge.values(), key).sort(), `${name} has a gap at the sealed mouth`);
+  }
+  const sealEdges = new Map<string, { count: number; direction: number }>();
+  for (const part of parts) {
+    const vertices = points(part);
+    const indices = part.geometry.index!;
+    let faces = 0;
+    for (let index = 0; index < indices.count; index += 3) {
+      const ids = [indices.getX(index), indices.getX(index + 1), indices.getX(index + 2)];
+      assert.ok(ids.every(id => Number.isInteger(id) && id >= 0 && id < vertices.length));
+      const triangle = ids.map(id => vertices[id]);
+      const normal = new THREE.Vector3().subVectors(triangle[1], triangle[0])
+        .cross(new THREE.Vector3().subVectors(triangle[2], triangle[0]));
+      if (part === seal) assert.ok(normal.lengthSq() > 1e-18, `Seal triangle ${index / 3} is degenerate`);
+      if (triangle.every(point => point.z > 0) || triangle.every(point => point.z < 0)) {
+        assert.ok(normal.z * Math.sign(triangle[0].z) > 0, `${part.name} triangle ${index / 3} has reversed winding`);
+        faces += 1;
+      }
+      if (part !== seal) continue;
+      for (let side = 0; side < 3; side += 1) {
+        const a = key(triangle[side]);
+        const b = key(triangle[(side + 1) % 3]);
+        const edgeKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+        const edge = sealEdges.get(edgeKey) ?? { count: 0, direction: 0 };
+        edge.count += 1;
+        edge.direction += a < b ? 1 : -1;
+        sealEdges.set(edgeKey, edge);
+      }
+    }
+    assert.ok(faces > 0);
+  }
+  for (const [edge, counts] of sealEdges) assert.deepEqual(counts, { count: 2, direction: 0 }, `Unstitched seal edge ${edge}`);
 });
 
 test('hits, tearing and discard reset without replacing geometry or changing the scene placement', (t) => {
