@@ -41,7 +41,17 @@ class FakeResizeObserver {
 }
 Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: FakeResizeObserver });
 
-function createTestPack() {
+type TestPack = {
+  group: THREE.Group;
+  poses: DogeFoilPose[];
+  resizeMotion: boolean[];
+  disposeCount: number;
+  setExitDistance(): void;
+  update(pose: DogeFoilPose, preserveResizeMotion?: boolean): void;
+  dispose(): void;
+};
+
+function createTestPack(): TestPack {
   const group = new THREE.Group();
   const geometry = new THREE.BoxGeometry(2.45, 3.75, 0.1);
   const material = new THREE.MeshBasicMaterial();
@@ -66,9 +76,20 @@ function createTestPack() {
   packs.push(pack);
   return pack;
 }
-const packs: ReturnType<typeof createTestPack>[] = [];
+const packs: TestPack[] = [];
 
-function createTestSurface(card: DrifCardConfig, options: { loadTexture: (source: string) => Promise<THREE.Texture> }) {
+type TestSurface = {
+  card: DrifCardConfig;
+  loaded: ReturnType<typeof deferred>;
+  loadTexture: (source: string) => Promise<THREE.Texture>;
+  material: THREE.ShaderMaterial;
+  disposeCount: number;
+  setEffect(): Promise<void>;
+  update(): void;
+  dispose(): void;
+};
+
+function createTestSurface(card: DrifCardConfig, options: { loadTexture: (source: string) => Promise<THREE.Texture> }): TestSurface {
   const loaded = deferred();
   const texture = new THREE.Texture();
   const material = new THREE.ShaderMaterial({ uniforms: { uFront: { value: texture } } });
@@ -89,7 +110,7 @@ function createTestSurface(card: DrifCardConfig, options: { loadTexture: (source
   surfaces.push(surface);
   return surface;
 }
-const surfaces: ReturnType<typeof createTestSurface>[] = [];
+const surfaces: TestSurface[] = [];
 
 type CardSnapshot = {
   imageSrc: string;
@@ -1276,7 +1297,7 @@ test('inspection contact sheets capture all 79 opening frames with the existing 
   t.mock.method(dom.window.HTMLCanvasElement.prototype, 'getContext', ((kind: string) => {
     contexts.push(kind);
     return { fillRect() {}, fillText() {}, drawImage(_canvas: unknown, ...dimensions: number[]) { captures += 1; crops.push(dimensions); } };
-  }) as typeof dom.window.HTMLCanvasElement.prototype.getContext);
+  }) as unknown as typeof dom.window.HTMLCanvasElement.prototype.getContext);
   t.mock.method(dom.window.HTMLCanvasElement.prototype, 'toDataURL', () => `data:image/png;base64,sheet-${sheetCount++}`);
   const start = run.renderer.snapshots.length;
   assert.equal(run.controller.captureOpeningFrames().length, 4);
@@ -1311,7 +1332,7 @@ test('inspection capture discards partial sheets when context loss precedes its 
       assert.equal(run.renderer.contextLost, false);
       copied += 1;
     },
-  })) as typeof dom.window.HTMLCanvasElement.prototype.getContext);
+  })) as unknown as typeof dom.window.HTMLCanvasElement.prototype.getContext);
   t.mock.method(dom.window.HTMLCanvasElement.prototype, 'toDataURL', () => `data:image/png;base64,sheet-${sheets++}`);
   run.renderer.onRender = offscreen => {
     if (!offscreen && ++rendered === 22) run.renderer.contextLost = true;

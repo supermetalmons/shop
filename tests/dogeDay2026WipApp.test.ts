@@ -245,7 +245,7 @@ for (const packSize of [2, 3] as const) {
     const view = render(createElement(DogeDay2026WipApp));
     fireEvent.click(view.getByRole('button', { name: `${packSize} card pack` }));
     const scene = scenes.at(-1)!;
-    const action = view.getByRole<HTMLButtonElement>('button', { name: 'Hit the pack' });
+    const action = view.getByRole('button', { name: 'Hit the pack' }) as HTMLButtonElement;
     action.focus();
     act(() => scene.options.onStageChange('opening', 3));
     assert.equal(action.disabled, false);
@@ -326,7 +326,7 @@ test('Doge scene statuses stay visually hidden and announce the interactive card
   act(() => scene.options.onStageChange('waiting', 3));
   assert.equal(view.getByRole('status').textContent, 'Getting your card ready…');
   act(() => scene.options.onStageChange('opening', 3));
-  assert.equal(view.getByRole<HTMLButtonElement>('button', { name: 'Hit the pack' }).disabled, false);
+  assert.equal((view.getByRole('button', { name: 'Hit the pack' }) as HTMLButtonElement).disabled, false);
   assert.equal(view.getByRole('button', { name: 'Hit the pack' }).getAttribute('aria-disabled'), 'true');
   act(() => scene.options.onStageChange('revealed', 3));
   assert.match(view.getByRole('status').textContent ?? '', /Your card is ready and interactive/);
@@ -338,7 +338,7 @@ test('Doge scene statuses stay visually hidden and announce the interactive card
   assert.equal(view.getByRole('status').textContent, 'Unable to load this pack.');
   assert.equal(view.getByRole('status').parentElement?.className, 'doge-day-2026-reveal-overlay__sr-only');
   assert.equal(view.queryByRole('button', { name: 'Retry' }), null);
-  assert.equal(view.getByRole<HTMLButtonElement>('button', { name: 'Reset card tilt' }).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Reset card tilt' }) as HTMLButtonElement).disabled, true);
   fireEvent.click(view.getByRole('button', { name: 'Reset card tilt' }), { detail: 0 });
   fireEvent.keyDown(window, { key: ' ', code: 'Space' });
   assert.equal(scene.activations, 2);
@@ -496,9 +496,9 @@ test('Doge frame viewer isolates focus, blocks preview shortcuts, and restores i
   development = true;
   window.history.replaceState(null, '', '/doge_day_2026/wip?inspectOpening=1');
   const view = render(createElement(DogeDay2026WipApp));
-  assert.equal(view.getByRole<HTMLButtonElement>('button', { name: 'Loading frames…' }).disabled, true);
+  assert.equal((view.getByRole('button', { name: 'Loading frames…' }) as HTMLButtonElement).disabled, true);
   act(() => scenes[0].options.onGpuReady?.());
-  const trigger = view.getByRole<HTMLButtonElement>('button', { name: 'Frames' });
+  const trigger = view.getByRole('button', { name: 'Frames' });
   const picker = view.getByRole('button', { name: '3 card pack' });
   const density = view.getByRole('combobox', { name: 'Inspection pixel density' });
   const reveal = view.getByRole('button', { name: 'Hit the pack' });
