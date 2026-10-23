@@ -655,11 +655,6 @@ button.clear-card-reveal-overlay__retry:focus-visible {
   opacity: 1;
 }
 
-.inventory__item--receipt,
-.receipt-viewer-overlay--receipt {
-  --receipt-outline-color: rgba(0, 0, 0, 0.22);
-}
-
 .receipt-viewer-overlay .reveal-overlay__frame {
   overflow: visible;
   background: transparent;
@@ -1223,16 +1218,6 @@ button.wip-reset-btn:focus:not(:focus-visible) {
 }
 
 @media (prefers-color-scheme: dark) {
-  .inventory__item--receipt,
-  .receipt-viewer-overlay--receipt {
-    --receipt-outline-color: rgba(255, 255, 255, 0.18);
-  }
-
-  .inventory__item--pending {
-    border-color: rgba(255, 255, 255, 0.2);
-    background: rgba(255, 255, 255, 0.03);
-  }
-
   button.wip-close-btn,
   button.wip-reset-btn {
     color: rgba(255, 255, 255, 0.5);

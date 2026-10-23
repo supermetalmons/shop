@@ -9,6 +9,7 @@ import {
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { normalizeReceiptTransferDestination } from '../lib/receiptTransfer';
+import { FormError } from './FormError';
 
 export type ReceiptTransferFormProps = {
   feePayer: string;
@@ -100,11 +101,7 @@ export function ReceiptTransferForm({
         aria-invalid={Boolean(error)}
         aria-describedby={error ? errorId : undefined}
       />
-      {error ? (
-        <div id={errorId} className="error" role="alert">
-          {error}
-        </div>
-      ) : null}
+      <FormError id={errorId} message={error} />
       <div className="compact-modal-form__actions receipt-transfer-form__actions">
         <button ref={cancelButtonRef} type="button" onClick={dismiss} disabled={pending}>
           Cancel

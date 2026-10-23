@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
+import { FormError } from './FormError';
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -150,7 +151,7 @@ export function ClaimForm({
           />
         </label>
       ) : null}
-      {error ? <div className="error">{error}</div> : null}
+      <FormError message={error} />
       {success ? <div className="success">{success}</div> : null}
       <button type="submit" disabled={loading || (!isStripeCode && walletActionBusy)}>
         {loading ? 'Sending…' : 'Claim'}

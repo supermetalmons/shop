@@ -58,6 +58,8 @@ test('notification submissions keep validation local, block duplicates, and retr
   fireEvent.submit(email.form!);
   assert.equal(fetch.mock.callCount(), 0);
   assert.equal(view.getByRole('alert').textContent, 'Enter a valid email address.');
+  assert.equal(email.getAttribute('aria-invalid'), 'true');
+  assert.equal(email.getAttribute('aria-describedby'), view.getByRole('alert').id);
 
   fireEvent.change(email, { target: { value: '  recipient@example.com  ' } });
   submitTwice(email.form!);
@@ -73,6 +75,8 @@ test('notification submissions keep validation local, block duplicates, and retr
   fireEvent.submit(email.form!);
   assert.equal(fetch.mock.callCount(), 2);
   assert.equal(view.queryByRole('alert'), null);
+  assert.equal(email.getAttribute('aria-invalid'), 'false');
+  assert.equal(email.getAttribute('aria-describedby'), null);
   await act(async () => second.resolve(Response.json({ subscribed: true })));
   assert.equal(onSuccess.mock.callCount(), 1);
 });
@@ -109,11 +113,15 @@ test('receipt transfer blocks duplicate submissions and cancellation, then prese
   assert.equal(document.activeElement, view.getByRole('button', { name: 'OK' }));
   await act(async () => first.reject(new Error('Wallet rejected the request')));
   assert.equal(view.getByRole('alert').textContent, 'Wallet rejected the request');
+  assert.equal(input.getAttribute('aria-invalid'), 'true');
+  assert.equal(input.getAttribute('aria-describedby'), view.getByRole('alert').id);
   assert.equal(input.disabled, false);
   assert.equal(input.value, destination);
 
   fireEvent.submit(input.form!);
   assert.equal(view.queryByRole('alert'), null);
+  assert.equal(input.getAttribute('aria-invalid'), 'false');
+  assert.equal(input.getAttribute('aria-describedby'), null);
   assert.equal(onTransfer.mock.callCount(), 2);
   await act(async () => second.resolve());
   assert.equal(input.disabled, false);
@@ -185,10 +193,11 @@ test('claim failures retain their message and code, clear on retry, and then rep
   const input = view.getByPlaceholderText('Code') as HTMLInputElement;
   fireEvent.submit(input.form!);
   await act(async () => first.reject(new Error('Claim is temporarily unavailable')));
-  assert.ok(view.getByText('Claim is temporarily unavailable'));
+  assert.equal(view.getByRole('alert').textContent, 'Claim is temporarily unavailable');
+  assert.equal(input.form!.querySelector('[aria-invalid="true"]'), null);
   assert.equal(input.value, 'secret-code');
   fireEvent.submit(input.form!);
-  assert.equal(view.queryByText('Claim is temporarily unavailable'), null);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(attempts, 2);
   await act(async () => second.resolve());
   assert.equal(onSuccess.mock.callCount(), 1);
@@ -201,7 +210,7 @@ test('delivery submissions retain native validation and external pending guards'
   const view = render(createElement(DeliveryForm, props));
   const form = (view.getByRole('textbox', { name: 'Email' }) as HTMLInputElement).form!;
   fireEvent.submit(form);
-  assert.ok(view.getByText('Please complete the required fields.'));
+  assert.equal(view.getByRole('alert').textContent, 'Please complete the required fields.');
   assert.equal(onSubmit.mock.callCount(), 0);
   fillDeliveryAddress(view);
   fireEvent.change(view.getByRole('textbox', { name: 'Email' }), { target: { value: 'invalid' } });
@@ -239,11 +248,12 @@ test('delivery submissions block duplicates and retain address and errors for re
     email: 'recipient@example.com',
   }]);
   await act(async () => first.reject(new Error('Shipment could not be prepared')));
-  assert.ok(view.getByText('Shipment could not be prepared'));
+  assert.equal(view.getByRole('alert').textContent, 'Shipment could not be prepared');
+  assert.equal(form.querySelector('[aria-invalid="true"]'), null);
   assert.equal((view.getByRole('textbox', { name: 'Full name' }) as HTMLInputElement).value, 'Alex Example');
   assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);
   fireEvent.submit(form);
-  assert.equal(view.queryByText('Shipment could not be prepared'), null);
+  assert.equal(view.queryByRole('alert'), null);
   assert.equal(onSubmit.mock.callCount(), 2);
   await act(async () => second.resolve());
   assert.equal((view.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled, false);

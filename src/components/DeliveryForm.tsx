@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type DropFamily } from '../config/deployment';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
+import { FormError } from './FormError';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../../shared/dropLabels.ts';
 import { countryRequiresPostalCode, countryRequiresState, normalizeCountryCode } from '../../shared/countryNormalization.ts';
@@ -212,7 +213,7 @@ export function DeliveryForm({
         </label>
       </div>
       <div className="muted small">{shippingNoteOverride ?? shippingNote}</div>
-      {error ? <div className="error">{error}</div> : null}
+      <FormError message={error} />
       <div className={`row${mode === 'modal' ? ' row--end' : ''}`}>
         <button type="submit" disabled={saving || submitDisabled || shipmentPending}>
           {saving

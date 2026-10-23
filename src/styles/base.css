@@ -7,6 +7,7 @@
   --surface: #f5f5f7;
   --border: rgba(0, 0, 0, 0.06);
   --section-divider: var(--border);
+  --receipt-outline-color: rgba(0, 0, 0, 0.22);
   --accent: #0071e3;
   --accent-hover: #0077ed;
   --accent-tint: rgba(0, 113, 227, 0.12);
@@ -32,6 +33,7 @@
     --surface: #2d2d2d;
     --border: rgba(255, 255, 255, 0.08);
     --section-divider: rgba(255, 255, 255, 0.045);
+    --receipt-outline-color: rgba(255, 255, 255, 0.18);
     --accent: #2997ff;
     --accent-hover: #4dabff;
     --accent-tint: rgba(41, 151, 255, 0.16);

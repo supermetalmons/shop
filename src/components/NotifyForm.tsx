@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { subscribeToNotifications } from '../lib/notificationSubscriptions';
+import { FormError } from './FormError';
 
 interface NotifyFormProps {
   onSuccess: () => void;
@@ -71,11 +72,7 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
         aria-invalid={Boolean(error)}
         aria-describedby={error ? errorId : undefined}
       />
-      {error ? (
-        <div id={errorId} className="error" role="alert">
-          {error}
-        </div>
-      ) : null}
+      <FormError id={errorId} message={error} />
       <div className="compact-modal-form__actions notify-form__actions">
         <button type="button" onClick={onCancel} disabled={pending}>
           Cancel
