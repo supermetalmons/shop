@@ -17,6 +17,7 @@ type DogeDay2026RevealOverlayProps = {
   onError?: () => void;
 };
 
+// TODO: Reuse playMiNoteClosingParticles on successful unpack dismissal when adding the Doge Day production inventory flow.
 export function DogeDay2026RevealOverlay(props: DogeDay2026RevealOverlayProps) {
   const { cards, cardReady, boxLabel, resetKey, boxButtonRef } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);

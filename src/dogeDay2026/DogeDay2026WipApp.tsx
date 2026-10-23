@@ -4,6 +4,7 @@ import { DOGE_DAY_2026_WIP_CONFIG, DOGE_DAY_2026_WIP_SOUNDS, pickDogeDay2026Clic
 import { getDogeDay2026StarterCard } from './starterCards';
 import { soundPlayer } from '../lib/SoundPlayer';
 import { isKeyboardShortcutTarget } from '../lib/focusTrap';
+import { playMiNoteClosingParticles } from '../lib/miNoteClosingParticles';
 import { navigate } from '../navigation';
 import { ModalFocusScope } from '../components/ModalFocusScope';
 import './wip.css';
@@ -77,7 +78,10 @@ export default function DogeDay2026WipApp() {
     setResetKey((current) => current + 1);
   }, []);
 
-  const handleClose = useCallback(() => navigate('/'), []);
+  const handleClose = useCallback(() => {
+    navigate('/');
+    playMiNoteClosingParticles();
+  }, []);
   const handleBackgroundTap = useCallback(() => setFocusedMode((current) => !current), []);
   const handleSceneError = useCallback(() => setFocusedMode(false), []);
 

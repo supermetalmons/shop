@@ -83,6 +83,7 @@ beforeEach((t: TestContext) => {
 });
 afterEach(() => {
   cleanup();
+  window.dispatchEvent(new Event('pagehide'));
   assert.equal(timers.size, 0);
   assert.equal(frames.size, 0);
   assert.ok(scenes.every((scene) => scene.disposed));
