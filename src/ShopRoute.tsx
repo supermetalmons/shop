@@ -10,6 +10,7 @@ import { walletVisibleShopRoute, type ResolvedAppRoute, type ShopWipExperience }
 import { readStaffWalletSession, subscribeStaffWalletSession } from './lib/staffWalletSession';
 
 const PackWipApp = React.lazy(() => import('./WipApp'));
+const DogeDay2026WipApp = React.lazy(() => import('./dogeDay2026/DogeDay2026WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
 const MiNoteCardsWipApp = React.lazy(() => import('./MiNoteCardsWipApp'));
 const MiNoteCardsDemoWipApp = React.lazy(() => import('./MiNoteCardsDemoWipApp'));
@@ -154,6 +155,8 @@ function WalletScopedShopRoute({ route: requestedRoute }: ShopRouteProps) {
           <MiNoteCardsWipApp />
         ) : wipExperience === 'mi_note_cards_demo' ? (
           <MiNoteCardsDemoWipApp />
+        ) : wipExperience === 'doge_day_2026' ? (
+          <DogeDay2026WipApp />
         ) : (
           <PackWipApp dropId={wipExperience} />
         )}

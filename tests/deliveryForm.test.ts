@@ -46,6 +46,7 @@ const cardNotes = {
 };
 const familyNotes: Record<DropFamily, ShippingNoteCase> = {
   default: defaultNotes,
+  doge_day_2026: defaultNotes,
   little_swag_boxes: {
     itemsPerBox: 3,
     US: 'US delivery: 0.1 SOL up to 3 figures. 0.025 SOL each additional figure.',

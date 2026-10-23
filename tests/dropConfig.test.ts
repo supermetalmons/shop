@@ -104,6 +104,16 @@ const UPCOMING_ROUTES = [
     previewAspectRatio: 1050 / 1400,
     boxNamePrefix: 'pack',
   },
+  {
+    path: '/doge_day_2026',
+    dropFamily: 'doge_day_2026',
+    solanaCluster: 'mainnet-beta',
+    label: 'Doge Day 2026',
+    title: 'Doge Day 2026',
+    previewImageUrl: '/drops/doge_day_2026/cover.jpg',
+    previewAspectRatio: 914 / 1280,
+    boxNamePrefix: 'drop',
+  },
 ] as const;
 
 test('upcoming routes expose their exact preview configuration', () => {
@@ -153,6 +163,39 @@ test('pack WIP routes stay separate from their live drop routes', () => {
   assert.equal(resolveFrontendDropByPath('/poncho_drifella'), FRONTEND_DROPS.poncho_drifella);
 });
 
+test('Doge Day 2026 keeps its announcement and independent WIP separate from live deployments', () => {
+  for (const suffix of ['', '/']) {
+    const announcement = resolveAppRoute({ pathname: `/doge_day_2026${suffix}` });
+    assert.equal(announcement.kind, 'upcoming');
+    assert.equal(announcement.path, '/doge_day_2026');
+    assert.equal(announcement.shopPath, '/doge_day_2026');
+    assert.equal(announcement.upcoming?.dropFamily, 'doge_day_2026');
+    assert.equal(announcement.walletCluster, 'mainnet-beta');
+    assert.equal(announcement.drop, null);
+    assert.equal(announcement.preorderId, null);
+    assert.equal(announcement.wipExperience, null);
+    assert.equal(announcement.replacementHref, null);
+
+    const wip = resolveAppRoute({ pathname: `/doge_day_2026/wip${suffix}` });
+    assert.equal(wip.kind, 'wip');
+    assert.equal(wip.path, '/doge_day_2026/wip');
+    assert.equal(wip.shopPath, '/');
+    assert.equal(wip.wipExperience, 'doge_day_2026');
+    assert.equal(wip.walletCluster, 'mainnet-beta');
+    assert.equal(wip.drop, null);
+    assert.equal(wip.upcoming, null);
+    assert.equal(wip.preorderId, null);
+    assert.equal(wip.replacementHref, null);
+    assert.equal(resolveAppRoute({ pathname: `/poncho_drifella/wip${suffix}` }).wipExperience, 'poncho_drifella');
+    assert.equal(resolveFrontendDropByPath(`/doge_day_2026${suffix}`), null);
+    assert.equal(resolveFrontendDropByPath(`/doge_day_2026/wip${suffix}`), null);
+    assert.equal(resolveUpcomingDropRouteByPath(`/doge_day_2026/wip${suffix}`), null);
+  }
+
+  assert.equal(FRONTEND_DROPS.doge_day_2026, undefined);
+  assert.equal(API_DROPS.doge_day_2026, undefined);
+});
+
 test('the route resolver keeps the complete WIP table in one exported definition', () => {
   assert.deepEqual(WIP_ROUTES, [
     { path: '/card_nft_2/wip', experience: 'card_nft_2', dropId: 'card_nft_2' },
@@ -166,6 +209,7 @@ test('the route resolver keeps the complete WIP table in one exported definition
       experience: 'poncho_drifella',
       dropId: 'poncho_drifella',
     },
+    { path: '/doge_day_2026/wip', experience: 'doge_day_2026' },
     { path: '/clear_cards/wip', experience: 'clear_cards' },
     { path: '/mi_note_cards/wip', experience: 'mi_note_cards' },
     { path: '/mi_note_cards_devnet/wip', experience: 'mi_note_cards_demo' },
@@ -383,7 +427,7 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
 });
 
 test('drop family names normalize and default from IDs', () => {
-  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd', 'mi_note_cards'] as const) {
+  for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd', 'mi_note_cards', 'doge_day_2026'] as const) {
     assert.equal(defaultDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeDropFamily(undefined, ` ${family.toUpperCase()} `), family);

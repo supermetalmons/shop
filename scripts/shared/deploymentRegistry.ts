@@ -269,6 +269,7 @@ export function requireDropFamily(
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'doge_day_2026' ||
     normalized === 'drifella_binder' ||
     normalized === 'card_nft_binder' ||
     normalized === 'drifella_shirt' ||
@@ -280,7 +281,7 @@ export function requireDropFamily(
     return normalized;
   }
   throw new Error(
-    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, drifella_binder, card_nft_binder, drifella_shirt, card_nft_2, clear_cards, mi_note_cards, or tbd)`,
+    `Invalid ${label}: ${value} (expected default, little_swag_boxes, little_swag_hoodies, poncho_drifella, doge_day_2026, drifella_binder, card_nft_binder, drifella_shirt, card_nft_2, clear_cards, mi_note_cards, or tbd)`,
   );
 }
 

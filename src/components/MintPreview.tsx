@@ -422,7 +422,10 @@ export function MintPreview({ boxMedia, dropId, quantity, quantityLabel, renderP
   );
 
   return (
-    <div ref={previewRef} className="mint-panel__preview">
+    <div
+      ref={previewRef}
+      className={`mint-panel__preview${isDropFamily(dropId, 'doge_day_2026') ? ' mint-panel__preview--doge-day-2026' : ''}`}
+    >
       <div
         className="mint-panel__boxes"
         style={{

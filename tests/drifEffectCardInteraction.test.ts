@@ -10,7 +10,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { mockCardAssetImages } from './helpers/cardAssets.ts';
 import { drifCardVisualAssetsCache, preloadDrifCardVisualAssets } from '../src/lib/drifCardVisualAssets.ts';
 
-const { dom } = setupFrontendDom();
+const { dom, setMediaQueryMatches } = setupFrontendDom();
 const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
 const imports = registerHooks({
   load(url, context, nextLoad) {
@@ -139,6 +139,35 @@ test('disabling interaction cancels pending animation and resets the pose withou
   runFrames(8);
   assert.notEqual(element.style.getPropertyValue('--rotate-x'), '0deg');
 });
+
+for (const wrapper of [
+  { className: 'wip-reveal__card-item' },
+  { className: 'reveal-overlay__media-item' },
+  { className: 'doge-day-2026-wip-reveal__card-item', 'data-card-interaction-surface': true },
+]) {
+  test(`${wrapper.className} preserves hover wake through its interaction wrapper`, t => {
+    setMediaQueryMatches('(any-hover: hover) and (any-pointer: fine)', true);
+    const renderCard = (interactive: boolean) => createElement('div', wrapper,
+      createElement('span', { 'data-hover-decoration': true }),
+      createElement(DrifEffectCard, { card, ariaLabel: 'Preview', interactive, enableInteractiveUnlockWake: true }),
+    );
+    const view = render(renderCard(false));
+    const { element, image } = elements(view.container);
+    const hoveredDecoration = view.container.querySelector('[data-hover-decoration]')!;
+    const query = document.querySelectorAll.bind(document);
+    t.mock.method(document, 'querySelectorAll', (selector: string) => selector === ':hover'
+      ? [hoveredDecoration] as unknown as NodeListOf<Element>
+      : query(selector));
+    fireEvent.load(image);
+    runFrames(1);
+    assert.equal(element.classList.contains('interacting'), false);
+    view.rerender(renderCard(true));
+    runFrames(3);
+    assert.equal(element.classList.contains('interacting'), true);
+    view.unmount();
+    setMediaQueryMatches('(any-hover: hover) and (any-pointer: fine)', false);
+  });
+}
 
 for (const dropId of ['mi_note_cards', 'poncho_drifella', 'card_nft_2']) {
   test(`${dropId} viewer keeps its idle effect through interaction, suspension, and visibility resets`, () => {

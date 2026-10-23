@@ -668,7 +668,7 @@ export default function DrifEffectCard({
         return;
       }
 
-      const hoverWrapper = cardRef.current?.closest('.wip-reveal__card-item, .reveal-overlay__media-item') ?? null;
+      const hoverWrapper = cardRef.current?.closest('[data-card-interaction-surface], .wip-reveal__card-item, .reveal-overlay__media-item') ?? null;
       const hoveredElements = Array.from(document.querySelectorAll(':hover'));
       const hovered =
         isHoverChainTarget(element, hoveredElements) ||

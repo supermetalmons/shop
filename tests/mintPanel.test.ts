@@ -10,6 +10,12 @@ const { MintPanelActions } = await import('../src/components/MintPanelActions.ts
 const { mintPanelPreviewQuantity } = await import('../src/components/MintPreview.tsx');
 const { shouldFetchMintProgress } = await import('../src/hooks/useMintProgress.ts');
 const { resolveDropXProfile } = await import('../src/lib/dropSocialLinks.ts');
+const { resolveAppRoute } = await import('../src/routes.ts');
+const { useShopDrop } = await import('../src/shop/useShopDrop.ts');
+const { useShopNotifications } = await import('../src/shop/ui/useShopNotifications.ts');
+const { ShopPurchaseSection } = await import('../src/shop/ui/ShopPurchaseSection.tsx');
+const { NotifySubscription } = await import('../src/components/NotifySubscription.tsx');
+const { DropsPanel } = await import('../src/components/DropsPanel.tsx');
 type Props = Extract<Parameters<typeof MintPanel>[0], { mode: 'purchase' }>;
 
 afterEach(cleanup);
@@ -89,6 +95,67 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('clear_cards_devnet_v2', 8, false), 1);
   assert.equal(mintPanelPreviewQuantity('little_swag_boxes', 3, false), 3);
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
+});
+
+test('Doge Day 2026 displays its cover and opens the standard notification dialog without purchase controls', () => {
+  const route = resolveAppRoute({ pathname: '/doge_day_2026/' });
+  const unexpectedPurchase = () => assert.fail('An upcoming drop must not initiate a purchase');
+  function Announcement() {
+    const drop = useShopDrop(route);
+    const notifications = useShopNotifications(drop.normalizedCurrentPath, Boolean(drop.upcomingDropRoute), false);
+    return createElement('div', null,
+      createElement(ShopPurchaseSection, {
+        ...drop,
+        minting: false,
+        discountMinting: false,
+        stripePaymentLoading: false,
+        successfulMintToken: 0,
+        discountAvailable: false,
+        discountRemainingCount: 0,
+        handleMint: unexpectedPurchase,
+        handleDiscountMint: unexpectedPurchase,
+        handleStripePayment: unexpectedPurchase,
+        mintStatsReady: false,
+        packStatusDropId: null,
+        packStatusBreakdown: undefined,
+        packStatusDisplayLabels: undefined,
+        effectiveMintStats: undefined,
+        connectedWallet: undefined,
+        publicKey: null,
+        walletBusy: false,
+        showToast: unexpectedPurchase,
+        handleOpenNotify: notifications.handleOpenNotify,
+      }),
+      createElement(NotifySubscription, {
+        open: notifications.notifyOpen,
+        onOpenChange: notifications.handleNotifyOpenChange,
+        onSubscribed: () => undefined,
+      }),
+    );
+  }
+
+  const view = render(createElement(Announcement));
+  assert.ok(view.getByText('Doge Day 2026'));
+  assert.ok(view.getByText('Soon'));
+  const cover = view.container.querySelector<HTMLImageElement>('.mint-panel__preview img');
+  assert.equal(cover?.getAttribute('src'), '/drops/doge_day_2026/cover.jpg');
+  assert.ok(cover?.closest('.mint-panel__preview--doge-day-2026'));
+  assert.equal(view.queryByRole('slider'), null);
+  assert.equal(view.queryByRole('button', { name: /Mint|Checkout|Pay/i }), null);
+  assert.equal(view.container.querySelector('form'), null);
+  assert.equal(view.queryByRole('dialog'), null);
+
+  fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
+  assert.ok(view.getByRole('dialog', { name: 'Notify me' }));
+  assert.ok(view.getByRole('textbox', { name: 'Email' }));
+  fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
+  assert.equal(view.queryByRole('dialog'), null);
+});
+
+test('Doge Day 2026 remains accessible by URL without adding a home grid tile', () => {
+  const view = render(createElement(DropsPanel));
+  assert.equal(view.queryByRole('link', { name: 'Doge Day 2026' }), null);
+  assert.ok(view.getByRole('link', { name: 'Poncho Drifella' }));
 });
 
 test('switching purchase to announcement and back mounts one showcase and resets purchase quantity', () => {

@@ -9,6 +9,7 @@ export type DropFamily =
   | 'default'
   | 'little_swag_boxes'
   | 'poncho_drifella'
+  | 'doge_day_2026'
   | 'drifella_binder'
   | 'card_nft_binder'
   | 'drifella_shirt'
@@ -268,6 +269,7 @@ const DROP_FAMILY_BY_DROP_ID: Record<string, Exclude<DropFamily, 'default'>> = {
   card_nft_binder: 'card_nft_binder',
   card_nft_binder_devnet: 'card_nft_binder',
   clear_cards: 'clear_cards',
+  doge_day_2026: 'doge_day_2026',
   drifella_binder: 'drifella_binder',
   drifella_shirt: 'drifella_shirt',
   little_swag_boxes: 'little_swag_boxes',
@@ -293,6 +295,7 @@ export function normalizeDropFamily(value: unknown, dropId?: string): DropFamily
     normalized === 'little_swag_boxes' ||
     normalized === 'little_swag_hoodies' ||
     normalized === 'poncho_drifella' ||
+    normalized === 'doge_day_2026' ||
     normalized === 'drifella_binder' ||
     normalized === 'card_nft_binder' ||
     normalized === 'drifella_shirt' ||
