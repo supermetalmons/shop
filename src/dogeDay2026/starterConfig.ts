@@ -12,7 +12,6 @@ export const DOGE_DAY_2026_WIP_CONFIG = Object.freeze({
 
 const STARTER_MEDIA_BASE_URL = 'https://cdn.lil.org/nft/poncho_drifella';
 export const DOGE_DAY_2026_STARTER_CARD_BASE_URL = STARTER_MEDIA_BASE_URL;
-export const DOGE_DAY_2026_STARTER_PACK_BASE_URL = `${STARTER_MEDIA_BASE_URL}/pack`;
 export const DOGE_DAY_2026_WIP_SOUNDS = Object.freeze({
   click: Object.freeze([
     `${STARTER_MEDIA_BASE_URL}/sounds/hit1.mp3`,

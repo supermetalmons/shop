@@ -16,6 +16,7 @@ import {
 import { createMiNoteCardPath, poseMiNoteCardPath, updateMiNoteCardPath } from '../lib/miNotePackMotion';
 import { INTERACTIVE_CARD_CLOSEUP_MAX_HEIGHT_RATIO, INTERACTIVE_CARD_CLOSEUP_MAX_WIDTH_RATIO } from '../lib/revealOverlayLayout';
 import { createMiNoteCardInput, type PackPointerEvent } from '../lib/miNoteCardInput';
+import { setMiNoteCardTiltTarget, stepMiNoteMotion as spring } from '../lib/miNoteCardTilt';
 import { isMiNoteFolderInteractive, MI_NOTE_OPEN_TAPS, type MiNoteFolderPose, type MiNoteRevealEvent, type MiNoteRevealState } from '../lib/miNoteCardReveal';
 import { createMiNoteTapSparkles } from '../lib/miNoteTapSparkles';
 import { playMiNotePackSound, preloadMiNotePackSounds, unlockMiNotePackSounds, type MiNotePackSound } from '../lib/miNotePackSounds';
@@ -86,20 +87,6 @@ const PACK_HOVER_YAW = THREE.MathUtils.degToRad(8);
 
 function cardAssetKey(card: DrifCardConfig) {
   return JSON.stringify([card.imageSrc, card.foilSrc, card.textureSrc]);
-}
-
-function spring(motion: Motion, target: number, frequency: number, dt: number, reduced: boolean) {
-  if (motion.value === target && motion.velocity === 0) return false;
-  const offset = motion.value - target;
-  const impulse = motion.velocity + frequency * offset;
-  const decay = Math.exp(-frequency * dt);
-  motion.value = reduced ? target : target + (offset + impulse * dt) * decay;
-  motion.velocity = reduced ? 0 : (motion.velocity - frequency * impulse * dt) * decay;
-  if (Math.abs(motion.value - target) < 0.0001 && Math.abs(motion.velocity) < 0.0008) {
-    motion.value = target;
-    motion.velocity = 0;
-  }
-  return motion.value !== target || motion.velocity !== 0;
 }
 
 export default function MiNotePackViewer(props: MiNotePackViewerProps) {
@@ -675,8 +662,7 @@ export default function MiNotePackViewer(props: MiNotePackViewerProps) {
       const halfHeight = Math.max(1, Math.abs(projectedCorner.y - projectedCenter.y) * height / 2);
       const x = (event.clientX - rect.left - (projectedCenter.x + 1) * width / 2) / halfWidth;
       const y = (event.clientY - rect.top - (1 - projectedCenter.y) * height / 2) / halfHeight;
-      if (inspectingPointer === null && (Math.abs(x) > 1 || Math.abs(y) > 1)) tiltTarget.set(0, 0);
-      else tiltTarget.set(-THREE.MathUtils.clamp(y, -1, 1) * 0.24, -THREE.MathUtils.clamp(x, -1, 1) * 0.3);
+      setMiNoteCardTiltTarget(tiltTarget, x, y, inspectingPointer !== null);
       invalidate();
     }
     const canHoverPack = () => currentProps.current.interactionEnabled

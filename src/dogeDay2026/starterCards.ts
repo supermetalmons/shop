@@ -343,17 +343,6 @@ export function dogeDay2026CardIdentityKey(card: DrifCardConfig): string {
   ]);
 }
 
-export function getDogeDay2026CardAssetSources(card: DrifCardConfig | undefined): string[] {
-  if (!card) return [];
-  return Array.from(
-    new Set(
-      [card.imageSrc, card.textureSrc, card.foilSrc]
-        .map((assetSrc) => normalizeDrifCardAssetSrc(assetSrc))
-        .filter((assetSrc) => assetSrc.length > 0),
-    ),
-  );
-}
-
 const DRIF_CARDS: DrifCardConfig[] = Array.from({ length: DRIF_CARD_COUNT }, (_, index) => {
   const assetId = getDrifAssetId(index);
   const effectId = DEFAULT_EFFECT_PREFERENCE_ASSIGNMENTS[assetId];
