@@ -100,7 +100,15 @@ export function ShopWalletControl({ interactive, model }: ShopWalletControlProps
         aria-expanded={interactive ? open : undefined}
         data-background-blur-focus-fallback={interactive ? '' : undefined}
       >
-        <FaWallet aria-hidden />
+        <FaWallet
+          size={16}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={48}
+          strokeLinejoin="round"
+          viewBox="-24 8 560 496"
+          aria-hidden
+        />
       </button>
       {open ? (
         <div ref={popupRef} id={popupId} className="top__wallet-popup" role="dialog" aria-label="Wallet" tabIndex={-1}>
