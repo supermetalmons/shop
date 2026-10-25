@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
-import { createElement, StrictMode, useLayoutEffect, type ReactNode } from 'react';
+import { createElement, StrictMode, useLayoutEffect, useState, type ReactNode } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { WalletContext } from '@solana/wallet-adapter-react';
 import type { DeliveryOrderSummary, GetProfileStateResponse, ReconcileProfileStateResponse } from '../src/types.ts';
@@ -22,6 +22,7 @@ import {
   type StaffWalletSession,
 } from '../src/lib/staffWalletSession.ts';
 import { useShopSignIn } from '../src/shop/account/useShopSignIn.ts';
+import { logoutSolanaSessions } from '../src/lib/logoutSolanaSessions.ts';
 import {
   anonymousSessionTestHooks,
   currentAnonymousSubject,
@@ -39,6 +40,8 @@ Object.defineProperty(globalThis, 'getComputedStyle', { configurable: true, valu
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', { configurable: true, writable: true, value: true });
 
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
+const { useHeaderWallet } = await import('../src/shop/account/useHeaderWallet.ts');
+const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 
 afterEach(() => cleanup());
 
@@ -153,7 +156,8 @@ class RuntimeHarness {
       if (typeof timer === 'number') this.timers.delete(timer);
     },
     currentStaffSession: () => this.staffSession,
-    installStaffSession: async (session, expectedToken) => {
+    installStaffSession: async (session, expectedToken, isCurrent) => {
+      if (isCurrent && !isCurrent()) return null;
       if ((this.staffSession?.token || null) !== expectedToken) return this.staffSession;
       this.staffSession = session;
       this.emitAuthSubject(session.wallet);
@@ -900,8 +904,6 @@ test('shop actions continue through wallet selection and real auth restoration',
             wallet: { connecting: false, disconnecting: false },
             walletModalVisible: modalVisible,
             setVisible: () => undefined,
-            isSignedInWallet: Boolean(wallet && auth.sessionWallet === wallet && auth.authenticated),
-            hasAuthenticatedAccount: Boolean(auth.sessionWallet && auth.authenticated),
             showToast: (message) => { messages.push(message); },
             isUserRejectedError: () => false,
           });
@@ -999,6 +1001,331 @@ test('a new action waits for an explicit logout already in progress', async () =
   });
   assert.equal(newIntent.aborted, false);
   assert.equal(harness.signOutCalls, 1);
+});
+
+test('explicit logout blocks fresh profile reads and signing until revocation completes', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  const logout = deferred<void>();
+  harness.signOutImpl = async () => {
+    await logout.promise;
+    harness.nextState = emptyState();
+    harness.emitAuthSubject(null);
+  };
+  const previousLoads = harness.loadCalls;
+  let signOut!: Promise<void>;
+  let refresh!: Promise<boolean>;
+  act(() => {
+    signOut = result.current.signOut();
+    refresh = result.current.refreshProfileState();
+    harness.emitRefresh();
+  });
+  await act(async () => {
+    await assert.rejects(result.current.signIn(), /Sign-out is in progress/);
+  });
+  assert.equal(harness.loadCalls, previousLoads);
+  assert.equal(harness.authenticateCalls, 0);
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.authenticated, false);
+  await act(async () => {
+    logout.resolve();
+    await Promise.all([signOut, refresh]);
+  });
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.authenticated, false);
+});
+
+test('a profile read that finishes during explicit logout cannot restore the old owner', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  const profile = deferred<GetProfileStateResponse>();
+  harness.loadImpl = () => profile.promise;
+  const previousLoads = harness.loadCalls;
+  let refresh!: Promise<boolean>;
+  act(() => { refresh = result.current.refreshProfileState(); });
+  await waitFor(() => assert.equal(harness.loadCalls, previousLoads + 1));
+  const logout = deferred<void>();
+  harness.signOutImpl = async () => {
+    await logout.promise;
+    harness.nextState = emptyState();
+    harness.emitAuthSubject(null);
+  };
+  let signOut!: Promise<void>;
+  act(() => { signOut = result.current.signOut(); });
+  await act(async () => {
+    profile.resolve(readyState(WALLET_A));
+    await refresh;
+  });
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.profile, null);
+  harness.loadImpl = async () => harness.nextState;
+  await act(async () => { logout.resolve(); await signOut; });
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  assert.equal(result.current.sessionWallet, null);
+});
+
+test('failed explicit logout revalidates the retained session after pending refreshes were blocked', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  const logout = deferred<void>();
+  harness.signOutImpl = () => logout.promise;
+  const previousLoads = harness.loadCalls;
+  let signOut!: Promise<void>;
+  act(() => {
+    signOut = result.current.signOut();
+    harness.emitRefresh();
+  });
+  const rejected = assert.rejects(signOut, /Logout unavailable/);
+  await act(async () => Promise.resolve());
+  assert.equal(harness.loadCalls, previousLoads);
+  assert.equal(result.current.sessionWallet, null);
+  await act(async () => {
+    logout.reject(new Error('Logout unavailable'));
+    await rejected;
+  });
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.equal(result.current.authenticated, true);
+  assert.equal(result.current.sessionResolution, 'settled');
+});
+
+test('logout invalidates queued staff installation without delaying session revocation', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.staffSession?.wallet === wallet;
+  harness.runtime.createStaffChallenge = async () => ({
+    challengeId: 'challenge', message: 'Staff challenge', expiresAt: 10_000,
+  });
+  const session: StaffWalletSession = {
+    wallet: WALLET_A, token: 'pending-staff-token', refreshedAt: 1_000, expiresAt: 100_000,
+  };
+  harness.runtime.authenticateStaffWallet = async () => session;
+  const install = deferred<void>();
+  let installStarted = false;
+  harness.runtime.installStaffSession = async (_session, _expectedToken, isCurrent) => {
+    installStarted = true;
+    await install.promise;
+    assert.ok(isCurrent);
+    if (!isCurrent()) return null;
+    harness.staffSession = session;
+    harness.emitAuthSubject(WALLET_A);
+    return session;
+  };
+  let revokedToken: string | undefined;
+  harness.signOutImpl = async () => {
+    revokedToken = harness.staffSession?.token;
+    harness.staffSession = null;
+    harness.emitAuthSubject(null);
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  let signIn!: Promise<{ wallet: string }>;
+  act(() => { signIn = result.current.signIn(); });
+  const rejected = assert.rejects(signIn, /Wallet changed during sign-in/);
+  await waitFor(() => assert.equal(installStarted, true));
+  let signOut!: Promise<void>;
+  act(() => { signOut = result.current.signOut(); });
+  assert.equal(harness.signOutCalls, 1);
+  await act(async () => {
+    install.resolve();
+    await Promise.all([signOut, rejected]);
+  });
+  assert.equal(harness.signOutCalls, 1);
+  assert.equal(revokedToken, undefined);
+  assert.equal(harness.staffSession, null);
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(result.current.authenticated, false);
+});
+
+test('a new action waits through anonymous and staff logout without an intermediate identity', async () => {
+  const harness = new RuntimeHarness();
+  harness.uid = WALLET_A;
+  harness.staffSession = { wallet: WALLET_A, token: 'staff-token', refreshedAt: 1, expiresAt: 10_000 };
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.staffSession?.wallet === wallet;
+  harness.reconcileImpl = () => new Promise(() => {});
+  const anonymousLogout = deferred<void>();
+  const staffLogout = deferred<void>();
+  let anonymousSubject: string | null = 'retained-anonymous-subject';
+  let staffLogoutStarted = false;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  harness.signOutImpl = () => logoutSolanaSessions({
+    readStaffWalletSession: () => harness.staffSession,
+    logoutAnonymousSession: async () => {
+      await anonymousLogout.promise;
+      anonymousSubject = null;
+      harness.emitAuthSubject(harness.staffSession?.wallet || anonymousSubject);
+    },
+    logoutStaffWalletSession: async (captured) => {
+      staffLogoutStarted = true;
+      await staffLogout.promise;
+      if (harness.staffSession?.token === captured?.token) harness.staffSession = null;
+      harness.nextState = emptyState();
+      harness.emitAuthSubject(harness.staffSession?.wallet || anonymousSubject);
+    },
+  });
+  let signOut!: Promise<void>;
+  act(() => { signOut = result.current.signOut(); });
+  const newIntent = result.current.intentCancellationSignal;
+  let finished = false;
+  let restoration!: Promise<unknown>;
+  act(() => {
+    restoration = result.current.awaitWalletSessionRestoration(WALLET_A).then((value) => {
+      finished = true;
+      return value;
+    });
+  });
+  assert.equal(staffLogoutStarted, false);
+  await act(async () => { anonymousLogout.resolve(); });
+  assert.equal(staffLogoutStarted, true);
+  assert.equal(finished, false);
+  assert.equal(newIntent.aborted, false);
+  await act(async () => {
+    staffLogout.resolve();
+    await signOut;
+    assert.equal(await restoration, 'sign-in-required');
+  });
+  assert.equal(newIntent.aborted, false);
+  assert.equal(result.current.sessionWallet, null);
+});
+
+test('partial staff logout disconnects the wallet and keeps the failed-session retry', async () => {
+  const harness = new RuntimeHarness();
+  harness.uid = WALLET_A;
+  harness.staffSession = { wallet: WALLET_A, token: 'staff-token', refreshedAt: 1, expiresAt: 10_000 };
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.staffSession?.wallet === wallet;
+  harness.reconcileImpl = () => new Promise(() => {});
+  let anonymousSubject: string | null = 'retained-anonymous-subject';
+  harness.runtime.currentAnonymousSubject = () => anonymousSubject;
+  const staffLogout = deferred<void>();
+  let anonymousFailure = true;
+  let anonymousLogouts = 0;
+  let disconnects = 0;
+  harness.signOutImpl = () => logoutSolanaSessions({
+    readStaffWalletSession: () => harness.staffSession,
+    logoutAnonymousSession: async () => {
+      anonymousLogouts += 1;
+      if (anonymousFailure) throw new TypeError('Failed to fetch');
+      anonymousSubject = null;
+      harness.emitAuthSubject(harness.staffSession?.wallet || anonymousSubject);
+    },
+    logoutStaffWalletSession: async () => {
+      await staffLogout.promise;
+      harness.staffSession = null;
+      harness.nextState = emptyState();
+      harness.emitAuthSubject(anonymousSubject);
+    },
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const { result, unmount } = renderHook(() => {
+    const [connected, setConnected] = useState(true);
+    const auth = useSolanaAuthWithRuntime(walletState(connected ? WALLET_A : null), harness.runtime);
+    const header = useHeaderWallet({
+      auth,
+      wallet: {
+        connected, connecting: false, disconnecting: false, wallet: null,
+        publicKey: connected ? new PublicKey(WALLET_A) : null,
+        disconnect: async () => { disconnects += 1; setConnected(false); },
+      },
+      signIn: async () => undefined,
+      showToast: () => undefined,
+    });
+    return { auth, header };
+  }, { wrapper: ({ children }) => createElement(QueryClientProvider, { client }, children) });
+  try {
+    await waitFor(() => assert.equal(result.current.auth.sessionWallet, WALLET_A));
+    let completion!: Promise<void>;
+    act(() => { completion = result.current.header.disconnect(); });
+    await act(async () => { staffLogout.resolve(); await completion; });
+    assert.equal(disconnects, 1);
+    assert.equal(result.current.header.open, true);
+    assert.match(result.current.header.disconnectError || '', /session could not be signed out/);
+    anonymousFailure = false;
+    await act(async () => { await result.current.header.disconnect(); });
+    assert.equal(anonymousLogouts, 2);
+    assert.equal(disconnects, 1);
+    assert.equal(result.current.header.open, false);
+    assert.equal(result.current.header.disconnectError, null);
+  } finally {
+    unmount();
+    client.clear();
+  }
+});
+
+test('signing in again with the same wallet resets a failed adapter-disconnect retry', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  let disconnects = 0;
+  let failDisconnect = true;
+  const { result, unmount } = renderHook(() => {
+    const [connected, setConnected] = useState(true);
+    const auth = useSolanaAuthWithRuntime(walletState(connected ? WALLET_A : null), harness.runtime);
+    const header = useHeaderWallet({
+      auth,
+      wallet: {
+        connected, connecting: false, disconnecting: false, wallet: null,
+        publicKey: connected ? new PublicKey(WALLET_A) : null,
+        disconnect: async () => {
+          disconnects += 1;
+          if (failDisconnect) throw new Error('Wallet unavailable');
+          setConnected(false);
+        },
+      },
+      signIn: auth.signIn,
+      showToast: () => undefined,
+    });
+    return { auth, header };
+  }, { wrapper: ({ children }) => createElement(QueryClientProvider, { client }, children) });
+  try {
+    await waitFor(() => assert.equal(result.current.auth.sessionWallet, WALLET_A));
+    await act(async () => { await result.current.header.disconnect(); });
+    assert.equal(harness.signOutCalls, 1);
+    assert.match(result.current.header.disconnectError || '', /wallet could not be disconnected/);
+    await waitFor(() => assert.equal(result.current.auth.sessionResolution, 'settled'));
+    const intent = result.current.auth.intentCancellationSignal;
+    await act(async () => { await result.current.auth.signIn(); });
+    assert.equal(result.current.auth.intentCancellationSignal, intent);
+    assert.equal(result.current.auth.authenticated, true);
+    assert.equal(result.current.header.disconnectError, null);
+    assert.equal(result.current.header.open, false);
+    failDisconnect = false;
+    await act(async () => { await result.current.header.disconnect(); });
+    assert.equal(harness.signOutCalls, 2);
+    assert.equal(disconnects, 2);
+    assert.equal(result.current.auth.authenticated, false);
+    assert.equal(result.current.auth.sessionWallet, null);
+    assert.equal(result.current.header.disconnectError, null);
+  } finally {
+    unmount();
+    client.clear();
+  }
+});
+
+test('pending logout still cancels intent for a different anonymous identity', async () => {
+  const harness = new RuntimeHarness();
+  harness.runtime.currentAnonymousSubject = () => 'original-anonymous-subject';
+  harness.reconcileImpl = () => new Promise(() => {});
+  const logout = deferred<void>();
+  harness.signOutImpl = () => logout.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  let completion!: Promise<void>;
+  act(() => { completion = result.current.signOut(); });
+  const intent = result.current.intentCancellationSignal;
+  act(() => { harness.emitAuthSubject('replacement-anonymous-subject'); });
+  assert.equal(intent.aborted, true);
+  await act(async () => { logout.resolve(); await completion; });
 });
 
 test('failed mismatched-session cleanup rejects the action gate', async () => {
@@ -1174,8 +1501,6 @@ test('an authenticated action skips restoration and signing during a stalled pro
       wallet: { connecting: false, disconnecting: false },
       walletModalVisible: false,
       setVisible: () => undefined,
-      isSignedInWallet: auth.authenticated && auth.sessionWallet === WALLET_A,
-      hasAuthenticatedAccount: auth.authenticated,
       showToast: (message) => { messages.push(message); },
       isUserRejectedError: () => false,
     });

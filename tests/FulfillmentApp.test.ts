@@ -2,13 +2,15 @@ import { MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES } from '../shared/fulfillmentAcc
 import assert from 'node:assert/strict';
 import test, { afterEach, mock } from 'node:test';
 import { createElement, useMemo, useState } from 'react';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WalletContext, type WalletContextState } from '@solana/wallet-adapter-react';
 import { WalletModalContext } from '@solana/wallet-adapter-react-ui';
 import type { FulfillmentOrder } from '../src/types.ts';
 import { listFrontendDrops } from '../src/config/deployment.ts';
 import { listAllowedFulfillmentDropIds } from '../src/lib/fulfillmentAccess.ts';
 import { readStaffWalletSession, saveStaffWalletSession, clearStaffWalletSession } from '../src/lib/staffWalletSession.ts';
+import { anonymousSessionTestHooks } from '../src/lib/anonymousSession.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -37,6 +39,7 @@ afterEach(async () => {
   await clearStaffWalletSession();
   window.localStorage.clear();
   window.sessionStorage.clear();
+  anonymousSessionTestHooks.resetValidation();
   mock.restoreAll();
 });
 
@@ -69,40 +72,59 @@ async function installSession(wallet: string) {
   });
 }
 
-function AppHarness({ wallet, initialDropId = '' }: { wallet: string; initialDropId?: string }) {
+function AppHarness({ wallet, initialDropId = '', onDisconnect }: {
+  wallet: string;
+  initialDropId?: string;
+  onDisconnect?: () => void;
+}) {
   const [selectedDropId, setSelectedDropId] = useState(initialDropId);
+  const [disconnectedWallet, setDisconnectedWallet] = useState<string | null>(null);
+  const [queryClient] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }));
   const walletState = useMemo<WalletContextState>(() => ({
-    autoConnect: false, wallets: [], wallet: null, publicKey: new PublicKey(wallet),
-    connecting: false, connected: true, disconnecting: false,
-    select: () => undefined, connect: async () => undefined, disconnect: async () => undefined,
+    autoConnect: false, wallets: [], wallet: null, publicKey: disconnectedWallet === wallet ? null : new PublicKey(wallet),
+    connecting: false, connected: disconnectedWallet !== wallet, disconnecting: false,
+    select: () => undefined, connect: async () => undefined,
+    disconnect: async () => { onDisconnect?.(); setDisconnectedWallet(wallet); },
     sendTransaction: async () => '', signTransaction: undefined, signAllTransactions: undefined,
     signMessage: undefined, signIn: undefined,
-  }), [wallet]);
-  return createElement(WalletContext.Provider, { value: walletState },
+  }), [disconnectedWallet, onDisconnect, wallet]);
+  return createElement(QueryClientProvider, { client: queryClient },
+    createElement(WalletContext.Provider, { value: walletState },
     createElement(WalletModalContext.Provider, { value: { visible: false, setVisible: () => undefined } },
       createElement(FulfillmentApp, {
         selectedDropId,
         onSelectedDropIdChange: setSelectedDropId,
         orderVisibilityFilter: 'all',
         onOrderVisibilityFilterChange: () => undefined,
-      })));
+      }))));
 }
 
-function interceptRequests(options: { pendingEthereumOrders?: Promise<Response>; pendingEthereumReview?: Promise<Response> } = {}) {
+function interceptRequests(options: {
+  pendingEthereumOrders?: Promise<Response>;
+  pendingEthereumReview?: Promise<Response>;
+  pendingStatusUpdate?: Promise<Response>;
+} = {}) {
   const requests: Array<{ path: string; dropId?: string }> = [];
   mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), window.location.origin).pathname;
     const body = JSON.parse(String(init?.body || '{}')) as { dropId?: string };
     requests.push({ path, dropId: body.dropId });
+    if (path === '/api/auth/anonymous/session') return Response.json({
+      subject: 'anon:123e4567-e89b-42d3-a456-426614174000',
+      refreshedAt: Date.now(),
+      expiresAt: Date.now() + 3_600_000,
+    });
+    if (path === '/api/auth/anonymous/logout' || path === '/api/staff/auth/logout') return Response.json({ ok: true });
     if (path === '/api/profile/state') {
-      const wallet = readStaffWalletSession()!.wallet;
+      const wallet = readStaffWalletSession()?.wallet ?? null;
       return Response.json({
         responseMode: 'profile-state', sessionWallet: wallet,
-        profile: { status: 'ready', value: { wallet } },
-        shipments: { status: 'ready', value: [] }, nextCursor: null,
+        profile: wallet ? { status: 'ready', value: { wallet } } : null,
+        shipments: wallet ? { status: 'ready', value: [] } : null, nextCursor: null,
       });
     }
     if (path === '/api/profile/reconcile') return Response.json({ mergedStripeDeliveryOrders: 0 });
+    if (path === '/api/fulfillment/order-status' && options.pendingStatusUpdate) return options.pendingStatusUpdate;
     if (path === ORDERS_PATH) {
       if (body.dropId === ETHEREUM_DROP && options.pendingEthereumOrders) return options.pendingEthereumOrders;
       return Response.json({
@@ -188,6 +210,53 @@ test('the admin loads Ethereum only when selected and returning to All drops cle
   assert.equal(view.queryByText('111K · Ethereum test order'), null);
   await assertOrdinaryExports(view);
   assertOrdinaryRequests(requests, ADMIN);
+});
+
+test('fulfillment exposes mainnet wallet balance and disconnect removes its authenticated orders', async () => {
+  await installSession(ADMIN);
+  const requests = interceptRequests();
+  const balances: string[] = [];
+  mock.method(Connection.prototype, 'getAccountInfo', async function (this: Connection, address: PublicKey) {
+    balances.push(this.rpcEndpoint);
+    assert.equal(address.toBase58(), ADMIN);
+    return { lamports: 1_234_567_890, owner: new PublicKey(ADMIN), executable: false, data: Buffer.alloc(0), rentEpoch: 0 };
+  });
+  let disconnects = 0;
+  const view = render(createElement(AppHarness, { wallet: ADMIN, onDisconnect: () => { disconnects += 1; } }));
+  await view.findByText('Order 7');
+  const walletButton = view.getByRole('button', { name: 'Wallet' });
+  assert.equal(view.queryByRole('button', { name: 'App menu' }), null);
+  assert.equal(balances.length, 0);
+  fireEvent.click(walletButton);
+  await view.findByText('1.2346 SOL');
+  assert.ok(balances.every((endpoint) => endpoint.endsWith('/rpc/mainnet-beta')));
+  fireEvent.click(view.getByRole('button', { name: 'Disconnect', exact: true }));
+  await waitFor(() => assert.equal(disconnects, 1));
+  await waitFor(() => assert.equal(view.queryByText('Order 7'), null));
+  assert.equal(readStaffWalletSession(), null);
+  assert.ok(requests.some(({ path }) => path === '/api/staff/auth/logout'));
+  assert.ok(requests.some(({ path }) => path === '/api/auth/anonymous/logout'));
+  assert.ok(view.getByRole('button', { name: 'Wallet' }));
+});
+
+test('closing the status editor while saving keeps Disconnect disabled until the mutation settles', async () => {
+  await installSession(ADMIN);
+  const pending = deferred<Response>();
+  const requests = interceptRequests({ pendingStatusUpdate: pending.promise });
+  mock.method(Connection.prototype, 'getAccountInfo', async () => null);
+  const view = render(createElement(AppHarness, { wallet: ADMIN }));
+  await view.findByText('Order 7');
+  fireEvent.click(view.getByRole('button', { name: 'Edit status', exact: true }));
+  fireEvent.change(view.getByRole('combobox', { name: 'Fulfillment status' }), { target: { value: 'Shipped' } });
+  fireEvent.click(view.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => assert.ok(requests.some(({ path }) => path === '/api/fulfillment/order-status')));
+  fireEvent.click(view.getByRole('button', { name: 'Cancel', exact: true }));
+  fireEvent.click(view.getByRole('button', { name: 'Wallet' }));
+  assert.equal((view.getByRole('button', { name: 'Disconnect', exact: true }) as HTMLButtonElement).disabled, true);
+  await act(async () => {
+    pending.resolve(Response.json({ deliveryId: 7, fulfillmentStatus: 'Shipped' }));
+  });
+  await waitFor(() => assert.equal((view.getByRole('button', { name: 'Disconnect', exact: true }) as HTMLButtonElement).disabled, false));
 });
 
 for (const wallet of MAINNET_ADMIN_SHIPPER_WALLET_ADDRESSES) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
-import { useRef, useState } from 'react';
+import { createElement, useRef, useState, type PropsWithChildren } from 'react';
 import { PublicKey } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -10,6 +10,9 @@ const { useShopSignIn } = await import('../src/shop/account/useShopSignIn.ts');
 const { useShopActionContinuation } = await import('../src/shop/account/useShopActionContinuation.ts');
 const { useShopActionHandlers } = await import('../src/shop/useShopActionHandlers.ts');
 const { isUserRejectedError } = await import('../src/shop/commerce/transactionSupport.ts');
+const { useSolanaAuthWithRuntime } = await import('../src/hooks/useSolanaAuth.ts');
+const { useHeaderWallet } = await import('../src/shop/account/useHeaderWallet.ts');
+const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 
 afterEach(cleanup);
 after(() => dom.window.close());
@@ -73,8 +76,6 @@ function rig(connected = true) {
       wallet: { connecting: false, disconnecting: false },
       walletModalVisible,
       setVisible: setWalletModalVisible,
-      isSignedInWallet: authenticated,
-      hasAuthenticatedAccount: authenticated,
       showToast,
       isUserRejectedError,
     });
@@ -93,7 +94,7 @@ function rig(connected = true) {
       showToast,
       purchase: { handleMint: async () => { calls.mint += 1; await mint.promise; } },
     } as unknown as Parameters<typeof useShopActionHandlers>[0]);
-    return { signIn, continuation, handlers, walletModalVisible, setWalletModalVisible, authenticated };
+    return { signIn, continuation, handlers, walletModalVisible, setWalletModalVisible, authenticated, authLoading };
   }, { initialProps: initial });
   const connect = () => act(() => {
     view.rerender({ ...initial, connected: true });
@@ -101,6 +102,94 @@ function rig(connected = true) {
   });
   return { ...view, initial, connect, restoration, signature, mint, calls, messages };
 }
+
+test('header logout blocks a new mint until session revocation and adapter disconnect finish', async () => {
+  const logout = deferred<void>();
+  const adapterDisconnect = deferred<void>();
+  const events: string[] = [];
+  let loggedOut = false;
+  const runtime: Parameters<typeof useSolanaAuthWithRuntime>[1] = {
+    currentAuthSubject: () => 'auth-a',
+    subscribeAuthSubject: () => () => {},
+    ensureAuthenticated: async () => 'auth-a',
+    loadProfileState: async () => loggedOut
+      ? { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null, nextCursor: null }
+      : {
+        responseMode: 'profile-state', sessionWallet: owner,
+        profile: { status: 'ready', value: { wallet: owner } },
+        shipments: { status: 'ready', value: [] }, nextCursor: null,
+      },
+    reconcileProfileState: async () => ({ mergedStripeDeliveryOrders: 0 }),
+    authenticateWallet: async () => ({ wallet: owner }),
+    signOut: async () => { events.push('sign-out'); await logout.promise; loggedOut = true; },
+    subscribeRefreshEvents: () => () => {},
+    isPageVisible: () => true,
+    now: Date.now,
+    setTimer: () => 0,
+    clearTimer: () => {},
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const view = renderHook(() => {
+    const [connected, setConnected] = useState(true);
+    const [disconnecting, setDisconnecting] = useState(false);
+    const wallet = {
+      connected, publicKey: connected ? publicKey : null, connecting: false, disconnecting: false, wallet: null,
+      signMessage: async () => new Uint8Array(64),
+      disconnect: async () => { events.push('disconnect'); await adapterDisconnect.promise; setConnected(false); },
+    };
+    const auth = useSolanaAuthWithRuntime(wallet, runtime);
+    const signIn = useShopSignIn({
+      auth, connectedWallet: connected ? owner : undefined, publicKey: wallet.publicKey, wallet,
+      walletModalVisible: false, setVisible: () => {}, showToast: () => {}, isUserRejectedError,
+    });
+    const continuation = useShopActionContinuation({
+      connectedWallet: connected ? owner : undefined,
+      blocked: disconnecting,
+      cancellationSignal: auth.intentCancellationSignal,
+      scopeKey: '/',
+      ensureSignedIn: signIn.ensureSignedIn,
+      ensureWalletConnected: signIn.ensureWalletConnected,
+      showToast: () => {},
+    });
+    const control = useHeaderWallet({
+      auth, wallet, signIn: signIn.ensureSignedIn,
+      mutationPending: continuation.pendingAction?.phase === 'running',
+      signInPending: continuation.pendingAction?.phase === 'authenticating',
+      onBeforeDisconnect: continuation.cancel,
+      onDisconnectingChange: setDisconnecting,
+      showToast: () => {},
+    });
+    return { auth, control, continuation, connected, disconnecting };
+  }, { wrapper });
+  await waitFor(() => assert.equal(view.result.current.auth.authenticated, true));
+  let completion!: Promise<void>;
+  act(() => { completion = view.result.current.control.disconnect(); });
+  assert.equal(view.result.current.disconnecting, true);
+  assert.equal(view.result.current.connected, true);
+  await act(async () => {
+    await view.result.current.continuation.run({
+      key: 'mint', requirement: 'wallet', cancelled: undefined,
+      execute: () => { events.push('mint'); },
+    });
+  });
+  assert.equal(view.result.current.continuation.pendingAction, null);
+  assert.deepEqual(events, ['sign-out']);
+  await act(async () => { logout.resolve(); });
+  assert.equal(view.result.current.disconnecting, true);
+  await act(async () => {
+    await view.result.current.continuation.run({
+      key: 'mint', requirement: 'wallet', cancelled: undefined,
+      execute: () => { events.push('mint'); },
+    });
+  });
+  assert.deepEqual(events, ['sign-out', 'disconnect']);
+  await act(async () => { adapterDisconnect.resolve(); await completion; });
+  assert.equal(view.result.current.disconnecting, false);
+  assert.equal(view.result.current.connected, false);
+  view.unmount();
+  client.clear();
+});
 
 for (const [handler, key] of [
   ['handleHeaderSignIn', 'header-sign-in'],
@@ -144,17 +233,17 @@ for (const [handler, key] of [
     assert.deepEqual(context.messages, []);
   });
 
-  test(`${key} picker dismissal releases the action without resetting header readiness`, async () => {
+  test(`${key} picker dismissal releases the action without resetting wallet idle readiness`, async () => {
     const context = rig(false);
-    await waitFor(() => assert.equal(context.result.current.signIn.headerWalletButtonRevealed, true));
+    await waitFor(() => assert.equal(context.result.current.signIn.walletIdleReady, true));
     let completion!: Promise<void>;
     act(() => { completion = context.result.current.handlers[handler](); });
     assert.equal(context.result.current.walletModalVisible, true);
-    assert.equal(context.result.current.signIn.headerWalletButtonRevealed, true);
+    assert.equal(context.result.current.signIn.walletIdleReady, true);
     act(() => { context.result.current.setWalletModalVisible(false); });
     await act(async () => { await completion; });
     assert.equal(context.result.current.continuation.pendingAction, null);
-    assert.equal(context.result.current.signIn.headerWalletButtonRevealed, true);
+    assert.equal(context.result.current.signIn.walletIdleReady, true);
     context.connect();
     await act(async () => { context.restoration.resolve('sign-in-required'); });
     assert.deepEqual(context.calls, { restoration: 0, signature: 0, mint: 0 });
@@ -172,23 +261,23 @@ for (const [handler, key] of [
     await act(async () => { context.restoration.resolve('sign-in-required'); });
     assert.equal(context.calls.signature, 0);
     assert.equal(context.result.current.authenticated, false);
-    assert.equal(context.result.current.signIn.headerWalletButtonRevealed, true);
+    assert.equal(context.result.current.signIn.authReady, true);
     assert.deepEqual(context.messages, []);
   });
 
-  test(`${key} signature rejection restores header readiness without a toast`, async () => {
+  test(`${key} signature rejection clears authentication loading without a toast`, async () => {
     const context = rig();
     let completion!: Promise<void>;
     act(() => { completion = context.result.current.handlers[handler](); });
     await act(async () => { context.restoration.resolve('sign-in-required'); });
     await waitFor(() => assert.equal(context.calls.signature, 1));
-    assert.equal(context.result.current.signIn.headerWalletButtonRevealed, false);
+    assert.equal(context.result.current.authLoading, true);
     await act(async () => {
       context.signature.reject(new Error('User rejected the request'));
       await completion;
     });
     assert.equal(context.result.current.continuation.pendingAction, null);
-    assert.equal(context.result.current.signIn.headerWalletButtonRevealed, true);
+    assert.equal(context.result.current.authLoading, false);
     assert.deepEqual(context.messages, []);
   });
 }

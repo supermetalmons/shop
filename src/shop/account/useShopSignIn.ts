@@ -10,8 +10,6 @@ type ShopSignInOptions = {
   wallet: { connecting: boolean; disconnecting: boolean };
   walletModalVisible: boolean;
   setVisible: (visible: boolean) => void;
-  isSignedInWallet: boolean;
-  hasAuthenticatedAccount: boolean;
   showToast: (message: string) => void;
   isUserRejectedError: (error: unknown) => boolean;
 };
@@ -36,8 +34,7 @@ type SignInAttempt = {
 
 export function useShopSignIn(options: ShopSignInOptions) {
   const {
-    auth: { loading: authLoading, sessionResolution }, connectedWallet, wallet,
-    isSignedInWallet, hasAuthenticatedAccount,
+    auth: { sessionResolution }, connectedWallet, wallet,
   } = options;
   const latestRef = useRef(options);
   latestRef.current = options;
@@ -46,7 +43,6 @@ export function useShopSignIn(options: ShopSignInOptions) {
   const authReady = sessionResolution === 'settled';
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [walletIdleReady, setWalletIdleReady] = useState(false);
-  const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
 
   const isCurrentWallet = useCallback((attempt: SignInAttempt, expectedWallet: string) => {
     const current = latestRef.current;
@@ -199,13 +195,6 @@ export function useShopSignIn(options: ShopSignInOptions) {
   }, []);
 
   useEffect(() => {
-    if (isSignedInWallet || hasAuthenticatedAccount || !authReady || authLoading) {
-      setHeaderWalletButtonRevealed(false);
-      return;
-    }
-    if (connectedWallet || (walletIdleReady && !walletBusy)) setHeaderWalletButtonRevealed(true);
-  }, [authLoading, authReady, connectedWallet, hasAuthenticatedAccount, isSignedInWallet, walletBusy, walletIdleReady]);
-  useEffect(() => {
     if (connectedWallet || walletBusy) {
       setWalletIdleReady(false);
       return;
@@ -215,7 +204,7 @@ export function useShopSignIn(options: ShopSignInOptions) {
   }, [connectedWallet, walletBusy]);
 
   return {
-    authReady, walletBusy, walletIdleReady, headerWalletButtonRevealed,
+    authReady, walletBusy, walletIdleReady,
     ensureSignedIn, ensureWalletConnected,
   };
 }

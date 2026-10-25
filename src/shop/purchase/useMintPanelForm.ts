@@ -11,6 +11,7 @@ export interface MintPanelFormOptions {
   onMint: (quantity: number, variantKey?: string) => void | Promise<void>;
   solanaMintVisible?: boolean;
   busy: boolean;
+  actionsBlocked?: boolean;
   onError?: (message: string) => void;
   boxNamePrefix?: string;
   priceSol: number;
@@ -71,7 +72,7 @@ function formatStripeUsdAmountCents(value: number): string {
 }
 
 export function useMintPanelForm({
-  stats, statsReady = Boolean(stats), onMint, solanaMintVisible = true, busy, onError, boxNamePrefix,
+  stats, statsReady = Boolean(stats), onMint, solanaMintVisible = true, busy, actionsBlocked = false, onError, boxNamePrefix,
   priceSol, discountPriceSol, maxSupply, maxPerTx,
   discountAvailable, discountMaxQuantity, onDiscountMint, discountBusy,
   onStripePaymentClick, stripePaymentVisible, stripePaymentBusy,
@@ -179,7 +180,7 @@ export function useMintPanelForm({
     !exceedsDiscountAllowance;
   const showStripePaymentButton = Boolean(stripePaymentVisible && onStripePaymentClick && stripePaymentDisplayPriceLabel) && !soldOut;
   const submitBusy = busy || discountSubmit.pending || (useDiscountMint && Boolean(discountBusy));
-  const controlsBusy = submitBusy || stripePaymentPending;
+  const controlsBusy = actionsBlocked || submitBusy || stripePaymentPending;
 
   const canSubmit = () => {
     if (controlsBusy || mintSubmit.isPending() || discountSubmit.isPending() || stripeSubmit.isPending()) return false;

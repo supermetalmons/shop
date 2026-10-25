@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after, afterEach } from 'node:test';
-import { createElement } from 'react';
+import { createElement, useRef, useState } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import { resolveDropContent } from '../src/lib/dropContent.ts';
@@ -11,22 +11,38 @@ const { cleanup, fireEvent, render } = await import('@testing-library/react');
 const { ShopHeaderActions } = await import('../src/shop/ui/ShopHeaderActions.tsx');
 const { ShopShipmentsSection } = await import('../src/shop/ui/ShopShipmentsSection.tsx');
 const { ShopShipmentsEmptyState } = await import('../src/shop/ui/ShopShipmentsEmptyState.tsx');
+const { ModalFocusScope } = await import('../src/components/ModalFocusScope.tsx');
 
 afterEach(cleanup);
 after(() => dom.window.close());
 
 test('only the interactive header copy can sign in or expose the admin menu', () => {
   let signIns = 0;
+  let walletCloses = 0;
+  let menuOpen = true;
   const props: Parameters<typeof ShopHeaderActions>[0] = {
     interactive: false,
-    showHeaderWalletButton: true,
-    handleHeaderWalletSignIn: async () => { signIns += 1; },
+    walletControl: {
+      address: undefined,
+      open: false,
+      buttonDisabled: false,
+      disconnectDisabled: false,
+      disconnecting: false,
+      disconnectError: null,
+      balanceLamports: undefined,
+      balanceLoading: false,
+      balanceError: false,
+      activate: async () => { signIns += 1; },
+      close: () => { walletCloses += 1; },
+      disconnect: async () => undefined,
+      retryBalance: () => undefined,
+    },
     canUseAdminMenu: true,
     mainnetOnlyStaff: false,
     canUseAdminViewer: false,
     settingsRef: { current: null },
     settingsOpen: true,
-    setSettingsOpen: () => undefined,
+    setSettingsOpen: (next) => { menuOpen = typeof next === 'function' ? next(menuOpen) : next; },
     ownerPickerOpened: false,
     setOwnerPickerOpened: () => undefined,
     authenticatedWallet: 'admin-wallet',
@@ -45,7 +61,7 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
     adminMenuDevnetDrops: [],
   };
   const view = render(createElement(ShopHeaderActions, props));
-  const passiveWallet = view.getByRole('button', { name: 'Sign In' });
+  const passiveWallet = view.container.querySelector<HTMLButtonElement>('.top__wallet-button')!;
   fireEvent.click(passiveWallet);
   assert.equal(signIns, 0);
   assert.equal(passiveWallet.tabIndex, -1);
@@ -53,11 +69,19 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
   assert.equal(view.getAllByRole('button').every((button) => button.tabIndex === -1), true);
 
   view.rerender(createElement(ShopHeaderActions, { ...props, interactive: true }));
-  const activeWallet = view.getByRole('button', { name: 'Sign In' });
+  const activeWallet = view.getByRole('button', { name: 'Wallet' });
   fireEvent.click(activeWallet);
   assert.equal(signIns, 1);
   assert.equal(activeWallet.tabIndex, 0);
   assert.ok(view.getByRole('menu', { name: 'App menu' }));
+  const dashboard = view.getByRole('button', { name: 'App menu' });
+  assert.ok(dashboard.compareDocumentPosition(activeWallet) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  fireEvent.click(dashboard);
+  assert.equal(walletCloses, 1);
+  menuOpen = true;
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(menuOpen, false);
+  assert.ok(document.activeElement === dashboard);
 
   const expandedProps = {
     ...props,
@@ -84,6 +108,59 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
   assert.ok(view.getByRole('button', { name: 'fulfillment' }));
   assert.ok(view.getByRole('button', { name: 'override address' }));
   assert.ok(view.getByRole('button', { name: 'mi_note_cards/wip' }));
+});
+
+test('an inert app menu leaves Escape and focus with the active WIP preview', () => {
+  let previewEscapes = 0;
+  function Harness({ previewOpen }: { previewOpen: boolean }) {
+    const [settingsOpen, setSettingsOpen] = useState(true);
+    const settingsRef = useRef<HTMLDivElement | null>(null);
+    const props: Parameters<typeof ShopHeaderActions>[0] = {
+      interactive: true,
+      walletControl: {
+        address: undefined, open: false, buttonDisabled: false, disconnectDisabled: false,
+        disconnecting: false, disconnectError: null, balanceLamports: undefined,
+        balanceLoading: false, balanceError: false,
+        activate: async () => undefined, close: () => undefined,
+        disconnect: async () => undefined, retryBalance: () => undefined,
+      },
+      canUseAdminMenu: true, mainnetOnlyStaff: false, canUseAdminViewer: false,
+      settingsRef, settingsOpen, setSettingsOpen,
+      ownerPickerOpened: false, setOwnerPickerOpened: () => undefined,
+      authenticatedWallet: 'admin-wallet', adminViewedOwner: null,
+      setAdminViewedOwner: () => undefined, deliveryOrderOwners: [],
+      wipPickerOpened: true, setWipPickerOpened: () => undefined,
+      devnetDropsPickerOpened: false, setDevnetDropsPickerOpened: () => undefined,
+      deliveryOrderOwnersLoadingMore: false,
+      fetchNextDeliveryOrderOwners: async () => ({} as Awaited<ReturnType<Parameters<typeof ShopHeaderActions>[0]['fetchNextDeliveryOrderOwners']>>),
+      deliveryOrderOwnersHasNextPage: false, deliveryOrderOwnersError: null,
+      owner: 'admin-wallet', adminMenuDevnetDrops: [],
+    };
+    return createElement('div', null,
+      createElement('div', { inert: previewOpen || undefined }, createElement(ShopHeaderActions, props)),
+      previewOpen ? createElement(ModalFocusScope, {
+        ariaLabel: 'Card pack preview',
+        onEscape: () => { previewEscapes += 1; },
+        children: createElement('button', null, 'Close preview'),
+      }) : null,
+    );
+  }
+  const view = render(createElement(Harness, { previewOpen: false }));
+  assert.ok(view.getByRole('menu', { name: 'App menu' }));
+  view.rerender(createElement(Harness, { previewOpen: true }));
+  const previewButton = view.getByRole('button', { name: 'Close preview' });
+  assert.equal(document.activeElement, previewButton);
+  fireEvent.keyDown(previewButton, { key: 'Escape' });
+  assert.equal(previewEscapes, 1);
+  assert.equal(document.activeElement, previewButton);
+  assert.ok(view.getByRole('menu', { name: 'App menu' }));
+
+  view.rerender(createElement(Harness, { previewOpen: false }));
+  const dashboard = view.getByRole('button', { name: 'App menu' });
+  dashboard.focus();
+  fireEvent.keyDown(dashboard, { key: 'Escape' });
+  assert.equal(view.queryByRole('menu'), null);
+  assert.equal(document.activeElement, dashboard);
 });
 
 test('shipment rows preserve retained-data warnings and keyboard image viewing', () => {

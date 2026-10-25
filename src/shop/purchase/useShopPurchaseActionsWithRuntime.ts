@@ -34,6 +34,7 @@ export type ShopPurchaseActionsOptions = {
   connectedWallet: string | undefined;
   publicKey: PublicKey | null;
   walletBusy: boolean;
+  actionsBlocked?: boolean;
   authSubject: string | null;
   effectiveMintStats: MintStats | undefined;
   activeDiscountAllowance: number;
@@ -58,7 +59,7 @@ export type ShopPurchaseActionsOptions = {
 };
 
 export function useShopPurchaseActionsWithRuntime({
-  routeDrop, routeConnection, connectedWallet, publicKey, walletBusy, authSubject,
+  routeDrop, routeConnection, connectedWallet, publicKey, walletBusy, actionsBlocked = false, authSubject,
   effectiveMintStats, activeDiscountAllowance, activeDiscountScope, activeDiscountVersion,
   shouldFetchMintStats, refetchStats, refetchInventory, refreshInventoryAfterMint,
   addLocalMintedBoxes, blockViewerModeAction, requireRouteDrop, setVisible, showToast,
@@ -77,6 +78,8 @@ export function useShopPurchaseActionsWithRuntime({
   const [successfulMintToken, setSuccessfulMintToken] = useState(0);
   const mintActionLockRef = useRef<MintMode | null>(null);
   const stripeCheckoutOperationRef = useRef<StripeCheckoutOperationState | null>(null);
+  const actionsBlockedRef = useRef(actionsBlocked);
+  actionsBlockedRef.current = actionsBlocked;
   const mintedOut = useMemo(() => {
     return !effectiveMintStats || effectiveMintStats.remaining <= 0;
   }, [effectiveMintStats]);
@@ -88,6 +91,7 @@ export function useShopPurchaseActionsWithRuntime({
     activeDiscountAllowance, activeDiscountScope, activeDiscountVersion,
   }, runtime);
   const handleSolanaMint = async (mode: MintMode, quantity: number, variantKey?: string) => {
+    if (actionsBlockedRef.current) return;
     if (blockViewerModeAction()) return;
     const action = mode === 'discount' ? 'discount mint' : 'mint';
     const mintDrop = requireRouteDrop(action);
@@ -150,6 +154,7 @@ export function useShopPurchaseActionsWithRuntime({
   const handleDiscountMint = (quantity: number, variantKey?: string) => handleSolanaMint('discount', quantity, variantKey);
 
   const handleStripePayment = async (quantity: number, variantKey?: string) => {
+    if (actionsBlockedRef.current) return;
     if (blockViewerModeAction()) return;
     const mintDrop = requireRouteDrop('Stripe payment');
     const stripePaymentMode = stripeCheckoutModeForDrop(mintDrop);

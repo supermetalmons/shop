@@ -1,20 +1,26 @@
 import assert from 'node:assert/strict';
-import test, { after, afterEach } from 'node:test';
-import { PublicKey, TransactionMessage, VersionedTransaction, type Connection } from '@solana/web3.js';
+import test, { after, afterEach, mock } from 'node:test';
+import { createElement, useState, type PropsWithChildren } from 'react';
+import { Connection, PublicKey, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import * as boxMinter from '../src/lib/boxMinter.ts';
 
 const { dom } = setupFrontendDom();
 const { act, cleanup, renderHook, waitFor } = await import('@testing-library/react');
+const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+const { useHeaderWallet } = await import('../src/shop/account/useHeaderWallet.ts');
 const { useShopPurchaseActionsWithRuntime: useShopPurchaseActions } = await import('../src/shop/purchase/useShopPurchaseActionsWithRuntime.ts');
 const { useEffectiveMintStats } = await import('../src/shop/purchase/useShopPurchaseState.ts');
 const { discountUsedKey } = await import('../src/shop/persistedState.ts');
 type Options = Parameters<typeof useShopPurchaseActions>[0];
 type Runtime = NonNullable<Parameters<typeof useShopPurchaseActions>[1]>;
+const queryClients: InstanceType<typeof QueryClient>[] = [];
 
 afterEach(() => {
   cleanup();
+  mock.restoreAll();
+  queryClients.splice(0).forEach((client) => client.clear());
   dom.window.localStorage.clear();
 });
 after(() => dom.window.close());
@@ -168,6 +174,98 @@ test('Stripe retry retains the operation after credential resolution and stores 
     quantity: 1, remainingBeforeCheckout: 95, variantKey: 'L', variantRemainingBeforeCheckout: 10,
   }]);
   assert.deepEqual(events.slice(-2), ['remember-checkout', 'redirect']);
+});
+
+for (const outcome of ['success', 'failure'] as const) {
+  test(`pending Stripe checkout prevents disconnect until ${outcome}`, async () => {
+    mock.method(Connection.prototype, 'getAccountInfo', async () => null);
+    const { options, runtime, events } = harness();
+    options.authSubject = 'signed-in-subject';
+    const checkout = deferred<void>();
+    runtime.createStripeCheckoutSession = async () => {
+      await checkout.promise;
+      if (outcome === 'failure') throw new Error('Checkout failed');
+      return { id: 'cs_test_pending', url: 'https://checkout.stripe.com/test', livemode: false, authSubject: options.authSubject! };
+    };
+    const intentCancellationSignal = new AbortController().signal;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClients.push(client);
+    const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+    const { result } = renderHook(() => {
+      const purchase = useShopPurchaseActions(options, runtime);
+      const walletControl = useHeaderWallet({
+        auth: {
+          authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled', loading: false,
+          intentCancellationSignal, signOut: async () => { events.push('sign-out'); },
+        },
+        wallet: {
+          connected: true, publicKey: options.publicKey, wallet: null, connecting: false, disconnecting: false,
+          disconnect: async () => { events.push('disconnect'); },
+        },
+        mutationPending: purchase.stripePaymentLoading,
+        signIn: async () => {},
+        showToast: options.showToast,
+      });
+      return { purchase, walletControl };
+    }, { wrapper });
+    let completion!: Promise<void>;
+    act(() => { completion = result.current.purchase.handleStripePayment(1); });
+    assert.equal(result.current.purchase.stripePaymentLoading, true);
+    await act(async () => { await result.current.walletControl.activate(); });
+    assert.equal(result.current.walletControl.open, true);
+    assert.equal(result.current.walletControl.disconnectDisabled, true);
+    await act(async () => { await result.current.walletControl.disconnect(); });
+    assert.deepEqual(events, []);
+    await act(async () => { checkout.resolve(); await completion; });
+    assert.equal(result.current.purchase.stripePaymentLoading, false);
+    assert.equal(result.current.walletControl.disconnectDisabled, false);
+    assert.deepEqual(events, outcome === 'success' ? ['remember-checkout', 'redirect'] : ['toast:Checkout failed']);
+    await act(async () => { await result.current.walletControl.disconnect(); });
+    assert.deepEqual(events.slice(-2), ['sign-out', 'disconnect']);
+  });
+}
+
+test('logout blocks retained mint and Stripe callbacks until the adapter disconnect completes', async () => {
+  const { options, runtime, events } = harness();
+  const logout = deferred<void>();
+  const intentCancellationSignal = new AbortController().signal;
+  runtime.createStripeCheckoutSession = async () => {
+    events.push('checkout');
+    return { id: 'cs_test_after_logout', url: 'https://checkout.stripe.com/test', livemode: false, authSubject: 'anonymous-subject' };
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClients.push(client);
+  const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client }, children);
+  const { result } = renderHook(() => {
+    const [actionsBlocked, setActionsBlocked] = useState(false);
+    const purchase = useShopPurchaseActions({ ...options, actionsBlocked }, runtime);
+    const walletControl = useHeaderWallet({
+      auth: {
+        authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled', loading: false,
+        intentCancellationSignal, signOut: async () => { events.push('sign-out'); await logout.promise; },
+      },
+      wallet: {
+        connected: true, publicKey: options.publicKey, wallet: null, connecting: false, disconnecting: false,
+        disconnect: async () => { events.push('disconnect'); },
+      },
+      mutationPending: purchase.stripePaymentLoading,
+      onDisconnectingChange: setActionsBlocked,
+      signIn: async () => {},
+      showToast: options.showToast,
+    });
+    return { purchase, walletControl };
+  }, { wrapper });
+  const mint = result.current.purchase.handleMint;
+  const checkout = result.current.purchase.handleStripePayment;
+  let completion!: Promise<void>;
+  act(() => { completion = result.current.walletControl.disconnect(); });
+  await act(async () => { await mint(1); await checkout(1); });
+  assert.deepEqual(events, ['sign-out']);
+  assert.equal(result.current.purchase.stripePaymentLoading, false);
+  await act(async () => { logout.resolve(); await completion; });
+  assert.deepEqual(events, ['sign-out', 'disconnect']);
+  await act(async () => { await checkout(1); });
+  assert.deepEqual(events, ['sign-out', 'disconnect', 'checkout', 'remember-checkout', 'redirect']);
 });
 
 test('viewer mode stops both payment paths before any wallet or network work', async () => {

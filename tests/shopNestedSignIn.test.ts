@@ -66,7 +66,6 @@ function rig() {
       },
       connectedWallet: owner, publicKey, wallet,
       walletModalVisible: false, setVisible: () => {},
-      isSignedInWallet: sessionValid, hasAuthenticatedAccount: sessionValid,
       showToast, isUserRejectedError: () => false,
     });
     const continuation = useShopActionContinuation({

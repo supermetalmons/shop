@@ -161,6 +161,44 @@ test('staff session installation never overwrites a replacement token', async ()
   }
 });
 
+test('queued staff installation rechecks its intent inside the session lock', async (t) => {
+  const originalNow = Date.now;
+  Date.now = () => NOW_MS;
+  const candidate = { wallet: WALLET, token: TOKEN, refreshedAt: NOW_MS, expiresAt: NOW_MS + 100_000 };
+  const replacement = { wallet: OTHER_WALLET, token: OTHER_TOKEN, refreshedAt: NOW_MS, expiresAt: NOW_MS + 100_000 };
+  try {
+    for (const existing of [null, replacement]) {
+      await t.test(existing ? 'preserves replacement' : 'keeps signed-out state', async () => {
+        await clearStaffWalletSession();
+        if (existing) await saveStaffWalletSession(existing);
+        const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+        let release!: () => void;
+        const blocked = new Promise<void>((resolve) => { release = resolve; });
+        Object.defineProperty(globalThis, 'navigator', {
+          configurable: true,
+          value: { locks: { request: async (_name: string, callback: () => unknown) => {
+            await blocked;
+            return callback();
+          } } },
+        });
+        try {
+          let current = true;
+          const installing = installStaffWalletSessionIfUnchanged(candidate, existing?.token ?? null, () => current);
+          current = false;
+          release();
+          assert.equal(await installing, null);
+          assert.deepEqual(readStaffWalletSession(NOW_MS), existing);
+        } finally {
+          if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+          else Reflect.deleteProperty(globalThis, 'navigator');
+        }
+      });
+    }
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test('staff logout clears only after remote revocation succeeds', async () => {
   const originalNow = Date.now;
   Date.now = () => NOW_MS;

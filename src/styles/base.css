@@ -324,37 +324,6 @@ header.top--spacer {
   gap: var(--top-actions-gap);
 }
 
-.top__wallet-button,
-.top__wallet-spacer {
-  width: var(--top-wallet-width);
-  flex: 0 0 var(--top-wallet-width);
-}
-
-.top__wallet-button {
-  min-height: var(--top-wallet-min-height);
-  padding: var(--top-wallet-padding-y) var(--top-wallet-padding-x);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  user-select: none;
-  -webkit-user-select: none;
-  font-size: var(--top-wallet-font-size);
-  font-weight: 600;
-}
-
-.top__wallet-button span {
-  min-width: 0;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-.top__wallet-spacer {
-  height: var(--top-wallet-min-height);
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .top__actions {
   position: absolute;
   top: 50%;
@@ -394,7 +363,114 @@ header.top--spacer {
 
 .top__settings:focus-visible {
   outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.top__wallet-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.top__wallet-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(220px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: none;
+  border-radius: 9px;
+  background: rgba(250, 250, 250, 0.95);
+  color: var(--fg);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   box-shadow: none;
+  font-size: 12px;
+}
+
+.top__wallet-address {
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.top__wallet-caption {
+  color: var(--muted);
+}
+
+.top__wallet-balance-value {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+button.top__wallet-retry {
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+}
+
+button.top__wallet-retry:hover:not(:disabled) {
+  background: none;
+  text-decoration: underline;
+}
+
+.top__wallet-error {
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+button.top__wallet-disconnect {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(118, 119, 135, 0.08);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.top__wallet-disconnect:hover:not(:disabled) {
+  background: rgba(118, 119, 135, 0.13);
+  color: var(--fg);
+}
+
+button.top__wallet-disconnect:focus-visible,
+button.top__wallet-retry:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .top__wallet-popup {
+    background: rgba(35, 35, 35, 0.95);
+  }
+
+  button.top__wallet-disconnect {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  button.top__wallet-disconnect:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+  }
+}
+
+@media (pointer: coarse) {
+  button.top__wallet-disconnect {
+    min-height: 44px;
+  }
 }
 
 .top__submenu {
@@ -511,10 +587,7 @@ button.link.top__submenu-section:focus-visible {
 
 header.top--shop {
   --top-gap: clamp(8px, 2vw, 12px);
-  --top-wallet-width: 80px;
-  --top-wallet-font-size: 12px;
-  --top-wallet-padding-x: 10px;
-  --top-wallet-padding-y: 0;
+  --top-wallet-width: 32px;
   --top-wallet-min-height: 36px;
   --top-settings-width: 32px;
   --top-actions-gap: 6px;
@@ -586,17 +659,15 @@ header.top--shop.top--spacer {
   gap: var(--top-actions-gap);
 }
 
-.top--shop .top__wallet-button {
-  border: none;
-  box-shadow: none;
-  transition: background-color 0.16s ease;
-}
-
 .top--shop .top__actions {
   position: relative;
   top: auto;
   right: auto;
   transform: none;
+}
+
+.top--shop .top__actions > .top__submenu {
+  right: calc(-1 * (var(--top-settings-width) + var(--top-actions-gap)));
 }
 
 .top--shop .top__settings {
@@ -611,19 +682,12 @@ header.top--shop.top--spacer {
 
 @media (max-width: 360px) {
   header.top--shop {
-    --top-wallet-font-size: 11.5px;
-    --top-wallet-padding-x: 9px;
     --top-gap: 6px;
     padding: 8px 0;
   }
 }
 
 @media (max-width: 300px) {
-  header.top--shop {
-    --top-wallet-font-size: 11px;
-    --top-wallet-padding-x: 8px;
-  }
-
   .top--shop .brand h1 {
     font-size: 17px;
     gap: 5px;

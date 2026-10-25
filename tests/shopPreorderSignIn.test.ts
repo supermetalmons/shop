@@ -107,7 +107,6 @@ function rig() {
       connectedWallet, publicKey,
       wallet: { connecting: false, disconnecting: false },
       walletModalVisible, setVisible: setWalletModalVisible,
-      isSignedInWallet: authenticated, hasAuthenticatedAccount: authenticated,
       showToast: (message) => { messages.push(message); },
       isUserRejectedError: () => false,
     });

@@ -4,6 +4,7 @@ type WalletGateOptions = { signal?: AbortSignal; expectedWallet?: string };
 
 type ShopActionContinuationOptions = {
   connectedWallet: string | undefined;
+  blocked?: boolean;
   scopeKey: string;
   cancellationSignal?: AbortSignal;
   ensureSignedIn: (options?: WalletGateOptions) => Promise<boolean>;
@@ -173,7 +174,7 @@ export function useShopActionContinuation(options: ShopActionContinuationOptions
 
   const run = useCallback(<T,>(request: ShopActionRequest<T>): Promise<T> => {
     const cancellationSignal = latest.current.cancellationSignal;
-    if (!mounted.current || active.current || cancellationSignal?.aborted) return Promise.resolve(request.cancelled);
+    if (!mounted.current || latest.current.blocked || active.current || cancellationSignal?.aborted) return Promise.resolve(request.cancelled);
     const controller = new AbortController();
     let resolve!: (value: T) => void;
     let reject!: (error: unknown) => void;

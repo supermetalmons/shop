@@ -225,8 +225,6 @@ function signInOptions(overrides: Partial<Parameters<typeof useShopSignIn>[0]> =
     wallet: { connecting: false, disconnecting: false },
     walletModalVisible: false,
     setVisible: () => undefined,
-    isSignedInWallet: false,
-    hasAuthenticatedAccount: false,
     showToast: () => undefined,
     isUserRejectedError: () => false,
     ...overrides,

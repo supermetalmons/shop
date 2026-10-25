@@ -12,6 +12,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import type { FulfillmentOrder } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { updateFulfillmentStatus } from './api/fulfillment';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import { useFigureMetadataSnapshot, useFigureMetadataTargets } from './hooks/useFigureMetadata';
 import { resolveDropContent } from './lib/dropContent';
@@ -25,6 +26,12 @@ import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStatio
 import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
 import { useFulfillmentExports } from './fulfillment/useFulfillmentExports';
 import { ShopHeader } from './components/ShopHeader';
+import { useHeaderWallet } from './shop/account/useHeaderWallet';
+import { useShopSignIn } from './shop/account/useShopSignIn';
+import { isUserRejectedError } from './shop/commerce/transactionSupport';
+import { ShopWalletControl } from './shop/ui/ShopWalletControl';
+import { ShopStatus } from './shop/ui/ShopStatus';
+import { useShopFeedback } from './shop/ui/useShopFeedback';
 import { BodyPortal } from './components/BackgroundBlurLayer';
 import {
   DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
@@ -40,7 +47,6 @@ import {
   type FrontendDeploymentConfig,
 } from './config/deployment';
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
-import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
 import { fulfillmentOrderKey, groupFulfillmentOrders } from './fulfillment/orders';
 import {
   collectFulfillmentFigureMetadataTargets,
@@ -146,14 +152,14 @@ export default function FulfillmentApp({
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
+  const auth = useSolanaAuth();
   const {
     sessionWallet,
     authenticated,
-    signIn,
     loading: authLoading,
     error: authError,
     sessionResolution,
-  } = useSolanaAuth();
+  } = auth;
   const connectedWallet = walletAdapter.connected ? publicKey?.toBase58() || '' : '';
   const authenticatedWallet = authenticated && sessionWallet ? sessionWallet : '';
   const walletAddress = connectedWallet || authenticatedWallet;
@@ -189,11 +195,6 @@ export default function FulfillmentApp({
   const duplicateDropContent = useMemo(() => (duplicateDrop ? resolveDropContent(duplicateDrop) : null), [duplicateDrop]);
   const duplicateFigureMediaBase = duplicateDropContent?.figures.fulfillmentMediaBaseUrl;
   const signedIn = Boolean(authenticatedWallet && authenticatedWallet === walletAddress);
-  const signInReadiness = walletSessionSignInReadiness({
-    hasAuthenticatedSession: signedIn,
-    sessionResolution,
-    authLoading,
-  });
   const walletHasFulfillmentAccess = visibleDrops.length > 0 || hasEthereumDropAccess;
   const hasFulfillmentAccess = walletHasFulfillmentAccess && signedIn;
   const canAdminEditFulfillmentAddress = signedIn && hasFulfillmentAddressAdminAccess(walletAddress);
@@ -208,7 +209,7 @@ export default function FulfillmentApp({
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
   const figureMetadataByKey = useFigureMetadataSnapshot();
-  const [pendingSignIn, setPendingSignIn] = useState(false);
+  const [pendingStatusUpdates, setPendingStatusUpdates] = useState(0);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const [activeAddressOrderKey, setActiveAddressOrderKey] = useState<string | null>(null);
   const [activeShipstationOrderKey, setActiveShipstationOrderKey] = useState<string | null>(null);
@@ -437,32 +438,16 @@ export default function FulfillmentApp({
   );
 
   const handleCloseAddressModal = useCallback(() => setActiveAddressOrderKey(null), []);
-
-  const handleSolanaSignIn = useCallback(() => {
-    if (!connectedWallet || !publicKey) {
-      setPendingSignIn(true);
-      setWalletModalVisible(true);
-      return;
-    }
-    if (!walletHasFulfillmentAccess || signInReadiness !== 'sign') return;
-    void signIn();
-  }, [connectedWallet, publicKey, setWalletModalVisible, signIn, signInReadiness, walletHasFulfillmentAccess]);
-
-  useEffect(() => {
-    if (!pendingSignIn || !connectedWallet || !publicKey) return;
-    if (!walletHasFulfillmentAccess || signedIn) {
-      setPendingSignIn(false);
-      return;
-    }
-    if (signInReadiness !== 'sign') return;
-    setPendingSignIn(false);
-    void signIn();
-  }, [connectedWallet, pendingSignIn, publicKey, signIn, signedIn, signInReadiness, walletHasFulfillmentAccess]);
-
-  useEffect(() => {
-    if (!pendingSignIn || walletModalVisible || connectedWallet) return;
-    setPendingSignIn(false);
-  }, [connectedWallet, pendingSignIn, walletModalVisible]);
+  const statusApi = useMemo(() => ({
+    updateFulfillmentStatus: async (...args: Parameters<typeof updateFulfillmentStatus>) => {
+      setPendingStatusUpdates((count) => count + 1);
+      try {
+        return await updateFulfillmentStatus(...args);
+      } finally {
+        setPendingStatusUpdates((count) => count - 1);
+      }
+    },
+  }), []);
 
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
   const showManualReviewDropId = selectedDropIds.length > 1;
@@ -486,6 +471,38 @@ export default function FulfillmentApp({
     setOrdersError,
     onMenuClose: closeExportMenu,
   });
+
+  const headerSuspended = walletModalVisible || Boolean(activeUpdateOrder || activeAddressOrder || activeShipstationOrder) || secretCodesExporting;
+  const feedback = useShopFeedback(headerSuspended);
+  const signIn = useShopSignIn({
+    auth,
+    connectedWallet: connectedWallet || undefined,
+    publicKey,
+    wallet: walletAdapter,
+    walletModalVisible,
+    setVisible: setWalletModalVisible,
+    showToast: feedback.showToast,
+    isUserRejectedError,
+  });
+  const closeHeaderCompanions = useCallback(() => {
+    setManualReviewMenuOpen(false);
+    setExportMenuOpen(false);
+  }, []);
+  const walletControl = useHeaderWallet({
+    auth,
+    wallet: walletAdapter,
+    signIn: signIn.ensureSignedIn,
+    mutationPending: pendingStatusUpdates > 0,
+    suspended: headerSuspended,
+    scopeKey: `fulfillment:${selectedDropId}`,
+    onBeforeOpen: closeHeaderCompanions,
+    onBeforeDisconnect: () => {
+      closeHeaderCompanions();
+      setWalletModalVisible(false);
+    },
+    showToast: feedback.showToast,
+  });
+  const handleSolanaSignIn = () => { void walletControl.activate(); };
 
   const renderExportMenu = () => (
     <div className="fulfillment-export-menu" role="menu" aria-label="Fulfillment exports">
@@ -522,12 +539,16 @@ export default function FulfillmentApp({
 
   return (
     <div className="page fulfillment-page">
-      <ShopHeader scrollHomeToTop />
+      <ShopStatus feedback={feedback} suspended={headerSuspended} toastAboveModal={false} />
+      <ShopHeader
+        scrollHomeToTop
+        renderRight={({ interactive }) => <ShopWalletControl interactive={interactive} model={walletControl} />}
+      />
 
       {!walletBusy && (walletReady || signedIn) && (walletAddress ? (!walletHasFulfillmentAccess || authReady) : authReady) ? (
         !walletAddress ? (
           <section className="card">
-            <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>
+            <button type="button" onClick={handleSolanaSignIn} disabled={walletControl.buttonDisabled}>
               {authLoading ? 'Signing in…' : 'Sign in with Solana'}
             </button>
           </section>
@@ -538,7 +559,7 @@ export default function FulfillmentApp({
           </section>
         ) : !signedIn ? (
           <section className="card">
-            <button type="button" onClick={handleSolanaSignIn} disabled={authLoading}>
+            <button type="button" onClick={handleSolanaSignIn} disabled={walletControl.buttonDisabled}>
               {authLoading ? 'Signing in…' : 'Sign in with Solana'}
             </button>
           </section>
@@ -748,6 +769,7 @@ export default function FulfillmentApp({
         onClose={handleCloseUpdateModal}
         onOrderUpdated={updateOrder}
         onError={setOrdersError}
+        api={statusApi}
       />
 
       {authError ? <div className="error">{authError}</div> : null}

@@ -1,6 +1,6 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
@@ -48,6 +48,7 @@ import { useShopReveal } from './shop/reveal/useShopReveal';
 import { useShopRevealPreloading } from './shop/reveal/useShopRevealPreloading';
 import { ShopCommerceModals } from './shop/ui/ShopCommerceModals';
 import { ShopHeaderActions } from './shop/ui/ShopHeaderActions';
+import { useHeaderWallet } from './shop/account/useHeaderWallet';
 import { ShopInventorySection } from './shop/ui/ShopInventorySection';
 import { ShopPurchaseSection } from './shop/ui/ShopPurchaseSection';
 import { ShopReceiptsSection } from './shop/ui/ShopReceiptsSection';
@@ -85,6 +86,7 @@ function App({ route, suspended = false }: AppProps) {
   const connectedWallet = wallet.connected ? publicKey?.toBase58() : undefined;
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
   const walletBusy = wallet.connecting || wallet.disconnecting;
+  const [walletDisconnecting, setWalletDisconnecting] = useState(false);
   const statusUiSuspended = suspended || walletModalVisible;
   const auth = useSolanaAuth();
   const drop = useShopDrop(route);
@@ -142,11 +144,11 @@ function App({ route, suspended = false }: AppProps) {
   };
   const signIn = useShopSignIn({
     auth, connectedWallet, publicKey, wallet, walletModalVisible, setVisible,
-    isSignedInWallet, hasAuthenticatedAccount: account.hasAuthenticatedAccount,
     showToast, isUserRejectedError,
   });
   const continuation = useShopActionContinuation({
     connectedWallet,
+    blocked: walletDisconnecting,
     cancellationSignal: auth.intentCancellationSignal,
     scopeKey: `${drop.normalizedCurrentPath}:${commerceUiSuspended}`,
     ensureSignedIn: signIn.ensureSignedIn,
@@ -154,7 +156,7 @@ function App({ route, suspended = false }: AppProps) {
     showToast,
   });
   const pendingAction = continuation.pendingAction;
-  const walletActionBusy = Boolean(pendingAction);
+  const walletActionBusy = Boolean(pendingAction) || walletDisconnecting;
   const awaitingActionSignIn = pendingAction?.phase === 'authenticating';
   const preserveDelivery = awaitingActionSignIn && pendingAction.key === 'ship';
   const { miNoteCardsPage, ethereumVerification, preorderCheckout } = useShopPreorders({
@@ -236,6 +238,7 @@ function App({ route, suspended = false }: AppProps) {
   useShopRevealPreloading(reveal, inventory.shouldPreloadBoxFramesInitial, selection.selectedViewableItem);
   const purchaseActions = useShopPurchaseActions({
     ...drop, ...purchaseState,
+    actionsBlocked: walletDisconnecting,
     connectedWallet, publicKey, walletBusy, authSubject: auth.authSubject,
     effectiveMintStats,
     refetchInventory: queries.refetchInventory,
@@ -375,7 +378,24 @@ function App({ route, suspended = false }: AppProps) {
     : account.canReadOwnProfile && auth.profileError
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
-  const showHeaderWalletButton = !walletActionBusy && signIn.authReady && !auth.loading && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
+  const walletControl = useHeaderWallet({
+    auth,
+    wallet,
+    signIn: actionHandlers.handleHeaderSignIn,
+    signInPending: awaitingActionSignIn,
+    mutationPending: pendingAction?.phase === 'running' || purchaseActions.stripePaymentLoading,
+    onDisconnectingChange: setWalletDisconnecting,
+    suspended: suspended || Boolean(activeModalLayer),
+    scopeKey: drop.normalizedCurrentPath,
+    onBeforeOpen: () => account.setSettingsOpen(false),
+    onBeforeDisconnect: () => {
+      continuation.cancel();
+      setVisible(false);
+      account.setSettingsOpen(false);
+      account.setAdminViewedOwner(null);
+    },
+    showToast,
+  });
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
@@ -390,8 +410,7 @@ function App({ route, suspended = false }: AppProps) {
       renderRight={({ interactive }) => <ShopHeaderActions
         {...account}
         interactive={interactive}
-        showHeaderWalletButton={showHeaderWalletButton}
-        handleHeaderWalletSignIn={actionHandlers.handleHeaderSignIn}
+        walletControl={walletControl}
         adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
       />}
     />
@@ -464,6 +483,7 @@ function App({ route, suspended = false }: AppProps) {
               {...drop}
               {...purchaseState}
               {...purchaseActions}
+              actionsBlocked={walletDisconnecting}
               handleMint={actionHandlers.handleMint}
               handleDiscountMint={actionHandlers.handleDiscountMint}
               walletActionBusy={walletActionBusy}

@@ -164,10 +164,12 @@ export async function saveStaffWalletSession(session: StaffWalletSession): Promi
 export async function installStaffWalletSessionIfUnchanged(
   session: StaffWalletSession,
   expectedToken: string | null,
+  isCurrent: () => boolean = () => true,
 ): Promise<StaffWalletSession | null> {
   const normalized = parseSession(session, Math.min(Date.now(), session.refreshedAt));
   if (!normalized) throw new Error('Invalid staff wallet session');
   return withStaffSessionLock(() => {
+    if (!isCurrent()) return null;
     const current = readStaffWalletSession();
     if ((current?.token || null) !== expectedToken) return current;
     return writeStaffWalletSession(normalized);

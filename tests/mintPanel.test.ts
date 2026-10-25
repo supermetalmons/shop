@@ -550,6 +550,28 @@ test('Stripe-only single-item panels submit checkout once and block repeat click
   assert.equal(checkout.disabled, false);
 });
 
+test('blocked purchase actions disable mint and Stripe without showing payment progress', () => {
+  const props = panelProps({
+    actionsBlocked: true,
+    onMint: () => assert.fail('Blocked mint must not start'),
+    onStripePaymentClick: () => assert.fail('Blocked checkout must not start'),
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 10_000,
+  });
+  const view = render(createElement(MintPanel, props));
+  const checkout = view.getByRole('button', { name: /Checkout/ }) as HTMLButtonElement;
+  const mint = view.getByRole('button', { name: /Mint/ }) as HTMLButtonElement;
+  assert.equal(checkout.disabled, true);
+  assert.equal(mint.disabled, true);
+  assert.doesNotMatch(checkout.textContent!, /Opening Stripe/);
+  assert.doesNotMatch(mint.textContent!, /Minting/);
+  fireEvent.click(checkout);
+  fireEvent.click(mint);
+  view.rerender(createElement(MintPanel, { ...props, actionsBlocked: false }));
+  assert.equal(checkout.disabled, false);
+  assert.equal(mint.disabled, false);
+});
+
 test('Stripe-only drops poll mint progress unless they are forced sold out', () => {
   assert.equal(
     shouldFetchMintProgress({

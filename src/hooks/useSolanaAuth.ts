@@ -27,7 +27,6 @@ import {
   createStaffWalletChallenge,
   exchangeStaffWalletChallenge,
   installStaffWalletSessionIfUnchanged,
-  logoutStaffWalletSession,
   readStaffWalletSession,
   subscribeStaffWalletSession,
   type StaffWalletChallenge,
@@ -35,9 +34,9 @@ import {
 } from '../lib/staffWalletSession';
 import {
   currentAnonymousSubject,
-  logoutAnonymousSession,
   subscribeAnonymousSession,
 } from '../lib/anonymousSession';
+import { logoutSolanaSessions } from '../lib/logoutSolanaSessions';
 
 export type SolanaAuthState = ProfileSnapshotState & {
   deliveryRecoveryNextCheckAt: number | null;
@@ -54,6 +53,7 @@ export type SolanaAuthWalletState = {
 
 export type SolanaAuthRuntime = {
   currentAuthSubject: () => string | null;
+  currentAnonymousSubject?: () => string | null;
   subscribeAuthSubject: (listener: (authSubject: string | null, reason?: 'credential-expired' | 'session-renewed') => void) => () => void;
   ensureAuthenticated: () => Promise<string>;
   loadProfileState: () => Promise<GetProfileStateResponse>;
@@ -72,6 +72,7 @@ export type SolanaAuthRuntime = {
   installStaffSession?: (
     session: StaffWalletSession,
     expectedToken: string | null,
+    isCurrent?: () => boolean,
   ) => Promise<StaffWalletSession | null>;
   hasStaffSession?: (wallet: string) => boolean;
 };
@@ -90,6 +91,7 @@ type SignInAttempt = {
 type SessionReset = {
   promise: Promise<void>;
   status: 'pending' | 'complete' | 'failed';
+  anonymousSubject: string | null;
   error?: unknown;
 };
 
@@ -126,6 +128,7 @@ const EMPTY_AUTH_STATE: SolanaAuthState = {
 
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   currentAuthSubject: () => readStaffWalletSession()?.wallet || currentAnonymousSubject(),
+  currentAnonymousSubject,
   subscribeAuthSubject: (listener) => {
     const emit = (reason?: 'credential-expired' | 'session-renewed') => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject(), reason);
     const unsubscribeStaff = subscribeStaffWalletSession((_wallet, reason) => emit(reason));
@@ -139,15 +142,7 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   loadProfileState: loadProfileStateFromServer,
   reconcileProfileState,
   authenticateWallet: solanaAuth,
-  signOut: async () => {
-    const staffSession = readStaffWalletSession();
-    if (staffSession) {
-      await logoutAnonymousSession().catch(() => undefined);
-      await logoutStaffWalletSession(staffSession);
-    } else {
-      await logoutAnonymousSession();
-    }
-  },
+  signOut: logoutSolanaSessions,
   subscribeRefreshEvents: (listener) => subscribeBrowserRefreshEvents(() => {
     if (document.visibilityState !== 'hidden') listener();
   }, { online: true }),
@@ -294,7 +289,10 @@ export function useSolanaAuthWithRuntime(
 
   const resetAuthSession = useCallback(() => {
     if (sessionResetRef.current?.status === 'pending') return sessionResetRef.current.promise;
-    const reset: SessionReset = { promise: Promise.resolve(), status: 'pending' };
+    const reset: SessionReset = {
+      promise: Promise.resolve(), status: 'pending',
+      anonymousSubject: runtime.currentAnonymousSubject?.() ?? null,
+    };
     sessionResetRef.current = reset;
     reset.promise = runtime.signOut().then(
       () => { reset.status = 'complete'; },
@@ -368,6 +366,7 @@ export function useSolanaAuthWithRuntime(
   );
 
   const applyProfileState = useCallback((response: GetProfileStateResponse, uid: string) => {
+    if (sessionResetRef.current?.status === 'pending') return false;
     const wallet = response.sessionWallet;
     if (!wallet) {
       deactivateOwner(false);
@@ -401,12 +400,18 @@ export function useSolanaAuthWithRuntime(
   }, [deactivateOwner, endMismatchedAuthSession, runtime]);
 
   const refreshProfileState = useCallback((): Promise<boolean> => {
+    if (!mountedRef.current) return Promise.resolve(true);
+    const reset = sessionResetRef.current;
+    if (reset?.status === 'pending') {
+      return reset.promise.then(() => refreshProfileState(), () => false);
+    }
     const contextGeneration = contextGenerationRef.current;
     const sessionRevision = sessionRevisionRef.current;
     return refreshProfile({
       contextGeneration,
       sessionRevision,
-      isCurrent: () => mountedRef.current && contextGenerationRef.current === contextGeneration &&
+      isCurrent: () => mountedRef.current && sessionResetRef.current?.status !== 'pending' &&
+        contextGenerationRef.current === contextGeneration &&
         sessionRevisionRef.current === sessionRevision,
       ensureAuthSubject,
       applyProfileState,
@@ -482,7 +487,7 @@ export function useSolanaAuthWithRuntime(
           if (outcome === 'timed-out') throw new Error('Unable to sign in. Please try again.');
           if (outcome === 'failed') throw new Error('Unable to sign in. Please try again.', { cause: reset.error });
           if (restored()) return 'restored';
-          return 'sign-in-required';
+          continue;
         }
         if (reset?.status === 'failed' && mismatchSignOutRef.current) {
           throw new Error('Unable to sign in. Please try again.', { cause: reset.error });
@@ -587,7 +592,8 @@ export function useSolanaAuthWithRuntime(
       mismatchSignOutRef.current = null;
     }
     if (!invalidatesSession) return;
-    const internalReset = nextSubject === null && sessionResetRef.current?.status === 'pending';
+    const reset = sessionResetRef.current;
+    const internalReset = reset?.status === 'pending' && (nextSubject === null || nextSubject === reset.anonymousSubject);
     const internalBootstrap = authBootstrapInFlightRef.current > 0 &&
       previousSubject === null && nextSubject !== null;
     if (!internalReset && !internalBootstrap && reason !== 'credential-expired' && reason !== 'session-renewed') invalidateIntentContext();
@@ -616,8 +622,14 @@ export function useSolanaAuthWithRuntime(
     if (mismatchSignOutRef.current) return false;
     const currentAuthSubject = authSubjectRef.current;
     const activeWallet = sessionWalletRef.current;
-    contextGenerationRef.current += 1;
-    invalidateProfileRefresh();
+    const activeSignIn = signInAttemptRef.current;
+    const signingCurrentWallet = activeSignIn?.wallet === connectedWallet &&
+      activeSignIn.contextGeneration === contextGenerationRef.current &&
+      (!activeSignIn.uid || activeSignIn.uid === currentAuthSubject);
+    if (!signingCurrentWallet) {
+      contextGenerationRef.current += 1;
+      invalidateProfileRefresh();
+    }
     if (!activeWallet && connectedWallet) setState((current) => ({ ...current, loading: true }));
     const validated = Boolean(
       activeWallet && currentAuthSubject && sessionSubjectRef.current === currentAuthSubject && (!connectedWallet || connectedWallet === activeWallet),
@@ -642,6 +654,9 @@ export function useSolanaAuthWithRuntime(
       (unmountedError as Error & { code?: string }).code = 'wallet-changed';
       return Promise.reject(unmountedError);
     }
+    if (sessionResetRef.current?.status === 'pending') {
+      return Promise.reject(new Error('Sign-out is in progress. Please try again.'));
+    }
     if (!publicKey) return Promise.reject(new Error('Select a wallet to sign in.'));
     if (!signMessage) return Promise.reject(new Error('Wallet cannot sign messages'));
     const wallet = publicKey.toBase58();
@@ -662,19 +677,16 @@ export function useSolanaAuthWithRuntime(
     const attempt: SignInAttempt = { wallet, contextGeneration, uid: null, promise };
     signInAttemptRef.current = attempt;
     const attemptIsCurrent = () => signInAttemptRef.current === attempt;
+    const attemptContextIsCurrent = () => mountedRef.current && attemptIsCurrent() &&
+      contextGenerationRef.current === contextGeneration && connectedRef.current &&
+      connectedWalletRef.current === wallet;
     const ensureAttemptCurrent = (requireIdentity = true) => {
       if (requireIdentity && (!attempt.uid || runtime.currentAuthSubject() !== attempt.uid)) {
         const authChangedError = new Error('Authentication changed during sign-in. Please try again.');
         (authChangedError as Error & { code?: string }).code = 'auth-user-changed';
         throw authChangedError;
       }
-      const stale =
-        !mountedRef.current ||
-        !attemptIsCurrent() ||
-        contextGenerationRef.current !== contextGeneration ||
-        !connectedRef.current ||
-        connectedWalletRef.current !== wallet;
-      if (!stale) return;
+      if (attemptContextIsCurrent()) return;
       const walletChangedError = new Error('Wallet changed during sign-in. Please try again.');
       (walletChangedError as Error & { code?: string }).code = 'wallet-changed';
       throw walletChangedError;
@@ -707,7 +719,8 @@ export function useSolanaAuthWithRuntime(
           if (exchangedSession.wallet !== wallet) {
             throw new Error('Wallet session response did not match the connected wallet');
           }
-          const staffSession = await runtime.installStaffSession(exchangedSession, startingToken);
+          const staffSession = await runtime.installStaffSession(exchangedSession, startingToken, attemptContextIsCurrent);
+          ensureAttemptCurrent(false);
           if (!staffSession || staffSession.wallet !== wallet) {
             const authChangedError = new Error('Authentication changed during sign-in. Please try again.');
             (authChangedError as Error & { code?: string }).code = 'auth-user-changed';

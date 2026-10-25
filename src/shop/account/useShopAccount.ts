@@ -60,13 +60,18 @@ export function useShopAccount(
     queryKey: ['adminDeliveryOrderOwners', authenticatedWallet],
     enabled: Boolean(canUseAdminViewer && settingsOpen && ownerPickerOpened),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) =>
-      listDeliveryOrderOwners({
+    queryFn: async ({ pageParam, signal }) => {
+      signal.throwIfAborted();
+      const result = await listDeliveryOrderOwners({
         cursor: typeof pageParam === 'string' && pageParam ? pageParam : undefined,
         pageSize: ADMIN_OWNER_DOC_PAGE_SIZE,
-      }),
+      });
+      signal.throwIfAborted();
+      return result;
+    },
     getNextPageParam: (lastPage) => (lastPage.hasMore && lastPage.nextCursor ? lastPage.nextCursor : undefined),
     staleTime: 30_000,
+    gcTime: 0,
   });
   const deliveryOrderOwners = useMemo(() => {
     const unique = new Set<string>();
@@ -87,8 +92,14 @@ export function useShopAccount(
   } = useQuery({
     queryKey: ['viewedProfile', authenticatedWallet, owner, hasAuthenticatedAccount],
     enabled: Boolean(hasAuthenticatedAccount && canUseAdminViewer && isViewerMode && owner),
-    queryFn: () => getAdminProfileView(owner || '', { limit: DEFAULT_SHIPMENT_PAGE_LIMIT }),
+    queryFn: async ({ signal }) => {
+      signal.throwIfAborted();
+      const result = await getAdminProfileView(owner || '', { limit: DEFAULT_SHIPMENT_PAGE_LIMIT });
+      signal.throwIfAborted();
+      return result;
+    },
     staleTime: 10_000,
+    gcTime: 0,
   });
 
   const viewedProfile = useMemo(() => {

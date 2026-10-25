@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { afterEach, beforeEach, type TestContext } from 'node:test';
-import { createElement } from 'react';
+import { createElement, useCallback, useRef, useState } from 'react';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
@@ -8,11 +8,15 @@ import { encodeCall } from '../shared/ethereum/abi.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumStats } from '../shared/ethereum/api.ts';
 import type { EthereumWallet } from '../src/ethereum/useEthereum111k.ts';
 import type { EthereumCheckoutStatusResponse } from '../shared/ethereum/checkout.ts';
+import type { HeaderWallet } from '../src/shop/account/useHeaderWallet.ts';
 
 let { dom } = setupFrontendDom();
 const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
 const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111kPage.tsx');
+const { ShopHeader } = await import('../src/components/ShopHeader.tsx');
+const { ShopHeaderActions } = await import('../src/shop/ui/ShopHeaderActions.tsx');
+const { ShopWalletControl } = await import('../src/shop/ui/ShopWalletControl.tsx');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
@@ -1093,6 +1097,59 @@ test('viewing a collection connects below the mint panel while the sale is pause
   assert.equal(view.queryByRole('button', { name: 'View collection' }), null);
   assert.equal(mintButton.disabled, true);
   assert.equal(transactions, 0);
+});
+
+for (const control of ['Wallet', 'App menu'] as const) test(`the Ethereum picker handles Escape while the unfocused ${control} stays open`, () => {
+  function AccountHeader() {
+    const [open, setOpen] = useState(false);
+    const close = useCallback(() => {
+      if (control === 'Wallet') setOpen(false);
+    }, []);
+    const settingsRef = useRef<HTMLDivElement>(null);
+    const model: HeaderWallet = {
+      address: 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz', open: control === 'Wallet' && open,
+      buttonDisabled: false, disconnectDisabled: false, disconnecting: false, disconnectError: null,
+      balanceLamports: 0, balanceLoading: false, balanceError: false,
+      activate: async () => setOpen(value => !value), close,
+      disconnect: async () => undefined, retryBalance: () => undefined,
+    };
+    return createElement(ShopHeader, {
+      renderRight: ({ interactive }) => control === 'Wallet'
+        ? createElement(ShopWalletControl, { interactive, model })
+        : createElement(ShopHeaderActions, {
+          interactive, walletControl: model, canUseAdminMenu: true, mainnetOnlyStaff: false, canUseAdminViewer: false,
+          settingsRef, settingsOpen: open, setSettingsOpen: setOpen, ownerPickerOpened: false, setOwnerPickerOpened() {},
+          authenticatedWallet: model.address, adminViewedOwner: null, setAdminViewedOwner() {}, deliveryOrderOwners: [],
+          wipPickerOpened: false, setWipPickerOpened() {}, devnetDropsPickerOpened: false, setDevnetDropsPickerOpened() {},
+          deliveryOrderOwnersLoadingMore: false, deliveryOrderOwnersHasNextPage: false, deliveryOrderOwnersError: null,
+          fetchNextDeliveryOrderOwners: async () => { throw new Error('Unexpected owners request'); },
+          owner: model.address, adminMenuDevnetDrops: [],
+        }),
+    });
+  }
+  const disconnected: EthereumWallet = {
+    ...wallet, address: null, provider: null, status: 'disconnected',
+    connect() { view.rerenderPage({ wallet: { ...disconnected, status: 'choosing' } }); },
+    cancel() { view.rerenderPage({ wallet: disconnected }); },
+  };
+  const view = page({ wallet: disconnected, header: createElement(AccountHeader) });
+  const popupRole = control === 'Wallet' ? 'dialog' : 'menu';
+  const headerButton = view.getByRole('button', { name: control });
+  fireEvent.click(headerButton);
+  assert.equal(document.activeElement, view.getByRole(popupRole, { name: control }));
+  const collectionButton = view.getByRole('button', { name: 'View collection' });
+  collectionButton.focus();
+  fireEvent.keyDown(collectionButton, { key: 'Enter' });
+  fireEvent.click(collectionButton, { detail: 0 });
+  assert.ok(view.getByRole('dialog', { name: 'Connect Ethereum' }).contains(document.activeElement));
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  assert.equal(view.queryByRole('dialog', { name: 'Connect Ethereum' }), null);
+  assert.ok(view.getByRole(popupRole, { name: control }));
+  assert.equal(document.activeElement, collectionButton);
+  headerButton.focus();
+  fireEvent.keyDown(headerButton, { key: 'Escape' });
+  assert.equal(view.queryByRole(popupRole, { name: control }), null);
+  assert.equal(document.activeElement, headerButton);
 });
 
 test('Ethereum and Solana appear in one inventory while selection dispatch stays on its own chain', async () => {

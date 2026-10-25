@@ -1,3 +1,4 @@
+import { useEffect, useId, useRef } from 'react';
 import { FaTableCellsLarge } from 'react-icons/fa6';
 import {
   getFrontendDrop,
@@ -16,6 +17,8 @@ import {
 import { navigate } from '../../navigation';
 import { WIP_ROUTES } from '../../routes';
 import type { ShopAccount } from '../account/useShopAccount';
+import type { HeaderWallet } from '../account/useHeaderWallet';
+import { ShopWalletControl } from './ShopWalletControl';
 import { BUILD_INFO } from './feedback';
 
 type ShopHeaderActionsProps = Pick<ShopAccount,
@@ -42,8 +45,7 @@ type ShopHeaderActionsProps = Pick<ShopAccount,
   | 'owner'
 > & {
   interactive: boolean;
-  showHeaderWalletButton: boolean;
-  handleHeaderWalletSignIn: () => Promise<void>;
+  walletControl: HeaderWallet;
   adminMenuDevnetDrops: FrontendDeploymentConfig[];
 };
 export function ShopHeaderActions({
@@ -69,10 +71,26 @@ export function ShopHeaderActions({
   deliveryOrderOwnersError,
   owner,
   interactive,
-  showHeaderWalletButton,
-  handleHeaderWalletSignIn,
+  walletControl,
   adminMenuDevnetDrops,
 }: ShopHeaderActionsProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+  useEffect(() => {
+    if (!interactive || !canUseAdminMenu || !settingsOpen) return;
+    menuRef.current?.focus({ preventScroll: true });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || menuRef.current?.closest('[inert]')) return;
+      if (!settingsRef.current?.contains(document.activeElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSettingsOpen(false);
+      menuButtonRef.current?.focus({ preventScroll: true });
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [canUseAdminMenu, interactive, setSettingsOpen, settingsOpen, settingsRef]);
   const adminMenuLabel = (value: string) => value.replace(/^\/+/, '');
   const adminMenuSectionLabel = (value: string, expanded: boolean) => `${value} ${expanded ? '▾' : '▸'}`;
   const adminMenuIcon = (dropId?: string) => {
@@ -102,33 +120,26 @@ export function ShopHeaderActions({
     ? WIP_ROUTES.filter((entry) => getFrontendDrop(entry.dropId || entry.path.split('/')[1])?.solanaCluster === 'mainnet-beta')
     : WIP_ROUTES;
 
-  const walletAction = showHeaderWalletButton ? (
-    <button
-      type="button"
-      className="top__wallet-button secondary-light"
-      onClick={interactive ? handleHeaderWalletSignIn : undefined}
-      tabIndex={interactive ? undefined : -1}
-    >
-      <span>Sign In</span>
-    </button>
-  ) : (
-    <div className="top__wallet-spacer" aria-hidden="true" />
-  );
   const adminMenu = !canUseAdminMenu ? null : interactive ? (
     <div className="top__actions" ref={settingsRef}>
       <button
+        ref={menuButtonRef}
         type="button"
         className={`top__settings${settingsOpen ? ' top__settings--active' : ''}`}
-        onClick={() => setSettingsOpen((prev) => !prev)}
+        onClick={() => {
+          walletControl.close();
+          setSettingsOpen((prev) => !prev);
+        }}
         aria-label="App menu"
         data-background-blur-focus-fallback=""
         aria-haspopup="menu"
+        aria-controls={settingsOpen ? menuId : undefined}
         aria-expanded={settingsOpen}
       >
         <FaTableCellsLarge aria-hidden />
       </button>
       {settingsOpen ? (
-        <div className="top__submenu" role="menu" aria-label="App menu">
+        <div ref={menuRef} id={menuId} className="top__submenu" role="menu" aria-label="App menu" tabIndex={-1}>
           {canUseAdminViewer && !ownerPickerOpened ? (
             <button
               type="button"
@@ -272,8 +283,8 @@ export function ShopHeaderActions({
 
   return (
     <>
-      {walletAction}
       {adminMenu}
+      <ShopWalletControl interactive={interactive} model={walletControl} />
     </>
   );
 

@@ -10,6 +10,7 @@ import { runBrowserBootstrap } from './bootstrap';
 import type { ResolvedAppRoute } from './routes';
 import ShopRoute from './ShopRoute';
 import { BackgroundBlurProvider } from './components/BackgroundBlurLayer';
+import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
 
 const DrifApp = React.lazy(() => import('./DrifApp'));
@@ -42,7 +43,9 @@ function RoutedContent({ route }: RoutedContentProps) {
   if (route.kind === 'notify') {
     return (
       <React.Suspense fallback={null}>
-        <DrifApp />
+        <WalletContextProvider cluster="mainnet-beta">
+          <DrifApp />
+        </WalletContextProvider>
       </React.Suspense>
     );
   }
