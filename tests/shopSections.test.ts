@@ -25,6 +25,8 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
     walletControl: {
       address: undefined,
       open: false,
+      status: 'loading',
+      loadingError: null,
       buttonDisabled: false,
       disconnectDisabled: false,
       disconnecting: false,
@@ -36,6 +38,7 @@ test('only the interactive header copy can sign in or expose the admin menu', ()
       close: () => { walletCloses += 1; },
       disconnect: async () => undefined,
       retryBalance: () => undefined,
+      retryLoading: () => undefined,
     },
     canUseAdminMenu: true,
     mainnetOnlyStaff: false,
@@ -119,6 +122,7 @@ test('an inert app menu leaves Escape and focus with the active WIP preview', ()
       interactive: true,
       walletControl: {
         address: undefined, open: false, buttonDisabled: false, disconnectDisabled: false,
+        status: 'loading', loadingError: null, retryLoading: () => undefined,
         disconnecting: false, disconnectError: null, balanceLamports: undefined,
         balanceLoading: false, balanceError: false,
         activate: async () => undefined, close: () => undefined,

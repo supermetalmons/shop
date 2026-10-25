@@ -17,6 +17,11 @@ const { default: Ethereum111kPage } = await import('../src/ethereum/Ethereum111k
 const { ShopHeader } = await import('../src/components/ShopHeader.tsx');
 const { ShopHeaderActions } = await import('../src/shop/ui/ShopHeaderActions.tsx');
 const { ShopWalletControl } = await import('../src/shop/ui/ShopWalletControl.tsx');
+const { useHeaderWallet } = await import('../src/shop/account/useHeaderWallet.ts');
+const { useShopSignIn } = await import('../src/shop/account/useShopSignIn.ts');
+const { useShopActionContinuation } = await import('../src/shop/account/useShopActionContinuation.ts');
+const { useShopActionHandlers } = await import('../src/shop/useShopActionHandlers.ts');
+const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
@@ -982,8 +987,11 @@ test('a disconnected claim link connects within its claim dialog without initiat
     if (method === 'eth_chainId') return '0xaa36a7';
     return [owner];
   } } };
-  const view = page({ wallet: disconnected, claimReceiptId: receipt.tokenId, claimCode: 'ABCDEF123456' });
+  const modalChanges: boolean[] = [];
+  const view = page({ wallet: disconnected, claimReceiptId: receipt.tokenId, claimCode: 'ABCDEF123456',
+    onModalOpenChange: open => modalChanges.push(open) });
   assert.ok(view.getByRole('dialog', { name: 'Claim crate contents' }));
+  assert.equal(modalChanges.at(-1), true);
   fireEvent.click(view.getByRole('button', { name: 'Connect wallet' }));
   assert.equal(connections, 1);
   view.rerenderPage({ wallet: { ...disconnected, status: 'connecting' } });
@@ -991,6 +999,9 @@ test('a disconnected claim link connects within its claim dialog without initiat
   await waitFor(() => assert.equal((view.getByLabelText('Crate claim code') as HTMLInputElement).value, 'ABCDEF123456'));
   assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' }));
   assert.equal(transactions, 0);
+  assert.equal(modalChanges.at(-1), true);
+  fireEvent.click(view.getByRole('button', { name: 'Close', exact: true }));
+  assert.equal(modalChanges.at(-1), false);
 });
 
 test('closing a claim connection restores mint and collection actions and ignores a late wallet response', async t => {
@@ -1099,6 +1110,187 @@ test('viewing a collection connects below the mint panel while the sale is pause
   assert.equal(transactions, 0);
 });
 
+for (const [ethereumPending, settleOnOpen] of [
+  ['choosing', false], ['connecting', false], ['receipt viewer', false], ['artwork viewer', false], ['receipt viewer', true],
+] as const) test(`Ethereum ${ethereumPending} cancels an early Solana header sign-in${settleOnOpen ? ' when restoration finishes simultaneously' : ''}`, async t => {
+  const viewedItem = ethereumPending === 'receipt viewer' ? item('2000001', 'crate_receipt')
+    : ethereumPending === 'artwork viewer' ? { ...item('332', 'artwork'), name: 'Artwork #332', displayId: 332 } : null;
+  if (viewedItem) t.mock.method(ethereumApi, 'inventory', async () => ({ items: [viewedItem], nextCursor: null, observedBlock: 10 }));
+  let finishLoading!: () => void;
+  let cancelEthereum!: () => void;
+  let signInCalls = 0;
+  let solanaPickerOpens = 0;
+  const showToast = (message: string) => assert.fail(message);
+  function Harness() {
+    const [resolved, setResolved] = useState(false);
+    const [ethereumStatus, setEthereumStatus] = useState<EthereumWallet['status']>(viewedItem ? 'connected' : 'disconnected');
+    const [ethereumModalOpen, setEthereumModalOpen] = useState(false);
+    const [solanaPicker, setSolanaPicker] = useState(false);
+    const signal = useRef(new AbortController().signal);
+    finishLoading = () => setResolved(true);
+    cancelEthereum = () => setEthereumStatus('disconnected');
+    const auth = {
+      authenticated: false, sessionWallet: null, sessionResolution: resolved ? 'settled' as const : 'resolving' as const,
+      loading: false, error: null, refreshProfileState: async () => true, signOut: async () => {},
+      intentCancellationSignal: signal.current, hasAuthenticatedWalletSession: () => false,
+      awaitWalletSessionRestoration: async () => 'sign-in-required' as const,
+      signIn: async () => { throw new Error('Unexpected signature'); },
+    };
+    const solanaWallet = { connected: false, connecting: false, disconnecting: false, publicKey: null, wallet: null, disconnect: async () => {} };
+    const signIn = useShopSignIn({
+      auth, wallet: solanaWallet, connectedWallet: undefined, publicKey: null, walletModalVisible: solanaPicker,
+      setVisible: visible => { if (visible) solanaPickerOpens += 1; setSolanaPicker(visible); },
+      showToast, isUserRejectedError: () => false,
+    });
+    const continuation = useShopActionContinuation({
+      connectedWallet: undefined, scopeKey: '/111k_devnet', cancellationSignal: signal.current,
+      ensureSignedIn: signIn.ensureSignedIn, ensureWalletConnected: signIn.ensureWalletConnected, showToast,
+    });
+    const handlers = useShopActionHandlers({ continuation, showToast } as Parameters<typeof useShopActionHandlers>[0]);
+    const model = useHeaderWallet({
+      auth, wallet: solanaWallet,
+      signIn: request => { signInCalls += 1; return handlers.handleHeaderSignIn(request); },
+      joinPendingSignIn: signIn.joinPendingSignIn, signInPending: continuation.pendingAction?.phase === 'authenticating',
+      mutationPending: continuation.pendingAction?.phase === 'running', walletModalVisible: solanaPicker,
+      suspended: ethereumModalOpen || ethereumStatus === 'choosing' || ethereumStatus === 'connecting', showToast,
+    });
+    const onModalOpenChange = useCallback((open: boolean) => {
+      if (open) model.close();
+      setEthereumModalOpen(open);
+    }, [model.close]);
+    return createElement(Ethereum111kPage, {
+      header: createElement(ShopHeader, { renderRight: ({ interactive }) => createElement(ShopWalletControl, { interactive, model }) }),
+      wallet: { ...wallet, address: viewedItem ? owner : null, provider: viewedItem ? wallet.provider : null, status: ethereumStatus,
+        connect: () => setEthereumStatus(ethereumPending === 'choosing' ? 'choosing' : 'connecting'), cancel: cancelEthereum },
+      onModalOpenChange,
+      addressEncryptionPublicKey: '', solanaInventoryItems: [], solanaSelected: new Set<string>(),
+      onSolanaToggle() {}, clearSolanaSelection() {}, pendingRevealIds: new Set<string>(), onSolanaReveal() {}, onSolanaView() {},
+      canOpenSolanaBoxes: () => true, solanaRevealLoading: null, solanaInventoryReady: true,
+      externalBusy: Boolean(continuation.pendingAction), suspended: solanaPicker,
+    });
+  }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  const view = render(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(Harness))));
+  const headerButton = view.getByRole('button', { name: 'Wallet' });
+  fireEvent.click(headerButton);
+  assert.ok(view.getByText('Loading wallet…'));
+  if (ethereumPending === 'artwork viewer') {
+    const selector = `[data-inventory-id="${viewedItem!.id}"]`;
+    await waitFor(() => assert.ok(view.container.querySelector(selector)));
+    const tile = view.container.querySelector<HTMLElement>(selector)!;
+    tile.focus();
+    fireEvent.keyDown(tile, { key: 'Enter' });
+  }
+  const collectionButton = await view.findByRole('button', {
+    name: ethereumPending === 'artwork viewer' ? 'View' : viewedItem ? `View ${viewedItem.name}` : 'View collection', exact: true,
+  });
+  collectionButton.focus();
+  act(() => {
+    if (settleOnOpen) finishLoading();
+    fireEvent.keyDown(collectionButton, { key: 'Enter' });
+    fireEvent.click(collectionButton, { detail: 0 });
+  });
+  const ethereumDialog = view.queryByRole('dialog', { name: viewedItem?.name ?? 'Connect Ethereum' });
+  if (ethereumPending !== 'connecting') assert.ok(ethereumDialog?.contains(document.activeElement));
+  assert.equal(Boolean(view.container.querySelector('.top__wallet-popup')), false);
+  await act(async () => { finishLoading(); });
+  assert.equal(signInCalls, 0);
+  assert.equal(solanaPickerOpens, 0);
+  if (ethereumPending !== 'connecting') {
+    assert.ok(ethereumDialog?.contains(document.activeElement));
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    assert.equal(document.activeElement, collectionButton);
+  } else {
+    await act(async () => { cancelEthereum(); });
+  }
+  assert.equal(Boolean(view.queryByRole('dialog', { name: viewedItem?.name ?? 'Connect Ethereum' })), false);
+  assert.equal(signInCalls, 0);
+  assert.equal(view.container.querySelector('.top__wallet-popup'), null);
+  await act(async () => { fireEvent.click(headerButton); });
+  assert.equal(signInCalls, 1);
+  assert.equal(solanaPickerOpens, 1);
+});
+
+test('Ethereum modal reporting respects suspension and resets on unmount', () => {
+  const changes: boolean[] = [];
+  const view = page({ wallet: { ...wallet, status: 'choosing' }, onModalOpenChange: open => changes.push(open) });
+  assert.equal(changes.at(-1), true);
+  view.rerenderPage({ suspended: true });
+  assert.equal(changes.at(-1), false);
+  view.rerenderPage({ suspended: false });
+  assert.equal(changes.at(-1), true);
+  view.unmount();
+  assert.equal(changes.at(-1), false);
+});
+
+test('an Ethereum confirmation waits for the active Solana picker before showing its reveal', async t => {
+  const artwork = { ...item('1', 'artwork'), name: 'Artwork #1' };
+  const confirmation = deferred<Awaited<ReturnType<typeof ethereumApi.confirm>>>();
+  let confirmationCalls = 0;
+  t.mock.method(ethereumApi, 'confirm', async () => { confirmationCalls += 1; return confirmation.promise; });
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'ab'.repeat(32)}`, action: 'unbox', submittedAt: Date.now() });
+  let pickerVisible = false;
+  let dismissPicker!: () => void;
+  let signInCalls = 0;
+  const showToast = (message: string) => assert.fail(message);
+  function Harness() {
+    const [solanaPicker, setSolanaPicker] = useState(false);
+    const [ethereumModalOpen, setEthereumModalOpen] = useState(false);
+    const signal = useRef(new AbortController().signal);
+    pickerVisible = solanaPicker;
+    dismissPicker = () => setSolanaPicker(false);
+    const auth = {
+      authenticated: false, sessionWallet: null, sessionResolution: 'settled' as const, loading: false, error: null,
+      refreshProfileState: async () => true, signOut: async () => {}, intentCancellationSignal: signal.current,
+      hasAuthenticatedWalletSession: () => false, awaitWalletSessionRestoration: async () => 'sign-in-required' as const,
+      signIn: async () => { throw new Error('Unexpected signature'); },
+    };
+    const solanaWallet = { connected: false, connecting: false, disconnecting: false, publicKey: null, wallet: null, disconnect: async () => {} };
+    const signIn = useShopSignIn({
+      auth, wallet: solanaWallet, connectedWallet: undefined, publicKey: null, walletModalVisible: solanaPicker,
+      setVisible: setSolanaPicker, showToast, isUserRejectedError: () => false,
+    });
+    const continuation = useShopActionContinuation({
+      connectedWallet: undefined, scopeKey: '/111k_devnet', cancellationSignal: signal.current,
+      ensureSignedIn: signIn.ensureSignedIn, ensureWalletConnected: signIn.ensureWalletConnected, showToast,
+    });
+    const handlers = useShopActionHandlers({ continuation, showToast } as Parameters<typeof useShopActionHandlers>[0]);
+    const model = useHeaderWallet({
+      auth, wallet: solanaWallet, signIn: request => { signInCalls += 1; return handlers.handleHeaderSignIn(request); },
+      joinPendingSignIn: signIn.joinPendingSignIn, signInPending: continuation.pendingAction?.phase === 'authenticating',
+      mutationPending: continuation.pendingAction?.phase === 'running', walletModalVisible: solanaPicker,
+      suspended: ethereumModalOpen, showToast,
+    });
+    const onModalOpenChange = useCallback((open: boolean) => {
+      if (open) model.close();
+      setEthereumModalOpen(open);
+    }, [model.close]);
+    return createElement(Ethereum111kPage, {
+      header: createElement(ShopHeader, { renderRight: ({ interactive }) => createElement(ShopWalletControl, { interactive, model }) }),
+      wallet, onModalOpenChange, addressEncryptionPublicKey: '', solanaInventoryItems: [], solanaSelected: new Set<string>(),
+      onSolanaToggle() {}, clearSolanaSelection() {}, pendingRevealIds: new Set<string>(), onSolanaReveal() {}, onSolanaView() {},
+      canOpenSolanaBoxes: () => true, solanaRevealLoading: null, solanaInventoryReady: true,
+      externalBusy: Boolean(continuation.pendingAction), suspended: solanaPicker,
+    });
+  }
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  clients.push(client);
+  const view = render(createElement(QueryClientProvider, { client }, createElement(BackgroundBlurProvider, null, createElement(Harness))));
+  await waitFor(() => assert.equal(confirmationCalls, 1));
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: 'Wallet' })); });
+  assert.equal(pickerVisible, true);
+  await act(async () => { confirmation.resolve({ status: 'confirmed', confirmations: 1, items: [artwork], burnedTokenIds: [] }); });
+  await waitFor(() => assert.ok(document.querySelector('.ethereum111k__reveal')));
+  assert.equal(pickerVisible, true);
+  assert.equal(view.queryByRole('dialog', { name: 'Your artworks' }), null);
+  assert.equal(signInCalls, 1);
+  await act(async () => { dismissPicker(); });
+  assert.ok(view.getByRole('dialog', { name: 'Your artworks' }));
+  assert.equal(signInCalls, 1);
+});
+
 for (const control of ['Wallet', 'App menu'] as const) test(`the Ethereum picker handles Escape while the unfocused ${control} stays open`, () => {
   function AccountHeader() {
     const [open, setOpen] = useState(false);
@@ -1108,6 +1300,7 @@ for (const control of ['Wallet', 'App menu'] as const) test(`the Ethereum picker
     const settingsRef = useRef<HTMLDivElement>(null);
     const model: HeaderWallet = {
       address: 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz', open: control === 'Wallet' && open,
+      status: 'account', loadingError: null, retryLoading: () => undefined,
       buttonDisabled: false, disconnectDisabled: false, disconnecting: false, disconnectError: null,
       balanceLamports: 0, balanceLoading: false, balanceError: false,
       activate: async () => setOpen(value => !value), close,
@@ -1259,14 +1452,21 @@ test('the complete bonus batch reveal keeps all 311 artworks reachable with lazy
     items: artworks.filter(item => expected.includes(item.tokenId)), nextCursor: null, observedBlock: 10,
   }));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1, items: artworks, burnedTokenIds: [] }));
-  const view = page();
+  const modalChanges: boolean[] = [];
+  const view = page({ onModalOpenChange: open => modalChanges.push(open) });
   await waitFor(() => assert.ok(view.getByRole('dialog', { name: 'Your artworks' })));
+  assert.equal(modalChanges.at(-1), true);
   const reveal = document.querySelector('.ethereum111k__reveal-grid')!;
   assert.equal(reveal.querySelectorAll('button').length, 311);
   assert.ok(view.getByText('311 artworks'));
   assert.ok([...reveal.querySelectorAll('img')].every(image => image.getAttribute('loading') === 'lazy' && image.getAttribute('decoding') === 'async'));
+  const previousChanges = modalChanges.length;
   fireEvent.click(reveal.querySelectorAll('button')[310]);
   assert.ok(view.getByRole('dialog', { name: 'Artwork #311' }));
+  assert.equal(modalChanges.at(-1), true);
+  assert.ok(modalChanges.slice(previousChanges).every(Boolean));
+  fireEvent.click(view.getByRole('button', { name: 'Close', exact: true }));
+  assert.equal(modalChanges.at(-1), false);
 });
 
 test('claim links load the owned receipt, prefill its code, and remove the code from the address bar', async t => {
@@ -1353,17 +1553,20 @@ test('an interrupted submission blocks minting and offers hash recovery or expli
   const scope = ethereumInventoryScope(config, owner)!;
   writeEthereumStorage(`${scope}:pending`, { scope, hash: `0x${'0'.repeat(64)}`, awaitingHash: true, action: 'mint', submittedAt: Date.now(),
     intent: { to: contract, data: '0x1234', value: '0x1' } });
-  const view = page();
+  const modalChanges: boolean[] = [];
+  const view = page({ onModalOpenChange: open => modalChanges.push(open) });
   await waitFor(() => assert.ok(view.getByRole('button', { name: 'Recover transaction' })));
   assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, true);
   assert.ok(view.getByText('Check your wallet. The previous transaction may have been sent.'));
   fireEvent.click(view.getByRole('button', { name: 'Recover transaction' }));
+  assert.equal(modalChanges.at(-1), true);
   assert.ok(view.getByLabelText('Transaction hash'));
   assert.ok(view.getByRole('button', { name: 'Track transaction' }));
   fireEvent.click(view.getByRole('button', { name: 'Stop tracking…' }));
   assert.ok(view.getByText(/The original transaction may still execute/));
   fireEvent.click(view.getByRole('button', { name: 'Stop tracking this transaction' }));
   await waitFor(() => assert.equal(view.queryByRole('button', { name: 'Recover transaction' }), null));
+  assert.equal(modalChanges.at(-1), false);
   assert.equal((view.getByRole('button', { name: /Mint\s*1 crate/ }) as HTMLButtonElement).disabled, false);
 });
 

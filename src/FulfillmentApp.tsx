@@ -472,7 +472,8 @@ export default function FulfillmentApp({
     onMenuClose: closeExportMenu,
   });
 
-  const headerSuspended = walletModalVisible || Boolean(activeUpdateOrder || activeAddressOrder || activeShipstationOrder) || secretCodesExporting;
+  const fulfillmentSuspended = Boolean(activeUpdateOrder || activeAddressOrder || activeShipstationOrder) || secretCodesExporting;
+  const headerSuspended = walletModalVisible || fulfillmentSuspended;
   const feedback = useShopFeedback(headerSuspended);
   const signIn = useShopSignIn({
     auth,
@@ -492,8 +493,10 @@ export default function FulfillmentApp({
     auth,
     wallet: walletAdapter,
     signIn: signIn.ensureSignedIn,
+    joinPendingSignIn: signIn.joinPendingSignIn,
     mutationPending: pendingStatusUpdates > 0,
-    suspended: headerSuspended,
+    suspended: fulfillmentSuspended,
+    walletModalVisible,
     scopeKey: `fulfillment:${selectedDropId}`,
     onBeforeOpen: closeHeaderCompanions,
     onBeforeDisconnect: () => {

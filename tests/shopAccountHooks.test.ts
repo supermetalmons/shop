@@ -362,9 +362,11 @@ test('aborting a restoring action prevents late sign-in and leaves no restoratio
   initial.auth.awaitWalletSessionRestoration = () => restoration.promise;
   initial.auth.signIn = async () => { signatures += 1; return { wallet: initial.connectedWallet! }; };
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
+  assert.equal(result.current.joinPendingSignIn(), null);
   let action!: Promise<boolean>;
   act(() => { action = result.current.ensureSignedIn({ signal: controller.signal }); });
   await act(async () => undefined);
+  assert.equal(result.current.joinPendingSignIn(), null);
   await act(async () => {
     controller.abort();
     assert.equal(await action, false);
@@ -372,6 +374,45 @@ test('aborting a restoring action prevents late sign-in and leaves no restoratio
   await act(async () => { restoration.resolve('sign-in-required'); });
   assert.equal(signatures, 0);
   assert.deepEqual(messages, []);
+});
+
+test('late cleanup of a cancelled restoration preserves an immediate replacement request', async () => {
+  const firstRestoration = deferred<'sign-in-required'>();
+  const nextRestoration = deferred<'sign-in-required'>();
+  const controller = new AbortController();
+  const signals: Array<AbortSignal | undefined> = [];
+  let signatures = 0;
+  let replacementSettled = false;
+  const initial = signInOptions();
+  const completeSignIn = initial.auth.signIn;
+  initial.auth.awaitWalletSessionRestoration = (_wallet, signal) => {
+    signals.push(signal);
+    return signals.length === 1 ? firstRestoration.promise : nextRestoration.promise;
+  };
+  initial.auth.signIn = async () => { signatures += 1; return completeSignIn(); };
+  const { result } = renderHook(useShopSignIn, { initialProps: initial });
+  let cancelled!: Promise<boolean>;
+  let replacement!: Promise<boolean>;
+  act(() => { cancelled = result.current.ensureSignedIn({ signal: controller.signal }); });
+  await waitFor(() => assert.equal(signals.length, 1));
+  act(() => {
+    controller.abort();
+    replacement = result.current.ensureSignedIn();
+    void replacement.then(() => { replacementSettled = true; });
+  });
+  assert.equal(await cancelled, false);
+  await waitFor(() => assert.equal(signals.length, 2));
+  assert.equal(signals[0]?.aborted, true);
+  assert.notEqual(signals[0], signals[1]);
+  await act(async () => { firstRestoration.resolve('sign-in-required'); });
+  assert.equal(signals[1]?.aborted, false);
+  assert.equal(replacementSettled, false);
+  assert.equal(signatures, 0);
+  await act(async () => {
+    nextRestoration.resolve('sign-in-required');
+    assert.equal(await replacement, true);
+  });
+  assert.equal(signatures, 1);
 });
 
 test('a cancelled caller does not cancel another caller sharing the same prerequisite', async () => {
@@ -401,7 +442,7 @@ test('a cancelled caller does not cancel another caller sharing the same prerequ
   assert.equal(otherCallerSettled, true);
 });
 
-test('an aborted signature retains the prompt lock until it settles and cannot restart itself', async () => {
+test('new callers share a pending signature after the original caller cancels', async () => {
   const signature = deferred<void>();
   const controller = new AbortController();
   let signatures = 0;
@@ -415,13 +456,52 @@ test('an aborted signature retains the prompt lock until it settles and cannot r
   };
   const { result } = renderHook(useShopSignIn, { initialProps: initial });
   let action!: Promise<boolean>;
+  let nextAction!: Promise<boolean>;
   act(() => { action = result.current.ensureSignedIn({ signal: controller.signal }); });
   await waitFor(() => assert.equal(signatures, 1));
   await act(async () => {
     controller.abort();
     assert.equal(await action, false);
-    assert.equal(await result.current.ensureSignedIn(), false);
+    nextAction = result.current.ensureSignedIn();
   });
+  assert.equal(signatures, 1);
+  await act(async () => {
+    signature.reject(new Error('Late rejection'));
+    assert.equal(await nextAction, false);
+  });
+  assert.deepEqual(messages, ['Late rejection']);
+  await act(async () => { assert.equal(await result.current.ensureSignedIn(), true); });
+  assert.equal(signatures, 2);
+});
+
+for (const reason of ['wallet switch', 'identity change'] as const) test(`${reason} retains the signature lock until the pending request settles`, async () => {
+  const signature = deferred<void>();
+  const identity = new AbortController();
+  let signatures = 0;
+  const messages: string[] = [];
+  const initial = signInOptions({ showToast: (message) => messages.push(message) });
+  initial.auth.intentCancellationSignal = identity.signal;
+  const completeSignIn = initial.auth.signIn;
+  initial.auth.signIn = async () => {
+    signatures += 1;
+    if (signatures === 1) await signature.promise;
+    return completeSignIn();
+  };
+  const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
+  let action!: Promise<boolean>;
+  act(() => { action = result.current.ensureSignedIn(); });
+  await waitFor(() => assert.equal(signatures, 1));
+  if (reason === 'wallet switch') {
+    const nextKey = new PublicKey(new Uint8Array(32).fill(2));
+    rerender({ ...initial, connectedWallet: nextKey.toBase58(), publicKey: nextKey });
+    rerender(initial);
+  } else {
+    act(() => identity.abort());
+    rerender({ ...initial, auth: { ...initial.auth, intentCancellationSignal: new AbortController().signal } });
+  }
+  assert.equal(await action, false);
+  assert.equal(result.current.joinPendingSignIn(), null);
+  await act(async () => { assert.equal(await result.current.ensureSignedIn(), false); });
   assert.equal(signatures, 1);
   await act(async () => { signature.reject(new Error('Late rejection')); });
   assert.deepEqual(messages, []);
@@ -473,6 +553,39 @@ test('wallet-only prerequisites share selection without restoring or signing in'
   });
   assert.equal(restorations, 0);
   assert.equal(signatures, 0);
+});
+
+for (const approved of [true, false]) test(`wallet-only actions wait for a dismissed signature to be ${approved ? 'approved' : 'rejected'}`, async () => {
+  const signature = deferred<void>();
+  const controller = new AbortController();
+  let signatures = 0;
+  let walletReady = false;
+  const initial = signInOptions({ isUserRejectedError: () => true });
+  const completeSignIn = initial.auth.signIn;
+  initial.auth.signIn = async () => {
+    signatures += 1;
+    await signature.promise;
+    return completeSignIn();
+  };
+  const { result } = renderHook(useShopSignIn, { initialProps: initial });
+  let signIn!: Promise<boolean>;
+  act(() => { signIn = result.current.ensureSignedIn({ signal: controller.signal }); });
+  await waitFor(() => assert.equal(signatures, 1));
+  let wallet!: Promise<string | null>;
+  await act(async () => {
+    controller.abort();
+    assert.equal(await signIn, false);
+    wallet = result.current.ensureWalletConnected();
+    void wallet.then(() => { walletReady = true; });
+  });
+  assert.equal(walletReady, false);
+  await act(async () => {
+    if (approved) signature.resolve();
+    else signature.reject(new Error('User rejected the request'));
+    assert.equal(await wallet, initial.connectedWallet);
+  });
+  assert.equal(walletReady, true);
+  assert.equal(signatures, 1);
 });
 
 test('selecting a different owner cancels inventory sign-in before any signature', async () => {

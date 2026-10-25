@@ -52,12 +52,12 @@ export function useShopSignIn(options: ShopSignInOptions) {
   }, []);
 
   const releaseAttempt = useCallback((attempt: SignInAttempt) => {
-    if (attempt.consumers.size > 0) return;
+    if (attempt.consumers.size > 0 || attempt.signing) return;
     if (mountedRef.current && !attempt.wallet && attempt.pickerRequested && latestRef.current.walletModalVisible) {
       latestRef.current.setVisible(false);
     }
     attempt.controller.abort();
-    if (!attempt.signing && attemptRef.current === attempt) attemptRef.current = null;
+    if (attemptRef.current === attempt) attemptRef.current = null;
   }, []);
 
   const updateAttempt = useCallback((attempt: SignInAttempt) => {
@@ -104,6 +104,7 @@ export function useShopSignIn(options: ShopSignInOptions) {
       identitySignal?.addEventListener('abort', cancelIdentity, { once: true });
       controller.signal.addEventListener('abort', () => {
         identitySignal?.removeEventListener('abort', cancelIdentity);
+        if (attemptRef.current?.controller === controller && !attemptRef.current.signing) attemptRef.current = null;
         resolveWallet(null);
       }, { once: true });
       attemptRef.current = attempt;
@@ -136,15 +137,18 @@ export function useShopSignIn(options: ShopSignInOptions) {
           latestRef.current.showToast('Choose the wallet that owns these items.');
           return null;
         }
-        if (!requireSignIn) return walletAddress;
+        if (!requireSignIn) {
+          await activeAttempt.signInPromise;
+          return walletAddress;
+        }
         if (!activeAttempt.signInPromise) {
-          activeAttempt.signing = true;
           activeAttempt.signInPromise = (async () => {
             try {
               if (!latestRef.current.auth.hasAuthenticatedWalletSession(walletAddress)) {
                 const restoration = await latestRef.current.auth.awaitWalletSessionRestoration(walletAddress, activeAttempt.controller.signal);
                 if (restoration === 'cancelled' || !isCurrentWallet(activeAttempt, walletAddress)) return null;
                 if (!latestRef.current.auth.hasAuthenticatedWalletSession(walletAddress)) {
+                  activeAttempt.signing = true;
                   await latestRef.current.auth.signIn();
                 }
               }
@@ -152,7 +156,7 @@ export function useShopSignIn(options: ShopSignInOptions) {
                 ? walletAddress : null;
             } catch (error) {
               if (latestRef.current.isUserRejectedError(error)) return null;
-              if (isCurrentWallet(activeAttempt, walletAddress)) {
+              if (activeAttempt.consumers.size > 0 && isCurrentWallet(activeAttempt, walletAddress)) {
                 if (latestRef.current.auth.hasAuthenticatedWalletSession(walletAddress)) return walletAddress;
                 latestRef.current.showToast(error instanceof Error ? error.message : 'Failed to sign in. Please try again.');
               }
@@ -179,6 +183,11 @@ export function useShopSignIn(options: ShopSignInOptions) {
 
   const ensureWalletConnected = useCallback((request?: ShopSignInRequestOptions) => requestWallet(false, request), [requestWallet]);
   const ensureSignedIn = useCallback(async (request?: ShopSignInRequestOptions) => Boolean(await requestWallet(true, request)), [requestWallet]);
+  const joinPendingSignIn = useCallback((request?: ShopSignInRequestOptions): Promise<boolean> | null => {
+    const attempt = attemptRef.current;
+    if (!attempt?.signing || !attempt.signInPromise || !attempt.wallet || !isCurrentWallet(attempt, attempt.wallet)) return null;
+    return ensureSignedIn(request);
+  }, [ensureSignedIn, isCurrentWallet]);
 
   useEffect(() => {
     if (attemptRef.current) updateAttempt(attemptRef.current);
@@ -205,6 +214,6 @@ export function useShopSignIn(options: ShopSignInOptions) {
 
   return {
     authReady, walletBusy, walletIdleReady,
-    ensureSignedIn, ensureWalletConnected,
+    ensureSignedIn, ensureWalletConnected, joinPendingSignIn,
   };
 }

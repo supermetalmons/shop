@@ -15,6 +15,7 @@ type ShopActionContinuationOptions = {
 type ShopActionRequest<T> = {
   key: string;
   requirement: 'wallet' | 'sign-in';
+  signal?: AbortSignal;
   expectedWallet?: string;
   isCurrent?: () => boolean;
   prepare?: () => boolean | void;
@@ -174,7 +175,9 @@ export function useShopActionContinuation(options: ShopActionContinuationOptions
 
   const run = useCallback(<T,>(request: ShopActionRequest<T>): Promise<T> => {
     const cancellationSignal = latest.current.cancellationSignal;
-    if (!mounted.current || latest.current.blocked || active.current || cancellationSignal?.aborted) return Promise.resolve(request.cancelled);
+    if (!mounted.current || latest.current.blocked || active.current || cancellationSignal?.aborted || request.signal?.aborted) {
+      return Promise.resolve(request.cancelled);
+    }
     const controller = new AbortController();
     let resolve!: (value: T) => void;
     let reject!: (error: unknown) => void;
@@ -211,11 +214,15 @@ export function useShopActionContinuation(options: ShopActionContinuationOptions
       removeCancellationListener: () => {},
     };
     active.current = operation;
-    const cancelOnSessionChange = () => {
+    const cancelOnAbort = () => {
       if (active.current === operation) cancel();
     };
-    cancellationSignal?.addEventListener('abort', cancelOnSessionChange, { once: true });
-    operation.removeCancellationListener = () => cancellationSignal?.removeEventListener('abort', cancelOnSessionChange);
+    cancellationSignal?.addEventListener('abort', cancelOnAbort, { once: true });
+    request.signal?.addEventListener('abort', cancelOnAbort, { once: true });
+    operation.removeCancellationListener = () => {
+      cancellationSignal?.removeEventListener('abort', cancelOnAbort);
+      request.signal?.removeEventListener('abort', cancelOnAbort);
+    };
     setPendingAction({ key: request.key, phase: 'authenticating' });
     const gateOptions = { signal: controller.signal, expectedWallet: request.expectedWallet };
     const authenticate = async () => {

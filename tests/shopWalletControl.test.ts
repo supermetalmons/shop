@@ -5,7 +5,7 @@ import type { HeaderWallet } from '../src/shop/account/useHeaderWallet.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
-const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
 const { ShopWalletControl } = await import('../src/shop/ui/ShopWalletControl.tsx');
 
 afterEach(cleanup);
@@ -17,6 +17,8 @@ function wallet(overrides: Partial<HeaderWallet> = {}): HeaderWallet {
   return {
     address: ADDRESS,
     open: false,
+    status: 'account',
+    loadingError: null,
     buttonDisabled: false,
     disconnectDisabled: false,
     disconnecting: false,
@@ -28,11 +30,12 @@ function wallet(overrides: Partial<HeaderWallet> = {}): HeaderWallet {
     close: () => undefined,
     disconnect: async () => undefined,
     retryBalance: () => undefined,
+    retryLoading: () => undefined,
     ...overrides,
   };
 }
 
-test('wallet icon stays present and suppresses inactive or busy clicks', () => {
+test('wallet icon stays present and only suppresses suspended or passive clicks', () => {
   let activations = 0;
   const model = wallet({ address: undefined, activate: async () => { activations += 1; } });
   const view = render(createElement(ShopWalletControl, { interactive: true, model }));
@@ -50,6 +53,109 @@ test('wallet icon stays present and suppresses inactive or busy clicks', () => {
   assert.equal(view.queryByRole('dialog'), null);
   fireEvent.click(passive);
   assert.equal(activations, 1);
+});
+
+for (const [status, label] of [
+  ['loading', 'Loading wallet…'],
+  ['connecting', 'Connecting wallet…'],
+  ['signing-in', 'Signing in…'],
+] as const) test(`${status} opens a clear status popup without disabling the wallet icon`, () => {
+  let activations = 0;
+  const model = wallet({ open: true, status, activate: async () => { activations += 1; } });
+  const view = render(createElement(ShopWalletControl, { interactive: true, model }));
+  const trigger = view.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement;
+  assert.equal(trigger.disabled, false);
+  assert.equal(view.getByRole('status').textContent, label);
+  assert.equal(view.getByRole('status').getAttribute('aria-live'), 'polite');
+  assert.equal(view.queryByText('Mainnet balance'), null);
+  assert.equal(view.queryByLabelText(`Solana wallet ${ADDRESS}`), null);
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  fireEvent.click(trigger);
+  assert.equal(activations, 1);
+});
+
+test('loading becomes account content in the same dialog without moving focus', () => {
+  const model = wallet({ open: true, address: undefined, status: 'loading' });
+  const tree = (current: HeaderWallet) => createElement('div', null,
+    createElement(ShopWalletControl, { interactive: true, model: current }),
+    createElement('button', null, 'Another control'),
+  );
+  const view = render(tree(model));
+  const popup = view.getByRole('dialog', { name: 'Wallet' });
+  assert.equal(document.activeElement, popup);
+  view.rerender(tree({ ...model, status: 'connecting' }));
+  assert.equal(view.getByRole('dialog', { name: 'Wallet' }), popup);
+  assert.equal(document.activeElement, popup);
+  const other = view.getByRole('button', { name: 'Another control' });
+  other.focus();
+  view.rerender(tree({ ...model, status: 'account', address: ADDRESS }));
+  assert.equal(view.getByRole('dialog', { name: 'Wallet' }), popup);
+  assert.equal(document.activeElement, other);
+  assert.ok(view.getByText('1.2346 SOL'));
+  assert.equal(view.queryByRole('status'), null);
+});
+
+test('loading failures expose retry and preserve popup focus when retry starts', () => {
+  let retries = 0;
+  const model = wallet({
+    open: true, status: 'error', address: undefined, loadingError: 'Unable to reach the shop. Please try again.',
+    retryLoading: () => { retries += 1; },
+  });
+  const view = render(createElement(ShopWalletControl, { interactive: true, model }));
+  const popup = view.getByRole('dialog', { name: 'Wallet' });
+  assert.equal(view.getByRole('alert').textContent, model.loadingError);
+  assert.equal(view.queryByRole('button', { name: 'Disconnect' }), null);
+  const retry = view.getByRole('button', { name: 'Retry loading wallet' });
+  retry.focus();
+  fireEvent.click(retry);
+  assert.equal(retries, 1);
+  assert.equal(document.activeElement, popup);
+  view.rerender(createElement(ShopWalletControl, { interactive: true, model: { ...model, status: 'loading', loadingError: null } }));
+  assert.equal(view.getByRole('dialog', { name: 'Wallet' }), popup);
+  assert.equal(document.activeElement, popup);
+  assert.equal(view.getByRole('status').textContent, 'Loading wallet…');
+});
+
+test('sign-in cancellation restores focus from the removed popup to the wallet button', async () => {
+  const model = wallet({ open: true, status: 'signing-in', address: undefined });
+  const view = render(createElement(ShopWalletControl, { interactive: true, model }));
+  assert.equal(document.activeElement, view.getByRole('dialog', { name: 'Wallet' }));
+  await act(async () => {
+    await Promise.resolve();
+    view.rerender(createElement(ShopWalletControl, { interactive: true, model: { ...model, open: false } }));
+  });
+  assert.equal(view.queryByRole('dialog'), null);
+  assert.ok(document.activeElement === view.getByRole('button', { name: 'Wallet' }), 'cancelled sign-in restores wallet focus');
+});
+
+test('automatic recovery preserves focus when Retry disappears and Escape still closes the popup', () => {
+  let closed = 0;
+  const model = wallet({ open: true, status: 'error', address: undefined, close: () => { closed += 1; } });
+  const view = render(createElement(ShopWalletControl, { interactive: true, model }));
+  const popup = view.getByRole('dialog', { name: 'Wallet' });
+  view.getByRole('button', { name: 'Retry loading wallet' }).focus();
+  view.rerender(createElement(ShopWalletControl, { interactive: true, model: { ...model, status: 'account', address: ADDRESS } }));
+  assert.ok(document.activeElement === popup, 'automatic recovery keeps focus in the popup');
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(closed, 1);
+  assert.ok(document.activeElement === view.getByRole('button', { name: 'Wallet' }), 'Escape restores wallet focus');
+});
+
+for (const recovery of [false, true]) for (const keepFocus of [true, false]) test(`${recovery ? 'automatic recovery' : 'sign-in cancellation'} preserves focus moved outside${keepFocus ? '' : ' and then cleared'}`, () => {
+  const model = wallet({ open: true, status: recovery ? 'error' : 'signing-in', address: undefined });
+  const tree = (current: HeaderWallet) => createElement('div', null,
+    createElement(ShopWalletControl, { interactive: true, model: current }),
+    createElement('button', null, 'Another control'),
+  );
+  const view = render(tree(model));
+  if (recovery) view.getByRole('button', { name: 'Retry loading wallet' }).focus();
+  const other = view.getByRole('button', { name: 'Another control' });
+  other.focus();
+  if (!keepFocus) other.blur();
+  view.rerender(tree(recovery
+    ? { ...model, status: 'account', address: ADDRESS }
+    : { ...model, open: false }));
+  assert.ok(document.activeElement === (keepFocus ? other : document.body), 'outside focus is preserved');
 });
 
 test('wallet popup shows the account address, mainnet SOL balance, and disconnect', () => {
@@ -86,6 +192,7 @@ test('disconnect pending and failures have explicit controls', () => {
   const model = wallet({ open: true, disconnecting: true, disconnect: async () => { disconnects += 1; } });
   const view = render(createElement(ShopWalletControl, { interactive: true, model }));
   const pending = view.getByRole('button', { name: 'Disconnecting…' }) as HTMLButtonElement;
+  assert.equal((view.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement).disabled, false);
   assert.equal(pending.disabled, true);
   fireEvent.click(pending);
   assert.equal(disconnects, 0);

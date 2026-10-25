@@ -6,13 +6,16 @@ import { useMainnetSolBalance } from './useMainnetSolBalance';
 
 type HeaderWalletOptions = {
   auth: Pick<ReturnType<typeof useSolanaAuth>,
-    'authenticated' | 'sessionWallet' | 'sessionResolution' | 'loading' | 'signOut' | 'intentCancellationSignal'>;
+    'authenticated' | 'sessionWallet' | 'sessionResolution' | 'error' | 'refreshProfileState' |
+    'signOut' | 'intentCancellationSignal'>;
   wallet: Pick<WalletContextState,
     'connected' | 'connecting' | 'disconnecting' | 'publicKey' | 'wallet' | 'disconnect'>;
-  signIn: () => Promise<unknown>;
+  signIn: (request?: { signal?: AbortSignal }) => Promise<boolean>;
+  joinPendingSignIn?: (request?: { signal?: AbortSignal }) => Promise<boolean> | null;
   signInPending?: boolean;
   mutationPending?: boolean;
   suspended?: boolean;
+  walletModalVisible?: boolean;
   scopeKey?: string;
   onBeforeOpen?: () => void;
   onBeforeDisconnect?: () => void;
@@ -23,6 +26,8 @@ type HeaderWalletOptions = {
 export type HeaderWallet = {
   address: string | undefined;
   open: boolean;
+  status: 'loading' | 'connecting' | 'signing-in' | 'account' | 'error';
+  loadingError: string | null;
   buttonDisabled: boolean;
   disconnectDisabled: boolean;
   disconnecting: boolean;
@@ -34,6 +39,16 @@ export type HeaderWallet = {
   close: () => void;
   disconnect: () => Promise<void>;
   retryBalance: () => void;
+  retryLoading: () => void;
+};
+
+type OpenIntent = {
+  controller: AbortController;
+  signal: AbortSignal;
+  scopeKey: string | undefined;
+  signInCompleted: boolean;
+  ownsPicker: boolean;
+  observedExternalSignIn: boolean;
 };
 
 type DisconnectAttempt = {
@@ -55,24 +70,61 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
   const latest = useRef(options);
   latest.current = options;
   const mounted = useRef(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  const openRef = useRef(false);
+  const openIntent = useRef<OpenIntent | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
-  const signInFlight = useRef(false);
+  const signInFlight = useRef<OpenIntent | null>(null);
+  const retryFlight = useRef<Promise<void> | null>(null);
   const disconnectFlight = useRef<Promise<void> | null>(null);
   const disconnectAttempt = useRef<DisconnectAttempt | null>(null);
   const authenticatedAddress = options.auth.authenticated ? options.auth.sessionWallet || undefined : undefined;
+  const validatedAddress = options.auth.sessionResolution === 'settled' ? authenticatedAddress : undefined;
   const connectedAddress = options.wallet.connected ? options.wallet.publicKey?.toBase58() : undefined;
-  const address = disconnectAttempt.current?.address ?? authenticatedAddress;
-  const balance = useMainnetSolBalance(authenticatedAddress, open && !options.suspended && !disconnectAttempt.current);
+  const address = disconnectAttempt.current?.address ?? validatedAddress;
+  const balance = useMainnetSolBalance(validatedAddress,
+    open && !options.suspended && !options.walletModalVisible && !disconnectAttempt.current);
   const balanceRef = useRef(balance);
   balanceRef.current = balance;
 
+  const setOpen = useCallback((value: boolean) => {
+    openRef.current = value;
+    setOpenState(value);
+  }, []);
+
+  const cancelOpenIntent = useCallback(() => {
+    const intent = openIntent.current;
+    openIntent.current = null;
+    intent?.controller.abort();
+  }, []);
+
+  const close = useCallback(() => {
+    cancelOpenIntent();
+    retryFlight.current = null;
+    setOpen(false);
+    setRetrying(false);
+    setRetryError(null);
+  }, [cancelOpenIntent, setOpen]);
+
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
+    window.addEventListener('pagehide', close);
+    return () => {
+      mounted.current = false;
+      openRef.current = false;
+      cancelOpenIntent();
+      window.removeEventListener('pagehide', close);
+    };
+  }, [cancelOpenIntent, close]);
+
+  const isCurrentIntent = useCallback((intent: OpenIntent) => mounted.current &&
+    openIntent.current === intent && openRef.current && !intent.controller.signal.aborted &&
+    intent.signal === latest.current.auth.intentCancellationSignal && !intent.signal.aborted &&
+    intent.scopeKey === latest.current.scopeKey && !latest.current.suspended, []);
 
   const discardReplacedStaffSession = useCallback(() => {
     const attempt = disconnectAttempt.current;
@@ -81,10 +133,10 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
     disconnectAttempt.current = null;
     if (mounted.current) {
       setDisconnectError(null);
-      setOpen(false);
+      close();
     }
     return true;
-  }, []);
+  }, [close]);
 
   useEffect(() => subscribeStaffWalletSession(discardReplacedStaffSession), [discardReplacedStaffSession]);
 
@@ -101,15 +153,21 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
       (!adapter || adapter === attempt.adapter?.adapter)) return;
     disconnectAttempt.current = null;
     setDisconnectError(null);
-    setOpen(false);
-  }, [adapter, authenticatedAddress, connectedAddress]);
+    const intent = openIntent.current;
+    if (!attempt && intent && isCurrentIntent(intent) &&
+      (!previous.authenticatedAddress || previous.authenticatedAddress === authenticatedAddress) &&
+      (!previous.connectedAddress || previous.connectedAddress === connectedAddress) &&
+      (!previous.adapter || previous.adapter === adapter || !previous.connectedAddress && !previous.authenticatedAddress) &&
+      (!authenticatedAddress || !connectedAddress || authenticatedAddress === connectedAddress)) return;
+    close();
+  }, [adapter, authenticatedAddress, close, connectedAddress, isCurrentIntent]);
 
   useLayoutEffect(() => {
     const signal = options.auth.intentCancellationSignal;
     const invalidateAttempt = () => {
       disconnectAttempt.current = null;
       setDisconnectError(null);
-      setOpen(false);
+      close();
     };
     const attempt = disconnectAttempt.current;
     if (attempt && attempt.intentSignal !== signal) {
@@ -120,9 +178,13 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
         invalidateAttempt();
       }
     }
+    if (openIntent.current && openIntent.current.signal !== signal) close();
     const onAbort = () => {
       const operation = disconnectAttempt.current;
-      if (!operation || operation.intentSignal !== signal) return;
+      if (!operation || operation.intentSignal !== signal) {
+        close();
+        return;
+      }
       if (operation.startingSignOut) {
         operation.acceptNextIntent = true;
       } else if (operation.expectedWalletDisconnect && !latest.current.wallet.connected &&
@@ -135,51 +197,103 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
     };
     signal.addEventListener('abort', onAbort);
     return () => signal.removeEventListener('abort', onAbort);
-  }, [options.auth.intentCancellationSignal]);
+  }, [close, options.auth.intentCancellationSignal]);
 
-  useEffect(() => { setOpen(false); }, [options.scopeKey]);
-  useEffect(() => {
-    if (options.suspended) setOpen(false);
-  }, [options.suspended]);
-
-  const close = useCallback(() => setOpen(false), []);
-  const isButtonDisabled = () => {
-    const current = latest.current;
-    return Boolean(
-      current.suspended || disconnectFlight.current || signInFlight.current ||
-      current.wallet.connecting || current.wallet.disconnecting ||
-      !disconnectAttempt.current && (
-        current.auth.sessionResolution !== 'settled' || current.auth.loading || current.signInPending
-      ),
-    );
-  };
+  useLayoutEffect(() => { close(); }, [close, options.scopeKey]);
+  useLayoutEffect(() => {
+    const intent = openIntent.current;
+    if (options.suspended || options.walletModalVisible && (!intent?.ownsPicker || intent.signInCompleted)) close();
+  }, [close, options.suspended, options.walletModalVisible]);
 
   const activate = useCallback(async () => {
-    if (isButtonDisabled()) return;
     const current = latest.current;
-    current.onBeforeOpen?.();
-    if (current.auth.authenticated && current.auth.sessionWallet || disconnectAttempt.current) {
-      setOpen((value) => !value);
+    if (!mounted.current || current.suspended || current.walletModalVisible) return;
+    if (openRef.current) {
+      close();
       return;
     }
-    if (current.mutationPending) return;
-    signInFlight.current = true;
-    setSigningIn(true);
-    try {
-      await current.signIn();
-    } catch (error) {
-      if (mounted.current) latest.current.showToast(error instanceof Error ? error.message : 'Unable to sign in. Please try again.');
-    } finally {
-      signInFlight.current = false;
-      if (mounted.current) setSigningIn(false);
+    if (!disconnectAttempt.current) {
+      openIntent.current = {
+        controller: new AbortController(), signal: current.auth.intentCancellationSignal,
+        scopeKey: current.scopeKey, signInCompleted: false,
+        ownsPicker: false,
+        observedExternalSignIn: Boolean(current.signInPending),
+      };
     }
-  }, []);
+    setOpen(true);
+    current.onBeforeOpen?.();
+  }, [close, setOpen]);
+
+  useEffect(() => {
+    const intent = openIntent.current;
+    if (!intent || !isCurrentIntent(intent) || options.walletModalVisible || signInFlight.current) return;
+    if (validatedAddress) {
+      if (retryError) setRetryError(null);
+      return;
+    }
+    if (intent.signInCompleted) {
+      close();
+      return;
+    }
+    const pendingSignIn = options.joinPendingSignIn?.({ signal: intent.controller.signal });
+    if (!pendingSignIn) {
+      if (options.signInPending) intent.observedExternalSignIn = true;
+      else if (intent.observedExternalSignIn) {
+        close();
+        return;
+      }
+      if (disconnectAttempt.current || disconnectFlight.current || options.wallet.connecting || options.wallet.disconnecting ||
+        options.auth.sessionResolution !== 'settled' || options.signInPending || options.mutationPending) return;
+    }
+    intent.ownsPicker = !pendingSignIn;
+    intent.observedExternalSignIn = false;
+    signInFlight.current = intent;
+    setSigningIn(true);
+    void (async () => {
+      try {
+        const signedIn = await (pendingSignIn ?? latest.current.signIn({ signal: intent.controller.signal }));
+        if (!isCurrentIntent(intent)) return;
+        intent.signInCompleted = true;
+        if (!signedIn) close();
+      } catch (error) {
+        if (!isCurrentIntent(intent)) return;
+        latest.current.showToast(error instanceof Error ? error.message : 'Unable to sign in. Please try again.');
+        close();
+      } finally {
+        if (signInFlight.current === intent) {
+          signInFlight.current = null;
+          if (mounted.current) setSigningIn(false);
+        }
+      }
+    })();
+  });
+
+  const retryLoading = useCallback(() => {
+    const intent = openIntent.current;
+    if (!intent || !isCurrentIntent(intent) || retryFlight.current) return;
+    setRetryError(null);
+    setRetrying(true);
+    const promise = (async () => {
+      try {
+        await latest.current.auth.refreshProfileState();
+      } catch (error) {
+        if (isCurrentIntent(intent)) {
+          setRetryError(error instanceof Error ? error.message : 'Unable to load wallet. Please try again.');
+        }
+      }
+    })().finally(() => {
+      if (retryFlight.current === promise) retryFlight.current = null;
+      if (mounted.current && openIntent.current === intent) setRetrying(false);
+    });
+    retryFlight.current = promise;
+  }, [isCurrentIntent]);
 
   const disconnect = useCallback((): Promise<void> => {
     if (disconnectFlight.current) return disconnectFlight.current;
     if (discardReplacedStaffSession()) return Promise.resolve();
     const current = latest.current;
-    if (current.suspended || current.mutationPending || current.wallet.connecting || current.wallet.disconnecting || signInFlight.current) {
+    if (current.suspended || current.walletModalVisible || current.mutationPending || current.wallet.connecting ||
+      current.wallet.disconnecting || signInFlight.current || current.signInPending) {
       return Promise.resolve();
     }
     let attempt = disconnectAttempt.current;
@@ -207,6 +321,7 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
       disconnectAttempt.current = attempt;
     }
     const operation = attempt;
+    cancelOpenIntent();
     setDisconnecting(true);
     current.onDisconnectingChange?.(true);
     setDisconnectError(null);
@@ -251,7 +366,7 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
       if (!operation.sessionPending && !operation.walletPending) {
         disconnectAttempt.current = null;
         setDisconnectError(null);
-        setOpen(false);
+        close();
         return;
       }
       setDisconnectError(operation.sessionPending && operation.walletPending
@@ -269,14 +384,23 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
     });
     disconnectFlight.current = promise;
     return promise;
-  }, [discardReplacedStaffSession]);
+  }, [cancelOpenIntent, close, discardReplacedStaffSession, setOpen]);
+
+  const loadingError = options.auth.sessionResolution !== 'settled' ? options.auth.error || retryError : null;
+  const connecting = options.wallet.connecting || (signingIn || options.signInPending) && !connectedAddress;
+  const status = address ? 'account'
+    : connecting ? 'connecting'
+      : signingIn || options.signInPending ? 'signing-in'
+        : loadingError && !retrying ? 'error' : 'loading';
 
   return {
     address,
-    open: Boolean(open && address && !options.suspended),
-    buttonDisabled: Boolean(isButtonDisabled() || signingIn || disconnecting),
-    disconnectDisabled: Boolean(options.mutationPending || options.suspended || options.wallet.connecting ||
-      options.wallet.disconnecting || signingIn || disconnecting),
+    open: Boolean(open && !options.suspended && !options.walletModalVisible),
+    status,
+    loadingError,
+    buttonDisabled: Boolean(options.suspended || options.walletModalVisible),
+    disconnectDisabled: Boolean(options.mutationPending || options.suspended || options.walletModalVisible || options.wallet.connecting ||
+      options.wallet.disconnecting || options.signInPending || signingIn || disconnecting),
     disconnecting,
     disconnectError,
     balanceLamports: disconnectAttempt.current ? disconnectAttempt.current.balanceLamports : balance.lamports,
@@ -286,5 +410,6 @@ export function useHeaderWallet(options: HeaderWalletOptions): HeaderWallet {
     close,
     disconnect,
     retryBalance: balance.retry,
+    retryLoading,
   };
 }

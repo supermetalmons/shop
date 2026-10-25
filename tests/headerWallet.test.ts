@@ -46,9 +46,15 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
   const runtime = {
     signOut: async () => undefined,
     disconnect: async () => undefined,
-    signIn: async () => undefined,
+    signIn: async (_request?: { signal?: AbortSignal }) => true,
+    refreshProfileState: async () => true,
   };
-  const initial = { mutationPending: false, suspended: false, scopeKey: '/', resolving: false };
+  const signInSignals: Array<AbortSignal | undefined> = [];
+  const initial = {
+    mutationPending: false, suspended: false, scopeKey: '/', resolving: false, disabled: false,
+    error: null as string | null, connecting: false, disconnecting: false,
+    walletModalVisible: false, signInPending: false,
+  };
   const view = renderHook((props: typeof initial) => {
     const [account, setAccount] = useState(session);
     const [connectedKey, setConnectedKey] = useState<PublicKey | null>(connected ? new PublicKey(session ?? walletA) : null);
@@ -65,8 +71,9 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
       auth: {
         authenticated: Boolean(account),
         sessionWallet: account,
-        sessionResolution: props.resolving ? 'resolving' : 'settled',
-        loading: false,
+        sessionResolution: props.disabled ? 'disabled' : props.resolving ? 'resolving' : 'settled',
+        error: props.error,
+        refreshProfileState: async () => { calls.push('refresh'); return runtime.refreshProfileState(); },
         intentCancellationSignal: signal,
         signOut: async () => {
           calls.push('sign-out');
@@ -78,8 +85,8 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
       wallet: {
         connected: Boolean(connectedKey),
         publicKey: connectedKey,
-        connecting: false,
-        disconnecting: false,
+        connecting: props.connecting,
+        disconnecting: props.disconnecting,
         wallet: null,
         disconnect: async () => {
           calls.push('disconnect');
@@ -87,7 +94,11 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
           setConnectedKey(null);
         },
       },
-      signIn: async () => { calls.push('sign-in'); await runtime.signIn(); },
+      signIn: async (request) => {
+        calls.push('sign-in');
+        signInSignals.push(request?.signal);
+        return runtime.signIn(request);
+      },
       onBeforeOpen: () => calls.push('before-open'),
       onBeforeDisconnect: () => calls.push('before-disconnect'),
       onDisconnectingChange: pending => disconnectingChanges.push(pending),
@@ -97,29 +108,303 @@ function headerRig({ session = walletA.toBase58(), connected = true }: { session
       model,
       account,
       connectedKey,
+      restoreSession: (address: string) => setAccount(address),
+      connectWallet: (key: PublicKey) => setConnectedKey(key),
+      invalidateIntent: rotateIntent,
       replaceSession: (address: string) => { rotateIntent(); setAccount(address); },
       replaceWallet: (key: PublicKey) => { rotateIntent(); setConnectedKey(key); setAccount(key.toBase58()); },
     };
   }, { initialProps: initial, ...queryWrapper() });
-  return { ...view, initial, runtime, calls, messages, disconnectingChanges };
+  return { ...view, initial, runtime, calls, messages, disconnectingChanges, signInSignals };
 }
 
-test('wallet stays disabled while resolving, then signed-out activation joins one sign-in', async () => {
+test('an early click stays enabled and transitions from loading into a restored account', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  rig.rerender({ ...rig.initial, disabled: true });
+  assert.equal(rig.result.current.model.buttonDisabled, false);
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'loading');
+  assert.equal(rig.result.current.model.address, undefined);
+  assert.deepEqual(rig.calls, ['before-open']);
+  rig.rerender({ ...rig.initial, resolving: true });
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.result.current.model.address, walletA.toBase58());
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('an early signed-out click automatically starts one sign-in after restoration settles', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const signing = deferred<boolean>();
+  rig.runtime.signIn = () => signing.promise;
+  rig.rerender({ ...rig.initial, resolving: true });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.calls.includes('sign-in'), false);
+  rig.rerender(rig.initial);
+  await waitFor(() => assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1));
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.buttonDisabled, false);
+  assert.ok(['connecting', 'signing-in'].includes(rig.result.current.model.status));
+  assert.ok(rig.signInSignals[0]);
+  rig.rerender({ ...rig.initial });
+  assert.deepEqual(rig.calls, ['before-open', 'sign-in']);
+  act(() => {
+    rig.result.current.connectWallet(walletA);
+    rig.result.current.restoreSession(walletA.toBase58());
+  });
+  await act(async () => { signing.resolve(true); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.result.current.model.buttonDisabled, false);
+});
+
+test('a late adapter connection to the restored account keeps its popup open', async () => {
   const rig = headerRig({ session: null, connected: false });
   rig.rerender({ ...rig.initial, resolving: true });
-  assert.equal(rig.result.current.model.buttonDisabled, true);
   await act(async () => { await rig.result.current.model.activate(); });
-  assert.deepEqual(rig.calls, []);
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
   rig.rerender(rig.initial);
-  const signing = deferred();
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  act(() => rig.result.current.connectWallet(walletA));
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.address, walletA.toBase58());
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('an owned wallet picker hides the popup and successful sign-in returns to its account', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const signing = deferred<boolean>();
   rig.runtime.signIn = () => signing.promise;
-  let completion!: Promise<void>;
-  act(() => { completion = rig.result.current.model.activate(); });
   await act(async () => { await rig.result.current.model.activate(); });
+  rig.rerender({ ...rig.initial, walletModalVisible: true });
+  assert.equal(rig.result.current.model.open, false);
   assert.equal(rig.result.current.model.buttonDisabled, true);
-  assert.deepEqual(rig.calls, ['before-open', 'sign-in']);
-  await act(async () => { signing.resolve(); await completion; });
+  assert.equal(rig.signInSignals[0]?.aborted, false);
+  rig.rerender({ ...rig.initial, connecting: true });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'connecting');
+  act(() => rig.result.current.connectWallet(walletA));
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.status, 'signing-in');
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
+  await act(async () => { signing.resolve(true); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1);
+});
+
+test('an external wallet picker after successful sign-in closes the account popup', async () => {
+  const rig = headerRig({ session: null });
+  const signing = deferred<boolean>();
+  rig.runtime.signIn = () => signing.promise;
+  await act(async () => { await rig.result.current.model.activate(); });
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
+  await act(async () => { signing.resolve(true); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  rig.rerender({ ...rig.initial, walletModalVisible: true });
+  assert.equal(rig.result.current.model.open, false);
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1);
+});
+
+for (const outcome of ['picker cancelled', 'signature rejected'] as const) {
+  test(`${outcome} closes the popup without restarting sign-in`, async () => {
+    const rig = headerRig({ session: null, connected: outcome === 'signature rejected' });
+    const signing = deferred<boolean>();
+    rig.runtime.signIn = () => signing.promise;
+    await act(async () => { await rig.result.current.model.activate(); });
+    if (outcome === 'picker cancelled') rig.rerender({ ...rig.initial, walletModalVisible: true });
+    await act(async () => { signing.resolve(false); });
+    rig.rerender(rig.initial);
+    assert.equal(rig.result.current.model.open, false);
+    assert.equal(rig.result.current.model.buttonDisabled, false);
+    assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1);
+    assert.deepEqual(rig.messages, []);
+  });
+}
+
+for (const reason of ['close', 'toggle', 'route', 'overlay', 'pagehide', 'identity', 'unmount'] as const) {
+  test(`${reason} cancels an early click before readiness without a later sign-in`, async () => {
+    const rig = headerRig({ session: null, connected: false });
+    rig.rerender({ ...rig.initial, resolving: true });
+    await act(async () => { await rig.result.current.model.activate(); });
+    if (reason === 'close') act(() => rig.result.current.model.close());
+    else if (reason === 'toggle') await act(async () => { await rig.result.current.model.activate(); });
+    else if (reason === 'route') rig.rerender({ ...rig.initial, resolving: true, scopeKey: '/other' });
+    else if (reason === 'overlay') rig.rerender({ ...rig.initial, resolving: true, suspended: true });
+    else if (reason === 'pagehide') act(() => window.dispatchEvent(new dom.window.Event('pagehide')));
+    else if (reason === 'identity') act(() => rig.result.current.invalidateIntent());
+    else rig.unmount();
+    if (reason !== 'unmount') {
+      rig.rerender({ ...rig.initial, scopeKey: reason === 'route' ? '/other' : '/' });
+      assert.equal(rig.result.current.model.open, false);
+    }
+    assert.equal(rig.calls.includes('sign-in'), false);
+  });
+}
+
+test('rapid toggles during initial loading close the popup without starting sign-in', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  rig.rerender({ ...rig.initial, resolving: true });
+  await act(async () => {
+    await rig.result.current.model.activate();
+    await rig.result.current.model.activate();
+  });
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('closing an in-flight sign-in aborts its request and ignores a late success', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const signing = deferred<boolean>();
+  rig.runtime.signIn = () => signing.promise;
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.signInSignals[0]?.aborted, false);
+  act(() => rig.result.current.model.close());
+  assert.equal(rig.signInSignals[0]?.aborted, true);
+  await act(async () => {
+    rig.result.current.connectWallet(walletA);
+    rig.result.current.restoreSession(walletA.toBase58());
+    signing.resolve(true);
+  });
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1);
+});
+
+test('account replacement aborts an in-flight sign-in and does not reopen its popup', async () => {
+  const rig = headerRig({ session: null });
+  const signing = deferred<boolean>();
+  rig.runtime.signIn = () => signing.promise;
+  await act(async () => { await rig.result.current.model.activate(); });
+  act(() => rig.result.current.replaceWallet(walletB));
+  assert.equal(rig.signInSignals[0]?.aborted, true);
+  await act(async () => { signing.resolve(true); });
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.result.current.account, walletB.toBase58());
+});
+
+test('an unrelated wallet picker cancels a queued early click', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  rig.rerender({ ...rig.initial, resolving: true });
+  await act(async () => { await rig.result.current.model.activate(); });
+  rig.rerender({ ...rig.initial, resolving: true, walletModalVisible: true });
+  assert.equal(rig.result.current.model.open, false);
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('restoration failures remain visible and retry into the existing popup', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const refreshing = deferred<boolean>();
+  rig.runtime.refreshProfileState = () => refreshing.promise;
+  rig.rerender({ ...rig.initial, resolving: true, error: 'Network unavailable' });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, true);
   assert.equal(rig.result.current.model.buttonDisabled, false);
+  assert.equal(rig.result.current.model.status, 'error');
+  assert.equal(rig.result.current.model.loadingError, 'Network unavailable');
+  act(() => {
+    rig.result.current.model.retryLoading();
+    rig.result.current.model.retryLoading();
+  });
+  assert.equal(rig.result.current.model.status, 'loading');
+  assert.equal(rig.calls.filter(value => value === 'refresh').length, 1);
+  await act(async () => {
+    rig.result.current.restoreSession(walletA.toBase58());
+    rig.rerender(rig.initial);
+    refreshing.resolve(true);
+  });
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('dismissal during a restoration retry prevents a late popup or queued sign-in', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const refreshing = deferred<boolean>();
+  rig.runtime.refreshProfileState = () => refreshing.promise;
+  rig.rerender({ ...rig.initial, resolving: true, error: 'Offline' });
+  await act(async () => { await rig.result.current.model.activate(); });
+  act(() => rig.result.current.model.retryLoading());
+  act(() => rig.result.current.model.close());
+  await act(async () => { rig.rerender(rig.initial); refreshing.resolve(true); });
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('a reopened popup accepts Retry while a dismissed retry is still pending', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const first = deferred<boolean>();
+  const second = deferred<boolean>();
+  let refreshes = 0;
+  rig.runtime.refreshProfileState = () => ++refreshes === 1 ? first.promise : second.promise;
+  rig.rerender({ ...rig.initial, resolving: true, error: 'Offline' });
+  await act(async () => { await rig.result.current.model.activate(); });
+  act(() => rig.result.current.model.retryLoading());
+  assert.equal(rig.result.current.model.status, 'loading');
+  act(() => rig.result.current.model.close());
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.status, 'error');
+  act(() => rig.result.current.model.retryLoading());
+  assert.equal(refreshes, 2);
+  assert.equal(rig.result.current.model.status, 'loading');
+  await act(async () => { first.reject(new Error('Dismissed request failed')); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'loading');
+  assert.equal(rig.result.current.model.loadingError, 'Offline');
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
+  rig.rerender(rig.initial);
+  await act(async () => { second.resolve(true); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('a pending transaction delays sign-in while keeping the loading popup accessible', async () => {
+  const rig = headerRig({ session: null, connected: false });
+  const signing = deferred<boolean>();
+  rig.runtime.signIn = () => signing.promise;
+  rig.rerender({ ...rig.initial, mutationPending: true });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.buttonDisabled, false);
+  assert.equal(rig.calls.includes('sign-in'), false);
+  rig.rerender(rig.initial);
+  await waitFor(() => assert.equal(rig.calls.filter(value => value === 'sign-in').length, 1));
+  await act(async () => { signing.resolve(false); });
+});
+
+test('an external sign-in can load the opened wallet without starting another sign-in', async () => {
+  const rig = headerRig({ session: null });
+  rig.rerender({ ...rig.initial, signInPending: true });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.buttonDisabled, false);
+  assert.equal(rig.result.current.model.status, 'signing-in');
+  assert.equal(rig.calls.includes('sign-in'), false);
+  act(() => rig.result.current.restoreSession(walletA.toBase58()));
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.calls.includes('sign-in'), false);
+});
+
+test('a cancelled external sign-in closes the popup without starting a replacement sign-in', async () => {
+  const rig = headerRig({ session: null });
+  rig.rerender({ ...rig.initial, signInPending: true });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'signing-in');
+  rig.rerender(rig.initial);
+  assert.equal(rig.result.current.model.open, false);
+  assert.equal(rig.calls.includes('sign-in'), false);
 });
 
 test('a restored session without a connected adapter opens its account and signs out', async () => {
@@ -148,12 +433,32 @@ test('disconnect is single-flight, retains popup during revocation, and disconne
   assert.equal(rig.result.current.model.open, true);
   assert.equal(rig.result.current.model.address, walletA.toBase58());
   assert.equal(rig.result.current.model.disconnecting, true);
-  assert.equal(rig.result.current.model.buttonDisabled, true);
+  assert.equal(rig.result.current.model.buttonDisabled, false);
   assert.equal(rig.calls.includes('disconnect'), false);
   await act(async () => { logout.resolve(); await first; });
   assert.deepEqual(rig.calls, ['before-open', 'before-disconnect', 'sign-out', 'disconnect']);
   assert.equal(rig.result.current.model.open, false);
   assert.equal(rig.result.current.connectedKey, null);
+});
+
+test('the wallet popup can close and reopen while disconnect is still pending', async () => {
+  const rig = headerRig();
+  const logout = deferred();
+  rig.runtime.signOut = () => logout.promise;
+  await act(async () => { await rig.result.current.model.activate(); });
+  let completion!: Promise<void>;
+  act(() => { completion = rig.result.current.model.disconnect(); });
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, false);
+  await act(async () => { await rig.result.current.model.activate(); });
+  assert.equal(rig.result.current.model.open, true);
+  assert.equal(rig.result.current.model.status, 'account');
+  assert.equal(rig.result.current.model.address, walletA.toBase58());
+  assert.equal(rig.result.current.model.disconnecting, true);
+  assert.equal(rig.calls.filter(value => value === 'sign-out').length, 1);
+  assert.equal(rig.calls.includes('sign-in'), false);
+  await act(async () => { logout.resolve(); await completion; });
+  assert.equal(rig.result.current.model.open, false);
 });
 
 test('failed session revocation still disconnects the adapter and retry only retries revocation', async () => {
@@ -214,7 +519,8 @@ for (const outcome of ['session failure', 'adapter failure', 'mutation conflict'
       const model = useHeaderWallet({
         mutationPending,
         auth: {
-          authenticated: Boolean(account), sessionWallet: account, sessionResolution: 'settled', loading: false,
+          authenticated: Boolean(account), sessionWallet: account, sessionResolution: 'settled',
+          error: null, refreshProfileState: async () => true,
           intentCancellationSignal,
           signOut: async () => {
             setAccount(null);
@@ -228,7 +534,7 @@ for (const outcome of ['session failure', 'adapter failure', 'mutation conflict'
             setConnected(false);
           },
         },
-        signIn: async () => {},
+        signIn: async () => false,
         showToast: () => {},
       });
       return createElement('div', null,
@@ -242,7 +548,7 @@ for (const outcome of ['session failure', 'adapter failure', 'mutation conflict'
     const disconnect = view.getByRole('button', { name: 'Disconnect' });
     disconnect.focus();
     fireEvent.click(disconnect);
-    assert.equal(trigger.disabled, true);
+    assert.equal(trigger.disabled, false);
     const other = view.getByRole('textbox', { name: 'Other field' });
     fireEvent.pointerDown(other);
     other.focus();

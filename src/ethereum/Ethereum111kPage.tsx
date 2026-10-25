@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
@@ -36,13 +36,14 @@ export type Ethereum111kPageProps = {
   solanaInventoryReady: boolean;
   externalBusy?: boolean;
   suspended?: boolean;
+  onModalOpenChange?: (open: boolean) => void;
   showToast?: (message: string) => void;
 };
 
 export default function Ethereum111kPage({
   header, wallet, claimReceiptId, claimCode: linkedClaimCode, checkoutReturnId, addressEncryptionPublicKey, solanaInventoryItems, solanaSelected, onSolanaToggle, clearSolanaSelection,
   pendingRevealIds, onSolanaReveal, onSolanaView, canOpenSolanaBoxes, solanaRevealLoading,
-  solanaInventoryReady, externalBusy = false, suspended = false, showToast,
+  solanaInventoryReady, externalBusy = false, suspended = false, onModalOpenChange, showToast,
 }: Ethereum111kPageProps) {
   const [kind, setKind] = useState<'crate' | 'warehouse'>('crate');
   const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind);
@@ -132,6 +133,12 @@ export default function Ethereum111kPage({
   const claimLinkKey = claimReceiptId && linkedClaimCode ? `${claimReceiptId}:${linkedClaimCode}` : null;
   const claimConnectionOpen = Boolean(claimLinkKey && claimLinkHandled !== claimLinkKey && dismissedClaimConnection !== claimLinkKey &&
     !model.owner && !walletPickerOpen && !mintAction.pending);
+  const revealOpen = Boolean(model.revealed);
+  const viewerOpen = Boolean(viewed) && !revealOpen;
+  const recoveryDialogOpen = recoveryOpen && Boolean(model.pending || model.submission) && !revealOpen;
+  const modalOpen = !suspended && (walletPickerOpen || claimConnectionOpen || recoveryDialogOpen || viewerOpen || revealOpen);
+  useLayoutEffect(() => { onModalOpenChange?.(modalOpen); }, [modalOpen, onModalOpenChange]);
+  useLayoutEffect(() => () => { onModalOpenChange?.(false); }, [onModalOpenChange]);
   useEffect(() => {
     setQuantity(current => Math.min(current, maxQuantity));
   }, [maxQuantity]);
@@ -341,7 +348,7 @@ export default function Ethereum111kPage({
           return <button key={candidate.info.uuid} ref={index === 0 ? firstWalletRef : undefined} type="button" onClick={() => wallet.selectWallet(candidate)}>{icon ? <img src={icon} alt="" /> : null}{candidate.info.name}</button>;
         })}</div>
       </Modal>
-      <Modal open={recoveryOpen && Boolean(model.pending || model.submission) && !model.revealed} title="Recover a pending transaction" onClose={() => { if (!model.busy) setRecoveryOpen(false); }} suspended={suspended}>
+      <Modal open={recoveryDialogOpen} title="Recover a pending transaction" onClose={() => { if (!model.busy) setRecoveryOpen(false); }} suspended={suspended}>
         <p className="muted small">{model.submission ? 'Paste the transaction hash from your wallet to resume tracking.' : 'If you sped up or cancelled the transaction in your wallet, paste its new transaction hash.'}</p>
         <form className="ethereum111k__receipt-form" onSubmit={async event => {
           event.preventDefault();
@@ -358,7 +365,7 @@ export default function Ethereum111kPage({
           </> : <button type="button" className="ghost" onClick={() => setConfirmDismiss(true)} disabled={Boolean(model.busy)}>Stop tracking…</button>}
         </div>
       </Modal>
-      <Modal open={Boolean(viewed) && !model.revealed} title={viewed?.name ?? '111K artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
+      <Modal open={viewerOpen} title={viewed?.name ?? '111K artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
         {viewed ? <>
           <img className="ethereum111k__view-image" src={viewed.image} alt={viewed.name} />
           {viewed.description ? <p className="muted small">{viewed.description}</p> : null}
@@ -373,7 +380,7 @@ export default function Ethereum111kPage({
           </form> : null}
         </> : null}
       </Modal>
-      <Modal open={Boolean(model.revealed)} title={revealItems[0]?.kind === 'crate' ? 'Your crates' : 'Your artworks'} onClose={model.closeReveal} className="ethereum111k__reveal" suspended={suspended}>
+      <Modal open={revealOpen} title={revealItems[0]?.kind === 'crate' ? 'Your crates' : 'Your artworks'} onClose={model.closeReveal} className="ethereum111k__reveal" suspended={suspended}>
         <p className="muted small">{revealItems.length} {revealItems[0]?.kind === 'crate' ? 'crates' : 'artworks'}</p>
         <div className="ethereum111k__reveal-grid">{revealItems.map((item, index) => <button type="button" key={item.id} style={{ animationDelay: `${Math.min(index, 10) * 35}ms` }} onClick={() => { model.closeReveal(); setViewed(item); }}><img src={item.image} alt={item.name} loading="lazy" decoding="async" /><span>{item.name}</span></button>)}</div>
       </Modal>

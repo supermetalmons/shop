@@ -1,6 +1,6 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
@@ -87,6 +87,7 @@ function App({ route, suspended = false }: AppProps) {
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
   const walletBusy = wallet.connecting || wallet.disconnecting;
   const [walletDisconnecting, setWalletDisconnecting] = useState(false);
+  const [ethereumModalOpen, setEthereumModalOpen] = useState(false);
   const statusUiSuspended = suspended || walletModalVisible;
   const auth = useSolanaAuth();
   const drop = useShopDrop(route);
@@ -382,10 +383,14 @@ function App({ route, suspended = false }: AppProps) {
     auth,
     wallet,
     signIn: actionHandlers.handleHeaderSignIn,
+    joinPendingSignIn: signIn.joinPendingSignIn,
     signInPending: awaitingActionSignIn,
     mutationPending: pendingAction?.phase === 'running' || purchaseActions.stripePaymentLoading,
     onDisconnectingChange: setWalletDisconnecting,
-    suspended: suspended || Boolean(activeModalLayer),
+    suspended: suspended || ethereumModalOpen || ethereumWallet.status === 'choosing' || ethereumWallet.status === 'connecting' ||
+      Boolean(modals.receiptTransferTarget) || (reveal.revealOverlayOpen && !reveal.revealOverlayClosing) ||
+      modals.claimOpen || modals.deliveryOpen || notifications.notifyOpen,
+    walletModalVisible,
     scopeKey: drop.normalizedCurrentPath,
     onBeforeOpen: () => account.setSettingsOpen(false),
     onBeforeDisconnect: () => {
@@ -396,6 +401,10 @@ function App({ route, suspended = false }: AppProps) {
     },
     showToast,
   });
+  const onEthereumModalOpenChange = useCallback((open: boolean) => {
+    if (open) walletControl.close();
+    setEthereumModalOpen(open);
+  }, [walletControl.close]);
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
@@ -430,6 +439,7 @@ function App({ route, suspended = false }: AppProps) {
       {isEthereum111kPage ? (
         <Ethereum111kPage
           header={shopHeader}
+          onModalOpenChange={onEthereumModalOpenChange}
           wallet={ethereumWallet}
           claimReceiptId={route.ethereumClaimReceiptId}
           claimCode={route.ethereumClaimCode}
@@ -463,7 +473,7 @@ function App({ route, suspended = false }: AppProps) {
                 <MiNoteCardsGallery
                   wallet={ethereumWallet}
                   verification={ethereumVerification}
-                  onAdminSignIn={actionHandlers.handleHeaderSignIn}
+                  onAdminSignIn={async () => { await actionHandlers.handleHeaderSignIn(); }}
                   preorder={{
                     ...preorderCheckout,
                     purchase: actionHandlers.handlePreorder,

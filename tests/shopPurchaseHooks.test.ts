@@ -195,7 +195,8 @@ for (const outcome of ['success', 'failure'] as const) {
       const purchase = useShopPurchaseActions(options, runtime);
       const walletControl = useHeaderWallet({
         auth: {
-          authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled', loading: false,
+          authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled',
+          error: null, refreshProfileState: async () => true,
           intentCancellationSignal, signOut: async () => { events.push('sign-out'); },
         },
         wallet: {
@@ -203,7 +204,7 @@ for (const outcome of ['success', 'failure'] as const) {
           disconnect: async () => { events.push('disconnect'); },
         },
         mutationPending: purchase.stripePaymentLoading,
-        signIn: async () => {},
+        signIn: async () => true,
         showToast: options.showToast,
       });
       return { purchase, walletControl };
@@ -241,7 +242,8 @@ test('logout blocks retained mint and Stripe callbacks until the adapter disconn
     const purchase = useShopPurchaseActions({ ...options, actionsBlocked }, runtime);
     const walletControl = useHeaderWallet({
       auth: {
-        authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled', loading: false,
+        authenticated: true, sessionWallet: options.connectedWallet!, sessionResolution: 'settled',
+        error: null, refreshProfileState: async () => true,
         intentCancellationSignal, signOut: async () => { events.push('sign-out'); await logout.promise; },
       },
       wallet: {
@@ -250,7 +252,7 @@ test('logout blocks retained mint and Stripe callbacks until the adapter disconn
       },
       mutationPending: purchase.stripePaymentLoading,
       onDisconnectingChange: setActionsBlocked,
-      signIn: async () => {},
+      signIn: async () => true,
       showToast: options.showToast,
     });
     return { purchase, walletControl };

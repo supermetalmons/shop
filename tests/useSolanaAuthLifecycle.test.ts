@@ -1237,7 +1237,7 @@ test('partial staff logout disconnects the wallet and keeps the failed-session r
         publicKey: connected ? new PublicKey(WALLET_A) : null,
         disconnect: async () => { disconnects += 1; setConnected(false); },
       },
-      signIn: async () => undefined,
+      signIn: async () => true,
       showToast: () => undefined,
     });
     return { auth, header };
@@ -1282,7 +1282,7 @@ test('signing in again with the same wallet resets a failed adapter-disconnect r
           setConnected(false);
         },
       },
-      signIn: auth.signIn,
+      signIn: async () => Boolean(await auth.signIn()),
       showToast: () => undefined,
     });
     return { auth, header };

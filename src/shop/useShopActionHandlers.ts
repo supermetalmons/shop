@@ -69,10 +69,6 @@ export function useShopActionHandlers(options: ActionHandlersOptions) {
       ready: () => !restoreSelection || selectionMatches(targets.map(({ id }) => id), latest.current.selection.selected),
     };
   };
-  const handleSignIn = (key: 'header-sign-in' | 'shipments-sign-in') => continuation.run({
-    key, requirement: 'sign-in', cancelled: undefined,
-    execute: () => undefined,
-  });
   const handleMint = (mode: 'mint' | 'discount', quantity: number, variantKey?: string) => {
     if (options.blockViewerModeAction()) return Promise.resolve();
     const dropId = options.routeDropId;
@@ -201,8 +197,14 @@ export function useShopActionHandlers(options: ActionHandlersOptions) {
     }).catch((error) => { report(error); return cancelled; });
   };
   return {
-    handleHeaderSignIn: () => handleSignIn('header-sign-in'),
-    handleShipmentsSignIn: () => handleSignIn('shipments-sign-in'),
+    handleHeaderSignIn: (request?: { signal?: AbortSignal }) => continuation.run({
+      key: 'header-sign-in', requirement: 'sign-in', signal: request?.signal, cancelled: false,
+      execute: () => true,
+    }),
+    handleShipmentsSignIn: () => continuation.run({
+      key: 'shipments-sign-in', requirement: 'sign-in', cancelled: undefined,
+      execute: () => undefined,
+    }),
     handleMint: (quantity: number, variantKey?: string) => handleMint('mint', quantity, variantKey),
     handleDiscountMint: (quantity: number, variantKey?: string) => handleMint('discount', quantity, variantKey),
     handlePreorder, handleClaim, handleOpenShip, handleShip, handleAdminIrlRedeem, handleReceiptTransfer,

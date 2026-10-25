@@ -88,9 +88,11 @@ test('notify keeps its wallet icon visible and opens the existing picker once wh
   let pickerOpens = 0;
   const view = render(createElement(Harness, { onPickerOpen: () => { pickerOpens += 1; } }));
   const button = view.getByRole('button', { name: 'Wallet' }) as HTMLButtonElement;
-  await waitFor(() => assert.equal(button.disabled, false));
+  assert.equal(button.disabled, false);
   assert.equal(view.queryByRole('button', { name: 'App menu' }), null);
   fireEvent.click(button);
+  assert.ok(view.getByText('Loading wallet…'));
+  await waitFor(() => assert.equal(pickerOpens, 1));
   fireEvent.click(button);
   assert.equal(pickerOpens, 1);
   assert.equal(button.disabled, true);

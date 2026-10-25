@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef } from 'react';
 import { FaWallet } from 'react-icons/fa6';
 import { canRestoreFocus } from '../../lib/focusTrap';
 import type { HeaderWallet } from '../account/useHeaderWallet';
@@ -20,6 +20,7 @@ export function ShopWalletControl({ interactive, model }: ShopWalletControlProps
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
+  const focusedPopupElement = useRef<HTMLElement | null>(null);
   const restoreAfterDisconnect = useRef(false);
   const popupId = useId();
   const open = interactive && model.open;
@@ -28,13 +29,28 @@ export function ShopWalletControl({ interactive, model }: ShopWalletControlProps
   useEffect(() => {
     if (!interactive) return;
     const onFocusIn = (event: FocusEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) {
+      if (!(event.target instanceof HTMLElement)) return;
+      focusedPopupElement.current = popupRef.current?.contains(event.target) ? event.target : null;
+      if (!rootRef.current?.contains(event.target)) {
         restoreAfterDisconnect.current = false;
       }
     };
     document.addEventListener('focusin', onFocusIn);
     return () => document.removeEventListener('focusin', onFocusIn);
   }, [interactive]);
+
+  useLayoutEffect(() => {
+    if (!focusedPopupElement.current || focusedPopupElement.current.isConnected) return;
+    if (!interactive || document.activeElement !== document.body) {
+      focusedPopupElement.current = null;
+      return;
+    }
+    const target = open ? popupRef.current : buttonRef.current;
+    if (target && canRestoreFocus(target)) {
+      focusedPopupElement.current = null;
+      target.focus({ preventScroll: true });
+    }
+  });
 
   useEffect(() => {
     if (!restoreAfterDisconnect.current) return;
@@ -65,6 +81,7 @@ export function ShopWalletControl({ interactive, model }: ShopWalletControlProps
       const target = event.target;
       if (!(target instanceof Node) || rootRef.current?.contains(target)) return;
       restoreAfterDisconnect.current = false;
+      focusedPopupElement.current = null;
       const popup = popupRef.current;
       const hadFocus = popup?.contains(document.activeElement);
       const claimsFocus = target instanceof Element && target.closest(FOCUSABLE_TARGET);
@@ -112,34 +129,57 @@ export function ShopWalletControl({ interactive, model }: ShopWalletControlProps
       </button>
       {open ? (
         <div ref={popupRef} id={popupId} className="top__wallet-popup" role="dialog" aria-label="Wallet" tabIndex={-1}>
-          {model.address ? (
-            <div className="top__wallet-address" title={model.address} aria-label={`Solana wallet ${model.address}`}>
-              {model.address.slice(0, 6)}…{model.address.slice(-4)}
+          {model.status === 'account' ? (
+            <>
+              {model.address ? (
+                <div className="top__wallet-address" title={model.address} aria-label={`Solana wallet ${model.address}`}>
+                  {model.address.slice(0, 6)}…{model.address.slice(-4)}
+                </div>
+              ) : null}
+              <div className="top__wallet-balance" aria-busy={model.balanceLoading}>
+                <div className="top__wallet-caption">Mainnet balance</div>
+                <div className="top__wallet-balance-value" aria-live="polite">
+                  {model.balanceError ? (
+                    <>
+                      <span className="top__wallet-caption">Balance unavailable</span>
+                      <button type="button" className="top__wallet-retry" onClick={model.retryBalance} aria-label="Retry balance">Retry</button>
+                    </>
+                  ) : model.balanceLamports !== undefined ? formatBalance(model.balanceLamports) : model.balanceLoading ? 'Loading balance…' : '—'}
+                </div>
+              </div>
+              {model.disconnectError ? <div className="top__wallet-error" role="alert">{model.disconnectError}</div> : null}
+              <button
+                type="button"
+                className="top__wallet-disconnect"
+                disabled={model.disconnectDisabled || model.disconnecting}
+                onClick={() => {
+                  restoreAfterDisconnect.current = Boolean(popupRef.current?.contains(document.activeElement));
+                  void model.disconnect();
+                }}
+              >
+                {model.disconnecting ? 'Disconnecting…' : model.disconnectError ? 'Retry disconnect' : 'Disconnect'}
+              </button>
+            </>
+          ) : model.status === 'error' ? (
+            <>
+              <div className="top__wallet-error" role="alert">{model.loadingError || 'Unable to load wallet.'}</div>
+              <button
+                type="button"
+                className="top__wallet-retry"
+                aria-label="Retry loading wallet"
+                onClick={() => {
+                  popupRef.current?.focus({ preventScroll: true });
+                  model.retryLoading();
+                }}
+              >
+                Retry
+              </button>
+            </>
+          ) : (
+            <div className="top__wallet-status" role="status" aria-live="polite">
+              {model.status === 'connecting' ? 'Connecting wallet…' : model.status === 'signing-in' ? 'Signing in…' : 'Loading wallet…'}
             </div>
-          ) : null}
-          <div className="top__wallet-balance" aria-busy={model.balanceLoading}>
-            <div className="top__wallet-caption">Mainnet balance</div>
-            <div className="top__wallet-balance-value" aria-live="polite">
-              {model.balanceError ? (
-                <>
-                  <span className="top__wallet-caption">Balance unavailable</span>
-                  <button type="button" className="top__wallet-retry" onClick={model.retryBalance} aria-label="Retry balance">Retry</button>
-                </>
-              ) : model.balanceLamports !== undefined ? formatBalance(model.balanceLamports) : model.balanceLoading ? 'Loading balance…' : '—'}
-            </div>
-          </div>
-          {model.disconnectError ? <div className="top__wallet-error" role="alert">{model.disconnectError}</div> : null}
-          <button
-            type="button"
-            className="top__wallet-disconnect"
-            disabled={model.disconnectDisabled || model.disconnecting}
-            onClick={() => {
-              restoreAfterDisconnect.current = Boolean(popupRef.current?.contains(document.activeElement));
-              void model.disconnect();
-            }}
-          >
-            {model.disconnecting ? 'Disconnecting…' : model.disconnectError ? 'Retry disconnect' : 'Disconnect'}
-          </button>
+          )}
         </div>
       ) : null}
     </div>

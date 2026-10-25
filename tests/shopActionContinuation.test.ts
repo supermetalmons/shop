@@ -161,6 +161,78 @@ test('scope change cancels immediately and late gate success cannot revive the a
   assert.equal(executions, 0);
 });
 
+test('a pre-aborted request never starts authentication', async () => {
+  const request = new AbortController();
+  request.abort();
+  let gateCalls = 0;
+  const { result } = renderHook(() => useShopActionContinuation(options({
+    ensureSignedIn: async () => { gateCalls += 1; return true; },
+  })));
+  const completion = await result.current.run({
+    key: 'header-sign-in', requirement: 'sign-in', signal: request.signal,
+    execute: () => true, cancelled: false,
+  });
+  assert.equal(completion, false);
+  assert.equal(gateCalls, 0);
+  assert.equal(result.current.pendingAction, null);
+});
+
+test('request cancellation aborts its auth gate and prevents late execution', async () => {
+  const gate = deferred<boolean>();
+  const request = new AbortController();
+  let gateSignal: AbortSignal | undefined;
+  let executions = 0;
+  const { result } = renderHook(() => useShopActionContinuation(options({
+    ensureSignedIn: (options) => { gateSignal = options?.signal; return gate.promise; },
+  })));
+  let completion!: Promise<boolean>;
+  act(() => {
+    completion = result.current.run({
+      key: 'header-sign-in', requirement: 'sign-in', signal: request.signal,
+      execute: () => { executions += 1; return true; }, cancelled: false,
+    });
+  });
+  act(() => { request.abort(); });
+  assert.equal(await completion, false);
+  assert.equal(gateSignal?.aborted, true);
+  assert.equal(result.current.pendingAction, null);
+  await act(async () => { gate.resolve(true); });
+  assert.equal(executions, 0);
+});
+
+test('aborting completed and blocked requests cannot cancel a different running action', async () => {
+  const completedRequest = new AbortController();
+  const blockedRequest = new AbortController();
+  const transaction = deferred<string>();
+  const { result } = renderHook(() => useShopActionContinuation(options()));
+  let signedIn!: Promise<boolean>;
+  act(() => {
+    signedIn = result.current.run({
+      key: 'header-sign-in', requirement: 'sign-in', signal: completedRequest.signal,
+      execute: () => true, cancelled: false,
+    });
+  });
+  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(await signedIn, true);
+  let purchase!: Promise<string>;
+  act(() => {
+    purchase = result.current.run({
+      key: 'purchase', requirement: 'sign-in', execute: () => transaction.promise, cancelled: 'cancelled',
+    });
+  });
+  await waitFor(() => assert.equal(result.current.pendingAction?.phase, 'running'));
+  const blocked = await result.current.run({
+    key: 'header-sign-in', requirement: 'sign-in', signal: blockedRequest.signal,
+    execute: () => true, cancelled: false,
+  });
+  assert.equal(blocked, false);
+  act(() => { completedRequest.abort(); blockedRequest.abort(); });
+  assert.deepEqual(result.current.pendingAction, { key: 'purchase', phase: 'running' });
+  await act(async () => { transaction.resolve('purchased'); });
+  await waitFor(() => assert.equal(result.current.pendingAction, null));
+  assert.equal(await purchase, 'purchased');
+});
+
 test('first chosen wallet is pinned and switching away and back cannot revive intent', async () => {
   const gate = deferred<boolean>();
   let executions = 0;
