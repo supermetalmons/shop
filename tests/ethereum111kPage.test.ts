@@ -91,6 +91,30 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+type ShopActionHandlerOptions = Parameters<typeof useShopActionHandlers>[0];
+
+function headerSignInOptions(
+  continuation: ShopActionHandlerOptions['continuation'],
+  showToast: ShopActionHandlerOptions['showToast'],
+): ShopActionHandlerOptions {
+  const unexpected = (dependency: string): never => assert.fail(`Unexpected ${dependency} in Ethereum header sign-in`);
+  return {
+    continuation, showToast, owner: undefined, routeDropId: '111k_devnet',
+    blockViewerModeAction: () => unexpected('viewer mode check'),
+    get selection() { return unexpected('selection'); },
+    get selectionState() { return unexpected('selection state'); },
+    get inventory() { return unexpected('inventory'); },
+    get queries() { return unexpected('inventory queries'); },
+    get modals() { return unexpected('commerce modals'); },
+    get preorder() { return unexpected('preorder'); },
+    get purchase() { return unexpected('purchase'); },
+    get delivery() { return unexpected('delivery'); },
+    get claim() { return unexpected('claim'); },
+    get receipts() { return unexpected('receipts'); },
+    get reveal() { return unexpected('reveal'); },
+  };
+}
+
 const returnedCheckoutId = '11111111-1111-4111-8111-111111111111';
 const returnedAttemptId = '22222222-2222-4222-8222-222222222222';
 function returnedCheckout(overrides: Partial<EthereumCheckoutStatusResponse> = {}): EthereumCheckoutStatusResponse {
@@ -1000,7 +1024,7 @@ test('a disconnected claim link connects within its claim dialog without initiat
   assert.ok(view.getByRole('dialog', { name: 'Crate receipt #1' }));
   assert.equal(transactions, 0);
   assert.equal(modalChanges.at(-1), true);
-  fireEvent.click(view.getByRole('button', { name: 'Close', exact: true }));
+  fireEvent.click(view.getByRole('button', { name: 'Close' }));
   assert.equal(modalChanges.at(-1), false);
 });
 
@@ -1146,7 +1170,7 @@ for (const [ethereumPending, settleOnOpen] of [
       connectedWallet: undefined, scopeKey: '/111k_devnet', cancellationSignal: signal.current,
       ensureSignedIn: signIn.ensureSignedIn, ensureWalletConnected: signIn.ensureWalletConnected, showToast,
     });
-    const handlers = useShopActionHandlers({ continuation, showToast } as Parameters<typeof useShopActionHandlers>[0]);
+    const handlers = useShopActionHandlers(headerSignInOptions(continuation, showToast));
     const model = useHeaderWallet({
       auth, wallet: solanaWallet,
       signIn: request => { signInCalls += 1; return handlers.handleHeaderSignIn(request); },
@@ -1183,7 +1207,7 @@ for (const [ethereumPending, settleOnOpen] of [
     fireEvent.keyDown(tile, { key: 'Enter' });
   }
   const collectionButton = await view.findByRole('button', {
-    name: ethereumPending === 'artwork viewer' ? 'View' : viewedItem ? `View ${viewedItem.name}` : 'View collection', exact: true,
+    name: ethereumPending === 'artwork viewer' ? 'View' : viewedItem ? `View ${viewedItem.name}` : 'View collection',
   });
   collectionButton.focus();
   act(() => {
@@ -1256,7 +1280,7 @@ test('an Ethereum confirmation waits for the active Solana picker before showing
       connectedWallet: undefined, scopeKey: '/111k_devnet', cancellationSignal: signal.current,
       ensureSignedIn: signIn.ensureSignedIn, ensureWalletConnected: signIn.ensureWalletConnected, showToast,
     });
-    const handlers = useShopActionHandlers({ continuation, showToast } as Parameters<typeof useShopActionHandlers>[0]);
+    const handlers = useShopActionHandlers(headerSignInOptions(continuation, showToast));
     const model = useHeaderWallet({
       auth, wallet: solanaWallet, signIn: request => { signInCalls += 1; return handlers.handleHeaderSignIn(request); },
       joinPendingSignIn: signIn.joinPendingSignIn, signInPending: continuation.pendingAction?.phase === 'authenticating',
@@ -1465,7 +1489,7 @@ test('the complete bonus batch reveal keeps all 311 artworks reachable with lazy
   assert.ok(view.getByRole('dialog', { name: 'Artwork #311' }));
   assert.equal(modalChanges.at(-1), true);
   assert.ok(modalChanges.slice(previousChanges).every(Boolean));
-  fireEvent.click(view.getByRole('button', { name: 'Close', exact: true }));
+  fireEvent.click(view.getByRole('button', { name: 'Close' }));
   assert.equal(modalChanges.at(-1), false);
 });
 

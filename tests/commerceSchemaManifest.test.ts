@@ -87,6 +87,27 @@ test('migration replay failures and altered historical checkpoints do not overwr
   assert.equal(readFileSync(manifestPath, 'utf8'), alteredContent);
 });
 
+test('missing recorded Commerce checkpoints are rejected without repairing the manifest', (context) => {
+  const { options, manifestPath } = fixture(context);
+  generateCommerceSchema({ ...options, check: false });
+  const altered = readCommerceSchemaManifest(manifestPath);
+  delete altered.checkpoints[altered.migrations[12].name];
+  const alteredContent = JSON.stringify(altered);
+  writeFileSync(manifestPath, alteredContent);
+  for (const check of [true, false]) {
+    assert.throws(() => generateCommerceSchema({ ...options, check }), /Recorded Commerce schema checkpoint changed/);
+    assert.equal(readFileSync(manifestPath, 'utf8'), alteredContent);
+  }
+});
+
+test('committed Commerce manifest matches generation and retains its pre-checkpoint migration history', () => {
+  generateCommerceSchema({ check: true });
+  const manifest = readCommerceSchemaManifest();
+  for (const { name } of manifest.migrations.slice(0, 12)) {
+    assert.equal(Object.hasOwn(manifest.checkpoints, name), false);
+  }
+});
+
 test('every supported checkpoint is selected only by its complete ordered migration prefix', () => {
   const manifest = readCommerceSchemaManifest();
   const names = manifest.migrations.map(({ name }) => name);

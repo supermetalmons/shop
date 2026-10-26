@@ -177,24 +177,8 @@ function integrityInput(
       ),
       tableList: queryRows(db, `SELECT name, type, strict
         FROM pragma_table_list
-        WHERE schema = 'main' AND name IN (
-          'ethereum_auth_challenges',
-          'ethereum_auth_sessions',
-          'ethereum_profile_addresses',
-          'ethereum_profiles',
-          'anonymous_auth_sessions',
-          'auth_wallet_bindings',
-          'profile_addresses',
-          'profiles',
-          'rate_limit_buckets',
-          'reveal_submission_storage_control',
-          'reveal_submissions',
-          'staff_auth_challenges',
-          'staff_auth_sessions',
-          'mi_note_auth_sessions',
-          'mi_note_auth_challenges',
-          'worker_controls'
-        )
+        WHERE schema = 'main' AND name NOT LIKE 'sqlite_%'
+          AND name NOT GLOB '_cf_*' AND name <> 'd1_migrations'
         ORDER BY name`),
       authWalletBindingColumns: queryRows(db, 'PRAGMA table_info(auth_wallet_bindings)'),
       authWalletBindingCounts: queryRows(db, 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings'),
@@ -263,6 +247,42 @@ test('Ops integrity rejects Ethereum migration and schema drift', () => {
     tableList: healthy.tableList.map((row) =>
       row.name === 'ethereum_profiles' ? { ...row, strict: 0 } : row),
   }), /strict flag/);
+});
+
+test('Ops manifest validation preserves exact schema identity and strict tables', () => {
+  const input = integrityInput();
+  const first = input.schema[0];
+  const cases: Record<string, OpsD1IntegrityInput['schema']> = {
+    missing: input.schema.slice(1),
+    extra: [...input.schema, { ...first, name: 'unexpected_schema_object' }],
+    duplicate: [first, ...input.schema.slice(0, -1)],
+    unknown: [{ ...first, name: 'unexpected_schema_object' }, ...input.schema.slice(1)],
+    type: [{ ...first, type: 'view' }, ...input.schema.slice(1)],
+    tableName: [{ ...first, tbl_name: 'unexpected_table' }, ...input.schema.slice(1)],
+    sql: [{ ...first, sql: `CREATE TABLE ${String(first.name)} (unexpected INTEGER)` }, ...input.schema.slice(1)],
+  };
+  for (const [name, schema] of Object.entries(cases)) {
+    assert.throws(() => assertOpsD1Integrity({ ...input, schema }), /schema/, name);
+  }
+  assert.throws(() => assertOpsD1Integrity({
+    ...input,
+    tableList: input.tableList.map((row, index) => index === 0 ? { ...row, strict: 0 } : row),
+  }), /strict flag/);
+});
+
+test('Ops manifest validation requires the complete latest migration set', () => {
+  const input = integrityInput();
+  const cases: Record<string, OpsD1IntegrityInput['migrations']> = {
+    empty: [],
+    historical: input.migrations.slice(0, -1),
+    future: [...input.migrations, { name: '9999_future.sql' }],
+    duplicate: [input.migrations[0], ...input.migrations.slice(0, -1)],
+  };
+  for (const [name, migrations] of Object.entries(cases)) {
+    assert.throws(() => assertOpsD1Integrity({ ...input, migrations }), /migrations/, name);
+  }
+  assert.deepEqual(assertOpsD1Integrity({ ...input, migrations: input.migrations.toReversed() }),
+    assertOpsD1Integrity(input));
 });
 
 test('anonymous-auth subject lookup uses the UNIQUE auto-index', () => {

@@ -1,17 +1,10 @@
 import { createD1MaintenanceRunner, type D1MaintenanceQueryBatch } from './d1MaintenanceRunner.ts';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../shared/opsExpiryCleanupSql.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
+import { readDatabaseSchemaManifest } from './databaseSchemaManifest.ts';
 
-const OPS_D1_MIGRATIONS = [
-  '0001_current_schema.sql',
-  '0002_reveal_submission_write_fence.sql',
-  '0003_remove_ready_notification_pause.sql',
-  '0004_repair_ready_notification_cursor.sql',
-  '0005_remove_redundant_anonymous_auth_subject_index.sql',
-  '0006_cover_expiry_cleanup_indexes.sql',
-  '0007_mi_note_auth.sql',
-  '0008_ethereum_profiles.sql',
-] as const;
+const schemaManifest = readDatabaseSchemaManifest('ops');
+const OPS_D1_MIGRATIONS = schemaManifest.migrations.map((migration) => migration.name);
 
 export type OpsD1Row = Record<string, unknown>;
 
@@ -115,187 +108,14 @@ export type OpsD1IntegrityReport = {
 };
 
 const opsD1 = createD1MaintenanceRunner('ops');
-const expectedSchema = new Map<
-  string,
-  { fingerprint: string; type: string; tableName: string }
->([
-  ['ethereum_auth_challenges', { fingerprint: '6e3a933752f6a8d48b0202de4bbb1c6e018ccb1102d6a2c7d45d5241df46ae31', type: 'table', tableName: 'ethereum_auth_challenges' }],
-  ['ethereum_auth_challenges_expiry', { fingerprint: '21a384829b1eb2d660bf0b9a707610cdc9d7625be1d5a581a7f6b02a1703d490', type: 'index', tableName: 'ethereum_auth_challenges' }],
-  ['ethereum_auth_sessions', { fingerprint: '732acb080c3fbc5d6014f5370d80b83880e7cfb4f1eb49910a2d810373d4a62c', type: 'table', tableName: 'ethereum_auth_sessions' }],
-  ['ethereum_auth_sessions_expiry', { fingerprint: 'f8872ef7cb52c5709baf8138b735d03703f9eabe88a8b25808468b158b6909f9', type: 'index', tableName: 'ethereum_auth_sessions' }],
-  ['ethereum_profile_addresses', { fingerprint: '17a86741005bc79c0810fbd5be3c94762e410269ff8206fde6aef888580667f3', type: 'table', tableName: 'ethereum_profile_addresses' }],
-  ['ethereum_profiles', { fingerprint: '8b6401e72b6259db7255e618bd0bd5793658fd827d24c078ac5162bf279490c9', type: 'table', tableName: 'ethereum_profiles' }],
-  ['mi_note_auth_challenges', { fingerprint: 'a4f038e92fabc0dd7e8a24d3d9024c183c6dd14712fe20dd48461ee826d9370c', type: 'table', tableName: 'mi_note_auth_challenges' }],
-  ['mi_note_auth_challenges_expires_at_ms', { fingerprint: '884f06a33c788bdb89ff9062b3ef5e115fe70c6ef44539de471191ebcc1effd0', type: 'index', tableName: 'mi_note_auth_challenges' }],
-  ['mi_note_auth_sessions', { fingerprint: '364c625d11c296754a2f9cb970016ead77d379f7b71bed4836f22832b7094410', type: 'table', tableName: 'mi_note_auth_sessions' }],
-  ['mi_note_auth_sessions_expires_at_ms', { fingerprint: '10d69a40cc84e66bda2c653676d5216350413aa758ff89e5a10b7e340a2fb6b3', type: 'index', tableName: 'mi_note_auth_sessions' }],
-  ['reveal_submission_storage_control', { fingerprint: '44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a', type: 'table', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_control_update_guard', { fingerprint: '957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_insert_pause_guard', { fingerprint: '9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e', type: 'trigger', tableName: 'reveal_submissions' }],
-  ['reveal_submission_update_pause_guard', { fingerprint: '5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109', type: 'trigger', tableName: 'reveal_submissions' }],
-  [
-    'anonymous_auth_sessions',
-    {
-      fingerprint: 'c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304',
-      type: 'table',
-      tableName: 'anonymous_auth_sessions',
-    },
-  ],
-  [
-    'anonymous_auth_sessions_expires_at_ms',
-    {
-      fingerprint: 'b589d1100d64743d309a45b3fd45c2bc64153190b0437fa84889f417ceb0b559',
-      type: 'index',
-      tableName: 'anonymous_auth_sessions',
-    },
-  ],
-  [
-    'staff_auth_challenges',
-    {
-      fingerprint: 'be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d',
-      type: 'table',
-      tableName: 'staff_auth_challenges',
-    },
-  ],
-  [
-    'staff_auth_challenges_expires_at_ms',
-    {
-      fingerprint: '403b76ba6880533513b8fcb3c10f441b72dd6de92b64b345106de51689a38864',
-      type: 'index',
-      tableName: 'staff_auth_challenges',
-    },
-  ],
-  [
-    'staff_auth_sessions',
-    {
-      fingerprint: 'a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e',
-      type: 'table',
-      tableName: 'staff_auth_sessions',
-    },
-  ],
-  [
-    'staff_auth_sessions_expires_at_ms',
-    {
-      fingerprint: '37f48b6cd0e70162cd0134a7463ceb82dfae877a02cc195ec9371a703c76aa4e',
-      type: 'index',
-      tableName: 'staff_auth_sessions',
-    },
-  ],
-  [
-    'staff_auth_sessions_wallet',
-    {
-      fingerprint: 'b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e',
-      type: 'index',
-      tableName: 'staff_auth_sessions',
-    },
-  ],
-  [
-    'reveal_submissions_status_created_at_ms',
-    {
-      fingerprint: 'c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5',
-      type: 'index',
-      tableName: 'reveal_submissions',
-    },
-  ],
-  [
-    'reveal_submissions',
-    {
-      fingerprint: '2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd',
-      type: 'table',
-      tableName: 'reveal_submissions',
-    },
-  ],
-  [
-    'profile_address_conflict_guard',
-    {
-      fingerprint: '0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37',
-      type: 'trigger',
-      tableName: 'profile_addresses',
-    },
-  ],
-  [
-    'profile_address_delete_guard',
-    {
-      fingerprint: '76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f',
-      type: 'trigger',
-      tableName: 'profile_addresses',
-    },
-  ],
-  [
-    'profile_address_idempotent_insert',
-    {
-      fingerprint: 'cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43',
-      type: 'trigger',
-      tableName: 'profile_addresses',
-    },
-  ],
-  [
-    'profile_address_update_guard',
-    {
-      fingerprint: '6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423',
-      type: 'trigger',
-      tableName: 'profile_addresses',
-    },
-  ],
-  [
-    'profile_addresses',
-    {
-      fingerprint: 'e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0',
-      type: 'table',
-      tableName: 'profile_addresses',
-    },
-  ],
-  [
-    'profile_delete_guard',
-    {
-      fingerprint: '9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0',
-      type: 'trigger',
-      tableName: 'profiles',
-    },
-  ],
-  [
-    'profiles',
-    {
-      fingerprint: '3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94',
-      type: 'table',
-      tableName: 'profiles',
-    },
-  ],
-  [
-    'rate_limit_buckets',
-    {
-      fingerprint: 'db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e',
-      type: 'table',
-      tableName: 'rate_limit_buckets',
-    },
-  ],
-  [
-    'rate_limit_buckets_expires_at_ms',
-    {
-      fingerprint: '7b860409cb1ec4ed77f9c39fd352de9d0f904a70cf327d27f8b0275393337cf2',
-      type: 'index',
-      tableName: 'rate_limit_buckets',
-    },
-  ],
-  [
-    'auth_wallet_bindings',
-    {
-      fingerprint: 'b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331',
-      type: 'table',
-      tableName: 'auth_wallet_bindings',
-    },
-  ],
-  [
-    'worker_controls',
-    {
-      fingerprint: '345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c',
-      type: 'table',
-      tableName: 'worker_controls',
-    },
-  ],
-]);
+const expectedSchema = new Map(
+  schemaManifest.checkpoints[schemaManifest.migrations.at(-1)!.name].objects
+    .map((object) => [object.name, object] as const),
+);
+const expectedTableNames = [...expectedSchema]
+  .filter(([, value]) => value.type === 'table')
+  .map(([name]) => name)
+  .sort();
 
 type ExpectedColumn = readonly [
   name: string,
@@ -462,10 +282,7 @@ function assertExactSchema(rows: OpsD1Row[]): void {
 }
 
 function assertStrictTables(rows: OpsD1Row[]): void {
-  const tableNames = [...expectedSchema]
-    .filter(([, value]) => value.type === 'table')
-    .map(([name]) => name)
-    .sort();
+  const tableNames = expectedTableNames;
   if (rows.length !== tableNames.length) {
     fail('Ops D1 strict tables are not exact.');
   }
@@ -754,24 +571,7 @@ export function readRemoteOpsD1Integrity(
       FROM pragma_table_list
       WHERE
         schema = 'main' AND
-        name IN (
-          'ethereum_auth_challenges',
-          'ethereum_auth_sessions',
-          'ethereum_profile_addresses',
-          'ethereum_profiles',
-          'profile_addresses',
-          'anonymous_auth_sessions',
-          'profiles',
-          'rate_limit_buckets',
-          'reveal_submission_storage_control',
-          'reveal_submissions',
-          'staff_auth_challenges',
-          'staff_auth_sessions',
-          'mi_note_auth_sessions',
-          'mi_note_auth_challenges',
-          'auth_wallet_bindings',
-          'worker_controls'
-        )
+        name IN (${expectedTableNames.map((name) => `'${name.replace(/'/g, "''")}'`).join(', ')})
       ORDER BY name`,
     authWalletBindingColumns: 'PRAGMA table_info(auth_wallet_bindings)',
     authWalletBindingCounts: 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',

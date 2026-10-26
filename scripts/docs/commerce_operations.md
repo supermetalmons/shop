@@ -5,6 +5,14 @@ the authoritative notification, checkout, pack-status, and delivery-recovery
 tables. Applied SQL and historical schema checksums remain immutable. Append
 migrations and regenerate the schema manifest for future schema changes.
 
+After catalog or schema changes, run `npm run generate:db`, then
+`npm run check:db-generated`. Commit the generated files in
+`scripts/generated/`: `commerceSchemaManifest.json`, `dataSchemaManifest.json`,
+and `opsSchemaManifest.json`. Generation replays each database's SQL and rejects
+changes to recorded migrations or checkpoints. DATA and OPS manifests also
+record table ownership; their existing latest-schema validation is unchanged.
+Adding these local manifests requires no database migration or deployment.
+
 ## Inspect current state
 
 ```sh

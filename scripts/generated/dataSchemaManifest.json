@@ -1,0 +1,169 @@
+{
+  "formatVersion": 1,
+  "migrations": [
+    {
+      "name": "0001_current_schema.sql",
+      "checksum": "735215bd70019c7532df7021867b28a9d14b5fb418348a4e5e93d1dc670c42d7"
+    },
+    {
+      "name": "0002_pack_status_event_conflict_guard.sql",
+      "checksum": "4f94c07853a9cfb8b117e010da072ac1bdc95ba8c9b0f19812a010a981114c9e"
+    },
+    {
+      "name": "0003_pack_status_historical_replay.sql",
+      "checksum": "4cc4d14678456caa7d4b76782c20af2fa907facecb803674744212d8c03ac3ed"
+    }
+  ],
+  "checkpoints": {
+    "0001_current_schema.sql": {
+      "objects": [
+        {
+          "type": "table",
+          "name": "pack_status",
+          "tableName": "pack_status",
+          "fingerprint": "4bc49284d6f2ffc61a1ce7a28f56b011d32397479613a844e1957c573348a0fc"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_events",
+          "tableName": "pack_status_events",
+          "fingerprint": "d4c1f3c04824ac6097092fe208a3c6f9bb20d4aa197f434772e6215d9232c526"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_metadata",
+          "tableName": "pack_status_metadata",
+          "fingerprint": "c0f6fd7207ba44fad84a6e52ed70f3df71a215d48da5bbedec0665f0b5107672"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_apply",
+          "tableName": "pack_status_events",
+          "fingerprint": "fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_delete_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_immutable",
+          "tableName": "pack_status_events",
+          "fingerprint": "422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_type_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "da993846e30d04596e294d0d5a1a088687961c9144acade9b379da9c42438b03"
+        }
+      ]
+    },
+    "0002_pack_status_event_conflict_guard.sql": {
+      "objects": [
+        {
+          "type": "table",
+          "name": "pack_status",
+          "tableName": "pack_status",
+          "fingerprint": "4bc49284d6f2ffc61a1ce7a28f56b011d32397479613a844e1957c573348a0fc"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_events",
+          "tableName": "pack_status_events",
+          "fingerprint": "d4c1f3c04824ac6097092fe208a3c6f9bb20d4aa197f434772e6215d9232c526"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_metadata",
+          "tableName": "pack_status_metadata",
+          "fingerprint": "c0f6fd7207ba44fad84a6e52ed70f3df71a215d48da5bbedec0665f0b5107672"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_apply",
+          "tableName": "pack_status_events",
+          "fingerprint": "fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_conflict_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "04067c3d2acc60fc1616b063d2e0a983d7832f23a6813a9a79c0ede18494f48e"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_delete_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_immutable",
+          "tableName": "pack_status_events",
+          "fingerprint": "422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_type_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "da993846e30d04596e294d0d5a1a088687961c9144acade9b379da9c42438b03"
+        }
+      ]
+    },
+    "0003_pack_status_historical_replay.sql": {
+      "objects": [
+        {
+          "type": "table",
+          "name": "pack_status",
+          "tableName": "pack_status",
+          "fingerprint": "4bc49284d6f2ffc61a1ce7a28f56b011d32397479613a844e1957c573348a0fc"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_events",
+          "tableName": "pack_status_events",
+          "fingerprint": "d4c1f3c04824ac6097092fe208a3c6f9bb20d4aa197f434772e6215d9232c526"
+        },
+        {
+          "type": "table",
+          "name": "pack_status_metadata",
+          "tableName": "pack_status_metadata",
+          "fingerprint": "c0f6fd7207ba44fad84a6e52ed70f3df71a215d48da5bbedec0665f0b5107672"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_apply",
+          "tableName": "pack_status_events",
+          "fingerprint": "fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_conflict_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "f4769665a637ade96f6e6748874468f4fdd02ec8d82b0fdca9bb211d6ce9d7b6"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_delete_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_immutable",
+          "tableName": "pack_status_events",
+          "fingerprint": "422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38"
+        },
+        {
+          "type": "trigger",
+          "name": "pack_status_event_type_guard",
+          "tableName": "pack_status_events",
+          "fingerprint": "da993846e30d04596e294d0d5a1a088687961c9144acade9b379da9c42438b03"
+        }
+      ]
+    }
+  }
+}

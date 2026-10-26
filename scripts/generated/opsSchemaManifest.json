@@ -1,0 +1,1415 @@
+{
+  "formatVersion": 1,
+  "migrations": [
+    {
+      "name": "0001_current_schema.sql",
+      "checksum": "3166e0e999a6e35595bf7ba059c6b36a6d2d3beb73d70e50310649476b98dad9"
+    },
+    {
+      "name": "0002_reveal_submission_write_fence.sql",
+      "checksum": "a833bee5cac4f3e9f8b77e40739642d2c0d2142c6ff90ba686cf1a45102ab2f2"
+    },
+    {
+      "name": "0003_remove_ready_notification_pause.sql",
+      "checksum": "9f842f1130e211785cf990107b10a04286eab90677a32e4572d4cf0180843307"
+    },
+    {
+      "name": "0004_repair_ready_notification_cursor.sql",
+      "checksum": "c6283c5514372ae54f1c20d41f9bb81cb28c74e82bc4b87a80bb7c7b26e52a42"
+    },
+    {
+      "name": "0005_remove_redundant_anonymous_auth_subject_index.sql",
+      "checksum": "7f8d0ea2640854975ac8939ace09ae78cefae151031dc32f7fab7bdd5457b0af"
+    },
+    {
+      "name": "0006_cover_expiry_cleanup_indexes.sql",
+      "checksum": "8e26a801270567cac3a1b2fc7a7ffaf0476f2cd3a4aa0b966f3be5e9910396e6"
+    },
+    {
+      "name": "0007_mi_note_auth.sql",
+      "checksum": "67289323923c744c4cd5122ca83283d9518d1f44cd75134304f1de6f9855ab1f"
+    },
+    {
+      "name": "0008_ethereum_profiles.sql",
+      "checksum": "3ecb95673649ae55c6bc0ce413253567c43fac13f0b3a03eef42028f0f431984"
+    }
+  ],
+  "checkpoints": {
+    "0001_current_schema.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_auth_subject",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f"
+        },
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "8f536c805d444279ad7a826c0ee46142241ecfd2215ccf6ceada12b5d4df13da"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        }
+      ]
+    },
+    "0002_reveal_submission_write_fence.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_auth_subject",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f"
+        },
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "8f536c805d444279ad7a826c0ee46142241ecfd2215ccf6ceada12b5d4df13da"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0003_remove_ready_notification_pause.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_auth_subject",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f"
+        },
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0004_repair_ready_notification_cursor.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_auth_subject",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f"
+        },
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0005_remove_redundant_anonymous_auth_subject_index.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0006_cover_expiry_cleanup_indexes.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "b589d1100d64743d309a45b3fd45c2bc64153190b0437fa84889f417ceb0b559"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "7b860409cb1ec4ed77f9c39fd352de9d0f904a70cf327d27f8b0275393337cf2"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "403b76ba6880533513b8fcb3c10f441b72dd6de92b64b345106de51689a38864"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "37f48b6cd0e70162cd0134a7463ceb82dfae877a02cc195ec9371a703c76aa4e"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0007_mi_note_auth.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "b589d1100d64743d309a45b3fd45c2bc64153190b0437fa84889f417ceb0b559"
+        },
+        {
+          "type": "index",
+          "name": "mi_note_auth_challenges_expires_at_ms",
+          "tableName": "mi_note_auth_challenges",
+          "fingerprint": "884f06a33c788bdb89ff9062b3ef5e115fe70c6ef44539de471191ebcc1effd0"
+        },
+        {
+          "type": "index",
+          "name": "mi_note_auth_sessions_expires_at_ms",
+          "tableName": "mi_note_auth_sessions",
+          "fingerprint": "10d69a40cc84e66bda2c653676d5216350413aa758ff89e5a10b7e340a2fb6b3"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "7b860409cb1ec4ed77f9c39fd352de9d0f904a70cf327d27f8b0275393337cf2"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "403b76ba6880533513b8fcb3c10f441b72dd6de92b64b345106de51689a38864"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "37f48b6cd0e70162cd0134a7463ceb82dfae877a02cc195ec9371a703c76aa4e"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "mi_note_auth_challenges",
+          "tableName": "mi_note_auth_challenges",
+          "fingerprint": "a4f038e92fabc0dd7e8a24d3d9024c183c6dd14712fe20dd48461ee826d9370c"
+        },
+        {
+          "type": "table",
+          "name": "mi_note_auth_sessions",
+          "tableName": "mi_note_auth_sessions",
+          "fingerprint": "364c625d11c296754a2f9cb970016ead77d379f7b71bed4836f22832b7094410"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    },
+    "0008_ethereum_profiles.sql": {
+      "objects": [
+        {
+          "type": "index",
+          "name": "anonymous_auth_sessions_expires_at_ms",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "b589d1100d64743d309a45b3fd45c2bc64153190b0437fa84889f417ceb0b559"
+        },
+        {
+          "type": "index",
+          "name": "ethereum_auth_challenges_expiry",
+          "tableName": "ethereum_auth_challenges",
+          "fingerprint": "21a384829b1eb2d660bf0b9a707610cdc9d7625be1d5a581a7f6b02a1703d490"
+        },
+        {
+          "type": "index",
+          "name": "ethereum_auth_sessions_expiry",
+          "tableName": "ethereum_auth_sessions",
+          "fingerprint": "f8872ef7cb52c5709baf8138b735d03703f9eabe88a8b25808468b158b6909f9"
+        },
+        {
+          "type": "index",
+          "name": "mi_note_auth_challenges_expires_at_ms",
+          "tableName": "mi_note_auth_challenges",
+          "fingerprint": "884f06a33c788bdb89ff9062b3ef5e115fe70c6ef44539de471191ebcc1effd0"
+        },
+        {
+          "type": "index",
+          "name": "mi_note_auth_sessions_expires_at_ms",
+          "tableName": "mi_note_auth_sessions",
+          "fingerprint": "10d69a40cc84e66bda2c653676d5216350413aa758ff89e5a10b7e340a2fb6b3"
+        },
+        {
+          "type": "index",
+          "name": "rate_limit_buckets_expires_at_ms",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "7b860409cb1ec4ed77f9c39fd352de9d0f904a70cf327d27f8b0275393337cf2"
+        },
+        {
+          "type": "index",
+          "name": "reveal_submissions_status_created_at_ms",
+          "tableName": "reveal_submissions",
+          "fingerprint": "c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_challenges_expires_at_ms",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "403b76ba6880533513b8fcb3c10f441b72dd6de92b64b345106de51689a38864"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_expires_at_ms",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "37f48b6cd0e70162cd0134a7463ceb82dfae877a02cc195ec9371a703c76aa4e"
+        },
+        {
+          "type": "index",
+          "name": "staff_auth_sessions_wallet",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e"
+        },
+        {
+          "type": "table",
+          "name": "anonymous_auth_sessions",
+          "tableName": "anonymous_auth_sessions",
+          "fingerprint": "c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304"
+        },
+        {
+          "type": "table",
+          "name": "auth_wallet_bindings",
+          "tableName": "auth_wallet_bindings",
+          "fingerprint": "b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331"
+        },
+        {
+          "type": "table",
+          "name": "ethereum_auth_challenges",
+          "tableName": "ethereum_auth_challenges",
+          "fingerprint": "6e3a933752f6a8d48b0202de4bbb1c6e018ccb1102d6a2c7d45d5241df46ae31"
+        },
+        {
+          "type": "table",
+          "name": "ethereum_auth_sessions",
+          "tableName": "ethereum_auth_sessions",
+          "fingerprint": "732acb080c3fbc5d6014f5370d80b83880e7cfb4f1eb49910a2d810373d4a62c"
+        },
+        {
+          "type": "table",
+          "name": "ethereum_profile_addresses",
+          "tableName": "ethereum_profile_addresses",
+          "fingerprint": "17a86741005bc79c0810fbd5be3c94762e410269ff8206fde6aef888580667f3"
+        },
+        {
+          "type": "table",
+          "name": "ethereum_profiles",
+          "tableName": "ethereum_profiles",
+          "fingerprint": "8b6401e72b6259db7255e618bd0bd5793658fd827d24c078ac5162bf279490c9"
+        },
+        {
+          "type": "table",
+          "name": "mi_note_auth_challenges",
+          "tableName": "mi_note_auth_challenges",
+          "fingerprint": "a4f038e92fabc0dd7e8a24d3d9024c183c6dd14712fe20dd48461ee826d9370c"
+        },
+        {
+          "type": "table",
+          "name": "mi_note_auth_sessions",
+          "tableName": "mi_note_auth_sessions",
+          "fingerprint": "364c625d11c296754a2f9cb970016ead77d379f7b71bed4836f22832b7094410"
+        },
+        {
+          "type": "table",
+          "name": "profile_addresses",
+          "tableName": "profile_addresses",
+          "fingerprint": "e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0"
+        },
+        {
+          "type": "table",
+          "name": "profiles",
+          "tableName": "profiles",
+          "fingerprint": "3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94"
+        },
+        {
+          "type": "table",
+          "name": "rate_limit_buckets",
+          "tableName": "rate_limit_buckets",
+          "fingerprint": "db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submission_storage_control",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a"
+        },
+        {
+          "type": "table",
+          "name": "reveal_submissions",
+          "tableName": "reveal_submissions",
+          "fingerprint": "2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_challenges",
+          "tableName": "staff_auth_challenges",
+          "fingerprint": "be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d"
+        },
+        {
+          "type": "table",
+          "name": "staff_auth_sessions",
+          "tableName": "staff_auth_sessions",
+          "fingerprint": "a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e"
+        },
+        {
+          "type": "table",
+          "name": "worker_controls",
+          "tableName": "worker_controls",
+          "fingerprint": "345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_conflict_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_delete_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_idempotent_insert",
+          "tableName": "profile_addresses",
+          "fingerprint": "cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_address_update_guard",
+          "tableName": "profile_addresses",
+          "fingerprint": "6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423"
+        },
+        {
+          "type": "trigger",
+          "name": "profile_delete_guard",
+          "tableName": "profiles",
+          "fingerprint": "9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_delete_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_insert_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_control_update_guard",
+          "tableName": "reveal_submission_storage_control",
+          "fingerprint": "957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_insert_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e"
+        },
+        {
+          "type": "trigger",
+          "name": "reveal_submission_update_pause_guard",
+          "tableName": "reveal_submissions",
+          "fingerprint": "5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109"
+        }
+      ]
+    }
+  }
+}

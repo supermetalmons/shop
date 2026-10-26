@@ -493,12 +493,18 @@ native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
 
 Both API and frontend release checks verify generated catalog and schema files.
-`generate:db` updates the catalog first, then replays Commerce migrations to build
-`scripts/generated/commerceSchemaManifest.json`. The manifest preserves migration
-checksums, schema fingerprints, and versioned preorder catalogs for historical
-checkpoints. Generation refuses changes to recorded migrations or checkpoints.
-Current inspection and deployment require the latest checkpoint, initialized
-inventory in `rows` mode, and all four state controls in `table` mode. Applied
+`generate:db` updates the catalog first, then replays all three D1 migration sets
+to build the committed `scripts/generated/commerceSchemaManifest.json`,
+`scripts/generated/dataSchemaManifest.json`, and
+`scripts/generated/opsSchemaManifest.json`. The manifests preserve migration
+checksums and schema fingerprints for historical checkpoints; Commerce also
+preserves versioned preorder catalogs, while DATA and OPS record table ownership.
+Run `npm run check:db-generated` to verify the generated files. Generation refuses
+changes to recorded SQL or checkpoints. Adding these local manifests requires no
+database migration or deployment; DATA and OPS retain their existing latest-schema
+validation. Current Commerce inspection and deployment require the latest
+checkpoint, initialized inventory in `rows` mode, and all four state controls in
+`table` mode. Applied
 migrations and historical seeds must never be edited; append a migration and
 regenerate for schema changes.
 

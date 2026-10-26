@@ -130,7 +130,7 @@ test('notify restores a session-only wallet popup and signs it out without an at
   assert.equal(button.disabled, true);
   fireEvent.click(view.getByRole('button', { name: 'Cancel' }));
   fireEvent.click(button);
-  fireEvent.click(view.getByRole('button', { name: 'Disconnect', exact: true }));
+  fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
   await waitFor(() => assert.equal(readStaffWalletSession(), null));
   await waitFor(() => assert.equal(view.queryByRole('dialog', { name: 'Wallet' }), null));
   assert.equal(disconnects, 0);

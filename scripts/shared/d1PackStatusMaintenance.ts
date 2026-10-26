@@ -4,6 +4,7 @@ import {
   type PackStatusCounters,
 } from '../../shared/packStatus.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
+import { readDatabaseSchemaManifest } from './databaseSchemaManifest.ts';
 
 type D1Row = Record<string, unknown>;
 
@@ -36,21 +37,12 @@ export type D1EventCountExpectation = Pick<
 >;
 
 const dataD1 = createD1MaintenanceRunner('data');
-const PACK_STATUS_D1_MIGRATIONS = [
-  '0001_current_schema.sql',
-  '0002_pack_status_event_conflict_guard.sql',
-  '0003_pack_status_historical_replay.sql',
-] as const;
-const expectedSchema = new Map<string, { fingerprint: string; tableName: string; type: string }>([
-  ['pack_status', { fingerprint: '4bc49284d6f2ffc61a1ce7a28f56b011d32397479613a844e1957c573348a0fc', tableName: 'pack_status', type: 'table' }],
-  ['pack_status_events', { fingerprint: 'd4c1f3c04824ac6097092fe208a3c6f9bb20d4aa197f434772e6215d9232c526', tableName: 'pack_status_events', type: 'table' }],
-  ['pack_status_metadata', { fingerprint: 'c0f6fd7207ba44fad84a6e52ed70f3df71a215d48da5bbedec0665f0b5107672', tableName: 'pack_status_metadata', type: 'table' }],
-  ['pack_status_event_apply', { fingerprint: 'fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_conflict_guard', { fingerprint: 'f4769665a637ade96f6e6748874468f4fdd02ec8d82b0fdca9bb211d6ce9d7b6', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_delete_guard', { fingerprint: '79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_immutable', { fingerprint: '422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_type_guard', { fingerprint: 'da993846e30d04596e294d0d5a1a088687961c9144acade9b379da9c42438b03', tableName: 'pack_status_events', type: 'trigger' }],
-]);
+const schemaManifest = readDatabaseSchemaManifest('data');
+const PACK_STATUS_D1_MIGRATIONS = schemaManifest.migrations.map((migration) => migration.name);
+const expectedSchema = new Map(
+  schemaManifest.checkpoints[schemaManifest.migrations.at(-1)!.name].objects
+    .map((object) => [object.name, object] as const),
+);
 
 function fail(message: string): never {
   throw new Error(message);

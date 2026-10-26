@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { createD1MaintenanceRunner } from '../../../../scripts/shared/d1MaintenanceRunner.ts';
@@ -28,11 +28,10 @@ const dropRows = [
   ['poncho_drifella', 140, 420, 3],
 ] as const;
 
-const packStatusMigrationPaths = [
-  'cloud/workers/api/migrations/0001_current_schema.sql',
-  'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
-  'cloud/workers/api/migrations/0003_pack_status_historical_replay.sql',
-] as const;
+const packStatusMigrationsDirectory = 'cloud/workers/api/migrations';
+const packStatusMigrationPaths = readdirSync(packStatusMigrationsDirectory)
+  .filter((name) => name.endsWith('.sql')).sort()
+  .map((name) => `${packStatusMigrationsDirectory}/${name}`);
 
 function createPackStatusDatabase(): DatabaseSync {
   const database = new DatabaseSync(':memory:');
@@ -297,6 +296,38 @@ test('D1 integrity rejects an incomplete migration ledger and drifted trigger SQ
       ? { ...row, sql: String(row.sql).replace('payload conflict', 'payload  conflict') }
       : row),
   }), /schema/);
+});
+
+test('D1 manifest validation preserves exact schema identity', () => {
+  const input = integrityInput();
+  const first = input.schema[0];
+  const cases: Record<string, D1IntegrityInput['schema']> = {
+    missing: input.schema.slice(1),
+    extra: [...input.schema, { ...first, name: 'unexpected_schema_object' }],
+    duplicate: [first, ...input.schema.slice(0, -1)],
+    unknown: [{ ...first, name: 'unexpected_schema_object' }, ...input.schema.slice(1)],
+    type: [{ ...first, type: 'view' }, ...input.schema.slice(1)],
+    tableName: [{ ...first, tbl_name: 'unexpected_table' }, ...input.schema.slice(1)],
+    sql: [{ ...first, sql: `CREATE TABLE ${String(first.name)} (unexpected INTEGER)` }, ...input.schema.slice(1)],
+  };
+  for (const [name, schema] of Object.entries(cases)) {
+    assert.throws(() => assertD1Integrity({ ...input, schema }), /schema/, name);
+  }
+});
+
+test('D1 manifest validation requires the complete latest migration set', () => {
+  const input = integrityInput();
+  const cases: Record<string, D1IntegrityInput['migrations']> = {
+    empty: [],
+    historical: input.migrations.slice(0, -1),
+    future: [...input.migrations, { name: '9999_future.sql' }],
+    duplicate: [input.migrations[0], ...input.migrations.slice(0, -1)],
+  };
+  for (const [name, migrations] of Object.entries(cases)) {
+    assert.throws(() => assertD1Integrity({ ...input, migrations }), /migrations/, name);
+  }
+  assert.deepEqual(assertD1Integrity({ ...input, migrations: input.migrations.toReversed() }),
+    assertD1Integrity(input));
 });
 
 test('authoritative rebuild inserts and updates one summary while preserving other drops and events', (t) => {
