@@ -5,7 +5,7 @@ import test from 'node:test';
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import { createTestHarness } from 'wrangler';
-import { PreorderStore, publicPreorder, type StoredPreorder } from '../src/preorderStore.ts';
+import { listPreorderInventoryAssets, PreorderStore, publicPreorder, type StoredPreorder } from '../src/preorderStore.ts';
 import { getPreorderConfig } from '../../../../shared/preorders.ts';
 import { PREORDER_CARD_IDS } from '../../../../shared/preorderCardIds.generated.ts';
 import { recoverPreorder } from '../../../../scripts/ops/recoverPreorder.ts';
@@ -51,6 +51,9 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const winner = results[0].status === 'fulfilled' ? left : right;
     assert.equal((await store.claims(config.cluster, config.collection)).length, 2);
     assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM commerce_preorder_orders').first<{ count: number }>())!.count, 1);
+    assert.deepEqual((await db.prepare(`SELECT order_id, asset_ordinal, asset_address
+      FROM commerce_preorder_asset_lookup ORDER BY asset_ordinal`).all()).results,
+      winner.assets.map((asset, asset_ordinal) => ({ order_id: winner.orderId, asset_ordinal, asset_address: asset.address })));
     await Promise.all([
       store.submit(winner, { transactionBase64: 'authorized', signature: 'signature' }, 2000),
       store.expirePrepared(config.cluster, config.collection, 121_000),
@@ -70,6 +73,9 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     const confirmedEarly = await store.confirm(submittedEarly, 550, 3000);
     assert.equal(confirmedEarly.status, 'submitted');
     assert.equal(confirmedEarly.confirmedSlot, 550);
+    assert.deepEqual(await listPreorderInventoryAssets(db, repeatBuyer, [early.assets[0].address]),
+      [{ ...early.assets[0], preorderId: config.preorderId, status: 'submitted', confirmedSlot: 550 }]);
+    assert.deepEqual(await listPreorderInventoryAssets(db, 'transferred-buyer', [early.assets[0].address]), []);
     assert.equal(await store.active(config.preorderId, repeatBuyer), null);
     const nextOrders = await Promise.allSettled([
       store.reserve(candidate(repeatBuyer, [21])), store.reserve(candidate(repeatBuyer, [22])),
@@ -97,6 +103,8 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
     assert.equal(staleExpiry.confirmedSlot, 550);
     const finalizedEarly = await store.finish(confirmedEarly, 'succeeded', 5000, 560);
     assert.equal(finalizedEarly.confirmedSlot, 560);
+    assert.deepEqual(await listPreorderInventoryAssets(db, 'transferred-buyer', [early.assets[0].address]),
+      [{ ...early.assets[0], preorderId: config.preorderId, status: 'succeeded', confirmedSlot: 560 }]);
     assert.deepEqual(await store.confirm(submittedEarly, 570, 6000), finalizedEarly);
     await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE order_id = ?').bind(early.orderId).run(), /permanent/);
     for (const [index, status] of (['expired', 'failed', 'finalized'] as const).entries()) {
@@ -139,6 +147,8 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       const invalid = candidate(Keypair.generate().publicKey.toBase58(), [id]);
       await assert.rejects(store.reserve(invalid), /FOREIGN KEY constraint/);
       assert.equal(await store.get(invalid.orderId), null);
+      assert.equal(await db.prepare('SELECT order_id FROM commerce_preorder_asset_lookup WHERE order_id = ?')
+        .bind(invalid.orderId).first(), null);
     }
     await assert.rejects(db.prepare('UPDATE commerce_preorder_claims SET card_id = 100 WHERE card_id = 1400').run(), /immutable/);
     await assert.rejects(db.prepare('DELETE FROM commerce_preorder_claims WHERE card_id = 1400').run(), /permanent/);

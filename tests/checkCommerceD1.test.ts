@@ -31,7 +31,8 @@ import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
 import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
 import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
-import { getPreorderConfig } from '../shared/preorders.ts';
+import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
+import { requestedPreorderInventoryQuery } from '../cloud/workers/api/src/preorderInventoryQueries.ts';
 import { miNoteDropFixture } from './helpers/miNoteDropFixture.ts';
 
 const commerceMigrations = readCommerceMigrations();
@@ -239,10 +240,13 @@ for (const [type, name] of [
   ['index', 'commerce_preorder_active_buyer'],
   ['index', 'commerce_preorder_prepared_expiry'], ['index', 'commerce_preorder_confirmed_recovery'],
   ['index', 'commerce_preorder_inventory_buyer'], ['index', 'commerce_preorder_claim_order'],
+  ['index', 'commerce_preorder_asset_lookup_address'],
   ['index', 'commerce_stripe_checkout_state_reconciliation_due'],
   ['trigger', 'commerce_preorder_order_update_guard'], ['trigger', 'commerce_preorder_confirmation_guard'],
   ['trigger', 'commerce_preorder_claim_insert_guard'], ['trigger', 'commerce_preorder_claim_update_guard'],
   ['trigger', 'commerce_preorder_claim_delete_guard'], ['trigger', 'commerce_preorder_expiry_claim_release'],
+  ['trigger', 'commerce_preorder_order_asset_lookup'], ['trigger', 'commerce_preorder_asset_lookup_insert_guard'],
+  ['trigger', 'commerce_preorder_asset_lookup_update_guard'], ['trigger', 'commerce_preorder_asset_lookup_delete_guard'],
   ['trigger', 'commerce_stripe_checkout_state_update_guard'], ['trigger', 'commerce_commit_guard_stripe_checkout_finish'],
 ] as const) {
   test(`Commerce D1 checker rejects missing or weakened current schema object ${name}`, () => {
@@ -355,6 +359,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       stripeChargebackLinkedSessionsQuery('pi_check'),
       stripeChargebackMatchedDocumentsQuery('cs_live_check'),
       adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`),
+      requestedPreorderInventoryQuery('buyer_check', ['asset_check']),
     ];
     for (const productionQuery of productionPlans) {
       const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
@@ -368,6 +373,33 @@ test('Commerce D1 checker accepts the current schema using complete production q
     database.close();
   }
 });
+
+for (const enabledPreorderId of [null, ...PREORDER_CONFIGS.map(config => config.preorderId)]) {
+  test(`Commerce D1 checker handles ${enabledPreorderId ?? 'no'} enabled preorder scope`, (context) => {
+    const database = currentDatabase(false);
+    const originalEnabled = PREORDER_CONFIGS.map(config => config.enabled);
+    context.after(() => {
+      PREORDER_CONFIGS.forEach((config, index) => Object.assign(config, { enabled: originalEnabled[index] }));
+      database.close();
+    });
+    for (const config of PREORDER_CONFIGS) Object.assign(config, { enabled: config.preorderId === enabledPreorderId });
+    const query = localQuery(database);
+    const lookupPlanSql = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(requestedPreorderInventoryQuery('buyer_check', ['asset_check']))}`;
+    let lookupPlans = 0;
+    checkCommerceD1((sql) => {
+      if (sql === lookupPlanSql) lookupPlans += 1;
+      return query(sql);
+    });
+    assert.equal(lookupPlans, enabledPreorderId === null ? 0 : 1);
+    if (enabledPreorderId !== null) {
+      assert.throws(() => checkCommerceD1((sql) => sql === lookupPlanSql ? [{ detail: 'SCAN preorder' }] : query(sql)),
+        /query plan does not search commerce_preorder_asset_lookup_address/);
+    } else {
+      database.exec('DROP INDEX commerce_preorder_asset_lookup_address');
+      assert.throws(() => checkCommerceD1(query), schemaError('commerce_preorder_asset_lookup_address'));
+    }
+  });
+}
 
 test('Commerce D1 checker reads one schema catalog for the current schema', () => {
   const database = currentDatabase(false);

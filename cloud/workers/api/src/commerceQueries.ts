@@ -417,9 +417,10 @@ export function staleStripeFulfillmentsQuery(cutoffMs: number): CommerceSqlQuery
 export function dueStripeTerminalNotificationsQuery(args: Readonly<{
   dueAtMs: number;
   limit: number;
+  startAfter?: NotificationDueCursor;
 }>): CommerceSqlQuery {
   return {
-    sql: `SELECT document.document_path, document.document_kind, document.drop_id, document.document_id
+    sql: `SELECT document.document_path, document.document_kind, document.drop_id, document.document_id, due.next_attempt_at_ms
       FROM commerce_notification_outbox_stripe_due AS due INDEXED BY commerce_notification_outbox_stripe_due_at
       CROSS JOIN commerce_notification_outbox AS outbox
       CROSS JOIN commerce_documents AS document
@@ -427,6 +428,7 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
         AND document.document_path = outbox.parent_path
         AND outbox.family = 'stripe_terminal' AND outbox.state = 'pending'
         AND due.next_attempt_at_ms <= ? AND outbox.next_attempt_at_ms = due.next_attempt_at_ms
+        ${args.startAfter ? 'AND (due.next_attempt_at_ms, due.parent_path) > (?, ?)' : ''}
         AND document.document_kind = 'stripe_checkout'
         AND EXISTS (SELECT 1 FROM commerce_stripe_checkout_state AS checkout_state
           WHERE checkout_state.document_path = document.document_path
@@ -434,6 +436,6 @@ export function dueStripeTerminalNotificationsQuery(args: Readonly<{
               (outbox.outcome = 'manual_review' AND checkout_state.status = 'fulfillment_failed' AND document.manual_refund_review_required = 1)))
       ORDER BY due.next_attempt_at_ms, due.parent_path
       LIMIT CASE WHEN ${NOTIFICATION_OUTBOX_ACTIVE_SQL} THEN ? ELSE 0 END`,
-    bindings: [args.dueAtMs, args.limit],
+    bindings: [args.dueAtMs, ...(args.startAfter ? [args.startAfter.nextAttemptAtMs, args.startAfter.parentPath] : []), args.limit],
   };
 }

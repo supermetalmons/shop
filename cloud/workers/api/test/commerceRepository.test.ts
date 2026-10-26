@@ -686,11 +686,11 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
     seedQueryNotification(harness, commerceKeys.stripeCheckout('drop', status), { family: 'stripe_terminal' });
   }
   assert.deepEqual(
-    (await repository.queryDueStripeTerminalNotifications(10, 2)).map((record) => record.key.documentId),
+    (await repository.queryDueStripeTerminalNotifications(10, 2)).candidates.map((record) => record.key.documentId),
     ['review', 'a'],
   );
   assert.deepEqual(
-    (await repository.queryDueStripeTerminalNotifications(10)).map((record) => record.key.documentId),
+    (await repository.queryDueStripeTerminalNotifications(10)).candidates.map((record) => record.key.documentId),
     ['review', 'a', 'b'],
   );
   seedCommerceDocuments(harness, Array.from({ length: 21 }, (_, index) => ({
@@ -702,7 +702,7 @@ test('Stripe terminal notification recovery selects pending due jobs in a bounde
       family: 'stripe_terminal', dueAtMs: 10,
     });
   }
-  assert.equal((await repository.queryDueStripeTerminalNotifications(10)).length, 20);
+  assert.equal((await repository.queryDueStripeTerminalNotifications(10)).candidates.length, 20);
   for (const [dueAtMs, limit] of [[-1, 1], [Number.NaN, 1], [1, 0], [1, 1.5]]) {
     await assert.rejects(
       repository.queryDueStripeTerminalNotifications(dueAtMs, limit),
@@ -739,7 +739,9 @@ test('notification discovery projects only keys and preserves ready identity JSO
     data: { status: 'fulfilled', unrelatedPayload: 'x'.repeat(64 * 1024) },
   });
   seedQueryNotification(harness, checkoutKey, { family: 'stripe_terminal' });
-  assert.deepEqual(await repository.queryDueStripeTerminalNotifications(0), [{ key: checkoutKey }]);
+  assert.deepEqual(await repository.queryDueStripeTerminalNotifications(0), {
+    candidates: [{ key: checkoutKey, nextAttemptAtMs: 0 }], hasMore: false,
+  });
 });
 
 test('notification candidate parsing rejects inconsistent document identities', () => {
@@ -2113,7 +2115,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkout_state_reconciliation_due/);
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryDueStripeTerminalNotifications(1)),
-    [],
+    { candidates: [], hasMore: false },
   );
   assert.equal(calls.length, 14);
 });

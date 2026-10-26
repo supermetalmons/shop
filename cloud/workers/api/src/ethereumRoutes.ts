@@ -1,10 +1,12 @@
-import { ETHEREUM_API_PATHS } from '../../../../shared/ethereum/api.js';
-import { ETHEREUM_CHECKOUT_PATHS } from '../../../../shared/ethereum/checkout.js';
-import { ethereumReadPaths, handleEthereumRequest } from './ethereumHandler.js';
+import { handleEthereumRequest } from './ethereumHandler.js';
+import { ethereumRouteDefinitions } from './ethereumRouteDefinitions.js';
+import { trackProviderFetch } from './providerMetrics.js';
 import { exactRoute, type ExactWorkerRoute } from './workerRoutes/support.js';
 
-export const ethereumRoutes: readonly ExactWorkerRoute[] = [...Object.values(ETHEREUM_API_PATHS), ...Object.values(ETHEREUM_CHECKOUT_PATHS)].map((path) => exactRoute(path, {
-  commerceMutation: !ethereumReadPaths.has(path) && !path.startsWith('/ethereum/auth/') && path !== ETHEREUM_API_PATHS.transactionsConfirm,
-  cors: path === ETHEREUM_CHECKOUT_PATHS.status ? 'ethereum-checkout-status' : 'ethereum',
-  profileOriginGate: path !== ETHEREUM_CHECKOUT_PATHS.status, staff: 'skip', unexpectedError: 'profile',
-}, async (context) => ({ response: await handleEthereumRequest(context.request, context.env, path, { fetch: context.dependencies.providerFetch }) })));
+export const ethereumRoutes: readonly ExactWorkerRoute[] = Object.entries(ethereumRouteDefinitions).map(([path, route]) => exactRoute(path, {
+  commerceMutation: route.commerceMutation,
+  cors: route.originPolicy === 'checkout-status' ? 'ethereum-checkout-status' : 'ethereum',
+  profileOriginGate: route.originPolicy !== 'checkout-status', staff: 'skip', unexpectedError: 'profile',
+}, async (context) => ({ response: await handleEthereumRequest(context.request, context.env, path, {
+  fetch: trackProviderFetch(context.dependencies.providerFetch, context.metrics),
+}) })));

@@ -2,6 +2,7 @@ import { buildWalletDeliveryRecoveryState } from '../../../../shared/deliveryRec
 import type { DropInventoryManifest } from '../../../../shared/dropInventoryManifest.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
 import { executeGuardedCommerceRead } from './commerceGuardedRead.js';
+import type { ReconciliationPage } from './reconciliationPass.js';
 import {
   deliveryRecoveryAuthorityStatement, requireDeliveryRecoveryAuthority,
   recoverySnapshotColumns, parseRecoverySnapshot, type RecoverySnapshot,
@@ -408,18 +409,26 @@ export class D1CommerceRepository {
     });
   }
 
-  async queryDueStripeTerminalNotifications(dueAtMs: number, limit = 20): Promise<StripeTerminalNotificationCandidate[]> {
+  async queryDueStripeTerminalNotifications(
+    dueAtMs: number,
+    limit = 20,
+    startAfter?: NotificationDueCursor,
+  ): Promise<ReconciliationPage<StripeTerminalNotificationCandidate>> {
     positiveQueryLimit(limit);
+    validateNotificationDueCursor(startAfter, 'stripe_terminal');
     if (!Number.isSafeInteger(dueAtMs) || dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe notification cutoff.');
     }
-    const query = dueStripeTerminalNotificationsQuery({ dueAtMs, limit });
+    const query = dueStripeTerminalNotificationsQuery({ dueAtMs, limit: limit + 1, startAfter });
     const result = await this.readNotificationBatch(
       () => this.db.prepare(query.sql).bind(...query.bindings),
       true,
     );
     reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
-    return result.results.map(parseStripeTerminalNotificationCandidate);
+    return {
+      candidates: result.results.slice(0, limit).map(parseStripeTerminalNotificationCandidate),
+      hasMore: result.results.length > limit,
+    };
   }
 
   async begin(nowMs: number): Promise<CommerceUnitOfWork> {

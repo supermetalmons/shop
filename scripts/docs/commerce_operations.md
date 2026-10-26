@@ -13,6 +13,14 @@ changes to recorded migrations or checkpoints. DATA and OPS manifests also
 record table ownership; their existing latest-schema validation is unchanged.
 Adding these local manifests requires no database migration or deployment.
 
+Migration `0045_preorder_asset_lookup.sql` adds an address index for preorder
+inventory discovery. It backfills existing orders and uses an insert trigger to
+populate the lookup for both existing and updated Workers. Order JSON and live
+claims remain authoritative; assets are immutable and preorder history is
+permanent. Apply this migration and pass the Commerce integrity check before
+publishing the Worker that uses the lookup. If publication fails, the previous
+Worker can continue using the additive schema.
+
 ## Inspect current state
 
 ```sh

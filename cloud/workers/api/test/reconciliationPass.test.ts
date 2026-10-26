@@ -235,6 +235,110 @@ test('paged reconciliation stops after thirty-two inspections and reports remain
   assert.deepEqual([...remaining], [32, 33, 34, 35, 36, 37, 38, 39]);
 });
 
+test('explicit pages preserve a twenty-item cap without adding a soft time limit', async () => {
+  let elapsedMs = 0;
+  const remaining = new Set(Array.from({ length: 21 }, (_, index) => index));
+  const limits: number[] = [];
+  const result = await drainReconciliationCandidates<number>({
+    signal: new AbortController().signal,
+    failureMessage: 'paged reconciliation failed',
+    paging: {
+      inspectionLimit: 20,
+      budgetMs: null,
+      monotonicNowMs: () => elapsedMs,
+      loadPage: async (startAfter, limit) => {
+        limits.push(limit);
+        const due = [...remaining].filter((value) => startAfter === undefined || value > startAfter);
+        return { candidates: due.slice(0, limit), hasMore: due.length > limit };
+      },
+      candidateKey: String,
+      probeBacklog: async () => ({ hasMore: remaining.size > 0, oldestDueAgeMs: 100 }),
+    },
+    processCandidate: async (candidate) => {
+      elapsedMs += 2000;
+      remaining.delete(candidate);
+      return 'completed';
+    },
+  });
+  assert.deepEqual(limits, [8, 8, 4]);
+  assert.deepEqual([...remaining], [20]);
+  assert.deepEqual(result, {
+    attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0,
+    inspected: 20, pages: 3, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 100,
+  });
+});
+
+test('explicit final pages and the item cap preserve final-candidate cancellation outcomes', async () => {
+  for (const count of [8, 16, 20, 21]) {
+    for (const fails of [false, true]) {
+      const controller = new AbortController();
+      const failure = new Error('final processing failed');
+      const visited: number[] = [];
+      const all = Array.from({ length: count }, (_, index) => index);
+      const pass = drainReconciliationCandidates<number>({
+        signal: controller.signal,
+        cancellationMode: 'throw',
+        failureMessage: 'paged reconciliation failed',
+        paging: {
+          inspectionLimit: 20,
+          budgetMs: null,
+          loadPage: async (startAfter, limit) => {
+            const due = all.filter((value) => startAfter === undefined || value > startAfter);
+            return { candidates: due.slice(0, limit), hasMore: due.length > limit };
+          },
+          candidateKey: String,
+          probeBacklog: async () => assert.fail('cancelled pass must not probe'),
+        },
+        processCandidate: async (candidate) => {
+          visited.push(candidate);
+          if (candidate === Math.min(count, 20) - 1) {
+            controller.abort(new Error('cancelled after final candidate'));
+            if (fails) throw failure;
+          }
+          return 'completed';
+        },
+      });
+      if (fails) {
+        await assert.rejects(pass, (error: unknown) => error instanceof AggregateError &&
+          error.errors.length === 1 && error.errors[0] === failure);
+      } else {
+        const result = await pass;
+        assert.equal(result.completed, Math.min(count, 20));
+        assert.equal(result.stopReason, count > 20 ? 'item-limit' : 'drained');
+      }
+      assert.deepEqual(visited, all.slice(0, 20));
+    }
+  }
+});
+
+test('paged pre-load cancellation opt-out awaits discovery and accepts an empty page', async () => {
+  const cancellation = new Error('cancelled');
+  for (const candidates of [[], [1]]) {
+    let loaded = false;
+    const pass = drainReconciliationCandidates<number>({
+      signal: AbortSignal.abort(cancellation),
+      checkAbortedBeforeLoad: false,
+      cancellationMode: 'throw',
+      failureMessage: 'paged reconciliation failed',
+      paging: {
+        inspectionLimit: 20,
+        budgetMs: null,
+        loadPage: async () => {
+          await Promise.resolve();
+          loaded = true;
+          return { candidates, hasMore: false };
+        },
+        candidateKey: String,
+        probeBacklog: async () => assert.fail('cancelled pass must not probe'),
+      },
+      processCandidate: async () => assert.fail('cancelled pass must not process'),
+    });
+    if (candidates.length) await assert.rejects(pass, (error: unknown) => error === cancellation);
+    else assert.equal((await pass).attempted, 0);
+    assert.equal(loaded, true);
+  }
+});
+
 test('paging passes stuck candidates and probes behind its cursor without hiding failures', async () => {
   const remaining = new Set(Array.from({ length: 10 }, (_, index) => index));
   const visited: number[] = [];

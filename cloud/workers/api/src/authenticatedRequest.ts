@@ -2,6 +2,7 @@ import { createRequestDeadline, type RequestDeadline } from './boundedRequest.js
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import { ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import type { ApiErrorLike } from './httpResponse.js';
+import { trackProviderFetch } from './providerMetrics.js';
 import { RequestIdentityError, type RequestAuthContext, type RequestIdentity, type verifyRequestIdentity } from './requestIdentity.js';
 
 export function requestIdentityErrorDetails(
@@ -118,15 +119,7 @@ export async function withAuthenticatedRequest<T>(
     timeoutMs: dependencies.timeoutMs,
     timeoutMessage: options.timeoutMessage,
   });
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
+  const trackedFetch = trackProviderFetch(dependencies.providerFetch, metrics);
   try {
     return await run({
       deadline,

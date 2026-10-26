@@ -8,11 +8,16 @@ const RECONCILIATION_PAGE_SIZE = 8;
 const RECONCILIATION_INSPECTION_LIMIT = 32;
 const RECONCILIATION_BUDGET_MS = 20_000;
 
+export type ReconciliationPage<T> = Readonly<{ candidates: readonly T[]; hasMore: boolean }>;
+
 type ReconciliationPaging<T> = {
-  loadPage: (startAfter: T | undefined, limit: number) => Promise<readonly T[]>;
+  loadPage: (startAfter: T | undefined, limit: number) => Promise<readonly T[] | ReconciliationPage<T>>;
   candidateKey: (candidate: T) => string;
   probeBacklog: () => Promise<{ hasMore: boolean; oldestDueAgeMs: number | null }>;
   monotonicNowMs?: () => number;
+  inspectionLimit?: number;
+  budgetMs?: number | null;
+  awaitInitialLoad?: boolean;
 };
 
 type ReconciliationPassArgs<T> = {
@@ -67,31 +72,46 @@ async function drainPagedReconciliationCandidates<T>(
     hasMore: null as boolean | null, oldestDueAgeMs: null as number | null,
   };
   const monotonicNowMs = paging.monotonicNowMs || (() => performance.now());
+  const inspectionLimit = paging.inspectionLimit ?? RECONCILIATION_INSPECTION_LIMIT;
+  const budgetMs = paging.budgetMs === null ? Infinity : paging.budgetMs ?? RECONCILIATION_BUDGET_MS;
   const startedAtMs = monotonicNowMs();
   const failures: unknown[] = [];
   const seen = new Set<string>();
   let startAfter: T | undefined;
   try {
-    args.signal.throwIfAborted();
+    if (!Number.isSafeInteger(inspectionLimit) || inspectionLimit < 1 || !(budgetMs > 0)) {
+      throw new RangeError('Invalid reconciliation pass limits');
+    }
+    if (args.checkAbortedBeforeLoad !== false) args.signal.throwIfAborted();
     pages: while (true) {
-      if (args.signal.aborted) {
+      if (args.signal.aborted && (result.pages > 0 || args.checkAbortedBeforeLoad !== false)) {
         if (args.cancellationMode === 'throw') throw args.signal.reason;
         failures.push(args.signal.reason);
         break;
       }
-      if (result.inspected >= RECONCILIATION_INSPECTION_LIMIT) {
+      if (result.inspected >= inspectionLimit) {
         result.stopReason = 'item-limit';
         break;
       }
-      if (monotonicNowMs() - startedAtMs >= RECONCILIATION_BUDGET_MS) {
+      if (monotonicNowMs() - startedAtMs >= budgetMs) {
         result.stopReason = 'time-limit';
         break;
       }
-      const limit = Math.min(RECONCILIATION_PAGE_SIZE, RECONCILIATION_INSPECTION_LIMIT - result.inspected);
+      const limit = Math.min(RECONCILIATION_PAGE_SIZE, inspectionLimit - result.inspected);
       let candidates: readonly T[];
+      let explicitPage: ReconciliationPage<T> | undefined;
       try {
+        const awaitInitialLoad = result.pages === 0 && (paging.awaitInitialLoad || args.checkAbortedBeforeLoad === false);
         result.pages += 1;
-        candidates = await raceWithSignal(paging.loadPage(startAfter, limit), args.signal);
+        const page = awaitInitialLoad
+          ? await paging.loadPage(startAfter, limit)
+          : await raceWithSignal(paging.loadPage(startAfter, limit), args.signal);
+        if ('candidates' in page) {
+          explicitPage = page;
+          candidates = page.candidates;
+        } else {
+          candidates = page;
+        }
       } catch (error) {
         if (failures.length) throw new AggregateError([...failures, error], args.failureMessage);
         throw error;
@@ -102,11 +122,11 @@ async function drainPagedReconciliationCandidates<T>(
           failures.push(args.signal.reason);
           break pages;
         }
-        if (monotonicNowMs() - startedAtMs >= RECONCILIATION_BUDGET_MS) {
+        if (monotonicNowMs() - startedAtMs >= budgetMs) {
           result.stopReason = 'time-limit';
           break pages;
         }
-        if (result.inspected >= RECONCILIATION_INSPECTION_LIMIT) {
+        if (result.inspected >= inspectionLimit) {
           result.stopReason = 'item-limit';
           break pages;
         }
@@ -128,7 +148,13 @@ async function drainPagedReconciliationCandidates<T>(
           failures.push(error);
         }
       }
-      if (candidates.length < limit) break;
+      if (explicitPage) {
+        if (!explicitPage.hasMore) break;
+        if (result.inspected >= inspectionLimit) {
+          result.stopReason = 'item-limit';
+          break;
+        }
+      } else if (candidates.length < limit) break;
     }
     if (failures.length) throw new AggregateError(failures, args.failureMessage);
     return result;

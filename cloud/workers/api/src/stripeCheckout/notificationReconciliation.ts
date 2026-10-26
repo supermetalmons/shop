@@ -1,5 +1,6 @@
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
 import { D1CommerceRepository } from '../commerceRepository.js';
+import type { StripeTerminalNotificationCandidate } from '../commerceDiscoveryCandidates.js';
 import { getApiDrop } from '../dropConfig.js';
 import { drainReconciliationCandidates } from '../reconciliationPass.js';
 import type { StripeCheckoutCommerceContext } from './commerce.js';
@@ -14,12 +15,24 @@ export async function reconcilePendingStripeTerminalNotifications(
   overrides: { nowMs?: () => number } & ReconciliationOptions = {},
 ): Promise<ReconciliationResult> {
   const nowMs = overrides.nowMs || Date.now;
+  const dueAtMs = nowMs();
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const commerce: StripeCheckoutCommerceContext = { repository, signal, nowMs };
-  return drainReconciliationCandidates({
+  return drainReconciliationCandidates<StripeTerminalNotificationCandidate>({
     signal,
     onResult: overrides.onResult,
-    loadCandidates: () => repository.queryDueStripeTerminalNotifications(nowMs()),
+    paging: {
+      inspectionLimit: 20,
+      budgetMs: null,
+      awaitInitialLoad: true,
+      loadPage: (startAfter, limit) => repository.queryDueStripeTerminalNotifications(dueAtMs, limit,
+        startAfter ? { parentPath: startAfter.key.path, nextAttemptAtMs: startAfter.nextAttemptAtMs, family: 'stripe_terminal' } : undefined),
+      candidateKey: (candidate) => candidate.key.path,
+      probeBacklog: async () => {
+        const { candidates: [oldest] } = await repository.queryDueStripeTerminalNotifications(dueAtMs, 1);
+        return { hasMore: Boolean(oldest), oldestDueAgeMs: oldest ? Math.max(0, nowMs() - oldest.nextAttemptAtMs) : null };
+      },
+    },
     failureMessage: 'Stripe terminal notification reconciliation failed',
     processCandidate: async (candidate) => {
       if (candidate.key.kind !== 'stripe_checkout' || !candidate.key.dropId) return 'skipped';

@@ -267,6 +267,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0042_receipt_claim_failure_outbox.sql',
       '0043_ethereum_checkout.sql',
       '0044_ethereum_checkout_attempt_order_index.sql',
+      '0045_preorder_asset_lookup.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -591,10 +592,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const staleStripePlanDetails = staleStripePlan.results.map((row) => row.detail).join('\n');
     assert.match(staleStripePlanDetails, /commerce_stripe_checkout_state_reconciliation_due/);
     assert.doesNotMatch(staleStripePlanDetails, /USE TEMP B-TREE/);
-    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(10), [
-      { key: commerceKeys.stripeCheckout('runtime', 'cs_terminal') },
-    ]);
-    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(9), []);
+    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(10), {
+      candidates: [{ key: commerceKeys.stripeCheckout('runtime', 'cs_terminal'), nextAttemptAtMs: 10 }], hasMore: false,
+    });
+    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(9), { candidates: [], hasMore: false });
 
     const ownerUnit = await repository.begin(Date.parse('2026-01-01T00:00:01.000Z'));
     assert.deepEqual(
@@ -1101,7 +1102,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     for (const analyze of [false, true]) {
       if (analyze) await env.COMMERCE_DB.prepare('ANALYZE').run();
       observedBatchResults = undefined;
-      assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(5, 20), []);
+      assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(5, 20), { candidates: [], hasMore: false });
       const rowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
       assert.ok(Number.isSafeInteger(rowsRead) && rowsRead <= 4,
         `Suspended Stripe notification query read ${rowsRead} rows (analyzed: ${analyze})`);
@@ -1119,11 +1120,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
       insertOutbox(env.COMMERCE_DB, key, stripeDueTimes[index], 'stripe_terminal', 'manual_review')));
     observedBatchResults = undefined;
     observedPreparedSql.length = 0;
-    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 2)).map((record) => record.key.path),
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 2)).candidates.map((record) => record.key.path),
       [stripeDueKeys[2].path, stripeDueKeys[0].path]);
     const matchedStripeDueRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.deepEqual(latestObservedBatchResults()?.[1]?.results.map((row) => Object.keys(row).sort()),
-      Array.from({ length: 2 }, () => ['document_id', 'document_kind', 'document_path', 'drop_id']));
+      Array.from({ length: 3 }, () => ['document_id', 'document_kind', 'document_path', 'drop_id', 'next_attempt_at_ms']));
     assert.ok(Number.isSafeInteger(matchedStripeDueRowsRead) && matchedStripeDueRowsRead <= 16,
       `Matching Stripe notification query read ${matchedStripeDueRowsRead} rows`);
     const stripeDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_notification_outbox_stripe_due_at'));
@@ -1133,7 +1134,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const stripeDuePlanDetails = stripeDuePlan.results.map((row) => row.detail).join('\n');
     assert.match(stripeDuePlanDetails, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);
     assert.doesNotMatch(stripeDuePlanDetails, /SCAN (?:commerce_documents|document|outbox)|USE TEMP B-TREE/i);
-    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 20)).map((record) => record.key.path),
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(5, 20)).candidates.map((record) => record.key.path),
       [stripeDueKeys[2].path, stripeDueKeys[0].path, stripeDueKeys[1].path]);
     await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { status: 'fulfillment_failed' }));
     assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
@@ -1162,9 +1163,9 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.match(shippedDuePlanDetails, /SEARCH outbox USING (?:COVERING )?INDEX commerce_notification_outbox_family_due/);
     assert.doesNotMatch(shippedDuePlanDetails, /SCAN .*outbox|USE TEMP B-TREE/i);
     assert.deepEqual((await repository.notificationOutbox.get(deliveryKey.path, 'shipped'))?.entries[0].payload, shippedPayload);
-    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(0, 20)).map((record) => record.key.path), [suspendedKey.path]);
+    assert.deepEqual((await observedRepository.queryDueStripeTerminalNotifications(0, 20)).candidates.map((record) => record.key.path), [suspendedKey.path]);
     await repository.run(Date.now(), (unit) => unit.update(suspendedKey, { manualRefundReviewRequired: false }));
-    assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(0, 20), []);
+    assert.deepEqual(await observedRepository.queryDueStripeTerminalNotifications(0, 20), { candidates: [], hasMore: false });
     assert.deepEqual(await repository.notificationOutbox.get(suspendedKey.path, 'stripe_terminal'), suspendedOutbox);
 
     const fulfillmentDropId = 'fulfillment-pagination-load';

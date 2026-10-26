@@ -1,6 +1,7 @@
-import { PREORDER_CONFIGS, type PreorderOrder } from '../../../../shared/preorders.js';
+import type { PreorderOrder } from '../../../../shared/preorders.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { executeCommerceD1Batch } from './commerceD1Batch.js';
+import { recentPreorderInventoryQuery, requestedPreorderInventoryQuery } from './preorderInventoryQueries.js';
 
 export type StoredPreorder = PreorderOrder & {
   cluster: string;
@@ -14,6 +15,8 @@ export type StoredPreorder = PreorderOrder & {
   createdAtMs: number;
   revision: number;
 };
+
+export type PreorderDueCandidate = Readonly<{ order: StoredPreorder; nextCheckAtMs: number }>;
 
 type PreorderClaim = { id: number; status: 'reserved' | 'preordered'; orderId: string; buyer: string };
 
@@ -64,32 +67,14 @@ type PreorderInventoryRow = {
   confirmed_slot: number | null;
 };
 
-const PREORDER_INVENTORY_COLUMNS = `preorder.preorder_id, preorder.status, preorder.confirmed_slot,
-  (SELECT COALESCE(json_group_array(json_object('id', claim.card_id, 'address', json_extract(asset.value, '$.address'))), '[]')
-    FROM json_each(preorder.assets_json) AS asset JOIN commerce_preorder_claims AS claim
-      ON claim.order_id = preorder.order_id AND claim.cluster = preorder.cluster AND claim.collection = preorder.collection
-        AND claim.card_id = json_extract(asset.value, '$.id')
-    WHERE json_type(asset.value, '$.id') = 'integer' AND json_type(asset.value, '$.address') = 'text') AS assets_json`;
-
-function preorderInventoryScope(): { sql: string; values: string[] } {
-  const scopes = PREORDER_CONFIGS.filter(config => config.enabled);
-  return {
-    sql: scopes.map(() => '(preorder.preorder_id = ? AND preorder.cluster = ? AND preorder.collection = ?)').join(' OR ') || '0',
-    values: scopes.flatMap(config => [config.preorderId, config.cluster, config.collection]),
-  };
-}
-
 function preorderInventoryAssets(rows: PreorderInventoryRow[]): PreorderInventoryAsset[] {
   return rows.flatMap((row) => (JSON.parse(row.assets_json) as PreorderOrder['assets'])
     .map((asset) => ({ ...asset, preorderId: row.preorder_id, status: row.status, confirmedSlot: row.confirmed_slot })));
 }
 
 export async function listRecentPreorderInventoryAssets(db: D1Database, buyer: string): Promise<PreorderInventoryAsset[]> {
-  const scope = preorderInventoryScope();
-  const result = await db.prepare(`SELECT ${PREORDER_INVENTORY_COLUMNS} FROM commerce_preorder_orders AS preorder
-    WHERE (${scope.sql}) AND preorder.buyer = ? AND
-      (preorder.status = 'succeeded' OR (preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL))
-    ORDER BY preorder.created_at_ms DESC LIMIT 15`).bind(...scope.values, buyer).all<PreorderInventoryRow>();
+  const query = recentPreorderInventoryQuery(buyer);
+  const result = await db.prepare(query.sql).bind(...query.bindings).all<PreorderInventoryRow>();
   return preorderInventoryAssets(result.results);
 }
 
@@ -97,13 +82,8 @@ async function listRequestedPreorderInventoryAssets(
   db: D1Database, buyer: string, expected: readonly string[],
 ): Promise<PreorderInventoryAsset[]> {
   if (!expected.length) return [];
-  const scope = preorderInventoryScope();
-  const result = await db.prepare(`SELECT ${PREORDER_INVENTORY_COLUMNS} FROM commerce_preorder_orders AS preorder
-    WHERE (${scope.sql}) AND (preorder.status = 'succeeded' OR
-      (preorder.buyer = ? AND preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL)) AND EXISTS (
-      SELECT 1 FROM json_each(preorder.assets_json) AS asset JOIN json_each(?) AS expected
-        ON json_extract(asset.value, '$.address') = expected.value
-    ) LIMIT 15`).bind(...scope.values, buyer, JSON.stringify(expected)).all<PreorderInventoryRow>();
+  const query = requestedPreorderInventoryQuery(buyer, expected);
+  const result = await db.prepare(query.sql).bind(...query.bindings).all<PreorderInventoryRow>();
   return preorderInventoryAssets(result.results).filter((asset) => expected.includes(asset.address));
 }
 
@@ -199,11 +179,19 @@ export class PreorderStore {
       ? Buffer.from(JSON.stringify([Number(last.created_at_ms), String(last.order_id)])).toString('base64url') : null };
   }
 
-  async due(nowMs: number, limit = 20): Promise<StoredPreorder[]> {
+  async due(nowMs: number, limit = 20, startAfter?: { nextCheckAtMs: number; orderId: string }): Promise<{
+    candidates: PreorderDueCandidate[];
+    hasMore: boolean;
+  }> {
     const result = await this.db.prepare(`SELECT * FROM commerce_preorder_orders
       WHERE status IN ('prepared', 'submitted') AND next_check_at_ms <= ?
-      ORDER BY next_check_at_ms, order_id LIMIT ?`).bind(nowMs, limit).all<Record<string, unknown>>();
-    return result.results.map((row) => decode(row)!);
+      ${startAfter ? 'AND (next_check_at_ms, order_id) > (?, ?)' : ''}
+      ORDER BY next_check_at_ms, order_id LIMIT ?`)
+      .bind(nowMs, ...(startAfter ? [startAfter.nextCheckAtMs, startAfter.orderId] : []), limit + 1).all<Record<string, unknown>>();
+    return {
+      candidates: result.results.slice(0, limit).map((row) => ({ order: decode(row)!, nextCheckAtMs: Number(row.next_check_at_ms) })),
+      hasMore: result.results.length > limit,
+    };
   }
 
   async expirePrepared(cluster: string, collection: string, nowMs: number): Promise<void> {

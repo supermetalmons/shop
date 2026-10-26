@@ -9,12 +9,14 @@ import bs58 from 'bs58';
 import { getPreorderConfig, preorderMetadataUri } from '../shared/preorders.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../shared/solanaProgramAddresses.ts';
 import { d1Database as sqliteD1Database } from '../cloud/workers/api/test/commerceD1Harness.ts';
+import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
 
 const { handlePost } = await import(new URL('../cloud/workers/api/src/shopInventory.ts', import.meta.url).href);
 const { defaultDependencies } = await import(new URL('../cloud/workers/api/src/publicRouteSupport.ts', import.meta.url).href);
 type ProviderFetch = typeof fetch;
 
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(1));
+const assetLookupMigration = readCommerceMigrations().find(migration => migration.name === '0045_preorder_asset_lookup.sql')!;
 const assetId = (seed: string) => bs58.encode(createHash('sha256').update(seed).digest());
 const rpcResult = (id: string | number, result: unknown) => Response.json({ jsonrpc: '2.0', id, result });
 const quietDependencies = (providerFetch: ProviderFetch) => ({ ...defaultDependencies,
@@ -62,6 +64,7 @@ test('eighteen finalized preorders remain visible until collection search catche
     cluster TEXT, collection TEXT, card_id INTEGER, order_id TEXT REFERENCES commerce_preorder_orders(order_id),
     PRIMARY KEY (cluster, collection, card_id)
   )`);
+  database.exec(assetLookupMigration.sql);
   for (const asset of assets) {
     const orderId = `handoff-${String(asset.id).padStart(2, '0')}`;
     database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -136,6 +139,7 @@ test('older finalized negative proofs reject stale indexing until a new account 
     cluster TEXT, collection TEXT, card_id INTEGER, order_id TEXT REFERENCES commerce_preorder_orders(order_id),
     PRIMARY KEY (cluster, collection, card_id)
   )`);
+  database.exec(assetLookupMigration.sql);
   for (const asset of assets) {
     const orderId = `negative-handoff-${String(asset.id).padStart(2, '0')}`;
     database.prepare('INSERT INTO commerce_preorder_orders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')

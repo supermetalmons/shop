@@ -7,6 +7,7 @@ import { isObject, unavailableCommerceData } from './commerceRepositorySupport.j
 
 export type StripeTerminalNotificationCandidate = Readonly<{
   key: CommerceDocumentKey<'stripe_checkout'>;
+  nextAttemptAtMs: number;
 }>;
 
 export type StripeCheckoutRequeueCandidate = Readonly<{
@@ -97,7 +98,7 @@ export function parseReadyNotificationCandidate(row: Record<string, unknown>): R
 }
 
 export function parseStripeTerminalNotificationCandidate(row: Record<string, unknown>): StripeTerminalNotificationCandidate {
-  return { key: documentKey(row, 'stripe_checkout') };
+  return { key: documentKey(row, 'stripe_checkout'), nextAttemptAtMs: nextAttemptAtMs(row) };
 }
 
 export function parseStripeCheckoutRequeueCandidate(

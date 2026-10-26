@@ -5,7 +5,7 @@ import { commerceKeys } from '../cloud/workers/api/src/commerceRepository.ts';
 import {
   manualReviewCheckoutsQuery, packStatusOutboxDueQuery, staleStripeFulfillmentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
-import { listPreorderInventoryAssets, PreorderStore } from '../cloud/workers/api/src/preorderStore.ts';
+import { listRecentPreorderInventoryAssets, PreorderStore } from '../cloud/workers/api/src/preorderStore.ts';
 import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
 import {
   createCommerceD1Harness, seedCommerceDocuments, seedPackStatusOutbox,
@@ -104,22 +104,41 @@ test('obsolete index cleanup preserves populated commerce and indexed reconcilia
   ];
   const results = queries.map(({ sql, bindings }) => database.prepare(sql).all(...bindings));
   assert.ok(results.every((rows) => rows.length > 0));
-  const assets = await listPreorderInventoryAssets(harness.db, owner, ['asset1']);
+  const assets = await listRecentPreorderInventoryAssets(harness.db, owner);
   assert.equal(assets.length, 2);
-  assert.equal(preorderReads.length, 2);
+  assert.equal(preorderReads.length, 1);
+  const scopes = PREORDER_CONFIGS.filter(config => config.enabled);
+  const requestedSql = `SELECT preorder.preorder_id, preorder.status, preorder.confirmed_slot,
+    (SELECT COALESCE(json_group_array(json_object('id', claim.card_id, 'address', json_extract(asset.value, '$.address'))), '[]')
+      FROM json_each(preorder.assets_json) AS asset JOIN commerce_preorder_claims AS claim
+        ON claim.order_id = preorder.order_id AND claim.cluster = preorder.cluster AND claim.collection = preorder.collection
+          AND claim.card_id = json_extract(asset.value, '$.id')
+      WHERE json_type(asset.value, '$.id') = 'integer' AND json_type(asset.value, '$.address') = 'text') AS assets_json
+    FROM commerce_preorder_orders AS preorder
+    WHERE (${scopes.map(() => '(preorder.preorder_id = ? AND preorder.cluster = ? AND preorder.collection = ?)').join(' OR ')})
+      AND (preorder.status = 'succeeded' OR
+        (preorder.buyer = ? AND preorder.status = 'submitted' AND preorder.confirmed_slot IS NOT NULL)) AND EXISTS (
+        SELECT 1 FROM json_each(preorder.assets_json) AS asset JOIN json_each(?) AS expected
+          ON json_extract(asset.value, '$.address') = expected.value
+      ) LIMIT 15`;
+  const scopeBindings = scopes.flatMap(config => [config.preorderId, config.cluster, config.collection]);
+  const requestedBindings = [...scopeBindings, owner, '["asset1"]'];
+  const requestedAssets = database.prepare(requestedSql).all(...requestedBindings);
+  assert.equal(requestedAssets.length, 1);
   const before = snapshot(database);
   migrate(database);
   assertCleanup(database, before);
   assert.deepEqual(queries.map(({ sql, bindings }) => database.prepare(sql).all(...bindings)), results);
-  assert.deepEqual(await listPreorderInventoryAssets(harness.db, owner, ['asset1']), assets);
+  assert.deepEqual(await listRecentPreorderInventoryAssets(harness.db, owner), assets);
+  assert.deepEqual(database.prepare(requestedSql).all(...requestedBindings), requestedAssets);
   for (const { sql, bindings, index } of queries) {
     const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings);
     assert.ok(plan.some(({ detail }) => String(detail).includes(`SEARCH `) && String(detail).includes(index)), index);
   }
-  for (const sql of preorderReads.slice(0, 2)) {
-    const scopes = PREORDER_CONFIGS.filter(config => config.enabled).flatMap(config => [config.preorderId, config.cluster, config.collection]);
-    const requested = sql.includes('json_each(?)');
-    const bindings = [...scopes, owner, ...(requested ? ['["asset1"]'] : [])];
+  for (const { sql, bindings, requested } of [
+    { sql: preorderReads[0], bindings: [...scopeBindings, owner], requested: false },
+    { sql: requestedSql, bindings: requestedBindings, requested: true },
+  ]) {
     const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings).map(row => String(row.detail)).join('\n');
     assert.match(plan, requested ? /SEARCH preorder USING INDEX sqlite_autoindex_commerce_preorder_orders_2/ :
       /SEARCH preorder USING INDEX commerce_preorder_inventory_buyer/);

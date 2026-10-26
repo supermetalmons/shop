@@ -417,15 +417,15 @@ test('Stripe due lookup follows source eligibility without changing publication 
     await repository.run(stripeNow + 10, (unit) => unit.update(checkoutKey, updates));
     assert.deepEqual(dueRows(), eligible ? [{ parent_path: checkoutKey.path, family: 'stripe_terminal', next_attempt_at_ms: stripeNow + 100 }] : []);
     assert.deepEqual(await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'), original);
-    assert.deepEqual((await repository.queryDueStripeTerminalNotifications(stripeNow + 100)).map((row) => row.key.path), eligible ? [checkoutKey.path] : []);
+    assert.deepEqual((await repository.queryDueStripeTerminalNotifications(stripeNow + 100)).candidates.map((row) => row.key.path), eligible ? [checkoutKey.path] : []);
   }
   const parent = await repository.get(checkoutKey);
   const updated = await repository.notificationOutbox.compareAndSet({ expected: original, nowMs: stripeNow + 20,
     changes: { claimExpiresAtMs: stripeNow + 200, nextAttemptAtMs: stripeNow + 200 } });
   assert.ok(updated);
   assert.deepEqual(dueRows(), [{ parent_path: checkoutKey.path, family: 'stripe_terminal', next_attempt_at_ms: stripeNow + 200 }]);
-  assert.deepEqual(await repository.queryDueStripeTerminalNotifications(stripeNow + 100), []);
-  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).length, 1);
+  assert.deepEqual(await repository.queryDueStripeTerminalNotifications(stripeNow + 100), { candidates: [], hasMore: false });
+  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).candidates.length, 1);
   assert.deepEqual(await repository.get(checkoutKey), parent);
   assert.deepEqual(updated.entries, original.entries);
   assert.equal(updated.attemptCount, original.attemptCount);
@@ -433,11 +433,11 @@ test('Stripe due lookup follows source eligibility without changing publication 
   const exhausted = await repository.notificationOutbox.compareAndSet({ expected: updated, nowMs: stripeNow + 21,
     changes: { attemptCount: 4, retryUntilMs: stripeNow - 1 } });
   assert.ok(exhausted);
-  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).length, 1);
+  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).candidates.length, 1);
   await repository.run(stripeNow + 22, (unit) => unit.update(checkoutKey, { status: 'processing' }));
   await repository.run(stripeNow + 23, (unit) => unit.update(checkoutKey, { status: 'fulfillment_failed' }));
   assert.deepEqual(await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal'), exhausted);
-  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).length, 1);
+  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 200)).candidates.length, 1);
 });
 
 test('Stripe due lookup follows an outcome replacement while source fields stay unchanged', async (context) => {
@@ -451,7 +451,7 @@ test('Stripe due lookup follows an outcome replacement while source fields stay 
   }));
   assert.deepEqual(dueRows(), [{ parent_path: checkoutKey.path, family: 'stripe_terminal', next_attempt_at_ms: fulfilled.nextAttemptAtMs }]);
   assert.deepEqual(await repository.get(checkoutKey), parent);
-  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 20)).length, 1);
+  assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 20)).candidates.length, 1);
 });
 
 for (const sourceFirst of [false, true]) {
@@ -467,7 +467,7 @@ for (const sourceFirst of [false, true]) {
     const stored = await repository.notificationOutbox.get(checkoutKey.path, 'stripe_terminal');
     assert.equal(stored?.revision, 3);
     assert.deepEqual(dueRows(), [{ parent_path: checkoutKey.path, family: 'stripe_terminal', next_attempt_at_ms: stripeNow + 20 }]);
-    assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 20)).length, 1);
+    assert.equal((await repository.queryDueStripeTerminalNotifications(stripeNow + 20)).candidates.length, 1);
   });
 }
 

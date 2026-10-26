@@ -3,6 +3,7 @@ import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts'
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
 import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
 import { parseReceiptClaimFailureOutboxRow } from '../../shared/receiptClaimFailureOutbox.ts';
+import { PREORDER_CONFIGS } from '../../shared/preorders.ts';
 import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusProjectionFields.ts';
 import { parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
@@ -39,6 +40,7 @@ import {
 } from '../../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
 import { receiptClaimFailureDiscoveryQuery } from '../../cloud/workers/api/src/receiptClaimFailureNotifications.ts';
+import { requestedPreorderInventoryQuery } from '../../cloud/workers/api/src/preorderInventoryQueries.ts';
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -115,6 +117,18 @@ function readCommerceD1Checks(queryBatch: D1MaintenanceQueryBatch) {
         WHERE path_revision.document_path IS NULL) AS missing_live_count`,
     legacyRecovery: `SELECT COUNT(*) AS count FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND json_type(document_json, '$.receiptRecovery') IS NOT NULL`,
+    preorderAssetLookup: `SELECT
+      (SELECT COUNT(*) FROM commerce_preorder_orders AS preorder, json_each(preorder.assets_json) AS asset
+        WHERE json_type(preorder.assets_json, '$[' || asset.key || '].address') = 'text'
+          AND NOT EXISTS (SELECT 1 FROM commerce_preorder_asset_lookup AS lookup
+            WHERE lookup.order_id = preorder.order_id AND lookup.asset_ordinal = asset.key
+              AND lookup.asset_address = json_extract(preorder.assets_json, '$[' || asset.key || '].address'))
+      ) AS missing_count,
+      (SELECT COUNT(*) FROM commerce_preorder_asset_lookup AS lookup
+        LEFT JOIN commerce_preorder_orders AS preorder ON preorder.order_id = lookup.order_id
+        WHERE json_type(preorder.assets_json, '$[' || lookup.asset_ordinal || '].address') IS NOT 'text'
+          OR json_extract(preorder.assets_json, '$[' || lookup.asset_ordinal || '].address') IS NOT lookup.asset_address
+      ) AS invalid_count`,
     inventory: `SELECT inventory.*,
       (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = inventory.drop_id) AS available_count,
       (SELECT COUNT(*) FROM commerce_available_dudes
@@ -213,8 +227,14 @@ export function checkCommerceD1(
   const {
     authorityRows, stripeCheckoutControls, leaseRows, identityState, commitGuardState, deliveryOwnerRevisionState, documentPathRevisionState,
     legacyRecovery, inventory, invalidProcessedTimeRows, notificationControls, recoveryControls, packStatusControls,
-    missingRecovery, missing, invalidNotificationOwners, invalidStripeDue,
+    missingRecovery, missing, invalidNotificationOwners, invalidStripeDue, preorderAssetLookup,
   } = readCommerceD1Checks(queryBatch);
+
+  if (preorderAssetLookup.length !== 1 ||
+    safeInteger(preorderAssetLookup[0].missing_count, 'Missing preorder asset lookup count') !== 0 ||
+    safeInteger(preorderAssetLookup[0].invalid_count, 'Invalid preorder asset lookup count') !== 0) {
+    fail('Commerce D1 preorder asset lookup differs from source.');
+  }
 
   for (const row of commerceD1AuditRows(queryRemoteCommerceD1, {
     table: 'stripe_order_disputes', keys: ['livemode', 'session_id', 'dispute_id'],
@@ -487,6 +507,13 @@ export function checkCommerceD1(
   const adminIrlWorkflowStatusPlan = queryPlan(adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`));
   requireSearchIndex(adminIrlWorkflowStatusPlan, 'commerce_admin_irl_redeem_workflow_operation');
   requireNoTemporaryBTree(adminIrlWorkflowStatusPlan, 'Admin IRL Workflow status');
+
+  if (PREORDER_CONFIGS.some(config => config.enabled)) {
+    const preorderInventoryPlan = queryPlan(requestedPreorderInventoryQuery('buyer_check', ['asset_check']));
+    requireSearchIndex(preorderInventoryPlan, 'commerce_preorder_asset_lookup_address');
+    requireSearchIndex(preorderInventoryPlan, 'sqlite_autoindex_commerce_preorder_orders_1');
+    requireNoTemporaryBTree(preorderInventoryPlan, 'requested preorder inventory');
+  }
 
   for (const family of ['ready', 'stripe_terminal', 'shipped'] as const) {
     const plan = queryPlan(notificationOutboxDueQuery({ family, dueAtMs: 1, limit: 8 }));

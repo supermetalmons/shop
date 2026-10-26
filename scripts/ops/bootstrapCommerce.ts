@@ -15,7 +15,8 @@ const EMPTY_TABLES = [
   'commerce_documents', 'commerce_document_path_revisions', 'commerce_delivery_owner_revisions',
   'commerce_commit_guards', 'commerce_wipe_guards', 'commerce_delivery_recovery', 'commerce_notification_outbox',
   'commerce_notification_outbox_pending_owners', 'commerce_notification_outbox_stripe_due', 'commerce_pack_status_outbox',
-  'commerce_preorder_claims', 'commerce_preorder_orders', 'commerce_stripe_checkout_state', 'stripe_order_disputes',
+  'commerce_preorder_claims', 'commerce_preorder_orders', 'commerce_preorder_asset_lookup',
+  'commerce_stripe_checkout_state', 'stripe_order_disputes',
 ] as const;
 const emptyPredicate = EMPTY_TABLES.map((table) => `NOT EXISTS (SELECT 1 FROM ${table})`).join(' AND ');
 

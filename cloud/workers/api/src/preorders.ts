@@ -18,7 +18,7 @@ import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpRes
 import { MiNoteAuthError, verifyMiNoteSession } from './miNoteAuth.js';
 import { assertMiNoteEligibility, loadMiNoteEligibility } from './miNoteEligibility.js';
 import type { WorkerDependencies } from './publicRouteSupport.js';
-import { PreorderStore, publicPreorder, type StoredPreorder } from './preorderStore.js';
+import { PreorderStore, publicPreorder, type PreorderDueCandidate, type StoredPreorder } from './preorderStore.js';
 import {
   authorizePreorderTransaction, isPreorderBlockhashValid, preparePreorderTransaction,
   probePreorderTransaction, sendPreorderTransaction,
@@ -388,14 +388,25 @@ export async function reconcilePendingPreorders(
 ): Promise<ReconciliationResult> {
   const dependencies = { ...defaults, ...overrides };
   const store = new PreorderStore(env.COMMERCE_DB);
-  return drainReconciliationCandidates({
+  const dueAtMs = dependencies.nowMs();
+  return drainReconciliationCandidates<PreorderDueCandidate>({
     signal,
     checkAbortedBeforeLoad: false,
     cancellationMode: 'throw',
     onResult: overrides.onResult,
-    loadCandidates: () => store.due(dependencies.nowMs()),
+    paging: {
+      inspectionLimit: 20,
+      budgetMs: null,
+      loadPage: (startAfter, limit) => store.due(dueAtMs, limit, startAfter
+        ? { nextCheckAtMs: startAfter.nextCheckAtMs, orderId: startAfter.order.orderId } : undefined),
+      candidateKey: ({ order }) => order.orderId,
+      probeBacklog: async () => {
+        const { candidates: [oldest] } = await store.due(dueAtMs, 1);
+        return { hasMore: Boolean(oldest), oldestDueAgeMs: oldest ? Math.max(0, dependencies.nowMs() - oldest.nextCheckAtMs) : null };
+      },
+    },
     failureMessage: 'Preorder reconciliation failed.',
-    processCandidate: async (order) => {
+    processCandidate: async ({ order }) => {
       try {
         const current = await reconcileOrder(order, store, env, dependencies, signal, { rebroadcast: true });
         const outcome = current.status === 'prepared' || current.status === 'submitted' ? 'deferred'
@@ -410,6 +421,6 @@ export async function reconcilePendingPreorders(
         throw error;
       }
     },
-    onFailure: (order, error) => reportReconciliationFailure('preorders', { preorderId: order.preorderId, orderId: order.orderId }, error),
+    onFailure: ({ order }, error) => reportReconciliationFailure('preorders', { preorderId: order.preorderId, orderId: order.orderId }, error),
   });
 }

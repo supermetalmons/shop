@@ -167,7 +167,7 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     Object.assign(config, { checkoutEnabled: false });
     h.time(order.expiresAtMs);
     const unexpected = t.mock.fn(async () => { assert.fail('Unsigned expiry must not sign or broadcast.'); });
-    assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, {
+    assert.partialDeepStrictEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, {
       ...h.deps, prepare: unexpected, authorize: unexpected, blockhashValid: unexpected, probe: unexpected, send: unexpected,
     }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
     assert.equal(unexpected.mock.callCount(), 0);
@@ -202,7 +202,7 @@ for (const preorderId of ['mi_note_cards_devnet', 'mi_note_cards']) {
     assert.deepEqual((await listPreorderInventoryAssets(h.db, BUYER)).map(asset => asset.id), [1]);
     h.outcome('finalized');
     h.time(20_000);
-    assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps),
+    assert.partialDeepStrictEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps),
       { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
     const succeeded = (await h.store.get(orderId))!;
     const terminalRetry = await h.call('submit', { preorderId, orderId, transactionBase64: 'different-request-bytes' });
@@ -1125,12 +1125,67 @@ test('scheduled recovery drains expired disabled reservations before processing 
   h.outcome('finalized');
   Object.assign(config, { enabled: false });
 
-  assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), { attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), {
+    attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0,
+    inspected: 20, pages: 3, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 65_000,
+  });
   assert.deepEqual(await h.store.claims(config.cluster, config.collection), []);
   assert.equal(h.database.prepare("SELECT COUNT(*) AS count FROM commerce_preorder_orders WHERE status = 'expired'").get()!.count, 20);
   assert.equal((await h.store.get(active.orderId))!.status, 'submitted');
-  assert.deepEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  assert.partialDeepStrictEqual(await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.equal((await h.store.get(active.orderId))!.status, 'succeeded');
+});
+
+test('preorder due pages use the indexed timestamp and order ID cursor', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare([1]);
+  const template = (await h.store.get(prepared.body.order.orderId))!;
+  const orders = [template];
+  for (let id = 2; id <= 4; id += 1) {
+    orders.push(await h.store.reserve({ ...template, orderId: crypto.randomUUID(), requestId: crypto.randomUUID(),
+      buyer: `buyer-${id}`, cardIds: [id], assets: [{ id, address: `asset-${id}` }] }));
+  }
+  const sorted = orders.map((order) => order.orderId).sort();
+  const dueAtMs = template.expiresAtMs;
+  const first = await h.store.due(dueAtMs, 2);
+  assert.deepEqual(first.candidates.map(({ order, nextCheckAtMs }) => [order.orderId, nextCheckAtMs]),
+    sorted.slice(0, 2).map((orderId) => [orderId, dueAtMs]));
+  assert.equal(first.hasMore, true);
+  const prepare = h.db.prepare.bind(h.db);
+  let sql = '';
+  t.mock.method(h.db, 'prepare', (query: string) => { sql = query; return prepare(query); });
+  const next = await h.store.due(dueAtMs, 2, { nextCheckAtMs: dueAtMs, orderId: sorted[1] });
+  assert.deepEqual(next.candidates.map(({ order }) => order.orderId), sorted.slice(2));
+  assert.equal(next.hasMore, false);
+  const plan = JSON.stringify(h.database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(dueAtMs, dueAtMs, sorted[1], 3));
+  assert.match(plan, /SEARCH commerce_preorder_orders USING INDEX commerce_preorder_reconciliation/);
+  assert.doesNotMatch(plan, /TEMP B-TREE/);
+});
+
+test('preorder reconciliation fixes its due cutoff before processing multiple pages', async (t) => {
+  const h = harness();
+  t.after(() => h.database.close());
+  const prepared = await h.prepare([1]);
+  const template = (await h.store.get(prepared.body.order.orderId))!;
+  const orders = [template];
+  for (let id = 2; id <= 10; id += 1) {
+    orders.push(await h.store.reserve({ ...template, orderId: crypto.randomUUID(), requestId: crypto.randomUUID(),
+      buyer: `buyer-${id}`, cardIds: [id], assets: [{ id, address: `asset-${id}` }],
+      expiresAtMs: template.expiresAtMs + (id === 10 ? 1 : 0) }));
+  }
+  const future = orders[9];
+  h.time(template.expiresAtMs);
+  const finish = PreorderStore.prototype.finish;
+  t.mock.method(PreorderStore.prototype, 'finish', async function (this: PreorderStore, ...args: Parameters<typeof finish>) {
+    h.time(template.expiresAtMs + 1000);
+    return finish.apply(this, args);
+  });
+  const result = await reconcilePendingPreorders(h.env, new AbortController().signal, h.deps);
+  assert.equal(result.completed, 9);
+  assert.equal(result.pages, 2);
+  assert.equal(result.hasMore, false);
+  assert.equal((await h.store.get(future.orderId))!.status, 'prepared');
 });
 
 test('scheduled recovery keeps disabled submitted reservations after their original expiry', async (t) => {
@@ -1162,7 +1217,7 @@ test('cancelled scheduled recovery still discovers due orders before checking ca
     return due.call(this, nowMs);
   });
   const options = { ...h.deps, onResult: (result: unknown) => { summaries.push(result); } };
-  assert.deepEqual(await reconcilePendingPreorders(h.env, AbortSignal.abort(cancellation), options),
+  assert.partialDeepStrictEqual(await reconcilePendingPreorders(h.env, AbortSignal.abort(cancellation), options),
     { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
   const prepared = await h.prepare();
   const dueAtMs = (await h.store.get(prepared.body.order.orderId))!.expiresAtMs;
@@ -1170,11 +1225,45 @@ test('cancelled scheduled recovery still discovers due orders before checking ca
   await assert.rejects(reconcilePendingPreorders(h.env, AbortSignal.abort(cancellation), options),
     (error: unknown) => error === cancellation);
   assert.deepEqual(queries, [1000, dueAtMs]);
-  assert.deepEqual(summaries, [
+  assert.equal(summaries.length, 2);
+  assert.partialDeepStrictEqual(summaries, [
     { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
   ]);
 });
+
+for (const discovery of ['empty', 'candidate', 'failure'] as const) {
+  test(`preorder recovery awaits initial ${discovery} discovery after cancellation`, async (t) => {
+    const h = harness();
+    const discoveryGate = gate();
+    t.after(() => { discoveryGate.resolve(); h.database.close(); });
+    if (discovery === 'candidate') {
+      const prepared = await h.prepare();
+      h.time((await h.store.get(prepared.body.order.orderId))!.expiresAtMs);
+    }
+    const controller = new AbortController();
+    const cancellation = new Error('cancelled during discovery');
+    const queryFailure = new Error('discovery failed');
+    const due = PreorderStore.prototype.due;
+    t.mock.method(PreorderStore.prototype, 'due', async function (this: PreorderStore, ...args: Parameters<typeof due>) {
+      const page = await due.apply(this, args);
+      await discoveryGate.enter();
+      if (discovery === 'failure') throw queryFailure;
+      return page;
+    });
+    const pass = reconcilePendingPreorders(h.env, controller.signal, h.deps);
+    let settled = false;
+    void pass.then(() => { settled = true; }, () => { settled = true; });
+    await discoveryGate.started;
+    controller.abort(cancellation);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    discoveryGate.resolve();
+    if (discovery === 'empty') assert.equal((await pass).attempted, 0);
+    else await assert.rejects(pass, (error: unknown) => error === (discovery === 'failure' ? queryFailure : cancellation));
+    assert.equal(h.counts().sends, 0);
+  });
+}
 
 test('scheduled recovery awaits failed-order deferral without replacing the processing failure', async (t) => {
   const h = harness();
@@ -1190,7 +1279,9 @@ test('scheduled recovery awaits failed-order deferral without replacing the proc
   const failure = new Error('probe failed');
   const probes: string[] = [];
   const summaries: unknown[] = [];
-  t.mock.method(PreorderStore.prototype, 'due', async () => [first, second]);
+  t.mock.method(PreorderStore.prototype, 'due', async () => ({
+    candidates: [first, second].map((order) => ({ order, nextCheckAtMs: 2000 })), hasMore: false,
+  }));
   t.mock.method(PreorderStore.prototype, 'defer', async (order: typeof first) => {
     assert.equal(order.orderId, first.orderId);
     await deferral.enter();
@@ -1214,7 +1305,8 @@ test('scheduled recovery awaits failed-order deferral without replacing the proc
   await rejected;
   assert.deepEqual(probes, [first.signature, second.signature]);
   assert.equal((await h.store.get(second.orderId))!.status, 'succeeded');
-  assert.deepEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
+  assert.equal(summaries.length, 1);
+  assert.partialDeepStrictEqual(summaries, [{ attempted: 2, completed: 1, deferred: 0, skipped: 0, failed: 1 }]);
 });
 
 test('an uncertain first broadcast retains its transaction for status retry', async () => {

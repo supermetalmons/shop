@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
-import { commerceKeys } from '../src/commerceRepository.ts';
+import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
+import { dueStripeTerminalNotificationsQuery } from '../src/commerceQueries.ts';
 import { NotificationOutboxRepository } from '../src/notificationOutboxRepository.ts';
 import { reconcilePendingStripeTerminalNotifications } from '../src/stripeCheckout/notificationReconciliation.ts';
 import { createStripeTerminalNotificationIntent, notificationFixture, OUTBOX_NOW, OUTBOX_DROP, OUTBOX_LEASE } from './notificationOutboxTestSupport.ts';
@@ -33,12 +34,12 @@ test('cron recovers terminal notification rows without backfilling historical ch
     await unit.create(historical, { status: 'fulfilled', deliveryId: 7 });
   });
   const env = { COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue };
-  assert.deepEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 2, completed: 2, deferred: 0, skipped: 0, failed: 0 });
+  assert.partialDeepStrictEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 2, completed: 2, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(state.sent.flat().map((job) => job.kind).sort(), [
     'buyer_order_received', 'shipper_ready_to_ship', 'stripe_checkout_manual_review',
   ]);
   assert.equal(await state.repository.notificationOutbox.get(historical.path, 'stripe_terminal'), null);
-  assert.deepEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
+  assert.partialDeepStrictEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 });
 });
 
 test('reconciliation continues after Queue failure and preserves the failed publication for recovery', async (context) => {
@@ -71,12 +72,64 @@ test('Stripe recovery drains at most twenty checkouts per pass', async (context)
   const sessionIds = Array.from({ length: 21 }, (_, index) => `cs_${100 + index}`);
   await addManualNotifications(state, sessionIds);
   const env = { COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue };
-  assert.deepEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0 });
+  assert.deepEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), {
+    attempted: 20, completed: 20, deferred: 0, skipped: 0, failed: 0,
+    inspected: 20, pages: 3, stopReason: 'item-limit', hasMore: true, oldestDueAgeMs: 0,
+  });
   assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), sessionIds.slice(0, 20));
   const lastKey = commerceKeys.stripeCheckout(OUTBOX_DROP, sessionIds[20]);
   assert.equal((await state.repository.notificationOutbox.get(lastKey.path, 'stripe_terminal'))?.attemptCount, 0);
-  assert.deepEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
+  assert.partialDeepStrictEqual(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, { nowMs: () => OUTBOX_NOW }), { attempted: 1, completed: 1, deferred: 0, skipped: 0, failed: 0 });
   assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), sessionIds);
+});
+
+test('Stripe notification keysets preserve due-time ties and use the existing index', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { create: false });
+  await addManualNotifications(state, ['cs_100', 'cs_101', 'cs_102', 'cs_103']);
+  for (const [sessionId, due] of [['cs_100', OUTBOX_NOW - 1], ['cs_103', OUTBOX_NOW + 1]] as const) {
+    state.harness.database.prepare('UPDATE commerce_notification_outbox SET next_attempt_at_ms = ?, revision = revision + 1 WHERE parent_path = ?')
+      .run(due, commerceKeys.stripeCheckout(OUTBOX_DROP, sessionId).path);
+  }
+  const first = await state.repository.queryDueStripeTerminalNotifications(OUTBOX_NOW, 2);
+  assert.deepEqual(first.candidates.map(({ key, nextAttemptAtMs }) => [key.documentId, nextAttemptAtMs]), [
+    ['cs_100', OUTBOX_NOW - 1], ['cs_101', OUTBOX_NOW],
+  ]);
+  assert.equal(first.hasMore, true);
+  const startAfter = { family: 'stripe_terminal' as const, parentPath: first.candidates[1].key.path, nextAttemptAtMs: OUTBOX_NOW };
+  const next = await state.repository.queryDueStripeTerminalNotifications(OUTBOX_NOW, 2, startAfter);
+  assert.deepEqual(next.candidates.map(({ key }) => key.documentId), ['cs_102']);
+  assert.equal(next.hasMore, false);
+  const query = dueStripeTerminalNotificationsQuery({ dueAtMs: OUTBOX_NOW, limit: 3, startAfter });
+  const plan = JSON.stringify(state.harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings));
+  assert.match(plan, /SEARCH due USING (?:COVERING )?INDEX commerce_notification_outbox_stripe_due_at/);
+  assert.doesNotMatch(plan, /TEMP B-TREE/);
+  for (const nextAttemptAtMs of [-1, 1.5, NaN, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(state.repository.queryDueStripeTerminalNotifications(OUTBOX_NOW, 2, { ...startAfter, nextAttemptAtMs }),
+      { code: 'invalid-argument' });
+  }
+  await assert.rejects(state.repository.queryDueStripeTerminalNotifications(OUTBOX_NOW, 2, { ...startAfter, family: 'ready' }),
+    { code: 'invalid-argument' });
+});
+
+test('Stripe notification pages keep the original due cutoff while publication advances time', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal', { create: false });
+  const sessionIds = Array.from({ length: 10 }, (_, index) => `cs_${100 + index}`);
+  await addManualNotifications(state, sessionIds);
+  const future = commerceKeys.stripeCheckout(OUTBOX_DROP, sessionIds[9]);
+  state.harness.database.prepare('UPDATE commerce_notification_outbox SET next_attempt_at_ms = ?, revision = revision + 1 WHERE parent_path = ?')
+    .run(OUTBOX_NOW + 1, future.path);
+  const result = await reconcilePendingStripeTerminalNotifications({
+    COMMERCE_DB: state.harness.db,
+    NOTIFICATION_EMAIL_QUEUE: { sendBatch: async (messages) => {
+      state.setTime(OUTBOX_NOW + 1000);
+      return state.queue.sendBatch(messages);
+    } },
+  }, new AbortController().signal, { nowMs: state.nowMs });
+  assert.equal(result.completed, 9);
+  assert.equal(result.pages, 2);
+  assert.equal(result.hasMore, false);
+  assert.deepEqual(state.sent.flat().map((job) => job.context.sessionId), sessionIds.slice(0, 9));
+  assert.equal((await state.repository.notificationOutbox.get(future.path, 'stripe_terminal'))?.attemptCount, 0);
 });
 
 test('Stripe recovery finalizes an accepted enqueue before cancellation stops later checkouts', async (context) => {
@@ -105,6 +158,42 @@ test('Stripe recovery finalizes an accepted enqueue before cancellation stops la
   assert.equal(second?.state, 'pending');
   assert.equal(second?.attemptCount, 0);
 });
+
+for (const discovery of ['empty', 'candidate', 'failure'] as const) {
+  test(`Stripe recovery awaits initial ${discovery} discovery after cancellation`, async (context) => {
+    const state = await notificationFixture(context, 'stripe_terminal', { create: discovery === 'candidate' });
+    const controller = new AbortController();
+    const cancellation = new Error('cancelled during discovery');
+    const queryFailure = new Error('discovery failed');
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    context.after(() => release.resolve());
+    const query = D1CommerceRepository.prototype.queryDueStripeTerminalNotifications;
+    context.mock.method(D1CommerceRepository.prototype, 'queryDueStripeTerminalNotifications', async function (
+      this: D1CommerceRepository, ...args: Parameters<typeof query>
+    ) {
+      const page = await query.apply(this, args);
+      started.resolve();
+      await release.promise;
+      if (discovery === 'failure') throw queryFailure;
+      return page;
+    });
+    const pass = reconcilePendingStripeTerminalNotifications({
+      COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue,
+    }, controller.signal, { nowMs: state.nowMs });
+    let settled = false;
+    void pass.then(() => { settled = true; }, () => { settled = true; });
+    await started.promise;
+    controller.abort(cancellation);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    release.resolve();
+    if (discovery === 'empty') assert.equal((await pass).attempted, 0);
+    else await assert.rejects(pass, (error: unknown) => discovery === 'failure' ? error === queryFailure
+      : error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === cancellation);
+    assert.equal(state.sent.length, 0);
+  });
+}
 
 for (const terminalState of ['queued', 'failed'] as const) {
   test(`Stripe recovery reports concurrent ${terminalState} state after exhausted claim races`, async (context) => {
@@ -142,7 +231,7 @@ for (const terminalState of ['queued', 'failed'] as const) {
       }
       return updated;
     });
-    assert.deepEqual(await reconcilePendingStripeTerminalNotifications({
+    assert.partialDeepStrictEqual(await reconcilePendingStripeTerminalNotifications({
       COMMERCE_DB: state.harness.db, NOTIFICATION_EMAIL_QUEUE: state.queue,
     }, new AbortController().signal, { nowMs: state.nowMs }), {
       attempted: 1, completed: terminalState === 'queued' ? 1 : 0,
