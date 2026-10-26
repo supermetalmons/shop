@@ -183,7 +183,7 @@
     },
     {
       "name": "0046_frozen_commerce_metadata_cleanup.sql",
-      "checksum": "2c5999671db443f008a3dd5b206fe9b05ed41e9a6978df74cd365c2f587199e9"
+      "checksum": "710bec59b8b475a3fc676139cd23381d3e64c05451e001e4404fd9fdd5b58ce7"
     }
   ],
   "checkpoints": {

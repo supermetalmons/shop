@@ -138,7 +138,14 @@ SELECT 1, NOT EXISTS (
     OR outbox.parent_path <> 'drops/' || outbox.drop_id || '/deliveryOrders/' || document.document_id
     OR document.document_id = '' OR document.document_id GLOB '*[^!-~]*' OR instr(document.document_id, '/') > 0
     OR outbox.drop_id = '' OR outbox.drop_id GLOB '*[^!-~]*' OR instr(outbox.drop_id, '/') > 0
-    OR NOT (typeof(outbox.generation) = 'text' AND length(outbox.generation) = 36 AND lower(outbox.generation) GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-4[0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
+    OR NOT (typeof(outbox.generation) = 'text' AND length(outbox.generation) = 36
+      AND length(CAST(outbox.generation AS BLOB)) = 36
+      AND substr(outbox.generation, 9, 1) = '-' AND substr(outbox.generation, 14, 1) = '-'
+      AND substr(outbox.generation, 19, 1) = '-' AND substr(outbox.generation, 24, 1) = '-'
+      AND length(replace(outbox.generation, '-', '')) = 32
+      AND lower(replace(outbox.generation, '-', '')) NOT GLOB '*[^0-9a-f]*'
+      AND substr(outbox.generation, 15, 1) GLOB '4'
+      AND lower(substr(outbox.generation, 20, 1)) GLOB '[89ab]')
 );
 
 INSERT INTO commerce_frozen_metadata_cleanup_guard (allowed, complete)
@@ -151,8 +158,22 @@ SELECT 1, NOT EXISTS (
       CASE WHEN outbox.family = 'stripe_terminal' THEN 'stripeCheckouts/' ELSE 'deliveryOrders/' END || document.document_id
     OR document.document_id = '' OR instr(document.document_id, '/') > 0
     OR outbox.drop_id GLOB '*[^a-z0-9_-]*' OR substr(outbox.drop_id, 1, 1) NOT GLOB '[a-z0-9]'
-    OR NOT (typeof(outbox.generation) = 'text' AND length(outbox.generation) = 36 AND lower(outbox.generation) GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
-    OR (outbox.claim_id IS NOT NULL AND NOT (typeof(outbox.claim_id) = 'text' AND length(outbox.claim_id) = 36 AND lower(outbox.claim_id) GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'))
+    OR NOT (typeof(outbox.generation) = 'text' AND length(outbox.generation) = 36
+      AND length(CAST(outbox.generation AS BLOB)) = 36
+      AND substr(outbox.generation, 9, 1) = '-' AND substr(outbox.generation, 14, 1) = '-'
+      AND substr(outbox.generation, 19, 1) = '-' AND substr(outbox.generation, 24, 1) = '-'
+      AND length(replace(outbox.generation, '-', '')) = 32
+      AND lower(replace(outbox.generation, '-', '')) NOT GLOB '*[^0-9a-f]*'
+      AND substr(outbox.generation, 15, 1) GLOB '[1-8]'
+      AND lower(substr(outbox.generation, 20, 1)) GLOB '[89ab]')
+    OR (outbox.claim_id IS NOT NULL AND NOT (typeof(outbox.claim_id) = 'text' AND length(outbox.claim_id) = 36
+      AND length(CAST(outbox.claim_id AS BLOB)) = 36
+      AND substr(outbox.claim_id, 9, 1) = '-' AND substr(outbox.claim_id, 14, 1) = '-'
+      AND substr(outbox.claim_id, 19, 1) = '-' AND substr(outbox.claim_id, 24, 1) = '-'
+      AND length(replace(outbox.claim_id, '-', '')) = 32
+      AND lower(replace(outbox.claim_id, '-', '')) NOT GLOB '*[^0-9a-f]*'
+      AND substr(outbox.claim_id, 15, 1) GLOB '[1-8]'
+      AND lower(substr(outbox.claim_id, 20, 1)) GLOB '[89ab]'))
     OR (outbox.state IN ('queued', 'cancelled') AND outbox.claim_id IS NOT NULL)
     OR (outbox.state = 'pending' AND outbox.claim_expires_at_ms IS NOT NULL
       AND outbox.next_attempt_at_ms IS NOT outbox.claim_expires_at_ms)
@@ -173,7 +194,14 @@ SELECT 1, NOT EXISTS (
         WHEN outbox.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'buyer_order_received' END ,
       CASE WHEN outbox.family = 'shipped' THEN 'buyer_order_shipped'
         WHEN outbox.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'shipper_ready_to_ship' END )
-    OR NOT (typeof(json_extract(entry.value, '$.jobId')) = 'text' AND length(json_extract(entry.value, '$.jobId')) = 36 AND lower(json_extract(entry.value, '$.jobId')) GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[1-8][0-9a-f][0-9a-f][0-9a-f]-[89ab][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')
+    OR NOT (typeof(json_extract(entry.value, '$.jobId')) = 'text' AND length(json_extract(entry.value, '$.jobId')) = 36
+      AND length(CAST(json_extract(entry.value, '$.jobId') AS BLOB)) = 36
+      AND substr(json_extract(entry.value, '$.jobId'), 9, 1) = '-' AND substr(json_extract(entry.value, '$.jobId'), 14, 1) = '-'
+      AND substr(json_extract(entry.value, '$.jobId'), 19, 1) = '-' AND substr(json_extract(entry.value, '$.jobId'), 24, 1) = '-'
+      AND length(replace(json_extract(entry.value, '$.jobId'), '-', '')) = 32
+      AND lower(replace(json_extract(entry.value, '$.jobId'), '-', '')) NOT GLOB '*[^0-9a-f]*'
+      AND substr(json_extract(entry.value, '$.jobId'), 15, 1) GLOB '[1-8]'
+      AND lower(substr(json_extract(entry.value, '$.jobId'), 20, 1)) GLOB '[89ab]')
     OR json_type(entry.value, '$.idempotencyKey') IS NOT 'text' OR length(json_extract(entry.value, '$.idempotencyKey')) NOT BETWEEN 1 AND 256
     OR json_extract(entry.value, '$.idempotencyKey') GLOB '*[^!-~]*'
     OR json_type(entry.value, '$.state') IS NOT 'text' OR json_extract(entry.value, '$.state') NOT IN ('pending', 'queued', 'failed')

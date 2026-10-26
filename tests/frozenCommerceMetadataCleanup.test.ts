@@ -24,6 +24,13 @@ const notificationFields = [...LEGACY_NOTIFICATION_FIELDS];
 const packFields = [...LEGACY_PACK_STATUS_PROJECTION_FIELDS];
 const checkoutFields = [...STRIPE_CHECKOUT_STATE_FIELDS];
 
+test('cleanup SQL keeps LIKE and GLOB patterns within the D1 50-byte limit', () => {
+  const patterns = [...cleanup.sql.matchAll(/\b(?:LIKE|GLOB)\s+'((?:''|[^'])*)'/g)];
+  assert.ok(patterns.length > 0);
+  assert.equal(patterns.length, [...cleanup.sql.matchAll(/\b(?:LIKE|GLOB)\b/g)].length);
+  for (const [, pattern] of patterns) assert.ok(Buffer.byteLength(pattern.replaceAll("''", "'")) <= 50, pattern);
+});
+
 function read(database: DatabaseSync, sql: string) {
   return database.prepare(sql).all().map((row) => ({ ...row }));
 }
@@ -134,6 +141,40 @@ function fixture(context: test.TestContext, pending = false) {
       jobs: [{ subject: 'Frozen Stripe payload', text: 'Superseded payload' }] } });
   pause(database);
   return harness;
+}
+
+for (const target of ['pack-generation', 'notification-generation', 'notification-claim', 'notification-job'] as const) {
+  test(`cleanup ${target} UUID guard accepts supported versions and rejects malformed identities`, (context) => {
+    const { database } = fixture(context, true);
+    const statement = unstable_splitSqlQuery(cleanup.sql).find((sql) => sql.includes(target === 'pack-generation'
+      ? 'SELECT 1 FROM commerce_pack_status_outbox AS outbox LEFT JOIN'
+      : target === 'notification-job' ? 'SELECT 1 FROM commerce_notification_outbox AS outbox, json_each'
+      : 'SELECT 1 FROM commerce_notification_outbox AS outbox LEFT JOIN'))!;
+    const query = database.prepare(statement.replace(/^INSERT INTO commerce_frozen_metadata_cleanup_guard \(allowed, complete\)\s*SELECT 1, /,
+      'SELECT ') + ' AS valid');
+    const candidates: Array<[string, boolean]> = [];
+    for (let version = 1; version <= 8; version++) for (const variant of ['8', '9', 'a', 'b', 'A', 'B']) {
+      candidates.push([`abcdefab-cdef-${version}abc-${variant}def-abcdefabcdef`, target !== 'pack-generation' || version === 4]);
+    }
+    candidates.push(['ABCDEFAB-CDEF-4ABC-BDEF-ABCDEFABCDEF', true]);
+    for (const invalid of ['', id.slice(1), `${id}0`, id.replace('-', ''),
+      '0000000-00000-4000-8000-000000000046', '000-0000-0000-4000-8000-000000000046',
+      id.replace('-4000-', '-0000-'), id.replace('-4000-', '-9000-'), id.replace('-8000-', '-7000-'),
+      id.replace('-8000-', '-c000-'), `${id.slice(0, -1)}g`, ` ${id.slice(1)}`, `${id.slice(0, -1)} `,
+      `${id}\0`, `${id.slice(0, -1)}\0`, `α${id.slice(1)}`]) candidates.push([invalid, false]);
+    const table = target === 'pack-generation' ? 'commerce_pack_status_outbox' : 'commerce_notification_outbox';
+    withoutTriggers(database, table, () => {
+      for (const [value, expected] of candidates) {
+        database.exec('PRAGMA ignore_check_constraints = ON');
+        try {
+          if (target === 'pack-generation') database.prepare('UPDATE commerce_pack_status_outbox SET generation = ?').run(value);
+          else if (target === 'notification-job') database.prepare("UPDATE commerce_notification_outbox SET entries_json = json_set(entries_json, '$[0].jobId', ?) WHERE family = 'ready'").run(value);
+          else database.prepare(`UPDATE commerce_notification_outbox SET ${target === 'notification-generation' ? 'generation' : 'claim_id'} = ? WHERE family = 'ready'`).run(value);
+        } finally { database.exec('PRAGMA ignore_check_constraints = OFF'); }
+        assert.equal(query.get()!.valid, expected ? 1 : 0, `${target}: ${JSON.stringify(value)}`);
+      }
+    });
+  });
 }
 
 const changedTriggers = new Set(['commerce_notification_legacy_insert_fence', 'commerce_notification_legacy_update_fence',
