@@ -35,15 +35,3 @@ export function uniqueAssetGroupingCollectionMint(asset: DasAssetCollectionSourc
   const collectionMints = assetGroupingCollectionMints(asset);
   return collectionMints.length === 1 ? collectionMints[0] : null;
 }
-
-export function assetGroupingAllowsTreeVerifiedCollectionMatch(
-  asset: DasAssetCollectionSource | null | undefined,
-  expectedCollectionMint: string,
-): boolean {
-  const expected = String(expectedCollectionMint || '').trim();
-  if (!expected) return false;
-
-  const collectionMints = assetGroupingCollectionMints(asset);
-  if (!collectionMints.length) return true;
-  return collectionMints.includes(expected);
-}

@@ -80,10 +80,9 @@ test('receipt claim pending contract validates an opaque UUID and exact fields',
   ]) assert.equal(parseStripeReceiptClaimPendingResponse(invalid), null);
 });
 
-test('receipt claim start and status use short HTTP deadlines while the legacy route stays compatible', () => {
+test('receipt claim start and status use short HTTP deadlines', () => {
   assert.equal(profileApiTimeoutMs(STRIPE_RECEIPT_CLAIM_START_PATH), 20_000);
   assert.equal(profileApiTimeoutMs(STRIPE_RECEIPT_CLAIM_STATUS_PATH), 20_000);
-  assert.equal(profileApiTimeoutMs('/receipts/stripe/claim'), 190_000);
 });
 
 test('receipt claim returns an already complete result without polling', async () => {

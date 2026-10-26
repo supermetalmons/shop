@@ -73,10 +73,7 @@ import {
 
 export * from './commerceRepositoryTypes.js';
 export { commerceKeyFromPath, commerceKeys } from './commerceDocumentCodec.js';
-export {
-  d1RetryCount,
-  loadCommerceAuthorityControl,
-} from './commerceRepositorySupport.js';
+export { loadCommerceAuthorityControl } from './commerceRepositorySupport.js';
 export { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 
 export class D1CommerceRepository {

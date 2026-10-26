@@ -52,8 +52,9 @@ deployment and migration records remain intact.
 Status recorded on 2026-10-09: mainnet setup is finalized, inventory is initialized,
 and the API and frontend are published with sales closed. Both configs remain
 unstarted with zero minted packs, and all 176 preorder NFTs retain their original
-identities and metadata. The live [mainnet page](https://mons.shop/mi_note_cards)
-shows **Soon / Notify Me** without purchase controls.
+identities and metadata. At that checkpoint, the
+[mainnet page](https://mons.shop/mi_note_cards) showed **Soon / Notify Me** without
+purchase controls; the launch recorded above subsequently removed that hold.
 
 | Phase | Verified state |
 | --- | --- |
@@ -140,7 +141,8 @@ with depth 14, buffer 64, and canopy 0. Its TreeConfig is
 `AmGxiZNLys6jQDUQsxumnuVmjzD6MA7H6MAh5PXbLvgz` is active and includes both
 configs and the delivery receiver.
 
-Use the [mainnet deployment runbook](../../scripts/docs/mi_note_drop_deployment.md#mainnet-setup-with-sales-closed).
+Use the [current deployment guide](../../scripts/docs/mi_note_drop_deployment.md#existing-deployments)
+for inspection and recovery.
 The initial deployment retained an explicit **Soon / Notify Me** route hold.
 The subsequent launch removed that hold, enabled mint configuration A, and
 published the approved physical customs settings. The original deployment

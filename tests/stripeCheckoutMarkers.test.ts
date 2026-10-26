@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
-  completedStripeCheckoutMarkerKeyForAuthSubject,
+
   completedStripeCheckoutMarkerSummaryForAuthSubject,
   forgetCompletedStripeCheckoutMarkersForAuthSubject,
   isStripeCheckoutMintProgressSettled,
@@ -127,14 +127,14 @@ test('completeStripeCheckoutMarker only completes a matching local checkout mark
     storage,
   );
   assert.equal(wrongUid.completed, false);
-  assert.equal(Boolean(completedStripeCheckoutMarkerKeyForAuthSubject('anon_uid_123', wrongUid.markers)), false);
+  assert.equal(Boolean(completedStripeCheckoutMarkerSummaryForAuthSubject('anon_uid_123', wrongUid.markers).markerKey), false);
 
   const completed = completeStripeCheckoutMarker(
     { sessionId: 'cs_test_123', authSubject: 'anon_uid_123', completedAt: 300 },
     storage,
   );
   assert.equal(completed.completed, true);
-  assert.equal(completedStripeCheckoutMarkerKeyForAuthSubject('anon_uid_123', completed.markers), 'cs_test_123');
+  assert.equal(completedStripeCheckoutMarkerSummaryForAuthSubject('anon_uid_123', completed.markers).markerKey, 'cs_test_123');
   assert.deepEqual(stripeCheckoutMintProgressForSession('anon_uid_123', 'cs_test_123', completed.markers), {
     dropId: 'little_swag_hoodies_devnet',
     quantity: 3,
@@ -208,9 +208,9 @@ test('completed Stripe checkout gate is scoped to the current auth subject', () 
     storage,
   );
 
-  assert.equal(Boolean(completedStripeCheckoutMarkerKeyForAuthSubject('anon_uid_123', markers)), true);
-  assert.equal(Boolean(completedStripeCheckoutMarkerKeyForAuthSubject('other_uid', markers)), false);
-  assert.equal(Boolean(completedStripeCheckoutMarkerKeyForAuthSubject(null, markers)), false);
+  assert.equal(Boolean(completedStripeCheckoutMarkerSummaryForAuthSubject('anon_uid_123', markers).markerKey), true);
+  assert.equal(Boolean(completedStripeCheckoutMarkerSummaryForAuthSubject('other_uid', markers).markerKey), false);
+  assert.equal(Boolean(completedStripeCheckoutMarkerSummaryForAuthSubject(null, markers).markerKey), false);
 });
 
 test('forgetCompletedStripeCheckoutMarkersForAuthSubject removes only wallet-resolved checkout sessions', () => {
@@ -262,6 +262,6 @@ test('forgetCompletedStripeCheckoutMarkersForAuthSubject removes only wallet-res
 
   assert.equal(result.removed, true);
   assert.deepEqual(result.removedSessionIds, ['cs_test_resolved']);
-  assert.equal(completedStripeCheckoutMarkerKeyForAuthSubject('anon_uid_123', result.markers), 'cs_test_waiting');
-  assert.equal(completedStripeCheckoutMarkerKeyForAuthSubject('other_uid', result.markers), 'cs_test_other_uid');
+  assert.equal(completedStripeCheckoutMarkerSummaryForAuthSubject('anon_uid_123', result.markers).markerKey, 'cs_test_waiting');
+  assert.equal(completedStripeCheckoutMarkerSummaryForAuthSubject('other_uid', result.markers).markerKey, 'cs_test_other_uid');
 });

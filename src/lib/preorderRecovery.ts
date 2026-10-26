@@ -13,7 +13,6 @@ export type PreorderRecoveryRecord = {
 };
 
 const PREFIX = 'mons:preorder-recovery:v4:';
-const LEGACY_PREFIXES = ['mons:preorder-recovery:v3:', 'mons:preorder-recovery:v2:', 'mons:preorder-recovery:v1:'];
 const listeners = new Set<() => void>();
 const fallback = new Map<string, string>();
 
@@ -29,14 +28,14 @@ function keyFor(order: PreorderOrder): string {
 function parse(value: string | null): PreorderRecoveryRecord | null {
   try {
     const parsed = JSON.parse(value || 'null');
-    if (!parsed || !parsed.order || !Array.isArray(parsed.resolvedAssetIds) || typeof parsed.failureNotified !== 'boolean') return null;
+    if (!parsed || parsed.inventoryResolutionVersion !== 4 || !parsed.order ||
+      !Array.isArray(parsed.resolvedAssetIds) || typeof parsed.failureNotified !== 'boolean') return null;
     const order = parsePreorderOrder(parsed.order, parsed.order.preorderId);
     if (order.confirmedSlot == null) return null;
-    const resolvedAssetIds: string[] = [3, 4].includes(parsed.inventoryResolutionVersion)
-      ? parsed.resolvedAssetIds.filter((id: unknown) => order.assets.some(asset => asset.address === id)) : [];
+    const resolvedAssetIds: string[] = parsed.resolvedAssetIds.filter((id: unknown) => order.assets.some(asset => asset.address === id));
     const ownedResolvedAssetIds = Array.isArray(parsed.ownedResolvedAssetIds)
       ? parsed.ownedResolvedAssetIds.filter((id: unknown) => resolvedAssetIds.includes(id as string)) : [];
-    const convertedAssetIds = parsed.inventoryResolutionVersion === 4 && Array.isArray(parsed.convertedAssetIds)
+    const convertedAssetIds = Array.isArray(parsed.convertedAssetIds)
       ? order.assets.filter(asset => parsed.convertedAssetIds.includes(asset.address)).map(asset => asset.address) : [];
     const inventoryResolutionRevisions = Object.fromEntries(order.assets.flatMap(asset => {
       const revision = parsed.inventoryResolutionRevisions?.[asset.address];
@@ -53,10 +52,6 @@ function parse(value: string | null): PreorderRecoveryRecord | null {
 
 function localValue(key: string): string | null {
   try { return fallback.get(key) ?? storage(false)?.getItem(key) ?? null; } catch { return fallback.get(key) ?? null; }
-}
-
-function sourceKeys(key: string): string[] {
-  return [key, ...LEGACY_PREFIXES.map(prefix => `${prefix}${key.slice(PREFIX.length)}`)];
 }
 
 function mergeRecoveryRecords(local: PreorderRecoveryRecord | null, shared: PreorderRecoveryRecord | null): PreorderRecoveryRecord | null {
@@ -103,27 +98,19 @@ function recordForKey(value: string | null, key: string): PreorderRecoveryRecord
 
 function recordSource(key: string): { record: PreorderRecoveryRecord | null; local: boolean; needsWrite: boolean } {
   const shared = storage();
-  for (const source of sourceKeys(key)) {
-    const local = localValue(source);
-    if (local !== null) {
-      const previous = recordForKey(local, key);
-      const record = source === key ? mergeRecoveryRecords(previous, recordForKey(shared?.getItem(source) ?? null, key)) : previous;
-      return { record, local: true, needsWrite: source !== key || JSON.stringify(record) !== JSON.stringify(previous) };
-    }
-    const value = shared?.getItem(source) ?? null;
-    if (value !== null) return { record: recordForKey(value, key), local: false, needsWrite: source !== key };
+  const local = localValue(key);
+  if (local !== null) {
+    const previous = recordForKey(local, key);
+    const record = mergeRecoveryRecords(previous, recordForKey(shared?.getItem(key) ?? null, key));
+    return { record, local: true, needsWrite: JSON.stringify(record) !== JSON.stringify(previous) };
   }
-  return { record: null, local: false, needsWrite: false };
+  return { record: recordForKey(shared?.getItem(key) ?? null, key), local: false, needsWrite: false };
 }
 
 function safeRecordSource(key: string): ReturnType<typeof recordSource> {
   try { return recordSource(key); }
   catch {
-    for (const source of sourceKeys(key)) {
-      const value = localValue(source);
-      if (value !== null) return { record: recordForKey(value, key), local: true, needsWrite: source !== key };
-    }
-    return { record: null, local: true, needsWrite: false };
+    return { record: recordForKey(localValue(key), key), local: true, needsWrite: false };
   }
 }
 
@@ -185,15 +172,11 @@ export function listPreorderRecoveries(owner?: string): PreorderRecoveryRecord[]
     for (const target of [storage(), storage(false)]) {
       if (target) for (let index = 0; index < target.length; index += 1) {
         const key = target.key(index);
-        if (key && [PREFIX, ...LEGACY_PREFIXES].some(prefix => key.startsWith(prefix))) keys.add(key);
+        if (key?.startsWith(PREFIX)) keys.add(key);
       }
     }
   } catch {}
-  const canonicalKeys = new Set([...keys].map(key => {
-    const legacyPrefix = LEGACY_PREFIXES.find(prefix => key.startsWith(prefix));
-    return legacyPrefix ? `${PREFIX}${key.slice(legacyPrefix.length)}` : key;
-  }));
-  return [...canonicalKeys].sort().flatMap(key => {
+  return [...keys].sort().flatMap(key => {
     const value = read(key);
     return value && (!owner || value.order.buyer === owner) && key === keyFor(value.order) ? [value] : [];
   });
@@ -213,7 +196,7 @@ export async function hydratePreorderRecoveries(owner: string, signal?: AbortSig
 export function subscribePreorderRecoveries(listener: () => void): () => void {
   listeners.add(listener);
   const changed = (event: StorageEvent) => {
-    if (event.key === null || [PREFIX, ...LEGACY_PREFIXES].some(prefix => event.key!.startsWith(prefix))) listener();
+    if (event.key === null || event.key.startsWith(PREFIX)) listener();
   };
   window.addEventListener('storage', changed);
   return () => { listeners.delete(listener); window.removeEventListener('storage', changed); };

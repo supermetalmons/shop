@@ -30,7 +30,7 @@ export function stripeCheckoutDocumentRawData(input: {
     throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout state.');
   }
   if (input.reuseRawData === 'unchanged' && input.previousRawData) return input.previousRawData;
-  const metadata = stripeCheckoutStateMetadata(input.data, input.previousRawData ?? {});
+  const metadata = stripeCheckoutStateMetadata(input.data);
   if (input.reuseRawData === 'if-equal' && input.previousRawData &&
     JSON.stringify(metadata) === JSON.stringify(input.previousRawData)) return input.previousRawData;
   return metadata;

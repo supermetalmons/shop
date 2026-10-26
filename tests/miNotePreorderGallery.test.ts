@@ -6,6 +6,7 @@ import { getPreorderConfig } from '../shared/preorders.ts';
 import type { PreorderCheckout } from '../src/hooks/usePreorderCheckout.ts';
 import type { createPreorderApi } from '../src/lib/preorderApi.ts';
 import { ProfileApiError } from '../src/api/transport.ts';
+import { discardLegacyBrowserState } from '../src/lib/discardLegacyBrowserState.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -1030,12 +1031,14 @@ test('test wallets can request admin Solana sign-in and partial ownership remain
   assert.equal(view.getAllByRole('img').length, 10);
 });
 
-test('legacy request-only recovery restores card selection after confirming no server order exists', async () => {
+test('discarded identity-less requests do not restore gallery selections or block fresh picks', async () => {
   const initial = checkout();
   const buyer = initial.config.collection;
   const key = `mons:preorder:v1:${initial.config.cluster}:${initial.config.collection}:${buyer}`;
   const saved = { requestId: 'legacy-request', cardIds: [1] };
   window.localStorage.setItem(key, JSON.stringify(saved));
+  discardLegacyBrowserState();
+  assert.equal(window.localStorage.getItem(key), null);
   let finishStatus!: (value: { order: null }) => void;
   const forbidden = async () => { throw new Error('Recovery must not prepare, sign, submit, or cancel'); };
   const api: ReturnType<typeof createPreorderApi> = {
@@ -1053,10 +1056,15 @@ test('legacy request-only recovery restores card selection after confirming no s
   }
   const view = render(createElement(Harness));
   const card = await view.findByRole('button', { name: /Select preorder #1:/ }) as HTMLButtonElement;
-  assert.equal(card.disabled, true);
-  assert.deepEqual(current.pending, saved);
+  assert.equal(card.disabled, false);
+  assert.equal(current.pending, null);
+  assert.equal(card.getAttribute('aria-pressed'), 'false');
+  assert.equal(view.queryByLabelText('1 cards selected'), null);
+  assert.equal(view.queryByRole('button', { name: 'Preorder for 0.25 SOL' }), null);
   await act(async () => { finishStatus({ order: null }); });
-  await waitFor(() => assert.equal(card.disabled, false));
+  await waitFor(() => assert.equal(current.recoveryReady, true));
+  assert.equal(card.disabled, false);
+  assert.equal(card.getAttribute('aria-pressed'), 'false');
   assert.equal(current.pending, null);
   assert.equal(window.localStorage.getItem(key), null);
   assert.equal(Boolean(view.queryByText('Cancel your previous preorder to start with a verified Ethereum wallet.')), false);

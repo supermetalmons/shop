@@ -19,8 +19,8 @@ import {
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
+import { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER } from '../../../../shared/contracts.ts';
 import {
-  ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   adminIrlRedeemPrepareTestHooks,
   handleAdminIrlRedeemPrepare,

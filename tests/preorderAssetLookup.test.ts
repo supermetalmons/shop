@@ -9,7 +9,8 @@ import {
 } from '../cloud/workers/api/src/preorderStore.ts';
 import { requestedPreorderInventoryQuery } from '../cloud/workers/api/src/preorderInventoryQueries.ts';
 import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
-import { checkCurrentCommerceSchema } from '../scripts/shared/currentCommerceSchema.ts';
+import { readCommerceSchemaManifest, selectCommerceSchemaCheckpoint } from '../scripts/shared/commerceSchemaManifest.ts';
+import { captureD1SchemaObjects } from '../scripts/shared/d1SchemaManifest.ts';
 import { checkCommerceD1 } from '../scripts/ops/checkCommerceD1.ts';
 import { getPreorderConfig } from '../shared/preorders.ts';
 
@@ -41,9 +42,9 @@ function lookupRows(database: DatabaseSync) {
     FROM commerce_preorder_asset_lookup ORDER BY order_id, asset_ordinal`).all().map(row => ({ ...row }));
 }
 
-function registerMigrations(database: DatabaseSync): void {
+function registerMigrations(database: DatabaseSync, through = migrations.at(-1)!.name): void {
   database.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
-  for (const [index, entry] of migrations.entries()) {
+  for (const [index, entry] of migrations.filter(({ name }) => name <= through).entries()) {
     database.prepare('INSERT INTO d1_migrations VALUES (?, ?)').run(index + 1, entry.name);
   }
 }
@@ -84,8 +85,13 @@ for (const split of [false, true]) {
       { order_id: 'order-005', asset_ordinal: 0, asset_address: 'asset-5' },
     ]);
     assert.deepEqual(h.database.prepare('PRAGMA foreign_key_check').all(), []);
-    registerMigrations(h.database);
-    checkCurrentCommerceSchema(sql => h.database.prepare(sql).all().map(row => ({ ...row })));
+    registerMigrations(h.database, migration.name);
+    const checkpoint = selectCommerceSchemaCheckpoint(readCommerceSchemaManifest(),
+      h.database.prepare('SELECT name FROM d1_migrations ORDER BY id').all().map(({ name }) => name));
+    assert.deepEqual(captureD1SchemaObjects(h.database).map(({ type, name, fingerprint }) => ({ type, name, fingerprint })),
+      checkpoint.objects);
+    assert.deepEqual(h.database.prepare('SELECT card_id FROM commerce_preorder_cards ORDER BY card_id').all().map(({ card_id }) => card_id),
+      checkpoint.preorderCardIds);
     await store.reserve(reservation(7, { buyer: 'old-writer' }));
     assert.deepEqual(lookupRows(h.database).at(-1), { order_id: 'order-007', asset_ordinal: 0, asset_address: 'asset-7' });
   });

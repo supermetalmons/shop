@@ -1150,9 +1150,6 @@ test('Admin IRL marker reuse is drafted before its D1-only publication step', as
         receiptTxs: [SIGNATURE],
         boxes: [box],
       }),
-      packStatusProjectionState: 'pending',
-      packStatusProjectionNextAttemptAtMs: 0,
-      packStatusProjectionFailureCount: 0,
     } as CommerceDocumentData,
   });
   await new D1CommerceRepository(harness.db).run(0, async (unit) => {

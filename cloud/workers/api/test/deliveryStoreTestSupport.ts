@@ -3,7 +3,7 @@ import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import type { CommerceRepositoryContext } from '../src/commerceTransactions.ts';
 import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { LEGACY_NOTIFICATION_FIELDS } from '../../../../shared/notificationOutbox.ts';
+import { LEGACY_NOTIFICATION_FIELDS } from '../../../../scripts/shared/frozenCommerceMetadata.ts';
 import { seedNotificationOutbox, type CommerceD1Harness, createCommerceD1Harness } from './commerceD1Harness.ts';
 
 export const OWNER = Keypair.generate().publicKey.toBase58();

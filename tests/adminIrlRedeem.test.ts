@@ -18,7 +18,6 @@ import {
   canAdminIrlRedeemCardReceipt,
   canAdminIrlRedeemSelection,
   removeHiddenAssetIds,
-  retainTransientHiddenAssetIdsPresentInInventory,
 } from '../src/lib/adminIrlRedeem.ts';
 
 const ADMIN_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
@@ -27,15 +26,6 @@ const IRL_REDEEM_WALLETS = [
   'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq',
 ];
 const SHIPPER_WITHOUT_IRL_REDEEM_ACCESS = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
-
-test('direct-card transient hiding clears absent receipts without changing persistent hidden assets', () => {
-  const transient = new Set(['receipt-present', 'receipt-gone']);
-  assert.deepEqual(
-    Array.from(retainTransientHiddenAssetIdsPresentInInventory(transient, ['receipt-present', 'unrelated'])),
-    ['receipt-present'],
-  );
-  assert.deepEqual(Array.from(transient), ['receipt-present', 'receipt-gone']);
-});
 
 test('claim completion unhides only the exact returned receipt asset ids', () => {
   const hidden = new Set(['receipt-a', 'receipt-b', 'pack-c']);

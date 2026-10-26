@@ -8,10 +8,10 @@ import {
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
-  d1RetryCount,
   type CommerceDocumentData,
   type CommerceDocumentKey,
 } from '../src/commerceRepository.ts';
+import { d1RetryCount } from '../src/commerceRepositorySupport.ts';
 import {
   type CommerceD1BatchObservation,
   type CommerceD1CallObservation,

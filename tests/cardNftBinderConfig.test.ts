@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DEPLOYMENT_DROPS, getReceiptPoolDeployment } from '../shared/deploymentRegistry.ts';
+import { DEPLOYMENT_DROPS, RECEIPT_POOL_DEPLOYMENTS, receiptPoolDeploymentKey } from '../shared/deploymentRegistry.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import { API_DROPS } from '../cloud/workers/api/src/dropConfig.ts';
 import {
@@ -34,7 +34,7 @@ test('card NFT binder deployments remain Stripe-only members of the shared recei
     assert.equal(config.priceSol, 1_000_000);
     assert.equal(config.discountPriceSol, 1_000_000);
     assert.equal(config.treasury, TREASURY);
-    const pool = getReceiptPoolDeployment(config.solanaCluster, config.receiptPoolId!);
+    const pool = RECEIPT_POOL_DEPLOYMENTS[receiptPoolDeploymentKey(config.solanaCluster, config.receiptPoolId!)];
     assert.ok(pool);
     assert.equal(config.collectionMint, pool.collectionMint);
     assert.equal(config.receiptsMerkleTree, pool.receiptsMerkleTree);

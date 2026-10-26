@@ -134,9 +134,9 @@ function projectionOutbox(state: PackStatusOutboxRecord['state']): PackStatusOut
   };
 }
 
-test('pack-status rebuild uses active table state instead of frozen legacy markers', () => {
+test('pack-status rebuild uses active table state and rejects frozen legacy markers', () => {
   const runtime = { dropId: 'card_nft_2', cluster: 'mainnet-beta' as const, itemsPerBox: 3, maxSupply: 100 };
-  const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
+  const parent = commerceDocument('delivery_order', '1', { status: 'ready_to_ship' });
   for (const state of ['completed', 'cancelled'] as const) {
     assert.doesNotThrow(() => rebuildPackStatusCounters(runtime, {
       assignments: [], deliveryOrders: [parent], packStatusOutboxes: [projectionOutbox(state)],
@@ -146,14 +146,18 @@ test('pack-status rebuild uses active table state instead of frozen legacy marke
   for (const state of ['pending', 'failed'] as const) {
     assert.throws(() => rebuildPackStatusCounters(runtime, {
       assignments: [],
-      deliveryOrders: [commerceDocument('delivery_order', '1', { packStatusProjectionState: 'completed' })],
+      deliveryOrders: [parent],
       packStatusOutboxes: [projectionOutbox(state)],
     }), /outbox to be settled/);
   }
+  assert.throws(() => rebuildPackStatusCounters(runtime, {
+    assignments: [], deliveryOrders: [commerceDocument('delivery_order', '1', { packStatusProjectionState: null })],
+    packStatusOutboxes: [projectionOutbox('completed')],
+  }), /Frozen pack-status metadata remains/);
 });
 
 test('pack-status snapshot reads table authority and rejects invalid controls or missing parents', () => {
-  const parent = commerceDocument('delivery_order', '1', { packStatusProjectionState: 'pending' });
+  const parent = commerceDocument('delivery_order', '1', { status: 'ready_to_ship' });
   const recovery = createDeliveryRecoveryRecord({ parentPath: parent.path, receiptRecoveryJson: null,
     nowMs: 1, generation: '00000000-0000-4000-8000-000000000030' });
   const { receipt_recovery_json: recoveryPayload, ...recoveryMetadata } = deliveryRecoveryRow(recovery);
@@ -173,15 +177,16 @@ test('pack-status snapshot reads table authority and rejects invalid controls or
   };
   const snapshot = readPackStatusCommerceSnapshot('card_nft_2', rows);
   assert.equal(snapshot.packStatusOutboxes[0].state, 'completed');
-  assert.equal(snapshot.deliveryOrders[0].data.packStatusProjectionState, 'pending');
+  assert.equal(snapshot.deliveryOrders[0].data.packStatusProjectionState, undefined);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
     ? [{ storage_mode: 'unknown' }] : rows(sql)), /requires active table storage/);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.includes("document_kind = 'delivery_order'")
     ? [] : rows(sql)), /parent is invalid/);
-  assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT * FROM commerce_pack_status_outbox')
-    ? [] : rows(sql)), /outbox is missing/);
+  assert.deepEqual(readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT * FROM commerce_pack_status_outbox')
+    ? [] : rows(sql)).packStatusOutboxes, []);
   assert.throws(() => rebuildPackStatusCounters({ dropId: 'card_nft_2', cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 100 },
-    { assignments: [], deliveryOrders: [parent], packStatusOutboxes: [] }), /outbox is missing/);
+    { assignments: [], deliveryOrders: [{ ...parent, data: { ...parent.data, packStatusProjectionState: 'pending' } }],
+      packStatusOutboxes: [] }), /Frozen pack-status metadata remains/);
   assert.throws(() => readPackStatusCommerceSnapshot('card_nft_2', (sql) => sql.startsWith('SELECT storage_mode')
     ? [{ storage_mode: 'legacy' }] : rows(sql)), /requires active table storage/);
 });
@@ -491,18 +496,15 @@ test('authoritative rebuild derives assignment and delivery counters from Commer
       commerceDocument('delivery_order', '1', {
         status: 'processing',
         items: [{ assetId: 'normal-box', kind: 'box' }],
-        packStatusProjectionState: 'completed',
       }),
       commerceDocument('delivery_order', '2', {
         status: 'ready_to_ship',
         source: 'admin_irl_redeem',
         items: [{ assetId: 'admin-receipt', kind: 'box' }],
-        packStatusProjectionState: 'completed',
       }),
       commerceDocument('delivery_order', '3', {
         status: 'ready_to_ship',
         items: [{ assetId: 'irl-box', kind: 'box' }],
-        packStatusProjectionState: 'completed',
       }),
     ],
   });

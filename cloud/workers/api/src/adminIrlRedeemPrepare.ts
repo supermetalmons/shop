@@ -99,7 +99,6 @@ import {
 } from './solanaTransaction.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
-export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
 
 const REQUEST_MAX_BYTES = 4096;
 const HANDLER_TIMEOUT_MS = 55_000;

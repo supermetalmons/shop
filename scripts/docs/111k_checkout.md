@@ -72,7 +72,7 @@ The backend persists the checkout/quote link before returning a signature and pe
 
 An open checkout refreshes promptly. After departure, the existing five-minute reconciliation schedule completes outstanding work; chain congestion, provider outages, and processing backlogs can take longer. No completion logic relies on unload handlers or the callback page.
 
-Apply the additive checkout commerce migration and deploy the backward-compatible API before enabling the frontend. Keep the existing deliberate maintenance controls. Disabling new checkout entry must not remove persisted attempts or stop normal reconciliation.
+Deploy the API before the frontend through the [Cloudflare deployment runbook](cloudflare_deployment.md), applying all pending migrations and required maintenance controls. Disabling new checkout entry must not remove persisted attempts or stop normal reconciliation.
 
 Unprepared checkout drafts expire after 24 hours. Expired drafts without a quote or submission attempt are deleted in bounded scheduled batches; their URLs then return not found. Prepared orders and submission attempts remain available for recovery. Anonymous creation has a separate rate limit from status polling. If another checkout already has an active submission for any of the same NFTs, Mons blocks preparation or another send and provides a link to resume the pending checkout.
 

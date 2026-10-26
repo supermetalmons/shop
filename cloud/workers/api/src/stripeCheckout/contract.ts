@@ -14,7 +14,6 @@ import {
 import {
   STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
-  STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CURRENCY,
   normalizeStripeCheckoutQuantity,
@@ -180,17 +179,6 @@ function lineItemUnitAmountCents(
   return null;
 }
 
-export function shouldProcessStripeCheckoutFulfillmentWrite(args: {
-  beforeStatus?: unknown;
-  afterStatus?: unknown;
-}): boolean {
-  const beforeStatus = normalizedString(args.beforeStatus);
-  return (
-    normalizedString(args.afterStatus) === STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING &&
-    (beforeStatus === STRIPE_CHECKOUT_STATUS.CREATED || beforeStatus === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED)
-  );
-}
-
 export function validateStripeCheckoutContract(args: {
   session: {
     mode?: unknown;
@@ -269,12 +257,6 @@ export function validateStripeCheckoutContract(args: {
   }
 
   return { quantity, currency: expectedCurrency, unitAmountCents };
-}
-
-export function validateStripeTestCheckoutContract(
-  args: Omit<Parameters<typeof validateStripeCheckoutContract>[0], 'expectedLivemode'>,
-): { ignored: true } | { quantity: number; currency: string; unitAmountCents: number } {
-  return validateStripeCheckoutContract({ ...args, expectedLivemode: false });
 }
 
 export function buildStripeOffchainAddressSnapshot(args: {

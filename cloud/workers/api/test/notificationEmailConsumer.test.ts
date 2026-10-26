@@ -11,12 +11,12 @@ import {
 } from '../src/notificationEmailConsumer.ts';
 import { processNotificationQueueMessage } from '../src/notificationEnqueue.ts';
 import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
-
-const {
-  default: worker,
+import {
   processBackgroundJobBatch,
   processStripeFulfillmentMessage,
-} = await loadApiWorkerIndex();
+} from '../src/workerBackgroundJobs.ts';
+
+const { default: worker } = await loadApiWorkerIndex();
 
 const JOB = createNotificationEmailJobV1({
   jobId: '123e4567-e89b-42d3-a456-426614174000',

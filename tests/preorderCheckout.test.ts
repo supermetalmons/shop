@@ -408,27 +408,14 @@ test('a late reservation after abandonment is recovered by the next preparation 
 });
 
 for (const ethereumAddress of [undefined, null]) {
-  test(`legacy request-only recovery clears ${ethereumAddress === null ? 'null' : 'missing'} Ethereum identity only after a successful empty status`, async () => {
+  test(`identity-less pending requests with ${ethereumAddress === null ? 'null' : 'missing'} Ethereum identity are ignored`, async () => {
     const { api, options } = runtime();
     const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-    const saved = { requestId: 'legacy-request', cardIds: [1], ...(ethereumAddress === null ? { ethereumAddress } : {}) };
-    window.localStorage.setItem(key, JSON.stringify(saved));
+    window.localStorage.setItem(key, JSON.stringify({ requestId: 'retired-request', cardIds: [1], ...(ethereumAddress === null ? { ethereumAddress } : {}) }));
     api.status = async () => { throw new Error('Offline'); };
     const { result } = renderHook(() => usePreorderCheckout(options, api));
     await waitFor(() => assert.match(result.current.error!, /keep checking/));
-    assert.deepEqual(result.current.pending, saved);
-    assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), saved);
-    assert.equal(result.current.recoveryReady, false);
-
-    let finishStatus!: (value: { order: null }) => void;
-    api.status = async () => new Promise((resolve) => { finishStatus = resolve; });
-    act(() => { window.dispatchEvent(new dom.window.Event('focus')); });
-    assert.deepEqual(result.current.pending, saved);
-    await act(async () => { finishStatus({ order: null }); });
     assert.equal(result.current.pending, null);
-    assert.equal(window.localStorage.getItem(key), null);
-    assert.equal(result.current.recoveryReady, true);
-    assert.equal(result.current.error, null);
   });
 }
 
@@ -449,50 +436,9 @@ for (const [name, fields] of [
   });
 }
 
-for (const status of ['prepared', 'submitted'] as const) {
-  test(`legacy request-only recovery retains a real ${status} order`, async () => {
-    const { api, options } = runtime();
-    const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-    const saved = { requestId: 'legacy-request', cardIds: [1] };
-    const existing = { ...order(status), ethereumAddress: null };
-    window.localStorage.setItem(key, JSON.stringify(saved));
-    api.status = async () => ({ order: existing });
-    const { result } = renderHook(() => usePreorderCheckout(options, api));
-    await waitFor(() => assert.equal(result.current.recoveryReady, true));
-    const expected = { ...saved, orderId: existing.orderId, ethereumAddress: null,
-      ...(status === 'submitted' ? { submittedAttempt: true } : {}),
-    };
-    assert.deepEqual(result.current.order, existing);
-    assert.deepEqual(result.current.pending, expected);
-    assert.deepEqual(JSON.parse(window.localStorage.getItem(key)!), expected);
-  });
-}
-
-for (const status of ['prepared', 'submitted'] as const) {
-  test(`legacy recovery adopts a different ${status} order without reusing its old request ID`, async () => {
-    const { api, options, calls } = runtime();
-    const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-    window.localStorage.setItem(key, JSON.stringify({ requestId: 'legacy-request', cardIds: [1] }));
-    const existing = { ...order(status), orderId: 'other-order', cardIds: [2], ethereumAddress: null };
-    api.status = async () => ({ order: existing });
-    const { result } = renderHook(() => usePreorderCheckout(options, api));
-    await waitFor(() => assert.equal(result.current.order?.orderId, existing.orderId));
-    assert.equal(result.current.pending?.requestId, null);
-    assert.deepEqual(result.current.pending?.cardIds, [2]);
-    assert.equal(result.current.error, null);
-    assert.equal(JSON.parse(window.localStorage.getItem(key)!).orderId, existing.orderId);
-    api.status = async () => ({ order: { ...existing, status: status === 'prepared' ? 'cancelled' : 'succeeded' } });
-    await act(async () => { window.dispatchEvent(new dom.window.Event('focus')); });
-    assert.equal(result.current.pending, null);
-    assert.equal(window.localStorage.getItem(key), null);
-    assert.equal(calls.prepare.length + calls.submit.length + calls.signed, 0);
-  });
-}
-
-test('legacy active-order recovery cannot overwrite a newer request from another tab', async () => {
+test('active-order discovery cannot overwrite a newer request from another tab', async () => {
   const { api, options } = runtime();
   const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-  window.localStorage.setItem(key, JSON.stringify({ requestId: 'legacy-request', cardIds: [1] }));
   let finishStatus!: (value: { order: PreorderOrder }) => void;
   api.status = async () => new Promise(resolve => { finishStatus = resolve; });
   const { result } = renderHook(() => usePreorderCheckout(options, api));
@@ -508,10 +454,9 @@ test('legacy active-order recovery cannot overwrite a newer request from another
   assert.equal(result.current.order, null);
 });
 
-test('a delayed empty legacy recovery adopts another tab’s newer request before its storage event', async () => {
+test('a delayed empty discovery adopts another tab’s newer request before its storage event', async () => {
   const { api, options } = runtime();
   const key = `mons:preorder:v1:${config.cluster}:${config.collection}:${buyer}`;
-  window.localStorage.setItem(key, JSON.stringify({ requestId: 'legacy-request', cardIds: [1] }));
   let finishStatus!: (value: { order: null }) => void;
   let statusCalls = 0;
   api.status = async () => {
@@ -1474,7 +1419,8 @@ for (const knownOrderId of [true, false]) {
     };
     const view = renderHook(() => usePreorderCheckout(options, api));
     await waitFor(() => assert.equal(waiting, true));
-    const saved = { requestId: 'request-2', cardIds: next.cardIds, ...(knownOrderId ? { orderId: next.orderId } : {}) };
+    const saved = { requestId: 'request-2', cardIds: next.cardIds, ethereumAddress: ethereumSession.address,
+      ...(knownOrderId ? { orderId: next.orderId } : {}) };
     window.localStorage.setItem(key, JSON.stringify(saved));
     await act(async () => { finishStatus({ order: previous }); });
     const recovered = JSON.parse(window.localStorage.getItem(key)!);

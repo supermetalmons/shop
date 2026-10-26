@@ -19,7 +19,7 @@ const SIGNATURE = 'receipt-signature';
 
 test('receipt request parsing accepts only the bounded exact JSON contract', async () => {
   const body = { code: CODE, recipient: RECIPIENT };
-  const request = (value: string, contentType = 'application/json') => new Request('https://api.mons.shop/receipts/stripe/claim', {
+  const request = (value: string, contentType = 'application/json') => new Request('https://api.mons.shop/receipts/stripe/claim/start', {
     method: 'POST', headers: { 'Content-Type': contentType }, body: value,
   });
   assert.deepEqual(await readRequestBody(request(JSON.stringify(body)), new AbortController().signal), body);

@@ -156,8 +156,8 @@ for (const lateResponse of ['success', 'error'] as const) {
     const confirmed: PreorderOrder = { ...context.result.current.preorder.order!, status: 'submitted', confirmedSlot: 500,
       signature: bs58.encode(signed.signatures[0]) };
     await act(async () => {
-      const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
-      window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+      const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+      window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false, inventoryResolutionVersion: 4 }));
       window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
     });
     await waitFor(() => assert.equal(firstCompleted, true));
@@ -204,11 +204,11 @@ for (const lateResponse of ['success', 'error'] as const) {
       assets: [{ id: 2, address: Keypair.generate().publicKey.toBase58() }], status: 'prepared', confirmedSlot: null, signature: null };
     const nextPending = { requestId: 'request-B', orderId: next.orderId, cardIds: next.cardIds, ethereumAddress: ethereumSession.address };
     const foregroundKey = `mons:preorder:v1:${config.cluster}:${config.collection}:${context.buyer}`;
-    const recoveryKey = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+    const recoveryKey = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
     context.api.status = async (_preorderId, orderId) => ({ order: orderId === next.orderId ? next : orderId === confirmed.orderId ? confirmed : null });
     await act(async () => {
       window.localStorage.setItem(foregroundKey, JSON.stringify(nextPending));
-      window.localStorage.setItem(recoveryKey, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+      window.localStorage.setItem(recoveryKey, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false, inventoryResolutionVersion: 4 }));
       const keys = lateResponse === 'success' ? [recoveryKey, foregroundKey] : [foregroundKey, recoveryKey];
       for (const key of keys) window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
     });
@@ -261,8 +261,8 @@ test('matching confirmation releases the running action after navigation cleared
   await act(async () => { context.rerender({ connected: true, scopeKey: '/another-drop' }); });
   assert.equal(context.result.current.continuation.pendingAction?.phase, 'running');
   await act(async () => {
-    const key = `mons:preorder-recovery:v3:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
-    window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+    const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${context.buyer}:${confirmed.orderId}`;
+    window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false, inventoryResolutionVersion: 4 }));
     window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
   });
   await waitFor(() => assert.equal(context.result.current.continuation.pendingAction, null));

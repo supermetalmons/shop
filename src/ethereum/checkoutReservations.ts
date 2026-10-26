@@ -11,7 +11,7 @@ const fallbacks = new WeakMap<Window, Map<string, string | null>>();
 
 type CheckoutReservation = {
   checkoutId: string; chainId: number; contractAddress: string; wallet: string; tokenIds: string[]; attemptId: string | null;
-  revision: string | null;
+  revision: string;
 };
 type StoredCheckoutReservation = CheckoutReservation & { key: string };
 type ReservationSnapshot = { rows: StoredCheckoutReservation[]; stable: boolean };
@@ -64,9 +64,9 @@ function parseReservations(value: string): ReservationSnapshot {
           normalizeEthereumAddress(row.contractAddress) !== row.contractAddress || typeof row.wallet !== 'string' ||
           normalizeEthereumAddress(row.wallet) !== row.wallet || row.attemptId !== null && !ETHEREUM_CHECKOUT_ID.test(row.attemptId)) return [];
         const tokenIds = normalizeCheckoutTokenIds(row.tokenIds);
-        const revision = typeof row.revision === 'string' && ETHEREUM_CHECKOUT_ID.test(row.revision) ? row.revision : null;
-        const legacyKey = `${STORAGE_PREFIX}${reservationIdentity(row)}`;
-        if (key !== legacyKey && (!revision || key !== `${legacyKey}:${revision}`)) return [];
+        const revision = row.revision;
+        if (typeof revision !== 'string' || !ETHEREUM_CHECKOUT_ID.test(revision) ||
+          key !== `${STORAGE_PREFIX}${reservationIdentity(row)}:${revision}`) return [];
         return [{ checkoutId: row.checkoutId, chainId: row.chainId, contractAddress: row.contractAddress,
           wallet: row.wallet, tokenIds, attemptId: row.attemptId, revision, key }];
       } catch { return []; }
@@ -98,7 +98,7 @@ function writeReservation(stored: StoredCheckoutReservation, remove = false): bo
       const identityKey = `${STORAGE_PREFIX}${reservationIdentity(row)}`;
       for (const [previousKey, previousValue] of fallback) {
         if (previousKey !== key && previousValue !== null &&
-          (previousKey === identityKey || previousKey.startsWith(`${identityKey}:`))) fallback.delete(previousKey);
+          previousKey.startsWith(`${identityKey}:`)) fallback.delete(previousKey);
       }
     }
     fallback.set(key, value);

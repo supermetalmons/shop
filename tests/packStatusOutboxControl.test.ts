@@ -39,7 +39,7 @@ test('uninitialized pack-status reports readiness and never imports markers', as
 });
 
 test('active pack-status inspection is bounded, read-only and preserves terminal retry metadata', async (t) => {
-  const { harness, query } = fixture(t, 53, true);
+  const { harness, query } = fixture(t, 53);
   for (let id = 1; id <= 53; id += 1) seedPackStatusOutbox(harness, { ...record(id),
     state: 'completed', nextAttemptAtMs: null, completedAtMs: 10, updatedAtMs: 10, failureCount: 2 });
   const before = query('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path');
@@ -56,13 +56,13 @@ test('active pack-status inspection is bounded, read-only and preserves terminal
   assert.deepEqual(query('SELECT * FROM commerce_pack_status_outbox ORDER BY parent_path'), before);
 });
 
-test('active status detects lost historical obligations without inventing work for unmarked orders', async (t) => {
+test('active status rejects frozen markers without inventing work for unmarked orders', async (t) => {
   const { harness, query } = fixture(t, 1, true);
   const missing = await runPackStatusOutboxControl(['status'], { query });
-  assert.match(missing.validationError || '', /outbox is missing/);
+  assert.match(missing.validationError || '', /Frozen pack-status metadata remains/);
   assert.equal(query('SELECT COUNT(*) AS count FROM commerce_pack_status_outbox')[0].count, 0);
   seedPackStatusOutbox(harness, record(1));
-  assert.equal((await runPackStatusOutboxControl(['status'], { query })).validationError, null);
+  assert.match((await runPackStatusOutboxControl(['status'], { query })).validationError || '', /Frozen pack-status metadata remains/);
   const unmarked = fixture(t);
   const empty = await runPackStatusOutboxControl(['status'], { query: unmarked.query });
   assert.equal(empty.validationError, null);

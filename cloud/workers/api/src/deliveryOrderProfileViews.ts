@@ -1,7 +1,7 @@
 import type { FulfillmentOrder } from '../../../../shared/contracts.js';
 import { fulfillmentOrderFromRecord } from '../../../../shared/fulfillmentReadModel.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
-import { LEGACY_NOTIFICATION_FIELDS, shippedNotificationState, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
+import { shippedNotificationState, type NotificationOutboxRecord } from '../../../../shared/notificationOutbox.js';
 import { isStripeChargebackSessionId } from '../../../../shared/stripeChargebacks.js';
 import type { CommerceDocumentRecord } from './commerceRepositoryTypes.js';
 
@@ -36,7 +36,6 @@ export function fulfillmentOrderSummaryFromDocument(
   if (document.key.kind !== 'delivery_order' || document.key.dropId !== options.dropId) return null;
   const fields: Record<string, unknown> = Object.fromEntries(FULFILLMENT_ORDER_FIELDS.flatMap((field) =>
     Object.hasOwn(document.data, field) ? [[field, document.data[field]]] : []));
-  for (const field of LEGACY_NOTIFICATION_FIELDS) delete fields[field];
   const shippedState = shippedNotificationState(options.shippedOutbox);
   if (shippedState) fields.buyerOrderShippedEmailState = shippedState;
   const sessionId = fulfillmentStripeSessionId(document, options.dropId);

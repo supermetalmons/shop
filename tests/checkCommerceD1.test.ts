@@ -29,7 +29,8 @@ import {
 } from '../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
 import { readCommerceMigrations } from '../scripts/shared/commerceMigrationReplay.ts';
-import { stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
+import { STRIPE_CHECKOUT_STATE_FIELDS, stripeCheckoutStateFromDocument, stripeCheckoutStateMetadata, stripeCheckoutStateRow } from '../shared/stripeCheckoutState.ts';
+import { LEGACY_NOTIFICATION_FIELDS } from '../scripts/shared/frozenCommerceMetadata.ts';
 import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 import { getPreorderConfig, PREORDER_CONFIGS } from '../shared/preorders.ts';
 import { requestedPreorderInventoryQuery } from '../cloud/workers/api/src/preorderInventoryQueries.ts';
@@ -146,7 +147,7 @@ function insertDocuments(database: DatabaseSync, documents: FixtureDocument[]): 
     );
     for (const document of documents) {
       const data = document.kind === 'stripe_checkout'
-        ? stripeCheckoutStateMetadata(document.data, {}) : document.data;
+        ? stripeCheckoutStateMetadata(document.data) : document.data;
       database.prepare(`INSERT INTO commerce_documents (document_path, document_kind, drop_id, document_id, document_json,
         version, create_time, update_time, processed_at_seconds, processed_at_nanos)
         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).run(
@@ -202,13 +203,8 @@ function currentDatabase(seedDocuments = true): DatabaseSync {
 function currentPackStatusDatabase(): DatabaseSync {
   const database = currentDatabase(false);
   resumeDatabase(database);
-  const fence = String(database.prepare("SELECT sql FROM sqlite_schema WHERE name = 'commerce_pack_status_legacy_insert_fence'").get()!.sql);
-  database.exec('DROP TRIGGER commerce_pack_status_legacy_insert_fence');
   insertDocuments(database, [{ path: 'drops/card_nft_2/deliveryOrders/1', kind: 'delivery_order', dropId: 'card_nft_2', id: '1',
-    data: { deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }],
-      packStatusProjectionState: 'pending', packStatusProjectionNextAttemptAtMs: 17,
-      packStatusProjectionFailureCount: 2, packStatusProjectionLastErrorCode: 'unavailable' } }]);
-  database.exec(fence);
+    data: { deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }] } }]);
   insertRow(database, 'commerce_pack_status_outbox', packStatusOutboxRow({
     parentPath: 'drops/card_nft_2/deliveryOrders/1', dropId: 'card_nft_2', generation: FIXTURE_GENERATION,
     state: 'pending', revision: 1, failureCount: 2, nextAttemptAtMs: 17,
@@ -563,7 +559,7 @@ test('pack-status outbox schema checks reject missing and weakened indexes and w
   }
 });
 
-test('pack-status outbox checks accept authoritative state while frozen markers remain unchanged', () => {
+test('pack-status outbox checks accept authoritative state without frozen markers', () => {
   const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
@@ -576,16 +572,15 @@ test('pack-status outbox checks accept authoritative state while frozen markers 
       completed_at_ms = updated_at_ms + 1, updated_at_ms = updated_at_ms + 1, revision = revision + 1`);
     assert.equal(checkCommerceD1(query, { forDeployment: true }).packStatusOutboxMode, 'table');
     assert.equal(JSON.parse(String(query('SELECT document_json FROM commerce_documents')[0].document_json))
-      .packStatusProjectionState, 'pending');
+      .packStatusProjectionState, undefined);
   } finally { database.close(); }
 });
-test('active pack-status checks reject lost migrated obligations and allow unmarked historical parents', () => {
+test('active pack-status checks reject frozen markers and allow unmarked historical parents', () => {
   const database = currentPackStatusDatabase();
   try {
     database.exec('DELETE FROM commerce_pack_status_outbox');
     const query = localQuery(database);
-    const expectedError = /Pack-status outbox is missing for source document: drops\/card_nft_2\/deliveryOrders\/1/;
-    assert.throws(() => checkCommerceD1(query), expectedError);
+    const expectedError = /Commerce D1 contains frozen pack-status metadata: drops\/card_nft_2\/deliveryOrders\/1/;
     const unmarked = { deliveryId: 1, dropId: 'card_nft_2', status: 'ready_to_ship', items: [{ kind: 'box' }] };
     const withFields = (fields: Record<string, unknown>): CheckCommerceD1Query => (sql) => query(sql).map((row) =>
       sql.startsWith('SELECT document.document_path, document.document_kind,')
@@ -602,13 +597,10 @@ test('active pack-status checks reject lost migrated obligations and allow unmar
   }
 });
 
-test('pack-status outbox checker rejects missing or malformed current rows without comparing frozen source markers', () => {
+test('pack-status outbox checker rejects malformed current rows without legacy source markers', () => {
   const database = currentPackStatusDatabase();
   try {
     const query = localQuery(database);
-    assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
-      sql.startsWith('SELECT document.document_path, document.document_kind,')
-        ? { ...row, pack_status_parent_path: null } : row)), /Pack-status outbox is missing for source document/);
     for (const corruption of [{ failure_count: -1 }, { generation: 'invalid' }, { revision: 0 }]) {
       assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
         sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox') ? { ...row, ...corruption } : row)),
@@ -617,6 +609,22 @@ test('pack-status outbox checker rejects missing or malformed current rows witho
     assert.equal(checkCommerceD1((sql) => query(sql).map((row) =>
       sql.startsWith('SELECT outbox.*,') && sql.includes('FROM commerce_pack_status_outbox AS outbox')
         ? { ...row, failure_count: 3, revision: 2, updated_at_ms: Number(row.updated_at_ms) + 1 } : row)).packStatusOutboxRows, 1);
+  } finally { database.close(); }
+});
+
+test('Commerce D1 checker rejects every frozen notification and checkout field including null', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    for (const [kind, fields, error] of [
+      ['delivery_order', LEGACY_NOTIFICATION_FIELDS, /frozen notification metadata/],
+      ['stripe_checkout', STRIPE_CHECKOUT_STATE_FIELDS, /frozen Stripe checkout metadata/],
+    ] as const) {
+      for (const field of fields) assert.throws(() => checkCommerceD1((sql) => query(sql).map((row) =>
+        sql.startsWith('SELECT document.document_path, document.document_kind,') && row.document_kind === kind
+          ? { ...row, document_json: JSON.stringify({ ...JSON.parse(String(row.document_json)), [field]: null }) } : row)), error);
+    }
+    assert.doesNotThrow(() => checkCommerceD1(query));
   } finally { database.close(); }
 });
 test('pack-status outbox checker rejects invalid controls, orphan rows, and malformed retry state', () => {

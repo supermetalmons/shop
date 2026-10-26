@@ -45,12 +45,10 @@ import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 import { createCommerceD1Harness, d1Database as sqliteD1Database } from './commerceD1Harness.ts';
 import { PreorderStore, type StoredPreorder } from '../src/preorderStore.ts';
+import { sleepWithSignal } from '../src/boundedRequest.ts';
+import { runScheduledReconciliations } from '../src/workerScheduled.ts';
 
-const {
-  handleRequest: rawHandleRequest,
-  runScheduledReconciliations,
-  sleepWithAbort,
-} = await loadApiWorkerIndex();
+const { handleRequest: rawHandleRequest } = await loadApiWorkerIndex();
 
 type RequestDependencies = Parameters<typeof rawHandleRequest>[3];
 
@@ -1120,8 +1118,17 @@ test('IRL claim route enforces restricted CORS, bearer authentication, methods, 
   assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
 });
 
+test('retired synchronous receipt claim route returns not found without provider work', async () => {
+  const response = await handleRequest(request('/receipts/stripe/claim', {
+    code: 'ABCDEF-1234567890', recipient: OWNER,
+  }, { Origin: 'https://mons.shop' }), env(), quietDependencies(async () => {
+    assert.fail('Retired receipt claims must not call providers');
+  }));
+  assert.equal(response.status, 404);
+});
+
 test('Stripe receipt claim route enforces restricted CORS, bearer authentication, methods, and safe logging', async () => {
-  const pathname = '/receipts/stripe/claim';
+  const pathname = '/receipts/stripe/claim/start';
   const code = 'ABCDEF-1234567890';
   const preflight = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
     method: 'OPTIONS',
@@ -2652,13 +2659,13 @@ test('retry sleep rejects both already-aborted and subsequently aborted signals'
   const earlyReason = new Error('early abort');
   alreadyAborted.abort(earlyReason);
   await assert.rejects(
-    sleepWithAbort(10_000, alreadyAborted.signal),
+    sleepWithSignal(10_000, alreadyAborted.signal),
     (error: unknown) => error === earlyReason,
   );
 
   const laterAborted = new AbortController();
   const laterReason = new Error('later abort');
-  const sleeping = sleepWithAbort(10_000, laterAborted.signal);
+  const sleeping = sleepWithSignal(10_000, laterAborted.signal);
   laterAborted.abort(laterReason);
   await assert.rejects(sleeping, (error: unknown) => error === laterReason);
 });

@@ -11,7 +11,6 @@ import {
   type SolanaAuthRuntime,
   type SolanaAuthWalletState,
 } from '../src/hooks/useSolanaAuth.ts';
-import { walletSessionSignInReadiness } from '../src/lib/profileClientLifecycle.ts';
 import {
   ensureStaffWalletSession,
   installStaffWalletSessionIfUnchanged,
@@ -222,11 +221,6 @@ test('an authenticated Auth user without a wallet session settles signed out', a
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
   assert.equal(result.current.sessionWallet, null);
   assert.equal(result.current.loading, false);
-  assert.equal(walletSessionSignInReadiness({
-    hasAuthenticatedSession: false,
-    sessionResolution: result.current.sessionResolution,
-    authLoading: result.current.loading,
-  }), 'sign');
 });
 
 test('the auth subject observes identities created after render', async () => {

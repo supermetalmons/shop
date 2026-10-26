@@ -10,7 +10,7 @@ import {
   isStripeReceiptClaimOperationId,
   type StripeReceiptClaimPendingResponse,
 } from '../../../../shared/stripeReceiptClaimWorkflow.js';
-import { createRequestDeadline, createTimedAbortScope, isRequestCancellationError, raceWithSignal, readBoundedRequestJson, sleepWithSignal } from './boundedRequest.js';
+import { createRequestDeadline, createTimedAbortScope, isRequestCancellationError, raceWithSignal, readBoundedRequestJson } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import { RequestIdentityError, verifyRequestIdentity, type RequestAuthContext } from './requestIdentity.js';
@@ -37,9 +37,7 @@ const defaultDependencies = {
   ensure: ensureReceiptClaimWorkflowRunning,
   verifyIdentity: verifyRequestIdentity,
   nowMs: Date.now,
-  sleep: sleepWithSignal,
   httpTimeoutMs: STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS,
-  legacyTimeoutMs: 180_000,
 };
 
 function result(response: Response, outcome: string, options: Partial<RouteResult> = {}): RouteResult {
@@ -79,7 +77,7 @@ function project(snapshot: ReceiptClaimWorkflowSnapshot): RouteResult {
 }
 
 async function handle(
-  mode: 'start' | 'status' | 'legacy',
+  mode: 'start' | 'status',
   request: Request,
   env: Env,
   authContext: RequestAuthContext,
@@ -92,7 +90,7 @@ async function handle(
     }), 'method-not-allowed', { authOutcome: 'rejected' });
   }
   const dependencies = { ...defaultDependencies, ...overrides };
-  const timeoutMs = mode === 'legacy' ? dependencies.legacyTimeoutMs : dependencies.httpTimeoutMs;
+  const timeoutMs = dependencies.httpTimeoutMs;
   const deadline = createRequestDeadline(request, {
     timeoutMs,
     timeoutMessage: 'Receipt claim request timed out.',
@@ -133,7 +131,7 @@ async function handle(
       }
       return project(stored);
     }
-    const requestId = request.headers.get(STRIPE_RECEIPT_CLAIM_REQUEST_HEADER) || (mode === 'legacy' ? crypto.randomUUID() : '');
+    const requestId = request.headers.get(STRIPE_RECEIPT_CLAIM_REQUEST_HEADER) || '';
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(requestId)) {
       throw new StripeReceiptClaimError('invalid-argument', 'Invalid receipt claim request id.');
     }
@@ -145,15 +143,6 @@ async function handle(
     snapshot = reserved.snapshot;
     operationId = snapshot.operation.operationId;
     snapshot = await raceWithSignal(dependencies.ensure(env, snapshot, deadline.signal, requestId), deadline.signal);
-    if (mode !== 'legacy') return project(snapshot);
-    while (snapshot.operation.phase === 'pending') {
-      await dependencies.sleep(STRIPE_RECEIPT_CLAIM_POLL_INTERVAL_MS, deadline.signal);
-      const next = await raceWithSignal(dependencies.load(context(), operationId), deadline.signal);
-      if (!next || next.code !== code || next.operation.recipient !== recipient) {
-        throw new StripeReceiptClaimError('not-found', 'Receipt claim operation not found.');
-      }
-      snapshot = next;
-    }
     return project(snapshot);
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
@@ -181,8 +170,4 @@ export function handleStripeReceiptClaimWorkflowStart(request: Request, env: Env
 
 export function handleStripeReceiptClaimWorkflowStatus(request: Request, env: Env, authContext: RequestAuthContext = {}, overrides: Partial<typeof defaultDependencies> = {}) {
   return handle('status', request, env, authContext, overrides);
-}
-
-export function handleStripeReceiptClaimWorkflowLegacy(request: Request, env: Env, authContext: RequestAuthContext = {}, overrides: Partial<typeof defaultDependencies> = {}) {
-  return handle('legacy', request, env, authContext, overrides);
 }

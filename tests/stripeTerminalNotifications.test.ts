@@ -3,7 +3,6 @@ import test from 'node:test';
 import { STRIPE_CHECKOUT_STATUS } from '../shared/stripeCheckoutSession.ts';
 import {
   prepareStripeCheckoutTerminalNotifications,
-  shouldPublishStripeCheckoutTerminalNotificationsWrite,
 } from '../cloud/workers/api/src/stripeCheckout/terminalNotifications.ts';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
 import { stripeCheckoutNotificationView } from '../cloud/workers/api/src/stripeCheckout/readModel.ts';
@@ -43,38 +42,6 @@ function dependencies(args: {
     ...(args.createJobId ? { createJobId: args.createJobId } : {}),
   };
 }
-
-test('terminal transition detection covers direct fulfillment and manual-review writes once', () => {
-  assert.equal(shouldPublishStripeCheckoutTerminalNotificationsWrite({
-    before: { status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED },
-    after: { status: STRIPE_CHECKOUT_STATUS.FULFILLED },
-  }), true);
-  assert.equal(shouldPublishStripeCheckoutTerminalNotificationsWrite({
-    before: { status: STRIPE_CHECKOUT_STATUS.FULFILLED },
-    after: { status: STRIPE_CHECKOUT_STATUS.FULFILLED },
-  }), false);
-  assert.equal(shouldPublishStripeCheckoutTerminalNotificationsWrite({
-    before: { status: STRIPE_CHECKOUT_STATUS.PROCESSING },
-    after: {
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-      manualRefundReviewRequired: true,
-    },
-  }), true);
-  assert.equal(shouldPublishStripeCheckoutTerminalNotificationsWrite({
-    before: {
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-      manualRefundReviewRequired: true,
-    },
-    after: {
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-      manualRefundReviewRequired: true,
-    },
-  }), false);
-  assert.equal(shouldPublishStripeCheckoutTerminalNotificationsWrite({
-    before: null,
-    after: { status: STRIPE_CHECKOUT_STATUS.FULFILLED },
-  }), false);
-});
 
 test('fulfilled checkout reloads terminal state and prepares exact buyer and shipper jobs', async () => {
   const ids = [...JOB_IDS];

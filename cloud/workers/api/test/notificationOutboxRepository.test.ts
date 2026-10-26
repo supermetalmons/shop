@@ -175,16 +175,16 @@ test('multiple staged changes to one outbox commit one revision', async (context
   assert.equal(stored?.state, 'cancelled');
 });
 
-test('legacy mode stays writable by old code but fails closed for table publishers', async (context) => {
-  const { repository } = fixture(context, { notificationOutboxMode: 'legacy' });
+test('historical legacy mode stays writable by old code but fails closed for table publishers', async (context) => {
+  const { repository } = fixture(context, { notificationOutboxMode: 'legacy', frozenCommerceMetadataCleanupMigration: false });
   await repository.run(100, (unit) => unit.update(key, { buyerOrderShippedEmailState: 'pending' }));
   await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), /unavailable/);
   await assert.rejects(repository.notificationOutbox.getMany([key.path], 'shipped'), isUnavailable);
   await assert.rejects(repository.run(100, (unit) => unit.enqueueNotificationOutbox(input())), /unavailable/);
 });
 
-test('activated legacy fences preserve frozen fields but reject changed or new legacy markers', async (context) => {
-  const { harness, repository } = fixture(context);
+test('historical activated fences preserve frozen fields but reject changed or new legacy markers', async (context) => {
+  const { harness, repository } = fixture(context, { frozenCommerceMetadataCleanupMigration: false });
   seedCommerceDocument(harness, { key, version: 2, data: { buyerOrderShippedEmailState: 'pending', status: 'ready_to_ship' } });
   await repository.run(100, (unit) => unit.update(key, { fulfillmentTrackingCode: 'tracking' }));
   await assert.rejects(repository.run(200, (unit) => unit.update(key, { buyerOrderShippedEmailState: 'queued' })), /legacy notification writes/);

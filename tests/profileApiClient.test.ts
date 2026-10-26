@@ -890,11 +890,11 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
     receiptKind: 'box',
   } as const;
   const payload = await requestProfileApi(
-    '/receipts/stripe/claim',
+    '/receipts/stripe/claim/start',
     { code: 'ABCDEF-1234567890', recipient: OWNER },
     {
       fetch: async (input, init) => {
-        assert.equal(String(input), 'https://api.mons.shop/receipts/stripe/claim');
+        assert.equal(String(input), 'https://api.mons.shop/receipts/stripe/claim/start');
         assert.equal(init?.method, 'POST');
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
         assert.deepEqual(JSON.parse(String(init?.body)), {
@@ -912,7 +912,7 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
   assert.equal(parseStripeReceiptClaimResponse({ ...response, extra: true }), null);
   assert.equal(parseStripeReceiptClaimResponse({ ...response, deliveryId: 0 }), null);
   assert.equal(parseStripeReceiptClaimResponse({ ...response, receiptTxs: ['invalid'] }), null);
-  assert.equal(profileApiTimeoutMs('/receipts/stripe/claim'), 190_000);
+  assert.equal(profileApiTimeoutMs('/receipts/stripe/claim/start'), 20_000);
 
 });
 

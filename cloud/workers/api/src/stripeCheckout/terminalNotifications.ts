@@ -10,7 +10,9 @@ import {
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
-import type { StripeCheckoutNotificationView, StripeCheckoutTerminalState } from './readModel.js';
+import type {
+  StripeCheckoutNotificationView,
+} from './readModel.js';
 
 type CheckoutDocument = {
   path: string;
@@ -29,24 +31,6 @@ export type StripeCheckoutTerminalNotificationResult = {
   jobs: NotificationEmailJobV1[];
   reason?: string;
 };
-
-export function shouldPublishStripeCheckoutTerminalNotificationsWrite(args: {
-  before: StripeCheckoutTerminalState | null;
-  after: StripeCheckoutTerminalState;
-}): boolean {
-  if (!args.before) return false;
-  if (args.after.status === STRIPE_CHECKOUT_STATUS.FULFILLED) {
-    return args.before.status !== STRIPE_CHECKOUT_STATUS.FULFILLED;
-  }
-  return (
-    args.after.status === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED &&
-    args.after.manualRefundReviewRequired === true &&
-    (
-      args.before.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED ||
-      args.before.manualRefundReviewRequired !== true
-    )
-  );
-}
 
 function invalid(reason: string): StripeCheckoutTerminalNotificationResult {
   return { outcome: 'invalid', jobs: [], reason };

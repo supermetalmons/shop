@@ -99,11 +99,8 @@ export function hydrateStripeCheckoutState<T extends Record<string, unknown>>(da
   return hydrated as T;
 }
 
-export function stripeCheckoutStateMetadata<T extends Record<string, unknown>>(data: T, originalRawData: T): T {
+export function stripeCheckoutStateMetadata<T extends Record<string, unknown>>(data: T): T {
   const metadata = { ...data };
-  for (const field of STRIPE_CHECKOUT_STATE_FIELDS) {
-    delete metadata[field];
-    if (Object.hasOwn(originalRawData, field)) metadata[field as keyof T] = originalRawData[field] as T[keyof T];
-  }
+  for (const field of STRIPE_CHECKOUT_STATE_FIELDS) delete metadata[field];
   return metadata;
 }

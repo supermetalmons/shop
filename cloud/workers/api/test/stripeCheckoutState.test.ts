@@ -8,32 +8,9 @@ import {
   stripeCheckoutStateRow,
 } from '../../../../shared/stripeCheckoutState.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceFieldValue, commerceKeys, type CommerceDocumentWriteData } from '../src/commerceRepository.ts';
-import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1Harness } from './commerceD1Harness.ts';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 
 const key = commerceKeys.stripeCheckout('drop', 'cs_state');
-
-function activate(harness: CommerceD1Harness): void {
-  const { database } = harness;
-  database.exec(`INSERT INTO commerce_authority_control_lease VALUES (1, '00000000-0000-4000-8000-000000000026',
-    CAST(strftime('%s', 'now') AS INTEGER) * 1000, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000);
-    UPDATE commerce_authority_control SET authority_state = 'paused', revision = revision + 1,
-      paused_at_ms = NULL, updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    UPDATE commerce_authority_control SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'preparing',
-      source_documents_revision = (SELECT documents_revision FROM commerce_authority_control);`);
-  for (const document of database.prepare("SELECT * FROM commerce_documents WHERE document_kind = 'stripe_checkout'").all()) {
-    const row = stripeCheckoutStateRow(stripeCheckoutStateFromDocument(String(document.document_path),
-      JSON.parse(String(document.document_json)), Number(document.version)));
-    const columns = Object.keys(row);
-    database.prepare(`INSERT INTO commerce_stripe_checkout_state (${columns.join(', ')})
-      VALUES (${columns.map(() => '?').join(', ')})`).run(...columns.map((column) => row[column]));
-  }
-  database.exec(`UPDATE commerce_stripe_checkout_state_control SET preparation_state = 'ready', prepared_at_ms = 0;
-    UPDATE commerce_stripe_checkout_state_control SET storage_mode = 'table';
-    UPDATE commerce_authority_control SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
-      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
-    DELETE FROM commerce_authority_control_lease;`);
-}
 
 test('checkout state validates exact scalars and hydration never revives cleared historical fields', () => {
   const legacy = { status: 'processing', processingAttemptId: 'old', nextFulfillmentRetryAt: 300, updatedAt: 100,
@@ -44,7 +21,7 @@ test('checkout state validates exact scalars and hydration never revives cleared
   assert.equal(hydrated.status, 'fulfilled');
   assert.equal(Object.hasOwn(hydrated, 'processingAttemptId'), false);
   assert.equal(Object.hasOwn(hydrated, 'nextFulfillmentRetryAt'), false);
-  assert.deepEqual(stripeCheckoutStateMetadata(hydrated, legacy), legacy);
+  assert.deepEqual(stripeCheckoutStateMetadata(hydrated), { stripeSessionSummary: { id: 'cs_state' } });
   assert.equal(legacy.status, 'processing');
   for (const fields of [{ status: 'other' }, { status: 'created', updatedAt: '100' },
     { status: 'processing', processingAttemptCount: -1 }, { status: 'processing', processingLeaseExpiresAt: 0.5 }]) {
@@ -54,13 +31,12 @@ test('checkout state validates exact scalars and hydration never revives cleared
     /Invalid Stripe checkout state/);
 });
 
-test('checkout state-only writes preserve frozen JSON and bump the parent without rewriting its payload', async () => {
+test('checkout state-only writes preserve metadata JSON and bump the parent without rewriting its payload', async () => {
   const writes: string[] = [];
-  const harness = createCommerceD1Harness({ stripeCheckoutStateMode: 'legacy',
+  const harness = createCommerceD1Harness({
     observeStatement: ({ method, sql }) => { if (method === 'run') writes.push(sql); } });
   seedCommerceDocument(harness, { key, data: { status: 'processing', processingAttemptId: 'old',
     nextFulfillmentRetryAt: 400, updatedAt: 100, metadata: { kept: true } } });
-  activate(harness);
   const original = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(key.path)!.document_json;
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(Date.now(), (unit) => unit.update(key, {
@@ -79,8 +55,8 @@ test('checkout state-only writes preserve frozen JSON and bump the parent withou
   assert.equal(harness.database.prepare('SELECT document_version FROM commerce_stripe_checkout_state WHERE document_path = ?').get(key.path)!.document_version, 2);
   await repository.run(Date.now(), (unit) => unit.update(key, { metadata: { changed: true }, updatedAt: commerceFieldValue.serverTimestamp() }));
   const raw = JSON.parse(String(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(key.path)!.document_json));
-  assert.equal(raw.status, 'processing');
-  assert.equal(raw.processingAttemptId, 'old');
+  assert.equal(raw.status, undefined);
+  assert.equal(raw.processingAttemptId, undefined);
   assert.deepEqual(raw.metadata, { changed: true });
   assert.equal((await repository.get(key))?.data.status, 'fulfilled');
 });
@@ -185,13 +161,12 @@ test('checkout staged creation and metadata patches survive subsequent state-onl
   }
 });
 
-test('checkout replacement and delete-recreate retain frozen state while replacing metadata', async (context) => {
+test('checkout replacement and delete-recreate keep lifecycle state out of metadata', async (context) => {
   for (const recreate of [false, true]) {
-    const harness = createCommerceD1Harness({ stripeCheckoutStateMode: 'legacy' });
+    const harness = createCommerceD1Harness();
     context.after(() => harness.database.close());
     seedCommerceDocument(harness, { key, data: { status: 'processing', processingAttemptId: 'historical',
       updatedAt: 100, metadata: { old: true }, removed: true } });
-    activate(harness);
     const repository = new D1CommerceRepository(harness.db);
     const replacement = { status: 'fulfilled', updatedAt: 200, metadata: { replaced: true } };
     await repository.run(Date.now(), async (unit) => {
@@ -204,8 +179,7 @@ test('checkout replacement and delete-recreate retain frozen state while replaci
     assert.deepEqual(record.data, replacement);
     assert.equal(record.version, 2);
     assert.deepEqual(JSON.parse(String(harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
-      .get(key.path)!.document_json)), { status: 'processing', processingAttemptId: 'historical',
-      updatedAt: 100, metadata: { replaced: true } });
+      .get(key.path)!.document_json)), { metadata: { replaced: true } });
     assert.equal(harness.database.prepare('SELECT document_version FROM commerce_stripe_checkout_state WHERE document_path = ?')
       .get(key.path)!.document_version, record.version);
   }
@@ -249,14 +223,14 @@ test('checkout batches reject omitted typed-state writes and stale legacy writer
   ]), /stripe checkout state commit is incomplete/);
   assert.equal(harness.database.prepare('SELECT version FROM commerce_documents WHERE document_path = ?').get(key.path)!.version, 1);
   assert.equal(harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_commit_guards').get()!.count, 0);
-  await assert.rejects(harness.db.prepare("UPDATE commerce_documents SET version = version + 1, document_json = json_set(document_json, '$.status', 'fulfilled') WHERE document_path = ?").bind(key.path).run(), /stripe checkout state is unavailable/);
+  await assert.rejects(harness.db.prepare("UPDATE commerce_documents SET version = version + 1, document_json = json_set(document_json, '$.status', 'fulfilled') WHERE document_path = ?").bind(key.path).run(), /legacy stripe checkout state writes are disabled/);
   await assert.rejects(harness.db.prepare("UPDATE commerce_stripe_checkout_state SET status = 'fulfilled' WHERE document_path = ?").bind(key.path).run(), /stripe checkout state is unavailable/);
   await new D1CommerceRepository(harness.db).run(Date.now(), (unit) => unit.delete(key));
   assert.equal(harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_stripe_checkout_state').get()!.count, 0);
 });
 
 test('table-only checkout runtime rejects legacy mode without affecting ordinary document reads', async () => {
-  const harness = createCommerceD1Harness({ stripeCheckoutStateMode: 'legacy' });
+  const harness = createCommerceD1Harness({ stripeCheckoutStateMode: 'legacy', frozenCommerceMetadataCleanupMigration: false });
   seedCommerceDocument(harness, { key, data: { status: 'created', updatedAt: 100 } });
   const repository = new D1CommerceRepository(harness.db);
   await assert.rejects(repository.get(key), { code: 'unavailable' });

@@ -48,20 +48,6 @@ export type NotificationOutboxMutation = Partial<Pick<NotificationOutboxRecord,
 
 const NOTIFICATION_OUTBOX_MAX_ENTRIES_BYTES = 200 * 1024;
 
-export const LEGACY_NOTIFICATION_FIELDS = [
-  'buyerOrderReceivedEmailState', 'buyerOrderReceivedEmailJobId', 'buyerOrderReceivedEmailJob',
-  'buyerOrderReceivedEmailIdempotencyKey', 'buyerOrderReceivedEmailQueuedAt',
-  'shipperReadyToShipEmailState', 'shipperReadyToShipEmailJobId', 'shipperReadyToShipEmailJob',
-  'shipperReadyToShipEmailIdempotencyKey', 'shipperReadyToShipEmailQueuedAt',
-  'readyToShipNotificationRetryUntilMs', 'readyToShipNotificationPublishAttemptCount',
-  'readyToShipNotificationPublishClaimId', 'readyToShipNotificationPublishClaimExpiresAtMs',
-  'readyToShipNotificationFailedAt', 'readyToShipNotificationLastErrorCode',
-  'stripeTerminalNotification', 'stripeTerminalNotificationState',
-  'stripeTerminalNotificationNextAttemptAtMs', 'stripeTerminalNotificationQueuedAt',
-  'stripeTerminalNotificationLastError', 'buyerOrderShippedEmailState',
-  'buyerOrderShippedEmailJobId', 'buyerOrderShippedEmailIdempotencyKey', 'buyerOrderShippedEmailQueuedAt',
-] as const;
-
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const time = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;

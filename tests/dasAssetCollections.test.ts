@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assetGroupingAllowsTreeVerifiedCollectionMatch,
   assetGroupingCollectionMints,
   uniqueAssetGroupingCollectionMint,
 } from '../shared/dasAssetCollections.ts';
@@ -79,54 +78,6 @@ test('DAS collection helpers normalize collection groupings', () => {
       uniqueAssetGroupingCollectionMint(entry.asset),
       entry.unique,
       `${entry.name} unique collection`,
-    );
-  }
-});
-
-test('DAS collection helpers allow tree proof only when grouping is inconclusive or includes expected collection', () => {
-  const cases = [
-    {
-      name: 'missing grouping',
-      asset: {},
-      expectedCollectionMint: 'collection-1',
-      allowed: true,
-    },
-    {
-      name: 'single expected collection',
-      asset: { grouping: [{ group_key: 'collection', group_value: 'collection-1' }] },
-      expectedCollectionMint: 'collection-1',
-      allowed: true,
-    },
-    {
-      name: 'multiple collections including expected',
-      asset: {
-        grouping: [
-          { group_key: 'collection', group_value: 'collection-1' },
-          { group_key: 'collection', group_value: 'collection-2' },
-        ],
-      },
-      expectedCollectionMint: 'collection-1',
-      allowed: true,
-    },
-    {
-      name: 'only another collection',
-      asset: { grouping: [{ group_key: 'collection', group_value: 'collection-2' }] },
-      expectedCollectionMint: 'collection-1',
-      allowed: false,
-    },
-    {
-      name: 'missing expected collection',
-      asset: {},
-      expectedCollectionMint: '',
-      allowed: false,
-    },
-  ];
-
-  for (const entry of cases) {
-    assert.equal(
-      assetGroupingAllowsTreeVerifiedCollectionMatch(entry.asset, entry.expectedCollectionMint),
-      entry.allowed,
-      entry.name,
     );
   }
 });

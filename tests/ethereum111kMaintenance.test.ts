@@ -183,7 +183,15 @@ test('document fences inspect old and new scope and reject late old writers afte
   for (const sql of [
     `UPDATE commerce_documents SET drop_id = 'other' WHERE document_path = '${ORDER.path}'`,
     `UPDATE commerce_documents SET drop_id = '111k_devnet' WHERE document_path = '${OTHER.path}'`,
-  ]) assert.throws(() => harness.database.exec(sql), /ethereum 111k is paused/);
+  ]) {
+    harness.database.exec('BEGIN');
+    try {
+      harness.database.prepare(`INSERT INTO commerce_commit_guards
+        (guard_id, expectations_json, created_at_ms, delivery_recovery_paths_json)
+        VALUES ('document-fence-test', '[]', 0, ?)`).run(JSON.stringify([ORDER.path, OTHER.path]));
+      assert.throws(() => harness.database.exec(sql), /ethereum 111k is paused/);
+    } finally { harness.database.exec('ROLLBACK'); }
+  }
   const resetPlan = await plan(harness);
   await queryBatch(harness)(buildEthereum111kResetBatch(resetPlan));
   const control = parseEthereum111kControl(query(harness)(ETHEREUM_111K_CONTROL_SQL)[0]);

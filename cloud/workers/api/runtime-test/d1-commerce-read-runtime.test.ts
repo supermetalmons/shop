@@ -1,6 +1,7 @@
 import { createDeliveryRecoveryRecord } from '../../../../shared/deliveryRecoveryState.ts';
 import { deliveryRecoveryWriteStatement } from '../src/deliveryRecoveryPersistence.ts';
-import { LEGACY_NOTIFICATION_FIELDS, type NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
+import type { NotificationOutboxFamily } from '../../../../shared/notificationOutbox.ts';
+import { LEGACY_NOTIFICATION_FIELDS } from '../../../../scripts/shared/frozenCommerceMetadata.ts';
 import { notificationOutboxWriteStatement } from '../src/notificationOutboxRepository.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { packStatusOutboxInsertStatement } from '../src/packStatusOutboxRepository.ts';
@@ -45,7 +46,7 @@ function insertDocument(
   data: CommerceDocumentData,
   processedAt: CommerceTimestamp | null = null,
 ): D1PreparedStatement[] {
-  const metadata = key.kind === 'stripe_checkout' ? stripeCheckoutStateMetadata(data, {}) : { ...data };
+  const metadata = key.kind === 'stripe_checkout' ? stripeCheckoutStateMetadata(data) : { ...data };
   if (key.kind === 'delivery_order') delete metadata.receiptRecovery;
   const statement = db.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
@@ -268,6 +269,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0043_ethereum_checkout.sql',
       '0044_ethereum_checkout_attempt_order_index.sql',
       '0045_preorder_asset_lookup.sql',
+      '0046_frozen_commerce_metadata_cleanup.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms

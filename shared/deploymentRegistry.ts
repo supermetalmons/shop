@@ -991,16 +991,6 @@ export function receiptPoolDeploymentKey(
   return `${solanaCluster}:${String(receiptPoolId || '').trim().toLowerCase()}`;
 }
 
-export function getReceiptPoolDeployment(
-  solanaCluster: SolanaCluster,
-  receiptPoolId: string,
-): ReceiptPoolDeployment | undefined {
-  const key = receiptPoolDeploymentKey(solanaCluster, receiptPoolId);
-  return Object.prototype.hasOwnProperty.call(RECEIPT_POOL_DEPLOYMENTS, key)
-    ? RECEIPT_POOL_DEPLOYMENTS[key]
-    : undefined;
-}
-
 function assertRegistryKeysMatchDropIds<T extends { dropId: string }>(
   drops: Record<string, T>,
 ): void {

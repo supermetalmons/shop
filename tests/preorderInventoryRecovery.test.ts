@@ -178,11 +178,10 @@ test('aborted inventory responses neither retire recoveries nor commit stale ite
   }), /abort/i);
 });
 
-test('legacy resolved records are rechecked once and finalized absence requires a verified transfer back', async (t) => {
-  const legacy = record(1, 'succeeded');
-  legacy.resolvedAssetIds = [address(1)];
-  const key = `mons:preorder-recovery:v1:${config.cluster}:${config.collection}:${owner}:${legacy.order.orderId}`;
-  const stored = new Map([[key, JSON.stringify(legacy)]]);
+test('current unresolved records are rechecked and finalized absence requires a verified transfer back', async (t) => {
+  const current = record(1, 'succeeded');
+  const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${owner}:${current.order.orderId}`;
+  const stored = new Map([[key, JSON.stringify({ ...current, inventoryResolutionVersion: 4 })]]);
   const storage = {
     get length() { return stored.size; }, key: (index: number) => [...stored.keys()][index] ?? null,
     getItem: (name: string) => stored.get(name) ?? null,
@@ -197,7 +196,7 @@ test('legacy resolved records are rechecked once and finalized absence requires 
   assert.deepEqual(listPreorderRecoveries(owner)[0].resolvedAssetIds, []);
   assert.deepEqual(mergePreorderInventory([], listPreorderRecoveries(owner)), [{ ...item(1), image: `${config.imageBase}1.webp` }]);
   await resolvePreorderInventoryAssets(owner, [address(1)]);
-  assert.equal(JSON.parse(stored.get(key.replace(':v1:', ':v4:'))!).inventoryResolutionVersion, 4);
+  assert.equal(JSON.parse(stored.get(key)!).inventoryResolutionVersion, 4);
   assert.deepEqual(listPreorderRecoveries(owner)[0].resolvedAssetIds, [address(1)]);
   assert.deepEqual(mergePreorderInventory([], listPreorderRecoveries(owner)), []);
   assert.deepEqual(mergePreorderInventory([item(1)], listPreorderRecoveries(owner)), []);

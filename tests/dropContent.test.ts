@@ -6,7 +6,6 @@ import {
   CARD_NFT_2_BOX_MEDIA,
   CARD_NFT_2_CDN_BASE_URL,
   CARD_NFT_2_PACK_BASE_URL,
-  CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_INITIAL_COUNT,
   CARD_NFT_2_PACK_RECEIPT_MEDIA,
   CARD_NFT_BINDER_CDN_BASE_URL,
@@ -148,7 +147,7 @@ test('card_nft_2 box inventory images resolve from token id', () => {
   }
   assert.deepEqual(FRONTEND_DROPS.card_nft_2.boxMedia, CARD_NFT_2_BOX_MEDIA);
   assert.equal(CARD_NFT_2_PACK_RECEIPT_MEDIA, CARD_NFT_2_BOX_MEDIA);
-  assert.equal(resolveDropContent('card_nft_2').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_INITIAL_BASE_URL);
+  assert.equal(resolveDropContent('card_nft_2').box.inventoryImageBaseUrl, CARD_NFT_2_PACK_BASE_URL);
   assert.equal(resolveDropContent('card_nft_2').box.inventoryImagePathMode, 'folder_initial');
   assert.equal(resolveBoxMediaIdForDrop('card_nft_2', 5), 1);
   assert.equal(

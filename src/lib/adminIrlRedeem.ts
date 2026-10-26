@@ -30,14 +30,6 @@ export function removeHiddenAssetIds(hiddenAssetIds: ReadonlySet<string>, assetI
   return new Set(Array.from(hiddenAssetIds).filter((id) => !removed.has(id)));
 }
 
-export function retainTransientHiddenAssetIdsPresentInInventory(
-  hiddenAssetIds: ReadonlySet<string>,
-  inventoryAssetIds: Iterable<string>,
-): Set<string> {
-  const present = new Set(Array.from(inventoryAssetIds, (id) => String(id || '').trim()).filter(Boolean));
-  return new Set(Array.from(hiddenAssetIds).filter((id) => present.has(id)));
-}
-
 function pendingAdminIrlRedeemFinalizeKey(wallet?: string) {
   return wallet ? `monsPendingAdminIrlRedeems:${wallet}` : 'monsPendingAdminIrlRedeems:disconnected';
 }

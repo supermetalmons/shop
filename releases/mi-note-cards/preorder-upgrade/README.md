@@ -62,5 +62,18 @@ execution verification intact. The upgrade command intentionally requires sales
 to remain closed, and its strict asset checks reject later burns; do not rerun it
 against the now-live drop to recreate or replace redeemed NFTs.
 
-See the [upgrade runbook](../../../scripts/docs/mi_note_preorder_upgrade.md)
-for the generic preparation, signing, and recovery workflow.
+## Historical tooling
+
+The completed conversion CLI, helper, tests, and npm command have been removed
+from active tooling. Their original preparation, signing, and recovery runbook
+remains with the matching source and dependencies in commit
+`abb1e8b84fadae8d59af363e6b4a8117343f2dba`:
+
+```sh
+git worktree add --detach ../shop-mi-note-conversion-history abb1e8b84fadae8d59af363e6b4a8117343f2dba
+```
+
+Keep this isolated checkout for historical investigation. The old command's
+closed-sales and original-metadata checks are not a live collection verifier.
+Use [current inventory verification](../../../scripts/docs/mi_note_public_inventory.md)
+for retained asset identity and permanent exclusions.

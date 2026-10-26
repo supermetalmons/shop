@@ -2,9 +2,7 @@ import { handleStripeCheckoutSession, STRIPE_CHECKOUT_SESSION_PATH } from '../st
 import { handleStripeWebhookRequest, STRIPE_WEBHOOK_PATH } from '../stripeWebhook.js';
 import { IRL_CLAIM_PREPARE_PATH, handleIrlClaimPrepare } from '../irlClaim.js';
 import { RECEIPT_TRANSFER_PREPARE_PATH, handleReceiptTransferPrepare } from '../receiptTransfer.js';
-import { STRIPE_RECEIPT_CLAIM_PATH } from '../stripeReceiptClaimRequest.js';
 import {
-  handleStripeReceiptClaimWorkflowLegacy,
   handleStripeReceiptClaimWorkflowStart,
   handleStripeReceiptClaimWorkflowStatus,
 } from '../stripeReceiptClaimWorkflowRoutes.js';
@@ -75,7 +73,7 @@ async function dispatchIrlClaim(context: WorkerRouteContext): Promise<WorkerRout
 
 async function dispatchStripeReceiptClaim(
   context: WorkerRouteContext,
-  handler = handleStripeReceiptClaimWorkflowLegacy,
+  handler: typeof handleStripeReceiptClaimWorkflowStart,
 ): Promise<WorkerRouteResult> {
   const result = await handler(
     context.request,
@@ -203,11 +201,6 @@ export const commerceRoutes: readonly ExactWorkerRoute[] = [
     IRL_CLAIM_PREPARE_PATH,
     profilePolicy({ commerceMutation: true }),
     dispatchIrlClaim,
-  ),
-  exactRoute(
-    STRIPE_RECEIPT_CLAIM_PATH,
-    profilePolicy({ commerceMutation: true }),
-    dispatchStripeReceiptClaim,
   ),
   exactRoute(
     STRIPE_RECEIPT_CLAIM_START_PATH,

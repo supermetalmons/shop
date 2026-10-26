@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { validateNotificationEmailRecipient } from '../shared/notificationSubscription.ts';
 import {
-  RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED,
   normalizeNotificationEmailRecipient,
   planReadyToShipOrderNotifications,
   resolveNotificationDeliveryId,
   shouldNotifyBuyerForDeliveryShippedWrite,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
-  shouldSendResendNotificationEmail,
-  validateNotificationEmailRecipient,
 } from '../cloud/workers/api/src/notifications.ts';
 import {
   buildBuyerOrderReceivedEmailContent,
@@ -49,15 +47,6 @@ function buyerVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): B
 function shipperVisibleItemsForEmailBuilderTest(items: NotificationEmailItem[]): ShipperVisibleOrderEmailItem[] {
   return items as ShipperVisibleOrderEmailItem[];
 }
-
-test('Resend non-checkout error notification emails are enabled', () => {
-  assert.equal(RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED, true);
-  assert.equal(shouldSendResendNotificationEmail('buyer_order_received'), true);
-  assert.equal(shouldSendResendNotificationEmail('buyer_order_shipped'), true);
-  assert.equal(shouldSendResendNotificationEmail('shipper_ready_to_ship'), true);
-  assert.equal(shouldSendResendNotificationEmail('stripe_checkout_manual_review'), true);
-  assert.equal(shouldSendResendNotificationEmail('receipt_claim_manual_review'), true);
-});
 
 test('shipped notification requires the first Shipped state with a valid HTTPS tracking link', () => {
   assert.equal(

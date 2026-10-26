@@ -12,12 +12,12 @@ import { runPreorderStatus } from '../lib/preorderStatusQueue';
 import { subscribeBrowserRefreshEvents } from '../lib/browserRefreshEvents';
 import { usePreorderRecoveryRecords } from './usePreorderRecoveryRecords';
 import { usePreorderReconciliation, type PreorderCheckoutApi } from './usePreorderReconciliation';
+import { parsePendingPreorder, type PendingPreorder } from '../lib/preorderPending';
 
 const preorderApi = createPreorderApi();
 const RECOVERY_ERROR_MESSAGE = 'Couldn’t check your preorder. We’ll keep checking.';
 const RECOVERY_CONFLICT_MESSAGE = 'Another preorder is active. Continue to resolve it.';
 
-type PendingPreorder = { requestId: string | null; cardIds: number[]; orderId?: string; submittedAttempt?: boolean; ethereumAddress?: string | null };
 type CheckoutPhase = 'idle' | 'authenticating' | 'preparing' | 'signing' | 'submitting' | 'cancelling';
 type CheckoutOptions = {
   config: PreorderConfig;
@@ -43,12 +43,7 @@ function storageKey(config: PreorderConfig, buyer: string): string {
 
 function readPending(key: string): PendingPreorder | null {
   try {
-    const value = JSON.parse(window.localStorage.getItem(key) || 'null') as PendingPreorder | null;
-    if (!value || (value.requestId !== null && typeof value.requestId !== 'string') ||
-      !Array.isArray(value.cardIds) || value.cardIds.length < 1 || value.cardIds.length > 3 ||
-      !value.cardIds.every(isPreorderCardId) ||
-      (value.orderId !== undefined && typeof value.orderId !== 'string')) return null;
-    return value;
+    return parsePendingPreorder(JSON.parse(window.localStorage.getItem(key) || 'null'));
   } catch {
     return null;
   }
@@ -169,9 +164,7 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
       (value.orderId === next.orderId || value.orderId === undefined &&
         value.cardIds.length === next.cardIds.length && value.cardIds.every((id, index) => id === next.cardIds[index]));
     const stored = readPending(key);
-    const legacyRequest = stored && !stored.ethereumAddress && !stored.orderId && !stored.submittedAttempt &&
-      samePending(stored, pendingRef.current) && activeOrder(next);
-    if (stored && !legacyRequest && !(stored.orderId === next.orderId || stored.orderId === undefined &&
+    if (stored && !(stored.orderId === next.orderId || stored.orderId === undefined &&
       stored.requestId && stored.requestId === pendingRef.current?.requestId && matches(stored) && matches(pendingRef.current))) {
       if (samePending(stored, pendingRef.current)) {
         setRecoveryReady(true);
@@ -286,15 +279,14 @@ export function usePreorderCheckout(options: CheckoutOptions, api: PreorderCheck
         if (result.order && (result.order.buyer !== buyer || result.order.preorderId !== config.preorderId)) {
           throw new Error('Preorder wallet or collection does not match.');
         }
+        const stored = readPending(scope);
+        if (stored && !samePending(stored, recoveringPending)) {
+          adoptPending(stored);
+          setRecoveryRevision(value => value + 1);
+          return;
+        }
         const retirePreparation = !config.checkoutEnabled && !recoveringPending?.submittedAttempt;
-        if (retirePreparation || !result.order && recoveringPending && !recoveringPending.ethereumAddress &&
-          !recoveringPending.orderId && !recoveringPending.submittedAttempt) {
-          const stored = readPending(scope);
-          if (stored && !samePending(stored, recoveringPending)) {
-            adoptPending(stored);
-            setRecoveryRevision(value => value + 1);
-            return;
-          }
+        if (retirePreparation) {
           keepPending(null, scope);
           setOrder(null);
           recoveringPending = null;

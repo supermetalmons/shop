@@ -106,10 +106,6 @@ export function notificationEmailJobJson(job: NotificationEmailJobV1): string {
   return JSON.stringify(job);
 }
 
-export function notificationEmailJobByteLength(job: NotificationEmailJobV1): number {
-  return utf8Length(notificationEmailJobJson(job));
-}
-
 export function isNotificationEmailJobV1(value: unknown): value is NotificationEmailJobV1 {
   if (!isRecord(value) || !hasExactKeys(value, JOB_KEYS)) return false;
   if (value.version !== NOTIFICATION_EMAIL_JOB_VERSION || !isNotificationEmailJobId(value.jobId)) return false;

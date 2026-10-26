@@ -12,7 +12,6 @@ import { RequestIdentityError, type verifyRequestIdentity } from '../src/request
 import { ShipStationProfileError } from '../src/shipstation/common.ts';
 import { handleStripeCheckoutSession } from '../src/stripeCheckout.ts';
 import {
-  handleStripeReceiptClaimWorkflowLegacy,
   handleStripeReceiptClaimWorkflowStart,
   handleStripeReceiptClaimWorkflowStatus,
 } from '../src/stripeReceiptClaimWorkflowRoutes.ts';
@@ -164,10 +163,9 @@ test('checkout pre-auth domain, unknown, and expired-deadline outcomes remain di
 for (const [mode, handle] of [
   ['start', handleStripeReceiptClaimWorkflowStart],
   ['status', handleStripeReceiptClaimWorkflowStatus],
-  ['legacy', handleStripeReceiptClaimWorkflowLegacy],
 ] as const) {
   const receiptRequest = () => {
-    const value = request(mode === 'legacy' ? '/receipts/stripe/claim' : `/receipts/stripe/claim/${mode}`, {
+    const value = request(`/receipts/stripe/claim/${mode}`, {
       code: 'ABCDEF-1234567890', recipient: RECEIPT_RECIPIENT,
       ...(mode === 'status' ? { operationId: RECEIPT_OPERATION_ID } : {}),
     });
@@ -198,7 +196,7 @@ for (const [mode, handle] of [
 
   test(`receipt ${mode} deadline wins identity errors and requests the same operation retry`, async () => {
     const result = await handle(receiptRequest(), { COMMERCE_DB: database } as Env, {}, {
-      httpTimeoutMs: 5, legacyTimeoutMs: 5,
+      httpTimeoutMs: 5,
       verifyIdentity: async (_request, _db, signal) => throwAfterDeadline(signal, new RequestIdentityError('invalid-token')),
     });
     assert.equal(result.response.status, 504);

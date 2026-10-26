@@ -4,21 +4,13 @@ import {
   normalizeNotificationEmailRecipient,
   validateNotificationEmailRecipient,
 } from '../../../../shared/notificationSubscription.js';
-import type { NotificationEmailKind } from '../../../../shared/notificationEmailJob.js';
 
-export {
-  normalizeNotificationEmailRecipient,
-  validateNotificationEmailRecipient,
-} from '../../../../shared/notificationSubscription.js';
+export { normalizeNotificationEmailRecipient } from '../../../../shared/notificationSubscription.js';
 
 export type DeliveryReadyToShipStatusSnapshot = {
   status?: unknown;
   source?: unknown;
 } | null | undefined;
-
-export type ResendNotificationEmailKind = NotificationEmailKind;
-
-export const RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED = true;
 
 export type ReadyToShipOrderNotificationPlan = {
   buyerRecipient: string | null;
@@ -67,11 +59,6 @@ export function planReadyToShipOrderNotifications(args: {
     shipperRecipients,
     shouldBuildOrderEmailItems: shipperRecipients.length > 0 || Boolean(buyerRecipient),
   };
-}
-
-export function shouldSendResendNotificationEmail(kind: ResendNotificationEmailKind): boolean {
-  if (kind === 'stripe_checkout_manual_review' || kind === 'receipt_claim_manual_review') return true;
-  return RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED;
 }
 
 export function shouldNotifyShippersForDeliveryReadyToShipWrite(args: {

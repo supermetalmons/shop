@@ -17,7 +17,7 @@ beforeEach(t => { if ('after' in t) installBrowserLocks(t); });
 afterEach(() => { cleanup(); window.localStorage.clear(); window.sessionStorage.clear(); });
 after(() => dom.window.close());
 
-for (const version of ['v1', 'v2', 'v3']) test(`the recovery hook hydrates terminal ${version} records without requiring a mutation`, async () => {
+for (const version of ['v1', 'v2', 'v3']) test(`the recovery hook ignores retired ${version} records without importing them`, async () => {
   const seeds = ['succeeded', 'failed'].map((status, index) => {
     const address = bs58.encode(new Uint8Array(32).fill(index + 42));
     const order = { orderId: `hydrate-${status}`, preorderId: config.preorderId, buyer: owner, ethereumAddress: null,
@@ -31,9 +31,9 @@ for (const version of ['v1', 'v2', 'v3']) test(`the recovery hook hydrates termi
     return { key, value, record, currentKey: key.replace(`:${version}:`, ':v4:') };
   });
   const { result } = renderHook(() => usePreorderRecoveryRecords(owner));
-  const before = JSON.stringify(result.current);
-  await waitFor(() => assert.ok(seeds.every(seed => window.localStorage.getItem(seed.currentKey))));
-  assert.equal(JSON.stringify(result.current), before);
+  assert.deepEqual(result.current, []);
+  await act(async () => {});
+  for (const seed of seeds) assert.equal(window.localStorage.getItem(seed.currentKey), null);
   for (const seed of seeds) assert.equal(window.localStorage.getItem(seed.key), seed.value);
   await act(async () => {
     for (const seed of seeds) {
@@ -42,7 +42,7 @@ for (const version of ['v1', 'v2', 'v3']) test(`the recovery hook hydrates termi
       window.dispatchEvent(new dom.window.StorageEvent('storage', { key: seed.key }));
     }
   });
-  assert.equal(JSON.stringify(result.current), before);
+  assert.deepEqual(result.current, []);
 });
 
 for (const owned of [false, true]) test(`the recovery hook observes newer shared ${owned ? 'absence' : 'ownership'} through a local shadow and saves it only locally`, async context => {

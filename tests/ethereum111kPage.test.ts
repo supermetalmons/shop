@@ -402,9 +402,10 @@ test('cross-tab checkout storage events block an already selected crate and stal
   const view = page();
   const open = await selectCrate(view);
   assert.equal(open.disabled, false);
-  const key = `mons.shop.ethereum-checkout-reservation:${returnedCheckoutId}:${returnedAttemptId}`;
+  const revision = crypto.randomUUID();
+  const key = `mons.shop.ethereum-checkout-reservation:${returnedCheckoutId}:${returnedAttemptId}:${revision}`;
   window.localStorage.setItem(key, JSON.stringify({ checkoutId: response.checkoutId, chainId: response.chainId,
-    contractAddress: response.contractAddress, wallet: response.wallet, tokenIds: response.tokenIds, attemptId: returnedAttemptId }));
+    contractAddress: response.contractAddress, wallet: response.wallet, tokenIds: response.tokenIds, attemptId: returnedAttemptId, revision }));
   await act(async () => { fireEvent.click(open); });
   assert.equal(sends, 0);
   await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key })); });

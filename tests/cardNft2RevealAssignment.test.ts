@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../shared/assignDudesPicker.ts';
+import {
+  pickDudeIdsForAssignment,
+} from '../shared/assignDudesPicker.ts';
 import { CARD_NFT_2_MAX_CARD_ID } from '../shared/cardNft2AssetCore.ts';
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
-  CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
   CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS,
   CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET,
   CARD_NFT_2_COMMON_CARD_IDS,
   CARD_NFT_2_COMMON_CARD_ID_SET,
   CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS,
-  CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET,
   CARD_NFT_2_SUPER_RARE_CARD_IDS,
   CARD_NFT_2_SUPER_RARE_CARD_ID_SET,
 } from '../shared/cardNft2RevealIds.ts';
@@ -79,9 +79,9 @@ test('card_nft_2 reveal ids match canonical sources and are valid', () => {
   assert.deepEqual([...CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS], expectedAsGoodAsSuperRareIds);
   assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 73);
 
-  assert.equal(CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.size, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length);
+  assert.equal(new Set(CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS).size, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length);
   assert.equal(CARD_NFT_2_SUPER_RARE_CARD_ID_SET.size, CARD_NFT_2_SUPER_RARE_CARD_IDS.length);
-  assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.size, CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length);
+  assert.equal(new Set(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS).size, CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length);
   assert.equal(CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET.size, CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS.length);
   assert.equal(
     CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS.length,
@@ -129,7 +129,7 @@ test('card_nft_2 assignment can pick ad hoc curated ids for the as-good first sl
   });
 
   assert.deepEqual(result.chosen, [curatedA, commonId, neitherId]);
-  assert.equal(result.chosen.some((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.has(id)), true);
+  assert.equal(result.chosen.some((id) => CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.includes(id)), true);
   assert.equal(result.chosen.includes(superRareId), false);
   assert.equal(result.candidatesChecked, 3);
   assert.deepEqual(pool, [superRareId, curatedB, curatedC]);
@@ -207,7 +207,7 @@ test('card_nft_2 assignment uses common surplus before as-good surplus after nei
   assert.deepEqual(countAssignmentCategories(pool), { as_good_as_super_rare: 1, common: 2, neither: 0 });
 });
 
-test('card_nft_2 manifest validation accepts picker output across slot fallback shapes', async () => {
+test('card_nft_2 picker preserves assignment size and stale exclusions across fallback shapes', async () => {
   const [neitherA, neitherB, staleNeither] = firstNNonBucketIds(3);
   const scenarios = [
     {
@@ -255,39 +255,8 @@ test('card_nft_2 manifest validation accepts picker output across slot fallback 
     });
     assert.deepEqual(result.staleDudeIds, scenario.staleDudeIds || [], scenario.name);
 
-    await validateDudeIdsForAssignment({
-      dropFamily: 'card_nft_2',
-      itemsPerBox: 3,
-      maxDudeId: CARD_NFT_2_MAX_CARD_ID,
-      pool: [...scenario.pool],
-      dudeIds: result.chosen,
-      isAssigned: scenario.assigned,
-    });
     assert.equal(result.chosen.length, 3, scenario.name);
   }
-});
-
-test('card_nft_2 manifest validation skips reads for verified stale ids', async () => {
-  const staleNeitherId = firstNonBucketId();
-  const superRareId = CARD_NFT_2_SUPER_RARE_CARD_IDS[0]!;
-  const commonId = CARD_NFT_2_COMMON_CARD_IDS[0]!;
-  const commonExtraId = CARD_NFT_2_COMMON_CARD_IDS[1]!;
-  const reads: number[] = [];
-
-  await validateDudeIdsForAssignment({
-    dropFamily: 'card_nft_2',
-    itemsPerBox: 3,
-    maxDudeId: CARD_NFT_2_MAX_CARD_ID,
-    pool: [superRareId, commonId, staleNeitherId, commonExtraId],
-    dudeIds: [superRareId, commonId, commonExtraId],
-    knownAssignedDudeIds: [staleNeitherId],
-    isAssigned: (id) => {
-      reads.push(id);
-      return false;
-    },
-  });
-
-  assert.equal(reads.includes(staleNeitherId), false);
 });
 
 test('card_nft_2 assignment uses common extras before rare-like extras', async () => {

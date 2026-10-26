@@ -10,7 +10,6 @@ import {
   NOTIFICATION_EMAIL_MAX_TEXT_BYTES,
   createNotificationEmailJobV1,
   isNotificationEmailJobV1,
-  notificationEmailJobByteLength,
   type NotificationEmailKind,
 } from '../shared/notificationEmailJob.ts';
 
@@ -68,7 +67,7 @@ test('notification email contract enforces body and serialized size limits', () 
     text: 't'.repeat(NOTIFICATION_EMAIL_MAX_TEXT_BYTES),
     html: 'h'.repeat(NOTIFICATION_EMAIL_MAX_HTML_BYTES),
   };
-  assert.ok(notificationEmailJobByteLength(nearLimit) > NOTIFICATION_EMAIL_MAX_JOB_BYTES);
+  assert.ok(new TextEncoder().encode(JSON.stringify(nearLimit)).byteLength > NOTIFICATION_EMAIL_MAX_JOB_BYTES);
   assert.equal(isNotificationEmailJobV1(nearLimit), false);
 });
 

@@ -143,13 +143,12 @@ export type PackStatusCommerceSnapshot = {
 
 function requirePackStatusOutboxParents(snapshot: PackStatusCommerceSnapshot): void {
   const parents = new Map(snapshot.deliveryOrders.map((document) => [document.path, document]));
-  const outboxes = new Map(snapshot.packStatusOutboxes.map((outbox) => [outbox.parentPath, outbox]));
   for (const outbox of snapshot.packStatusOutboxes) {
     if (parents.get(outbox.parentPath)?.dropId !== outbox.dropId) fail('Pack-status outbox parent is invalid.');
   }
   for (const parent of snapshot.deliveryOrders) {
-    if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(parent.data, field)) && !outboxes.has(parent.path)) {
-      fail(`Pack-status outbox is missing: ${parent.path}.`);
+    if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(parent.data, field))) {
+      fail(`Frozen pack-status metadata remains: ${parent.path}.`);
     }
   }
 }

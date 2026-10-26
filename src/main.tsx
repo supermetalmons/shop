@@ -7,6 +7,7 @@ import { getBuildInfo } from './lib/buildInfo';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import { canonicalProductionUrl } from './lib/canonicalOrigin';
 import { runBrowserBootstrap } from './bootstrap';
+import { discardLegacyBrowserState } from './lib/discardLegacyBrowserState';
 import type { ResolvedAppRoute } from './routes';
 import ShopRoute from './ShopRoute';
 import { BackgroundBlurProvider } from './components/BackgroundBlurLayer';
@@ -65,6 +66,7 @@ runBrowserBootstrap(canonicalProductionUrl(window.location.href), {
   redirect: (url) => window.location.replace(url),
   setup: () => {
     if (!window.Buffer) window.Buffer = Buffer;
+    discardLegacyBrowserState();
     installMobileInteractionGuards();
     document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
   },

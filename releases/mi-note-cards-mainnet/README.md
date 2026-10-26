@@ -1,10 +1,10 @@
-# Mi Note Cards public-drop metadata
+# Mi Note Cards public-drop metadata — October 9, 2026 snapshot
 
-The 4,114 item metadata JSONs for the upcoming public `mi_note_cards` family drop
+The 4,114 item metadata JSONs prepared for the public `mi_note_cards` family drop
 are hosted on the CDN. Generated JSON copies are no longer stored in this
 repository; this release record preserves their paths and source mapping.
 
-Use this exact metadata base for the upcoming public drop:
+The reviewed mainnet metadata base is:
 
 `https://cdn.lil.org/nft/mi_note_cards/json`
 
@@ -94,7 +94,8 @@ images, card receipts, pack receipts, and collection metadata also returned HTTP
 
 All 1,430 card records are included independently of the 1,254-card capacity of
 627 two-card packs. Pack contents and preorder allocation are not assigned here.
-The [mainnet deployment release](../mi-note-cards/README.md) freezes that
-allocation and prepares the two configs while sales stay closed. Existing
-preorder NFTs remain unchanged; their conversion and mint activation are separate
-later operations.
+At this metadata snapshot, deployment, preorder conversion, and activation were
+separate later operations. They are now completed; the
+[mainnet release](../mi-note-cards/README.md) and
+[conversion record](../mi-note-cards/preorder-upgrade/README.md) preserve their
+allocation and verification evidence. This record does not represent live stock.

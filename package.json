@@ -109,9 +109,7 @@
     "generate:ops-schema": "node --import tsx scripts/generateDatabaseSchema.ts ops --write",
     "check:ops-schema": "node --import tsx scripts/generateDatabaseSchema.ts ops --check",
     "generate:db": "npm run generate:preorder-catalog && npm run generate:commerce-schema && npm run generate:data-schema && npm run generate:ops-schema",
-    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema && npm run check:data-schema && npm run check:ops-schema",
-    "upgrade-mi-note-preorders": "node --import tsx scripts/upgrade-mi-note-preorders.ts",
-    "issue:binder-packing": "node --import tsx scripts/ops/issueBinderPackingReceipts.ts"
+    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema && npm run check:data-schema && npm run check:ops-schema"
   },
   "repository": {
     "type": "git",

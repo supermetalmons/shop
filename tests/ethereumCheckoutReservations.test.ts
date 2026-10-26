@@ -170,21 +170,16 @@ test('terminal responses retire only the revisions captured before their request
   assert.equal(checkoutReservesItems([item()]), false);
 });
 
-test('legacy keys remain readable and migrate without letting stale cleanup remove the new revision', () => {
+test('unrevisioned reservations are ignored without being imported', () => {
   const legacyKey = seed(checkout());
-  assert.equal(checkoutReservesItems([item()]), true);
-  const stale = observeCheckoutReservation(checkoutId);
-  observeCheckoutReservation(checkoutId)(checkout());
-  assert.equal(window.localStorage.getItem(legacyKey), null);
-  assert.equal(storedKeys().length, 1);
-  assert.ok(storedKeys()[0].startsWith(`${legacyKey}:`));
-  stale(checkout({ status: 'failed' }));
-  assert.equal(checkoutReservesItems([item()]), true);
-  observeCheckoutReservation(checkoutId)(checkout({ status: 'failed' }));
   assert.equal(checkoutReservesItems([item()]), false);
-  seed(checkout());
   observeCheckoutReservation(checkoutId)(checkout({ status: 'failed' }));
-  assert.deepEqual(storedKeys(), []);
+  assert.deepEqual(storedKeys(), [legacyKey]);
+  assert.equal(checkoutReservesItems([item()]), false);
+  rememberCheckoutReservation(checkout());
+  assert.equal(checkoutReservesItems([item()]), true);
+  observeCheckoutReservation(checkoutId)(checkout({ status: 'success' }));
+  assert.deepEqual(storedKeys(), [legacyKey]);
 });
 
 test('capacity counts logical reservations while every persisted revision remains visible', () => {

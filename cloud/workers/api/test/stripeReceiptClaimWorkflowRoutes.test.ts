@@ -6,7 +6,6 @@ import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
 import { runtimeForDrop } from '../src/stripeReceiptClaimOnchain.ts';
 import {
-  handleStripeReceiptClaimWorkflowLegacy,
   handleStripeReceiptClaimWorkflowStart,
   handleStripeReceiptClaimWorkflowStatus,
 } from '../src/stripeReceiptClaimWorkflowRoutes.ts';
@@ -112,19 +111,6 @@ test('status requires authentication before it reads an operation', async () => 
   assert.equal(loads, 0);
 });
 
-test('legacy adapter waits for the same operation and preserves the successful response shape', async () => {
-  const fixture = harness();
-  const result = await handleStripeReceiptClaimWorkflowLegacy(request(body), env, {}, {
-    ...fixture.dependencies, sleep: async () => {
-      fixture.snapshot.operation.phase = 'complete'; fixture.snapshot.operation.result = RECEIPT_RESULT;
-    },
-  });
-  assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), RECEIPT_RESULT);
-  assert.equal(fixture.ensured(), 1);
-  assert.match(fixture.reservations[0]?.requestId || '', /^[0-9a-f-]{36}$/);
-});
-
 test('disconnect after reservation leaves accepted work owned by the Workflow', async () => {
   const fixture = harness();
   const controller = new AbortController();
@@ -157,7 +143,6 @@ test('short start deadlines return when reservation acknowledgement stalls', asy
 
 for (const [mode, handle] of [
   ['start', handleStripeReceiptClaimWorkflowStart],
-  ['legacy', handleStripeReceiptClaimWorkflowLegacy],
 ] as const) {
   for (const stalled of ['proof', 'assignment'] as const) {
     test(`${mode} returns completed legacy claims when optional ${stalled} enrichment stalls`, async (t) => {
@@ -181,7 +166,7 @@ for (const [mode, handle] of [
       const response = await handle(request(body, { requestId: RECEIPT_REQUEST_ID }), {
         ...env, COMMERCE_DB: fixture.db, HELIUS_API_KEY: 'test-key',
       }, {}, {
-        httpTimeoutMs: 1050, legacyTimeoutMs: 1050,
+        httpTimeoutMs: 1050,
         verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'anon' }),
         ensure: async (_env, snapshot) => { ensured += 1; return snapshot; },
         reserve: async (context, code, recipient, nowMs, options) => {
@@ -235,12 +220,11 @@ test('retired instance recovery asks the client to retry the same invocation', a
 for (const [mode, handle] of [
   ['start', handleStripeReceiptClaimWorkflowStart],
   ['status', handleStripeReceiptClaimWorkflowStatus],
-  ['legacy', handleStripeReceiptClaimWorkflowLegacy],
 ] as const) {
   const validBody = { ...body, ...(mode === 'status' ? { operationId: RECEIPT_OPERATION_ID } : {}) };
 
   test(`receipt ${mode} rejects methods before authentication or database work`, async () => {
-    const response = await handle(new Request('https://api.mons.shop/receipts/stripe/claim'), env, {}, {
+    const response = await handle(new Request(`https://api.mons.shop/receipts/stripe/claim/${mode}`), env, {}, {
       nowMs: () => assert.fail('Rejected methods must not read the authentication clock'),
       verifyIdentity: async () => assert.fail('Rejected methods must not authenticate'),
       reserve: async () => assert.fail('Rejected methods must not reserve claims'),
@@ -261,7 +245,7 @@ for (const [mode, handle] of [
       [JSON.stringify(validBody), 'text/plain'],
     ]) {
       let authentications = 0;
-      const response = await handle(new Request('https://api.mons.shop/receipts/stripe/claim', {
+      const response = await handle(new Request(`https://api.mons.shop/receipts/stripe/claim/${mode}`, {
         method: 'POST', headers: { 'Content-Type': contentType }, body: raw,
       }), env, {}, {
         verifyIdentity: async () => { authentications += 1; throw new RequestIdentityError('invalid-token'); },
@@ -307,15 +291,3 @@ for (const [mode, handle] of [
     }
   });
 }
-
-test('legacy polling deadline leaves its durable operation pending and allows the same operation retry', async () => {
-  const fixture = harness();
-  const response = await handleStripeReceiptClaimWorkflowLegacy(request(body), env, {}, {
-    ...fixture.dependencies, legacyTimeoutMs: 5,
-  });
-  assert.equal(response.response.status, 504);
-  assert.equal(response.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), 'same-operation');
-  assert.equal(response.operationId, RECEIPT_OPERATION_ID);
-  assert.equal(fixture.ensured(), 1);
-  assert.equal(fixture.snapshot.operation.phase, 'pending');
-});

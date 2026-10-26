@@ -83,7 +83,7 @@ function delayedRuntime() {
 function receiveRecovery(order: PreorderOrder) {
   const orderConfig = getPreorderConfig(order.preorderId)!;
   const key = `mons:preorder-recovery:v4:${orderConfig.cluster}:${orderConfig.collection}:${order.buyer}:${encodeURIComponent(order.orderId)}`;
-  window.localStorage.setItem(key, JSON.stringify({ order, resolvedAssetIds: [], failureNotified: false }));
+  window.localStorage.setItem(key, JSON.stringify({ order, resolvedAssetIds: [], failureNotified: false, inventoryResolutionVersion: 4 }));
   window.dispatchEvent(new dom.window.StorageEvent('storage', { key }));
 }
 
@@ -100,7 +100,7 @@ for (const httpStatus of [401, 409]) {
         const prepared = orders.get(orderId)!;
         const confirmed = { ...prepared, status: recoveredStatus, confirmedSlot: 500, signature };
         const key = `mons:preorder-recovery:v4:${config.cluster}:${config.collection}:${buyer}:${orderId}`;
-        window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false }));
+        window.localStorage.setItem(key, JSON.stringify({ order: confirmed, resolvedAssetIds: [], failureNotified: false, inventoryResolutionVersion: 4 }));
         return { order: prepared };
       };
       const { result } = renderHook(() => usePreorderCheckout({ ...options,

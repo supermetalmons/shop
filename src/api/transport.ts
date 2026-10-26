@@ -169,7 +169,6 @@ export type AuthenticatedApiPath =
   | '/preorders/status'
   | '/checkout/session'
   | '/claims/irl/prepare'
-  | '/receipts/stripe/claim'
   | typeof STRIPE_RECEIPT_CLAIM_START_PATH
   | typeof STRIPE_RECEIPT_CLAIM_STATUS_PATH
   | '/delivery/prepare'
@@ -224,7 +223,6 @@ const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
-const STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS = 190_000;
 const PROFILE_D1_WRITE_API_TIMEOUT_MS = 80_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
@@ -248,7 +246,6 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
     return DELIVERY_RECEIPTS_API_TIMEOUT_MS;
   }
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
-  if (pathname === '/receipts/stripe/claim') return STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS;
   if (pathname === STRIPE_RECEIPT_CLAIM_START_PATH || pathname === STRIPE_RECEIPT_CLAIM_STATUS_PATH) {
     return STRIPE_RECEIPT_CLAIM_HTTP_TIMEOUT_MS;
   }

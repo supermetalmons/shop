@@ -5,8 +5,6 @@ import { requireStripeReceiptClaimCode } from '../../../../shared/stripeReceiptC
 import { readBoundedRequestJson } from './boundedRequest.js';
 import { StripeReceiptClaimError } from './stripeReceiptClaimErrors.js';
 
-export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
-
 const REQUEST_MAX_BYTES = 1024;
 
 const requestSchema = z.object({

@@ -1,7 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { PublicKey, SystemProgram } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import Stripe from 'stripe';
 import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
@@ -12,11 +12,9 @@ import {
   decodeAdminDeliveryOrderRecord,
   deriveAdminOrderPda,
   encodeAdminDeliverVariantOrderArgs,
-  shouldProcessStripeCheckoutFulfillmentWrite,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
-  validateStripeTestCheckoutContract,
   type StripeOffchainDeliveryOrderDocumentInput,
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
 } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
@@ -57,17 +55,14 @@ import {
 } from '../shared/stripeWebhook.ts';
 import {
   StripeCheckoutPackStatusProjectionError,
-  buildStripeCheckoutManualReviewSummary,
   createOrGetStripeOffchainDeliveryOrder,
   isRetryableStripeCheckoutFulfillmentError,
   processStripeCheckoutFulfillmentDocument,
   runStripeCheckoutFulfillmentWithRetry,
-  isStripeCheckoutManualReviewCandidate,
   stripeApiModeForCluster,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
   stripeCheckoutKindForDrop,
-  stripeTestApiKey,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
 import {
   markStripeCheckoutFulfillmentFailed,
@@ -92,16 +87,13 @@ import { StripeCheckoutFulfillmentError } from '../cloud/workers/api/src/stripeC
 import { stripeClientForKey } from '../cloud/workers/api/src/stripeCheckout/provider.ts';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../cloud/workers/api/src/claimCodes.ts';
 import {
-  IX_BUBBLEGUM_MINT_V2,
   IX_BUBBLEGUM_BURN_V2,
   IX_BUBBLEGUM_TRANSFER_V2,
   bubblegumBurnV2Ix,
-  bubblegumMintV2Ix,
   bubblegumTransferV2Ix,
-  encodeBubblegumMintV2Args,
 } from '../cloud/workers/api/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
-import { manualReviewCheckoutFromRecord } from '../shared/fulfillmentReadModel.ts';
+import { isManualReviewCheckout, manualReviewCheckoutFromRecord } from '../shared/fulfillmentReadModel.ts';
 import { parseShipStationShipTo } from '../shared/shipstationRates.ts';
 
 function pubkey(seed: number): PublicKey {
@@ -244,10 +236,6 @@ function u64LE(value: bigint): Buffer {
   const buf = Buffer.alloc(8);
   buf.writeBigUInt64LE(value, 0);
   return buf;
-}
-
-function timestampLike(ms: number): { toMillis(): number } {
-  return { toMillis: () => ms };
 }
 
 function anchorDiscriminator(namespace: string, name: string): Buffer {
@@ -464,76 +452,6 @@ test('Bubblegum burnV2 helper uses expected discriminator and account order', ()
   assert.equal(ix.keys.at(-1)?.pubkey.toBase58(), proof[1].toBase58());
 });
 
-test('Bubblegum mintV2 helper matches the receipt metadata encoding and account order', () => {
-  const payer = pubkey(1);
-  const merkleTree = pubkey(2);
-  const coreCollection = pubkey(3);
-  const treeConfig = pubkey(4);
-  const mplCoreCpiSigner = pubkey(5);
-  const name = 'receipt · binder 16';
-  const uri = 'https://cdn.lil.org/nft/card_nft_binder/json/rb16.json';
-  const data = encodeBubblegumMintV2Args({
-    name,
-    uri,
-    coreCollection,
-  });
-  const expected = Buffer.concat([
-    IX_BUBBLEGUM_MINT_V2,
-    u32LE(Buffer.byteLength(name)),
-    Buffer.from(name),
-    u32LE(0),
-    u32LE(Buffer.byteLength(uri)),
-    Buffer.from(uri),
-    Buffer.from([0, 0, 0, 1, 1, 0]),
-    u32LE(0),
-    Buffer.from([1]),
-    coreCollection.toBuffer(),
-    Buffer.from([0, 0]),
-  ]);
-  assert.deepEqual(data, expected);
-
-  const ix = bubblegumMintV2Ix({
-    bubblegumProgramId: pubkey(20),
-    mplNoopProgramId: pubkey(21),
-    mplAccountCompressionProgramId: pubkey(22),
-    mplCoreProgramId: pubkey(23),
-    mplCoreCpiSigner,
-    treeConfig,
-    payer,
-    treeCreatorOrDelegate: payer,
-    collectionAuthority: payer,
-    leafOwner: payer,
-    leafDelegate: payer,
-    merkleTree,
-    coreCollection,
-    name,
-    uri,
-  });
-
-  assert.deepEqual(
-    ix.keys.map((key) => [
-      key.pubkey.toBase58(),
-      key.isSigner,
-      key.isWritable,
-    ]),
-    [
-      [treeConfig.toBase58(), false, true],
-      [payer.toBase58(), true, true],
-      [payer.toBase58(), true, false],
-      [payer.toBase58(), true, false],
-      [payer.toBase58(), false, false],
-      [payer.toBase58(), false, false],
-      [merkleTree.toBase58(), false, true],
-      [coreCollection.toBase58(), false, true],
-      [mplCoreCpiSigner.toBase58(), false, false],
-      [pubkey(21).toBase58(), false, false],
-      [pubkey(22).toBase58(), false, false],
-      [pubkey(23).toBase58(), false, false],
-      [SystemProgram.programId.toBase58(), false, false],
-    ],
-  );
-});
-
 test('admin order PDA and instruction args use the on-chain seed and discriminator', () => {
   const programId = pubkey(1);
   const configPda = pubkey(2);
@@ -695,7 +613,7 @@ test('Stripe fulfillment and manual-review addresses preserve international loca
   }
 });
 
-test('buildStripeCheckoutManualReviewSummary includes failed manual-review checkout contact info when allowed', () => {
+test('manualReviewCheckoutFromRecord includes failed manual-review checkout contact info when allowed', () => {
   const checkout = {
     status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
     manualRefundReviewRequired: true,
@@ -704,8 +622,8 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
     authSubject: 'anonymous_subject',
     quantity: '15',
-    createdAt: timestampLike(1_000),
-    failedAt: timestampLike(2_000),
+    createdAt: 1_000,
+    failedAt: 2_000,
     lastFulfillmentError: { message: 'processing failure\nstack hidden' },
     stripeSessionSummary: {
       amount_total: '66000',
@@ -731,7 +649,7 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
     },
   };
 
-  const summary = buildStripeCheckoutManualReviewSummary({
+  const summary = manualReviewCheckoutFromRecord({
     dropId: 'card_nft_2',
     sessionId: 'cs_test_manual_review_123',
     checkout,
@@ -761,7 +679,7 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
   assert.equal(summary?.address && 'phone' in summary.address, false);
 });
 
-test('buildStripeCheckoutManualReviewSummary masks failed checkout contact info when address access is not allowed', () => {
+test('manualReviewCheckoutFromRecord masks failed checkout contact info when address access is not allowed', () => {
   const checkout = {
     status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
     manualRefundReviewRequired: true,
@@ -783,7 +701,7 @@ test('buildStripeCheckoutManualReviewSummary masks failed checkout contact info 
     },
   };
 
-  const summary = buildStripeCheckoutManualReviewSummary({
+  const summary = manualReviewCheckoutFromRecord({
     dropId: 'card_nft_2',
     sessionId: 'cs_test_manual_review_456',
     checkout,
@@ -843,9 +761,9 @@ test('manual-review checkout summary excludes non-failed or non-manual-review ch
     { ...included, status: STRIPE_CHECKOUT_STATUS.CREATED, manualRefundReviewRequired: true },
   ];
 
-  assert.equal(isStripeCheckoutManualReviewCandidate(included), true);
+  assert.equal(isManualReviewCheckout(included), true);
   assert.ok(
-    buildStripeCheckoutManualReviewSummary({
+    manualReviewCheckoutFromRecord({
       dropId: 'card_nft_2',
       sessionId: 'cs_test_manual_review_789',
       checkout: included,
@@ -854,9 +772,9 @@ test('manual-review checkout summary excludes non-failed or non-manual-review ch
     }),
   );
   excluded.forEach((checkout) => {
-    assert.equal(isStripeCheckoutManualReviewCandidate(checkout), false);
+    assert.equal(isManualReviewCheckout(checkout), false);
     assert.equal(
-      buildStripeCheckoutManualReviewSummary({
+      manualReviewCheckoutFromRecord({
         dropId: 'card_nft_2',
         sessionId: 'cs_test_manual_review_789',
         checkout,
@@ -1010,8 +928,8 @@ test('isStripeOffchainFulfillmentSession only accepts the app fulfillment mode',
   assert.equal(isStripeOffchainFulfillmentSession({ metadata: {} }), false);
 });
 
-test('validateStripeTestCheckoutContract ignores unrelated checkout sessions', () => {
-  const result = validateStripeTestCheckoutContract({
+test('validateStripeCheckoutContract in test mode ignores unrelated checkout sessions', () => {
+  const result = validateStripeCheckoutContract({ expectedLivemode: false,
     session: { mode: 'payment', payment_status: 'paid', livemode: false, metadata: {} },
     lineItems: { data: [] },
     expectedUnitAmountCents: 100,
@@ -1020,8 +938,8 @@ test('validateStripeTestCheckoutContract ignores unrelated checkout sessions', (
   assert.deepEqual(result, { ignored: true });
 });
 
-test('validateStripeTestCheckoutContract accepts a one-item USD test checkout', () => {
-  const result = validateStripeTestCheckoutContract({
+test('validateStripeCheckoutContract in test mode accepts a one-item USD test checkout', () => {
+  const result = validateStripeCheckoutContract({ expectedLivemode: false,
     session: {
       mode: 'payment',
       payment_status: 'paid',
@@ -1166,7 +1084,7 @@ test('validateStripeCheckoutContract accepts multi-item checkout quantity when e
   );
 });
 
-test('validateStripeTestCheckoutContract rejects quantity mismatches and multiple line items', () => {
+test('validateStripeCheckoutContract in test mode rejects quantity mismatches and multiple line items', () => {
   const session = {
     mode: 'payment',
     payment_status: 'paid',
@@ -1182,7 +1100,7 @@ test('validateStripeTestCheckoutContract rejects quantity mismatches and multipl
 
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session,
         lineItems: {
           data: [{ quantity: 2, currency: STRIPE_OFFCHAIN_CURRENCY, amount_total: 200 }],
@@ -1193,7 +1111,7 @@ test('validateStripeTestCheckoutContract rejects quantity mismatches and multipl
   );
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session,
         lineItems: {
           data: [
@@ -1207,7 +1125,7 @@ test('validateStripeTestCheckoutContract rejects quantity mismatches and multipl
   );
 });
 
-test('validateStripeTestCheckoutContract rejects wrong currency and amount', () => {
+test('validateStripeCheckoutContract in test mode rejects wrong currency and amount', () => {
   const session = {
     mode: 'payment',
     payment_status: 'paid',
@@ -1223,7 +1141,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
 
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session: { ...session, currency: 'eur' },
         lineItems: { data: [{ quantity: 1, currency: 'eur', amount_total: 100 }] },
         expectedUnitAmountCents: 100,
@@ -1232,7 +1150,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
   );
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session: { ...session, amount_total: 200 },
         lineItems: { data: [{ quantity: 1, currency: STRIPE_OFFCHAIN_CURRENCY, amount_total: 200 }] },
         expectedUnitAmountCents: 100,
@@ -1241,7 +1159,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
   );
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session: { ...session, amount_subtotal: 200, amount_total: 200 },
         lineItems: {
           data: [
@@ -1260,7 +1178,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
   );
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session: { ...session, amount_subtotal: 100, amount_total: 90 },
         lineItems: {
           data: [
@@ -1279,7 +1197,7 @@ test('validateStripeTestCheckoutContract rejects wrong currency and amount', () 
   );
   assert.throws(
     () =>
-      validateStripeTestCheckoutContract({
+      validateStripeCheckoutContract({ expectedLivemode: false,
         session: { ...session, automatic_tax: { enabled: false, status: 'complete' } },
         lineItems: {
           data: [
@@ -2075,10 +1993,10 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   );
 });
 
-test('stripeTestApiKey uses the first configured test key only', () => {
-  assert.equal(stripeTestApiKey(['rk_test_restricted', 'sk_test_secret']), 'rk_test_restricted');
-  assert.equal(stripeTestApiKey(['', 'sk_live_ignored', 'sk_test_secret']), 'sk_test_secret');
-  assert.throws(() => stripeTestApiKey(['', 'sk_live_wrong']), /Stripe test key is not configured/);
+test('stripeApiKeyForMode uses the first configured test key only', () => {
+  assert.equal(stripeApiKeyForMode(['rk_test_restricted', 'sk_test_secret'], 'test'), 'rk_test_restricted');
+  assert.equal(stripeApiKeyForMode(['', 'sk_live_ignored', 'sk_test_secret'], 'test'), 'sk_test_secret');
+  assert.throws(() => stripeApiKeyForMode(['', 'sk_live_wrong'], 'test'), /Stripe test key is not configured/);
 });
 
 test('stripeApiKeyForMode selects only keys matching the requested mode', () => {
@@ -3208,51 +3126,6 @@ test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot b
   );
 
   assert.equal(attempts, 1);
-});
-
-test('shouldProcessStripeCheckoutFulfillmentWrite accepts only created/failed to pending transitions', () => {
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: STRIPE_CHECKOUT_STATUS.CREATED,
-      afterStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-      afterStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      afterStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      afterStatus: STRIPE_CHECKOUT_STATUS.PROCESSING,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: undefined,
-      afterStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      afterStatus: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-    false,
-  );
 });
 
 test('checkout session core rejects bad returnUrl before config fetch', async () => {

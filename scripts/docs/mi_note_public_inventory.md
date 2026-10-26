@@ -32,7 +32,7 @@ or malformed preorder identities. It does not equate Core account count with the
 collection size: compressed receipt mints increase that size too. Before public
 registration, rechecks retain the complete prelaunch coverage requirement.
 
-After the [preorder metadata upgrade](mi_note_preorder_upgrade.md), frozen-manifest
+After the [completed preorder conversion](../../releases/mi-note-cards/preorder-upgrade/README.md), frozen-manifest
 verification also accepts each ledger-recorded asset's exact `card N` name and
 `fN.json` URI under the matching registered drop. The original asset address and
 card ID must still match the permanent claim. Conversion never changes this
@@ -68,8 +68,8 @@ metadata base, and collection. Keep both configurations unstarted with zero
 minted packs during initialization. The logical drop has two cards per pack.
 
 The registry's `inventoryManifest` must contain the snapshot's `sha256` and
-`eligibleCardIds` as `cardIds`. Apply Commerce migration
-`0036_scoped_inventory_initialization.sql` before using the new initializer.
+`eligibleCardIds` as `cardIds`. Apply all checked-in Commerce migrations before
+using the initializer, following [Commerce operations](commerce_operations.md).
 
 ```sh
 node --import tsx scripts/ops/dudeInventoryControl.ts initialize-new --drop mi_note_cards_devnet --manifest releases/mi-note-cards-devnet/inventory.json

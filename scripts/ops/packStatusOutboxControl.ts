@@ -29,11 +29,9 @@ async function verifyState(query: CommerceAuthorityQuery): Promise<number> {
     }
     count += rows.length;
     if (rows.length < PAGE_SIZE) {
-      const missing = await query(`SELECT document.document_path FROM commerce_documents AS document
-        LEFT JOIN commerce_pack_status_outbox AS outbox ON outbox.parent_path = document.document_path
-        WHERE document.document_kind = 'delivery_order' AND outbox.parent_path IS NULL
-          AND (${legacyProjectionPredicate('document.document_json')}) LIMIT 1`);
-      if (missing.length) throw new Error(`Pack-status outbox is missing: ${String(missing[0].document_path)}.`);
+      const legacy = await query(`SELECT document_path FROM commerce_documents
+        WHERE ${legacyProjectionPredicate('document_json')} LIMIT 1`);
+      if (legacy.length) throw new Error(`Frozen pack-status metadata remains: ${String(legacy[0].document_path)}.`);
       return count;
     }
     cursor = String(rows.at(-1)!.parent_path);

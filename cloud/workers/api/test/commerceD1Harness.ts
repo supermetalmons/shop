@@ -222,6 +222,7 @@ export function createCommerceD1Harness(
     preorderCatalogMigration?: boolean;
     ethereumControlMigration?: boolean;
     preorderAssetLookupMigration?: boolean;
+    frozenCommerceMetadataCleanupMigration?: boolean;
   }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
@@ -281,6 +282,7 @@ export function createCommerceD1Harness(
         if (options.obsoleteIndexesMigration === false && migration.name >= '0034_') break;
         if (options.ethereumControlMigration === false && migration.name >= '0041_') break;
         if (options.preorderAssetLookupMigration === false && migration.name >= '0045_') break;
+        if (options.frozenCommerceMetadataCleanupMigration === false && migration.name >= '0046_') break;
         database.exec(migration.sql);
       }
     }
@@ -462,8 +464,7 @@ function writeCommerceDocument(
       ]));
   }
   if (typedCheckout) {
-    const existing = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?').get(seed.key.path);
-    data = stripeCheckoutStateMetadata(seed.data, existing ? JSON.parse(String(existing.document_json)) : {});
+    data = stripeCheckoutStateMetadata(seed.data);
     harness.database.prepare(`INSERT INTO commerce_commit_guards
       (guard_id, expectations_json, expected_documents_revision, created_at_ms, stripe_checkout_paths_json)
       VALUES (?, '[]', NULL, 0, ?)`).run(guardId, JSON.stringify([seed.key.path]));

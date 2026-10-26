@@ -40,16 +40,9 @@ import {
   raceWithSignal,
 } from './boundedRequest.js';
 
-export { runScheduledReconciliations } from './workerScheduled.js';
 export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkflow.js';
 export { StripeReceiptClaimWorkflowV1 } from './stripeReceiptClaimWorkflow.js';
 export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
-export {
-  processBackgroundJobBatch,
-  processStripeFulfillmentMessage,
-} from './workerBackgroundJobs.js';
-export { sleepWithAbort } from './publicRouteSupport.js';
-export type { ProviderFetch } from './publicRouteSupport.js';
 
 type RequestExecution = {
   defer: DeferredWork;

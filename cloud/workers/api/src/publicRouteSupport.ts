@@ -141,8 +141,6 @@ export async function parseJsonRequestBody<T>(
   return value;
 }
 
-export const sleepWithAbort = sleepWithSignal;
-
 export const defaultDependencies: WorkerDependencies = {
   cache: typeof caches === 'undefined'
     ? null
@@ -158,7 +156,7 @@ export const defaultDependencies: WorkerDependencies = {
   inventoryMaxProviderCalls: HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS,
   inventoryMaxResponseBodyBytes: MAX_INVENTORY_RESPONSE_BODY_BYTES,
   randomUint32: () => crypto.getRandomValues(new Uint32Array(1))[0],
-  sleep: sleepWithAbort,
+  sleep: sleepWithSignal,
   log: (entry) => console.log(entry),
   resendFetch: (input, init) => fetch(input, init),
   resendTimeoutMs: RESEND_TIMEOUT_MS,

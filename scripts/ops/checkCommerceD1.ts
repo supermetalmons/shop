@@ -1,11 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { parseDeliveryRecoveryRow } from '../../shared/deliveryRecoveryState.ts';
 import { parseNotificationOutboxRow } from '../../shared/notificationOutbox.ts';
+import { LEGACY_NOTIFICATION_FIELDS } from '../shared/frozenCommerceMetadata.ts';
 import { parsePackStatusOutboxRow } from '../../shared/packStatusOutbox.ts';
 import { parseReceiptClaimFailureOutboxRow } from '../../shared/receiptClaimFailureOutbox.ts';
 import { PREORDER_CONFIGS } from '../../shared/preorders.ts';
 import { LEGACY_PACK_STATUS_PROJECTION_FIELDS } from '../shared/packStatusProjectionFields.ts';
-import { parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
+import { STRIPE_CHECKOUT_STATE_FIELDS, parseStripeCheckoutStateRow } from '../../shared/stripeCheckoutState.ts';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
   commerceD1DocumentIdentity,
@@ -328,9 +329,7 @@ export function checkCommerceD1(
   for (const row of commerceD1AuditRows(queryRemoteCommerceD1, {
     table: 'commerce_documents', alias: 'document', keys: ['document_path'],
     columns: `document.document_path, document.document_kind, document.drop_id, document.document_id,
-      document.document_json, document.version, document.create_time, document.update_time,
-      outbox.parent_path AS pack_status_parent_path`,
-    joins: 'LEFT JOIN commerce_pack_status_outbox AS outbox ON outbox.parent_path = document.document_path',
+      document.document_json, document.version, document.create_time, document.update_time`,
   })) {
     authoritativeDocuments += 1;
     const identity = commerceD1DocumentIdentity(String(row.document_path));
@@ -355,9 +354,14 @@ export function checkCommerceD1(
     }
     if (['dude_pool', 'dude_assignment', 'box_assignment'].includes(String(row.document_kind)) &&
       !readyInventoryDrops.has(String(row.drop_id))) fail('Commerce D1 inventory initialization is incomplete.');
-    if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(document, field)) &&
-      row.pack_status_parent_path !== row.document_path) {
-      fail(`Pack-status outbox is missing for source document: ${String(row.document_path)}.`);
+    if (LEGACY_PACK_STATUS_PROJECTION_FIELDS.some((field) => Object.hasOwn(document, field))) {
+      fail(`Commerce D1 contains frozen pack-status metadata: ${String(row.document_path)}.`);
+    }
+    if (LEGACY_NOTIFICATION_FIELDS.some((field) => Object.hasOwn(document, field))) {
+      fail(`Commerce D1 contains frozen notification metadata: ${String(row.document_path)}.`);
+    }
+    if (row.document_kind === 'stripe_checkout' && STRIPE_CHECKOUT_STATE_FIELDS.some((field) => Object.hasOwn(document, field))) {
+      fail(`Commerce D1 contains frozen Stripe checkout metadata: ${String(row.document_path)}.`);
     }
   }
 

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
-import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
 import { cleanupExpiredOpsRecords } from './opsExpiryCleanup.js';
 
 export const RECEIPT_TRANSFER_CALLER_RATE_LIMIT = 60;
@@ -8,8 +7,6 @@ export const RECEIPT_TRANSFER_ASSET_RATE_LIMIT = 20;
 export const RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 export const RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION = 2;
 const RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_GRACE_MS = 2 * 60 * 1000;
-export const RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT =
-  OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit;
 
 const RECEIPT_TRANSFER_CALLER_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:caller';
 const RECEIPT_TRANSFER_ASSET_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:asset';
@@ -240,54 +237,6 @@ function parseBucketRow(
     throw new Error('Receipt transfer rate-limit database returned an invalid bucket');
   }
   return { count, windowStartedAtMs, expiresAtMs };
-}
-
-export function evaluateReceiptTransferRateLimit(
-  existing: Record<string, unknown> | null | undefined,
-  nowMs: number,
-  limit: number,
-): ReceiptTransferRateLimitDecision {
-  const normalizedNowMs = normalizedNow(nowMs);
-  validateLimit(limit);
-  const storedWindowStartedAtMs = finiteInteger(existing?.windowStartedAtMs);
-  const storedCount = finiteInteger(existing?.count);
-  const hasActiveWindow =
-    storedWindowStartedAtMs != null &&
-    storedWindowStartedAtMs >= 0 &&
-    Number.isSafeInteger(storedWindowStartedAtMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS) &&
-    storedWindowStartedAtMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS > normalizedNowMs &&
-    storedCount != null &&
-    storedCount >= 1 &&
-    storedCount <= limit;
-
-  if (!hasActiveWindow) {
-    return {
-      allowed: true,
-      count: 1,
-      windowStartedAtMs: normalizedNowMs,
-    };
-  }
-
-  if (storedCount >= limit) {
-    return {
-      allowed: false,
-      count: storedCount,
-      retryAfterMs: Math.min(
-        RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
-        Math.max(
-          1,
-          storedWindowStartedAtMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS - normalizedNowMs,
-        ),
-      ),
-      windowStartedAtMs: storedWindowStartedAtMs,
-    };
-  }
-
-  return {
-    allowed: true,
-    count: storedCount + 1,
-    windowStartedAtMs: storedWindowStartedAtMs,
-  };
 }
 
 export function receiptTransferCallerRateLimitSubjectHash(uid: string): string {

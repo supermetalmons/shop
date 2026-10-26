@@ -12,10 +12,6 @@ export const BOX_MINTER_MINT_VARIANT_KIND_NONE = 0;
 export const BOX_MINTER_MINT_VARIANT_KIND_SIZE = 1;
 export const BOX_MINTER_MINT_VARIANT_OPTION_COUNT = 3;
 
-export type BoxMinterMintVariantKind =
-  | typeof BOX_MINTER_MINT_VARIANT_KIND_NONE
-  | typeof BOX_MINTER_MINT_VARIANT_KIND_SIZE;
-
 export type BoxMinterMintVariantTuple = [number, number, number];
 
 export function isConfiguredBoxMinterItemsPerBox(
@@ -45,14 +41,5 @@ export function isBoxMinterDiscountMintsPerWallet(
     Number.isInteger(value) &&
     (value as number) >= BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET &&
     (value as number) <= BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET
-  );
-}
-
-export function isBoxMinterMintVariantKind(
-  value: unknown,
-): value is BoxMinterMintVariantKind {
-  return (
-    value === BOX_MINTER_MINT_VARIANT_KIND_NONE ||
-    value === BOX_MINTER_MINT_VARIANT_KIND_SIZE
   );
 }

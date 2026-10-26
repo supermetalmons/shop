@@ -21,18 +21,6 @@ export type DudeAssignmentPickerArgs = {
   randomInt?: (maxExclusive: number) => number;
 };
 
-export type DudeAssignmentValidationArgs = Omit<DudeAssignmentPickerArgs, 'randomInt'> & {
-  dudeIds: readonly number[];
-  knownAssignedDudeIds?: readonly number[];
-};
-
-class DudeAssignmentValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DudeAssignmentValidationError';
-  }
-}
-
 export class DudeAssignmentPoolExhaustedError extends Error {
   readonly bucket: DudeAssignmentBucket;
   readonly chosen: readonly number[];
@@ -234,94 +222,6 @@ async function takeCardNft2BucketIfAvailable(args: {
   }
 }
 
-async function pruneAssignedAndCheckBucketAvailability(args: {
-  bucket: DudeAssignmentBucket;
-  maxDudeId: number;
-  pool: number[];
-  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-}): Promise<boolean> {
-  for (let index = 0; index < args.pool.length; index += 1) {
-    const dudeId = args.pool[index];
-    if (!dudeMatchesBucket(dudeId, args.bucket, args.maxDudeId)) continue;
-    if (await args.isAssigned(dudeId)) {
-      args.pool.splice(index, 1);
-      index -= 1;
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
-async function takeManifestDudeByIndex(args: {
-  slot: string;
-  remaining: number[];
-  remainingIndex: number;
-  pool: number[];
-  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-}): Promise<void> {
-  const dudeId = args.remaining[args.remainingIndex];
-  const poolIndex = args.pool.indexOf(dudeId);
-  if (poolIndex < 0) {
-    throw new DudeAssignmentValidationError(`Manifest dude ${dudeId} is not available for the ${args.slot} slot`);
-  }
-  if (await args.isAssigned(dudeId)) {
-    throw new DudeAssignmentValidationError(`Manifest dude ${dudeId} is already assigned`);
-  }
-  args.remaining.splice(args.remainingIndex, 1);
-  args.pool.splice(poolIndex, 1);
-}
-
-async function takeManifestDudeForBucket(args: {
-  bucket: DudeAssignmentBucket;
-  maxDudeId: number;
-  remaining: number[];
-  pool: number[];
-  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-}): Promise<boolean> {
-  const remainingIndex = args.remaining.findIndex((dudeId) => dudeMatchesBucket(dudeId, args.bucket, args.maxDudeId));
-  if (remainingIndex >= 0) {
-    await takeManifestDudeByIndex({
-      slot: bucketDisplayName(args.bucket),
-      remaining: args.remaining,
-      remainingIndex,
-      pool: args.pool,
-      isAssigned: args.isAssigned,
-    });
-    return true;
-  }
-
-  if (
-    await pruneAssignedAndCheckBucketAvailability({
-      bucket: args.bucket,
-      maxDudeId: args.maxDudeId,
-      pool: args.pool,
-      isAssigned: args.isAssigned,
-    })
-  ) {
-    throw new DudeAssignmentValidationError(`Manifest dudeIds are missing an available ${bucketDisplayName(args.bucket)} dude`);
-  }
-  return false;
-}
-
-async function takeManifestAnyDude(args: {
-  slot: string;
-  remaining: number[];
-  pool: number[];
-  isAssigned: (dudeId: number) => boolean | Promise<boolean>;
-}): Promise<void> {
-  if (!args.remaining.length) {
-    throw new DudeAssignmentValidationError(`Manifest dudeIds are missing a dude for the ${args.slot} slot`);
-  }
-  await takeManifestDudeByIndex({
-    slot: args.slot,
-    remaining: args.remaining,
-    remainingIndex: 0,
-    pool: args.pool,
-    isAssigned: args.isAssigned,
-  });
-}
-
 export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): Promise<DudeAssignmentPickResult> {
   const randomInt = args.randomInt || defaultRandomInt;
   const chosen: number[] = [];
@@ -401,49 +301,4 @@ export async function pickDudeIdsForAssignment(args: DudeAssignmentPickerArgs): 
     staleAssigned: stats.staleDudeIds.length,
     staleDudeIds: [...stats.staleDudeIds],
   };
-}
-
-export async function validateDudeIdsForAssignment(args: DudeAssignmentValidationArgs): Promise<void> {
-  if (args.dudeIds.length !== args.itemsPerBox) {
-    throw new DudeAssignmentValidationError(`Manifest dudeIds must contain exactly ${args.itemsPerBox} ids`);
-  }
-
-  const pool = [...args.pool];
-  const remaining = [...args.dudeIds];
-  const knownAssignedDudeIds = new Set(args.knownAssignedDudeIds || []);
-  if (knownAssignedDudeIds.size) {
-    for (let index = 0; index < pool.length; index += 1) {
-      if (!knownAssignedDudeIds.has(pool[index]!)) continue;
-      pool.splice(index, 1);
-      index -= 1;
-    }
-  }
-  const isCardNft2 = args.dropFamily === 'card_nft_2';
-
-  if (!isCardNft2) {
-    while (remaining.length) {
-      await takeManifestAnyDude({ slot: 'assignment', remaining, pool, isAssigned: args.isAssigned });
-    }
-    return;
-  }
-
-  await runCardNft2AssignmentRules({
-    itemsPerBox: args.itemsPerBox,
-    remainingSlots: () => remaining.length,
-    rejectTooFewSlots: () => {
-      throw new DudeAssignmentValidationError('card_nft_2 assignments require at least two card ids');
-    },
-    consumeBucketIfAvailable: (bucket) =>
-      takeManifestDudeForBucket({
-        bucket,
-        maxDudeId: args.maxDudeId,
-        remaining,
-        pool,
-        isAssigned: args.isAssigned,
-      }),
-    consumeAny: (slot) => takeManifestAnyDude({ slot, remaining, pool, isAssigned: args.isAssigned }),
-    rejectExtraExhausted: () => {
-      throw new DudeAssignmentValidationError('Manifest dudeIds contain more card ids than the available assignment rules allow');
-    },
-  });
 }

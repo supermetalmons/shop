@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../shared/opsExpiryCleanupSql.ts';
 import {
   RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
   RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
-  RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
   RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
   cleanupExpiredReceiptTransferRateLimitBuckets,
   consumeReceiptTransferRateLimit,
-  evaluateReceiptTransferRateLimit,
   receiptTransferAssetRateLimitBucket,
   receiptTransferAssetRateLimitSubjectHash,
   receiptTransferCallerRateLimitBucket,
@@ -60,67 +59,6 @@ function scriptedDatabase(batches: Array<Array<Array<Record<string, unknown>>>>,
   };
   return { calls, database };
 }
-
-test('receipt transfer fixed windows preserve caller and asset quotas', () => {
-  const startedAtMs = 1_000;
-  let caller: Record<string, unknown> | undefined;
-  for (let count = 1; count <= RECEIPT_TRANSFER_CALLER_RATE_LIMIT; count += 1) {
-    const decision = evaluateReceiptTransferRateLimit(caller, startedAtMs + count - 1, RECEIPT_TRANSFER_CALLER_RATE_LIMIT);
-    assert.equal(decision.allowed, true);
-    caller = { count: decision.count, windowStartedAtMs: decision.windowStartedAtMs };
-  }
-  assert.deepEqual(
-    evaluateReceiptTransferRateLimit(caller, startedAtMs + 1_000, RECEIPT_TRANSFER_CALLER_RATE_LIMIT),
-    {
-      allowed: false,
-      count: RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
-      retryAfterMs: RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS - 1_000,
-      windowStartedAtMs: startedAtMs,
-    },
-  );
-  assert.deepEqual(
-    evaluateReceiptTransferRateLimit(
-      { count: RECEIPT_TRANSFER_ASSET_RATE_LIMIT, windowStartedAtMs: startedAtMs },
-      startedAtMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
-      RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
-    ),
-    {
-      allowed: true,
-      count: 1,
-      windowStartedAtMs: startedAtMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
-    },
-  );
-});
-
-test('receipt transfer fixed windows stay monotonic for reversed request arrival', () => {
-  const newerStartedAtMs = 2_000;
-  const olderSampledAtMs = 1_000;
-  assert.deepEqual(
-    evaluateReceiptTransferRateLimit(
-      { count: 1, windowStartedAtMs: newerStartedAtMs },
-      olderSampledAtMs,
-      RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
-    ),
-    {
-      allowed: true,
-      count: 2,
-      windowStartedAtMs: newerStartedAtMs,
-    },
-  );
-  assert.deepEqual(
-    evaluateReceiptTransferRateLimit(
-      { count: RECEIPT_TRANSFER_ASSET_RATE_LIMIT, windowStartedAtMs: newerStartedAtMs },
-      olderSampledAtMs,
-      RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
-    ),
-    {
-      allowed: false,
-      count: RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
-      retryAfterMs: RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
-      windowStartedAtMs: newerStartedAtMs,
-    },
-  );
-});
 
 test('receipt transfer rate-limit subjects preserve v2 domain separation', () => {
   const base = assetSubject();
@@ -194,18 +132,18 @@ test('receipt transfer D1 consumption uses one atomic UPSERT and read batch', as
 
 test('receipt transfer D1 cleanup is bounded and reports remaining backlog', async () => {
   const nowMs = 1_700_000_000_000;
-  const scripted = scriptedDatabase([[[], [{ has_more: 1 }]]], [[RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT, 0]]);
+  const scripted = scriptedDatabase([[[], [{ has_more: 1 }]]], [[OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit, 0]]);
   assert.deepEqual(
     await cleanupExpiredReceiptTransferRateLimitBuckets(scripted.database, nowMs),
     {
-      deletedCount: RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
+      deletedCount: OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit,
       limitReached: true,
       hasMore: true,
     },
   );
   assert.deepEqual(scripted.calls[0][0].values, [
     nowMs - 2 * 60 * 1_000,
-    RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
+    OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit,
   ]);
   assert.equal(scripted.calls[0][1].values[0], nowMs - 2 * 60 * 1_000);
   assert.match(scripted.calls[0][0].query, /LIMIT \?/);
@@ -219,13 +157,7 @@ test('receipt transfer D1 cleanup keeps grace cutoffs non-negative and uses whol
       deletedCount: 0, limitReached: false, hasMore: false,
     });
     assert.deepEqual(scripted.calls[0].map(({ values }) => values), [
-      [cutoffMs, RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT], [cutoffMs],
+      [cutoffMs, OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit], [cutoffMs],
     ]);
   }
-});
-
-test('receipt transfer evaluator rejects invalid limits and times', () => {
-  assert.throws(() => evaluateReceiptTransferRateLimit(undefined, -1, 1));
-  assert.throws(() => evaluateReceiptTransferRateLimit(undefined, 1, 0));
-  assert.throws(() => evaluateReceiptTransferRateLimit(undefined, Number.NaN, 1));
 });

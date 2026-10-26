@@ -88,11 +88,12 @@ weight and the USD declared value are supplied.
 
 ## Later preorder metadata upgrade
 
-The separate [preorder upgrade runbook](../../scripts/docs/mi_note_preorder_upgrade.md)
-converts the 22 existing devnet assets to their corresponding regular card names
-and metadata. Its records belong in `preorder-upgrade/`. This later operation
-preserves the frozen inventory, permanent exclusions, and original rehearsal
-evidence above; future smoke fingerprints use the assets' current metadata.
+The completed preorder upgrade converted the 22 devnet assets to their regular
+card names and metadata. Records in `preorder-upgrade/` preserve the frozen
+inventory, permanent exclusions, and original rehearsal evidence above. The
+[historical tool source](../mi-note-cards/preorder-upgrade/README.md#historical-tooling)
+retains the matched conversion runbook; current smoke fingerprints use the assets'
+current metadata.
 
 The [reviewed manifest](preorder-upgrade/manifest.json) identifies all 22 assets.
 The [unsigned preview](preorder-upgrade/preview.json) passed all six batches:

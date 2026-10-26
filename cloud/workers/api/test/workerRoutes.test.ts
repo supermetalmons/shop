@@ -32,7 +32,6 @@ const EXPECTED_EXACT_ROUTES = [
   ['/webhooks/stripe', 'none', false, 'optional', true, 'stripe-webhook', '/webhooks/stripe'],
   ['/admin/stripe-chargebacks/backfill', 'profile', true, 'required', true, 'profile', '/admin/stripe-chargebacks/backfill'],
   ['/claims/irl/prepare', 'profile', true, 'optional', true, 'profile', '/claims/irl/prepare'],
-  ['/receipts/stripe/claim', 'profile', true, 'optional', true, 'profile', '/receipts/stripe/claim'],
   ['/receipts/stripe/claim/start', 'profile', true, 'optional', true, 'profile', '/receipts/stripe/claim/start'],
   ['/receipts/stripe/claim/status', 'profile', true, 'optional', false, 'profile', '/receipts/stripe/claim/status'],
   ['/receipts/transfer/prepare', 'profile', true, 'optional', true, 'profile', '/receipts/transfer/prepare'],
@@ -249,7 +248,6 @@ test('unexpected receipt polling errors request a retry without changing other r
   for (const [pathname, retryable] of [
     ['/receipts/stripe/claim/start', true],
     ['/receipts/stripe/claim/status', true],
-    ['/receipts/stripe/claim', false],
     ['/profile/state', false],
   ] as const) {
     const response = unexpectedWorkerRouteResponse(workerRouteRegistry.resolve(pathname),

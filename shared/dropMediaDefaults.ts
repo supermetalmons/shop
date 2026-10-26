@@ -4,7 +4,6 @@ import type { SharedMediaMapConfig } from './mediaMap.ts';
 export const CARD_NFT_2_CDN_BASE_URL = 'https://cdn.lil.org/nft/card_nft_2';
 const CARD_NFT_2_PACK_URL = `${CARD_NFT_2_CDN_BASE_URL}/pack`;
 export const CARD_NFT_2_PACK_BASE_URL = CARD_NFT_2_PACK_URL;
-export const CARD_NFT_2_PACK_INITIAL_BASE_URL = CARD_NFT_2_PACK_URL;
 export const CARD_NFT_2_PACK_INITIAL_COUNT = 4;
 
 const CARD_NFT_2_PACK_MEDIA_VALUE = {

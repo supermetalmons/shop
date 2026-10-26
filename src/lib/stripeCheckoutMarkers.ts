@@ -384,13 +384,6 @@ export function isStripeCheckoutMintProgressSettled(
   return tracksProgress;
 }
 
-export function completedStripeCheckoutMarkerKeyForAuthSubject(
-  authSubject: string | null | undefined,
-  markers: readonly StripeCheckoutMarker[],
-): string {
-  return completedStripeCheckoutMarkerSummaryForAuthSubject(authSubject, markers).markerKey;
-}
-
 export function completedStripeCheckoutMarkerSummaryForAuthSubject(
   authSubject: string | null | undefined,
   markers: readonly StripeCheckoutMarker[],

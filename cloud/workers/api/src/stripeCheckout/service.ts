@@ -17,7 +17,6 @@ import {
   deriveAdminOrderPda,
   encodeAdminDeliverVariantOrderArgs,
   stripeCheckoutSessionOrderHash,
-  stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
   type DecodedAdminDeliveryOrderRecord,
   type StripeAddressEncryptionResult,
@@ -29,7 +28,6 @@ import {
   resolveMintSelectionVariantIndex,
   STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
-  STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
 } from '../../../../../shared/stripeCheckoutSession.js';
 import {
@@ -40,16 +38,11 @@ import {
   type StripeApiMode,
 } from '../stripeProviderConfig.js';
 import { stripeClientForKey } from './provider.js';
-import type {
-  StripeCheckoutManualReviewAddress,
-} from '../../../../../shared/contracts.js';
 import {
   classifyStripeCheckoutKind,
   stripeCheckoutModeForCluster,
   type StripeCheckoutKind as SharedStripeCheckoutKind,
 } from '../../../../../shared/stripeCheckoutCore.js';
-import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
-import { toMillisMaybe } from '../time.js';
 import { StripeCheckoutFulfillmentError, StripeCheckoutProcessingAttemptOwnershipCheckError } from './errors.js';
 import { isSignalCancellationError, sleepWithSignal } from '../boundedRequest.js';
 import type { CommerceDocumentKey } from '../commerceRepository.js';
@@ -70,21 +63,6 @@ import {
   type StripeOffchainDeliveryOrderDraft,
   type StripeOffchainDeliveryOrderResult,
 } from './store.js';
-
-export type StripeCheckoutManualReviewSummary = {
-  dropId: string;
-  sessionId: string;
-  owner: string;
-  authSubject?: string;
-  quantity?: number;
-  amountTotal?: number;
-  currency?: string;
-  createdAt?: number;
-  failedAt?: number;
-  manualRefundReviewReason?: string;
-  errorMessage?: string;
-  address: StripeCheckoutManualReviewAddress;
-};
 
 type StripeCheckoutFulfillmentSkippedReason =
   | StripeCheckoutFulfillmentStartSkippedReason
@@ -368,10 +346,6 @@ export async function runStripeCheckoutFulfillmentWithRetry<T>(
   }
 }
 
-export function stripeTestApiKey(apiKeys: readonly string[]): string {
-  return stripeApiKeyForMode(apiKeys, 'test');
-}
-
 export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApiMode): string[] {
   const keys = selectStripeApiKeys(apiKeys, mode);
   if (keys.length === 0) throw new StripeCheckoutFulfillmentError('failed-precondition', `Stripe ${mode} key is not configured.`);
@@ -508,128 +482,6 @@ function requireStripeOffchainAddressSnapshot(params: {
       sessionId: params.session.id,
     });
   }
-}
-
-function normalizedManualReviewString(value: unknown): string {
-  return String(value || '').trim();
-}
-
-function manualReviewPositiveInteger(value: unknown): number | undefined {
-  const parsed = Math.floor(Number(value));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function manualReviewNonNegativeInteger(value: unknown): number | undefined {
-  const parsed = Math.floor(Number(value));
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function manualReviewCurrency(value: unknown): string | undefined {
-  const currency = normalizedManualReviewString(value).toLowerCase();
-  return /^[a-z]{3}$/.test(currency) ? currency : undefined;
-}
-
-function truncateManualReviewText(value: string, maxLength = 220): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
-}
-
-function firstManualReviewErrorLine(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const line = value
-    .split(/\r?\n/)
-    .map((part) => part.trim())
-    .find(Boolean);
-  return line ? truncateManualReviewText(line) : undefined;
-}
-
-function stripeCheckoutManualReviewErrorMessage(checkout: any): string | undefined {
-  const error = checkout?.lastFulfillmentError;
-  const candidates = [
-    error?.message,
-    error?.details?.lastError,
-    error?.lastError,
-    checkout?.manualRefundReviewReason,
-  ];
-  for (const candidate of candidates) {
-    const message = firstManualReviewErrorLine(candidate);
-    if (message) return message;
-  }
-  return undefined;
-}
-
-function stripeCheckoutManualReviewAddress(args: {
-  session?: Stripe.Checkout.Session | null;
-  canViewSensitiveAddress: boolean;
-}): StripeCheckoutManualReviewAddress {
-  const parsed = stripeFulfillmentAddressFromSession(args.session);
-  if (!parsed) return { full: null };
-  const country = normalizedManualReviewString(parsed.country);
-  const countryCode = normalizedManualReviewString(parsed.countryCode).toUpperCase();
-  if (!args.canViewSensitiveAddress) {
-    return {
-      full: '***',
-      ...(country ? { country } : {}),
-      ...(countryCode ? { countryCode } : {}),
-    };
-  }
-  return {
-    full: parsed.formatted || null,
-    ...(parsed.email ? { email: parsed.email } : {}),
-    ...(country ? { country } : {}),
-    ...(countryCode ? { countryCode } : {}),
-  };
-}
-
-export function isStripeCheckoutManualReviewCandidate(checkout: any): boolean {
-  return checkout?.manualRefundReviewRequired === true && checkout?.status === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED;
-}
-
-export function buildStripeCheckoutManualReviewSummary(args: {
-  dropId: string;
-  sessionId: string;
-  checkout: any;
-  session?: Stripe.Checkout.Session | null;
-  canViewSensitiveAddress: boolean;
-}): StripeCheckoutManualReviewSummary | null {
-  const { checkout } = args;
-  if (!isStripeCheckoutManualReviewCandidate(checkout)) return null;
-  const sessionSummary = checkout?.stripeSessionSummary || {};
-  const quantity = manualReviewPositiveInteger(checkout?.quantity ?? sessionSummary?.metadata?.quantity ?? args.session?.metadata?.quantity);
-  const amountTotal = manualReviewNonNegativeInteger(args.session?.amount_total ?? sessionSummary?.amount_total);
-  const currency = manualReviewCurrency(args.session?.currency ?? sessionSummary?.currency);
-  let owner = normalizedManualReviewString(checkout?.owner);
-  let authSubject = '';
-  try {
-    const identity = normalizeStripeCheckoutIdentity(checkout);
-    owner = identity.owner;
-    authSubject = 'authSubject' in identity ? identity.authSubject : '';
-  } catch {
-    authSubject = '';
-  }
-  const manualRefundReviewReason = normalizedManualReviewString(checkout?.manualRefundReviewReason);
-  const errorMessage = stripeCheckoutManualReviewErrorMessage(checkout);
-  const createdAt = toMillisMaybe(checkout?.createdAt);
-  const failedAt = toMillisMaybe(checkout?.failedAt);
-
-  return {
-    dropId: args.dropId,
-    sessionId: requireStripeCheckoutSessionId(args.sessionId),
-    owner,
-    ...(authSubject ? { authSubject } : {}),
-    ...(quantity ? { quantity } : {}),
-    ...(amountTotal !== undefined ? { amountTotal } : {}),
-    ...(currency ? { currency } : {}),
-    ...(createdAt !== undefined ? { createdAt } : {}),
-    ...(failedAt !== undefined ? { failedAt } : {}),
-    ...(manualRefundReviewReason ? { manualRefundReviewReason } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
-    address: stripeCheckoutManualReviewAddress({
-      session: args.session,
-      canViewSensitiveAddress: args.canViewSensitiveAddress,
-    }),
-  };
 }
 
 function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutDropRuntime>(

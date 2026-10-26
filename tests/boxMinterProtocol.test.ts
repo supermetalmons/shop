@@ -12,7 +12,6 @@ import {
   BOX_MINTER_MINT_VARIANT_OPTION_COUNT,
   BOX_MINTER_PENDING_OPEN_SEED,
   isBoxMinterDiscountMintsPerWallet,
-  isBoxMinterMintVariantKind,
   isConfiguredBoxMinterItemsPerBox,
   isOpenableBoxMinterItemsPerBox,
   type BoxMinterMintVariantTuple,
@@ -54,11 +53,6 @@ test('box-minter discount and variant predicates preserve protocol boundaries', 
     assert.equal(isBoxMinterDiscountMintsPerWallet(value), true);
   }
 
-  assert.equal(isBoxMinterMintVariantKind(BOX_MINTER_MINT_VARIANT_KIND_NONE), true);
-  assert.equal(isBoxMinterMintVariantKind(BOX_MINTER_MINT_VARIANT_KIND_SIZE), true);
-  assert.equal(isBoxMinterMintVariantKind(-1), false);
-  assert.equal(isBoxMinterMintVariantKind(2), false);
-  assert.equal(isBoxMinterMintVariantKind('1'), false);
 });
 
 test('box-minter variant tuples remain mutable three-item tuples', () => {
