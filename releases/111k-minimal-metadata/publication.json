@@ -1,0 +1,34 @@
+{
+  "complete": true,
+  "totalObjects": 689896,
+  "bucket": "cdn-mons-shop",
+  "objectsSha256": "153f6898446383a0267ec01f31d11fbf58eacdd035d7f296efa2a1213d293d51",
+  "networks": [
+    {
+      "network": "sepolia",
+      "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+      "bucket": "cdn-mons-shop",
+      "prefix": "111k-sepolia/",
+      "objectsSha256": "153f6898446383a0267ec01f31d11fbf58eacdd035d7f296efa2a1213d293d51",
+      "snapshotSha256": "d273466332822f72f4071ee34e362b56da4aafa77b2bd6783602a8aff54398da",
+      "uploaded": 310882,
+      "skipped": 34066,
+      "complete": true,
+      "finishedAt": "2026-10-27T21:06:30.307Z"
+    },
+    {
+      "network": "mainnet",
+      "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+      "bucket": "cdn-mons-shop",
+      "prefix": "111k/",
+      "objectsSha256": "153f6898446383a0267ec01f31d11fbf58eacdd035d7f296efa2a1213d293d51",
+      "snapshotSha256": "13ddce568be09f6ff1f23fcc8330c4f6aac087ae5023733250d17f75e984e301",
+      "uploaded": 344948,
+      "skipped": 0,
+      "complete": true,
+      "finishedAt": "2026-10-27T21:10:59.787Z"
+    }
+  ],
+  "rollbackLocation": "~/.mons-shop-backups/111k-metadata/2026-10-27-minimal",
+  "verifiedAt": "2026-10-27T21:11:39.246Z"
+}

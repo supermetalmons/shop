@@ -60,6 +60,16 @@ for (const operation of ['create', 'status'] as const) {
     }
   });
 
+  test(`checkout ${operation} preserves HTTPS item images and editable metadata`, async context => {
+    const response = snapshot('');
+    Object.assign(response.items[0], { name: 'Updated crate #1', description: '',
+      image: 'https://future-cdn.example/crate.webp', attributes: [{ trait_type: 'type', value: 'crate' }] });
+    context.mock.method(globalThis, 'fetch', async () => Response.json(response));
+    assert.deepEqual((await request()).items, response.items);
+    response.items[0].image = 'https://user@future-cdn.example/crate.webp';
+    await assert.rejects(request(), /invalid response/);
+  });
+
   test(`checkout ${operation} still rejects unsafe callbacks`, async context => {
     let response = snapshot('opaque');
     context.mock.method(globalThis, 'fetch', async () => Response.json(response));

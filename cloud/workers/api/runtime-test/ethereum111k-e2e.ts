@@ -10,6 +10,7 @@ import { bytesToHex } from '@noble/hashes/utils';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog } from '../../../../shared/ethereum/abi.ts';
 import { checksumEthereumAddress, crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_MAX_METADATA_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
+import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.ts';
 import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { ETHEREUM_CHECKOUT_PATHS, type EthereumCheckoutStatusResponse, type EthereumCheckoutPrepareResponse, type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
@@ -87,7 +88,7 @@ async function readCdnMetadata(uri: string): Promise<EthereumMetadata> {
     createError: () => new Error(`CDN metadata is invalid: ${uri}`) });
   assert.ok(metadata && typeof metadata === 'object' && 'name' in metadata && 'image' in metadata);
   assert.equal(typeof metadata.name, 'string');
-  assert.ok(typeof metadata.image === 'string' && metadata.image.startsWith('data:image/svg+xml;base64,'));
+  assert.ok(isEthereumMetadataImage(metadata.image));
   return metadata as EthereumMetadata;
 }
 

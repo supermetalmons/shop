@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "objectCount": 344948,
+  "totalBytes": 71168605,
+  "counts": {
+    "artwork": 111111,
+    "crate": 5555,
+    "warehouse": 505,
+    "artwork_receipt": 222222,
+    "crate_receipt": 5555
+  },
+  "objectsFile": "objects.jsonl",
+  "objectsSha256": "153f6898446383a0267ec01f31d11fbf58eacdd035d7f296efa2a1213d293d51",
+  "templateSha256": {
+    "artwork": "7f55fe6733d79ddd5da7c4de60cde80e19f9f1d01eb5fcb6be08820f2e3bee17",
+    "crate": "1c7e6a48a08e8f625f4d32ac54435c2ea91d8c8765d2522a256e3f12858141f9",
+    "warehouse": "53001409fb307945670d4e8b67ea2a69cddbb2c96dc5ce9ee07ac3d9941c554f",
+    "artwork_receipt": "600662656f86202a9e81b6f4b20fd7e70d43a01eceb033052cc5621d15be98c1",
+    "crate_receipt": "3547c4599e05da5c2753ccb17d6a795c7c71fabb1db89da7fef93840bc26d04a"
+  },
+  "sourceSha256": {
+    "../../shared/ethereum/protocol.ts": "8cf4a1e912f7d46d343b98acca31c8aa780f8d1911bda723644f2f89c487dd57",
+    "../../shared/ethereum/metadataImage.ts": "72766d4b6d8577e55bf94ba73dc2df07ec170aa694283d579e79650ef1f04780",
+    "./catalog.ts": "9deb924eb921636a315d28cfa832d5328b7bc0367e87162221cae182ed10e15e",
+    "./generate.ts": "f206992c384d9103ef555f2e78c86a5e952fe06d2d0a0938b9b4c6bad197f6ca"
+  }
+}

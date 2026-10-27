@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { EthereumItemKind } from '../../shared/ethereum/protocol';
+import { isEthereumMetadataImage } from '../../shared/ethereum/metadataImage';
 import { ethereumExplorerTransaction, resolveEthereum111kConfig } from '../../shared/ethereum/config';
 import type { FulfillmentOrder } from '../types';
 import { monsApiOrigin } from '../lib/monsApiOrigin';
@@ -20,8 +21,8 @@ export function loadEthereumFulfillmentPreview(kind: EthereumItemKind, displayId
   }).then(async (response) => {
     if (!response.ok) throw new Error('The Ethereum preview is temporarily unavailable.');
     const value: unknown = await response.json();
-    if (!value || typeof value !== 'object' || !('image' in value) || typeof value.image !== 'string' ||
-      !value.image.startsWith('data:image/svg+xml;base64,')) throw new Error('Invalid Ethereum preview.');
+    if (!value || typeof value !== 'object' || !('image' in value) ||
+      !isEthereumMetadataImage(value.image)) throw new Error('Invalid Ethereum preview.');
     return value.image;
   }).finally(() => { if (previews.get(key) === promise) previews.delete(key); });
   previews.set(key, promise);

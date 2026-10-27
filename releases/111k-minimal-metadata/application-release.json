@@ -1,0 +1,26 @@
+{
+  "baseRevision": "793d2a57c6b5e421c8e4aa643b676bc93081085b",
+  "workingTreeChangesIncluded": true,
+  "apiVersion": "bd1fca4e-9a0e-4461-86fb-644af4037ccd",
+  "frontendVersion": "69b1fbe8-50e8-4678-be0b-9996b0b5f497",
+  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "contractsChanged": false,
+  "databasesChanged": false,
+  "checks": {
+    "apiUnit": 2633,
+    "apiRuntime": 39,
+    "frontendRoot": 4778,
+    "frontendSupporting": 34,
+    "metadataTooling": 43,
+    "typechecks": true,
+    "generatedFiles": true,
+    "bundleValidation": true,
+    "startupProfile": true,
+    "deadCodeBaseline": true,
+    "remoteIntegrity": true,
+    "pendingMigrations": 0
+  },
+  "notes": [
+    "One existing profile lifecycle deadline test failed during concurrent checks; its isolated rerun and the complete API gate passed."
+  ]
+}

@@ -74,7 +74,8 @@ test('Ethereum PNG and ZIP claim links stay on the local app origin', async () =
   inputs.displayedOrders = [{ ...order(), dropId: '111k_devnet', source: 'ethereum',
     boxes: [{ boxId: 5555, claimCode: 'ABCDEF123456', dudeIds: [111081] }], cardClaims: [] }];
   inputs.fulfillmentFigureMetadataTargets = [];
-  mock.method(globalThis, 'fetch', async () => Response.json({ image: 'data:image/svg+xml;base64,PHN2Zy8+' }));
+  const image = 'https://wip.lil.org/crate-receipt.webp';
+  mock.method(globalThis, 'fetch', async () => Response.json({ image }));
   const files = dependencies();
   const { result } = renderHook(() => useFulfillmentExports(inputs, files));
   await act(async () => { await result.current.downloadSecretCodePng(inputs.displayedOrders[0], { kind: 'box', index: 0 }); });
@@ -82,6 +83,8 @@ test('Ethereum PNG and ZIP claim links stay on the local app origin', async () =
   const claimUrl = 'http://localhost:5173/111k_devnet?receiptId=2005555&claim=ABCDEF123456';
   assert.equal(files.buildSecretCodePngBlob.mock.calls[0].arguments[0].claimUrl, claimUrl);
   assert.equal(files.buildSecretCodesZipBlob.mock.calls[0].arguments[0][0].claimUrl, claimUrl);
+  assert.deepEqual(files.buildSecretCodePngBlob.mock.calls[0].arguments[0].previewImages, [{ src: image }]);
+  assert.deepEqual(files.buildSecretCodesZipBlob.mock.calls[0].arguments[0][0].previewImages, [{ src: image }]);
   assert.equal(inputs.setOrdersError.mock.calls.at(-1)?.arguments[0], null);
 });
 

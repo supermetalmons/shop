@@ -67,8 +67,16 @@ test('fulfillment previews deduplicate only pending reads within the same scope 
   assert.equal(fetch.mock.callCount(), 2);
   release();
   assert.deepEqual(await Promise.all([first, duplicate, other]), [image, image, image]);
-  image = 'data:image/svg+xml;base64,c2Vjb25k';
+  image = 'https://future-cdn.example/artwork-receipt.webp';
   assert.equal(await loadEthereumFulfillmentPreview('artwork_receipt', 222222, 'deployment-a'), image);
   assert.equal(fetch.mock.callCount(), 3);
   assert.ok(requests.every(request => request.cache === 'no-store'));
+});
+
+test('fulfillment previews reject unsafe image URLs', async t => {
+  let image = '';
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ image }));
+  for (image of ['http://wip.lil.org/receipt.webp', 'https://user@wip.lil.org/receipt.webp', 'javascript:alert(1)']) {
+    await assert.rejects(loadEthereumFulfillmentPreview('crate_receipt', 1), /Invalid Ethereum preview/);
+  }
 });

@@ -258,6 +258,22 @@ test('Ethereum inventory isolates chain, contract and owner, without changing NF
   await assert.rejects(ethereumApi.inventory(config, owner, null));
 });
 
+test('Ethereum inventory and confirmations preserve HTTPS images and editable metadata', async t => {
+  const artwork = { ...item('1'), name: 'Updated artwork #1', description: '',
+    image: 'https://future-cdn.example/artwork.webp', attributes: [{ trait_type: 'type', value: 'artwork' }] };
+  t.mock.method(globalThis, 'fetch', async () => Response.json({
+    items: [artwork], nextCursor: null, observedBlock: 1, status: 'confirmed', confirmations: 3, burnedTokenIds: [],
+  }));
+  assert.deepEqual((await ethereumApi.inventory(config, owner, null)).items, [artwork]);
+  assert.deepEqual((await ethereumApi.confirm(hash, config, owner)).items, [artwork]);
+  assert.deepEqual(ethereumInventoryView(artwork).attributes, artwork.attributes);
+  for (const image of ['http://wip.lil.org/artwork.webp', 'https://user@wip.lil.org/artwork.webp', 'javascript:alert(1)']) {
+    artwork.image = image;
+    await assert.rejects(ethereumApi.inventory(config, owner, null), /invalid response/);
+    await assert.rejects(ethereumApi.confirm(hash, config, owner), /invalid response/);
+  }
+});
+
 test('Ethereum inventory reads all live and rollback IDs in two parallel bounded requests', async t => {
   const liveIds = Array.from({ length: 100 }, (_, index) => String(index + 1));
   const rollbackIds = Array.from({ length: 100 }, (_, index) => String(index + 1001));

@@ -1,0 +1,8 @@
+{
+  "name": "Crate Receipt #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/crate_receipt.webp",
+  "attributes": [
+    { "trait_type": "type", "value": "crate receipt" }
+  ]
+}

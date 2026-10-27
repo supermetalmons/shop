@@ -1,0 +1,8 @@
+{
+  "name": "Receipt #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+  "attributes": [
+    { "trait_type": "type", "value": "receipt" }
+  ]
+}

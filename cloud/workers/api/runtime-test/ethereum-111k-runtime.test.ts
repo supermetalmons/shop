@@ -240,7 +240,8 @@ export default {
     const provider = async (input, init) => {
       if (String(input).startsWith(env.ETHEREUM_111K_METADATA_BASE_URI)) {
         metadataUrls.push(String(input));
-        return Response.json({ name: 'Synthetic runtime metadata', image: 'data:image/svg+xml;base64,PHN2Zy8+' });
+        return Response.json({ name: 'Synthetic runtime metadata', image: 'https://future-cdn.example/artwork.webp',
+          description: '', attributes: [{ trait_type: 'type', value: 'artwork' }] });
       }
       const payload = JSON.parse(init.body);
       const respond = rpc => {
@@ -301,10 +302,14 @@ export default {
     });
     const confirmed = await confirm();
     assert.equal(confirmed.status, 200, await confirmed.clone().text());
-    const body = await confirmed.json() as { status: string; items: { tokenId: string; name: string }[] };
+    const body = await confirmed.json() as { status: string; items: { tokenId: string; name: string;
+      image: string; description: string; attributes: { trait_type: string; value: string }[] }[] };
     assert.equal(body.status, 'confirmed');
     assert.deepEqual(body.items.map(item => item.tokenId), Array.from({ length: 311 }, (_, index) => String(index + 1)));
     assert.ok(body.items.every(item => item.name === 'Synthetic runtime metadata'));
+    assert.ok(body.items.every(item => item.image === 'https://future-cdn.example/artwork.webp' && item.description === ''));
+    assert.ok(body.items.every(item => item.attributes.length === 1 && item.attributes[0].trait_type === 'type' &&
+      item.attributes[0].value === 'artwork'));
     assert.equal(confirmed.headers.get('X-Test-Metadata-Reads'), '311');
     assert.equal(confirmed.headers.get('X-Test-Unique-Metadata-Reads'), '311');
     assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '14');

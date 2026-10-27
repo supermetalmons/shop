@@ -1,0 +1,455 @@
+{
+  "passed": true,
+  "readOnly": true,
+  "startedAt": "2026-10-27T21:07:48.619Z",
+  "checkedAt": "2026-10-27T21:08:05.341Z",
+  "checks": [
+    {
+      "path": "/ethereum/111k/config",
+      "status": 200,
+      "enabled": true,
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+      "frontendParserAccepted": true,
+      "headers": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      }
+    },
+    {
+      "path": "/ethereum/111k/stats",
+      "status": 200,
+      "saleActive": true,
+      "allocatedCrates": 3,
+      "artworksMinted": 40
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=1",
+      "tokenId": "1",
+      "kind": "artwork",
+      "displayId": 1,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "1",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ]
+      },
+      "generatedFileSha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=111111",
+      "tokenId": "111111",
+      "kind": "artwork",
+      "displayId": 111111,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "111111",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder.png",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ]
+      },
+      "generatedFileSha256": "0c15eb535abbb5556ca0a08607c040ab1c5259c00300273e803fbb34d6cd6469",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate&displayId=1",
+      "tokenId": "111112",
+      "kind": "crate",
+      "displayId": 1,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Crate #1",
+        "description": "",
+        "image": "https://wip.lil.org/111k/crate.jpg",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "crate"
+          }
+        ]
+      },
+      "generatedFileSha256": "46b8bcb99a5a3dca2b524373bfda0a61e6317a0295287e2554d0629789d3a5db",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate&displayId=5555",
+      "tokenId": "116666",
+      "kind": "crate",
+      "displayId": 5555,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Crate #5555",
+        "description": "",
+        "image": "https://wip.lil.org/111k/crate.jpg",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "crate"
+          }
+        ]
+      },
+      "generatedFileSha256": "c7f8f6737bcb7d90b88f1f3635a79ce1310dfd03761bdf49bedfe6b3924f8d59",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=warehouse&displayId=1",
+      "tokenId": "116667",
+      "kind": "warehouse",
+      "displayId": 1,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Warehouse #1",
+        "description": "",
+        "image": "https://wip.lil.org/111k/warehouse.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "warehouse"
+          }
+        ]
+      },
+      "generatedFileSha256": "3f410d9466e66e2542ee6c15504990a1a4214fd8df4bf7df5b297a8fb59ad47d",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=warehouse&displayId=505",
+      "tokenId": "117171",
+      "kind": "warehouse",
+      "displayId": 505,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Warehouse #505",
+        "description": "",
+        "image": "https://wip.lil.org/111k/warehouse.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "warehouse"
+          }
+        ]
+      },
+      "generatedFileSha256": "ecc795304b1322ef3bdeea17ead57e16de4895fc247ab9cbce88cc6f78381f6f",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=1",
+      "tokenId": "1000001",
+      "kind": "artwork_receipt",
+      "displayId": 1,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Receipt #1",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "d504dc5f41df5b9d41b9b3c99b5e8a271f8f1b4b541e2083a14706521dd8e7e9",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=111111",
+      "tokenId": "1111111",
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Receipt #111111",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "ff8fb014f40021a83ba6419e2838f72ea7886ee28227f42ccbd95158fe1a195b",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=111112",
+      "tokenId": "1111112",
+      "kind": "artwork_receipt",
+      "displayId": 111112,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Receipt #111112",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "e926f5184ccf4a67c771262ceded8de8cedc8d0461e5398c2d70ee57e7ccbfff",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=222222",
+      "tokenId": "1222222",
+      "kind": "artwork_receipt",
+      "displayId": 222222,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Receipt #222222",
+        "description": "",
+        "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "91faa6a43da1532760d8ee29bd46c0e6b46d61e281f54a306c16d1c0076e3191",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate_receipt&displayId=1",
+      "tokenId": "2000001",
+      "kind": "crate_receipt",
+      "displayId": 1,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Crate Receipt #1",
+        "description": "",
+        "image": "https://wip.lil.org/111k/crate_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "crate receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "70058901970ee6465c3abdd93742c0639eaead55807daabbed0ab4ae261b3f7f",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate_receipt&displayId=5555",
+      "tokenId": "2005555",
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "cdnMatchesGenerated": true,
+      "expected": {
+        "name": "Crate Receipt #5555",
+        "description": "",
+        "image": "https://wip.lil.org/111k/crate_receipt.webp",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "crate receipt"
+          }
+        ]
+      },
+      "generatedFileSha256": "61da4376478cd9068cdc7960a35dfd12e9a2f72bb6097bef37ff5e1859e4a138",
+      "apiHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      },
+      "cdnHeaders": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "*"
+      }
+    },
+    {
+      "path": "/api/ethereum/111k/metadata?kind=artwork_receipt&displayId=111112",
+      "status": 200,
+      "metadataMatchesGenerated": true,
+      "headers": {
+        "cacheControl": "no-store",
+        "contentType": "application/json; charset=utf-8",
+        "accessControlAllowOrigin": "https://mons.shop"
+      }
+    },
+    {
+      "path": "/ethereum/111k/inventory",
+      "status": 200,
+      "expectedTokenIds": [
+        "2",
+        "1000001"
+      ],
+      "expectedOwnershipMatches": true,
+      "allItemsHttps": true,
+      "allItemsMatchGenerated": true,
+      "frontendParserAccepted": true,
+      "pageCount": 2,
+      "itemsChecked": 41,
+      "uniqueItems": 40,
+      "observedBlocks": [
+        12007719,
+        12007720
+      ]
+    },
+    {
+      "path": "/ethereum/111k/inventory",
+      "status": 200,
+      "expectedTokenIds": [
+        "1111132",
+        "1111151"
+      ],
+      "expectedOwnershipMatches": true,
+      "allItemsHttps": true,
+      "allItemsMatchGenerated": true,
+      "frontendParserAccepted": true,
+      "pageCount": 1,
+      "itemsChecked": 20,
+      "uniqueItems": 20,
+      "observedBlocks": [
+        12007720
+      ]
+    },
+    {
+      "path": "/111k_devnet",
+      "status": 200,
+      "matchesLocalBuild": true,
+      "entryAsset": "/assets/index-pJ1Z8-qZ.js",
+      "htmlSha256": "1584be8f7dddbbb08c142c0335b94ec7edb58a81c4c1ef0218f128d802a2883a",
+      "entrySha256": "6f8cb134db698896611b8d8a1eb21ad16065da5a1d2930b22879486c54ccdbd3"
+    }
+  ]
+}

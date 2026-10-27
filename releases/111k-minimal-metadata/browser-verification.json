@@ -1,0 +1,44 @@
+{
+  "passed": true,
+  "images": [
+    {
+      "src": "https://wip.lil.org/111k/artwork_placeholder.png",
+      "width": 932,
+      "height": 1006
+    },
+    {
+      "src": "https://wip.lil.org/111k/warehouse.webp",
+      "width": 1254,
+      "height": 1254
+    },
+    {
+      "src": "https://wip.lil.org/111k/crate.jpg",
+      "width": 1280,
+      "height": 960
+    },
+    {
+      "src": "https://wip.lil.org/111k/crate_receipt.webp",
+      "width": 1400,
+      "height": 1400
+    },
+    {
+      "src": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+      "width": 1400,
+      "height": 1400
+    }
+  ],
+  "png": {
+    "type": "image/png",
+    "bytes": 584956,
+    "width": 2000,
+    "height": 2800
+  },
+  "exportPngSha256": "6499baf710a78483b8de6f07604577a20a8bd9486351db243224ee34075f8c69",
+  "storefront": {
+    "url": "https://mons.shop/111k_devnet",
+    "loaded": true,
+    "availabilityLoaded": true,
+    "screenshotSha256": "57711c35da108a0673c45083cc8444a45d20edbc94dcf721a0eddcaf5cc5f08b"
+  },
+  "syntheticExportCode": "PREVIEW-ONLY"
+}

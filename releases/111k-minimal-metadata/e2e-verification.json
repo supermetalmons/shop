@@ -1,0 +1,44 @@
+{
+  "passed": true,
+  "startedAt": "2026-10-27T21:07:48.563Z",
+  "checkedAt": "2026-10-27T21:08:27.343Z",
+  "productionReadOnly": true,
+  "command": "npm run test:ethereum:e2e",
+  "exitCode": 0,
+  "chainId": 31337,
+  "passedScenarios": 37,
+  "metadataChecks": [
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/111111.json",
+      "kind": "artwork",
+      "displayId": 111111,
+      "apiMatchesCdn": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/116666.json",
+      "kind": "crate",
+      "displayId": 5555,
+      "apiMatchesCdn": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/117171.json",
+      "kind": "warehouse",
+      "displayId": 505,
+      "apiMatchesCdn": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/1111111.json",
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "apiMatchesCdn": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/2005555.json",
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "apiMatchesCdn": true
+    }
+  ],
+  "resultsPath": ".cache/111k-clean-metadata/e2e-results.json",
+  "logPath": ".cache/111k-clean-metadata/e2e.log"
+}

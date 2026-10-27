@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "operation": "offline-rollback-prevalidation",
+  "startedAt": "2026-10-27T20:54:00.374Z",
+  "verifiedAt": "2026-10-27T20:54:11.296Z",
+  "complete": true,
+  "networks": [
+    {
+      "network": "sepolia",
+      "archive": "sepolia/objects.jsonl.gz",
+      "archiveSha256": "d273466332822f72f4071ee34e362b56da4aafa77b2bd6783602a8aff54398da",
+      "objectCount": 344948,
+      "totalBytes": 1074218244,
+      "archiveChecksumVerified": true,
+      "gzipIntegrityVerified": true,
+      "objectHashesVerified": true,
+      "completeIdentityCoverageVerified": true,
+      "complete": true,
+      "elapsedMs": 10921
+    },
+    {
+      "network": "mainnet",
+      "archive": "mainnet/objects.jsonl.gz",
+      "archiveSha256": "13ddce568be09f6ff1f23fcc8330c4f6aac087ae5023733250d17f75e984e301",
+      "objectCount": 344948,
+      "totalBytes": 1072838452,
+      "archiveChecksumVerified": true,
+      "gzipIntegrityVerified": true,
+      "objectHashesVerified": true,
+      "completeIdentityCoverageVerified": true,
+      "complete": true,
+      "elapsedMs": 10914
+    }
+  ]
+}

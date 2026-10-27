@@ -1,0 +1,8 @@
+{
+  "name": "{{tokenId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/artwork_placeholder.png",
+  "attributes": [
+    { "trait_type": "type", "value": "painting" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "Crate #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/crate.jpg",
+  "attributes": [
+    { "trait_type": "type", "value": "crate" }
+  ]
+}

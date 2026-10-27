@@ -1,0 +1,8 @@
+{
+  "name": "Warehouse #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/warehouse.webp",
+  "attributes": [
+    { "trait_type": "type", "value": "warehouse" }
+  ]
+}

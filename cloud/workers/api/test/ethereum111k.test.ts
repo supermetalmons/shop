@@ -3220,6 +3220,24 @@ test('offchain metadata fetches current JSON over HTTP without storing previous 
   } finally { f.close(); }
 });
 
+test('all five metadata kinds preserve HTTPS images, empty descriptions and a single type attribute', async () => {
+  const f = fixture();
+  try {
+    const kinds = ['artwork', 'warehouse', 'crate', 'crate_receipt', 'artwork_receipt'] as const;
+    const metadata = kinds.map(kind => ({ name: `${kind} #1`, description: '',
+      image: `https://future-cdn.example/${kind}.webp`, attributes: [{ trait_type: 'type', value: kind }] }));
+    const infos = kinds.map(kind => ({ tokenId: ethereumMetadataTokenId(kind, 1), kind, displayId: 1, owner: WALLET }));
+    for (const [index, info] of infos.entries()) {
+      f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${info.tokenId}.json`, metadata[index]);
+      const result = await f.request(`${paths.metadata}?kind=${info.kind}&displayId=1`);
+      assert.equal(result.response.status, 200);
+      assert.deepEqual(result.body, metadata[index]);
+    }
+    const items = await ethereumInventoryItems(readContext(f), infos);
+    assert.deepEqual(items.map(({ name, description, image, attributes }) => ({ name, description, image, attributes })), metadata);
+  } finally { f.close(); }
+});
+
 for (const uri of ['https://other.example/1.json', 'https://cdn.mons.shop/111k/1.json',
   'https://cdn.mons.shop/111k-sepolia/2.json', 'https://cdn.mons.shop/111k-sepolia/01.json',
   'https://cdn.mons.shop/111k-sepolia/1.json?version=2', 'data:application/json;base64,e30=']) {
@@ -3247,6 +3265,8 @@ for (const [name, response] of [
   ['invalid JSON', () => new Response('{', { headers: { 'Content-Type': 'application/json' } })],
   ['oversized JSON', () => Response.json({ name: 'x'.repeat(128 * 1024), image: 'data:image/svg+xml;base64,AA==' })],
   ['invalid image', () => Response.json({ name: 'Artwork', image: 'javascript:alert(1)' })],
+  ['HTTP image', () => Response.json({ name: 'Artwork', image: 'http://wip.lil.org/artwork.webp' })],
+  ['image credentials', () => Response.json({ name: 'Artwork', image: 'https://user:password@wip.lil.org/artwork.webp' })],
 ] as const) {
   test(`offchain metadata fails closed for ${name}`, async () => {
     const f = fixture();

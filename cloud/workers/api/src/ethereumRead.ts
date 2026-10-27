@@ -1,5 +1,6 @@
 import { encodeCall, decodeReturn } from '../../../../shared/ethereum/abi.js';
 import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '../../../../shared/ethereum/protocol.js';
+import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import {
   ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS,
   ETHEREUM_MAX_METADATA_BATCH_SIZE, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
@@ -57,8 +58,7 @@ export async function ethereumReceipt(context: EthereumContext, hash: string, al
 
 function parseMetadata(value: unknown): EthereumMetadata {
   if (!value || typeof value !== 'object' || !('name' in value) || !('image' in value) ||
-    typeof value.name !== 'string' || typeof value.image !== 'string' ||
-    !value.image.startsWith('data:image/svg+xml;base64,')) {
+    typeof value.name !== 'string' || !isEthereumMetadataImage(value.image)) {
     throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata.');
   }
   return { name: value.name, image: value.image,

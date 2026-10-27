@@ -14,6 +14,7 @@ import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config';
+import { isEthereumMetadataImage } from '../../shared/ethereum/metadataImage';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -60,9 +61,9 @@ export function parseEthereumInventoryItem(value: unknown, config: Ethereum111kC
   if (!record(value) || value.chainId !== config.chainId || normalizeEthereumAddress(value.contractAddress) !== config.contractAddress ||
     normalizeEthereumAddress(value.owner) !== owner || typeof value.tokenId !== 'string' || normalizeEthereumTokenId(value.tokenId) !== value.tokenId ||
     !ETHEREUM_ITEM_KINDS.includes(value.kind as EthereumInventoryItem['kind']) || typeof value.name !== 'string' ||
-    !Number.isSafeInteger(value.displayId) || Number(value.displayId) < 1 || typeof value.image !== 'string' ||
+    !Number.isSafeInteger(value.displayId) || Number(value.displayId) < 1 ||
     Number(value.displayId) > ethereumItemDisplayIdMaximum(value.kind as EthereumInventoryItem['kind']) ||
-    !/^data:image\/svg\+xml(?:;base64)?,/.test(value.image)) return invalid();
+    !isEthereumMetadataImage(value.image)) return invalid();
   const id = ethereumAssetId(config.chainId, config.contractAddress!, value.tokenId as string);
   if (value.id !== id) return invalid();
   return value as EthereumInventoryItem;
