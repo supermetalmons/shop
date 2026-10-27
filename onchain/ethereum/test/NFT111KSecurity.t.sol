@@ -1,7 +1,6 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface SecurityVm {
@@ -19,10 +18,10 @@ contract SecurityCollection is NFT111K {
         address owner_,
         address signer_,
         address payable deliveryReceiver_,
-        address renderer_,
+        string memory baseURI_,
         address[] memory recipients_,
         uint256[] memory shares_
-    ) NFT111K(owner_, signer_, deliveryReceiver_, renderer_, bytes32(0), recipients_, shares_) {}
+    ) NFT111K(owner_, signer_, deliveryReceiver_, baseURI_, bytes32(0), recipients_, shares_) {}
 
     function transientStateClean() external view returns (bool) {
         return _extraData(address(0), address(0), 0) == 0 && !_reentrancyGuardEntered();
@@ -272,7 +271,7 @@ contract NFT111KSecurityTest is TestSupport {
             address(this),
             vm.addr(SIGNER_KEY),
             DELIVERY_RECEIVER,
-            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
+            "https://cdn.mons.shop/111k-sepolia/",
             _proceedsRecipients(),
             _proceedsSharesBps()
         );

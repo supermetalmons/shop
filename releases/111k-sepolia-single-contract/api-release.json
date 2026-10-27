@@ -1,0 +1,37 @@
+{
+  "previousDeployment": {
+    "id": "4126916e-9763-4687-bed7-e1f2323bed6f",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/message": "Serve 111K metadata from public R2 (4841444e)",
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "c89cb7ea-78d1-4219-8562-681fb579f02c",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T13:13:34.916479Z"
+  },
+  "deployment": {
+    "id": "8438baf7-6bfd-440a-a2b5-6506f8c7ed38",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "f874a646-3177-4ed6-8988-252411c710b7",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T13:41:14.447248Z"
+  },
+  "apiPublishedObservedAt": "2026-10-27T13:42:00.871Z",
+  "drainNotBefore": "2026-10-27T13:43:05.871Z",
+  "checksPassedBeforePublication": true,
+  "pendingMigrations": 0
+}

@@ -1,7 +1,6 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract RejectingDeliveryReceiver {
@@ -71,7 +70,6 @@ contract ContractBuyer {
 
 contract NFT111KTest is TestSupport {
     NFT111K internal token;
-    NFT111KUrlRenderer internal renderer;
     uint256 internal constant SIGNER_KEY = 0xA11CE;
     address internal alice = address(0xA110);
     address internal bob = address(0xB0B);
@@ -90,12 +88,11 @@ contract NFT111KTest is TestSupport {
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(address(this), 100 ether);
-        renderer = new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/");
         token = new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
             deliveryReceiver,
-            address(renderer),
+            "https://cdn.mons.shop/111k-sepolia/",
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps()
@@ -703,23 +700,22 @@ contract NFT111KTest is TestSupport {
         assertEq(address(token).balance, 0);
     }
 
-    function testRendererReplacementPreservesOwnershipAndValidatesPreviews() public {
+    function testBaseURIUpdatePreservesOwnershipAndValidatesPreviews() public {
         _buyCrates(alice, 1);
-        NFT111KUrlRenderer replacement = new NFT111KUrlRenderer("https://cdn.mons.shop/111k/");
         vm.prank(alice);
         vm.expectRevert();
-        token.setRenderer(address(replacement));
-        token.setRenderer(address(replacement));
+        token.setBaseURI("https://cdn.mons.shop/111k/");
+        token.setBaseURI("https://cdn.mons.shop/111k/");
         _info(111112, 2, 1, alice);
-        assertEq(token.tokenURI(111112), replacement.tokenURI(2, 1));
+        assertEq(token.tokenURI(111112), "https://cdn.mons.shop/111k/111112.json");
         assertTrue(token.supportsInterface(0x49064906));
         assertTrue(token.supportsInterface(0x80ac58cd));
         vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
         token.previewTokenURI(2, 5556);
         vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
         token.previewTokenURI(0, 1);
-        vm.expectRevert(NFT111K.InvalidAddress.selector);
-        token.setRenderer(bob);
+        vm.expectRevert(NFT111K.InvalidBaseURI.selector);
+        token.setBaseURI("");
     }
 
     function testFuzzDisplayNumbers(uint16 requestedCrate, uint8 itemOffset) public {

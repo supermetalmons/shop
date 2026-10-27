@@ -1,0 +1,32 @@
+{
+  "checkedAt": "2026-10-27T13:44:39.802Z",
+  "scope": {
+    "chainId": 11155111,
+    "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92"
+  },
+  "control": {
+    "paused": true,
+    "revision": 15,
+    "pausedAtMs": 1793108449000,
+    "chainId": 11155111,
+    "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+    "resetGuardId": null,
+    "lastResetId": "eff5ab4d-a715-48e2-8535-5f371e6ce0f7",
+    "updatedAtMs": 1793108617000
+  },
+  "counts": {
+    "documents": 0,
+    "recovery": 0,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "cursors": 0
+  }
+}

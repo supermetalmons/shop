@@ -29,6 +29,7 @@ const config = {
         ...newDropEntries,
         'scripts/newPreorderCollections/*.ts',
         'tests/api/*.test.ts',
+        'tests/ethereum/*.test.ts',
         'tests/*.test.ts',
       ],
       project: [
@@ -45,7 +46,7 @@ const config = {
         'tests/**/*.ts',
       ],
       ignoreDependencies: ['buffer', 'cloudflare'],
-      ignoreBinaries: ['anchor', 'mkfifo', 'solana', 'forge', 'anvil'],
+      ignoreBinaries: ['anchor', 'mkfifo', 'solana', 'forge', 'anvil', 'cast'],
       ignoreExportsUsedInFile: { type: true },
     },
     'onchain/ethereum': {

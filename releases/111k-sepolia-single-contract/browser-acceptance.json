@@ -1,0 +1,15 @@
+{
+  "url": "https://mons.shop/111k_devnet",
+  "passed": true,
+  "mode": "read-only browser inspection",
+  "checks": [
+    "111K crate preview rendered",
+    "Crate and warehouse selectors rendered",
+    "Mint quantity control rendered",
+    "Mint button shows 0.0001 ETH",
+    "Remaining supply shows 5552 / 5555 during acceptance",
+    "Inventory, shipments, and receipts sections rendered",
+    "No maintenance or error message displayed"
+  ],
+  "transactionsFromBrowser": 0
+}

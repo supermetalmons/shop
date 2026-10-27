@@ -12,7 +12,7 @@ type EthereumBlockSnapshot = { blockNumber: number; blockHash: string };
 export type EthereumEnvironment = Pick<Env,
   'OPS_DB' | 'COMMERCE_DB' | 'ALCHEMY_MI_NOTE_API_KEY' |
   'ETHEREUM_111K_CHAIN_ID' | 'ETHEREUM_111K_CONTRACT_ADDRESS' |
-  'ETHEREUM_111K_RENDERER_ADDRESS' | 'ETHEREUM_111K_DEPLOYMENT_BLOCK' |
+  'ETHEREUM_111K_DEPLOYMENT_BLOCK' |
   'ETHEREUM_111K_METADATA_BASE_URI' |
   'ETHEREUM_111K_RPC_URL' |
   'STAFF_AUTH_CHALLENGE_RATE_LIMITER' | 'STAFF_AUTH_SESSION_RATE_LIMITER' |
@@ -34,7 +34,6 @@ export function ethereumConfig(env: EthereumEnvironment): Ethereum111kConfig {
   return resolveEthereum111kConfig({
     chainId: Number(env.ETHEREUM_111K_CHAIN_ID || '11155111'),
     contractAddress: env.ETHEREUM_111K_CONTRACT_ADDRESS || null,
-    rendererAddress: env.ETHEREUM_111K_RENDERER_ADDRESS || null,
     metadataBaseUri: env.ETHEREUM_111K_METADATA_BASE_URI,
     deploymentBlock: Number(env.ETHEREUM_111K_DEPLOYMENT_BLOCK || '0'),
     ...(localRpc ? { walletRpcUrl: localRpc } : {}),

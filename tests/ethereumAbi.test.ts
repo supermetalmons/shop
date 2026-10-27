@@ -6,17 +6,20 @@ import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumToken
 import { physicalCrateArtworkIds, ethereumAssetId, ethereumReceiptTokenId, ethereumMetadataTokenId,
   ethereumItemDisplayIdMaximum, formatEtherAmount } from '../shared/ethereum/protocol.ts';
 import { ethereumMetadataBaseUri, resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
-import { nft111KAbi, nft111KRendererAbi } from '../shared/ethereum/abi.generated.ts';
+import { nft111KAbi } from '../shared/ethereum/abi.generated.ts';
 import { ETHEREUM_FUNCTIONS } from '../shared/ethereum/protocol.ts';
 
-test('generated contract ABI covers every client call and metadata renderer', () => {
+test('generated contract ABI covers every client call and collection metadata', () => {
   type Input = { type: string; components?: readonly Input[] };
   const typeName = (input: Input): string => input.type.startsWith('tuple')
     ? `(${input.components!.map(typeName).join(',')})${input.type.slice(5)}` : input.type;
   const signatures = new Set(nft111KAbi.filter(entry => entry.type === 'function')
     .map(entry => `${entry.name}(${entry.inputs.map(typeName).join(',')})`));
   for (const signature of Object.values(ETHEREUM_FUNCTIONS)) assert.ok(signatures.has(signature), signature);
-  assert.ok(nft111KRendererAbi.some(entry => entry.type === 'function' && entry.name === 'tokenURI'));
+  assert.ok(signatures.has('baseURI()'));
+  assert.ok(signatures.has('setBaseURI(string)'));
+  assert.equal(signatures.has('renderer()'), false);
+  assert.equal(signatures.has('setRenderer(address)'), false);
 });
 
 const WALLET = '0x1111111111111111111111111111111111111111';

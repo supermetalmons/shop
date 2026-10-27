@@ -18,9 +18,9 @@ export const nft111KAbi = [
         "internalType": "address payable"
       },
       {
-        "name": "renderer_",
-        "type": "address",
-        "internalType": "address"
+        "name": "baseURI_",
+        "type": "string",
+        "internalType": "string"
       },
       {
         "name": "discountRoot",
@@ -314,6 +314,19 @@ export const nft111KAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "baseURI",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
       }
     ],
     "stateMutability": "view"
@@ -944,19 +957,6 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
-    "name": "renderer",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "contract INFT111KRenderer"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
@@ -1046,6 +1046,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "setBaseURI",
+    "inputs": [
+      {
+        "name": "baseURI_",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setDeliveryPaymentReceiver",
     "inputs": [
       {
@@ -1119,19 +1132,6 @@ export const nft111KAbi = [
         "name": "paused",
         "type": "bool",
         "internalType": "bool"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setRenderer",
-    "inputs": [
-      {
-        "name": "renderer_",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -1540,6 +1540,19 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
+    "name": "BaseURIUpdated",
+    "inputs": [
+      {
+        "name": "baseURI",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "BatchMetadataUpdate",
     "inputs": [
       {
@@ -1916,19 +1929,6 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
-    "name": "RendererUpdated",
-    "inputs": [
-      {
-        "name": "renderer",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
     "name": "SaleStatusUpdated",
     "inputs": [
       {
@@ -2102,6 +2102,11 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "InvalidAuthorization",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidBaseURI",
     "inputs": []
   },
   {
@@ -2295,67 +2300,6 @@ export const nft111KAbi = [
   {
     "type": "error",
     "name": "WrongPayment",
-    "inputs": []
-  }
-] as const;
-
-export const nft111KRendererAbi = [
-  {
-    "type": "constructor",
-    "inputs": [
-      {
-        "name": "baseURI_",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "baseURI",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "tokenURI",
-    "inputs": [
-      {
-        "name": "kind",
-        "type": "uint8",
-        "internalType": "uint8"
-      },
-      {
-        "name": "displayId",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "string",
-        "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "error",
-    "name": "InvalidBaseURI",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidItem",
     "inputs": []
   }
 ] as const;

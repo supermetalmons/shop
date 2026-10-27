@@ -5,7 +5,6 @@ export type Ethereum111kConfig = {
   chainId: number;
   chainName: string;
   contractAddress: string | null;
-  rendererAddress: string | null;
   metadataBaseUri: string;
   deploymentBlock: number;
   explorerUrl: string;
@@ -24,7 +23,6 @@ export type Ethereum111kConfig = {
 export function resolveEthereum111kConfig(input: {
   chainId?: number | string;
   contractAddress?: string | null;
-  rendererAddress?: string | null;
   metadataBaseUri?: string;
   deploymentBlock?: number | string;
   walletRpcUrl?: string;
@@ -34,12 +32,11 @@ export function resolveEthereum111kConfig(input: {
   const deploymentBlock = Number(input.deploymentBlock || 0);
   if (!Number.isSafeInteger(deploymentBlock) || deploymentBlock < 0) throw new Error('Invalid Ethereum deployment block');
   const contractAddress = normalizeEthereumAddress(input.contractAddress);
-  const rendererAddress = normalizeEthereumAddress(input.rendererAddress);
   const metadataBaseUri = ethereumMetadataBaseUri(input.metadataBaseUri || 'https://cdn.mons.shop/111k-sepolia/', chainId);
   return {
     dropId: ETHEREUM_111K_DROP_ID, chainId,
     chainName: chainId === 31337 ? 'Local Ethereum' : 'Sepolia',
-    contractAddress, rendererAddress, metadataBaseUri, deploymentBlock,
+    contractAddress, metadataBaseUri, deploymentBlock,
     explorerUrl: chainId === 31337 ? '' : 'https://sepolia.etherscan.io',
     walletRpcUrl: input.walletRpcUrl || (chainId === 31337 ? 'http://127.0.0.1:8545' : 'https://ethereum-sepolia-rpc.publicnode.com'),
     enabled: contractAddress !== null, testnet: true,

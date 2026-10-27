@@ -7,11 +7,13 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const baseline = 'benchmarks/compiler-legacy-200-cdn.json';
+const baseline = 'benchmarks/compiler-legacy-200-single-contract.json';
+const historical = ['compiler-legacy-200.json', 'compiler-legacy-200-cdn.json', 'compiler-settings.json'];
 const read = path => readFileSync(path, 'utf8');
 
 test('compiler benchmarks regenerate and reproduce both recipient configurations without changing historical baselines', () => {
   const originalBaseline = read(join(root, baseline));
+  const historicalBaselines = historical.map(name => read(join(root, 'benchmarks', name)));
   const directory = mkdtempSync(join(tmpdir(), '111k-compiler-test-'));
   try {
     for (const name of ['src', 'fixtures/discounts', 'snapshots', 'benchmarks']) {
@@ -35,7 +37,7 @@ test('compiler benchmarks regenerate and reproduce both recipient configurations
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const report = JSON.parse(read(join(directory, output)));
       assert.equal(report.status, 'complete');
-      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 800);
+      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 896);
       assert.equal(report.writeBenchmarkCount,
         Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release)/.test(name)).length);
       for (const variant of report.variants) {
@@ -43,7 +45,9 @@ test('compiler benchmarks regenerate and reproduce both recipient configurations
         for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'releaseMint', 'releaseMintEightRecipients']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
-        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 544);
+        assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);
+        assert.deepEqual(Object.keys(variant.deploymentTransactions), ['collection']);
+        assert.equal(variant.deploymentTransactions.collection.constructorArgumentBytes, 640);
         assert.ok(variant.deploymentTransactions.collection.gasUsed > 0);
         assert.equal(variant.comparison.withinDeploymentSizeLimits, true);
       }
@@ -66,8 +70,10 @@ test('compiler benchmarks regenerate and reproduce both recipient configurations
     assert.deepEqual(reproduced.variants.map(variant => variant.gas), regenerated.variants.map(variant => variant.gas));
     assert.deepEqual(reproduced.variants.map(variant => variant.deploymentTransactions),
       regenerated.variants.map(variant => variant.deploymentTransactions));
+    assert.deepEqual(historical.map(name => read(join(directory, 'benchmarks', name))), historicalBaselines);
   } finally {
     assert.equal(read(join(root, baseline)), originalBaseline);
+    assert.deepEqual(historical.map(name => read(join(root, 'benchmarks', name))), historicalBaselines);
     rmSync(directory, { recursive: true, force: true });
   }
 });

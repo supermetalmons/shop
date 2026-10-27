@@ -91,12 +91,12 @@ async function readCdnMetadata(uri: string): Promise<EthereumMetadata> {
   return metadata as EthereumMetadata;
 }
 
-function testEnvironment(contract: string, renderer: string, key: string, ops: EthereumEnvironment['OPS_DB'], commerce: EthereumEnvironment['COMMERCE_DB']): EthereumEnvironment {
+function testEnvironment(contract: string, key: string, ops: EthereumEnvironment['OPS_DB'], commerce: EthereumEnvironment['COMMERCE_DB']): EthereumEnvironment {
   const limiter = { limit: async () => ({ success: true }) };
   return {
     OPS_DB: ops, COMMERCE_DB: commerce, ALCHEMY_MI_NOTE_API_KEY: '',
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contract,
-    ETHEREUM_111K_RENDERER_ADDRESS: renderer, ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
+    ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
     ETHEREUM_111K_METADATA_BASE_URI: metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl, ETHEREUM_111K_SIGNER_SECRET: key,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
@@ -132,14 +132,14 @@ try {
     root: string; proofs: Record<string, string[]>;
   };
   const proceeds = parseProceedsConfig(JSON.parse(await readFile(resolve(project, 'config/proceeds.json'), 'utf8')));
-  const constructorTypes = ['address', 'address', 'address', 'address', 'bytes32', 'address[]', 'uint256[]'];
-  const rendererReceipt = await deploy('NFT111KUrlRenderer', admin, ['string'], [metadataBaseURI]);
+  const constructorTypes = ['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]'];
   const deployment = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, proceeds.deliveryPaymentReceiver, rendererReceipt.contractAddress, discounts.root,
+    [admin, signer, proceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
       proceeds.mintRecipients, proceeds.mintSharesBps]);
   const contract = deployment.contractAddress!;
+  assert.deepEqual(await call(contract, 'baseURI()', [], [], ['string']), [metadataBaseURI]);
   const reservedAddresses = new Set([
-    ...accounts, signer, contract, rendererReceipt.contractAddress!, ...proceeds.mintRecipients, proceeds.deliveryPaymentReceiver,
+    ...accounts, signer, contract, ...proceeds.mintRecipients, proceeds.deliveryPaymentReceiver,
     `0x${'9'.repeat(40)}`,
   ].map(address => address.toLowerCase()));
   function reserveAddress() {
@@ -155,7 +155,7 @@ try {
   await rpc('anvil_impersonateAccount', [payoutCaller]);
   const info = (id: number | bigint) => call(contract, ETHEREUM_FUNCTIONS.tokenInfo, ['uint256'], [id], ['uint8', 'uint256', 'address']);
   const transact = (wallet: string, signature: string, types: string[], args: unknown[], value = 0n) => send(wallet, encodeCall(signature, types, args), contract, value);
-  const gas: Record<string, string> = { deploy: BigInt(deployment.gasUsed).toString(), renderer: BigInt(rendererReceipt.gasUsed).toString() };
+  const gas: Record<string, string> = { deploy: BigInt(deployment.gasUsed).toString() };
   const batching: Record<string, number> = {};
   const checkoutRecovery: Array<{ recovery: string; checkoutId: string; orderId: number; transactionHash: string; fulfillmentOrders: number; confirmations: number }> = [];
   for (const [name, expected] of [
@@ -214,7 +214,7 @@ try {
     .run(contract.toLowerCase(), Date.now());
   const discountOps = new DatabaseSync(':memory:');
   try {
-    const api = apiClient(testEnvironment(contract, rendererReceipt.contractAddress!, key, d1Database(discountOps), discountCommerce.db));
+    const api = apiClient(testEnvironment(contract, key, d1Database(discountOps), discountCommerce.db));
     const stats = () => api<EthereumStats>(`${ETHEREUM_API_PATHS.stats}?owner=${discountWallet}`);
     const initial = await stats();
     assert.equal(initial.owner, discountWallet);
@@ -345,7 +345,7 @@ try {
   const publicDatabase = new DatabaseSync(':memory:');
   try {
     const db = d1Database(publicDatabase);
-    const environment = testEnvironment(contract, rendererReceipt.contractAddress!, key, db, db);
+    const environment = testEnvironment(contract, key, db, db);
     const rpcCalls: Array<{ method: string; params: unknown[] }> = [];
     const envelopes: number[] = [];
     const trackingFetch: typeof fetch = async (input, init) => {
@@ -406,7 +406,7 @@ try {
       commerce.database.exec(await readFile(resolve(root, 'cloud/workers/api/commerce-migrations/0037_ethereum_111k.sql'), 'utf8'));
     }
     ops.exec(await readFile(resolve(root, 'cloud/workers/api/ops-migrations/0008_ethereum_profiles.sql'), 'utf8'));
-    const environment = testEnvironment(contract, rendererReceipt.contractAddress!, key, d1Database(ops), commerce.db);
+    const environment = testEnvironment(contract, key, d1Database(ops), commerce.db);
     const api = apiClient(environment);
     const challenge = await api<EthereumAuthChallenge>(ETHEREUM_API_PATHS.authChallenge, { dropId: '111k_devnet', address: buyer, chainId: 31337 });
     const signature = await rpc<string>('personal_sign', [`0x${Buffer.from(challenge.message).toString('hex')}`, buyer]);
@@ -651,7 +651,7 @@ try {
 
   const eightRecipients = Array.from({ length: 8 }, () => reserveAddress());
   const maxSplit = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, replacementDeliveryReceiver, rendererReceipt.contractAddress, discounts.root, eightRecipients, Array(8).fill(1250)]);
+    [admin, signer, replacementDeliveryReceiver, metadataBaseURI, discounts.root, eightRecipients, Array(8).fill(1250)]);
   const maxContract = maxSplit.contractAddress!;
   gas.deployEightRecipients = BigInt(maxSplit.gasUsed).toString();
   assert.deepEqual(await call(maxContract, 'mintRecipientCount()', [], [], ['uint256']), [8n]);
@@ -669,7 +669,7 @@ try {
     mintRecipients: mixedCaseRecipients, mintSharesBps: [5000, 5000], deliveryPaymentReceiver: checksumEthereumAddress(admin),
   });
   const mixedCaseDeployment = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, mixedCaseProceeds.deliveryPaymentReceiver, rendererReceipt.contractAddress, discounts.root,
+    [admin, signer, mixedCaseProceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
       mixedCaseProceeds.mintRecipients, mixedCaseProceeds.mintSharesBps]);
   const mixedCaseContract = mixedCaseDeployment.contractAddress!;
   await send(buyer, encodeCall('mintCrates(uint256)', ['uint256'], [1]), mixedCaseContract, 100000000000000n);
@@ -689,7 +689,7 @@ try {
   const previewDatabase = new DatabaseSync(':memory:');
   try {
     const db = d1Database(previewDatabase);
-    const api = apiClient(testEnvironment(contract, rendererReceipt.contractAddress!, key, db, db));
+    const api = apiClient(testEnvironment(contract, key, db, db));
     for (const preview of previews) {
       const kind = ethereumItemKind(preview.kind)!;
       const expectedUri = `${metadataBaseURI}${ethereumMetadataTokenId(kind, preview.id)}.json`;
@@ -704,7 +704,7 @@ try {
       metadataChecks.push({ uri: expectedUri, kind, displayId: preview.id, apiMatchesCdn: true });
     }
   } finally { previewDatabase.close(); }
-  const report = { chainId: 31337, contract, renderer: rendererReceipt.contractAddress, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details', 'all five metadata types read from the live CDN and preserved by the API'] };
+  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details', 'all five metadata types read from the live CDN and preserved by the API'] };
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

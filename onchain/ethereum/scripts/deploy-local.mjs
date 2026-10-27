@@ -45,7 +45,7 @@ for (const address of [deployer, owner, signer]) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/.test(address)) throw new Error('Invalid local deployment address.');
 }
 const run = (executable, args) => execFileSync(executable, args, { cwd: fileURLToPath(root), encoding: 'utf8' }).trim();
-const collectionNonce = BigInt(await rpc('eth_getTransactionCount', [deployer, 'pending'])) + 1n;
+const collectionNonce = BigInt(await rpc('eth_getTransactionCount', [deployer, 'pending']));
 const predictedCollection = run('cast', ['compute-address', deployer, '--nonce', collectionNonce.toString()])
   .match(/^Computed Address: (0x[0-9a-fA-F]{40})$/)?.[1];
 if (!predictedCollection) throw new Error('Unable to predict the collection address.');
@@ -55,12 +55,9 @@ const artifact = async name => JSON.parse(await readFile(new URL(`out/${name}.so
 const send = creation => JSON.parse(run('cast', [
   'send', '--rpc-url', rpcUrl.href, '--unlocked', '--from', deployer, '--create', creation, '--json',
 ]));
-const rendererConstructor = run('cast', ['abi-encode', 'constructor(string)', metadataBaseURI]);
-const renderer = send((await artifact('NFT111KUrlRenderer')).bytecode.object + rendererConstructor.slice(2));
-if (!renderer.contractAddress || Number(renderer.status) !== 1) throw new Error('Renderer deployment failed.');
 const constructor = run('cast', [
-  'abi-encode', 'constructor(address,address,address,address,bytes32,address[],uint256[])',
-  owner, signer, deliveryPaymentReceiver, renderer.contractAddress, discountRoot,
+  'abi-encode', 'constructor(address,address,address,string,bytes32,address[],uint256[])',
+  owner, signer, deliveryPaymentReceiver, metadataBaseURI, discountRoot,
   `[${mintRecipients.join(',')}]`, `[${mintSharesBps.join(',')}]`,
 ]);
 const collection = send((await artifact('NFT111K')).bytecode.object + constructor.slice(2));
@@ -68,11 +65,11 @@ if (!collection.contractAddress || Number(collection.status) !== 1) throw new Er
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 7,
+  protocolVersion: 8,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
-  rendererAddress: renderer.contractAddress, metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
+  metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, deliveryPaymentReceiver, mintRecipients, mintSharesBps, discountRoot,
-  rendererTransactionHash: renderer.transactionHash, collectionTransactionHash: collection.transactionHash,
+  collectionTransactionHash: collection.transactionHash,
 };
 const outputDirectory = new URL('.local/', root);
 await mkdir(outputDirectory, { recursive: true });

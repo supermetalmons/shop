@@ -1,0 +1,57 @@
+{
+  "passed": true,
+  "logs": {
+    "ethereum": {
+      "sha256": "b43a01aa604df55639ecb87592f33adfa187f31f6d5d8f3e32421d84895ab15c",
+      "solidityPassed": 144,
+      "optionalForkTestsSkipped": 3,
+      "gasMeasurements": 113,
+      "ethereumTypescriptPassed": 486
+    },
+    "api": {
+      "sha256": "1a4b2cf52a4ff7f3aa55c716ea1b6af5368b28e925c1c2aef7bb45f21c14c6f4",
+      "unitPassed": 2630,
+      "runtimePassed": 39
+    },
+    "frontend": {
+      "sha256": "08ba9bc612c4ba2c4f18742c733db66ce8f63f7f9e0ed1d590bd607256439a5a",
+      "rootPassed": 4761,
+      "workerPassed": 4,
+      "shopApiPassed": 29,
+      "commonIdsPassed": 1
+    },
+    "anvilEndToEnd": {
+      "sha256": "f45f851527326afbe9c87254f898043cfd55cd82fdfd5c2170147df93f4efb95"
+    },
+    "finalWorkerTypes": {
+      "sha256": "9d548a8ecf3aad5d067f2ba32496ddad4deb6d3a905253c1eff31bb6e4583e78"
+    },
+    "dataIntegrity": {
+      "sha256": "83edccd467c93faf8af706366a1b9071bc269e0895db5d505a68d7fa3a598906"
+    },
+    "opsIntegrity": {
+      "sha256": "9b5eb7e982b9fbcdea77bdc8fe783f978d8abe21b2f6076166947b7f69e709aa"
+    },
+    "commerceIntegrity": {
+      "sha256": "62c902e92d9709f9f422396cc0de9bc8b594accb4e154e26ede9a8bbb6e78037"
+    }
+  },
+  "additionalChecks": [
+    "Actual deploy-local helper at nonzero nonce, collection payee rejection, one deployment, manifest version 8",
+    "Frontend, API, and tools typechecks",
+    "Solidity formatter and generated ABI",
+    "Compiler baseline reproduction, fixture checks, gas snapshots",
+    "No pending DATA, OPS, or Commerce migrations",
+    "git diff --check"
+  ],
+  "retry": {
+    "initialParallelApiRun": "One profile lifecycle test exceeded its deadline under concurrent test load.",
+    "isolatedProfileTestsPassed": 19,
+    "completeIsolatedApiRerunPassed": true
+  },
+  "runtimeBytes": 21780,
+  "runtimeHeadroomBytes": 2796,
+  "creationBytes": 25616,
+  "constructorBytesFourRecipients": 640,
+  "metadataReceiptBatchGas": 93570
+}

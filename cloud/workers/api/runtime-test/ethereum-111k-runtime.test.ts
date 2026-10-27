@@ -32,7 +32,7 @@ function ethereumRuntime() {
       ...database, remote: false, migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
     })),
     vars: { ...production.vars, ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: '',
-      ETHEREUM_111K_RENDERER_ADDRESS: '', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
+      ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
       ETHEREUM_111K_RPC_URL: '', ALCHEMY_MI_NOTE_API_KEY: '' },
   };
   delete config.$schema;

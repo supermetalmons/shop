@@ -3,9 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 const project = new URL('../', import.meta.url);
 const artifact = JSON.parse(await readFile(new URL('out/NFT111K.sol/NFT111K.json', project), 'utf8'));
-const renderer = JSON.parse(await readFile(new URL('out/NFT111KUrlRenderer.sol/NFT111KUrlRenderer.json', project), 'utf8'));
 const target = new URL('../../shared/ethereum/abi.generated.ts', project);
-const source = `export const nft111KAbi = ${JSON.stringify(artifact.abi, null, 2)} as const;\n\nexport const nft111KRendererAbi = ${JSON.stringify(renderer.abi, null, 2)} as const;\n`;
+const source = `export const nft111KAbi = ${JSON.stringify(artifact.abi, null, 2)} as const;\n`;
 
 if (process.argv.includes('--check')) {
   const existing = await readFile(target, 'utf8').catch(() => '');

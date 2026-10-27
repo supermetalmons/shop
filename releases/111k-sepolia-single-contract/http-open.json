@@ -1,0 +1,157 @@
+{
+  "checkedAt": "2026-10-27T13:46:00.104Z",
+  "phase": "open",
+  "passed": true,
+  "releaseId": "111k-single-contract-2026-10-27T13-33-35-504Z-687adb52",
+  "manifestSha256": "ee408336228d619d5943cae1d815ca8dc29a1d7a57991021c462c9f529c3a65b",
+  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "broadcastTransactions": 0,
+  "results": [
+    {
+      "path": "/ethereum/111k/config",
+      "status": 200,
+      "body": {
+        "dropId": "111k_devnet",
+        "chainId": 11155111,
+        "chainName": "Sepolia",
+        "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+        "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+        "deploymentBlock": 12005467,
+        "explorerUrl": "https://sepolia.etherscan.io",
+        "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+        "enabled": true,
+        "testnet": true,
+        "cratePriceWei": "100000000000000",
+        "warehousePriceWei": "1100000000000000",
+        "deliveryFeeWei": "100000000000000",
+        "confirmationBlocks": 3,
+        "maxMintQuantity": 15,
+        "maxUnboxQuantity": 15,
+        "maxDeliveryItems": 50
+      }
+    },
+    {
+      "path": "/health",
+      "status": 200,
+      "body": {
+        "ok": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/stats?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "status": 200,
+      "body": {
+        "chainId": 11155111,
+        "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+        "owner": "0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+        "allocatedCrates": 0,
+        "warehousesMinted": 0,
+        "artworksMinted": 0,
+        "cratePriceWei": "100000000000000",
+        "warehousePriceWei": "1100000000000000",
+        "saleActive": true,
+        "remainingCrates": 5555,
+        "remainingWarehouses": 505,
+        "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+        "discountCratePriceWei": "50000000000000",
+        "discountAllowance": 1,
+        "discountUsed": 0
+      }
+    },
+    {
+      "path": "/pack-status/card_nft_2",
+      "status": 200,
+      "body": {
+        "ok": true,
+        "packStatus": {
+          "dropId": "card_nft_2",
+          "total": 11133,
+          "totalInitialSupply": 3711,
+          "totalCards": 11133,
+          "cardsPerPack": 3,
+          "unsealedOnline": 2451,
+          "unsealedCards": 7353,
+          "redeemedIrl": 351,
+          "redeemedIrlNormal": 178,
+          "redeemedIrlStripe": 173,
+          "redeemedUnsealedCards": 705,
+          "redeemedCards": 1758,
+          "items": [
+            {
+              "key": "unsealed",
+              "label": "Unpacked",
+              "amount": 7353,
+              "percentage": 66.05
+            },
+            {
+              "key": "redeemed",
+              "label": "Redeemed",
+              "amount": 1758,
+              "percentage": 15.79
+            },
+            {
+              "key": "total",
+              "label": "Total",
+              "amount": 11133,
+              "percentage": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "path": "/ethereum/111k/inventory?owner=0xe26067c76fdbe877f48b0a8400cf5db8b47af0fe",
+      "status": 200,
+      "body": {
+        "items": [],
+        "nextCursor": null,
+        "observedBlock": 12005512
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Artwork #1",
+        "metadataSha256": "528253bf7bf20edc5c1dd99215cb4ac9d72a7c4ba62c885b0f7f02c990ec16d6",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Crate #1",
+        "metadataSha256": "c4cc3abc5dd4c37e1f7d1d88710b97bef26c00dbf230c3fd8b3e88d81b39903c",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=warehouse&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Warehouse #1",
+        "metadataSha256": "d6ccb9b03da14ba8a1148aa95bd4f204b9be5f20bd8634bc6716ae19f09dcc2e",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Artwork Receipt #1",
+        "metadataSha256": "33f2dee0245fa037953a12b3e7fc51919df8609629001104bda2d6c12072014e",
+        "imageInline": true
+      }
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate_receipt&displayId=1",
+      "status": 200,
+      "body": {
+        "name": "111K Crate Receipt #1",
+        "metadataSha256": "75358e4133ec5e0b69c1a2f5983a85b2af7c11b8edc925b998f71391bf4da675",
+        "imageInline": true
+      }
+    }
+  ]
+}

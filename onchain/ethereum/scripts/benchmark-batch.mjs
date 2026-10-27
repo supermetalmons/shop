@@ -21,7 +21,7 @@ const comparison = (batchName, separateName) => {
   return { batch, separate, saved: separate - batch, savedPercent: Number(((separate - batch) / separate * 100).toFixed(2)) };
 };
 const paths = [
-  'src/NFT111K.sol', 'src/NFT111KUrlRenderer.sol', 'src/INFT111KRenderer.sol',
+  'src/NFT111K.sol',
   'test/NFT111KGas.t.sol', 'test/TestSupport.sol', 'test/NFT111KBatch.t.sol',
   'foundry.toml', 'package-lock.json', 'snapshots/NFT111KGasTest.json', 'fixtures/discounts/proof.json',
   'scripts/benchmark-batch.mjs',

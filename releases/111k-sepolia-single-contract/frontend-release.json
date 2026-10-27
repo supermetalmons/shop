@@ -1,0 +1,35 @@
+{
+  "checkedAt": "2026-10-27T13:45:12.639Z",
+  "previousDeployment": {
+    "id": "df43aca1-89ed-47e7-acef-492cb0d69449",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/message": "Use CDN metadata as source of truth (4841444e)",
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "9ece1f4d-ec6c-4b80-858a-f9160da19ab1",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T13:13:56.138076Z"
+  },
+  "deployment": {
+    "id": "d171b056-d014-43f3-a3f3-c243eadaab42",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "fdee4955-e27e-49ae-9c38-377b3d4d7efd",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T13:44:06.192779Z"
+  },
+  "releaseChecksPassed": true
+}

@@ -12,9 +12,9 @@ import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
-  protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
+  protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
 };
-if (deployment.protocolVersion !== 7) throw new Error('The local deployment does not support offchain metadata and the current receipt numbering. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 8) throw new Error('The local deployment does not support metadata URLs in the collection contract. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -26,7 +26,6 @@ try {
   throw new Error('Local metadata must use the collection CDN. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 }
 const contractAddress = requireEthereumAddress(deployment.contractAddress);
-const rendererAddress = requireEthereumAddress(deployment.rendererAddress);
 const proceeds = parseProceedsConfig(deployment, contractAddress) as {
   mintRecipients: string[]; mintSharesBps: number[]; deliveryPaymentReceiver: string;
 };
@@ -42,15 +41,14 @@ async function rpc(method: string, params: unknown[] = []): Promise<unknown> {
   return body.result;
 }
 
-const [chainId, client, collectionCode, rendererCode, signerResult] = await Promise.all([
+const [chainId, client, collectionCode, signerResult] = await Promise.all([
   rpc('eth_chainId'), rpc('web3_clientVersion'), rpc('eth_getCode', [contractAddress, 'latest']),
-  rpc('eth_getCode', [rendererAddress, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('quoteSigner()', [], []) }, 'latest']),
 ]);
 if (chainId !== '0x7a69' || typeof client !== 'string' || !client.toLowerCase().includes('anvil')) {
   throw new Error('Start the local Anvil chain before starting this API.');
 }
-if ([collectionCode, rendererCode].some((code) => typeof code !== 'string' || code.length < 4)) {
+if (typeof collectionCode !== 'string' || collectionCode.length < 4) {
   throw new Error('The local deployment is missing. Run npm --prefix onchain/ethereum run deploy:local again.');
 }
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
@@ -61,10 +59,10 @@ const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI] = aw
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [`0x${'0'.repeat(40)}`]) }, 'latest']),
-  rpc('eth_call', [{ to: rendererAddress, data: encodeCall('baseURI()', [], []) }, 'latest']),
+  rpc('eth_call', [{ to: contractAddress, data: encodeCall('baseURI()', [], []) }, 'latest']),
 ]);
 if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
-  throw new Error('The local metadata renderer does not match its deployment manifest.');
+  throw new Error('The local collection metadata base URI does not match its deployment manifest.');
 }
 if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
@@ -108,7 +106,7 @@ const config = {
   main: resolve(root, 'cloud/workers/api/src/index.ts'),
   vars: { ...rawConfig.vars, ...emptySecrets,
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contractAddress,
-    ETHEREUM_111K_RENDERER_ADDRESS: rendererAddress, ETHEREUM_111K_DEPLOYMENT_BLOCK: String(deployment.deploymentBlock),
+    ETHEREUM_111K_DEPLOYMENT_BLOCK: String(deployment.deploymentBlock),
     ETHEREUM_111K_METADATA_BASE_URI: deployment.metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl.href, ETHEREUM_111K_SIGNER_SECRET: testKey,
     ADDRESS_DECRYPTION_SECRET: Buffer.from(addressKeyPair.secretKey).toString('base64'),

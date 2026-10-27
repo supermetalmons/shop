@@ -31,8 +31,10 @@ const run = (directory, args) => execFileSync('forge', args, {
 const harnessName = 'NFT111KCompilerGasTest';
 const testCommand = ['test', '--offline', '--isolate', '--match-contract', `^${harnessName}$`,
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
-const names = ['NFT111K', 'NFT111KUrlRenderer'];
-const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200-cdn.json');
+const names = ['NFT111K'];
+const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/';
+const baselineName = 'benchmarks/compiler-legacy-200-single-contract.json';
+const baselinePath = join(packageRoot, baselineName);
 assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
 const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
 const expectedNames = Object.keys(committedSnapshots).sort((a, b) => a.localeCompare(b));
@@ -122,9 +124,8 @@ contract ${harnessName} is NFT111KGasTest {
         override
         returns (NFT111K)
     {
-        address renderer = _deployCandidate("NFT111KUrlRenderer", abi.encode("https://cdn.mons.shop/111k-sepolia/"));
         return NFT111K(_deployCandidate("NFT111K", abi.encode(
-            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer, bytes32(0), recipients, shares
+            address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), "${metadataBaseURI}", bytes32(0), recipients, shares
         )));
     }
 
@@ -168,17 +169,17 @@ function measurements(directory, harnessDirectory) {
   return Object.fromEntries(Object.entries(values).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-function collectionArguments(owner, renderer, recipientCount = 4) {
+function collectionArguments(owner, recipientCount = 4) {
   const recipients = Array.from({ length: recipientCount }, (_, index) =>
     `0x${(0xA00001 + index).toString(16).padStart(40, '0')}`);
   const shares = recipientCount === 4 ? [5000, 2500, 1500, 1000] : Array(recipientCount).fill(1250);
-  return Buffer.from(encode(['address', 'address', 'address', 'address', 'bytes32', 'address[]', 'uint256[]'],
+  return Buffer.from(encode(['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]'],
     [owner, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', '0x000000000000000000000000000000000000beef',
-      renderer, `0x${'0'.repeat(64)}`, recipients, shares])).toString('hex');
+      metadataBaseURI, `0x${'0'.repeat(64)}`, recipients, shares])).toString('hex');
 }
 
 const maximumCollectionArgumentBytes = collectionArguments(
-  '0x0000000000000000000000000000000000000001', '0x0000000000000000000000000000000000000002', 8).length / 2;
+  '0x0000000000000000000000000000000000000001', 8).length / 2;
 
 async function deploymentMeasurements(variants) {
   const server = createServer();
@@ -230,10 +231,8 @@ async function deploymentMeasurements(variants) {
         assert.equal(receipt?.status, '0x1', `${variant.label}: deployment failed`);
         return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)), constructorArgumentBytes: args.length / 2 };
       };
-      const renderer = await deploy('NFT111KUrlRenderer',
-        Buffer.from(encode(['string'], ['https://cdn.mons.shop/111k-sepolia/'])).toString('hex'));
-      const args = collectionArguments(wallet, renderer.address);
-      variant.deploymentTransactions = { renderer, collection: await deploy('NFT111K', args) };
+      const args = collectionArguments(wallet);
+      variant.deploymentTransactions = { collection: await deploy('NFT111K', args) };
     }
   } finally {
     if (anvil.exitCode === null && !startupError) {
@@ -257,7 +256,6 @@ function summarize(candidate, baseline) {
     abiUnchanged: names.every(name => candidate.artifacts[name].canonicalAbiSha256 === baseline.artifacts[name].canonicalAbiSha256),
     withinDeploymentSizeLimits: names.every(name => candidate.artifacts[name].runtimeBytes <= 24576 &&
       candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? maximumCollectionArgumentBytes : 0) <= 49152),
-    withinProjectSizeBudgets: candidate.artifacts.NFT111KUrlRenderer.runtimeBytes <= 12 * 1024,
   };
 }
 
@@ -266,7 +264,7 @@ const report = {
   measuredAt: new Date().toISOString(),
   sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: packageRoot, encoding: 'utf8' }).trim(),
   sourceSha256: sourceHashes(packageRoot),
-  baselineReference: { path: 'benchmarks/compiler-legacy-200-cdn.json', updated: updateBaseline },
+  baselineReference: { path: baselineName, updated: updateBaseline },
   benchmarkCount: expectedNames.length,
   writeBenchmarkCount: writeNames.length,
   toolchain: {
@@ -284,7 +282,7 @@ const report = {
     scriptSha256: hash(read(fileURLToPath(import.meta.url))),
     fixedSettings: { solc: '0.8.30', optimizer: true, evmVersion: 'prague', bytecodeHash: 'none' },
     maximumCollectionArgumentBytes,
-    harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE in the original order, preserving addresses and signed calldata.',
+    harness: 'All variants use one legacy/200 harness and MinimalGasReceiver. Candidate creation bytecode is loaded with vm.getCode and deployed using CREATE at identical addresses, preserving signed calldata.',
     measurement: `All ${expectedNames.length} measurements use Forge --isolate. Write measurements include transaction intrinsic/calldata gas and refunds; Separate benchmarks sum 15 isolated single-unpack calls with snapshotValue. Read measurements are callee STATICCALL execution. Setup and harness gas are excluded. Deployment gas comes from actual Prague Anvil receipts, reverting to identical account state and nonces for each variant.`,
     environment: 'FOUNDRY_* and DAPP_* overrides are removed for isolated builds. Tracked sources and normal gas snapshots are never modified. The compiler baseline is rewritten only with --update-baseline.',
   },
@@ -367,7 +365,7 @@ try {
   await deploymentMeasurements(measured);
   for (const variant of measured) {
     variant.comparison ??= summarize(variant, baseline);
-    variant.comparison.deploymentDeltas = Object.fromEntries(['renderer', 'collection'].map(name =>
+    variant.comparison.deploymentDeltas = Object.fromEntries(['collection'].map(name =>
       [name, variant.deploymentTransactions[name].gasUsed - baseline.deploymentTransactions[name].gasUsed]));
   }
   report.status = 'complete';

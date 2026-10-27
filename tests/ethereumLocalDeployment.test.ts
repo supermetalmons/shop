@@ -17,20 +17,20 @@ test('the local API rejects old deployment manifests before connecting to Anvil'
     });
   };
   try {
-    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6]) {
+    for (const protocolVersion of [undefined, 1, 2, 3, 4, 5, 6, 7]) {
       const result = start({ protocolVersion });
       assert.ifError(result.error);
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /The local deployment does not support offchain metadata and the current receipt numbering\./);
+      assert.match(result.stderr, /The local deployment does not support metadata URLs in the collection contract\./);
       assert.match(result.stderr, /Restart Anvil and run npm --prefix onchain\/ethereum run deploy:local again\./);
     }
-    const current = start({ protocolVersion: 7, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
+    const current = start({ protocolVersion: 8, chainId: 1, rpcUrl: 'http://127.0.0.1:8545' });
     assert.ifError(current.error);
     assert.equal(current.status, 1);
     assert.match(current.stderr, /The local API accepts only an Anvil deployment on an HTTP loopback URL, chain ID 31337\./);
     for (const metadataBaseURI of ['http://127.0.0.1:8789/111k-sepolia/', 'http://localhost:8789/111k/',
       'http://[::1]:8789/111k-sepolia/', 'https://example.com/111k-sepolia/']) {
-      const local = start({ protocolVersion: 7, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
+      const local = start({ protocolVersion: 8, chainId: 31337, rpcUrl: 'http://127.0.0.1:8545', metadataBaseURI });
       assert.ifError(local.error);
       assert.equal(local.status, 1);
       assert.match(local.stderr, /Local metadata must use the collection CDN\./);

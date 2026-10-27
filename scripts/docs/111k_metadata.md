@@ -15,7 +15,9 @@ New 111K deployments return `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` 
 
 Digital opening keeps sequential ERC721A batch minting. Artwork `T` and receipt `1000000 + T` render the same flower. Physical-only artwork numbers start at 111112: crate `n` uses `111111 + 20 × (n − 1) + 1` onward. The final crate has 31 items and ends at artwork number 222222. The physical and digital receipt ranges cannot collide. A crate can only be digitally opened or physically redeemed, so at most 111111 artwork identities are issued across both paths.
 
-`NFT111KUrlRenderer` maps each kind/item number to its exact token filename. The collection still checks existence in `tokenURI`; previews can address possible tokens before they are minted. The URL renderer must only be used with the new numbering contract. Historical contracts retain their original renderers and numbering.
+`NFT111K` builds each CDN URL directly. `tokenURI` checks existence and uses the token ID as the filename; previews validate and map each kind/item number to its exact token filename before minting. There is no separate renderer in new deployments. Historical contracts retain their original renderers and numbering.
+
+The owner can call `setBaseURI(string)` to update the prefix. Both construction and updates require the existing valid URL format. Every successful update emits `BaseURIUpdated` and ERC-4906 `BatchMetadataUpdate`; setting the same URL refreshes metadata after CDN edits. Coordinate a changed prefix with `ETHEREUM_111K_METADATA_BASE_URI` and the application’s allowed URL policy before reopening metadata-dependent flows.
 
 ## Source of truth
 
@@ -48,7 +50,7 @@ Freshness applies when a client requests metadata. An already rendered page or a
 
 ## Local development and checks
 
-Local deployment manifest version 7 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the existing HTTPS CDN prefixes `/111k-sepolia/` and `/111k/`. The local API verifies that value against the renderer and fetches the CDN directly. Existing loopback metadata manifests require a fresh local deployment; matching CDN manifests remain valid. Local development requires network access and reports unavailable metadata rather than falling back to local files or generated output.
+Local deployment manifest version 8 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the existing HTTPS CDN prefixes `/111k-sepolia/` and `/111k/`. The local API verifies that value against the collection’s `baseURI()` and fetches the CDN directly. Every manifest older than version 8 requires a fresh single-contract deployment, including manifests with matching CDN URLs. Local development requires network access and reports unavailable metadata rather than falling back to local files or generated output.
 
 ```sh
 npm run check:api

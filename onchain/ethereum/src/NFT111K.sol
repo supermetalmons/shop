@@ -7,9 +7,11 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-import {INFT111KRenderer} from "./INFT111KRenderer.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
+    using Strings for uint256;
+
     enum ItemKind {
         None,
         Artwork,
@@ -75,7 +77,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public totalMintReleased;
     uint256 public totalDeliveryReceived;
     uint256 public totalDeliveryReleased;
-    INFT111KRenderer public renderer;
+    string public baseURI;
     mapping(uint256 => uint256) public warehouseFirstCrate;
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
@@ -100,6 +102,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error ProceedsPaymentFailed();
     error TokenAlreadyIssued();
     error InvalidMetadataItem();
+    error InvalidBaseURI();
     error DiscountInactive();
     error InvalidDiscountProof();
     error DiscountAllowanceExceeded();
@@ -126,7 +129,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event RedemptionsPauseUpdated(bool paused);
     event QuoteSignerUpdated(address indexed signer);
     event DeliveryPaymentReceiverUpdated(address indexed receiver);
-    event RendererUpdated(address indexed renderer);
+    event BaseURIUpdated(string baseURI);
     event MintProceedsReleased(address indexed recipient, uint256 amount);
     event DeliveryProceedsReleased(address indexed receiver, uint256 amount);
     event BatchMetadataUpdate(uint256 fromTokenId, uint256 toTokenId);
@@ -135,14 +138,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         address initialOwner,
         address signer,
         address payable deliveryPaymentReceiver_,
-        address renderer_,
+        string memory baseURI_,
         bytes32 discountRoot,
         address[] memory mintRecipients_,
         uint256[] memory mintSharesBps_
     ) ERC721A("111K", "111K") Ownable(initialOwner) EIP712("111K", "2") {
-        if (signer == address(0) || renderer_.code.length == 0) {
-            revert InvalidAddress();
-        }
+        if (signer == address(0)) revert InvalidAddress();
+        _validateBaseURI(baseURI_);
         uint256 count = mintRecipients_.length;
         if (count < 2 || count > 8 || mintSharesBps_.length != count) revert InvalidMintSplit();
         uint256 totalShares;
@@ -161,7 +163,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         _validateDeliveryPaymentReceiver(deliveryPaymentReceiver_);
         quoteSigner = signer;
         deliveryPaymentReceiver = deliveryPaymentReceiver_;
-        renderer = INFT111KRenderer(renderer_);
+        baseURI = baseURI_;
         discountMerkleRoot = discountRoot;
     }
 
@@ -381,14 +383,13 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        (uint8 kind, uint256 displayId,) = getTokenInfo(tokenId);
+        (uint8 kind,,) = getTokenInfo(tokenId);
         if (kind == 0) revert URIQueryForNonexistentToken();
-        return renderer.tokenURI(kind, displayId);
+        return _tokenURI(tokenId);
     }
 
     function previewTokenURI(uint8 kind, uint256 displayId) external view returns (string memory) {
-        if (!_validMetadataItem(kind, displayId)) revert InvalidMetadataItem();
-        return renderer.tokenURI(kind, displayId);
+        return _tokenURI(_metadataTokenId(kind, displayId));
     }
 
     function previewTokenURIs(uint8[] calldata kinds, uint256[] calldata displayIds)
@@ -399,8 +400,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (kinds.length != displayIds.length || kinds.length > MAX_METADATA_BATCH_SIZE) revert InvalidQuantity();
         uris = new string[](kinds.length);
         for (uint256 i; i < kinds.length; ++i) {
-            if (!_validMetadataItem(kinds[i], displayIds[i])) revert InvalidMetadataItem();
-            uris[i] = renderer.tokenURI(kinds[i], displayIds[i]);
+            uris[i] = _tokenURI(_metadataTokenId(kinds[i], displayIds[i]));
         }
     }
 
@@ -449,10 +449,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         emit DeliveryPaymentReceiverUpdated(receiver);
     }
 
-    function setRenderer(address renderer_) external onlyOwner {
-        if (renderer_.code.length == 0) revert InvalidAddress();
-        renderer = INFT111KRenderer(renderer_);
-        emit RendererUpdated(renderer_);
+    function setBaseURI(string calldata baseURI_) external onlyOwner {
+        _validateBaseURI(baseURI_);
+        baseURI = baseURI_;
+        emit BaseURIUpdated(baseURI_);
         emit BatchMetadataUpdate(1, CRATE_RECEIPT_OFFSET + MAX_CRATES);
     }
 
@@ -552,12 +552,40 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         return crateNumber == MAX_CRATES ? 31 : 20;
     }
 
-    function _validMetadataItem(uint8 kind, uint256 displayId) private pure returns (bool) {
-        if (displayId == 0) return false;
-        if (kind == uint8(ItemKind.Artwork)) return displayId <= MAX_ARTWORKS;
-        if (kind == uint8(ItemKind.ArtworkReceipt)) return displayId <= MAX_ARTWORK_RECEIPTS;
-        if (kind == uint8(ItemKind.Crate) || kind == uint8(ItemKind.CrateReceipt)) return displayId <= MAX_CRATES;
-        return kind == uint8(ItemKind.Warehouse) && displayId <= MAX_WAREHOUSES;
+    function _tokenURI(uint256 tokenId) private view returns (string memory) {
+        return string.concat(baseURI, tokenId.toString(), ".json");
+    }
+
+    function _metadataTokenId(uint8 kind, uint256 displayId) private pure returns (uint256) {
+        if (displayId == 0) revert InvalidMetadataItem();
+        if (kind == uint8(ItemKind.Artwork) && displayId <= MAX_ARTWORKS) return displayId;
+        if (kind == uint8(ItemKind.Crate) && displayId <= MAX_CRATES) return CRATE_TOKEN_START + displayId - 1;
+        if (kind == uint8(ItemKind.Warehouse) && displayId <= MAX_WAREHOUSES) {
+            return WAREHOUSE_TOKEN_START + displayId - 1;
+        }
+        if (kind == uint8(ItemKind.ArtworkReceipt) && displayId <= MAX_ARTWORK_RECEIPTS) {
+            return ARTWORK_RECEIPT_OFFSET + displayId;
+        }
+        if (kind == uint8(ItemKind.CrateReceipt) && displayId <= MAX_CRATES) {
+            return CRATE_RECEIPT_OFFSET + displayId;
+        }
+        revert InvalidMetadataItem();
+    }
+
+    function _validateBaseURI(string memory baseURI_) private view {
+        bytes memory value = bytes(baseURI_);
+        if (value.length < 9 || value[value.length - 1] != "/") revert InvalidBaseURI();
+        bool secure = value[0] == "h" && value[1] == "t" && value[2] == "t" && value[3] == "p" && value[4] == "s"
+            && value[5] == ":" && value[6] == "/" && value[7] == "/";
+        bool local = block.chainid == 31337 && value[0] == "h" && value[1] == "t" && value[2] == "t" && value[3] == "p"
+            && value[4] == ":" && value[5] == "/" && value[6] == "/";
+        if ((!secure && !local) || value[secure ? 8 : 7] == "/") revert InvalidBaseURI();
+        for (uint256 i; i < value.length; ++i) {
+            if (
+                uint8(value[i]) <= 32 || uint8(value[i]) >= 127 || value[i] == "?" || value[i] == "#"
+                    || value[i] == "\\" || value[i] == "@"
+            ) revert InvalidBaseURI();
+        }
     }
 
     function _startTokenId() internal pure override returns (uint256) {

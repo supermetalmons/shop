@@ -1,19 +1,17 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-10-27T12:44:24.116Z",
-  "sourceCommit": "7f0a8e7dbf67e32feaabde370e9d61b206d094af",
+  "measuredAt": "2026-10-27T13:32:24.982Z",
+  "sourceCommit": "4841444ef69964d5f8b566e6e5f1b544cc7b2ace",
   "sourceSha256": {
-    "src/NFT111K.sol": "5320bbb0832367e462b11d2b503366cc92a268d08eda80cb67ccdb8662c24a17",
-    "src/NFT111KUrlRenderer.sol": "f154e69b738469e3b45c3a1519ea166fce8717de072867fd60df6da4b7b668d0",
-    "src/INFT111KRenderer.sol": "25ee08675b3b8fa174d800d0a8fd59663a82631d2bf5231eab6dca8a727c769d",
-    "test/NFT111KGas.t.sol": "fe2e8a2b0f8b68fbf1d5868ccb16617640331a13a6b7e0682d9a749dce762c20",
+    "src/NFT111K.sol": "6631bd52aac7accb8f1cf62921cb63b204807f375af4463ce3a4583a519a45f1",
+    "test/NFT111KGas.t.sol": "9ce5327194c6061b912152d467707c5b83bc23e06b246dddbfd79de325bc5ed8",
     "test/TestSupport.sol": "601b4a0da9e386727ccbfea83207a07013b7cefcfa7b871c00ec8795755c510f",
-    "test/NFT111KBatch.t.sol": "d2566b58fd2fbc4de4c69217b7a911e9ef51ef1d38e11deaa6666b1561e332b3",
+    "test/NFT111KBatch.t.sol": "c895837c4d409546b5d43cbaad51db65dba58310575943fe23319de27b495d82",
     "foundry.toml": "b0ba3a152c5c03369eba70cb6a066d5d1241ca212c5f7afb647592664b35d308",
     "package-lock.json": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
-    "snapshots/NFT111KGasTest.json": "f237bbfd53537276477f285c9d13bb5a3993c9e96445b4da3420108315ab33ab",
+    "snapshots/NFT111KGasTest.json": "10eef9cf9b3f72a6abd2b255b45947d1c271f8c1aed3f0ffef21d3519cb0977e",
     "fixtures/discounts/proof.json": "92d4c940f6c0783f27889915f44d7048007b10960542887fff1379d486eb21ee",
-    "scripts/benchmark-batch.mjs": "cec31dd3e4723e494f9f11dac8e63c86c14dc162bf1fee54c9e35f218b4da73a"
+    "scripts/benchmark-batch.mjs": "1062f3016ff7b37452e4eab196c32945524e6a09db5df0f4403e2f752d3737c9"
   },
   "toolchain": {
     "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
@@ -51,39 +49,39 @@
     "receiver": "MinimalGasReceiver; arbitrary contract-wallet callback work is excluded."
   },
   "runtime": {
-    "bytes": 19795,
+    "bytes": 21780,
     "eip170Limit": 24576,
-    "headroomBytes": 4781
+    "headroomBytes": 2796
   },
   "unbox15": {
     "ordinary": {
       "artworks": 300,
       "eoa": {
         "batch": 1194614,
-        "separate": 1694730,
-        "saved": 500116,
-        "savedPercent": 29.51
+        "separate": 1695060,
+        "saved": 500446,
+        "savedPercent": 29.52
       },
       "receiver": {
         "batch": 1651535,
-        "separate": 2151480,
-        "saved": 499945,
-        "savedPercent": 23.24
+        "separate": 2151810,
+        "saved": 500275,
+        "savedPercent": 23.25
       }
     },
     "bonus": {
       "artworks": 311,
       "eoa": {
         "batch": 1215801,
-        "separate": 1715917,
-        "saved": 500116,
-        "savedPercent": 29.15
+        "separate": 1716247,
+        "saved": 500446,
+        "savedPercent": 29.16
       },
       "receiver": {
         "batch": 1689353,
-        "separate": 2189279,
-        "saved": 499926,
-        "savedPercent": 22.84
+        "separate": 2189609,
+        "saved": 500256,
+        "savedPercent": 22.85
       }
     }
   },
@@ -95,9 +93,9 @@
     "rpcHexValueBytes": 28930
   },
   "metadata30": {
-    "artworkGas": 140876,
-    "artworkReceiptGas": 151196,
-    "mixedKindsGas": 148742,
+    "artworkGas": 84206,
+    "artworkReceiptGas": 93570,
+    "mixedKindsGas": 91034,
     "responseScenario": {
       "kind": 4,
       "displayId": 222222,

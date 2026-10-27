@@ -1,13 +1,12 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {Vm} from "../test/TestSupport.sol";
 
 contract Deploy111K {
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    function run() external returns (NFT111K token, NFT111KUrlRenderer renderer) {
+    function run() external returns (NFT111K token) {
         uint256 privateKey = vm.envUint("ETHEREUM_111K_DEPLOYER_KEY");
         address owner = vm.envAddress("ETHEREUM_111K_OWNER");
         address signer = vm.envAddress("ETHEREUM_111K_QUOTE_SIGNER");
@@ -21,7 +20,7 @@ contract Deploy111K {
         uint256[] memory shares = vm.parseJsonUintArray(proceeds, ".mintSharesBps");
         address payable deliveryReceiver = payable(vm.parseJsonAddress(proceeds, ".deliveryPaymentReceiver"));
         address deployer = vm.addr(privateKey);
-        address collection = vm.computeCreateAddress(deployer, uint256(vm.getNonce(deployer)) + 1);
+        address collection = vm.computeCreateAddress(deployer, uint256(vm.getNonce(deployer)));
         if (
             owner == address(0) || signer == address(0) || deliveryReceiver == address(0)
                 || deliveryReceiver == collection
@@ -44,8 +43,7 @@ contract Deploy111K {
         }
         if (totalShares != 10_000) revert NFT111K.InvalidMintSplit();
         vm.startBroadcast(privateKey);
-        renderer = new NFT111KUrlRenderer(metadataBaseURI);
-        token = new NFT111K(owner, signer, deliveryReceiver, address(renderer), discountRoot, recipients, shares);
+        token = new NFT111K(owner, signer, deliveryReceiver, metadataBaseURI, discountRoot, recipients, shares);
         vm.stopBroadcast();
     }
 }

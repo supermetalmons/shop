@@ -1,0 +1,149 @@
+{
+  "complete": true,
+  "verifiedAt": "2026-10-27T13:52:57.460Z",
+  "releaseId": "111k-single-contract-2026-10-27T13-33-35-504Z-687adb52",
+  "manifestSha256": "ee408336228d619d5943cae1d815ca8dc29a1d7a57991021c462c9f529c3a65b",
+  "baseRevision": "4841444ef69964d5f8b566e6e5f1b544cc7b2ace",
+  "workingTreeChangesIncluded": true,
+  "chainId": 11155111,
+  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "deploymentBlock": 12005467,
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/",
+  "deployments": {
+    "api": {
+      "id": "8438baf7-6bfd-440a-a2b5-6506f8c7ed38",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "f874a646-3177-4ed6-8988-252411c710b7",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-27T13:41:14.447248Z"
+    },
+    "frontend": {
+      "id": "d171b056-d014-43f3-a3f3-c243eadaab42",
+      "source": "wrangler",
+      "strategy": "percentage",
+      "annotations": {
+        "workers/triggered_by": "deployment"
+      },
+      "versions": [
+        {
+          "version_id": "fdee4955-e27e-49ae-9c38-377b3d4d7efd",
+          "percentage": 100
+        }
+      ],
+      "created_on": "2026-10-27T13:44:06.192779Z"
+    }
+  },
+  "control": {
+    "paused": false,
+    "revision": 16,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+    "resetGuardId": null,
+    "lastResetId": "eff5ab4d-a715-48e2-8535-5f371e6ce0f7",
+    "updatedAtMs": 1793108755000
+  },
+  "resetId": "eff5ab4d-a715-48e2-8535-5f371e6ce0f7",
+  "privateResetBackupCreated": true,
+  "sourceVerification": "sourcify-verification.json",
+  "validation": "validation.json",
+  "liveAcceptance": "live-acceptance.json",
+  "browserAcceptance": "browser-acceptance.json",
+  "verifiedBlock": 12005547,
+  "verifiedBlockHash": "0x84adc606b1a4eafb88137d879354cce44eea86ee08fda033451741b886811e6d",
+  "finalChainState": {
+    "totalSupply": "60",
+    "allocatedCrates": "3",
+    "remainingCrates": "5552",
+    "totalMintReceived": "300000000000000",
+    "totalDeliveryReceived": "100000000000000",
+    "artworksMinted": "40"
+  },
+  "runtime": {
+    "runtimeBytes": 21780,
+    "runtimeSha256": "944c15d251164815f594a6d832a6f76e2e2a65667c191f5c84bc549b625d5e07",
+    "runtimeKeccak256": "0x23e0e6553c48aaf16d60021690ce65a1562cd0fc79d927bf8693c10f1bd115c3",
+    "immutableReferencesChecked": true
+  },
+  "historicalSales": [
+    {
+      "address": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+      "saleActive": true
+    },
+    {
+      "address": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+      "saleActive": true
+    },
+    {
+      "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "saleActive": true
+    },
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "acceptanceTransactions": [
+    {
+      "operation": "mint",
+      "hash": "0x83fb3dadf3bcc4f772a767508dabc608387cd12e665d49ed7b804f051fb8f712",
+      "block": 12005515,
+      "gasUsed": "810590",
+      "gasPriceWei": "1000",
+      "feeWei": "810590000"
+    },
+    {
+      "operation": "openBatch",
+      "hash": "0x38fbba37ff41f0df07829a6ed5a465cf1b0cd28dc16839a61048c53d3e382ef1",
+      "block": 12005519,
+      "gasUsed": "495471",
+      "gasPriceWei": "1000",
+      "feeWei": "495471000"
+    },
+    {
+      "operation": "delivery",
+      "hash": "0xd4788dd8714d9d9b2e58284bc113c226f3875aea566a513d0b2f52b4d6537ca0",
+      "block": 12005523,
+      "gasUsed": "672676",
+      "gasPriceWei": "1000",
+      "feeWei": "672676000"
+    },
+    {
+      "operation": "transferReceipt",
+      "hash": "0x7f1045895d7c7a669d53e95fbc6ceb72f04e67c04032e249ca5de32900f33cea",
+      "block": 12005536,
+      "gasUsed": "159118",
+      "gasPriceWei": "1000",
+      "feeWei": "159118000"
+    },
+    {
+      "operation": "claim",
+      "hash": "0xe7d302cbed58353aec5cbb4c32903026587f23a031462449197444dd9e902916",
+      "block": 12005539,
+      "gasUsed": "2476247",
+      "gasPriceWei": "1000",
+      "feeWei": "2476247000"
+    }
+  ],
+  "acceptanceFeesWei": "4614102000",
+  "sourceSha256": {
+    "onchain/ethereum/src/NFT111K.sol": "6631bd52aac7accb8f1cf62921cb63b204807f375af4463ce3a4583a519a45f1",
+    "shared/ethereum/abi.generated.ts": "775fceeab68d2bb88dcb8fd34d7a06af6b7960002d556b00f8beb35fbc92b86e",
+    "shared/ethereum/config.ts": "7e4670bf6cbf420f3cfe779bb0f6de119eb0b47c1b06aeacba700dd066e31d1d",
+    "cloud/workers/api/src/ethereumRuntime.ts": "974b3942b2337f3d34fcb9f01be682c27ac7ecc12aeda981311e16e04a4f6261",
+    "cloud/workers/api/wrangler.jsonc": "f95b2e55b8215e314307e30f4cad7a51fc7495bb05dade20ae7cfec55274b578",
+    "cloud/workers/api/worker-configuration.d.ts": "7edb9f99851f4880de586b95ffb31d6b832501a4e1ee6d2b91053d2aa5709e69"
+  }
+}
