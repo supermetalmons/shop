@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "*"
+        ],
+        "methods": [
+          "GET",
+          "HEAD"
+        ],
+        "headers": [
+          "*"
+        ]
+      },
+      "exposeHeaders": [
+        "Accept-Ranges",
+        "Cache-Control",
+        "CF-Cache-Status",
+        "Content-Disposition",
+        "Content-Encoding",
+        "Content-Length",
+        "Content-Range",
+        "Content-Type",
+        "Date",
+        "ETag",
+        "Last-Modified"
+      ],
+      "maxAgeSeconds": 86400
+    }
+  ]
+}

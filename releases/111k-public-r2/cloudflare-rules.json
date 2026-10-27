@@ -1,0 +1,59 @@
+[
+  {
+    "phase": "http_response_headers_transform",
+    "name": "Public CDN response headers",
+    "rule": {
+      "ref": "cdn_mons_shop_public_headers",
+      "description": "Public CORS and no-store headers for cdn.mons.shop",
+      "expression": "http.host eq \"cdn.mons.shop\"",
+      "enabled": true,
+      "action": "rewrite",
+      "action_parameters": {
+        "headers": {
+          "Access-Control-Allow-Origin": {
+            "operation": "set",
+            "value": "*"
+          },
+          "Access-Control-Allow-Headers": {
+            "operation": "set",
+            "value": "*"
+          },
+          "Access-Control-Allow-Methods": {
+            "operation": "set",
+            "value": "GET, HEAD, OPTIONS"
+          },
+          "Access-Control-Expose-Headers": {
+            "operation": "set",
+            "value": "Accept-Ranges, Cache-Control, CF-Cache-Status, Content-Disposition, Content-Encoding, Content-Length, Content-Range, Content-Type, Date, ETag, Last-Modified"
+          },
+          "Cross-Origin-Resource-Policy": {
+            "operation": "set",
+            "value": "cross-origin"
+          },
+          "Timing-Allow-Origin": {
+            "operation": "set",
+            "value": "*"
+          },
+          "Cache-Control": {
+            "operation": "set",
+            "value": "no-store"
+          }
+        }
+      }
+    }
+  },
+  {
+    "phase": "http_request_cache_settings",
+    "name": "Public CDN cache policy",
+    "rule": {
+      "ref": "cdn_mons_shop_bypass_cache",
+      "description": "Bypass cache for cdn.mons.shop metadata",
+      "expression": "http.host eq \"cdn.mons.shop\"",
+      "enabled": true,
+      "action": "set_cache_settings",
+      "action_parameters": {
+        "cache": false
+      }
+    }
+  }
+]

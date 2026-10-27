@@ -1,0 +1,10 @@
+{
+  "verifiedAt": "2026-10-27T12:20:57.666Z",
+  "worker": "mons-shop-cdn",
+  "deleted": true,
+  "settingsHttpStatus": 404,
+  "errorCode": 10007,
+  "remainingLegacyKvNamespaces": [],
+  "forceDependencyRemovalUsed": false,
+  "cliPostDeleteKvCleanupRequiredOAuthVerification": true
+}

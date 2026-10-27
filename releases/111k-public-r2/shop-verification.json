@@ -1,0 +1,72 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-10-27T12:20:24.493Z",
+  "readOnly": true,
+  "checks": [
+    {
+      "path": "/ethereum/111k/config",
+      "status": 200,
+      "contract": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92"
+    },
+    {
+      "path": "/ethereum/111k/stats",
+      "status": 200,
+      "allocatedCrates": 3,
+      "artworksMinted": 40
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=1",
+      "status": 200,
+      "name": "111K Artwork #1",
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate&displayId=1",
+      "status": 200,
+      "name": "111K Crate #1",
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=warehouse&displayId=505",
+      "status": 200,
+      "name": "111K Warehouse #505",
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=222222",
+      "status": 200,
+      "name": "111K Artwork Receipt #222222",
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=crate_receipt&displayId=5555",
+      "status": 200,
+      "name": "111K Crate Receipt #5555",
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/inventory",
+      "status": 200,
+      "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "expectedTokenIds": [
+        "2",
+        "1000001"
+      ],
+      "itemsReturned": 31,
+      "observedBlock": 12005084,
+      "metadataMatches": true
+    },
+    {
+      "path": "/ethereum/111k/inventory",
+      "status": 200,
+      "owner": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "expectedTokenIds": [
+        "1111132",
+        "1111151"
+      ],
+      "itemsReturned": 20,
+      "observedBlock": 12005084,
+      "metadataMatches": true
+    }
+  ]
+}

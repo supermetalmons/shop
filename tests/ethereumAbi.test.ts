@@ -170,7 +170,7 @@ test('digital and physical-only receipt identities occupy separate complete rang
   assert.throws(() => resolveEthereum111kConfig({ chainId: 1 }));
 });
 
-test('metadata base URIs accept the CDN namespaces and isolated local origins only', () => {
+test('metadata base URIs accept only the published CDN namespaces', () => {
   assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/');
   assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
     'https://cdn.mons.shop/111k/');
@@ -179,7 +179,7 @@ test('metadata base URIs accept the CDN namespaces and isolated local origins on
   assert.throws(() => ethereumMetadataBaseUri('https://cdn.mons.shop/111k-sepolia/', 1));
   for (const host of ['localhost', '127.0.0.1', '[::1]']) {
     const metadataBaseUri = `http://${host}:8788/111k-sepolia/`;
-    assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri }).metadataBaseUri, metadataBaseUri);
+    assert.throws(() => resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri }));
     assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri }));
   }
   assert.throws(() => resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'http://localhost:8788/other/' }));

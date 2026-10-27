@@ -6,12 +6,11 @@ import { parseProceedsConfig } from './proceeds-config.mjs';
 const root = new URL('../', import.meta.url);
 const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/';
 const metadataUrl = new URL(metadataBaseURI);
-const localMetadata = metadataUrl.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(metadataUrl.hostname) &&
+const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' &&
   ['/111k/', '/111k-sepolia/'].includes(metadataUrl.pathname);
-const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' && ['/111k/', '/111k-sepolia/'].includes(metadataUrl.pathname);
-if ((!localMetadata && !hostedMetadata) || metadataUrl.href !== metadataBaseURI || metadataUrl.username || metadataUrl.password ||
+if (!hostedMetadata || metadataUrl.href !== metadataBaseURI || metadataUrl.username || metadataUrl.password ||
     metadataUrl.search || metadataUrl.hash || !metadataUrl.pathname.endsWith('/')) {
-  throw new Error('Metadata requires a canonical CDN collection URL or an HTTP loopback URL using /111k/ or /111k-sepolia/.');
+  throw new Error('Local metadata must use https://cdn.mons.shop/111k-sepolia/ or https://cdn.mons.shop/111k/.');
 }
 const rpcUrl = new URL(process.env.ETHEREUM_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.protocol !== 'http:' || rpcUrl.username || rpcUrl.password) {

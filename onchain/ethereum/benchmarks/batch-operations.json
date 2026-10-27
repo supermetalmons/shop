@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-10-18T18:08:51.491Z",
-  "sourceCommit": "6af6035d5ab57ee3ee1195bfae5dfb0ff1b91319",
+  "measuredAt": "2026-10-27T12:44:24.116Z",
+  "sourceCommit": "7f0a8e7dbf67e32feaabde370e9d61b206d094af",
   "sourceSha256": {
-    "src/NFT111K.sol": "4808a38362bdede683f82bcbb8f62014ba0eedb30199403bc9df4c0f4035baf6",
-    "src/NFT111KRenderer.sol": "1cd6f937209b65f6163c75d3397196dc3828aee8f92b1884c47e0ed0f9b614cf",
+    "src/NFT111K.sol": "5320bbb0832367e462b11d2b503366cc92a268d08eda80cb67ccdb8662c24a17",
+    "src/NFT111KUrlRenderer.sol": "f154e69b738469e3b45c3a1519ea166fce8717de072867fd60df6da4b7b668d0",
     "src/INFT111KRenderer.sol": "25ee08675b3b8fa174d800d0a8fd59663a82631d2bf5231eab6dca8a727c769d",
-    "test/NFT111KGas.t.sol": "545ded1e7e7262bbbc9a5c6b1c83689b7cee0fb5afe57e0c5e45fea3510b3574",
-    "test/TestSupport.sol": "1f4e22d8ca3908e1fefc1b7b4c3d7acd7e0ac9205ab907acdc089ed9deb745bc",
-    "test/NFT111KBatch.t.sol": "4c782adaa27e66e8f1b0b08771186d4d4fd7ce4159b0417c14225275e8be8b66",
-    "foundry.toml": "17dd3750f2805ae7a71ca84ebc93f2ce350ecdbb783e1c5ef6e622d8e0863cd9",
-    "package-lock.json": "0911c8501c6eb8800372a79cf7c6ee86bed89563566560aa9ccca0a5710ed0e6",
-    "snapshots/NFT111KGasTest.json": "a693ef842b6a54f729b236bc7dd79b32d5a9ac0ec45447140303bfcfb0d2d9da",
-    "fixtures/metadata.json": "6fbb6fb2b8f00dfa078b58955b57ff5ee42ca3803742a2ad9ba09864454b8000",
-    "scripts/benchmark-batch.mjs": "aa7220ca1c8a12d5b9840db1b9802d6ba9843337ba2e2fdc2551b815dd78c592"
+    "test/NFT111KGas.t.sol": "fe2e8a2b0f8b68fbf1d5868ccb16617640331a13a6b7e0682d9a749dce762c20",
+    "test/TestSupport.sol": "601b4a0da9e386727ccbfea83207a07013b7cefcfa7b871c00ec8795755c510f",
+    "test/NFT111KBatch.t.sol": "d2566b58fd2fbc4de4c69217b7a911e9ef51ef1d38e11deaa6666b1561e332b3",
+    "foundry.toml": "b0ba3a152c5c03369eba70cb6a066d5d1241ca212c5f7afb647592664b35d308",
+    "package-lock.json": "b9c694342923fa2bc860a63561f6fcb0237a7a41abe930b010f25563dcb2fa1b",
+    "snapshots/NFT111KGasTest.json": "f237bbfd53537276477f285c9d13bb5a3993c9e96445b4da3420108315ab33ab",
+    "fixtures/discounts/proof.json": "92d4c940f6c0783f27889915f44d7048007b10960542887fff1379d486eb21ee",
+    "scripts/benchmark-batch.mjs": "cec31dd3e4723e494f9f11dac8e63c86c14dc162bf1fee54c9e35f218b4da73a"
   },
   "toolchain": {
     "forge": "forge Version: 1.7.1-Homebrew\nCommit SHA: 4072e48705af9d93e3c0f6e29e93b5e9a40caed8\nBuild Timestamp: 2026-05-08T07:44:24.000000000Z (1778226264)\nBuild Profile: release",
@@ -37,72 +37,75 @@
       "libraries": {}
     },
     "dependencies": {
+      "@metamask/abi-utils": "2.0.4",
+      "@noble/hashes": "1.8.0",
       "@openzeppelin/contracts": "5.6.1",
+      "@openzeppelin/merkle-tree": "1.0.8",
       "erc721a": "4.3.0"
     }
   },
   "measurement": {
     "command": "node onchain/ethereum/scripts/benchmark-batch.mjs",
     "gas": "Verified committed Forge --isolate measurements. Batch costs are one transaction; separate costs sum fifteen isolated transactions with identical initial state and token order. Setup and harness costs are excluded. Write costs include intrinsic/calldata gas and refunds. Read costs measure the callee STATICCALL.",
-    "response": "ABI return sizes derive from the exact static tuple layout or the matching committed renderer fixture, including array heads, lengths and padding. Hex sizes include the 0x prefix but omit the JSON-RPC envelope.",
+    "response": "ABI return sizes derive from the exact static tuple layout or a URL for the maximum artwork receipt ID, including array heads, lengths and padding. Hex sizes include the 0x prefix but omit the JSON-RPC envelope.",
     "receiver": "MinimalGasReceiver; arbitrary contract-wallet callback work is excluded."
   },
   "runtime": {
-    "bytes": 17206,
+    "bytes": 19795,
     "eip170Limit": 24576,
-    "headroomBytes": 7370
+    "headroomBytes": 4781
   },
   "unbox15": {
     "ordinary": {
       "artworks": 300,
       "eoa": {
-        "batch": 1215149,
-        "separate": 1714920,
-        "saved": 499771,
-        "savedPercent": 29.14
+        "batch": 1194614,
+        "separate": 1694730,
+        "saved": 500116,
+        "savedPercent": 29.51
       },
       "receiver": {
-        "batch": 1668470,
-        "separate": 2168070,
-        "saved": 499600,
-        "savedPercent": 23.04
+        "batch": 1651535,
+        "separate": 2151480,
+        "saved": 499945,
+        "savedPercent": 23.24
       }
     },
     "bonus": {
       "artworks": 311,
       "eoa": {
-        "batch": 1236336,
-        "separate": 1736107,
-        "saved": 499771,
-        "savedPercent": 28.79
+        "batch": 1215801,
+        "separate": 1715917,
+        "saved": 500116,
+        "savedPercent": 29.15
       },
       "receiver": {
-        "batch": 1706156,
-        "separate": 2205737,
-        "saved": 499581,
-        "savedPercent": 22.65
+        "batch": 1689353,
+        "separate": 2189279,
+        "saved": 499926,
+        "savedPercent": 22.84
       }
     }
   },
   "tokenInfo150": {
-    "sparseArtworkTailsIncludingBonusGas": 6942976,
-    "cratesGas": 558023,
-    "absentTokensGas": 509723,
+    "sparseArtworkTailsIncludingBonusGas": 6915998,
+    "cratesGas": 558045,
+    "absentTokensGas": 509745,
     "abiReturnBytes": 14464,
     "rpcHexValueBytes": 28930
   },
   "metadata30": {
-    "artworkGas": 14341937,
-    "artworkReceiptGas": 18989148,
-    "mixedKindsGas": 10493266,
+    "artworkGas": 140876,
+    "artworkReceiptGas": 151196,
+    "mixedKindsGas": 148742,
     "responseScenario": {
       "kind": 4,
-      "displayId": 111111,
+      "displayId": 222222,
       "repetitions": 30,
-      "singleUriBytes": 6245
+      "singleUriBytes": 47
     },
-    "abiReturnBytes": 190144,
-    "rpcHexValueBytes": 380290,
+    "abiReturnBytes": 3904,
+    "rpcHexValueBytes": 7810,
     "testedCallGasBudget": 25000000,
     "testedHexResponseBudgetBytes": 524288
   }

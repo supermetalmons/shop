@@ -27,7 +27,7 @@ npm run dev:ethereum:api
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current local deployment manifest uses `protocolVersion: 7`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. The manifest records `metadataBaseURI`, which is verified against the renderer. Local metadata uses an isolated fixture Worker with the same generator; it never reads remote R2 or the public CDN. A fresh deployment is required for the new metadata and receipt numbering. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+The current local deployment manifest uses `protocolVersion: 7`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. The manifest records `metadataBaseURI`, which is verified against the renderer. Local metadata defaults to `https://cdn.mons.shop/111k-sepolia/`, the same authoritative JSONs as the deployed shop. No metadata server or generator runs locally. CDN connectivity is required; unavailable metadata produces an error rather than a local fallback. Existing loopback metadata manifests require redeployment; matching CDN manifests remain valid. A fresh deployment is required for the new metadata and receipt numbering. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
 
 Both deployment scripts load `onchain/ethereum/config/proceeds.json`: four valid placeholder recipients at 50% / 25% / 15% / 10%, and a separate placeholder shipping receiver. Replace the placeholders before deploying for real proceeds. The configuration supports 2–8 mint recipients whose positive basis points total 10,000; addresses must be distinct and must not be the collection. Mint recipients/shares are fixed. The owner may rotate the shipping receiver using `setDeliveryPaymentReceiver(address)`, which moves all unpaid and future shipping fees to the new receiver. Treasury environment settings are no longer used.
 
@@ -50,7 +50,7 @@ Exported Ethereum claim QR codes use the current app origin, so local exports re
 
 The API runs reconciliation every ten seconds to recover transactions after the browser closes. Database state and the local address key are discarded when it exits: restart Anvil and run `deploy:local` again when starting a fresh API session. The normal Solana inventory needs the regular API; this isolated local API only provides the Ethereum test flow.
 
-For a different local RPC port, set `ETHEREUM_111K_LOCAL_RPC_URL` when deploying. The API reads that URL from the deployment file. `ETHEREUM_111K_LOCAL_DEPLOYMENT` can select another local deployment JSON file. Only HTTP loopback URLs, Anvil and chain ID `31337` are accepted.
+For a different local RPC port, set `ETHEREUM_111K_LOCAL_RPC_URL` when deploying. The API reads that RPC URL from the deployment file; RPC access accepts only HTTP loopback URLs, Anvil and chain ID `31337`. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the published HTTPS CDN namespaces `/111k-sepolia/` and `/111k/`, with Sepolia as the default. `ETHEREUM_111K_LOCAL_DEPLOYMENT` can select another local deployment JSON file.
 
 ## Collection behavior
 
@@ -99,8 +99,7 @@ The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) 
 | `ETHEREUM_111K_CHAIN_ID` | `11155111` for Sepolia; `31337` for local testing |
 | `ETHEREUM_111K_CONTRACT_ADDRESS` | Collection contract; blank keeps it undeployed |
 | `ETHEREUM_111K_RENDERER_ADDRESS` | URL renderer contract |
-| `ETHEREUM_111K_METADATA_BASE_URI` | Exact CDN metadata prefix for this deployment |
-| `ETHEREUM_METADATA_CDN` | Service binding to the read-only metadata Worker |
+| `ETHEREUM_111K_METADATA_BASE_URI` | Exact public R2 metadata prefix fetched over HTTP for this deployment |
 | `ETHEREUM_111K_DEPLOYMENT_BLOCK` | First block for bounded event reconciliation |
 | `ETHEREUM_111K_RPC_URL` | Local loopback RPC only; unused for Sepolia |
 | `ETHEREUM_111K_SIGNER_SECRET` | Backend authorization key matching `quoteSigner()`; required for delivery and claims, optional while undeployed |

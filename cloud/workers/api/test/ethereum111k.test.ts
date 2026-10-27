@@ -6,8 +6,7 @@ import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../.
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
   type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumItemKind, ethereumMetadataTokenId, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
-import { ethereumPlaceholderMetadata } from '../../../../shared/ethereum/placeholderMetadata.ts';
+import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumItemKind, ethereumMetadataTokenId, type EthereumInventoryItem, type EthereumMetadata } from '../../../../shared/ethereum/protocol.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
@@ -21,6 +20,10 @@ import { createCommerceD1Harness, d1Database } from './commerceD1Harness.ts';
 import { ETHEREUM_CHECKOUT_PATHS as checkoutPaths, type EthereumCheckoutStatusResponse,
   type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 
+const SYNTHETIC_METADATA: EthereumMetadata = {
+  name: 'Synthetic metadata fixture', image: 'data:image/svg+xml;base64,PHN2Zy8+',
+  description: 'Synthetic HTTP response for tests.', attributes: [],
+};
 const NOW = 2_000_000_000_000;
 const ORIGIN = 'https://mons.shop';
 const CONTRACT = '0x1111111111111111111111111111111111111111';
@@ -79,15 +82,6 @@ function fixture(controlActive = true) {
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: CONTRACT,
     ETHEREUM_111K_RENDERER_ADDRESS: RENDERER, ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
-    ETHEREUM_METADATA_CDN: {
-      fetch: async (input, init) => {
-        const url = String(input);
-        state.metadataRequests.push({ url, init });
-        const metadata = state.metadataValues.get(url);
-        return metadata ? Response.json(metadata) : new Response(null, { status: 404 });
-      },
-      connect() { throw new Error('Unexpected metadata connection'); },
-    },
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };
@@ -102,9 +96,17 @@ function fixture(controlActive = true) {
     transactions: new Map<string, Record<string, unknown>>(), transactionCount: '0x0',
     logs: [] as EthereumLog[], calls: [] as Rpc[], batchSizes: [] as number[], urls: [] as string[], usedOrders: new Set<number>(),
     alchemyNfts: [] as Record<string, unknown>[], alchemyCursor: null as string | null,
-    metadataValues: new Map<string, ReturnType<typeof ethereumPlaceholderMetadata>>(),
+    metadataValues: new Map<string, EthereumMetadata>(),
     metadataRequests: [] as { url: string; init?: RequestInit }[],
     afterRpc: null as ((payload: Rpc, result: unknown) => Promise<void>) | null,
+  };
+  const metadata: { fetch: typeof fetch } = {
+    fetch: async (input, init) => {
+      const url = String(input);
+      state.metadataRequests.push({ url, init });
+      const value = state.metadataValues.get(url);
+      return value ? Response.json(value) : new Response(null, { status: 404 });
+    },
   };
   const responseFor = async (payload: Rpc): Promise<unknown> => {
     state.calls.push(payload);
@@ -163,7 +165,7 @@ function fixture(controlActive = true) {
           decodeReturn(['uint8', 'uint256'], argumentsHex).map(value => [value]) as [bigint[], bigint[]];
         const uris = kinds.map((kind, index) => {
           const uri = `${env.ETHEREUM_111K_METADATA_BASE_URI}${ethereumMetadataTokenId(ethereumItemKind(Number(kind))!, Number(ids[index]))}.json`;
-          state.metadataValues.set(uri, ethereumPlaceholderMetadata(Number(kind), Number(ids[index])));
+          if (!state.metadataValues.has(uri)) state.metadataValues.set(uri, SYNTHETIC_METADATA);
           return uri;
         });
         return encodeAbi([batched ? 'string[]' : 'string'], batched ? [uris] : [uris[0]]);
@@ -180,6 +182,7 @@ function fixture(controlActive = true) {
   };
   const providerFetch: typeof fetch = async (input, init) => {
     const url = String(input);
+    if (url.startsWith(env.ETHEREUM_111K_METADATA_BASE_URI)) return metadata.fetch(input, init);
     state.urls.push(url);
     if (url.includes('/getNFTsForOwner')) return Response.json({ ownedNfts: state.alchemyNfts,
       ...(state.alchemyCursor ? { pageKey: state.alchemyCursor } : {}) });
@@ -264,7 +267,7 @@ function fixture(controlActive = true) {
     assert.equal(result.body.status, 'confirmed');
     return ready;
   }
-  return { env, ops, commerce, failures, databaseCalls, state, providerFetch, request, challenge, session, saveAddress, prepared,
+  return { env, ops, commerce, failures, databaseCalls, state, metadata, providerFetch, request, challenge, session, saveAddress, prepared,
     setReceipt, deliveryLog, claimLog, quoteRow, claimRow, order, confirmed,
     close: () => { ops.close(); commerce.database.close(); } };
 }
@@ -2994,6 +2997,7 @@ test('limited event ranges resume a fixed scan and retain the next reorg sweep',
     const loadCursor = () => f.commerce.database.prepare('SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor').get()!;
     let requests = 0;
     const limitedFetch: typeof fetch = async (input, init) => {
+      if (!init?.body) return f.providerFetch(input, init);
       const rpc = JSON.parse(String(init?.body)) as Rpc;
       if (rpc.method === 'eth_getLogs') {
         requests++;
@@ -3178,22 +3182,24 @@ test('contract read batches preserve duplicate positions and omit absent token t
     assert.deepEqual(await ethereumTokenInfos(context, []), []);
     assert.deepEqual(await ethereumInventoryItems(context, []), []);
     assert.equal(f.state.calls.length, 0);
+    f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}111112.json`, { ...SYNTHETIC_METADATA, name: 'First response' });
+    f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}111113.json`, { ...SYNTHETIC_METADATA, name: 'Second response' });
     const infos = await ethereumTokenInfos(context, ['111112', '999999', '111112', '111113']);
     assert.deepEqual(infos.map(info => info.tokenId), ['111112', '111112', '111113']);
     const items = await ethereumInventoryItems(context, infos);
-    assert.deepEqual(items.map(item => item.name), ['111K Crate #1', '111K Crate #1', '111K Crate #2']);
+    assert.deepEqual(items.map(item => item.name), ['First response', 'First response', 'Second response']);
     assert.equal(f.state.metadataRequests.length, 2);
     assert.deepEqual(f.state.batchSizes, [1, 1]);
     assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === 'latest'));
   } finally { f.close(); }
 });
 
-test('offchain metadata fetches current JSON through the binding without storing previous responses', async () => {
+test('offchain metadata fetches current JSON over HTTP without storing previous responses', async () => {
   const f = fixture();
   try {
-    const original = f.env.ETHEREUM_METADATA_CDN.fetch;
+    const original = f.metadata.fetch;
     let revision = 1;
-    f.env.ETHEREUM_METADATA_CDN.fetch = async (input, init) => {
+    f.metadata.fetch = async (input, init) => {
       assert.equal(init?.cache, 'no-store');
       assert.equal(init?.redirect, 'manual');
       const response = await original(input, init);
@@ -3222,6 +3228,7 @@ for (const uri of ['https://other.example/1.json', 'https://cdn.mons.shop/111k/1
     const f = fixture();
     try {
       const providerFetch: typeof fetch = async (input, init) => {
+        if (!init?.body) return f.providerFetch(input, init);
         const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
         if (!Array.isArray(payload)) return f.providerFetch(input, init);
         return Response.json(payload.map(call => ({ jsonrpc: '2.0', id: call.id, result: encodeAbi(['string[]'], [[uri]]) })));
@@ -3245,7 +3252,7 @@ for (const [name, response] of [
   test(`offchain metadata fails closed for ${name}`, async () => {
     const f = fixture();
     try {
-      f.env.ETHEREUM_METADATA_CDN.fetch = async () => response();
+      f.metadata.fetch = async () => response();
       const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
       assert.equal(result.response.status, 503);
       assert.equal(result.body.image, undefined);
@@ -3259,13 +3266,13 @@ test('offchain inventory metadata uses at most eight concurrent reads and preser
   const held = new Promise<void>(resolve => { release = resolve; });
   t.after(release);
   try {
-    const original = f.env.ETHEREUM_METADATA_CDN.fetch;
+    const original = f.metadata.fetch;
     let started!: () => void;
     const eightStarted = new Promise<void>(resolve => { started = resolve; });
     let active = 0;
     let maximum = 0;
     let count = 0;
-    f.env.ETHEREUM_METADATA_CDN.fetch = async (input, init) => {
+    f.metadata.fetch = async (input, init) => {
       active++;
       maximum = Math.max(maximum, active);
       if (++count === 8) started();
@@ -3276,6 +3283,8 @@ test('offchain inventory metadata uses at most eight concurrent reads and preser
     };
     const infos = Array.from({ length: 31 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
       displayId: index + 1, owner: WALLET }));
+    f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}1.json`, { ...SYNTHETIC_METADATA, name: 'First concurrent response' });
+    f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}31.json`, { ...SYNTHETIC_METADATA, name: 'Last concurrent response' });
     const pending = ethereumInventoryItems(readContext(f), infos);
     await eightStarted;
     assert.equal(count, 8);
@@ -3283,7 +3292,10 @@ test('offchain inventory metadata uses at most eight concurrent reads and preser
     const items = await pending;
     assert.equal(maximum, 8);
     assert.equal(count, 31);
-    assert.deepEqual(items.map(item => item.name), infos.map(info => `111K Artwork #${info.displayId}`));
+    assert.deepEqual(items.map(item => item.tokenId), infos.map(info => info.tokenId));
+    assert.deepEqual(items.map(item => item.name), [
+      'First concurrent response', ...Array(29).fill(SYNTHETIC_METADATA.name), 'Last concurrent response',
+    ]);
   } finally { release(); f.close(); }
 });
 
@@ -3292,7 +3304,7 @@ test('an offchain metadata failure cancels pending reads and returns no partial 
   try {
     let reads = 0;
     let cancelled = false;
-    f.env.ETHEREUM_METADATA_CDN.fetch = async (_input, init) => {
+    f.metadata.fetch = async (_input, init) => {
       if (++reads !== 1) return new Response(null, { status: 503 });
       return new Promise<Response>((_resolve, reject) => {
         init!.signal!.addEventListener('abort', () => { cancelled = true; reject(init!.signal!.reason); }, { once: true });
@@ -3306,11 +3318,31 @@ test('an offchain metadata failure cancels pending reads and returns no partial 
   } finally { f.close(); }
 });
 
+test('offchain metadata HTTP reads stop when the request deadline expires', { timeout: 5000 }, async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  const reason = new DOMException('Request deadline expired', 'TimeoutError');
+  let cancelled = false;
+  try {
+    f.metadata.fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => { cancelled = true; reject(init!.signal!.reason); }, { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(reason), 25);
+    try {
+      await assert.rejects(ethereumInventoryItems({ ...readContext(f), signal: controller.signal }, [
+        { tokenId: '1', kind: 'artwork', displayId: 1, owner: WALLET },
+      ]), error => error === reason);
+      assert.equal(cancelled, true);
+    } finally { clearTimeout(timer); }
+  } finally { f.close(); }
+});
+
 for (const token of [[0, 1, WALLET], [6, 1, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
   test(`token information rejects an inconsistent tuple ${token.join(':')}`, async () => {
     const f = fixture();
     try {
       const providerFetch: typeof fetch = async (input, init) => {
+        if (!init?.body) return f.providerFetch(input, init);
         const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
         if (!Array.isArray(payload)) return f.providerFetch(input, init);
         return Response.json(payload.map(rpc => ({ jsonrpc: '2.0', id: rpc.id, result: encodeAbi(['(uint8,uint256,address)[]'], [[token]]) })));
@@ -3328,6 +3360,7 @@ test('a later metadata envelope failure returns no partial inventory and cancels
     let started!: () => void;
     const held = new Promise<void>(resolve => { started = resolve; });
     const providerFetch: typeof fetch = async (input, init) => {
+      if (!init?.body) return f.providerFetch(input, init);
       const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
       if (!Array.isArray(payload)) return f.providerFetch(input, init);
       if (++envelopes === 1) {
@@ -3359,6 +3392,7 @@ test('contract read envelopes stay bounded and preserve order when concurrent re
     let started!: () => void;
     const concurrent = new Promise<void>(resolve => { started = resolve; });
     const providerFetch: typeof fetch = async (input, init) => {
+      if (!init?.body) return f.providerFetch(input, init);
       const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
       if (!Array.isArray(payload)) return f.providerFetch(input, init);
       const envelope = ++envelopes;
@@ -3388,6 +3422,7 @@ for (const failure of ['missing-response', 'duplicate-id', 'unknown-id', 'rpc-er
     try {
       const providerFetch: typeof fetch = async (input, init) => {
         const response = await f.providerFetch(input, init);
+        if (!init?.body) return response;
         const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
         if (!Array.isArray(payload)) return response;
         const body = await response.json() as { id: number; result: string; error?: object }[];
@@ -3514,7 +3549,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
       `${paths.inventory}?owner=${WALLET}&expectedTokenIds=31`, undefined, undefined, { fetch: providerFetch });
     assert.equal(result.response.status, 200, JSON.stringify(result.body));
     assert.equal(result.body.observedBlock, 102);
-    assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `111K Artwork #${id}`));
+    assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
     const reads = f.state.calls.filter(call => call.method === 'eth_call');
     assert.equal(reads.length, 3);
     assert.ok(reads.every(call => call.params[1] === blockHash(102)));
@@ -3557,7 +3592,7 @@ for (const count of [311, 620]) {
       assert.equal(result.response.status, 200, JSON.stringify(result.body));
       assert.equal(result.body.status, 'confirmed');
       assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
-      assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `111K Artwork #${id}`));
+      assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
       assert.equal(reads.length, Math.ceil(count / 150) + Math.ceil(count / 30));
       assert.ok(reads.every(call => call.params[1] === blockHash(102)));
@@ -3586,7 +3621,7 @@ test('bundled transactions confirm more than 150 minted items with complete meta
     assert.equal(result.response.status, 200, JSON.stringify(result.body));
     assert.equal(result.body.status, 'confirmed');
     assert.deepEqual(result.body.items.map(item => item.tokenId), minted);
-    assert.deepEqual(result.body.items.map(item => item.name), minted.map((_tokenId, index) => `111K Crate #${index + 1}`));
+    assert.deepEqual(result.body.items.map(item => item.displayId), minted.map((_tokenId, index) => index + 1));
     assert.ok(result.body.items.every(item => item.owner === WALLET && item.kind === 'crate' &&
       item.image.startsWith('data:image/svg+xml;base64,')));
     assert.deepEqual(result.body.burnedTokenIds, burned);
@@ -3609,6 +3644,7 @@ test('local inventory recovers expected IDs at its captured hash when log discov
     }
     let omitted = false;
     const providerFetch: typeof fetch = async (input, init) => {
+      if (!init?.body) return f.providerFetch(input, init);
       const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
       if (!Array.isArray(payload) && payload.method === 'eth_getLogs' && !omitted) {
         omitted = true;

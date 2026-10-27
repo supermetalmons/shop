@@ -2,7 +2,6 @@ pragma solidity 0.8.30;
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 contract FixturesTest is TestSupport {
@@ -162,38 +161,6 @@ contract FixturesTest is TestSupport {
             _hex(abi.encodeCall(NFT111K.claimCrateReceipt, (2_000_042, f.claimId, f.quote.deadline, f.claimSignature))),
             '"}'
         );
-    }
-
-    function testExportMetadataFixtures() public {
-        NFT111KRenderer renderer = new NFT111KRenderer();
-        string memory output = "[";
-        for (uint8 kind = 1; kind <= 5; ++kind) {
-            output = string.concat(
-                output,
-                kind == 1 ? "" : ",",
-                '{"kind":',
-                uint256(kind).toString(),
-                ',"displayId":42,"tokenURI":"',
-                renderer.tokenURI(kind, 42),
-                '"}'
-            );
-        }
-        output = string.concat(
-            output,
-            ',{"kind":2,"displayId":5555,"tokenURI":"',
-            renderer.tokenURI(2, 5555),
-            '"}',
-            ',{"kind":4,"displayId":111111,"tokenURI":"',
-            renderer.tokenURI(4, 111111),
-            '"}',
-            ',{"kind":4,"displayId":111112,"tokenURI":"',
-            renderer.tokenURI(4, 111112),
-            '"}',
-            ',{"kind":4,"displayId":222222,"tokenURI":"',
-            renderer.tokenURI(4, 222222),
-            '"}]'
-        );
-        vm.writeFile("fixtures/metadata.json", output);
     }
 
     function _signature(uint256 key, bytes32 digest) private returns (bytes memory) {

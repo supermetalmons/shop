@@ -1,0 +1,256 @@
+{
+  "passed": true,
+  "verifiedAt": "2026-10-27T12:20:17.223Z",
+  "metadataContentsChanged": false,
+  "checks": [
+    {
+      "path": "/111k-sepolia/1.json",
+      "status": 200,
+      "bytes": 2090,
+      "sha256": "fd6f3bde3251466943734a4aae699c973bd9cfc8ebe2b4d935db275c18dfc09e",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/111111.json",
+      "status": 200,
+      "bytes": 3508,
+      "sha256": "cf78d952a2e34c9a36a7b6b4c3cc0b14ec335582622b3e9c350e356ca0455d44",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/111112.json",
+      "status": 200,
+      "bytes": 1467,
+      "sha256": "3ff1178172d0f45a71dbb8a11424b372a5979a6e364a105debe7c5ebe6ef21a0",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/116666.json",
+      "status": 200,
+      "bytes": 1478,
+      "sha256": "9739e8a15dc1452824b16f5b8a3ef21de50a7404a3c2498aff9fbf49b7c79c79",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/116667.json",
+      "status": 200,
+      "bytes": 1504,
+      "sha256": "e2ca86a5ec507b484d94ef8edee2b6602cbec33539c9113a780f70727b9097fb",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/117171.json",
+      "status": 200,
+      "bytes": 1512,
+      "sha256": "ca0b17cfebb75047b9340d7a5afb16e0391a23ec629b19bbd10292c7459ebf05",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/1000001.json",
+      "status": 200,
+      "bytes": 3269,
+      "sha256": "a1cfd1a724a77f7616774dc0807d9126910b2c6806e80be93a27bd507d154427",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/1111111.json",
+      "status": 200,
+      "bytes": 4687,
+      "sha256": "5d2da2bf0cb974544a4dcf2893243473b675f6a363bdf7cc662385bf8448b6b0",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/1111112.json",
+      "status": 200,
+      "bytes": 3179,
+      "sha256": "8fcad9da6013ad883be09a7483320275e748f23540490880f628ce5df3629022",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/1222222.json",
+      "status": 200,
+      "bytes": 2959,
+      "sha256": "f9d2fd8427db0f79cd09f1b8ec0f66a82528402873c2c9d8286349b5bb2c64b0",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/2000001.json",
+      "status": 200,
+      "bytes": 2484,
+      "sha256": "8b14d19a8f3747d046e522004d0031f6927170ac5423de22abc0add821e0c7d4",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k-sepolia/2005555.json",
+      "status": 200,
+      "bytes": 2494,
+      "sha256": "dd42b827adf77cce664e6b0f13230ca857057a69ca3d3b8eac5fef709f2697e7",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/1.json",
+      "status": 200,
+      "bytes": 2086,
+      "sha256": "9dbf3b369414417efa89d340633151b0dc986ff7c65deff4a75b5ca8f0ebd29b",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/111111.json",
+      "status": 200,
+      "bytes": 3504,
+      "sha256": "828d5fb54b309ae892d39d99950c7f1b0df3192a6e24d8048f2eb0f3a4e39cc3",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/111112.json",
+      "status": 200,
+      "bytes": 1463,
+      "sha256": "966535afec33d8f10da562115fcae268ff40916e57111c9270cf53b7ceb8dc74",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/116666.json",
+      "status": 200,
+      "bytes": 1474,
+      "sha256": "69b1c998cc258952aa770483f29935359afc4b625c1873d39e8459aa3e358d26",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/116667.json",
+      "status": 200,
+      "bytes": 1500,
+      "sha256": "93f37859aa570d3bd1b8ef1b56a42315ded641b84bca8973948967ba6f5d9bf0",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/117171.json",
+      "status": 200,
+      "bytes": 1508,
+      "sha256": "de7215d6a2d94b9298c73bf685589ee96e52fd267d215a8486ea82568883ad4c",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/1000001.json",
+      "status": 200,
+      "bytes": 3265,
+      "sha256": "d6372fd2f373479eec2f801fa875b8670229c7667bbba497fc3a448b54b684a2",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/1111111.json",
+      "status": 200,
+      "bytes": 4683,
+      "sha256": "989bf93a4a8ca162ec7b381ae8029f7b5aa75f291bf32189b67a28541bee204c",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/1111112.json",
+      "status": 200,
+      "bytes": 3175,
+      "sha256": "18375556dd42b95f824c3703898f4fad0bba6cc00937188d05ff9c1df7e0a80a",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/1222222.json",
+      "status": 200,
+      "bytes": 2955,
+      "sha256": "f15d82a58f410e4419f20af5a76be8a557d94d6dd612f2a143a235332647dc16",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/2000001.json",
+      "status": 200,
+      "bytes": 2480,
+      "sha256": "8d4d42f22675b0736aed576f8fc64a19eb1c8f92525546eb776f99b523eb0e5d",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "path": "/111k/2005555.json",
+      "status": 200,
+      "bytes": 2490,
+      "sha256": "ac27b1c4f9bf3a9da2854bf58d59202a7fd8ebcd17645f9bf015adaffa84f912",
+      "headVerified": true,
+      "cacheStatus": "DYNAMIC"
+    },
+    {
+      "preflight": "GET",
+      "origin": "https://marketplace.example",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "preflight": "HEAD",
+      "origin": "https://marketplace.example",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "preflight": "GET",
+      "origin": "https://third-party.example",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "preflight": "HEAD",
+      "origin": "https://third-party.example",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "preflight": "GET",
+      "origin": "http://localhost:5173",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "preflight": "HEAD",
+      "origin": "http://localhost:5173",
+      "status": 204,
+      "maxAgeSeconds": 86400
+    },
+    {
+      "deniedPreflight": "PUT",
+      "status": 403
+    },
+    {
+      "deniedPreflight": "DELETE",
+      "status": 403
+    },
+    {
+      "missing": "/111k/0.json",
+      "status": 404
+    },
+    {
+      "missing": "/111k-sepolia/117172.json",
+      "status": 404
+    },
+    {
+      "missing": "/missing.json",
+      "status": 404
+    }
+  ],
+  "repeatedUncachedGets": 3
+}

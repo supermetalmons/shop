@@ -1,0 +1,152 @@
+{
+  "verifiedAt": "2026-10-27T12:21:45.152Z",
+  "complete": true,
+  "baseRevision": "7f0a8e7dbf67e32feaabde370e9d61b206d094af",
+  "workingTreeChangesIncluded": true,
+  "bucket": "cdn-mons-shop",
+  "location": "ENAM",
+  "objectCount": 689896,
+  "objectContentsChanged": false,
+  "hostname": "cdn.mons.shop",
+  "publicReadOnly": true,
+  "r2DevEnabled": false,
+  "domain": {
+    "ownershipStatus": "active",
+    "sslStatus": "active",
+    "minTlsVersion": "1.2",
+    "dns": {
+      "name": "cdn.mons.shop",
+      "type": "CNAME",
+      "content": "public.r2.dev",
+      "bucket": "cdn-mons-shop"
+    }
+  },
+  "cors": {
+    "rules": [
+      {
+        "allowed": {
+          "origins": [
+            "*"
+          ],
+          "methods": [
+            "GET",
+            "HEAD"
+          ],
+          "headers": [
+            "*"
+          ]
+        },
+        "exposeHeaders": [
+          "Accept-Ranges",
+          "Cache-Control",
+          "CF-Cache-Status",
+          "Content-Disposition",
+          "Content-Encoding",
+          "Content-Length",
+          "Content-Range",
+          "Content-Type",
+          "Date",
+          "ETag",
+          "Last-Modified"
+        ],
+        "maxAgeSeconds": 86400
+      }
+    ]
+  },
+  "rules": [
+    {
+      "phase": "http_response_headers_transform",
+      "rulesetId": "3426595a8661469e8c394116dac11f77",
+      "rule": {
+        "action": "rewrite",
+        "action_parameters": {
+          "headers": {
+            "Access-Control-Allow-Headers": {
+              "operation": "set",
+              "value": "*"
+            },
+            "Access-Control-Allow-Methods": {
+              "operation": "set",
+              "value": "GET, HEAD, OPTIONS"
+            },
+            "Access-Control-Allow-Origin": {
+              "operation": "set",
+              "value": "*"
+            },
+            "Access-Control-Expose-Headers": {
+              "operation": "set",
+              "value": "Accept-Ranges, Cache-Control, CF-Cache-Status, Content-Disposition, Content-Encoding, Content-Length, Content-Range, Content-Type, Date, ETag, Last-Modified"
+            },
+            "Cache-Control": {
+              "operation": "set",
+              "value": "no-store"
+            },
+            "Cross-Origin-Resource-Policy": {
+              "operation": "set",
+              "value": "cross-origin"
+            },
+            "Timing-Allow-Origin": {
+              "operation": "set",
+              "value": "*"
+            }
+          }
+        },
+        "description": "Public CORS and no-store headers for cdn.mons.shop",
+        "enabled": true,
+        "expression": "http.host eq \"cdn.mons.shop\"",
+        "id": "8c39d803f5bf43e7b8f5a52bf8c235c8",
+        "last_updated": "2026-10-27T12:08:28.260289Z",
+        "ref": "cdn_mons_shop_public_headers",
+        "version": "1"
+      }
+    },
+    {
+      "phase": "http_request_cache_settings",
+      "rulesetId": "cbc8aad29d5a45f7917658c615146909",
+      "rule": {
+        "action": "set_cache_settings",
+        "action_parameters": {
+          "cache": false
+        },
+        "description": "Bypass cache for cdn.mons.shop metadata",
+        "enabled": true,
+        "expression": "http.host eq \"cdn.mons.shop\"",
+        "id": "832c885326824a6480904a13cd180b3a",
+        "last_updated": "2026-10-27T12:08:30.880996Z",
+        "ref": "cdn_mons_shop_bypass_cache",
+        "version": "1"
+      }
+    }
+  ],
+  "apiDeployment": {
+    "id": "79064521-1194-4b39-b446-90154b9c127e",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "e7800a86-e9e1-4cef-9ebf-d90ec75b247c",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T12:17:13.982222Z"
+  },
+  "apiCdnServiceBindingRemoved": true,
+  "retiredWorker": {
+    "verifiedAt": "2026-10-27T12:20:57.666Z",
+    "worker": "mons-shop-cdn",
+    "deleted": true,
+    "settingsHttpStatus": 404,
+    "errorCode": 10007,
+    "remainingLegacyKvNamespaces": [],
+    "forceDependencyRemovalUsed": false,
+    "cliPostDeleteKvCleanupRequiredOAuthVerification": true
+  },
+  "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+  "rendererAddress": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+  "contractsChanged": false,
+  "databasesChanged": false,
+  "updatesOrPurgeAutomationImplemented": false
+}

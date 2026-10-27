@@ -5,6 +5,7 @@ import { createTestHarness } from 'wrangler';
 import nacl from 'tweetnacl';
 import { decodeReturn, encodeCall } from '../shared/ethereum/abi.ts';
 import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
+import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
 
@@ -18,6 +19,11 @@ const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
   throw new Error('The local API accepts only an Anvil deployment on an HTTP loopback URL, chain ID 31337.');
+}
+try {
+  ethereumMetadataBaseUri(deployment.metadataBaseURI, deployment.chainId);
+} catch {
+  throw new Error('Local metadata must use the collection CDN. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 }
 const contractAddress = requireEthereumAddress(deployment.contractAddress);
 const rendererAddress = requireEthereumAddress(deployment.rendererAddress);
@@ -118,10 +124,7 @@ delete config.secrets;
 process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
 process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
 const runtimeRoot = await mkdtemp(join(tmpdir(), '111k-api-'));
-const server = createTestHarness({ root: runtimeRoot, workers: [{ config }, { config: {
-  name: 'mons-shop-cdn', main: resolve(root, 'scripts/ethereum-metadata/local-worker.ts'),
-  compatibility_date: rawConfig.compatibility_date, compatibility_flags: ['nodejs_compat'],
-} }] });
+const server = createTestHarness({ root: runtimeRoot, workers: [{ config }] });
 let closed = false;
 let reconcileTimer: ReturnType<typeof setInterval> | undefined;
 async function close() {
@@ -165,6 +168,13 @@ try {
   if (!stats.ok) {
     throw new Error(`The local Worker could not read the deployed collection (HTTP ${stats.status}): ${await stats.text()}`);
   }
+  const metadata = await worker.fetch(`${url.origin}/ethereum/111k/metadata?kind=artwork&displayId=1`, {
+    headers: { Origin: 'http://localhost:5173' },
+  });
+  await metadata.body?.cancel();
+  if (!metadata.ok) {
+    throw new Error(`The local API could not read collection metadata from ${deployment.metadataBaseURI} (HTTP ${metadata.status}). Check CDN connectivity and retry.`);
+  }
   let reconciling = false;
   reconcileTimer = setInterval(() => {
     if (reconciling || closed) return;
@@ -174,6 +184,7 @@ try {
     }).finally(() => { reconciling = false; });
   }, 10_000);
   console.log(`Local Ethereum API: ${url.origin}`);
+  console.log(`Collection metadata: ${deployment.metadataBaseURI}`);
   console.log(`Collection: ${contractAddress}`);
   console.log('Fresh in-memory databases only. All production API credentials are disabled.');
   console.log(`Frontend: VITE_MONS_API_ORIGIN=${url.origin} VITE_111K_LOCAL_ADDRESS_PUBLIC_KEY=${addressPublicKey} npm run dev`);

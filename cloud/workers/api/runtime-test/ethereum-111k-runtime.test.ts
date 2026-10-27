@@ -217,7 +217,7 @@ test('native Worker routes preserve Ethereum CORS, atomic D1 sessions and encryp
   } finally { await server.close(); }
 });
 
-test('native Worker contract batches return a full 311-item confirmation and reject a changed snapshot', async () => {
+test('native Worker contract batches consume synthetic metadata for a full 311-item confirmation and reject a changed snapshot', async () => {
   const production = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const directory = await mkdtemp(join(tmpdir(), '111k-read-runtime-'));
   const fixturePath = join(directory, 'worker.mjs');
@@ -235,8 +235,13 @@ export default {
     const url = new URL(request.url);
     const calls = [];
     const envelopes = [];
+    const metadataUrls = [];
     let changed = false;
-    const provider = async (_input, init) => {
+    const provider = async (input, init) => {
+      if (String(input).startsWith(env.ETHEREUM_111K_METADATA_BASE_URI)) {
+        metadataUrls.push(String(input));
+        return Response.json({ name: 'Synthetic runtime metadata', image: 'data:image/svg+xml;base64,PHN2Zy8+' });
+      }
       const payload = JSON.parse(init.body);
       const respond = rpc => {
         let result;
@@ -273,6 +278,8 @@ export default {
     const response = await handleEthereumRequest(request, { ...env, PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: true }) } }, url.pathname, { fetch: provider });
     response.headers.set('X-Test-Contract-Calls', String(calls.length));
     response.headers.set('X-Test-Max-Envelope', String(Math.max(...envelopes)));
+    response.headers.set('X-Test-Metadata-Reads', String(metadataUrls.length));
+    response.headers.set('X-Test-Unique-Metadata-Reads', String(new Set(metadataUrls).size));
     response.headers.set('X-Test-Pinned-Calls', String(calls.every(params => params[1] === blockHash(102))));
     return response;
   },
@@ -281,13 +288,9 @@ export default {
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
     name: 'ethereum-read-runtime', main: fixturePath,
     compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
-    services: [{ binding: 'ETHEREUM_METADATA_CDN', service: 'mons-shop-cdn' }],
     vars: { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: '0x1111111111111111111111111111111111111111',
       ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
       ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/' },
-  } }, { config: {
-    name: 'mons-shop-cdn', main: resolve('scripts/ethereum-metadata/local-worker.ts'),
-    compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
   } }] });
   try {
     await server.listen();
@@ -301,7 +304,9 @@ export default {
     const body = await confirmed.json() as { status: string; items: { tokenId: string; name: string }[] };
     assert.equal(body.status, 'confirmed');
     assert.deepEqual(body.items.map(item => item.tokenId), Array.from({ length: 311 }, (_, index) => String(index + 1)));
-    assert.equal(body.items[310].name, '111K Artwork #311');
+    assert.ok(body.items.every(item => item.name === 'Synthetic runtime metadata'));
+    assert.equal(confirmed.headers.get('X-Test-Metadata-Reads'), '311');
+    assert.equal(confirmed.headers.get('X-Test-Unique-Metadata-Reads'), '311');
     assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '14');
     assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '4');
     assert.equal(confirmed.headers.get('X-Test-Pinned-Calls'), 'true');

@@ -52,12 +52,10 @@ export function resolveEthereum111kConfig(input: {
 
 export function ethereumMetadataBaseUri(value: string, chainId: number): string {
   const url = new URL(value);
-  const local = chainId === 31337 && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) &&
-    url.protocol === 'http:' && ['/111k-sepolia/', '/111k/'].includes(url.pathname);
   const hostedPaths = chainId === 31337 ? ['/111k-sepolia/', '/111k/'] :
     chainId === 11155111 ? ['/111k-sepolia/'] : chainId === 1 ? ['/111k/'] : [];
   const hosted = url.origin === 'https://cdn.mons.shop' && hostedPaths.includes(url.pathname);
-  if ((!local && !hosted) || url.username || url.password || url.search || url.hash ||
+  if (!hosted || url.username || url.password || url.search || url.hash ||
     !url.pathname.endsWith('/') || url.href !== value) throw new Error('Invalid Ethereum metadata base URI');
   return url.href;
 }

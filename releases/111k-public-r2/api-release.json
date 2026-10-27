@@ -1,0 +1,21 @@
+{
+  "verifiedAt": "2026-10-27T12:17:52.452Z",
+  "drainNotBefore": "2026-10-27T12:18:57.453Z",
+  "deployment": {
+    "id": "79064521-1194-4b39-b446-90154b9c127e",
+    "source": "wrangler",
+    "strategy": "percentage",
+    "annotations": {
+      "workers/triggered_by": "deployment"
+    },
+    "versions": [
+      {
+        "version_id": "e7800a86-e9e1-4cef-9ebf-d90ec75b247c",
+        "percentage": 100
+      }
+    ],
+    "created_on": "2026-10-27T12:17:13.982222Z"
+  },
+  "cdnBindingRemoved": true,
+  "otherBindingsUnchanged": true
+}

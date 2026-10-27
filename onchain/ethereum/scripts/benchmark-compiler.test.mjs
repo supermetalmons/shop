@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const baseline = 'benchmarks/compiler-legacy-200.json';
+const baseline = 'benchmarks/compiler-legacy-200-cdn.json';
 const read = path => readFileSync(path, 'utf8');
 
 test('compiler benchmarks regenerate and reproduce both recipient configurations without changing historical baselines', () => {

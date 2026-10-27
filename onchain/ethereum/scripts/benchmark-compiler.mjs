@@ -32,7 +32,7 @@ const harnessName = 'NFT111KCompilerGasTest';
 const testCommand = ['test', '--offline', '--isolate', '--match-contract', `^${harnessName}$`,
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
 const names = ['NFT111K', 'NFT111KUrlRenderer'];
-const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200.json');
+const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200-cdn.json');
 assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
 const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
 const expectedNames = Object.keys(committedSnapshots).sort((a, b) => a.localeCompare(b));
@@ -266,7 +266,7 @@ const report = {
   measuredAt: new Date().toISOString(),
   sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: packageRoot, encoding: 'utf8' }).trim(),
   sourceSha256: sourceHashes(packageRoot),
-  baselineReference: { path: 'benchmarks/compiler-legacy-200.json', updated: updateBaseline },
+  baselineReference: { path: 'benchmarks/compiler-legacy-200-cdn.json', updated: updateBaseline },
   benchmarkCount: expectedNames.length,
   writeBenchmarkCount: writeNames.length,
   toolchain: {

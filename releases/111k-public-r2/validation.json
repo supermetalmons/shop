@@ -1,0 +1,38 @@
+{
+  "checkedAt": "2026-10-27T12:18:47.765Z",
+  "passed": true,
+  "api": {
+    "unitTests": 2630,
+    "nativeRuntimeTests": 39,
+    "generatedSchemas": true,
+    "generatedTypes": true,
+    "typecheck": true,
+    "dryRun": true,
+    "bundleCredentialCheck": true,
+    "startupProfile": true
+  },
+  "local": {
+    "anvilEndToEnd": true,
+    "loopbackFixtures": true,
+    "localDeploymentTests": 5
+  },
+  "repository": {
+    "unitTests": 4778,
+    "rootTypecheck": true,
+    "toolsTypecheck": true,
+    "deadCodeBaseline": 214,
+    "diffWhitespace": true
+  },
+  "databases": {
+    "migrationsPending": 0,
+    "packStatusHealthy": true,
+    "opsHealthy": true,
+    "commerceDeploymentCheckHealthy": true,
+    "readOnly": true
+  },
+  "metadata": {
+    "objectCount": 689896,
+    "inventoryAndEtagsUnchanged": true,
+    "objectsWritten": 0
+  }
+}

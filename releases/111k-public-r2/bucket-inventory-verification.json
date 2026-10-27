@@ -1,0 +1,28 @@
+{
+  "verifiedAt": "2026-10-27T12:11:15.641Z",
+  "bucket": "cdn-mons-shop",
+  "location": "Eastern North America",
+  "totalObjects": 689896,
+  "networks": [
+    {
+      "network": "sepolia",
+      "prefix": "111k-sepolia/",
+      "objects": 344948,
+      "totalBytes": 1074218244,
+      "objectsManifestSha256": "06194b701d497d880d37a5fc52bcbf380d170aae18a812c16b25cfddff58e605",
+      "remoteListingSha256": "9b118fdafcd4339d8e80e8ad3c940e30f6487498d85c71e51e1c884e829fa8e8",
+      "coverageAndSizesVerified": true,
+      "perObjectUploadChecksumsVerifiedByJournal": true
+    },
+    {
+      "network": "mainnet",
+      "prefix": "111k/",
+      "objects": 344948,
+      "totalBytes": 1072838452,
+      "objectsManifestSha256": "ea3b759801c74d1ced793362b6500fdfd778280f1427d66aabdcb864d0ca16c7",
+      "remoteListingSha256": "f48c3639ffa37afa35c93e276b84f5c6fbe06d8f8c5656078248c812f18aa50d",
+      "coverageAndSizesVerified": true,
+      "perObjectUploadChecksumsVerifiedByJournal": true
+    }
+  ]
+}

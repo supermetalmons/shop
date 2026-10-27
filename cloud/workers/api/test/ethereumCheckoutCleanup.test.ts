@@ -41,10 +41,6 @@ function fixture(t: TestContext) {
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: CONTRACT,
     ETHEREUM_111K_RENDERER_ADDRESS: '', ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
-    ETHEREUM_METADATA_CDN: {
-      fetch: async () => { throw new Error('Unexpected metadata read'); },
-      connect() { throw new Error('Unexpected metadata connection'); },
-    },
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };

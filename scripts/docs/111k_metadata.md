@@ -17,51 +17,47 @@ Digital opening keeps sequential ERC721A batch minting. Artwork `T` and receipt 
 
 `NFT111KUrlRenderer` maps each kind/item number to its exact token filename. The collection still checks existence in `tokenURI`; previews can address possible tokens before they are minted. The URL renderer must only be used with the new numbering contract. Historical contracts retain their original renderers and numbering.
 
-## Generate and publish
+## Source of truth
 
-The deterministic TypeScript generator preserves the original digital flowers and receipt frames. Physical-only flowers extend the center geometry into a second disjoint range. Images stay embedded as base64 SVGs in the JSON, so replacing a JSON also replaces its image without a separate image-cache dependency.
+The JSON objects on `cdn.mons.shop` are the authoritative collection metadata. Local development and the deployed shop read those same objects. The repository contains no collection artwork/JSON generator, initial-upload pipeline, local metadata server, or generated-file fallback.
 
-```sh
-npm run ethereum:metadata -- generate --network all
-npm run ethereum:metadata -- validate --network all
-```
-
-Each network directory under `.cache/111k-metadata/` contains 344948 JSONs, an ordered object manifest with hashes, a source manifest, and a validation report. Full generated metadata remains outside Git. Release records retain the compact manifests and validation evidence.
-
-For uploads, set `R2_ENDPOINT`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` in the process environment. The account's endpoint is `https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com` and the bucket is `cdn-mons-shop`, created with the Eastern North America (`enam`) location hint. Keep credentials out of repository files, command arguments, and logs.
-
-```sh
-npm run ethereum:metadata -- upload --network sepolia --concurrency 128
-npm run ethereum:metadata -- upload --network mainnet --concurrency 128
-```
-
-The uploader requires successful validation, checks local SHA-256 and remote Content-MD5/ETag, and uses conditional object creation. Identical existing objects reconcile safely; different existing content stops the upload. A manifest/destination-scoped journal records completed uploads. Reuse the journal after an interruption. Remove its lock only after confirming its owning process has exited. This initial-publication command intentionally does not overwrite later edited metadata.
-
-Cloudflare documents deriving S3 credentials from an existing API token: its token ID is the access key ID, and the SHA-256 hash of its value is the secret access key. Bucket administration and object permissions differ, so a token may upload objects while being unable to list bucket configurations. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
+The `cdn-mons-shop` bucket contains 344948 JSON objects per network and remains in Eastern North America (`enam`). The published JSONs currently embed base64 SVG images. Historical release manifests record the initial publication's hashes and validation evidence; they describe that release and are not runtime inputs or definitions of future metadata.
 
 ## Serving and freshness
 
-The private R2 bucket is bound to `mons-shop-cdn`. The Worker serves only valid collection JSON paths through `cdn.mons.shop`, allows GET/HEAD/OPTIONS with public CORS, and enforces `Cache-Control: no-store`, `CDN-Cache-Control: no-store`, and `Cloudflare-CDN-Cache-Control: no-store` on every response. It does not use the Cache API or retain object contents between requests. R2's public development URL stays disabled.
+The `cdn-mons-shop` R2 bucket serves files directly through its public custom domain `cdn.mons.shop`. Every object is publicly readable by its key; public access does not allow writes. There is no metadata-serving Worker. R2's separate public development URL stays disabled.
 
-Uploads also set object cache metadata to `no-store`. The Worker overrides object headers, so a future manual replacement cannot accidentally enable caching. Missing objects and errors are not cached. Conditional client headers do not bypass the fresh R2 read.
+Stored JSON objects use `Cache-Control: no-store` and `Content-Type: application/json; charset=utf-8`. A Cloudflare cache rule bypasses caching for `http.host eq "cdn.mons.shop"`, and a response-header rule for that hostname sets `Cache-Control: no-store`, including on missing-object and error responses. Response-header rules alone do not control Cloudflare's edge cache, so retain the separate cache-bypass rule.
 
-The API resolves the contract's exact expected URL through its `ETHEREUM_METADATA_CDN` service binding. Metadata bodies are bounded to 128 KiB, with eight concurrent reads and cancellation. Ownership reads remain pinned to a canonical block snapshot. Fulfillment previews deduplicate only pending reads and fetch again on subsequent requests.
+The bucket CORS policy allows all origins and request headers, allows `GET` and `HEAD`, and sets `MaxAgeSeconds` to `86400`. R2 handles `OPTIONS` preflights automatically. This duration caches browser permission checks, not metadata. The hostname's response-header rule matches the public access policy used by `lil-org-cdn`:
+
+| Header | Value |
+| --- | --- |
+| `Access-Control-Allow-Origin` | `*` |
+| `Access-Control-Allow-Headers` | `*` |
+| `Access-Control-Allow-Methods` | `GET, HEAD, OPTIONS` |
+| `Access-Control-Expose-Headers` | `Accept-Ranges, Cache-Control, CF-Cache-Status, Content-Disposition, Content-Encoding, Content-Length, Content-Range, Content-Type, Date, ETag, Last-Modified` |
+| `Cross-Origin-Resource-Policy` | `cross-origin` |
+| `Timing-Allow-Origin` | `*` |
+
+Use the same exposed-header list in the bucket CORS policy. This permits anonymous browser reads and embedding from third-party sites. See [R2 CORS](https://developers.cloudflare.com/r2/buckets/cors/) and [response-header rules](https://developers.cloudflare.com/rules/transform/response-header-modification/).
+
+The API fetches the contract's exact expected public URL over HTTP with `cache: 'no-store'`, rejects redirects, and applies a ten-second timeout. Metadata bodies are bounded to 128 KiB, with eight concurrent reads and cancellation. Ownership reads remain pinned to a canonical block snapshot. Fulfillment previews deduplicate only pending reads and fetch again on subsequent requests.
 
 Freshness applies when a client requests metadata. An already rendered page or a marketplace's indexed copy does not refresh merely because the R2 object changes. Future updates should use the existing ERC-4906 refresh mechanism and any marketplace refresh tools as needed. This release implements no reveal workflow, update scheduler, or marketplace refresh automation. See [R2 consistency](https://developers.cloudflare.com/r2/reference/consistency/) and [ERC-4906](https://eips.ethereum.org/EIPS/eip-4906).
 
 ## Local development and checks
 
-Local deployment manifest version 7 records `metadataBaseURI`. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` can use an HTTP loopback origin with the `/111k-sepolia/` or `/111k/` prefix. The local API verifies that value against the renderer and binds an isolated metadata fixture Worker using the same generator; it does not read the public CDN or remote R2.
+Local deployment manifest version 7 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the existing HTTPS CDN prefixes `/111k-sepolia/` and `/111k/`. The local API verifies that value against the renderer and fetches the CDN directly. Existing loopback metadata manifests require a fresh local deployment; matching CDN manifests remain valid. Local development requires network access and reports unavailable metadata rather than falling back to local files or generated output.
 
 ```sh
-npm run check:cdn
-node --import tsx --test tests/ethereumMetadataGenerator.test.ts
+npm run check:api
 npm run test:ethereum
 npm run test:ethereum:e2e
 ```
 
-The CDN uses the repository's pinned Wrangler-compatible date. Generate its binding types with `npm run types:cdn`. Its tests exercise real local R2 replacement, deletion, HEAD/CORS, exact range boundaries, missing objects, and oversized objects.
+Unit and native-runtime tests remain offline using small, explicitly synthetic HTTP responses. They cover URL/token mapping, ordering, batching, response bounds, redirects, failures, timeouts, and cancellation without reproducing collection artwork. The Anvil end-to-end test requires CDN connectivity and reads current JSONs; it verifies URLs and API compatibility without pinning original names, artwork geometry, or hashes.
 
-`npm run prepare:cdn` produces and validates the pinned Wrangler multipart payload without remote calls. `npm run deploy:cdn` runs the CDN checks and uploads that payload through the Cloudflare Workers API, verifies domain ownership, and disables workers.dev and preview URLs. This supports the existing token's Worker deployment permissions without requiring bucket-administration permission for Wrangler's bucket lookup. Deployment reports are stored under `.cache/111k-offchain/`; inspect an uncertain report before retrying.
+Bucket custom domains and CORS require bucket-administration access; object-upload permissions alone are insufficient. Manage the hostname's CORS response headers and cache bypass in the `mons.shop` zone. Verify GET, HEAD, and OPTIONS from arbitrary origins against both collection prefixes, confirm `no-store`, and check that repeated responses are not cache hits. Changes to files do not require an application deployment.
 
-Publish and verify all metadata before deploying a collection that references it. Use the existing [Sepolia maintenance and replacement procedure](111k_testnet.md#ethereum-maintenance-and-replacement) for the application cutover. Record the metadata manifest hashes, Worker version, contract source/creation evidence, HTTP freshness verification, and live acceptance results in the release directory.
+Publish and verify all metadata before deploying a collection that references it. Use the existing [Sepolia maintenance and replacement procedure](111k_testnet.md#ethereum-maintenance-and-replacement) when replacing a collection. A metadata-hosting migration that preserves URLs and contents requires no contract deployment or database reset. Record the metadata manifest hashes, bucket/domain/CORS/cache configuration, application version, and HTTP and shop verification in the release directory. Preserve earlier Worker deployment records as historical evidence.

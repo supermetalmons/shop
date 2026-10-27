@@ -22,7 +22,6 @@
 		"ETHEREUM_111K_DEPLOYMENT_BLOCK": "12004558",
 		"ETHEREUM_111K_RPC_URL": ""
 	},
-	"services": [{ "binding": "ETHEREUM_METADATA_CDN", "service": "mons-shop-cdn" }],
 	"d1_databases": [
 		{
 			"binding": "DATA_DB",

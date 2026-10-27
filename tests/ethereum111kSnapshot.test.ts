@@ -46,30 +46,24 @@ function fixture(context: test.TestContext, count = 40) {
   return { harness, rows, insert, queryBatch, batches };
 }
 
-function cratePreviewJson(): string {
-  const fixtures = JSON.parse(readFileSync('onchain/ethereum/fixtures/metadata.json', 'utf8'));
-  const uri = fixtures.find((value: { kind: number; displayId: number }) => value.kind === 2 && value.displayId === 42).tokenURI;
-  const metadata = JSON.parse(Buffer.from(uri.split(',')[1], 'base64').toString());
-  const svg = Buffer.from(metadata.image.split(',')[1], 'base64').toString();
+function syntheticPreviewJson(): string {
   return JSON.stringify(Array.from({ length: 50 }, (_, index) => {
     const displayId = index + 1;
     const tokenId = String(111111 + displayId);
-    return { tokenId, kind: 'crate', displayId, owner: `0x${'22'.repeat(20)}`, name: `111K Crate #${displayId}`,
-      image: `data:image/svg+xml;base64,${Buffer.from(svg.replace('>42</text>', `>${displayId}</text>`)).toString('base64')}`,
-      description: metadata.description,
-      attributes: metadata.attributes.map((attribute: { trait_type: string; value: unknown }) =>
-        attribute.trait_type === 'Item number' ? { ...attribute, value: displayId } : attribute),
+    return { tokenId, kind: 'crate', displayId, owner: `0x${'22'.repeat(20)}`, name: 'Synthetic metadata',
+      image: 'data:image/svg+xml;base64,PHN2Zy8+', description: 'x'.repeat(2048),
+      attributes: [{ trait_type: 'Test payload', value: 'Synthetic' }],
       id: ethereumAssetId(SCOPE.chainId, SCOPE.contractAddress, tokenId), ...SCOPE };
   }));
 }
 
-for (const kind of ['current-crates', 'maximum-escaping'] as const) test(`checkout snapshot pages retain ${kind} previews below the process output limit`, async () => {
-  const previews = JSON.parse(cratePreviewJson());
-  const itemsJson = JSON.stringify(kind === 'current-crates' ? previews :
+for (const kind of ['synthetic-payload', 'maximum-escaping'] as const) test(`checkout snapshot pages retain ${kind} previews below the process output limit`, async () => {
+  const previews = JSON.parse(syntheticPreviewJson());
+  const itemsJson = JSON.stringify(kind === 'synthetic-payload' ? previews :
     previews.map((item: object) => ({ ...item, name: '"'.repeat(9000) })));
   assert.ok(Buffer.byteLength(itemsJson) <= 1024 * 1024);
   const tokenIds = JSON.stringify(previews.map((item: { tokenId: string }) => item.tokenId));
-  const rows = Array.from({ length: kind === 'current-crates' ? 1000 : 40 }, (_, index) =>
+  const rows = Array.from({ length: kind === 'synthetic-payload' ? 1000 : 40 }, (_, index) =>
     ({ ...checkout(index + 1, itemsJson), token_ids_json: tokenIds }));
   let maxOutputBytes = 0;
   let totalOutputBytes = 0;

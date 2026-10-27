@@ -125,7 +125,6 @@ function env(options: {
     ETHEREUM_111K_CHAIN_ID: '11155111', ETHEREUM_111K_CONTRACT_ADDRESS: '',
     ETHEREUM_111K_RENDERER_ADDRESS: '', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
     ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
-    ETHEREUM_METADATA_CDN: { fetch: async () => new Response(null, { status: 404 }), connect() { throw new Error('Unexpected connect'); } },
     ETHEREUM_111K_RPC_URL: '', ETHEREUM_111K_SIGNER_SECRET: '',
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,

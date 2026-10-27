@@ -17,7 +17,7 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`npm test` regenerates deterministic authorization/calldata vectors in `fixtures/eip712.json` and metadata fixtures in `fixtures/metadata.json`. `scripts/check-fixtures.mjs` validates metadata and decodes SVG previews under `out/media-previews`. Regenerate `shared/ethereum/abi.generated.ts` after changing the contract interface:
+`npm test` regenerates deterministic authorization/calldata vectors in `fixtures/eip712.json`. `scripts/check-fixtures.mjs` validates those authorization fixtures. Regenerate `shared/ethereum/abi.generated.ts` after changing the contract interface:
 
 ```sh
 npm run build
@@ -43,13 +43,11 @@ npm run gas:update
 
 Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values are gas units, not ETH fees, and omit any outer contract-wallet transaction overhead. Differently ordered authorizations can also differ slightly in signature-byte calldata cost. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
 
-## Offchain metadata and SVG artwork
+## Offchain metadata
 
-New deployments use `NFT111KUrlRenderer`, which returns `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{tokenId}.json` on mainnet. The [metadata guide](../../scripts/docs/111k_metadata.md) covers generation, publishing, cache behavior, and local fixtures. The retained `NFT111KRenderer` is an offline SVG reference; it is no longer deployed for new collections.
+New deployments use `NFT111KUrlRenderer`, which returns `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{tokenId}.json` on mainnet. These URLs serve the authoritative JSONs directly from public R2 with permissive CORS and `no-store` caching. The [metadata guide](../../scripts/docs/111k_metadata.md) covers URL identities, access, cache behavior, and testing.
 
-Artworks show four simple flower families: narrow daisies, notched blossoms, broad poppies, and layered dahlias. They have curved stems and two leaves on full 720×720 backgrounds, with six palettes pairing soft backgrounds and colorful petals. An artwork receipt embeds the same composition. The filled flower center's position and radius encode distinct geometry for all 222,222 possible display IDs across digital and physical-only paths, so uniqueness does not depend on chance or hidden metadata. `test/Renderer.t.sol` checks the complete center mapping, deterministic SVG output, matching receipt artwork, and size budgets of 4 KiB per SVG and 12 KiB for the renderer runtime.
-
-Standalone crates and warehouses are vertically centered on transparent canvases. Crates use warm wood colors, including within crate receipts; warehouses use muted sage green. Receipt canvases retain their paper and red redeemed sticker.
+The repository retains URL construction and token-ID mapping, but no collection JSON/SVG renderer or metadata generator. Historical release records document the original artwork publication. Unit tests use generic synthetic responses, while local development and the Anvil end-to-end flow fetch the current CDN JSONs.
 
 ## Local chain
 
@@ -65,7 +63,7 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, the proceeds configuration, and `protocolVersion: 7` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, the proceeds configuration, `metadataBaseURI`, and `protocolVersion: 7` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Metadata defaults to `https://cdn.mons.shop/111k-sepolia/`, matching the deployed shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the published HTTPS CDN namespaces `/111k-sepolia/` and `/111k/`. Other optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
 
 Local deployment manifest version 7 identifies offchain metadata, the recorded `metadataBaseURI`, sequential digital identities, and disjoint physical-only receipt identities, alongside mint splits, delivery proceeds, discounts, and batch operations. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, probes the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
@@ -75,7 +73,7 @@ Start the isolated API from the repository root:
 npm run dev:ethereum:api
 ```
 
-The helper reads `.local/deployment.json`, injects the public local test signer, and creates temporary databases. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
+The helper reads `.local/deployment.json`, injects the public local test signer, creates temporary databases, and reads metadata directly from the CDN. Local manifests with loopback metadata URLs require a fresh local deployment; matching CDN manifests remain valid. Metadata reads require CDN connectivity and have no local fallback. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
 
 Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
 
@@ -187,20 +185,20 @@ The owner can replace the renderer for a later metadata implementation. This cha
 
 ## Gas comparison
 
-### Batch operations (2026-10-18)
+### Batch operations (2026-10-27)
 
-The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, 105 verified gas snapshots, deployed code size and bounded-read response sizes at that revision, before crate discounts were added. The collection runtime at that revision was 17,206 bytes, leaving 7,370 bytes below the EIP-170 limit. The renderer was 11,775 bytes. Current measurements are checked in `snapshots/NFT111KGasTest.json`.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the current collection and URL renderer. All 113 gas measurements are checked in `snapshots/NFT111KGasTest.json`. The collection runtime is 19,795 bytes, leaving 4,781 bytes below the EIP-170 limit.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |
-| 15 ordinary crates, EOA | 1,215,149 | 1,714,920 | 499,771 (29.14%) |
-| 15 crates including #5555, EOA | 1,236,336 | 1,736,107 | 499,771 (28.79%) |
-| 15 ordinary crates, minimal receiver | 1,668,470 | 2,168,070 | 499,600 (23.04%) |
-| 15 crates including #5555, minimal receiver | 1,706,156 | 2,205,737 | 499,581 (22.65%) |
+| 15 ordinary crates, EOA | 1,194,614 | 1,694,730 | 500,116 (29.51%) |
+| 15 crates including #5555, EOA | 1,215,801 | 1,715,917 | 500,116 (29.15%) |
+| 15 ordinary crates, minimal receiver | 1,651,535 | 2,151,480 | 499,945 (23.24%) |
+| 15 crates including #5555, minimal receiver | 1,689,353 | 2,189,279 | 499,926 (22.84%) |
 
-These isolated write measurements include intrinsic/calldata gas and refunds, with identical initial state and input order for each comparison. Setup and arbitrary contract-wallet callback work are excluded. The Anvil API lifecycle also compares real transaction receipts after 40 artworks already exist: opening 15 crates including #5555 costs 1,219,236 gas versus 1,719,007 separately, saving 499,771 gas (29.07%).
+These isolated write measurements include intrinsic/calldata gas and refunds, with identical initial state and input order for each comparison. Setup and arbitrary contract-wallet callback work are excluded. The Anvil API lifecycle separately checks that batch opening saves gas using real transaction receipts.
 
-The 150-entry sparse artwork-info benchmark costs 6,942,976 gas. A 30-entry large artwork-receipt metadata read costs 18,989,148 gas and returns 190,144 ABI bytes (380,290 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
+The 150-entry sparse artwork-info benchmark costs 6,915,998 gas. A 30-entry artwork-receipt metadata URL read costs 151,196 gas and returns 3,904 ABI bytes (7,810 bytes of hex, excluding the RPC envelope). Tests enforce a 25-million-gas call budget and 512 KiB hex-response budget for that metadata scenario. These are read simulations; inventory users do not submit a paid transaction for them.
 
 Regenerate the report after reviewing updated gas snapshots:
 
@@ -233,9 +231,9 @@ In that recorded comparison, all 77 write measurements and eight reads improve a
 
 At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer deployment costs 2,579,059 (+291,853). Those one-time costs are separate from user-call savings. Normal gas snapshots also compile the test receiver at the selected settings; the compiler comparison keeps its bytecode fixed to isolate the collection's improvements.
 
-Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [checked-in legacy/200 baseline](benchmarks/compiler-legacy-200.json) records source, harness, dependency and compiler provenance as well as all 89 measurements. Normal runs reject changed provenance or measurements; they never silently replace the baseline. In both records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
+Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [historical legacy/200 baseline](benchmarks/compiler-legacy-200.json) records the source, harness, dependency and compiler provenance for those 89 measurements. Current tooling uses the separate [CDN legacy/200 baseline](benchmarks/compiler-legacy-200-cdn.json) for the collection and URL renderer. Normal runs reject changed provenance or measurements; they never silently replace the active baseline. In these records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-The current source has 113 benchmarks, so the preserved 89-benchmark compiler baseline intentionally fails provenance/name checks against it. Reproduce the earlier comparison from its recorded source revision. To compare modified sources, explicitly refresh the compiler baseline with `--update-baseline` as shown below before running:
+The current source has 113 benchmarks and uses the CDN baseline. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000
@@ -252,7 +250,7 @@ After reviewing an intentional source, harness or toolchain change, explicitly r
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-baseline-update.json legacy 200 1000 --update-baseline
-node scripts/benchmark-compiler.mjs benchmarks/compiler-settings.json legacy 200 1000
+node scripts/benchmark-compiler.mjs /tmp/111k-cdn-compiler-settings.json legacy 200 1000
 ```
 
 Compiler comparisons leave normal gas snapshots unchanged. Regenerate those separately with `npm run gas:update` when intended. The compiler settings affect future builds and deployments; existing deployed contracts retain their original bytecode.

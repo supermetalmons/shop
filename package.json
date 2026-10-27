@@ -59,7 +59,7 @@
     "test:ethereum": "npm --prefix onchain/ethereum run check && node --import tsx --test tests/ethereum*.test.ts",
     "test:ethereum:e2e": "node --import tsx cloud/workers/api/runtime-test/ethereum111k-e2e.ts",
     "test:onchain:sbf": "cd onchain && NO_DNA=1 anchor build --no-idl --arch sbf -- --features no-idl,no-log-ix-name,mainnet-program-id -- --locked && BOX_MINTER_SBF_PATH=\"$PWD/target/deploy/box_minter.so\" cargo test --locked --features sbf-tests,mainnet-program-id --test split_payments_sbf",
-    "check": "npm run check:cdn && npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run check:api && npm run typecheck:tools && npm run check:dead-code && npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
+    "check": "npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run check:api && npm run typecheck:tools && npm run check:dead-code && npm test && npm run test:onchain && npm run build && npm run validate:browser-bundle",
     "check-irl-claims": "tsx scripts/ops/checkIrlClaims.ts",
     "rebuild-pack-status": "tsx scripts/ops/rebuildPackStatus.ts",
     "db:migrate:data": "wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env",
@@ -109,15 +109,7 @@
     "generate:ops-schema": "node --import tsx scripts/generateDatabaseSchema.ts ops --write",
     "check:ops-schema": "node --import tsx scripts/generateDatabaseSchema.ts ops --check",
     "generate:db": "npm run generate:preorder-catalog && npm run generate:commerce-schema && npm run generate:data-schema && npm run generate:ops-schema",
-    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema && npm run check:data-schema && npm run check:ops-schema",
-    "types:cdn": "wrangler types cloud/workers/cdn/worker-configuration.d.ts --config cloud/workers/cdn/wrangler.jsonc --env-file cloud/workers/cdn/release.env",
-    "types:cdn:check": "wrangler types cloud/workers/cdn/worker-configuration.d.ts --check --config cloud/workers/cdn/wrangler.jsonc --env-file cloud/workers/cdn/release.env",
-    "typecheck:cdn": "tsc -p cloud/workers/cdn/tsconfig.json",
-    "test:cdn": "node --import tsx --test cloud/workers/cdn/test/*.test.ts",
-    "check:cdn": "npm run types:cdn:check && npm run typecheck:cdn && npm run test:cdn && wrangler deploy --dry-run --config cloud/workers/cdn/wrangler.jsonc --env-file cloud/workers/cdn/release.env",
-    "deploy:cdn": "npm run check:cdn && node --import tsx scripts/ops/deployMetadataCdn.ts --write",
-    "ethereum:metadata": "node --import tsx scripts/ethereum-metadata/cli.ts",
-    "prepare:cdn": "node --import tsx scripts/ops/deployMetadataCdn.ts"
+    "check:db-generated": "npm run check:preorder-catalog && npm run check:commerce-schema && npm run check:data-schema && npm run check:ops-schema"
   },
   "repository": {
     "type": "git",
@@ -155,7 +147,6 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1157.0",
     "@solana/spl-token": "^0.4.15",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",

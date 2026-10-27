@@ -74,7 +74,7 @@ async function readMetadata(context: EthereumContext, uri: unknown, tokenId: str
   signal.throwIfAborted();
   let response: Response;
   try {
-    response = await context.env.ETHEREUM_METADATA_CDN.fetch(uri, {
+    response = await context.fetch(uri, {
       headers: { Accept: 'application/json' }, cache: 'no-store', redirect: 'manual', signal,
     });
   } catch {
