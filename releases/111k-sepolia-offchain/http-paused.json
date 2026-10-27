@@ -1,0 +1,86 @@
+{
+  "checkedAt": "2026-10-27T10:48:11.814Z",
+  "reads": [
+    {
+      "path": "/ethereum/111k/config",
+      "status": 200,
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "chainName": "Sepolia",
+      "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+      "rendererAddress": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+      "deploymentBlock": 12004558,
+      "explorerUrl": "https://sepolia.etherscan.io",
+      "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+      "enabled": false,
+      "testnet": true,
+      "cratePriceWei": "100000000000000",
+      "warehousePriceWei": "1100000000000000",
+      "deliveryFeeWei": "100000000000000",
+      "confirmationBlocks": 3,
+      "maxMintQuantity": 15,
+      "maxUnboxQuantity": 15,
+      "maxDeliveryItems": 50
+    },
+    {
+      "path": "/ethereum/111k/stats",
+      "status": 200,
+      "chainId": 11155111,
+      "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+      "owner": null,
+      "allocatedCrates": 0,
+      "warehousesMinted": 0,
+      "artworksMinted": 0,
+      "cratePriceWei": "100000000000000",
+      "warehousePriceWei": "1100000000000000",
+      "saleActive": false,
+      "remainingCrates": 5555,
+      "remainingWarehouses": 505,
+      "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "discountCratePriceWei": "50000000000000",
+      "discountAllowance": 1,
+      "discountUsed": 0
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork&displayId=1",
+      "status": 200,
+      "name": "111K Artwork #1"
+    },
+    {
+      "path": "/ethereum/111k/metadata?kind=artwork_receipt&displayId=222222",
+      "status": 200,
+      "name": "111K Artwork Receipt #222222"
+    }
+  ],
+  "mutations": [
+    {
+      "path": "/ethereum/111k/delivery/prepare",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/delivery/confirm",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/claims/prepare",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/claims/confirm",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/checkout/create",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/checkout/prepare",
+      "status": 503
+    },
+    {
+      "path": "/ethereum/111k/checkout/submission",
+      "status": 503
+    }
+  ]
+}

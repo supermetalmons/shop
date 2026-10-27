@@ -8,11 +8,12 @@ import {
   type EthereumDeliveryPrepareRequest, type EthereumDeliveryConfirmRequest,
   type EthereumClaimPrepareRequest, type EthereumClaimConfirmRequest,
 } from '../../shared/ethereum/api';
-import { ethereumAssetId, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ethereumAssetId, ethereumItemDisplayIdMaximum, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_INVENTORY_EXPECTED_IDS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import { requestEthereumJson, type EthereumRequestOptions } from './request';
 import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
+import { ethereumMetadataBaseUri } from '../../shared/ethereum/config';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -41,7 +42,7 @@ async function request(path: string, options: EthereumRequestOptions = {}): Prom
 
 export function parseEthereumConfig(value: unknown): Ethereum111kConfig {
   if (!record(value) || value.dropId !== '111k_devnet' || typeof value.chainId !== 'number' || ![11155111, 31337].includes(value.chainId) ||
-    typeof value.chainName !== 'string' || typeof value.enabled !== 'boolean' || value.testnet !== true ||
+    typeof value.chainName !== 'string' || typeof value.enabled !== 'boolean' || value.testnet !== true || typeof value.metadataBaseUri !== 'string' ||
     (value.contractAddress !== null && !normalizeEthereumAddress(value.contractAddress)) || (value.enabled && value.contractAddress === null) ||
     typeof value.walletRpcUrl !== 'string' || typeof value.explorerUrl !== 'string' ||
     !amount(value.cratePriceWei) || !amount(value.warehousePriceWei) || !amount(value.deliveryFeeWei) ||
@@ -50,6 +51,7 @@ export function parseEthereumConfig(value: unknown): Ethereum111kConfig {
     !Number.isSafeInteger(value.maxDeliveryItems) || Number(value.maxDeliveryItems) < 1 || Number(value.maxDeliveryItems) > 50 ||
     !Number.isSafeInteger(value.confirmationBlocks) || Number(value.confirmationBlocks) < 1) return invalid();
   const rpc = new URL(value.walletRpcUrl);
+  ethereumMetadataBaseUri(value.metadataBaseUri, value.chainId);
   if (rpc.protocol !== 'https:' && !(value.chainId === 31337 && rpc.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(rpc.hostname))) return invalid();
   return { ...value, contractAddress: normalizeEthereumAddress(value.contractAddress) } as Ethereum111kConfig;
 }
@@ -59,6 +61,7 @@ export function parseEthereumInventoryItem(value: unknown, config: Ethereum111kC
     normalizeEthereumAddress(value.owner) !== owner || typeof value.tokenId !== 'string' || normalizeEthereumTokenId(value.tokenId) !== value.tokenId ||
     !ETHEREUM_ITEM_KINDS.includes(value.kind as EthereumInventoryItem['kind']) || typeof value.name !== 'string' ||
     !Number.isSafeInteger(value.displayId) || Number(value.displayId) < 1 || typeof value.image !== 'string' ||
+    Number(value.displayId) > ethereumItemDisplayIdMaximum(value.kind as EthereumInventoryItem['kind']) ||
     !/^data:image\/svg\+xml(?:;base64)?,/.test(value.image)) return invalid();
   const id = ethereumAssetId(config.chainId, config.contractAddress!, value.tokenId as string);
   if (value.id !== id) return invalid();

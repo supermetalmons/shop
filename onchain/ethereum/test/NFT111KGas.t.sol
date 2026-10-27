@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface GasMeasurementVm {
@@ -103,7 +103,7 @@ contract NFT111KGasTest is TestSupport {
             address(this),
             vm.addr(SIGNER_KEY),
             payable(address(0xBEEF)),
-            address(new NFT111KRenderer()),
+            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
             bytes32(0),
             recipients,
             shares
@@ -282,7 +282,7 @@ contract NFT111KGasTest is TestSupport {
         NFT111K.TokenInfo[] memory infos = token.getTokenInfos(ids);
         vm.snapshotGasLastCall("getTokenInfos150Fresh");
         assertEq(infos.length, 150);
-        assertEq(infos[149].displayId, 111111);
+        assertEq(infos[149].displayId, 3031);
     }
 
     function testGasGetTokenInfos150Spot() public {
@@ -574,7 +574,7 @@ contract NFT111KGasTest is TestSupport {
         (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(31);
         vm.snapshotGasLastCall("getTokenInfoFresh31");
         assertEq(kind, 1);
-        assertEq(displayId, 111111);
+        assertEq(displayId, 31);
         assertEq(owner, alice);
     }
 
@@ -694,7 +694,7 @@ contract NFT111KGasTest is TestSupport {
         vm.snapshotGasLastCall(name);
         (uint8 kind, uint256 displayId, address owner) = token.getTokenInfo(bonus ? 31 : 20);
         assertEq(kind, 1);
-        assertEq(displayId, bonus ? 111111 : 20);
+        assertEq(displayId, bonus ? 31 : 20);
         assertEq(owner, wallet);
     }
 
@@ -723,7 +723,7 @@ contract NFT111KGasTest is TestSupport {
         assertEq(count, quantity * 20 + (bonus ? 11 : 0));
         (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(count);
         assertEq(kind, 1);
-        assertEq(displayId, bonus ? 111111 : quantity * 20);
+        assertEq(displayId, count);
         assertEq(holder, wallet);
     }
 

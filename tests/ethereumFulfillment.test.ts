@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fulfillmentOrderFromRecord } from '../shared/fulfillmentReadModel.ts';
 import { createFulfillmentApiClient } from '../src/api/fulfillment.ts';
+import { loadEthereumFulfillmentPreview } from '../src/fulfillment/EthereumFulfillmentCard.tsx';
 
 const HASH = `0x${'ab'.repeat(32)}`;
 const fields = {
@@ -46,4 +47,28 @@ test('fulfillment API rejects malformed transaction references and accepts legac
   }
   const api = createFulfillmentApiClient(async () => ({ orders: [{ ...order, ethereumTransaction: undefined }] }));
   assert.equal((await api.listFulfillmentOrders({ dropId: options.dropId })).orders.length, 1);
+});
+
+test('fulfillment previews deduplicate only pending reads within the same scope and refetch later edits', async t => {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let image = 'data:image/svg+xml;base64,Zmlyc3Q=';
+  const requests: RequestInit[] = [];
+  const fetch = t.mock.method(globalThis, 'fetch', async (_input, init) => {
+    requests.push(init ?? {});
+    await held;
+    return Response.json({ image });
+  });
+  const first = loadEthereumFulfillmentPreview('artwork_receipt', 222222, 'deployment-a');
+  const duplicate = loadEthereumFulfillmentPreview('artwork_receipt', 222222, 'deployment-a');
+  const other = loadEthereumFulfillmentPreview('artwork_receipt', 222222, 'deployment-b');
+  assert.equal(first, duplicate);
+  assert.notEqual(first, other);
+  assert.equal(fetch.mock.callCount(), 2);
+  release();
+  assert.deepEqual(await Promise.all([first, duplicate, other]), [image, image, image]);
+  image = 'data:image/svg+xml;base64,c2Vjb25k';
+  assert.equal(await loadEthereumFulfillmentPreview('artwork_receipt', 222222, 'deployment-a'), image);
+  assert.equal(fetch.mock.callCount(), 3);
+  assert.ok(requests.every(request => request.cache === 'no-store'));
 });

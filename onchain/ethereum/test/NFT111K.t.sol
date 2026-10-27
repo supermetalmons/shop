@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract RejectingDeliveryReceiver {
@@ -53,7 +53,7 @@ contract ContractBuyer {
         (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(id);
         require(holder == address(this));
         lastDisplayId = displayId;
-        require(bytes(token.tokenURI(id)).length > 100);
+        require(bytes(token.tokenURI(id)).length > 40);
         if (rejectReceipt && (kind == 4 || kind == 5)) revert();
         if (transferOnReceipt != 0 && (kind == 4 || kind == 5)) {
             uint256 transferId = transferOnReceipt;
@@ -71,7 +71,7 @@ contract ContractBuyer {
 
 contract NFT111KTest is TestSupport {
     NFT111K internal token;
-    NFT111KRenderer internal renderer;
+    NFT111KUrlRenderer internal renderer;
     uint256 internal constant SIGNER_KEY = 0xA11CE;
     address internal alice = address(0xA110);
     address internal bob = address(0xB0B);
@@ -90,7 +90,7 @@ contract NFT111KTest is TestSupport {
         vm.deal(alice, 100 ether);
         vm.deal(bob, 100 ether);
         vm.deal(address(this), 100 ether);
-        renderer = new NFT111KRenderer();
+        renderer = new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/");
         token = new NFT111K(
             address(this),
             vm.addr(SIGNER_KEY),
@@ -205,15 +205,15 @@ contract NFT111KTest is TestSupport {
         for (uint256 i; i < ids.length; ++i) {
             _missingToken(ids[i]);
         }
-        _info(2, 1, 22, alice);
-        _info(9, 1, 29, alice);
-        _info(11, 1, 31, alice);
-        _info(19, 1, 39, alice);
-        _info(21, 1, 1, alice);
-        _info(39, 1, 19, alice);
+        _info(2, 1, 2, alice);
+        _info(9, 1, 9, alice);
+        _info(11, 1, 11, alice);
+        _info(19, 1, 19, alice);
+        _info(21, 1, 21, alice);
+        _info(39, 1, 39, alice);
         _missingToken(41);
-        _info(1_000_021, 4, 21, alice);
-        _info(1_000_030, 4, 30, alice);
+        _info(1_000_001, 4, 1, alice);
+        _info(1_000_010, 4, 10, alice);
         _info(1_000_040, 4, 40, alice);
         _info(1_000_020, 4, 20, alice);
     }
@@ -243,32 +243,32 @@ contract NFT111KTest is TestSupport {
         token.unboxWarehouse(116667);
     }
 
-    function testFixedDisplayNumbersSurviveArbitraryOpenOrderTransferAndBurn() public {
+    function testSequentialArtworkIdsSurviveArbitraryOpenOrderTransferAndBurn() public {
         _buyCrates(alice, 3);
         vm.startPrank(alice);
         token.unboxCrate(111114);
         token.unboxCrate(111112);
         token.transferFrom(alice, bob, 10);
         vm.stopPrank();
-        _info(1, 1, 41, alice);
-        _info(20, 1, 60, alice);
-        _info(21, 1, 1, alice);
-        _info(40, 1, 20, alice);
-        _info(10, 1, 50, bob);
-        _info(9, 1, 49, alice);
-        _info(11, 1, 51, alice);
+        _info(1, 1, 1, alice);
+        _info(20, 1, 20, alice);
+        _info(21, 1, 21, alice);
+        _info(40, 1, 40, alice);
+        _info(10, 1, 10, bob);
+        _info(9, 1, 9, alice);
+        _info(11, 1, 11, alice);
         uint256[] memory ids = _one(9);
         _redeem(alice, ids, 1);
         _info(9, 0, 0, address(0));
-        _info(1_000_049, 4, 49, alice);
-        _info(8, 1, 48, alice);
-        _info(11, 1, 51, alice);
-        assertEq(token.tokenURI(21), token.previewTokenURI(1, 1));
+        _info(1_000_009, 4, 9, alice);
+        _info(8, 1, 8, alice);
+        _info(11, 1, 11, alice);
+        assertEq(token.tokenURI(21), token.previewTokenURI(1, 21));
         vm.expectRevert();
         token.tokenURI(9);
     }
 
-    function testReceiptClaimUsesFixedCrateNumbersAndCanTransfer() public {
+    function testPhysicalReceiptClaimUsesSeparateArtworkIdsAndCanTransfer() public {
         _buyCrates(alice, 3);
         _redeem(alice, _one(111114), 1);
         _missingToken(111114);
@@ -284,7 +284,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(bob);
         token.claimCrateReceipt(2_000_003, claimId, deadline, signature);
         for (uint256 id = 41; id <= 60; ++id) {
-            _info(1_000_000 + id, 4, id, bob);
+            _info(1_111_111 + id, 4, 111_111 + id, bob);
         }
         _missingToken(2_000_003);
         vm.prank(bob);
@@ -303,6 +303,34 @@ contract NFT111KTest is TestSupport {
         vm.prank(bob);
         vm.expectRevert(NFT111K.WrongOwner.selector);
         token.unboxCrate(111112);
+    }
+
+    function testPhysicalClaimsAndDigitalReceiptsHaveSeparateIdsAndExactTokenUrls() public {
+        _buyCrates(alice, 2);
+        _redeem(alice, _one(111112), 1);
+        bytes32 claimId = keccak256("separate-physical-artwork-range");
+        uint256 deadline = block.timestamp + 300;
+        bytes memory signature = _claimSignature(alice, 2000001, claimId, deadline);
+        vm.prank(alice);
+        token.claimCrateReceipt(2000001, claimId, deadline, signature);
+        _info(1111112, 4, 111112, alice);
+        _info(1111131, 4, 111131, alice);
+        _missingToken(1);
+        (,, uint256 artworksBefore,,,,,,,) = token.stats(address(0));
+        assertEq(artworksBefore, 0);
+        assertEq(token.tokenURI(1111112), "https://cdn.mons.shop/111k-sepolia/1111112.json");
+        vm.prank(alice);
+        token.unboxCrate(111113);
+        _info(1, 1, 1, alice);
+        _info(20, 1, 20, alice);
+        assertEq(token.tokenURI(1), "https://cdn.mons.shop/111k-sepolia/1.json");
+        _redeem(alice, _one(1), 2);
+        _info(1000001, 4, 1, alice);
+        _info(1111112, 4, 111112, alice);
+        assertEq(token.tokenURI(1000001), "https://cdn.mons.shop/111k-sepolia/1000001.json");
+        assertEq(token.totalSupply(), 40);
+        (,, uint256 artworksAfter,,,,,,,) = token.stats(address(0));
+        assertEq(artworksAfter, 20);
     }
 
     function testDuplicateItemsRevertAtomicallyWithoutConsumingAuthorization() public {
@@ -381,7 +409,7 @@ contract NFT111KTest is TestSupport {
         token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
     }
 
-    function testDeliveryRejectsChangedArtworkMappingAfterReorgBeforeAnyBurn() public {
+    function testDeliveryArtworkIdentityStaysStableAcrossOpeningOrderReorg() public {
         _buyCrates(alice, 3);
         uint256 snapshot = vm.snapshotState();
         vm.prank(alice);
@@ -389,37 +417,24 @@ contract NFT111KTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         ids[0] = 111113;
         ids[1] = 1;
-        NFT111K.DeliveryQuote memory staleQuote = _quote(alice, 17, ids);
-        bytes memory staleSignature = _deliverySignature(ids, staleQuote);
-        _info(1, 1, 41, alice);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 17, ids);
+        bytes memory signature = _deliverySignature(ids, quote);
+        string memory originalURI = token.tokenURI(1);
+        _info(1, 1, 1, alice);
 
         assertTrue(vm.revertToState(snapshot));
         vm.prank(alice);
         token.unboxCrate(111112);
         _info(1, 1, 1, alice);
-        uint256 balanceBefore = address(token).balance;
+        assertEq(token.tokenURI(1), originalURI);
+        assertEq(_quote(alice, 17, ids).receiptIdsHash, quote.receiptIdsHash);
         vm.prank(alice);
-        vm.expectRevert(NFT111K.InvalidAuthorization.selector);
-        token.redeemForDelivery{value: staleQuote.fee}(ids, staleQuote, staleSignature);
-        assertEq(address(token).balance, balanceBefore);
-        assertFalse(token.usedDeliveryOrders(17));
-        _info(111113, 2, 2, alice);
-        _info(1, 1, 1, alice);
-        _info(2_000_002, 0, 0, address(0));
-        _info(1_000_001, 0, 0, address(0));
-        _info(1_000_041, 0, 0, address(0));
-
-        NFT111K.DeliveryQuote memory freshQuote = _quote(alice, 17, ids);
-        assertTrue(freshQuote.receiptIdsHash != staleQuote.receiptIdsHash);
-        bytes memory freshSignature = _deliverySignature(ids, freshQuote);
-        vm.prank(alice);
-        token.redeemForDelivery{value: freshQuote.fee}(ids, freshQuote, freshSignature);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
         assertTrue(token.usedDeliveryOrders(17));
         _info(111113, 0, 0, address(0));
         _info(1, 0, 0, address(0));
         _info(2_000_002, 5, 2, alice);
         _info(1_000_001, 4, 1, alice);
-        _info(1_000_041, 0, 0, address(0));
     }
 
     function testDeliveryRejectsSignedMalformedOrMismatchedReceiptHashesAtomically() public {
@@ -431,15 +446,15 @@ contract NFT111KTest is TestSupport {
         ids[1] = 1;
         uint256[] memory receipts = new uint256[](2);
         receipts[0] = 2_000_001;
-        receipts[1] = 1_000_021;
+        receipts[1] = 1_000_001;
         bytes32[] memory invalidHashes = new bytes32[](6);
         invalidHashes[0] = bytes32(0);
         invalidHashes[1] = keccak256("invalid receipt commitment");
         invalidHashes[2] = keccak256(abi.encodePacked(receipts));
         invalidHashes[3] = keccak256(abi.encode(_one(receipts[0])));
-        receipts[1] = 1_000_022;
+        receipts[1] = 1_000_002;
         invalidHashes[4] = keccak256(abi.encode(receipts));
-        receipts[0] = 1_000_021;
+        receipts[0] = 1_000_001;
         receipts[1] = 2_000_001;
         invalidHashes[5] = keccak256(abi.encode(receipts));
         NFT111K.DeliveryQuote memory quote = _quote(alice, 18, ids);
@@ -453,13 +468,13 @@ contract NFT111KTest is TestSupport {
             assertFalse(token.usedDeliveryOrders(18));
             assertEq(address(token).balance, balanceBefore);
             _info(111112, 2, 1, alice);
-            _info(1, 1, 21, alice);
+            _info(1, 1, 1, alice);
             _info(2_000_001, 0, 0, address(0));
-            _info(1_000_021, 0, 0, address(0));
+            _info(1_000_001, 0, 0, address(0));
         }
         _redeem(alice, ids, 18);
         _info(2_000_001, 5, 1, alice);
-        _info(1_000_021, 4, 21, alice);
+        _info(1_000_001, 4, 1, alice);
     }
 
     function testVersionOneDeliveryAndClaimSignaturesAreRejected() public {
@@ -614,9 +629,9 @@ contract NFT111KTest is TestSupport {
         ids[3] = 1;
         uint256[] memory receipts = new uint256[](4);
         receipts[0] = 2_000_003;
-        receipts[1] = 1_000_040;
-        receipts[2] = 1_000_001;
-        receipts[3] = 1_000_021;
+        receipts[1] = 1_000_020;
+        receipts[2] = 1_000_021;
+        receipts[3] = 1_000_001;
         NFT111K.DeliveryQuote memory quote = _quote(alice, 21, ids);
         assertEq(quote.receiptIdsHash, keccak256(abi.encode(receipts)));
         bytes memory signature = _deliverySignature(ids, quote);
@@ -662,11 +677,11 @@ contract NFT111KTest is TestSupport {
         assertEq(token.balanceOf(alice), balance);
         assertTrue(token.usedDeliveryOrders(quote.orderId));
         _info(2_000_003, 5, 3, alice);
-        _info(1_000_040, 4, 40, alice);
+        _info(1_000_020, 4, 20, alice);
         _info(1_000_001, 4, 1, alice);
         _info(1_000_021, 4, 21, alice);
-        _info(2, 1, 22, alice);
-        _info(22, 1, 2, alice);
+        _info(2, 1, 2, alice);
+        _info(22, 1, 22, alice);
     }
 
     function testRejectingDeliveryReceiverCannotBlockPurchasesOrDeliveryAndReleaseCanRetry() public {
@@ -690,7 +705,7 @@ contract NFT111KTest is TestSupport {
 
     function testRendererReplacementPreservesOwnershipAndValidatesPreviews() public {
         _buyCrates(alice, 1);
-        NFT111KRenderer replacement = new NFT111KRenderer();
+        NFT111KUrlRenderer replacement = new NFT111KUrlRenderer("https://cdn.mons.shop/111k/");
         vm.prank(alice);
         vm.expectRevert();
         token.setRenderer(address(replacement));
@@ -718,7 +733,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         token.unboxCrate(111111 + crateNumber);
         uint256 offset = uint256(itemOffset) % 20;
-        _info(1 + offset, 1, (crateNumber - 1) * 20 + 1 + offset, alice);
+        _info(1 + offset, 1, 1 + offset, alice);
     }
 
     function testFullSupplyMixedDigitalAndPhysicalHasExactly111111ArtworkIdentities() public {
@@ -749,7 +764,7 @@ contract NFT111KTest is TestSupport {
         assertEq(token.balanceOf(alice), 111111);
         assertEq(token.totalSupply(), 111111);
         _info(111080, 1, 111080, alice);
-        for (uint256 displayId = 111081; displayId <= 111111; ++displayId) {
+        for (uint256 displayId = 222192; displayId <= 222222; ++displayId) {
             _info(1_000_000 + displayId, 4, displayId, alice);
         }
         (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
@@ -768,13 +783,13 @@ contract NFT111KTest is TestSupport {
         token.transferFrom(alice, bob, 16);
         vm.stopPrank();
         for (uint256 id = 1; id <= 31; ++id) {
-            _info(id, 1, 111080 + id, id == 16 ? bob : alice);
+            _info(id, 1, id, id == 16 ? bob : alice);
         }
-        _info(32, 1, 1, alice);
-        _info(51, 1, 20, alice);
+        _info(32, 1, 32, alice);
+        _info(51, 1, 51, alice);
         _redeem(alice, _one(31), 1);
-        _info(1_111_111, 4, 111111, alice);
-        _info(32, 1, 1, alice);
+        _info(1_000_031, 4, 31, alice);
+        _info(32, 1, 32, alice);
     }
 
     function testWarehouseUnavailableBelow11Remaining() public {

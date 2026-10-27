@@ -135,6 +135,7 @@ test('document-path migration backfills a populated Commerce D1 in the real runt
   };
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{ config: runtimeConfig }],
@@ -211,6 +212,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
   };
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{ config: runtimeConfig }],

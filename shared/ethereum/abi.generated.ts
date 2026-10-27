@@ -107,6 +107,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_ARTWORK_RECEIPTS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_CRATES",
     "inputs": [],
     "outputs": [
@@ -2288,6 +2301,30 @@ export const nft111KAbi = [
 
 export const nft111KRendererAbi = [
   {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "baseURI_",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "baseURI",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
     "type": "function",
     "name": "tokenURI",
     "inputs": [
@@ -2309,7 +2346,12 @@ export const nft111KRendererAbi = [
         "internalType": "string"
       }
     ],
-    "stateMutability": "pure"
+    "stateMutability": "view"
+  },
+  {
+    "type": "error",
+    "name": "InvalidBaseURI",
+    "inputs": []
   },
   {
     "type": "error",

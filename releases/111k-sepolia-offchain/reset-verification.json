@@ -1,0 +1,30 @@
+{
+  "completedAt": "2026-10-27T10:50:53.942Z",
+  "dryRun": false,
+  "completed": true,
+  "reconciled": false,
+  "resetId": "796fe701-a050-4cec-a276-d56384e6592e",
+  "scope": {
+    "chainId": 11155111,
+    "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497"
+  },
+  "expectedRevision": 11,
+  "counts": {
+    "documents": 0,
+    "recovery": 0,
+    "notifications": 0,
+    "pack_outbox": 0,
+    "inventory": 0,
+    "available_dudes": 0,
+    "inventory_initializations": 0,
+    "linked_documents": 0,
+    "quotes": 0,
+    "checkouts": 0,
+    "attempts": 0,
+    "claims": 0,
+    "cursors": 1
+  },
+  "privateBackupCreated": true,
+  "backupSha256": "82cbde627012c3438a2b32e34aaa271559abe25a54e82ab754782274839f242a",
+  "drainNotBefore": "2026-10-27T10:48:28.697Z"
+}

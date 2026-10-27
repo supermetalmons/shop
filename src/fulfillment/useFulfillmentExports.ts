@@ -147,7 +147,8 @@ export function useFulfillmentExports({
               });
         if (!entry) throw new Error('Secret code unavailable');
         if (order.dropId === '111k_devnet' && entry.boxId) {
-          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId) }];
+          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId,
+            order.ethereumTransaction ? `${order.ethereumTransaction.chainId}:${order.ethereumTransaction.hash}` : fulfillmentOrderKey(order)) }];
         }
 
         const pngBlob = await dependencies.buildSecretCodePngBlob(entry);
@@ -191,11 +192,13 @@ export function useFulfillmentExports({
         ethereumClaimOrigin: window.location.origin,
       });
       const ethereumEntries = exportEntries.filter((entry) => entry.orderId.startsWith('111k_devnet:') && entry.boxId);
+      const ethereumScopes = new Map(displayedOrders.map(order => [fulfillmentOrderKey(order), order.ethereumTransaction
+        ? `${order.ethereumTransaction.chainId}:${order.ethereumTransaction.hash}` : fulfillmentOrderKey(order)]));
       const preparationPercent = ethereumEntries.length ? 20 : 0;
       let previewsLoaded = 0;
       for (let index = 0; index < ethereumEntries.length; index += 4) {
         const results = await Promise.allSettled(ethereumEntries.slice(index, index + 4).map(async (entry) => {
-          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId!) }];
+          entry.previewImages = [{ src: await loadEthereumFulfillmentPreview('crate_receipt', entry.boxId!, ethereumScopes.get(entry.orderId)) }];
           setSecretCodesExportProgress(++previewsLoaded / ethereumEntries.length * preparationPercent);
         }));
         const failure = results.find((result) => result.status === 'rejected');

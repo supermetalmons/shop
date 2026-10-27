@@ -17,6 +17,7 @@ test('real D1 atomically claims preorders, fences submission and safely recovers
       migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)) })) };
   delete runtime.$schema;
   delete runtime.secrets;
+  delete runtime.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtime }] });
   try {
     await server.listen();

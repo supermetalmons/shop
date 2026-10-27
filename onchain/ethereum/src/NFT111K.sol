@@ -34,6 +34,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     }
 
     uint256 public constant MAX_ARTWORKS = 111_111;
+    uint256 public constant MAX_ARTWORK_RECEIPTS = 222_222;
     address public constant SEAPORT = 0x0000000000000068F116a894984e2DB1123eB395;
     uint256 public constant MAX_CRATES = 5_555;
     uint256 public constant MAX_WAREHOUSES = 505;
@@ -80,7 +81,6 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     mapping(bytes32 => bool) public usedClaims;
     mapping(address => uint256) public discountUsed;
     mapping(address => bool) private seaportApprovalRevoked;
-    uint24 private transient pendingArtworkOffset;
 
     error InvalidQuantity();
     error SoldOut();
@@ -287,7 +287,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         usedClaims[claimId] = true;
         _burn(receiptId);
         uint256 count = _crateContentsCount(crateNumber);
-        uint256 firstDisplayId = (crateNumber - 1) * 20 + 1;
+        uint256 firstDisplayId = MAX_ARTWORKS + (crateNumber - 1) * 20 + 1;
         uint256[] memory receiptIds = new uint256[](count);
         for (uint256 i; i < count; ++i) {
             receiptIds[i] = ARTWORK_RECEIPT_OFFSET + firstDisplayId + i;
@@ -322,7 +322,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         TokenOwnership memory ownership = tokenId <= MAX_ARTWORKS ? _artworkOwnership(tokenId) : _ownershipAt(tokenId);
         if (ownership.addr == address(0) || ownership.burned) return (0, 0, address(0));
         if (tokenId <= MAX_ARTWORKS) {
-            return (uint8(ItemKind.Artwork), tokenId + ownership.extraData - MAX_ARTWORKS, ownership.addr);
+            return (uint8(ItemKind.Artwork), tokenId, ownership.addr);
         }
         holder = ownership.addr;
         if (tokenId >= CRATE_TOKEN_START && tokenId < CRATE_TOKEN_START + MAX_CRATES) {
@@ -331,7 +331,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (tokenId >= WAREHOUSE_TOKEN_START && tokenId < WAREHOUSE_TOKEN_START + MAX_WAREHOUSES) {
             return (uint8(ItemKind.Warehouse), tokenId - WAREHOUSE_TOKEN_START + 1, holder);
         }
-        if (tokenId > ARTWORK_RECEIPT_OFFSET && tokenId <= ARTWORK_RECEIPT_OFFSET + MAX_ARTWORKS) {
+        if (tokenId > ARTWORK_RECEIPT_OFFSET && tokenId <= ARTWORK_RECEIPT_OFFSET + MAX_ARTWORK_RECEIPTS) {
             return (uint8(ItemKind.ArtworkReceipt), tokenId - ARTWORK_RECEIPT_OFFSET, holder);
         }
         if (tokenId > CRATE_RECEIPT_OFFSET && tokenId <= CRATE_RECEIPT_OFFSET + MAX_CRATES) {
@@ -539,10 +539,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     function _mintCrateArtworks(uint256 tokenId, uint256 crateNumber) private {
         uint256 count = _crateContentsCount(crateNumber);
         uint256 firstToken = _nextTokenId();
-        uint256 firstDisplayId = (crateNumber - 1) * 20 + 1;
-        pendingArtworkOffset = uint24(MAX_ARTWORKS + firstDisplayId - firstToken);
         _safeMint(msg.sender, count);
-        pendingArtworkOffset = 0;
         emit CrateUnboxed(tokenId, msg.sender, firstToken, count);
     }
 
@@ -557,9 +554,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function _validMetadataItem(uint8 kind, uint256 displayId) private pure returns (bool) {
         if (displayId == 0) return false;
-        if (kind == uint8(ItemKind.Artwork) || kind == uint8(ItemKind.ArtworkReceipt)) {
-            return displayId <= MAX_ARTWORKS;
-        }
+        if (kind == uint8(ItemKind.Artwork)) return displayId <= MAX_ARTWORKS;
+        if (kind == uint8(ItemKind.ArtworkReceipt)) return displayId <= MAX_ARTWORK_RECEIPTS;
         if (kind == uint8(ItemKind.Crate) || kind == uint8(ItemKind.CrateReceipt)) return displayId <= MAX_CRATES;
         return kind == uint8(ItemKind.Warehouse) && displayId <= MAX_WAREHOUSES;
     }
@@ -570,9 +566,5 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function _sequentialUpTo() internal pure override returns (uint256) {
         return MAX_ARTWORKS;
-    }
-
-    function _extraData(address from, address, uint24 previous) internal view override returns (uint24) {
-        return from == address(0) ? pendingArtworkOffset : previous;
     }
 }

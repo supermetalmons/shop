@@ -12,8 +12,7 @@ const gas = json('snapshots/NFT111KGasTest.json');
 const artifact = json('out/NFT111K.sol/NFT111K.json');
 const metadata = typeof artifact.metadata === 'string' ? JSON.parse(artifact.metadata) : artifact.metadata;
 const runtimeBytes = artifact.deployedBytecode.object.replace(/^0x/, '').length / 2;
-const fixture = json('fixtures/metadata.json').find(item => item.kind === 4 && item.displayId === 111111);
-const uriBytes = Buffer.byteLength(fixture.tokenURI);
+const uriBytes = Buffer.byteLength('https://cdn.mons.shop/111k-sepolia/1222222.json');
 const metadataAbiBytes = 64 + 30 * (64 + Math.ceil(uriBytes / 32) * 32);
 const infoAbiBytes = 64 + 150 * 96;
 const comparison = (batchName, separateName) => {
@@ -22,7 +21,7 @@ const comparison = (batchName, separateName) => {
   return { batch, separate, saved: separate - batch, savedPercent: Number(((separate - batch) / separate * 100).toFixed(2)) };
 };
 const paths = [
-  'src/NFT111K.sol', 'src/NFT111KRenderer.sol', 'src/INFT111KRenderer.sol',
+  'src/NFT111K.sol', 'src/NFT111KUrlRenderer.sol', 'src/INFT111KRenderer.sol',
   'test/NFT111KGas.t.sol', 'test/TestSupport.sol', 'test/NFT111KBatch.t.sol',
   'foundry.toml', 'package-lock.json', 'snapshots/NFT111KGasTest.json', 'fixtures/metadata.json', 'fixtures/discounts/proof.json',
   'scripts/benchmark-batch.mjs',
@@ -41,7 +40,7 @@ const report = {
   measurement: {
     command: 'node onchain/ethereum/scripts/benchmark-batch.mjs',
     gas: 'Verified committed Forge --isolate measurements. Batch costs are one transaction; separate costs sum fifteen isolated transactions with identical initial state and token order. Setup and harness costs are excluded. Write costs include intrinsic/calldata gas and refunds. Read costs measure the callee STATICCALL.',
-    response: 'ABI return sizes derive from the exact static tuple layout or the matching committed renderer fixture, including array heads, lengths and padding. Hex sizes include the 0x prefix but omit the JSON-RPC envelope.',
+    response: 'ABI return sizes derive from the exact static tuple layout or a URL for the maximum artwork receipt ID, including array heads, lengths and padding. Hex sizes include the 0x prefix but omit the JSON-RPC envelope.',
     receiver: 'MinimalGasReceiver; arbitrary contract-wallet callback work is excluded.',
   },
   runtime: { bytes: runtimeBytes, eip170Limit: 24576, headroomBytes: 24576 - runtimeBytes },
@@ -68,7 +67,7 @@ const report = {
     artworkGas: Number(gas.previewTokenURIs30Artworks),
     artworkReceiptGas: Number(gas.previewTokenURIs30ArtworkReceipts),
     mixedKindsGas: Number(gas.previewTokenURIs30Mixed),
-    responseScenario: { kind: 4, displayId: 111111, repetitions: 30, singleUriBytes: uriBytes },
+    responseScenario: { kind: 4, displayId: 222222, repetitions: 30, singleUriBytes: uriBytes },
     abiReturnBytes: metadataAbiBytes,
     rpcHexValueBytes: 2 + 2 * metadataAbiBytes,
     testedCallGasBudget: 25000000,

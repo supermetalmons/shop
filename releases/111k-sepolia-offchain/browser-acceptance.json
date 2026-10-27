@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-27T11:11:06.461Z",
+  "url": "https://mons.shop/111k_devnet",
+  "mode": "Disconnected-wallet page verification",
+  "pausedMintDisabledVerified": true,
+  "crate": {
+    "remaining": 5552,
+    "total": 5555,
+    "priceETH": "0.0001",
+    "mintButtonEnabled": true
+  },
+  "warehouse": {
+    "remaining": 504,
+    "total": 505,
+    "priceETH": "0.0011",
+    "mintButtonEnabled": true
+  },
+  "authenticatedOnchainAndApiFlows": "live-acceptance.json"
+}

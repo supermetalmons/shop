@@ -77,7 +77,7 @@ contract NFT111KRenderer is INFT111KRenderer {
         uint256 seed = uint256(keccak256(abi.encode(id)));
         string[4] memory colors = _palette(seed % 6);
         // The filled flower center preserves a distinct visible geometry for every display ID.
-        uint256 key = ((id - 1) * 65537 + 7919) % 111111;
+        uint256 key = (((id - 1) % 111111) * 65537 + 7919) % 111111 + ((id - 1) / 111111) * 111111;
         uint256 x = 264 + 3 * (key % 64);
         uint256 y = 202 + 2 * ((key / 64) % 64);
         string memory flower = string.concat(
@@ -249,7 +249,7 @@ contract NFT111KRenderer is INFT111KRenderer {
 
     function _validate(uint8 kind, uint256 id) private pure {
         if (id == 0 || kind == 0 || kind > 5) revert InvalidItem();
-        uint256 maximum = kind == 3 ? 505 : kind == 2 || kind == 5 ? 5555 : 111111;
+        uint256 maximum = kind == 3 ? 505 : kind == 2 || kind == 5 ? 5555 : kind == 4 ? 222222 : 111111;
         if (id > maximum) revert InvalidItem();
     }
 }

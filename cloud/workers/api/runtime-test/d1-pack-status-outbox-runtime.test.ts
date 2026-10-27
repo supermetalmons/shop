@@ -65,6 +65,7 @@ test('real D1 expands pack-status outboxes and preserves atomic enqueue, CAS, in
       migrations_dir: database.binding === 'COMMERCE_DB' ? directory : resolve('cloud/workers/api', String(database.migrations_dir)) })) };
   delete runtime.$schema;
   delete runtime.secrets;
+  delete runtime.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtime }] });
   try {
     await server.listen();

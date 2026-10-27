@@ -1,0 +1,69 @@
+{
+  "checkedAt": "2026-10-27T11:11:06.460Z",
+  "passed": true,
+  "contract": {
+    "command": "npm --prefix onchain/ethereum run check",
+    "passed": 149,
+    "optionalForkTestsSkipped": 3,
+    "gasBenchmarks": 113
+  },
+  "api": {
+    "command": "npm run deploy:api",
+    "unitTests": 2629,
+    "runtimeTests": 39,
+    "typecheck": true,
+    "bundleValidation": true,
+    "startupCheck": true,
+    "remoteDatabaseGates": true,
+    "authoritativeCommerceDocuments": 16027,
+    "noPendingMigrations": true
+  },
+  "frontend": {
+    "command": "npm run check:frontend",
+    "rootTests": 4786,
+    "workerTests": 4,
+    "shopApiTests": 29,
+    "commonIdsTests": 1,
+    "typecheck": true,
+    "build": true,
+    "browserBundleValidation": true
+  },
+  "additional": {
+    "solanaTests": 35,
+    "toolsTypecheck": true,
+    "deadCodeChecks": true,
+    "finalFocusedTests": 42,
+    "whitespaceCheck": true
+  },
+  "metadata": {
+    "objectsPerNetwork": 344948,
+    "totalObjects": 689896,
+    "uniqueFlowerGeometries": 222222,
+    "digitalReceiptPairs": 111111,
+    "generatedSourceParity": true,
+    "remoteCoverageAndSizes": true,
+    "uploadChecksums": true,
+    "immediateOverwriteAndRestore": true
+  },
+  "localEndToEnd": {
+    "command": "npm run test:ethereum:e2e",
+    "passed": true,
+    "maxBatchArtworks": 311,
+    "physicalReceiptRanges": true,
+    "checkoutAndFulfillment": true
+  },
+  "gasPrague": {
+    "unbox20Before": 130322,
+    "unbox20After": 128942,
+    "unbox311Before": 1236193,
+    "unbox311After": 1215801,
+    "metadata30Before": 14341937,
+    "metadata30After": 140876
+  },
+  "runtimeBytes": {
+    "collection": 19795,
+    "urlRenderer": 1384
+  },
+  "liveAcceptance": "live-acceptance.json",
+  "publicSourceVerification": "sourcify-verification.json"
+}

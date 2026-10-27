@@ -28,6 +28,7 @@ test('real D1 upgrades populated preorder claims to the catalog atomically', asy
   };
   delete runtime.$schema;
   delete runtime.secrets;
+  delete runtime.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtime }] });
   try {
     await server.listen();

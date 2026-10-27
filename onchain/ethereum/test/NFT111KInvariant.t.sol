@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 contract NFT111KInvariantHandler is TestSupport {
@@ -61,7 +61,7 @@ contract NFT111KInvariantHandler is TestSupport {
             address(this),
             vm.addr(SIGNER_KEY),
             payable(address(0xFEE)),
-            address(new NFT111KRenderer()),
+            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps()
@@ -390,13 +390,12 @@ contract NFT111KInvariantHandler is TestSupport {
 
     function _recordUnbox(uint256 id) private {
         address wallet = model[id].holder;
-        uint256 firstDisplayId = (model[id].displayId - 1) * 20 + 1;
         uint256 firstToken = artworkCount + 1;
         model[id].live = false;
         ++openedCrates;
         artworkCount += 20;
         for (uint256 i; i < 20; ++i) {
-            _issue(firstToken + i, 1, firstDisplayId + i, wallet);
+            _issue(firstToken + i, 1, firstToken + i, wallet);
         }
     }
 
@@ -436,7 +435,7 @@ contract NFT111KInvariantHandler is TestSupport {
         token.claimCrateReceipt(id, claimId, deadline, signature);
         claimAttempts.push(ClaimAttempt(claimId, !paused));
         if (paused) return;
-        uint256 firstDisplayId = (model[id].displayId - 1) * 20 + 1;
+        uint256 firstDisplayId = 111111 + (model[id].displayId - 1) * 20 + 1;
         model[id].live = false;
         ++claimedCrates;
         consumedClaims.push(claimId);

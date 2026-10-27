@@ -21,6 +21,7 @@ function runtimeServer() {
   };
   delete config.$schema;
   delete config.secrets;
+  delete config.services;
   return createTestHarness({ root: resolve('.'), workers: [{ config }] });
 }
 

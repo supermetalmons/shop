@@ -80,6 +80,7 @@ function inventoryRuntimeServer() {
   };
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   return createTestHarness({ root: resolve('.'), workers: [{ config: runtimeConfig }] });
 }
 

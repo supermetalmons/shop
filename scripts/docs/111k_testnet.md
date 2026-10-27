@@ -18,7 +18,7 @@ Terminal 1 starts Anvil with one-second blocks so delivery confirmations advance
 npm --prefix onchain/ethereum run chain:local
 ```
 
-Terminal 2 deploys the SVG renderer and collection to that local chain, then starts the local API:
+Terminal 2 deploys the URL renderer and collection to that local chain, then starts the local API:
 
 ```sh
 npm --prefix onchain/ethereum run deploy:local
@@ -27,14 +27,14 @@ npm run dev:ethereum:api
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current local deployment manifest uses `protocolVersion: 6`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. A fresh deployment is required for mint splits and separate delivery proceeds. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+The current local deployment manifest uses `protocolVersion: 7`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. The manifest records `metadataBaseURI`, which is verified against the renderer. Local metadata uses an isolated fixture Worker with the same generator; it never reads remote R2 or the public CDN. A fresh deployment is required for the new metadata and receipt numbering. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
 
 Both deployment scripts load `onchain/ethereum/config/proceeds.json`: four valid placeholder recipients at 50% / 25% / 15% / 10%, and a separate placeholder shipping receiver. Replace the placeholders before deploying for real proceeds. The configuration supports 2–8 mint recipients whose positive basis points total 10,000; addresses must be distinct and must not be the collection. Mint recipients/shares are fixed. The owner may rotate the shipping receiver using `setDeliveryPaymentReceiver(address)`, which moves all unpaid and future shipping fees to the new receiver. Treasury environment settings are no longer used.
 
 Anyone can submit `releaseMint(address)` or `releaseDelivery()` to pay the configured receiver, without access to an owner key. Read `releasableMint(address)` or `releasableDelivery()` first; zero balances are a no-op. Mint and shipping accounting remain separate, each recipient can withdraw independently, and pauses do not stop payouts. The contract no longer exposes a full-balance `withdraw()` function. See the [proceeds documentation](../../onchain/ethereum/README.md#mint-splits-and-delivery-proceeds) for rounding and accounting details.
 
 
-Delivery quotes commit to the expected receipt identities, so a reorg that changes an artwork token's displayed number requires a fresh quote before delivery. New deliveries sort token IDs before signing without rewriting saved quotes or pending transactions.
+Delivery quotes commit to the expected receipt identities. Artwork display numbers now equal their token IDs and stay stable across changes in crate-opening order. New deliveries sort token IDs before signing without rewriting saved quotes or pending transactions.
 
 In Terminal 3, run the exact frontend command printed by the API, for example:
 
@@ -54,16 +54,16 @@ For a different local RPC port, set `ETHEREUM_111K_LOCAL_RPC_URL` when deploying
 
 ## Collection behavior
 
-- One collection contains artwork, crates, warehouses, artwork receipts and crate receipts. Artwork metadata retains placeholder display numbers independently of ERC-721 token IDs; the flower SVGs intentionally omit visible numbers.
+- One collection contains artwork, crates, warehouses, artwork receipts and crate receipts. Digital artwork display numbers equal their sequential ERC-721 token IDs; the flower SVGs intentionally omit visible numbers.
 - A shared supply of 5,555 crate allocations covers individual purchases and warehouses. Each warehouse reserves 11 allocations immediately; warehouse opening burns it and mints the reserved crates.
-- Crate `n` represents placeholder artworks `20 × (n − 1) + 1` through `20 × n`. Crate #5,555 instead represents #111,081–111,111, including the 11 bonus artworks.
+- Digital opening assigns the next 20 artwork token IDs, or 31 for crate #5555. Physical-only claim artwork numbers use `111111 + 20 × (n − 1) + 1` onward; crate #5555 ends at #222222.
 - Minting accepts 1–15 crates or warehouses per transaction. Prices are 0.0001 test ETH per crate and 0.0011 test ETH per warehouse.
-- Digital opening accepts 1–15 crates in one atomic transaction, producing up to 311 artworks when crate #5555 is included. All selected crates burn before the first receiver callback; any failure rolls back the complete batch. Warehouses open individually. All metadata and SVG media are onchain; the backend performs no randomness or reveal transaction.
+- Digital opening accepts 1–15 crates in one atomic transaction, producing up to 311 artworks when crate #5555 is included. All selected crates burn before the first receiver callback; any failure rolls back the complete batch. Warehouses open individually. Metadata is served from token-ID JSON files at `cdn.mons.shop`, with SVGs embedded in each JSON. The backend performs no randomness or reveal transaction. See [offchain metadata](111k_metadata.md).
 - Delivery accepts up to 50 owned artworks/crates, requires a backend authorization, and charges 0.0001 test ETH per order. One user transaction burns the originals and mints their receipts. Warehouses and receipts are ineligible for delivery.
 - New app deliveries sort a copied selection numerically by original token ID before signing. Receipt identities remain paired with those tokens. The contract validates the whole selection, burns every original, then safely mints receipts; callbacks see all originals already burned. Arbitrary signed input order remains supported.
 - The owner can use `setRedemptionsPaused(true)` as an emergency onchain stop for delivery and crate-receipt claims. It leaves sales, unpacking, transfers, and withdrawals unchanged. The app and API do not read this switch. Pausing does not consume or extend signatures; use the existing signer rotation before resuming after a signer compromise.
 - After three confirmations, the order becomes available in fulfillment. Re-mining below that threshold returns it to processing. Physical crates receive stable secret codes and their fixed placeholder contents. Entering a matching code lets the current crate-receipt owner submit one signed claim transaction that burns it and mints 20/31 artwork receipts.
-- Receipts use token IDs `1,000,000 + artwork number` and `2,000,000 + crate number`. Original display identities survive redemption; consumed token IDs and crate allocations are never reused.
+- Digital artwork receipts use token IDs `1,000,000 + original token ID`; physical-only artwork receipts use 1,111,112–1,222,222. Crate receipts use `2,000,000 + crate number`. Artwork/receipt flowers match, and consumed token IDs and crate allocations are never reused.
 
 Fulfillment uses existing Solana staff sign-in. The primary admin and designated address operator can view the Ethereum test drop. The app supports status/tracking updates, address editing, placeholder previews, contents, order/address exports and secret-code PNG/ZIP exports. Ethereum test orders are blocked from ShipStation and customer/shipper email paths on the server.
 
@@ -92,13 +92,15 @@ Local deployment loads the committed root from `src/ethereum/discounts/111k.json
 
 ## Sepolia configuration
 
-The [Seaport release](../../releases/111k-sepolia-seaport/README.md) records the replacement collection at `0xea8f813d8844cfdd6bd917e2efda0b18c0c79497`, deployed at Sepolia block `11978544`, with default Seaport 1.6 approval and holder revocation. The [proceeds release](../../releases/111k-sepolia-proceeds/README.md), [discount release](../../releases/111k-sepolia-discounts/README.md), and [first Sepolia release](../../releases/111k-sepolia/README.md) remain historical records; all three older collections remain active onchain. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
+The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) records the active collection at `0x7f5f699b99e8feff9b9011f5b6f193d072186a92`, deployed at Sepolia block `12004558`, and URL renderer `0x83dfce5d990bf564afd02ae63555799b51d7f181`. It uses token-ID JSON files and disjoint physical-only artwork receipts while retaining Seaport approval and holder revocation. The [Seaport](../../releases/111k-sepolia-seaport/README.md), [proceeds](../../releases/111k-sepolia-proceeds/README.md), [discount](../../releases/111k-sepolia-discounts/README.md), and [first Sepolia](../../releases/111k-sepolia/README.md) releases remain historical records; all four older collections remain active onchain. Sepolia activated Glamsterdam on October 6, 2026: estimate deployment gas against the live RPC and verify each exact creation payload with `eth_call`. Local Prague gas benchmarks underestimate state-creation costs on this network. The API uses these settings:
 
 | Setting | Meaning |
 | --- | --- |
 | `ETHEREUM_111K_CHAIN_ID` | `11155111` for Sepolia; `31337` for local testing |
 | `ETHEREUM_111K_CONTRACT_ADDRESS` | Collection contract; blank keeps it undeployed |
-| `ETHEREUM_111K_RENDERER_ADDRESS` | SVG renderer contract |
+| `ETHEREUM_111K_RENDERER_ADDRESS` | URL renderer contract |
+| `ETHEREUM_111K_METADATA_BASE_URI` | Exact CDN metadata prefix for this deployment |
+| `ETHEREUM_METADATA_CDN` | Service binding to the read-only metadata Worker |
 | `ETHEREUM_111K_DEPLOYMENT_BLOCK` | First block for bounded event reconciliation |
 | `ETHEREUM_111K_RPC_URL` | Local loopback RPC only; unused for Sepolia |
 | `ETHEREUM_111K_SIGNER_SECRET` | Backend authorization key matching `quoteSigner()`; required for delivery and claims, optional while undeployed |

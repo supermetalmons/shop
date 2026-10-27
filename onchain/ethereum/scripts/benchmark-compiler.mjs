@@ -31,7 +31,7 @@ const run = (directory, args) => execFileSync('forge', args, {
 const harnessName = 'NFT111KCompilerGasTest';
 const testCommand = ['test', '--offline', '--isolate', '--match-contract', `^${harnessName}$`,
   '--gas-snapshot-check=false', '--gas-snapshot-emit=false', '--json'];
-const names = ['NFT111K', 'NFT111KRenderer'];
+const names = ['NFT111K', 'NFT111KUrlRenderer'];
 const baselinePath = join(packageRoot, 'benchmarks/compiler-legacy-200.json');
 assert.notEqual(outputPath, baselinePath, 'The report output must differ from the checked-in baseline');
 const committedSnapshots = JSON.parse(read(join(packageRoot, 'snapshots/NFT111KGasTest.json')));
@@ -122,7 +122,7 @@ contract ${harnessName} is NFT111KGasTest {
         override
         returns (NFT111K)
     {
-        address renderer = _deployCandidate("NFT111KRenderer", "");
+        address renderer = _deployCandidate("NFT111KUrlRenderer", abi.encode("https://cdn.mons.shop/111k-sepolia/"));
         return NFT111K(_deployCandidate("NFT111K", abi.encode(
             address(this), vm.addr(SIGNER_KEY), payable(address(0xBEEF)), renderer, bytes32(0), recipients, shares
         )));
@@ -230,7 +230,8 @@ async function deploymentMeasurements(variants) {
         assert.equal(receipt?.status, '0x1', `${variant.label}: deployment failed`);
         return { address: receipt.contractAddress, gasUsed: Number(BigInt(receipt.gasUsed)), constructorArgumentBytes: args.length / 2 };
       };
-      const renderer = await deploy('NFT111KRenderer');
+      const renderer = await deploy('NFT111KUrlRenderer',
+        Buffer.from(encode(['string'], ['https://cdn.mons.shop/111k-sepolia/'])).toString('hex'));
       const args = collectionArguments(wallet, renderer.address);
       variant.deploymentTransactions = { renderer, collection: await deploy('NFT111K', args) };
     }
@@ -256,7 +257,7 @@ function summarize(candidate, baseline) {
     abiUnchanged: names.every(name => candidate.artifacts[name].canonicalAbiSha256 === baseline.artifacts[name].canonicalAbiSha256),
     withinDeploymentSizeLimits: names.every(name => candidate.artifacts[name].runtimeBytes <= 24576 &&
       candidate.artifacts[name].creationBytes + (name === 'NFT111K' ? maximumCollectionArgumentBytes : 0) <= 49152),
-    withinProjectSizeBudgets: candidate.artifacts.NFT111KRenderer.runtimeBytes <= 12 * 1024,
+    withinProjectSizeBudgets: candidate.artifacts.NFT111KUrlRenderer.runtimeBytes <= 12 * 1024,
   };
 }
 

@@ -1,0 +1,24 @@
+{
+  "checkedAt": "2026-10-27T10:36:36.085Z",
+  "previous": {
+    "paused": false,
+    "revision": 10,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+    "resetGuardId": null,
+    "lastResetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+    "updatedAtMs": 1792782561000
+  },
+  "dryRun": false,
+  "control": {
+    "paused": true,
+    "revision": 11,
+    "pausedAtMs": 1793097395000,
+    "chainId": 11155111,
+    "contractAddress": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+    "resetGuardId": null,
+    "lastResetId": "63e851e5-ccfc-46b3-9f2f-388f0b7f0d40",
+    "updatedAtMs": 1793097395000
+  }
+}

@@ -53,6 +53,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   assert.deepEqual(runtimeConfig.compatibility_flags, productionConfig.compatibility_flags);
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{
@@ -734,6 +735,7 @@ test('partial upload disconnect is logged as 499 through the frontend and API Wo
   };
   delete apiConfig.$schema;
   delete apiConfig.secrets;
+  delete apiConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [

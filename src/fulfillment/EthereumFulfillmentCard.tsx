@@ -10,36 +10,37 @@ import type { FulfillmentSecretCodeDownloadTarget } from './useFulfillmentExport
 
 const previews = new Map<string, Promise<string>>();
 
-export function loadEthereumFulfillmentPreview(kind: EthereumItemKind, displayId: number): Promise<string> {
-  const key = `${kind}:${displayId}`;
+export function loadEthereumFulfillmentPreview(kind: EthereumItemKind, displayId: number, scope = ''): Promise<string> {
+  const origin = monsApiOrigin();
+  const key = `${origin}:${scope}:${kind}:${displayId}`;
   const existing = previews.get(key);
   if (existing) return existing;
-  const promise = fetch(`${monsApiOrigin()}/ethereum/111k/metadata?${new URLSearchParams({ kind, displayId: String(displayId) })}`, {
-    headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(30_000),
+  const promise = fetch(`${origin}/ethereum/111k/metadata?${new URLSearchParams({ kind, displayId: String(displayId) })}`, {
+    headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(30_000), cache: 'no-store',
   }).then(async (response) => {
     if (!response.ok) throw new Error('The Ethereum preview is temporarily unavailable.');
     const value: unknown = await response.json();
     if (!value || typeof value !== 'object' || !('image' in value) || typeof value.image !== 'string' ||
       !value.image.startsWith('data:image/svg+xml;base64,')) throw new Error('Invalid Ethereum preview.');
     return value.image;
-  }).catch((error: unknown) => { previews.delete(key); throw error; });
+  }).finally(() => { if (previews.get(key) === promise) previews.delete(key); });
   previews.set(key, promise);
   return promise;
 }
 
-function EthereumPreview({ kind, displayId }: { kind: EthereumItemKind; displayId: number }) {
+function EthereumPreview({ kind, displayId, scope }: { kind: EthereumItemKind; displayId: number; scope: string }) {
   const [image, setImage] = useState<string>();
   const frame = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     let active = true;
-    const load = () => { void loadEthereumFulfillmentPreview(kind, displayId).then((src) => { if (active) setImage(src); }).catch(() => {}); };
+    const load = () => { void loadEthereumFulfillmentPreview(kind, displayId, scope).then((src) => { if (active) setImage(src); }).catch(() => {}); };
     const observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) { observer?.disconnect(); load(); }
     }, { rootMargin: '300px' });
     if (observer && frame.current) observer.observe(frame.current);
     else load();
     return () => { active = false; observer?.disconnect(); };
-  }, [kind, displayId]);
+  }, [kind, displayId, scope]);
   return <span ref={frame} className="fulfillment-image-frame" style={{ aspectRatio: 1 }}>
     {image ? <img src={image} alt={`${kind.replaceAll('_', ' ')} #${displayId}`} className="figure-image" loading="lazy" /> :
       <span className="figure-image figure-image--placeholder" aria-hidden="true" />}
@@ -60,6 +61,7 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
   const canShowAddress = showFullAddress && order.address.full && order.address.full !== '***';
   const transaction = order.ethereumTransaction;
+  const previewScope = transaction ? `${transaction.chainId}:${transaction.hash}` : fulfillmentOrderKey(order);
   const transactionLink = transaction?.chainId === 11155111
     ? ethereumExplorerTransaction(resolveEthereum111kConfig({ chainId: transaction.chainId }), transaction.hash)
     : null;
@@ -85,7 +87,7 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
       const open = expanded.has(box.boxId);
       return <div className="order-items" key={box.boxId}>
         <div className="figure-grid"><div className="figure-tile">
-          <EthereumPreview kind="crate_receipt" displayId={box.boxId} />
+          <EthereumPreview kind="crate_receipt" displayId={box.boxId} scope={previewScope} />
           <span className="muted small">Crate #{box.boxId} · {box.dudeIds.length} artworks</span>
           {code ? <span className="muted small">{box.receiptClaimStatus === 'pending' ? 'Confirming' : codeUnavailable ? 'Claimed' : code}</span> : null}
           {code && !codeUnavailable ? <button type="button" className="secondary-light" disabled={secretCodeDownloadDisabled}
@@ -95,12 +97,12 @@ export function EthereumFulfillmentCard({ order, showContactInfo, showFullAddres
           const next = new Set(previous); if (next.has(box.boxId)) next.delete(box.boxId); else next.add(box.boxId); return next;
         })}>{open ? 'Hide contents' : 'Show contents'}</button>
         {open ? <div className="figure-grid">{box.dudeIds.map((id) => <div className="figure-tile" key={id}>
-          <EthereumPreview kind="artwork_receipt" displayId={id} /><span className="muted small">Artwork #{id}</span>
+          <EthereumPreview kind="artwork_receipt" displayId={id} scope={previewScope} /><span className="muted small">Artwork #{id}</span>
         </div>)}</div> : null}
       </div>;
     })}
     {order.looseDudes.length ? <div className="figure-grid">{order.looseDudes.map((id) => <div className="figure-tile" key={id}>
-      <EthereumPreview kind="artwork_receipt" displayId={id} /><span className="muted small">Artwork #{id}</span>
+      <EthereumPreview kind="artwork_receipt" displayId={id} scope={previewScope} /><span className="muted small">Artwork #{id}</span>
     </div>)}</div> : null}
   </div>;
 }

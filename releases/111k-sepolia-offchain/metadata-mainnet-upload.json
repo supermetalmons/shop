@@ -1,0 +1,9 @@
+{
+  "network": "mainnet",
+  "bucket": "cdn-mons-shop",
+  "prefix": "111k/",
+  "objectsSha256": "ea3b759801c74d1ced793362b6500fdfd778280f1427d66aabdcb864d0ca16c7",
+  "uploaded": 275109,
+  "skipped": 69839,
+  "complete": true
+}

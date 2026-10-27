@@ -1,8 +1,8 @@
 # 111K contracts
 
-An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and onchain SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata renderer. Mint recipients and their shares are fixed at deployment.
+An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata with embedded SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata renderer. Mint recipients and their shares are fixed at deployment.
 
-The [Seaport release](../../releases/111k-sepolia-seaport/README.md) records the latest collection and its verification. The [proceeds release](../../releases/111k-sepolia-proceeds/README.md) remains a historical collection record, and the [first Sepolia deployment](../../releases/111k-sepolia/README.md) remains the renderer's deployment record. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
+The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) records the latest collection and URL renderer with their verification. The [Seaport release](../../releases/111k-sepolia-seaport/README.md) and earlier releases remain historical records; the [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the original SVG renderer. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
 Ownership transfers require the new owner to accept. `renounceOwnership()` is disabled and reverts with `OwnershipRenunciationDisabled()` for the owner, preserving shipping-wallet rotation and emergency controls. Proceeds releases are permissionless. Existing deployments need a fresh deployment to gain this protection; the authorization protocol remains version 2.
 
@@ -24,7 +24,7 @@ npm run build
 npm run abi
 ```
 
-The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also revert a chain snapshot and change the artwork mapping to verify that an old quote cannot redeem a different physical identity.
+The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
 
 Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
 
@@ -32,7 +32,7 @@ Stateful invariant tests mix public and discounted purchases, transfers, unpacki
 npm run test:invariants:extended
 ```
 
-That campaign uses 512 sequences of 128 calls. Receiver regressions also exercise reentrancy, rejected callbacks, transfers during callbacks, and multiple operations within a single transaction. Reentrancy locks and the temporary artwork offset use transient storage, which requires EIP-1153; the configured Prague EVM supports it. Both are cleared before a successful call returns so subsequent calls in the same transaction remain safe.
+That campaign uses 512 sequences of 128 calls. Receiver regressions also exercise reentrancy, rejected callbacks, transfers during callbacks, and multiple operations within a single transaction. Reentrancy locks use transient storage, which requires EIP-1153; the configured Prague EVM supports it. The locks are cleared before a successful call returns so subsequent calls in the same transaction remain safe.
 
 Gas snapshots exclude scenario setup and signature preparation. With `--isolate`, write-call measurements include transaction intrinsic gas and any applicable calldata floor; view calls remain ordinary call-gas measurements. `npm run check` requires every benchmark to succeed and produce its expected runtime measurement, then compares those measurements with the committed snapshots without updating them. Filtered tests and missing or renamed measurements fail the check. Use these commands for a separate check or an intentional baseline update:
 
@@ -43,9 +43,11 @@ npm run gas:update
 
 Compare snapshots using the same Foundry, Solidity, optimizer, and EVM settings. Snapshot values are gas units, not ETH fees, and omit any outer contract-wallet transaction overhead. Differently ordered authorizations can also differ slightly in signature-byte calldata cost. Gas isolation applies only to the benchmark suite; security tests retain same-transaction execution.
 
-## Onchain SVG artwork
+## Offchain metadata and SVG artwork
 
-Artworks show four simple flower families: narrow daisies, notched blossoms, broad poppies, and layered dahlias. They have curved stems and two leaves on full 720×720 backgrounds, with six palettes pairing soft backgrounds and colorful petals. An artwork receipt embeds the same composition. The filled flower center's position and radius encode a permutation of all 111,111 display IDs, so uniqueness does not depend on chance or hidden metadata. `test/Renderer.t.sol` checks the complete center mapping, deterministic SVG output, matching receipt artwork, and size budgets of 4 KiB per SVG and 12 KiB for the renderer runtime.
+New deployments use `NFT111KUrlRenderer`, which returns `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{tokenId}.json` on mainnet. The [metadata guide](../../scripts/docs/111k_metadata.md) covers generation, publishing, cache behavior, and local fixtures. The retained `NFT111KRenderer` is an offline SVG reference; it is no longer deployed for new collections.
+
+Artworks show four simple flower families: narrow daisies, notched blossoms, broad poppies, and layered dahlias. They have curved stems and two leaves on full 720×720 backgrounds, with six palettes pairing soft backgrounds and colorful petals. An artwork receipt embeds the same composition. The filled flower center's position and radius encode distinct geometry for all 222,222 possible display IDs across digital and physical-only paths, so uniqueness does not depend on chance or hidden metadata. `test/Renderer.t.sol` checks the complete center mapping, deterministic SVG output, matching receipt artwork, and size budgets of 4 KiB per SVG and 12 KiB for the renderer runtime.
 
 Standalone crates and warehouses are vertically centered on transparent canvases. Crates use warm wood colors, including within crate receipts; warehouses use muted sage green. Receipt canvases retain their paper and red redeemed sticker.
 
@@ -63,9 +65,9 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, the proceeds configuration, and `protocolVersion: 6` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the renderer and collection using Anvil's first unlocked account. It writes addresses, the deployment block, the discount root, the proceeds configuration, and `protocolVersion: 7` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
 
-Local deployment manifest version 6 identifies built-in mint splits and separate delivery proceeds, alongside crate discounts, wallet-aware `stats(address)`, batch unpacking, and reads. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, probes the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
+Local deployment manifest version 7 identifies offchain metadata, the recorded `metadataBaseURI`, sequential digital identities, and disjoint physical-only receipt identities, alongside mint splits, delivery proceeds, discounts, and batch operations. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, probes the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
 Start the isolated API from the repository root:
 
@@ -125,23 +127,24 @@ The page uses the same discount button behavior as Solana: if the selected crate
 
 | Kind | NFT token IDs | Display number |
 | --- | --- | --- |
-| Artwork | 1–111111, issued sequentially in unpacking order | Fixed by its source crate |
+| Artwork | 1–111111, issued sequentially in unpacking order | Same as token ID |
 | Crate | 111112–116666 | 1–5555 |
 | Warehouse | 116667–117171 | 1–505 |
-| Artwork receipt | 1000000 + artwork display number | Original artwork number |
+| Digital artwork receipt | 1000001–1111111 | Original digital token ID |
+| Physical-only artwork receipt | 1111112–1222222 | 111112–222222 |
 | Crate receipt | 2000000 + crate number | Original crate number |
 
-Crate `n` corresponds to artwork display numbers `20 × (n − 1) + 1` through `20 × n`. Crate 5555 instead ends at 111111 and always contains 31 items, regardless of opening order. These are placeholder identities, not randomly allocated future artwork identities.
+Digital unboxing assigns the next sequential artwork token IDs, and each artwork display number equals its token ID. A physical claim for crate `n` instead uses artwork display numbers `111111 + 20 × (n − 1) + 1` through `111111 + 20 × n`. Crate 5555 always contains 31 items and its physical range ends at 222222. These are placeholder identities; no randomness or reveal process is implemented.
 
-Warehouse purchases reserve eleven crate identities immediately. Unpacking mints those reserved crates without consuming supply again. A crate can either be unpacked into artworks or redeemed into a crate receipt. Claiming a physical crate burns its receipt and creates the same fixed artwork receipt numbers. Warehouses cannot be delivered, and artwork receipts cannot be redeemed again. Receipts remain transferable.
+Warehouse purchases reserve eleven crate identities immediately. Unpacking mints those reserved crates without consuming supply again. A crate can either be unpacked into artworks or redeemed into a crate receipt. Claiming a physical crate burns its receipt and creates its fixed physical-only artwork receipt numbers. Digital artwork `T` redeems into receipt `1000000 + T` with the same flower. Mutually exclusive crate paths cap actual artwork issuance at 111111. Warehouses cannot be delivered, and artwork receipts cannot be redeemed again. Receipts remain transferable.
 
 The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates or warehouses; warehouse supply checks count eleven crate allocations per warehouse. `unboxCrate` and `unboxWarehouse` retain their single-container behavior. `unboxCrates(uint256[])` opens 1–15 distinct owned crates in one transaction. Delivery accepts 1–50 items.
 
-`getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. The artwork count in `stats(address)` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Artwork display offsets are stored per ERC721A mint batch and preserved through ownership changes.
+`getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. The artwork count in `stats(address)` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Digital artwork display numbers equal token IDs and remain stable through ownership changes.
 
 ### Batch crate opening
 
-`unboxCrates` validates and burns every input before any artwork receiver callback. A duplicate, invalid, or unowned input, or a rejected receiver callback, reverts the whole operation. Crates are opened in the caller's input order, using a separate ERC721A artwork batch and identity offset for each crate. The transient offset is cleared after each mint. A maximum batch containing crate #5555 creates 311 artworks; warehouses remain single-item openings.
+`unboxCrates` validates and burns every input before any artwork receiver callback. A duplicate, invalid, or unowned input, or a rejected receiver callback, reverts the whole operation. Crates are opened in the caller's input order, using a separate sequential ERC721A artwork batch for each crate. A maximum batch containing crate #5555 creates 311 artworks; warehouses remain single-item openings.
 
 Each crate emits its existing `CrateUnboxed` event. The final `CratesUnboxed(address indexed owner, bytes32 indexed tokenIdsHash, uint256 firstArtToken, uint256 artworkCount)` event commits to `keccak256(abi.encode(tokenIds))` in input order. Confirmation and recovery require exactly one matching aggregate event for a batch intent, including the owner, ordered ID commitment, output count and token range. Single-crate calls do not emit the aggregate event.
 
@@ -162,7 +165,7 @@ CrateClaim(address wallet,uint256 receiptId,bytes32 claimId,uint256 deadline)
 
 `tokenIdsHash` is `keccak256(abi.encode(tokenIds))`, including the ABI array offset and length. `receiptIdsHash` is `keccak256(abi.encode(expectedReceiptIds))`, using the expected receipt for each token in the same order. Both hashes bind array order and length. The calldata quote tuple appends `bytes32 receiptIdsHash` after its existing `orderId`, `wallet`, `fee`, and `deadline` fields.
 
-Before any burn or mint, delivery derives every receipt ID from the current token identity, validates ownership and item kind, and compares the receipt commitment. A changed mapping, such as an artwork token ID allocated to a different crate after a reorg, reverts with `InvalidAuthorization`. The caller must prepare a fresh quote. All selected originals are then burned before any receipt is safely minted. Burn hooks make no external calls, so the upfront ownership checks remain valid throughout the burn phase.
+Before any burn or mint, delivery derives every receipt ID from the current token identity, validates ownership and item kind, and compares the receipt commitment. An incorrect receipt commitment reverts with `InvalidAuthorization`. Digital identity no longer changes when a reorg changes crate-opening order. All selected originals are then burned before any receipt is safely minted. Burn hooks make no external calls, so the upfront ownership checks remain valid throughout the burn phase.
 
 Transfer logs contain all original burns followed by receipt mints; `DeliveryRedeemed` remains last and preserves the token/receipt pairing in the signed order. During a receipt callback, all selected originals are nonexistent, and balance/supply reflect all burns plus only receipts minted so far. A receiver may transfer a new receipt or an unrelated token. Rejecting any receipt still rolls back every burn, mint, payment and consumed authorization.
 

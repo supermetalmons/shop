@@ -1,0 +1,51 @@
+{
+  "releaseId": "111k-offchain-2026-10-27T09-41-29-256Z-b9f51d9a",
+  "manifestSha256": "9ecc936ff9609d6544b896595675aafea5c32f1bbac3b09adb4ddc0f078cfba4",
+  "chainId": 11155111,
+  "rendererAddress": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+  "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+  "saleActive": true,
+  "transactions": [
+    {
+      "action": "deploy-renderer",
+      "hash": "0xd06137419808d8147dfdaa0fb21f7c56a8869ac28c4f295bf4da7e066edbc615",
+      "nonce": 18,
+      "blockNumber": 12004555,
+      "blockHash": "0x3ed62105997f8b60edcbf13f30484168bda6c8746a2fab6e0ebc22a14b85d7a9",
+      "confirmations": 3,
+      "gasUsed": "2731528",
+      "effectiveGasPriceWei": "1000"
+    },
+    {
+      "action": "deploy",
+      "hash": "0xf928371c20356788f716c8dbe4e748b82931bb6ea8c4e5b2bb6af1095bd1e767",
+      "nonce": 19,
+      "blockNumber": 12004558,
+      "blockHash": "0x12abbd334a769df179efb5ad66716dda6f69d4c7f5b5bdb32801d90c641c8607",
+      "confirmations": 4,
+      "gasUsed": "33178493",
+      "effectiveGasPriceWei": "1000"
+    },
+    {
+      "action": "pause-new-1",
+      "hash": "0x5fb7a55c22647b2f1d367d84d47c2c6be42bb42246b8ae387e423ca512ce90df",
+      "nonce": 20,
+      "blockNumber": 12004559,
+      "blockHash": "0x48ad6a94f93aae75f9c65b2836a609fe1358057abb53ad637f53e54db60dfa25",
+      "confirmations": 3,
+      "gasUsed": "31045",
+      "effectiveGasPriceWei": "1000"
+    },
+    {
+      "action": "open-new-2",
+      "hash": "0xa1dbef0bbfe1940d29c51a5d0fd16d7972b53675eb43ec441184867a6fcff980",
+      "nonce": 21,
+      "blockNumber": 12004646,
+      "blockHash": "0xe3e1e73d2ad5aceafa72c420752d8e0e31baa511af46fa8f8a32fdc776679ff9",
+      "confirmations": 3,
+      "gasUsed": "31057",
+      "effectiveGasPriceWei": "1000"
+    }
+  ],
+  "totalFeeWei": "35972123000"
+}

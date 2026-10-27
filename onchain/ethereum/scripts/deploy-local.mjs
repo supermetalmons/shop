@@ -4,6 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { parseProceedsConfig } from './proceeds-config.mjs';
 
 const root = new URL('../', import.meta.url);
+const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/';
+const metadataUrl = new URL(metadataBaseURI);
+const localMetadata = metadataUrl.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(metadataUrl.hostname) &&
+  ['/111k/', '/111k-sepolia/'].includes(metadataUrl.pathname);
+const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' && ['/111k/', '/111k-sepolia/'].includes(metadataUrl.pathname);
+if ((!localMetadata && !hostedMetadata) || metadataUrl.href !== metadataBaseURI || metadataUrl.username || metadataUrl.password ||
+    metadataUrl.search || metadataUrl.hash || !metadataUrl.pathname.endsWith('/')) {
+  throw new Error('Metadata requires a canonical CDN collection URL or an HTTP loopback URL using /111k/ or /111k-sepolia/.');
+}
 const rpcUrl = new URL(process.env.ETHEREUM_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.protocol !== 'http:' || rpcUrl.username || rpcUrl.password) {
   throw new Error('Local deployment accepts only an HTTP loopback RPC URL.');
@@ -47,7 +56,8 @@ const artifact = async name => JSON.parse(await readFile(new URL(`out/${name}.so
 const send = creation => JSON.parse(run('cast', [
   'send', '--rpc-url', rpcUrl.href, '--unlocked', '--from', deployer, '--create', creation, '--json',
 ]));
-const renderer = send((await artifact('NFT111KRenderer')).bytecode.object);
+const rendererConstructor = run('cast', ['abi-encode', 'constructor(string)', metadataBaseURI]);
+const renderer = send((await artifact('NFT111KUrlRenderer')).bytecode.object + rendererConstructor.slice(2));
 if (!renderer.contractAddress || Number(renderer.status) !== 1) throw new Error('Renderer deployment failed.');
 const constructor = run('cast', [
   'abi-encode', 'constructor(address,address,address,address,bytes32,address[],uint256[])',
@@ -59,9 +69,9 @@ if (!collection.contractAddress || Number(collection.status) !== 1) throw new Er
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 6,
+  protocolVersion: 7,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
-  rendererAddress: renderer.contractAddress, deploymentBlock: Number(collection.blockNumber),
+  rendererAddress: renderer.contractAddress, metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, deliveryPaymentReceiver, mintRecipients, mintSharesBps, discountRoot,
   rendererTransactionHash: renderer.transactionHash, collectionTransactionHash: collection.transactionHash,
 };

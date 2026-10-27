@@ -1,0 +1,9 @@
+{
+  "network": "sepolia",
+  "bucket": "cdn-mons-shop",
+  "prefix": "111k-sepolia/",
+  "objectsSha256": "06194b701d497d880d37a5fc52bcbf380d170aae18a812c16b25cfddff58e605",
+  "uploaded": 275043,
+  "skipped": 69905,
+  "complete": true
+}

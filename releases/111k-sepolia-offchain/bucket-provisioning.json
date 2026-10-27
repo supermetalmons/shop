@@ -1,0 +1,15 @@
+{
+  "verifiedAt": "2026-10-27T10:13:27.429Z",
+  "accountId": "e25f90fc073ea309b54b8b5144bf28e0",
+  "bucket": "cdn-mons-shop",
+  "location": "Eastern North America",
+  "locationHint": "enam",
+  "storageClass": "Standard",
+  "publicBucketAccess": false,
+  "publicDevelopmentUrl": false,
+  "hostname": "cdn.mons.shop",
+  "worker": "mons-shop-cdn",
+  "previousBucket": "mons-shop-cdn",
+  "previousBucketDeleted": true,
+  "evidence": "Cloudflare dashboard General settings and empty old-bucket removal"
+}

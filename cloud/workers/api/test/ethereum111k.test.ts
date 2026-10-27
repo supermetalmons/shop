@@ -6,7 +6,8 @@ import { encodeAbi, decodeReturn, ETHEREUM_EVENT_TOPICS, encodeCall } from '../.
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
   type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumClaimPrepareResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { deliveryDigest, crateClaimDigest, ethereumReceiptIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { crateArtworkIds, ethereumHexQuantity, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
+import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumItemKind, ethereumMetadataTokenId, type EthereumInventoryItem } from '../../../../shared/ethereum/protocol.ts';
+import { ethereumPlaceholderMetadata } from '../../../../shared/ethereum/placeholderMetadata.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import { cleanupEthereumAuth } from '../src/ethereumAuth.ts';
@@ -77,6 +78,16 @@ function fixture(controlActive = true) {
     OPS_DB: d1Database(ops), COMMERCE_DB: commerce.db, ALCHEMY_MI_NOTE_API_KEY: 'test-alchemy-key',
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: CONTRACT,
     ETHEREUM_111K_RENDERER_ADDRESS: RENDERER, ETHEREUM_111K_DEPLOYMENT_BLOCK: '2',
+    ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/',
+    ETHEREUM_METADATA_CDN: {
+      fetch: async (input, init) => {
+        const url = String(input);
+        state.metadataRequests.push({ url, init });
+        const metadata = state.metadataValues.get(url);
+        return metadata ? Response.json(metadata) : new Response(null, { status: 404 });
+      },
+      connect() { throw new Error('Unexpected metadata connection'); },
+    },
     ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_SIGNER_SECRET: SIGNER_KEY,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: limiter, STAFF_AUTH_SESSION_RATE_LIMITER: limiter, PUBLIC_SHOP_RATE_LIMITER: limiter,
   };
@@ -86,11 +97,13 @@ function fixture(controlActive = true) {
     expectedSigner: SIGNER, contractCode: new Set<string>(), magic: '0x1626ba7e',
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
-      ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 821, owner: WALLET }]]),
+      ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
     receipts: new Map<string, EthereumReceipt>(), canonical: new Map<number, string>(),
     transactions: new Map<string, Record<string, unknown>>(), transactionCount: '0x0',
     logs: [] as EthereumLog[], calls: [] as Rpc[], batchSizes: [] as number[], urls: [] as string[], usedOrders: new Set<number>(),
     alchemyNfts: [] as Record<string, unknown>[], alchemyCursor: null as string | null,
+    metadataValues: new Map<string, ReturnType<typeof ethereumPlaceholderMetadata>>(),
+    metadataRequests: [] as { url: string; init?: RequestInit }[],
     afterRpc: null as ((payload: Rpc, result: unknown) => Promise<void>) | null,
   };
   const responseFor = async (payload: Rpc): Promise<unknown> => {
@@ -149,9 +162,9 @@ function fixture(controlActive = true) {
         const [kinds, ids] = batched ? decodeReturn(['uint8[]', 'uint256[]'], argumentsHex) as [bigint[], bigint[]] :
           decodeReturn(['uint8', 'uint256'], argumentsHex).map(value => [value]) as [bigint[], bigint[]];
         const uris = kinds.map((kind, index) => {
-          const name = `Kind ${kind} #${ids[index]}`;
-          const image = `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"><text>${name}</text></svg>`).toString('base64')}`;
-          return `data:application/json;base64,${Buffer.from(JSON.stringify({ name, image })).toString('base64')}`;
+          const uri = `${env.ETHEREUM_111K_METADATA_BASE_URI}${ethereumMetadataTokenId(ethereumItemKind(Number(kind))!, Number(ids[index]))}.json`;
+          state.metadataValues.set(uri, ethereumPlaceholderMetadata(Number(kind), Number(ids[index])));
+          return uri;
         });
         return encodeAbi([batched ? 'string[]' : 'string'], batched ? [uris] : [uris[0]]);
       }
@@ -228,7 +241,7 @@ function fixture(controlActive = true) {
     data: encodeAbi(['uint256', 'uint256[]', 'uint256[]'], [prepared.quote.fee, ids, receipts]),
     blockNumber: '0x64', blockHash: blockHash(100), transactionHash: hash, logIndex: '0x0' };
   }
-  function claimLog(prepared: EthereumClaimPrepareResponse, ids = crateArtworkIds(1).map(id => String(1_000_000 + id)), hash = CLAIM_HASH): EthereumLog {
+  function claimLog(prepared: EthereumClaimPrepareResponse, ids = physicalCrateArtworkIds(1).map(id => String(1_000_000 + id)), hash = CLAIM_HASH): EthereumLog {
     return { address: CONTRACT, topics: [ETHEREUM_EVENT_TOPICS.CrateReceiptClaimed,
       prepared.claimId, topicAddress(WALLET), topicNumber(prepared.receiptId)],
     data: encodeAbi(['uint256[]'], [ids]), blockNumber: '0x64', blockHash: blockHash(100), transactionHash: hash, logIndex: '0x0' };
@@ -1645,7 +1658,7 @@ test('delivery preparation persists one immutable selection before returning a v
     const stored = f.quoteRow(prepared.orderId);
     assert.equal(stored.token_ids_json, JSON.stringify(input.tokenIds));
     assert.equal(JSON.parse(String(stored.address_json)).encrypted, 'encrypted-test-address');
-    assert.equal(prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(['2000001', '1000821']));
+    assert.equal(prepared.quote.receiptIdsHash, ethereumReceiptIdsHash(['2000001', '1000007']));
     assert.deepEqual(decodeReturn(['uint256[]', '(uint256,address,uint256,uint256,bytes32)', 'bytes'], `0x${prepared.transaction.data.slice(10)}`),
       [[111112n, 7n], [BigInt(prepared.orderId), WALLET, BigInt(prepared.quote.fee), BigInt(prepared.quote.deadline), prepared.quote.receiptIdsHash], prepared.signature]);
     assert.equal(recoverEthereumAddress(deliveryDigest({ ...prepared.quote, chainId: 31337, contractAddress: CONTRACT, tokenIds: input.tokenIds }), prepared.signature), SIGNER);
@@ -2642,7 +2655,7 @@ test('one failed receipt does not block later records or discovery and is counte
     assert.equal((await f.request(paths.deliveryConfirm, { orderId: second.prepared.orderId, transactionHash: secondHash }, second.authentication.token)).body.status, 'pending');
     const third = await f.prepared(['7'], '10000000-0000-4000-8000-000000000003');
     const thirdHash = `0x${'dd'.repeat(32)}`;
-    const thirdLog = { ...f.deliveryLog(third.prepared, ['7'], ['1000821'], thirdHash),
+    const thirdLog = { ...f.deliveryLog(third.prepared, ['7'], ['1000007'], thirdHash),
       blockNumber: '0x69', blockHash: blockHash(105) };
     f.setReceipt(thirdHash, [thirdLog], 105);
     f.state.head = 107;
@@ -2927,7 +2940,7 @@ test('a previous worker checkpoint cannot strand an exhausted scan', async () =>
   const f = fixture();
   try {
     const { prepared } = await f.prepared(['7']);
-    const log = f.deliveryLog(prepared, ['7'], ['1000821']);
+    const log = f.deliveryLog(prepared, ['7'], ['1000007']);
     f.state.logs = [log];
     f.setReceipt(HASH, [log]);
     f.state.head = 200;
@@ -2975,7 +2988,7 @@ test('limited event ranges resume a fixed scan and retain the next reorg sweep',
   try {
     const first = await f.prepared(['7']);
     const reorg = await f.prepared(['111112'], '10000000-0000-4000-8000-000000000002');
-    const log = f.deliveryLog(first.prepared, ['7'], ['1000821']);
+    const log = f.deliveryLog(first.prepared, ['7'], ['1000007']);
     f.state.logs = [log];
     f.setReceipt(HASH, [log]);
     const loadCursor = () => f.commerce.database.prepare('SELECT next_block, scan_end_block FROM ethereum_reconciliation_cursor').get()!;
@@ -3168,9 +3181,128 @@ test('contract read batches preserve duplicate positions and omit absent token t
     const infos = await ethereumTokenInfos(context, ['111112', '999999', '111112', '111113']);
     assert.deepEqual(infos.map(info => info.tokenId), ['111112', '111112', '111113']);
     const items = await ethereumInventoryItems(context, infos);
-    assert.deepEqual(items.map(item => item.name), ['Kind 2 #1', 'Kind 2 #1', 'Kind 2 #2']);
+    assert.deepEqual(items.map(item => item.name), ['111K Crate #1', '111K Crate #1', '111K Crate #2']);
+    assert.equal(f.state.metadataRequests.length, 2);
     assert.deepEqual(f.state.batchSizes, [1, 1]);
     assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === 'latest'));
+  } finally { f.close(); }
+});
+
+test('offchain metadata fetches current JSON through the binding without storing previous responses', async () => {
+  const f = fixture();
+  try {
+    const original = f.env.ETHEREUM_METADATA_CDN.fetch;
+    let revision = 1;
+    f.env.ETHEREUM_METADATA_CDN.fetch = async (input, init) => {
+      assert.equal(init?.cache, 'no-store');
+      assert.equal(init?.redirect, 'manual');
+      const response = await original(input, init);
+      return Response.json({ ...await response.json() as object, name: `Revision ${revision}` });
+    };
+    const path = `${paths.metadata}?kind=artwork_receipt&displayId=222222`;
+    const first = await f.request(path);
+    assert.equal(first.response.status, 200);
+    assert.equal(first.body.name, 'Revision 1');
+    revision++;
+    const second = await f.request(path);
+    assert.equal(second.response.status, 200);
+    assert.equal(second.body.name, 'Revision 2');
+    assert.deepEqual(f.state.metadataRequests.map(request => request.url), [
+      'https://cdn.mons.shop/111k-sepolia/1222222.json', 'https://cdn.mons.shop/111k-sepolia/1222222.json',
+    ]);
+    assert.equal((await f.request(`${paths.metadata}?kind=artwork_receipt&displayId=222223`)).response.status, 400);
+    assert.equal((await f.request(`${paths.metadata}?kind=artwork&displayId=111112`)).response.status, 400);
+  } finally { f.close(); }
+});
+
+for (const uri of ['https://other.example/1.json', 'https://cdn.mons.shop/111k/1.json',
+  'https://cdn.mons.shop/111k-sepolia/2.json', 'https://cdn.mons.shop/111k-sepolia/01.json',
+  'https://cdn.mons.shop/111k-sepolia/1.json?version=2', 'data:application/json;base64,e30=']) {
+  test(`offchain metadata rejects an unexpected token URL ${uri}`, async () => {
+    const f = fixture();
+    try {
+      const providerFetch: typeof fetch = async (input, init) => {
+        const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
+        if (!Array.isArray(payload)) return f.providerFetch(input, init);
+        return Response.json(payload.map(call => ({ jsonrpc: '2.0', id: call.id, result: encodeAbi(['string[]'], [[uri]]) })));
+      };
+      await assert.rejects(ethereumInventoryItems(readContext(f, providerFetch), [
+        { tokenId: '1', kind: 'artwork', displayId: 1, owner: WALLET },
+      ]), /Invalid Ethereum metadata URL/);
+      assert.equal(f.state.metadataRequests.length, 0);
+    } finally { f.close(); }
+  });
+}
+
+for (const [name, response] of [
+  ['redirect', () => new Response(null, { status: 302, headers: { Location: 'https://other.example/1.json' } })],
+  ['missing', () => new Response(null, { status: 404 })],
+  ['wrong content type', () => new Response('{}', { headers: { 'Content-Type': 'text/plain' } })],
+  ['invalid JSON', () => new Response('{', { headers: { 'Content-Type': 'application/json' } })],
+  ['oversized JSON', () => Response.json({ name: 'x'.repeat(128 * 1024), image: 'data:image/svg+xml;base64,AA==' })],
+  ['invalid image', () => Response.json({ name: 'Artwork', image: 'javascript:alert(1)' })],
+] as const) {
+  test(`offchain metadata fails closed for ${name}`, async () => {
+    const f = fixture();
+    try {
+      f.env.ETHEREUM_METADATA_CDN.fetch = async () => response();
+      const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
+      assert.equal(result.response.status, 503);
+      assert.equal(result.body.image, undefined);
+    } finally { f.close(); }
+  });
+}
+
+test('offchain inventory metadata uses at most eight concurrent reads and preserves output order', { timeout: 5000 }, async t => {
+  const f = fixture();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  t.after(release);
+  try {
+    const original = f.env.ETHEREUM_METADATA_CDN.fetch;
+    let started!: () => void;
+    const eightStarted = new Promise<void>(resolve => { started = resolve; });
+    let active = 0;
+    let maximum = 0;
+    let count = 0;
+    f.env.ETHEREUM_METADATA_CDN.fetch = async (input, init) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      if (++count === 8) started();
+      try {
+        await held;
+        return await original(input, init);
+      } finally { active--; }
+    };
+    const infos = Array.from({ length: 31 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
+      displayId: index + 1, owner: WALLET }));
+    const pending = ethereumInventoryItems(readContext(f), infos);
+    await eightStarted;
+    assert.equal(count, 8);
+    release();
+    const items = await pending;
+    assert.equal(maximum, 8);
+    assert.equal(count, 31);
+    assert.deepEqual(items.map(item => item.name), infos.map(info => `111K Artwork #${info.displayId}`));
+  } finally { release(); f.close(); }
+});
+
+test('an offchain metadata failure cancels pending reads and returns no partial inventory', { timeout: 5000 }, async () => {
+  const f = fixture();
+  try {
+    let reads = 0;
+    let cancelled = false;
+    f.env.ETHEREUM_METADATA_CDN.fetch = async (_input, init) => {
+      if (++reads !== 1) return new Response(null, { status: 503 });
+      return new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => { cancelled = true; reject(init!.signal!.reason); }, { once: true });
+      });
+    };
+    const infos = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
+      displayId: index + 1, owner: WALLET }));
+    await assert.rejects(ethereumInventoryItems(readContext(f), infos), /metadata is temporarily unavailable/);
+    assert.equal(cancelled, true);
+    assert.ok(reads <= 8);
   } finally { f.close(); }
 });
 
@@ -3244,8 +3376,8 @@ test('contract read envelopes stay bounded and preserve order when concurrent re
     const values = await pending;
     assert.equal(maximum, 2);
     assert.deepEqual(f.state.batchSizes.slice().sort((a, b) => a - b), [1, 4, 4, 4]);
-    assert.deepEqual(values.map(value => JSON.parse(atob(String(decodeReturn(['string'], value)[0]).split(',')[1])).name),
-      calls.map((_call, index) => `Kind 1 #${index + 1}`));
+    assert.deepEqual(values.map(value => String(decodeReturn(['string'], value)[0])),
+      calls.map((_call, index) => `${f.env.ETHEREUM_111K_METADATA_BASE_URI}${index + 1}.json`));
     assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === '0x64'));
   } finally { release(); f.close(); }
 });
@@ -3374,9 +3506,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
         const [, displayIds] = decodeReturn(['uint8[]', 'uint256[]'], `0x${data.slice(10)}`) as [bigint[], bigint[]];
         if (displayIds[0] !== 31n || call.params[1] === blockHash(102)) continue;
         const [uris] = decodeReturn(['string[]'], result.result) as [string[]];
-        const metadata = JSON.parse(atob(uris[0].split(',')[1]));
-        metadata.name = 'Metadata from a different fork';
-        result.result = encodeAbi(['string[]'], [[`data:application/json;base64,${btoa(JSON.stringify(metadata))}`]]);
+        result.result = encodeAbi(['string[]'], [[uris[0].replace('/31.json', '/32.json')]]);
       }
       return Response.json(body);
     };
@@ -3384,7 +3514,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
       `${paths.inventory}?owner=${WALLET}&expectedTokenIds=31`, undefined, undefined, { fetch: providerFetch });
     assert.equal(result.response.status, 200, JSON.stringify(result.body));
     assert.equal(result.body.observedBlock, 102);
-    assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `Kind 1 #${id}`));
+    assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `111K Artwork #${id}`));
     const reads = f.state.calls.filter(call => call.method === 'eth_call');
     assert.equal(reads.length, 3);
     assert.ok(reads.every(call => call.params[1] === blockHash(102)));
@@ -3427,7 +3557,7 @@ for (const count of [311, 620]) {
       assert.equal(result.response.status, 200, JSON.stringify(result.body));
       assert.equal(result.body.status, 'confirmed');
       assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
-      assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `Kind 1 #${id}`));
+      assert.deepEqual(result.body.items.map(item => item.name), ids.map(id => `111K Artwork #${id}`));
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
       assert.equal(reads.length, Math.ceil(count / 150) + Math.ceil(count / 30));
       assert.ok(reads.every(call => call.params[1] === blockHash(102)));
@@ -3456,7 +3586,7 @@ test('bundled transactions confirm more than 150 minted items with complete meta
     assert.equal(result.response.status, 200, JSON.stringify(result.body));
     assert.equal(result.body.status, 'confirmed');
     assert.deepEqual(result.body.items.map(item => item.tokenId), minted);
-    assert.deepEqual(result.body.items.map(item => item.name), minted.map((_tokenId, index) => `Kind 2 #${index + 1}`));
+    assert.deepEqual(result.body.items.map(item => item.name), minted.map((_tokenId, index) => `111K Crate #${index + 1}`));
     assert.ok(result.body.items.every(item => item.owner === WALLET && item.kind === 'crate' &&
       item.image.startsWith('data:image/svg+xml;base64,')));
     assert.deepEqual(result.body.burnedTokenIds, burned);
@@ -3644,7 +3774,7 @@ test('physical crate 5555 requires all 31 receipt identities and never exposes i
     const prepared = await f.request<EthereumClaimPrepareResponse>(paths.claimPrepare,
       { receiptId: '2005555', code }, authentication.token);
     assert.equal(prepared.response.status, 200);
-    const receiptIds = crateArtworkIds(5555).map(id => String(1_000_000 + id));
+    const receiptIds = physicalCrateArtworkIds(5555).map(id => String(1_000_000 + id));
     assert.equal(receiptIds.length, 31);
     const input = { claimId: prepared.body.claimId, transactionHash: CLAIM_HASH };
     f.setReceipt(CLAIM_HASH, [f.claimLog(prepared.body, receiptIds.slice(0, 20))]);
@@ -3653,7 +3783,7 @@ test('physical crate 5555 requires all 31 receipt identities and never exposes i
     f.setReceipt(CLAIM_HASH, [f.claimLog(prepared.body, receiptIds)]);
     assert.equal((await f.request(paths.claimConfirm, input, authentication.token)).body.status, 'confirmed');
     assert.equal(f.claimRow('2005555').status, 'claimed');
-    assert.deepEqual((f.order(delivery.orderId)!.irlClaims as Record<string, unknown>[])[0].dudeIds, crateArtworkIds(5555));
+    assert.deepEqual((f.order(delivery.orderId)!.irlClaims as Record<string, unknown>[])[0].dudeIds, physicalCrateArtworkIds(5555));
   } finally { f.close(); }
 });
 
@@ -3799,7 +3929,7 @@ for (const slowMethod of ['eth_blockNumber', 'eth_getTransactionReceipt']) {
       await f.confirmed();
       const next = await f.prepared(['7'], '10000000-0000-4000-8000-000000000002');
       const nextHash = `0x${'cc'.repeat(32)}`;
-      const log = { ...f.deliveryLog(next.prepared, ['7'], ['1000821'], nextHash), logIndex: '0x1' };
+      const log = { ...f.deliveryLog(next.prepared, ['7'], ['1000007'], nextHash), logIndex: '0x1' };
       f.setReceipt(nextHash, [log]);
       f.state.logs.push(log);
       const parent = new AbortController();

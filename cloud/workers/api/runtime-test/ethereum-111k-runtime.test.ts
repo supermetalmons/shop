@@ -37,6 +37,7 @@ function ethereumRuntime() {
   };
   delete config.$schema;
   delete config.secrets;
+  delete config.services;
   return createTestHarness({ root: resolve('.'), workers: [{ config }] });
 }
 
@@ -260,9 +261,7 @@ export default {
           } else if (data.startsWith(selector('previewTokenURIs(uint8[],uint256[])'))) {
             const [kinds, ids] = decodeReturn(['uint8[]', 'uint256[]'], argumentsHex);
             if (ids.length > 30 || kinds.length !== ids.length) throw new Error('Metadata batch is invalid');
-            result = encodeAbi(['string[]'], [ids.map(id => 'data:application/json;base64,' + btoa(JSON.stringify({
-              name: 'Artwork #' + id, image: 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
-            })))]);
+            result = encodeAbi(['string[]'], [ids.map(id => env.ETHEREUM_111K_METADATA_BASE_URI + id + '.json')]);
             if (url.searchParams.has('reorg')) changed = true;
           } else throw new Error('Unexpected contract read');
         } else throw new Error('Unexpected RPC: ' + rpc.method);
@@ -282,8 +281,13 @@ export default {
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: {
     name: 'ethereum-read-runtime', main: fixturePath,
     compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
+    services: [{ binding: 'ETHEREUM_METADATA_CDN', service: 'mons-shop-cdn' }],
     vars: { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: '0x1111111111111111111111111111111111111111',
-      ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0' },
+      ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545', ETHEREUM_111K_DEPLOYMENT_BLOCK: '0',
+      ETHEREUM_111K_METADATA_BASE_URI: 'https://cdn.mons.shop/111k-sepolia/' },
+  } }, { config: {
+    name: 'mons-shop-cdn', main: resolve('scripts/ethereum-metadata/local-worker.ts'),
+    compatibility_date: production.compatibility_date, compatibility_flags: production.compatibility_flags,
   } }] });
   try {
     await server.listen();
@@ -297,7 +301,7 @@ export default {
     const body = await confirmed.json() as { status: string; items: { tokenId: string; name: string }[] };
     assert.equal(body.status, 'confirmed');
     assert.deepEqual(body.items.map(item => item.tokenId), Array.from({ length: 311 }, (_, index) => String(index + 1)));
-    assert.equal(body.items[310].name, 'Artwork #311');
+    assert.equal(body.items[310].name, '111K Artwork #311');
     assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '14');
     assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '4');
     assert.equal(confirmed.headers.get('X-Test-Pinned-Calls'), 'true');

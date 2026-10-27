@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract NFT111KBatchTest is TestSupport {
@@ -20,7 +20,7 @@ contract NFT111KBatchTest is TestSupport {
             address(this),
             vm.addr(SIGNER_KEY),
             payable(BOB),
-            address(new NFT111KRenderer()),
+            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps()
@@ -210,7 +210,7 @@ contract NFT111KBatchTest is TestSupport {
         uint256[] memory ids = new uint256[](30);
         for (uint256 i; i < ids.length; ++i) {
             kinds[i] = uint8(i % 5 + 1);
-            ids[i] = i % 5 == 2 ? 505 : i % 5 == 1 || i % 5 == 4 ? 5555 : 111111;
+            ids[i] = kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : kinds[i] == 4 ? 222222 : 111111;
         }
         string[] memory uris = token.previewTokenURIs(kinds, ids);
         assertEq(uris.length, ids.length);
@@ -232,7 +232,7 @@ contract NFT111KBatchTest is TestSupport {
         kinds[0] = 1;
         ids[0] = 42;
         uint8[7] memory invalidKinds = [uint8(0), 6, 1, 2, 3, 4, 5];
-        uint256[7] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 111112, 5556];
+        uint256[7] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 222223, 5556];
         for (uint256 i; i < invalidKinds.length; ++i) {
             kinds[1] = invalidKinds[i];
             ids[1] = invalidIds[i];
@@ -261,7 +261,7 @@ contract NFT111KBatchTest is TestSupport {
             assertEq(kind, 0);
             assertEq(holder, address(0));
             uint256 count = ids[i] == 116666 ? 31 : 20;
-            uint256 firstDisplayId = (ids[i] - 111112) * 20 + 1;
+            uint256 firstDisplayId = firstToken;
             for (uint256 j; j < count; ++j) {
                 uint256 displayId;
                 (kind, displayId, holder) = token.getTokenInfo(firstToken + j);

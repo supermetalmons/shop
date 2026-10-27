@@ -1,0 +1,14 @@
+{
+  "completedAt": "2026-10-27T10:54:57.284Z",
+  "dryRun": false,
+  "control": {
+    "paused": false,
+    "revision": 13,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+    "resetGuardId": null,
+    "lastResetId": "796fe701-a050-4cec-a276-d56384e6592e",
+    "updatedAtMs": 1793098497000
+  }
+}

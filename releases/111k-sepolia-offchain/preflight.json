@@ -1,0 +1,107 @@
+{
+  "releaseId": "111k-offchain-2026-10-27T09-41-29-256Z-b9f51d9a",
+  "manifestSha256": "9ecc936ff9609d6544b896595675aafea5c32f1bbac3b09adb4ddc0f078cfba4",
+  "checkedAt": "2026-10-27T09:42:53.848Z",
+  "readOnly": true,
+  "discountRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+  "discountAllowance": 1,
+  "discountCratePriceWei": "50000000000000",
+  "chainId": 11155111,
+  "previousContract": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+  "previousSaleActive": true,
+  "historicalSales": [
+    {
+      "address": "0xea8f813d8844cfdd6bd917e2efda0b18c0c79497",
+      "saleActive": true
+    },
+    {
+      "address": "0x3fc9f53200d3f025dfd046490b744747749a7b54",
+      "saleActive": true
+    },
+    {
+      "address": "0x4b3a94a144fe99954c5d55f870081e40b360cfbf",
+      "saleActive": true
+    },
+    {
+      "address": "0x6acc38d2ab61a06882be5d964a69efefe23058b3",
+      "saleActive": true
+    }
+  ],
+  "proceeds": {
+    "mintRecipients": [
+      "0x1111111111111111111111111111111111111111",
+      "0x2222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333",
+      "0x4444444444444444444444444444444444444444"
+    ],
+    "mintSharesBps": [
+      5000,
+      2500,
+      1500,
+      1000
+    ],
+    "deliveryPaymentReceiver": "0x5555555555555555555555555555555555555555"
+  },
+  "renderer": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+  "rendererRuntime": null,
+  "nonceLatest": 18,
+  "noncePending": 18,
+  "balanceWei": "1824754682762839175",
+  "credentials": {
+    "rpcConfigured": true,
+    "explorerApiConfigured": false,
+    "keychainHelperExists": true,
+    "deployer": {
+      "address": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "encryptedKeystorePresent": true,
+      "addressEmbeddedInKeystore": false,
+      "keychainAccountConfigured": true
+    },
+    "authorization": {
+      "address": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+      "encryptedKeystorePresent": true,
+      "addressEmbeddedInKeystore": false,
+      "keychainAccountConfigured": true
+    }
+  },
+  "baseURI": "https://cdn.mons.shop/111k-sepolia/",
+  "predictedContract": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+  "executionRules": "Live Sepolia RPC (Glamsterdam); contracts compiled for Prague",
+  "estimates": {
+    "renderer": {
+      "to": null,
+      "predictedContract": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+      "nonce": "0x12",
+      "gasEstimate": "2754374",
+      "gasLimit": "3355249",
+      "gasPrice": "1000",
+      "maximumFeeWei": "3355249000",
+      "simulatedRuntime": {
+        "runtimeBytes": 1384,
+        "runtimeSha256": "c44614b1e26b35a78e05ac94366dd2b788a516aa9559abc926808faac0421826",
+        "runtimeKeccak256": "0x891c7ef863d1ebf195994c5767f5dd16263020f8bf843fb53478d75d8671e289",
+        "immutableReferencesChecked": true
+      }
+    },
+    "collection": {
+      "to": null,
+      "predictedContract": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+      "nonce": "0x13",
+      "gasEstimate": "33442982",
+      "gasLimit": "40181579",
+      "gasPrice": "1000",
+      "maximumFeeWei": "40181579000",
+      "simulatedRuntime": {
+        "runtimeBytes": 19795,
+        "runtimeSha256": "d57b04f5a771d9f5faa349f8142fdc5ed38d9311a0163fd4f4e2f22afc8e6225",
+        "runtimeKeccak256": "0x2755659a30562857c17851a326e0d11d633bbf3411ffcdb94b8a9bd7094b91a9",
+        "immutableReferencesChecked": true
+      },
+      "rendererCodeOverride": true
+    }
+  },
+  "administrativeGasReserve": "200000",
+  "maximumReservedFeeWei": "43736828000",
+  "maximumReleaseFeeWei": "5000000000000000",
+  "transactions": []
+}

@@ -14,6 +14,7 @@ contract NFT111KRendererTest is TestSupport {
     using Strings for uint256;
 
     uint256 private constant MAX_ARTWORKS = 111111;
+    uint256 private constant MAX_ARTWORK_RECEIPTS = 222222;
     NFT111KRenderer private renderer;
     NFT111KRenderer private secondRenderer;
 
@@ -41,7 +42,8 @@ contract NFT111KRendererTest is TestSupport {
 
     function testFuzzAllKindsPreserveCanvasBackgroundsAndSvgBudget(uint256 seed, uint8 kindSeed) public view {
         uint8 kind = kindSeed % 5 + 1;
-        uint256 maximum = kind == 3 ? 505 : kind == 2 || kind == 5 ? 5555 : MAX_ARTWORKS;
+        uint256 maximum =
+            kind == 3 ? 505 : kind == 2 || kind == 5 ? 5555 : kind == 4 ? MAX_ARTWORK_RECEIPTS : MAX_ARTWORKS;
         bytes memory svg = _svg(renderer, kind, seed % maximum + 1);
         uint256 background = _find(svg, bytes('<rect width="720" height="720"'), 0);
         if (kind == 2 || kind == 3) assertEq(background, type(uint256).max);
@@ -66,8 +68,8 @@ contract NFT111KRendererTest is TestSupport {
     }
 
     function testFlowerCenterGeometryMappingIsUniqueAcrossFullSupply() public pure {
-        uint256[448] memory seen;
-        for (uint256 id = 1; id <= MAX_ARTWORKS; ++id) {
+        uint256[896] memory seen;
+        for (uint256 id = 1; id <= MAX_ARTWORK_RECEIPTS; ++id) {
             (uint256 x, uint256 y, uint256 radius) = _flowerCenter(id);
             assertTrue(x >= radius && y >= radius);
             assertTrue(x + radius <= 720 && y + radius <= 720);
@@ -76,6 +78,18 @@ contract NFT111KRendererTest is TestSupport {
             assertTrue(seen[signature >> 8] & mask == 0);
             seen[signature >> 8] |= mask;
         }
+    }
+
+    function testFuzzPhysicalReceiptUsesDistinctVisibleFlowerCenter(uint256 seed) public view {
+        uint256 id = MAX_ARTWORKS + seed % MAX_ARTWORKS + 1;
+        (uint256 x, uint256 y, uint256 radius) = _flowerCenter(id);
+        bytes memory center = bytes(
+            string.concat(
+                '<circle cx="', x.toString(), '" cy="', y.toString(), '" r="', radius.toString(), '" fill="#efb84c"/>'
+            )
+        );
+        _assertFinalArtworkShape(_svg(renderer, 4, id), center);
+        assertTrue(keccak256(_svg(renderer, 4, id)) != keccak256(_svg(renderer, 4, id - MAX_ARTWORKS)));
     }
 
     function _svg(NFT111KRenderer source, uint8 kind, uint256 id) private pure returns (bytes memory svg) {
@@ -89,7 +103,8 @@ contract NFT111KRendererTest is TestSupport {
     }
 
     function _flowerCenter(uint256 id) private pure returns (uint256 x, uint256 y, uint256 radius) {
-        uint256 key = ((id - 1) * 65537 + 7919) % MAX_ARTWORKS;
+        uint256 key =
+            (((id - 1) % MAX_ARTWORKS) * 65537 + 7919) % MAX_ARTWORKS + ((id - 1) / MAX_ARTWORKS) * MAX_ARTWORKS;
         x = 264 + 3 * (key % 64);
         y = 202 + 2 * ((key / 64) % 64);
         radius = 24 + key / 4096;

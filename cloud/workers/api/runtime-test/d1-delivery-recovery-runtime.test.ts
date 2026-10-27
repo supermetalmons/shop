@@ -49,6 +49,7 @@ test('native D1 delivery recovery cutover preserves state, fences old writers an
   };
   delete runtime.$schema;
   delete runtime.secrets;
+  delete runtime.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtime }] });
   try {
     await server.listen();

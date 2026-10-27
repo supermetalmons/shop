@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "network": "mainnet",
+  "prefix": "111k/",
+  "objectCount": 344948,
+  "totalBytes": 1072838452,
+  "counts": {
+    "artwork": 111111,
+    "crate": 5555,
+    "warehouse": 505,
+    "artwork_receipt": 222222,
+    "crate_receipt": 5555
+  },
+  "objectsFile": "objects.jsonl",
+  "objectsSha256": "ea3b759801c74d1ced793362b6500fdfd778280f1427d66aabdcb864d0ca16c7",
+  "sourceSha256": {
+    "../../shared/ethereum/placeholderMetadata.ts": "3eb440d0f78662f63a9567fe64d918c11551aa8902ab129d5a89efcbb6279206",
+    "../../shared/ethereum/protocol.ts": "8cf4a1e912f7d46d343b98acca31c8aa780f8d1911bda723644f2f89c487dd57",
+    "./catalog.ts": "d76998c9b3bb042ec280b5994645a0c03e279c03d3946706372e9bf3696f71a0",
+    "./generate.ts": "fcaf8d2d3747dc937d20b8bf71a4a07b08ffae2baa3e0fbc59911b4be92c72f5"
+  }
+}

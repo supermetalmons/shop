@@ -155,6 +155,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
   };
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{ config: runtimeConfig }],

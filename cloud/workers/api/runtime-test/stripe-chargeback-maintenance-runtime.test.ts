@@ -30,6 +30,7 @@ test('private chargeback maintenance runs through named workerd RPC without expo
   };
   delete apiConfig.$schema;
   delete apiConfig.secrets;
+  delete apiConfig.services;
   const fixtureDirectory = await mkdtemp(join(tmpdir(), 'mons-chargeback-rpc-'));
   const fixturePath = join(fixtureDirectory, 'caller.mjs');
   await writeFile(fixturePath, `

@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface SecurityVm {
@@ -272,7 +272,7 @@ contract NFT111KSecurityTest is TestSupport {
             address(this),
             vm.addr(SIGNER_KEY),
             DELIVERY_RECEIVER,
-            address(new NFT111KRenderer()),
+            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
@@ -398,7 +398,7 @@ contract NFT111KSecurityTest is TestSupport {
         _info(111113, 2, 2, ALICE);
         _info(2000003, 5, 3, ALICE);
         _absent(2000001, 2);
-        _absent(1000041, 20);
+        _absent(1111152, 20);
         assertFalse(token.usedDeliveryOrders(2));
         assertFalse(token.usedClaims(OUTER_CLAIM));
         token.setRedemptionsPaused(false);
@@ -410,7 +410,7 @@ contract NFT111KSecurityTest is TestSupport {
         assertTrue(token.usedClaims(OUTER_CLAIM));
         _info(2000001, 5, 1, ALICE);
         _info(2000002, 5, 2, ALICE);
-        _outputs(1000041, 20, 4, 41, ALICE);
+        _outputs(1111152, 20, 4, 111152, ALICE);
     }
 
     function testPauseDoesNotExtendDeliveryOrClaimExpiration() public {
@@ -483,7 +483,7 @@ contract NFT111KSecurityTest is TestSupport {
         vm.prank(ALICE);
         token.unboxCrate(111114);
         _info(1, 1, 1, BOB);
-        _info(21, 1, 41, ALICE);
+        _info(21, 1, 21, ALICE);
         _info(2000002, 5, 2, BOB);
         _outputs(111115, 11, 2, 4, ALICE);
         uint256 balance = address(token).balance;
@@ -500,7 +500,7 @@ contract NFT111KSecurityTest is TestSupport {
         token.claimCrateReceipt(2000002, OUTER_CLAIM, block.timestamp + 300, signature);
         assertFalse(token.saleActive());
         _info(1000001, 4, 1, BOB);
-        _outputs(1000021, 20, 4, 21, BOB);
+        _outputs(1111132, 20, 4, 111132, BOB);
     }
 
     function testCrateMintCallbacksRejectEveryProtectedReentry() public {
@@ -652,14 +652,14 @@ contract NFT111KSecurityTest is TestSupport {
         _outputs(1, 60, 1, 1, address(buyer));
     }
 
-    function testSingleThenBatchOpeningKeepsIndependentArtworkOffsets() public {
+    function testSingleThenBatchOpeningKeepsSequentialArtworkIds() public {
         SecurityReceiver buyer = _receiver();
         SecurityCall[] memory calls = new SecurityCall[](2);
         calls[0] = SecurityCall(abi.encodeCall(token.unboxCrate, (111114)), 0);
         calls[1] = SecurityCall(abi.encodeCall(token.unboxCrates, (_range(111112, 2))), 0);
         buyer.executeSequence(calls);
-        _outputs(1, 20, 1, 41, address(buyer));
-        _outputs(21, 40, 1, 1, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
+        _outputs(21, 40, 1, 21, address(buyer));
     }
 
     function testCaughtBatchRejectionThenDifferentOpeningAndBatchRetryClearTransientState() public {
@@ -671,8 +671,8 @@ contract NFT111KSecurityTest is TestSupport {
         calls[1] = batch;
         buyer.executeAfterCaughtRevert(batch.data, 0, calls);
         assertEq(buyer.caughtFailures(), 1);
-        _outputs(1, 20, 1, 41, address(buyer));
-        _outputs(21, 40, 1, 1, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
+        _outputs(21, 40, 1, 21, address(buyer));
     }
 
     function testCallbackTransferOfLaterDeliveryItemRollsBackTheWholeSelection() public {
@@ -730,18 +730,18 @@ contract NFT111KSecurityTest is TestSupport {
         assertEq(token.balanceOf(BOB), ids.length + 1);
         assertEq(token.totalSupply(), supply);
         _deliveryOutputs(ids, receipts, BOB);
-        _info(2, 1, 22, BOB);
-        _info(3, 1, 23, address(buyer));
+        _info(2, 1, 2, BOB);
+        _info(3, 1, 3, address(buyer));
     }
 
-    function testTwoOpeningsInOneWrapperCallHaveSeparateArtworkOffsets() public {
+    function testTwoOpeningsInOneWrapperCallHaveSequentialArtworkIds() public {
         SecurityReceiver buyer = _receiver();
         SecurityCall[] memory calls = new SecurityCall[](2);
         calls[0] = SecurityCall(abi.encodeCall(token.unboxCrate, (111114)), 0);
         calls[1] = SecurityCall(abi.encodeCall(token.unboxCrate, (111112)), 0);
         buyer.executeSequence(calls);
-        _outputs(1, 20, 1, 41, address(buyer));
-        _outputs(21, 20, 1, 1, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
+        _outputs(21, 20, 1, 21, address(buyer));
         assertEq(_artworksMinted(), 40);
     }
 
@@ -759,8 +759,8 @@ contract NFT111KSecurityTest is TestSupport {
         ids[0] = 1;
         ids[1] = 20;
         uint256[] memory receipts = new uint256[](2);
-        receipts[0] = 1000021;
-        receipts[1] = 1000040;
+        receipts[0] = 1000001;
+        receipts[1] = 1000020;
         NFT111K.DeliveryQuote memory quote = NFT111K.DeliveryQuote(
             2, address(buyer), 0.0001 ether, block.timestamp + 300, keccak256(abi.encode(receipts))
         );
@@ -771,9 +771,9 @@ contract NFT111KSecurityTest is TestSupport {
         buyer.executeSequence(calls);
         _info(1, 0, 0, address(0));
         _info(20, 0, 0, address(0));
-        _outputs(2, 18, 1, 22, address(buyer));
-        _info(1000021, 4, 21, address(buyer));
-        _info(1000040, 4, 40, address(buyer));
+        _outputs(2, 18, 1, 2, address(buyer));
+        _info(1000001, 4, 1, address(buyer));
+        _info(1000020, 4, 20, address(buyer));
         assertTrue(token.usedDeliveryOrders(2));
     }
 
@@ -783,13 +783,13 @@ contract NFT111KSecurityTest is TestSupport {
         calls[0] = SecurityCall(abi.encodeCall(token.unboxCrate, (111113)), 0);
         calls[1] = _route(buyer, 5);
         buyer.executeSequence(calls);
-        _outputs(1, 20, 1, 21, address(buyer));
-        _outputs(1000061, 20, 4, 61, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
+        _outputs(1111172, 20, 4, 111172, address(buyer));
         assertTrue(token.usedClaims(OUTER_CLAIM));
         assertEq(_artworksMinted(), 20);
     }
 
-    function testCaughtOpeningRevertThenDifferentOpeningAndRetryClearLockAndOffset() public {
+    function testCaughtOpeningRevertThenDifferentOpeningAndRetryClearLockAndPreserveSequentialIds() public {
         SecurityReceiver buyer = _receiver();
         buyer.configure(10, false, address(0));
         SecurityCall[] memory calls = new SecurityCall[](3);
@@ -799,7 +799,7 @@ contract NFT111KSecurityTest is TestSupport {
         buyer.executeAfterCaughtRevert(abi.encodeCall(token.unboxCrate, (111113)), 0, calls);
         assertEq(buyer.caughtFailures(), 1);
         assertEq(buyer.callbacks(), 41);
-        _outputs(1, 20, 1, 41, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
         _outputs(21, 20, 1, 21, address(buyer));
         _info(111127, 2, 16, address(buyer));
         assertEq(_artworksMinted(), 40);
@@ -832,7 +832,7 @@ contract NFT111KSecurityTest is TestSupport {
             _info(111112, 2, 1, ALICE);
             _info(2000002, 5, 2, ALICE);
             _absent(2000001, 1);
-            _absent(1000021, 20);
+            _absent(1111132, 20);
         }
         vm.prank(ALICE);
         if (claim) token.claimCrateReceipt(2000002, OUTER_CLAIM, quote.deadline, signature);
@@ -840,7 +840,7 @@ contract NFT111KSecurityTest is TestSupport {
         if (claim) {
             assertTrue(token.usedClaims(OUTER_CLAIM));
             _info(2000002, 0, 0, address(0));
-            _outputs(1000021, 20, 4, 21, ALICE);
+            _outputs(1111132, 20, 4, 111132, ALICE);
         } else {
             assertTrue(token.usedDeliveryOrders(2));
             _info(111112, 0, 0, address(0));
@@ -892,10 +892,10 @@ contract NFT111KSecurityTest is TestSupport {
         ids[2] = 1;
         ids[3] = 21;
         receipts = new uint256[](4);
-        receipts[0] = mixed ? 2000003 : 1000020;
-        receipts[1] = 1000040;
-        receipts[2] = 1000021;
-        receipts[3] = 1000001;
+        receipts[0] = mixed ? 2000003 : 1000040;
+        receipts[1] = 1000020;
+        receipts[2] = 1000001;
+        receipts[3] = 1000021;
     }
 
     function _deliveryCall(SecurityReceiver buyer, uint256[] memory ids) internal returns (SecurityCall memory) {
@@ -919,10 +919,10 @@ contract NFT111KSecurityTest is TestSupport {
         assertEq(token.balanceOf(BOB), 0);
         assertEq(token.totalSupply(), supply);
         _deliveryOutputs(ids, receipts, address(buyer));
-        _info(2, 1, 22, address(buyer));
-        _info(19, 1, 39, address(buyer));
-        _info(22, 1, 2, address(buyer));
-        _info(39, 1, 19, address(buyer));
+        _info(2, 1, 2, address(buyer));
+        _info(19, 1, 19, address(buyer));
+        _info(22, 1, 22, address(buyer));
+        _info(39, 1, 39, address(buyer));
     }
 
     function _uncaughtDeliverySourceTransfer(bool mixed) internal {
@@ -1124,7 +1124,7 @@ contract NFT111KSecurityTest is TestSupport {
             ? SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice())
             : SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         buyer.executeSequence(calls);
-        _outputs(1, 20, 1, 21, address(buyer));
+        _outputs(1, 20, 1, 1, address(buyer));
         if (warehouse) {
             _info(116668, 3, 2, address(buyer));
             assertEq(token.warehouseFirstCrate(2), 16);
@@ -1161,15 +1161,15 @@ contract NFT111KSecurityTest is TestSupport {
         } else if (route == 2) {
             _outputs(111116, 11, 2, 5, holder);
         } else if (route == 3) {
-            _outputs(1, 20, 1, 21, holder);
+            _outputs(1, 20, 1, 1, holder);
         } else if (route == 4) {
             _outputs(2000001, 3, 5, 1, holder);
         } else if (route == 5) {
-            _outputs(1000061, 20, 4, 61, holder);
+            _outputs(1111172, 20, 4, 111172, holder);
         } else {
-            _outputs(1, 20, 1, 41, holder);
+            _outputs(1, 20, 1, 1, holder);
             _outputs(21, 20, 1, 21, holder);
-            _outputs(41, 20, 1, 1, holder);
+            _outputs(41, 20, 1, 41, holder);
         }
     }
 

@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport} from "./TestSupport.sol";
 
 interface SeaportForkVm {
@@ -116,7 +116,7 @@ contract NFT111KSeaportForkTest is TestSupport {
             address(this),
             vm.addr(0x5151),
             payable(address(0xBEEF)),
-            address(new NFT111KRenderer()),
+            address(new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/")),
             bytes32(0),
             _proceedsRecipients(),
             _proceedsSharesBps()

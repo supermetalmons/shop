@@ -24,6 +24,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
   };
   delete runtimeConfig.$schema;
   delete runtimeConfig.secrets;
+  delete runtimeConfig.services;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{ config: runtimeConfig }],

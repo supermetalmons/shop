@@ -70,7 +70,7 @@ claims remain supported. The `/wip` routes remain available. See
 
 The active 111K Sepolia configuration and maintenance controls are documented in
 [111K setup](scripts/docs/111k_testnet.md); the
-[Seaport release](releases/111k-sepolia-seaport/README.md) records its deployment.
+[offchain metadata release](releases/111k-sepolia-offchain/README.md) records its deployment.
 Release evidence describes the recorded verification time, not live service state.
 
 ## Operations and reference
@@ -86,6 +86,7 @@ Release evidence describes the recorded verification time, not live service stat
 | New drop configuration | [Typed drop templates](scripts/newDrops/README.md) |
 | Mi Note inventory, deployment, pack layouts | [Inventory](scripts/docs/mi_note_public_inventory.md), [deployment](scripts/docs/mi_note_drop_deployment.md), [pack layouts](scripts/docs/mi_note_pack_setups.md) |
 | Ethereum checkout | [111K checkout](scripts/docs/111k_checkout.md) |
+| Ethereum metadata and CDN | [111K metadata](scripts/docs/111k_metadata.md) |
 | Metadata fields | [Drop metadata](scripts/docs/drop_metadata.md) |
 | One-off Worker-signed transactions | [Worker transactions](scripts/docs/worker_transactions.md) |
 | Card video rendering | [Native Mi Note renderer](scripts/mi-note-video/README.md) |

@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-27T09:44:14.934Z",
+  "readOnly": true,
+  "wallets": [
+    {
+      "role": "deployer",
+      "address": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "keychainAccess": true,
+      "encryptedWalletAddressVerified": true,
+      "noSignatureCreated": true
+    },
+    {
+      "role": "authorization",
+      "address": "0xcc4c8bfd93af9f36d46215a0206954bf6a14c3ca",
+      "keychainAccess": true,
+      "encryptedWalletAddressVerified": true,
+      "noSignatureCreated": true
+    },
+    {
+      "role": "recipient",
+      "address": "0xa9e965cf8fa6a67a63127dca30d36fcd313a6506",
+      "keychainAccess": true,
+      "encryptedWalletAddressVerified": true,
+      "noSignatureCreated": true
+    }
+  ]
+}

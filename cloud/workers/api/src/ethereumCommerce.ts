@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { decodeEventLogs, decodeReturn, encodeCall, type EthereumDecodedEvent } from '../../../../shared/ethereum/abi.js';
 import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.js';
 import {
-  ETHEREUM_AUTHORIZATION_TTL_SECONDS, crateArtworkIds, ethereumAssetId,
+  ETHEREUM_AUTHORIZATION_TTL_SECONDS, physicalCrateArtworkIds, ethereumAssetId, ethereumMetadataTokenId,
   ethereumHexQuantity, ethereumReceiptTokenId, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
 import type { EthereumDeliveryPrepareResponse, EthereumClaimPrepareResponse } from '../../../../shared/ethereum/api.js';
@@ -307,7 +307,7 @@ async function publishEthereumOrder(context: EthereumContext, row: EthereumDeliv
     if (currentClaims.results.length !== claims.length) throw new EthereumApiError('unavailable', 'The delivery claims changed. Try again.');
     const irlClaims = currentClaims.results.map((claim) => ({ code: claim.code, boxId: claim.crate_id,
       boxAssetId: ethereumAssetId(row.chain_id, row.contract_address, String(111111 + claim.crate_id)),
-      receiptTokenId: claim.receipt_id, dudeIds: crateArtworkIds(claim.crate_id), status: claim.status }));
+      receiptTokenId: claim.receipt_id, dudeIds: physicalCrateArtworkIds(claim.crate_id), status: claim.status }));
     unit.expectEthereumState({ kind: 'delivery', chainId: row.chain_id, contractAddress: row.contract_address,
       id: String(row.order_id), status: row.status, transactionHash: row.transaction_hash,
       blockNumber: row.block_number, blockHash: row.block_hash, updatedAtMs: row.updated_at_ms });
@@ -436,7 +436,7 @@ export async function confirmEthereumClaim(context: EthereumContext, claimId: st
     WHERE chain_id = ? AND contract_address = ? AND receipt_id = ?`)
     .bind(context.config.chainId, contract, event.receiptId).first<EthereumClaimRow>();
   if (!row) throw new EthereumApiError('not-found', 'Crate claim not found.');
-  const expectedIds = crateArtworkIds(row.crate_id).map((id) => ethereumReceiptTokenId('artwork', id));
+  const expectedIds = physicalCrateArtworkIds(row.crate_id).map((id) => ethereumMetadataTokenId('artwork_receipt', id));
   if (event.receiptId !== row.receipt_id ||
     JSON.stringify(event.receiptIds) !== JSON.stringify(expectedIds)) throw new EthereumApiError('permission-denied', 'The transaction does not match this crate claim.');
   const ready = confirmations >= context.config.confirmationBlocks;

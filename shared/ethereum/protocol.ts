@@ -1,6 +1,8 @@
 export const ETHEREUM_111K_DROP_ID = '111k_devnet' as const;
 const ARTWORK_COUNT = 111_111;
 const CRATE_COUNT = 5_555;
+const WAREHOUSE_COUNT = 505;
+const ARTWORK_RECEIPT_COUNT = 2 * ARTWORK_COUNT;
 const ARTWORK_RECEIPT_OFFSET = 1_000_000n;
 const CRATE_RECEIPT_OFFSET = 2_000_000n;
 export const ETHEREUM_MAX_MINT_QUANTITY = 15;
@@ -25,6 +27,21 @@ export function ethereumItemKind(value: number): EthereumItemKind | null {
 
 export function ethereumItemKindNumber(kind: EthereumItemKind): number {
   return ETHEREUM_ITEM_KINDS.indexOf(kind) + 1;
+}
+
+export function ethereumItemDisplayIdMaximum(kind: EthereumItemKind): number {
+  if (kind === 'warehouse') return WAREHOUSE_COUNT;
+  if (kind === 'crate' || kind === 'crate_receipt') return CRATE_COUNT;
+  return kind === 'artwork_receipt' ? ARTWORK_RECEIPT_COUNT : ARTWORK_COUNT;
+}
+
+export function ethereumMetadataTokenId(kind: EthereumItemKind, displayId: number): string {
+  if (!ETHEREUM_ITEM_KINDS.includes(kind) || !Number.isInteger(displayId) || displayId < 1 ||
+    displayId > ethereumItemDisplayIdMaximum(kind)) throw new Error('Invalid item number');
+  if (kind === 'artwork') return String(displayId);
+  if (kind === 'crate') return String(ARTWORK_COUNT + displayId);
+  if (kind === 'warehouse') return String(ARTWORK_COUNT + CRATE_COUNT + displayId);
+  return ((kind === 'artwork_receipt' ? ARTWORK_RECEIPT_OFFSET : CRATE_RECEIPT_OFFSET) + BigInt(displayId)).toString();
 }
 
 export function normalizeEthereumAddress(value: unknown): Hex | null {
@@ -52,10 +69,14 @@ export function ethereumAssetId(chainId: number, contract: string, tokenId: stri
   return `eip155:${chainId}:${requireEthereumAddress(contract)}:${id}`;
 }
 
-export function crateArtworkIds(crateId: number): number[] {
+function crateArtworkIds(crateId: number): number[] {
   if (!Number.isInteger(crateId) || crateId < 1 || crateId > CRATE_COUNT) throw new Error('Invalid crate number');
   const count = crateId === CRATE_COUNT ? 31 : 20;
   return Array.from({ length: count }, (_, index) => (crateId - 1) * 20 + index + 1);
+}
+
+export function physicalCrateArtworkIds(crateId: number): number[] {
+  return crateArtworkIds(crateId).map(id => ARTWORK_COUNT + id);
 }
 
 export function ethereumReceiptTokenId(kind: 'artwork' | 'crate', displayId: number): string {

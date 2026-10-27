@@ -20,6 +20,7 @@ test('Mi Note verification signs, consumes, scopes, and revokes proofs in worker
   delete config.routes;
   delete config.$schema;
   delete config.secrets;
+  delete config.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config }] });
   try {
     await server.listen();

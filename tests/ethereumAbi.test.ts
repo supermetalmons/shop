@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { encodeAbi, decodeReturn, encodeCall, decodeEventLogs, ETHEREUM_EVENT_TOPICS } from '../shared/ethereum/abi.ts';
 import { crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, personalMessageHash, recoverEthereumAddress, signDigest } from '../shared/ethereum/crypto.ts';
-import { crateArtworkIds, ethereumAssetId, ethereumReceiptTokenId, formatEtherAmount } from '../shared/ethereum/protocol.ts';
-import { resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
+import { physicalCrateArtworkIds, ethereumAssetId, ethereumReceiptTokenId, ethereumMetadataTokenId,
+  ethereumItemDisplayIdMaximum, formatEtherAmount } from '../shared/ethereum/protocol.ts';
+import { ethereumMetadataBaseUri, resolveEthereum111kConfig } from '../shared/ethereum/config.ts';
 import { nft111KAbi, nft111KRendererAbi } from '../shared/ethereum/abi.generated.ts';
 import { ETHEREUM_FUNCTIONS } from '../shared/ethereum/protocol.ts';
 
@@ -128,7 +129,7 @@ test('batch calldata and ordered crate hashes match Solidity-generated fixtures'
   };
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [fixture.batchUnbox.tokenIds]), fixture.calls.unboxCratesUnsorted);
   assert.equal(ethereumTokenIdsHash(fixture.batchUnbox.tokenIds), fixture.batchUnbox.tokenIdsHash);
-  assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => crateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
+  assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => physicalCrateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[1, 0, 111112]]), fixture.calls.getTokenInfos);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[4, 1, 5], [111111, 42, 5555]]), fixture.calls.previewTokenURIs);
 });
@@ -149,14 +150,44 @@ test('events decode only the configured contract and retain exact uint256 token 
   assert.equal(decodeEventLogs([{ ...logs[0], removed: true }], CONTRACT).length, 0);
 });
 
-test('fixed display numbers and receipt identities cover all 111111 artworks without overlap', () => {
-  assert.deepEqual(crateArtworkIds(42), Array.from({ length: 20 }, (_, i) => 821 + i));
-  assert.deepEqual(crateArtworkIds(5555), Array.from({ length: 31 }, (_, i) => 111081 + i));
+test('digital and physical-only receipt identities occupy separate complete ranges', () => {
   assert.equal(ethereumReceiptTokenId('crate', 5555), '2005555');
   assert.equal(ethereumReceiptTokenId('artwork', 111111), '1111111');
-  assert.throws(() => crateArtworkIds(5556));
+  assert.throws(() => ethereumReceiptTokenId('artwork', 111112));
+  assert.deepEqual(physicalCrateArtworkIds(1), Array.from({ length: 20 }, (_, i) => 111112 + i));
+  assert.deepEqual(physicalCrateArtworkIds(5555), Array.from({ length: 31 }, (_, i) => 222192 + i));
+  assert.equal(ethereumMetadataTokenId('artwork_receipt', 111112), '1111112');
+  assert.equal(ethereumMetadataTokenId('artwork_receipt', 222222), '1222222');
+  assert.equal(ethereumMetadataTokenId('warehouse', 505), '117171');
+  assert.equal(ethereumItemDisplayIdMaximum('artwork'), 111111);
+  assert.equal(ethereumItemDisplayIdMaximum('artwork_receipt'), 222222);
+  assert.throws(() => ethereumMetadataTokenId('artwork_receipt', 222223));
+  assert.throws(() => ethereumMetadataTokenId('artwork', 111112));
+  assert.throws(() => physicalCrateArtworkIds(5556));
   assert.equal(ethereumAssetId(31337, CONTRACT.toUpperCase().replace('0X', '0x'), '0x1'), `eip155:31337:${CONTRACT}:1`);
   assert.equal(formatEtherAmount('1100000000000000'), '0.0011');
   assert.equal(resolveEthereum111kConfig().enabled, false);
   assert.throws(() => resolveEthereum111kConfig({ chainId: 1 }));
+});
+
+test('metadata base URIs accept the CDN namespaces and isolated local origins only', () => {
+  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/');
+  assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
+    'https://cdn.mons.shop/111k/');
+  assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri: 'https://cdn.mons.shop/111k/' }));
+  assert.equal(ethereumMetadataBaseUri('https://cdn.mons.shop/111k/', 1), 'https://cdn.mons.shop/111k/');
+  assert.throws(() => ethereumMetadataBaseUri('https://cdn.mons.shop/111k-sepolia/', 1));
+  for (const host of ['localhost', '127.0.0.1', '[::1]']) {
+    const metadataBaseUri = `http://${host}:8788/111k-sepolia/`;
+    assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri }).metadataBaseUri, metadataBaseUri);
+    assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri }));
+  }
+  assert.throws(() => resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'http://localhost:8788/other/' }));
+  assert.throws(() => resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://localhost:8788/111k-sepolia/' }));
+  for (const metadataBaseUri of ['https://cdn.mons.shop.evil.test/111k-sepolia/', 'https://cdn.mons.shop/other/',
+    'https://cdn.mons.shop/111k-sepolia', 'https://cdn.mons.shop/111k-sepolia/?version=1',
+    'https://user@cdn.mons.shop/111k-sepolia/', 'http://cdn.mons.shop/111k-sepolia/',
+    'https://cdn.mons.shop:443/111k-sepolia/', 'https://cdn.mons.shop/../111k-sepolia/']) {
+    assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri }), metadataBaseUri);
+  }
 });

@@ -11,9 +11,9 @@ import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
 const deployment = JSON.parse(await readFile(deploymentFile, 'utf8')) as {
-  protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string;
+  protocolVersion?: number; chainId: number; rpcUrl: string; contractAddress: string; rendererAddress: string; deploymentBlock: number; quoteSigner: string; metadataBaseURI: string;
 };
-if (deployment.protocolVersion !== 6) throw new Error('The local deployment does not support the current proceeds contract interface. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
+if (deployment.protocolVersion !== 7) throw new Error('The local deployment does not support offchain metadata and the current receipt numbering. Restart Anvil and run npm --prefix onchain/ethereum run deploy:local again.');
 const rpcUrl = new URL(deployment.rpcUrl);
 if (deployment.chainId !== 31337 || rpcUrl.protocol !== 'http:' ||
   !['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.username || rpcUrl.password) {
@@ -50,12 +50,16 @@ if ([collectionCode, rendererCode].some((code) => typeof code !== 'string' || co
 if (requireEthereumAddress(deployment.quoteSigner) !== signer || typeof signerResult !== 'string' ||
   decodeReturn(['address'], signerResult)[0] !== signer) throw new Error('Local API requires the public A11CE test signer used by deploy:local.');
 
-const [unboxLimit, tokenInfos, tokenURIs, collectionStats] = await Promise.all([
+const [unboxLimit, tokenInfos, tokenURIs, collectionStats, metadataBaseURI] = await Promise.all([
   rpc('eth_call', [{ to: contractAddress, data: encodeCall('MAX_UNBOX_QUANTITY()', [], []) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[]]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs, ['uint8[]', 'uint256[]'], [[], []]) }, 'latest']),
   rpc('eth_call', [{ to: contractAddress, data: encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [`0x${'0'.repeat(40)}`]) }, 'latest']),
+  rpc('eth_call', [{ to: rendererAddress, data: encodeCall('baseURI()', [], []) }, 'latest']),
 ]);
+if (typeof metadataBaseURI !== 'string' || decodeReturn(['string'], metadataBaseURI)[0] !== deployment.metadataBaseURI) {
+  throw new Error('The local metadata renderer does not match its deployment manifest.');
+}
 if (typeof unboxLimit !== 'string' || decodeReturn(['uint256'], unboxLimit)[0] !== BigInt(ETHEREUM_MAX_UNBOX_QUANTITY) ||
   typeof tokenInfos !== 'string' || (decodeReturn(['(uint8,uint256,address)[]'], tokenInfos)[0] as unknown[]).length !== 0 ||
   typeof tokenURIs !== 'string' || (decodeReturn(['string[]'], tokenURIs)[0] as unknown[]).length !== 0 ||
@@ -99,6 +103,7 @@ const config = {
   vars: { ...rawConfig.vars, ...emptySecrets,
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contractAddress,
     ETHEREUM_111K_RENDERER_ADDRESS: rendererAddress, ETHEREUM_111K_DEPLOYMENT_BLOCK: String(deployment.deploymentBlock),
+    ETHEREUM_111K_METADATA_BASE_URI: deployment.metadataBaseURI,
     ETHEREUM_111K_RPC_URL: rpcUrl.href, ETHEREUM_111K_SIGNER_SECRET: testKey,
     ADDRESS_DECRYPTION_SECRET: Buffer.from(addressKeyPair.secretKey).toString('base64'),
   },
@@ -113,7 +118,10 @@ delete config.secrets;
 process.env.CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV = 'false';
 process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'false';
 const runtimeRoot = await mkdtemp(join(tmpdir(), '111k-api-'));
-const server = createTestHarness({ root: runtimeRoot, workers: [{ config }] });
+const server = createTestHarness({ root: runtimeRoot, workers: [{ config }, { config: {
+  name: 'mons-shop-cdn', main: resolve(root, 'scripts/ethereum-metadata/local-worker.ts'),
+  compatibility_date: rawConfig.compatibility_date, compatibility_flags: ['nodejs_compat'],
+} }] });
 let closed = false;
 let reconcileTimer: ReturnType<typeof setInterval> | undefined;
 async function close() {

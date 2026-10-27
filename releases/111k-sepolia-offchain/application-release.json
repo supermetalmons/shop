@@ -1,0 +1,51 @@
+{
+  "verifiedAt": "2026-10-27T11:07:28.695Z",
+  "complete": true,
+  "baseRevision": "1f6a69b0d9be6699009f389d44b6b0412959fe9c",
+  "workingTreeChangesIncluded": true,
+  "sourceAttribution": "Deployment inputs, source hashes, generated metadata manifests and service version IDs identify the published working-tree build.",
+  "chainId": 11155111,
+  "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+  "rendererAddress": "0x83dfce5d990bf564afd02ae63555799b51d7f181",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/",
+  "bucket": "cdn-mons-shop",
+  "location": "Eastern North America",
+  "metadataObjects": 689896,
+  "deployments": {
+    "mons-shop-api": {
+      "deploymentId": "7dfc3c90-da21-4e4f-850b-f7eb1a4f5ffe",
+      "versionId": "1246e6cb-aaa6-4540-90f8-3b3b8518cfe6",
+      "percentage": 100,
+      "createdOn": "2026-10-27T10:45:41.993835Z"
+    },
+    "mons-shop": {
+      "deploymentId": "18a8cb7c-2e79-4e59-8280-82a3cf8a30a0",
+      "versionId": "84864d21-7941-4ccf-a037-3c67079b0465",
+      "percentage": 100,
+      "createdOn": "2026-10-27T10:47:35.216461Z"
+    },
+    "mons-shop-cdn": {
+      "deploymentId": "76fb72a0-0438-4ce4-9a88-bab90d1dc096",
+      "versionId": "36f1fbe6-1130-4e18-9805-1e83e9d2c08a",
+      "percentage": 100,
+      "createdOn": "2026-10-27T10:11:45.52567Z"
+    }
+  },
+  "control": {
+    "paused": false,
+    "revision": 13,
+    "pausedAtMs": null,
+    "chainId": 11155111,
+    "contractAddress": "0x7f5f699b99e8feff9b9011f5b6f193d072186a92",
+    "resetGuardId": null,
+    "lastResetId": "796fe701-a050-4cec-a276-d56384e6592e",
+    "updatedAtMs": 1793098497000
+  },
+  "apiDrainNotBefore": "2026-10-27T10:48:28.697Z",
+  "resetId": "796fe701-a050-4cec-a276-d56384e6592e",
+  "privateResetBackupCreated": true,
+  "liveAcceptance": "live-acceptance.json",
+  "sourceVerification": "sourcify-verification.json",
+  "validation": "validation.json",
+  "browserAcceptance": "browser-acceptance.json"
+}

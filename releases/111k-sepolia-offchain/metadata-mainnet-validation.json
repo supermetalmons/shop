@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "network": "mainnet",
+  "manifestSha256": "40d1b5a5fa8c30000c9c330a4a663f980baa8c68897fba06eee20cb54b7c4e26",
+  "objectsSha256": "ea3b759801c74d1ced793362b6500fdfd778280f1427d66aabdcb864d0ca16c7",
+  "objectCount": 344948,
+  "totalBytes": 1072838452,
+  "artworkGeometryCount": 222222,
+  "digitalReceiptMatches": 111111
+}

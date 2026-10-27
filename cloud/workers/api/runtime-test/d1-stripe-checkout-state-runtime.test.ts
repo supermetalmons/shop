@@ -38,6 +38,7 @@ test('real D1 expands checkout storage without disrupting legacy writes, then ac
       migrations_dir: database.binding === 'COMMERCE_DB' ? directory : resolve('cloud/workers/api', String(database.migrations_dir)) })) };
   delete runtime.$schema;
   delete runtime.secrets;
+  delete runtime.services;
   const server = createTestHarness({ root: resolve('.'), workers: [{ config: runtime }] });
   try {
     await server.listen();

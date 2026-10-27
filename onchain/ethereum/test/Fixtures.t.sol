@@ -185,6 +185,12 @@ contract FixturesTest is TestSupport {
             '"}',
             ',{"kind":4,"displayId":111111,"tokenURI":"',
             renderer.tokenURI(4, 111111),
+            '"}',
+            ',{"kind":4,"displayId":111112,"tokenURI":"',
+            renderer.tokenURI(4, 111112),
+            '"}',
+            ',{"kind":4,"displayId":222222,"tokenURI":"',
+            renderer.tokenURI(4, 222222),
             '"}]'
         );
         vm.writeFile("fixtures/metadata.json", output);

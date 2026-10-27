@@ -1,7 +1,7 @@
 pragma solidity 0.8.30;
 
 import {NFT111K} from "../src/NFT111K.sol";
-import {NFT111KRenderer} from "../src/NFT111KRenderer.sol";
+import {NFT111KUrlRenderer} from "../src/NFT111KUrlRenderer.sol";
 import {TestSupport, Vm} from "./TestSupport.sol";
 
 contract ProceedsReceiver {
@@ -112,7 +112,7 @@ contract ForcedProceeds {
 
 contract NFT111KProceedsTest is TestSupport {
     NFT111K private token;
-    NFT111KRenderer private renderer;
+    NFT111KUrlRenderer private renderer;
     address private constant BUYER = address(0xB00001);
     address payable private constant DELIVERY = payable(address(0xD00001));
     address payable private constant NEXT_DELIVERY = payable(address(0xD00002));
@@ -123,7 +123,7 @@ contract NFT111KProceedsTest is TestSupport {
         vm.warp(2_000_000_000);
         vm.deal(address(this), 100 ether);
         vm.deal(BUYER, 100 ether);
-        renderer = new NFT111KRenderer();
+        renderer = new NFT111KUrlRenderer("https://cdn.mons.shop/111k-sepolia/");
         (address[] memory recipients, uint256[] memory shares) = _split(4);
         token = _deploy(recipients, shares, DELIVERY);
     }
