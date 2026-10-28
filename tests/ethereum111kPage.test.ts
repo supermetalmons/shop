@@ -629,8 +629,12 @@ test('an exhausted allowance clears a prior proof error and restores public crat
 test('the mint panel shares the drop frame and previews the selected crate quantity', async () => {
   const view = page({ header: createElement('header', {}, 'Shop header') });
   const crateImage = view.getByRole('img', { name: '111K crate' });
-  assert.equal(crateImage.querySelector('text')?.textContent, '?');
-  assert.equal(crateImage.getAttribute('viewBox'), '0 0 720 720');
+  assert.equal(crateImage.getAttribute('src'), 'https://wip.lil.org/111k/crate_clean.webp');
+  assert.equal(crateImage.getAttribute('width'), '1218');
+  assert.equal(crateImage.getAttribute('height'), '833');
+  const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
+  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1218 / 833)}px`);
+  assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
   await waitFor(() => assert.match(view.container.querySelector('.mint-panel')!.textContent!, /5555\s*\/\s*5555 left/));
   const frame = view.container.querySelector('.drop-page-frame--active')!;
   assert.ok(frame.contains(view.getByText('Shop header')));
@@ -684,6 +688,13 @@ test('switching containers preserves quantity unless it exceeds the available su
   assert.equal(quantity.max, '3');
   assert.equal(view.queryByRole('img', { name: '111K crate' }), null);
   assert.equal(view.getAllByRole('img', { name: '111K warehouse' }).length, 2);
+  const warehouseImage = view.getAllByRole('img', { name: '111K warehouse' })[0];
+  assert.equal(warehouseImage.getAttribute('src'), 'https://wip.lil.org/111k/warehouse_clean.webp');
+  assert.equal(warehouseImage.getAttribute('width'), '1254');
+  assert.equal(warehouseImage.getAttribute('height'), '1104');
+  const previewStyle = (view.container.querySelector('.mint-panel__boxes') as HTMLElement).style;
+  assert.equal(previewStyle.getPropertyValue('--box-width'), `${Math.floor(120 * 1254 / 1104)}px`);
+  assert.equal(previewStyle.getPropertyValue('--box-height'), '120px');
   assert.match(view.container.querySelector('.mint-panel')!.textContent!, /3\s*\/\s*505 left/);
   assert.ok(view.getByRole('button', { name: /Mint\s*2 warehouses.*0.0022 ETH/ }));
   fireEvent.click(view.getByRole('radio', { name: 'Crate' }));
@@ -1379,6 +1390,10 @@ test('Ethereum and Solana appear in one inventory while selection dispatch stays
   });
   await waitFor(() => assert.equal(view.container.querySelectorAll('[data-inventory-id]').length, 2));
   const ethereumTile = view.container.querySelector(`[data-inventory-id="${item().id}"]`)!;
+  const crateImage = ethereumTile.querySelector('img')!;
+  assert.equal(crateImage.getAttribute('src'), 'https://wip.lil.org/111k/crate_clean.webp');
+  assert.equal(crateImage.getAttribute('width'), '1218');
+  assert.equal(crateImage.getAttribute('height'), '833');
   fireEvent.click(ethereumTile);
   assert.equal(cleared, 1);
   assert.ok(view.getByRole('button', { name: 'Open crate' }));
@@ -1427,6 +1442,10 @@ test('warehouses and receipts keep their existing actions without offering check
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [warehouse, receipt], nextCursor: null, observedBlock: 10 }));
   const view = page();
   await waitFor(() => assert.ok(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)));
+  const warehouseImage = view.container.querySelector(`[data-inventory-id="${warehouse.id}"] img`)!;
+  assert.equal(warehouseImage.getAttribute('src'), 'https://wip.lil.org/111k/warehouse_clean.webp');
+  assert.equal(warehouseImage.getAttribute('width'), '1254');
+  assert.equal(warehouseImage.getAttribute('height'), '1104');
   fireEvent.click(view.container.querySelector(`[data-inventory-id="${warehouse.id}"]`)!);
   assert.ok(view.getByRole('button', { name: 'Open warehouse' }));
   assert.equal(view.queryByRole('button', { name: 'Send' }), null);

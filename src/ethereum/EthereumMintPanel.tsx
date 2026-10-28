@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityControl } from '../components/MintPanel';
 import { MintPanelActions } from '../components/MintPanelActions';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { EthereumContainerPreview } from './EthereumContainerPreview';
 import { EthereumContainerIcon } from './EthereumContainerIcon';
+import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 
 type EthereumMintPanelProps = {
   kind: 'crate' | 'warehouse';
@@ -23,14 +23,9 @@ type EthereumMintPanelProps = {
   onMint: () => void;
 };
 
-function ContainerPreview({ kind, onReady }: PrimaryMediaControls & { kind: 'crate' | 'warehouse' }) {
-  useEffect(onReady, [onReady]);
-  return <EthereumContainerPreview kind={kind} className="mint-panel__box mint-panel__box--media" />;
-}
-
 const containerPreviews = {
-  crate: (controls: PrimaryMediaControls) => <ContainerPreview kind="crate" {...controls} />,
-  warehouse: (controls: PrimaryMediaControls) => <ContainerPreview kind="warehouse" {...controls} />,
+  crate: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="crate" className="mint-panel__box" {...controls} />,
+  warehouse: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="warehouse" className="mint-panel__box" {...controls} />,
 };
 
 export function EthereumMintPanel({
@@ -44,7 +39,7 @@ export function EthereumMintPanel({
     ariaLabel="111K testnet mint"
     quantity={quantity}
     quantityLabel={quantityLabel}
-    boxMedia={{ aspectRatio: 1, mediaScale: kind === 'crate' ? 1.4 : 1.1 }}
+    boxMedia={{ aspectRatio: ETHEREUM_CONTAINER_MEDIA[kind].aspectRatio }}
     renderPreviewPrimary={containerPreviews[kind]}
     repeatPreviewPrimary
     previewPrimaryKey={`111k-${kind}`}

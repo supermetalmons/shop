@@ -275,6 +275,7 @@ type InventoryImageWithFallbackProps = {
   dropId: string;
   src: string;
   alt: string;
+  imageDimensions?: InventoryItem['imageDimensions'];
   ariaHidden?: boolean;
   decoding?: 'async' | 'auto' | 'sync';
 };
@@ -283,6 +284,7 @@ function InventoryImageWithFallback({
   dropId,
   src,
   alt,
+  imageDimensions,
   ariaHidden = false,
   decoding,
 }: InventoryImageWithFallbackProps) {
@@ -293,6 +295,8 @@ function InventoryImageWithFallback({
       imageProps={{
         className: 'inventory__image',
         alt: ariaHidden ? '' : alt,
+        width: imageDimensions?.width,
+        height: imageDimensions?.height,
         'aria-hidden': ariaHidden ? true : undefined,
         loading: 'lazy',
         decoding,
@@ -386,6 +390,7 @@ function InventoryMedia({
           dropId={item.dropId}
           src={item.image}
           alt={item.name}
+          imageDimensions={item.imageDimensions}
           ariaHidden
           decoding="async"
         />
@@ -395,7 +400,7 @@ function InventoryMedia({
     return <InventoryFigureBackgroundMedia item={item} />;
   }
 
-  return <InventoryImageWithFallback dropId={item.dropId} src={item.image} alt={item.name} />;
+  return <InventoryImageWithFallback dropId={item.dropId} src={item.image} alt={item.name} imageDimensions={item.imageDimensions} />;
 }
 
 export function InventoryGrid({

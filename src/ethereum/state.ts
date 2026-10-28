@@ -1,6 +1,7 @@
 import type { Ethereum111kConfig, EthereumInventoryItem, EthereumSession } from '../../shared/ethereum/api';
 import { ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import type { InventoryItem } from '../types';
+import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 
 export type EthereumAction = 'mint' | 'unbox' | 'delivery' | 'claim' | 'transfer' | 'cancel';
 export type EthereumPendingTransaction = {
@@ -29,9 +30,11 @@ export function ethereumInventoryScope(config: Pick<Ethereum111kConfig, 'chainId
 export function ethereumInventoryQueryKey(scope: string | null) { return ['ethereum111k', 'inventory', scope] as const; }
 
 export function ethereumInventoryView(item: EthereumInventoryItem): EthereumInventoryView {
+  const containerMedia = item.kind === 'crate' || item.kind === 'warehouse' ? ETHEREUM_CONTAINER_MEDIA[item.kind] : undefined;
   return {
     id: ethereumAssetId(item.chainId, item.contractAddress, item.tokenId),
-    dropId: '111k_devnet', name: item.name, image: item.image,
+    dropId: '111k_devnet', name: item.name, image: containerMedia?.src ?? item.image,
+    ...(containerMedia ? { imageDimensions: { width: containerMedia.width, height: containerMedia.height } } : {}),
     kind: item.kind.endsWith('_receipt') ? 'certificate' : item.kind === 'artwork' ? 'dude' : 'box',
     ...(item.kind === 'artwork' || item.kind === 'artwork_receipt' ? { dudeId: item.displayId } : { boxId: String(item.displayId) }),
     attributes: item.attributes?.map(attribute => ({ trait_type: attribute.trait_type, value: String(attribute.value) })),

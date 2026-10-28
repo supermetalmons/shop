@@ -258,7 +258,7 @@ test('Ethereum inventory isolates chain, contract and owner, without changing NF
   await assert.rejects(ethereumApi.inventory(config, owner, null));
 });
 
-test('Ethereum inventory and confirmations preserve HTTPS images and editable metadata', async t => {
+test('Ethereum inventory and confirmations preserve metadata while container previews use dimensioned overrides', async t => {
   const artwork = { ...item('1'), name: 'Updated artwork #1', description: '',
     image: 'https://future-cdn.example/artwork.webp', attributes: [{ trait_type: 'type', value: 'artwork' }] };
   t.mock.method(globalThis, 'fetch', async () => Response.json({
@@ -267,6 +267,20 @@ test('Ethereum inventory and confirmations preserve HTTPS images and editable me
   assert.deepEqual((await ethereumApi.inventory(config, owner, null)).items, [artwork]);
   assert.deepEqual((await ethereumApi.confirm(hash, config, owner)).items, [artwork]);
   assert.deepEqual(ethereumInventoryView(artwork).attributes, artwork.attributes);
+  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt'] as const) {
+    const view = ethereumInventoryView({ ...artwork, kind });
+    assert.equal(view.image, artwork.image);
+    assert.equal(view.imageDimensions, undefined);
+  }
+  for (const container of [
+    { kind: 'crate', width: 1218, height: 833 },
+    { kind: 'warehouse', width: 1254, height: 1104 },
+  ] as const) {
+    const view = ethereumInventoryView({ ...artwork, kind: container.kind });
+    assert.equal(view.image, `https://wip.lil.org/111k/${container.kind}_clean.webp`);
+    assert.deepEqual(view.imageDimensions, { width: container.width, height: container.height });
+    assert.equal(view.ethereum.image, artwork.image);
+  }
   for (const image of ['http://wip.lil.org/artwork.webp', 'https://user@wip.lil.org/artwork.webp', 'javascript:alert(1)']) {
     artwork.image = image;
     await assert.rejects(ethereumApi.inventory(config, owner, null), /invalid response/);

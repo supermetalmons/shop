@@ -80,6 +80,7 @@ export interface InventoryItem {
   name: string;
   kind: AssetKind;
   image?: string;
+  imageDimensions?: { width: number; height: number };
   previewVideo?: InventoryPreviewVideo;
   attributes?: { trait_type: string; value: string }[];
   boxId?: string;
