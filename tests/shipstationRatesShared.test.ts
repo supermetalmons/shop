@@ -498,8 +498,8 @@ test('shared ShipStation shipment errors include only safe field names', async (
     }),
     (error) => error instanceof ShipStationRatesProviderError &&
       error.code === 'failed-precondition' &&
-      error.message.includes('field_value_required (ship_to)') &&
-      error.message.includes('invalid_field_value (packages[0].weight.value)') &&
+      error.message.includes('code: field_value_required, field: ship_to') &&
+      error.message.includes('code: invalid_field_value, field: packages[0].weight.value') &&
       !error.message.includes('Private'),
   );
 });

@@ -2,6 +2,7 @@ import type {
   FulfillmentShipStationLabel,
   ShipStationMoney,
 } from './contracts.ts';
+import { shipStationErrorDetails, type ShipStationErrorDiagnostics } from './shipstationErrors.ts';
 
 const SHIPSTATION_API_BASE = 'https://api.shipstation.com/v2';
 const SHIPSTATION_LABEL_TIMEOUT_MS = 15_000;
@@ -27,6 +28,7 @@ export class ShipStationLabelProviderError extends Error {
   constructor(
     readonly code: ShipStationLabelProviderErrorCode,
     message: string,
+    readonly diagnostics?: ShipStationErrorDiagnostics,
   ) {
     super(message);
     this.name = 'ShipStationLabelProviderError';
@@ -251,32 +253,27 @@ async function readBoundedText(response: Response, maxBytes: number, signal: Abo
 }
 
 export function shipStationErrorMessage(value: unknown, fallback: string): string {
-  const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
-  const codes = Array.from(new Set(errors.flatMap((entry) => {
-    const code = optionalString(record(entry).error_code);
-    return code && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code) ? [code] : [];
-  }))).slice(0, 5);
-  if (codes.some((code) => /balance|fund|postage/i.test(code))) {
-    return 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.';
-  }
-  return codes.length ? codes.join('; ') : fallback;
+  return shipStationErrorDetails(value, fallback).message;
 }
 
 function errorForStatus(
   status: number,
-  message: string,
-  operation = 'shipment',
+  value: unknown,
+  operation: string,
 ): ShipStationLabelProviderError {
+  const details = shipStationErrorDetails(value, 'ShipStation returned an unrecognized error.', status);
+  const { message } = details;
+  const diagnostics = { ...details.diagnostics, operation };
   if (status === 401 || status === 403) {
-    return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the API key: ${message}`);
+    return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the API key during ${operation}: ${message}`, diagnostics);
   }
   if (status === 429) {
-    return new ShipStationLabelProviderError('resource-exhausted', `ShipStation rate limit: ${message}`);
+    return new ShipStationLabelProviderError('resource-exhausted', `ShipStation rate limit during ${operation}: ${message}`, diagnostics);
   }
   if (status >= 500) {
-    return new ShipStationLabelProviderError('unavailable', `ShipStation is unavailable: ${message}`);
+    return new ShipStationLabelProviderError('unavailable', `ShipStation is unavailable during ${operation}: ${message}`, diagnostics);
   }
-  return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the ${operation}: ${message}`);
+  return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the ${operation}: ${message}`, diagnostics);
 }
 
 async function shipStationLabelFetch(
@@ -346,7 +343,7 @@ export async function listShipStationLabelsForShipment(
     options,
   );
   if (status < 200 || status >= 300) {
-    throw errorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+    throw errorForStatus(status, json, 'label lookup');
   }
   const labels = record(json).labels;
   if (!Array.isArray(labels)) {
@@ -374,7 +371,7 @@ export async function getShipStationLabelById(
     options,
   );
   if (status < 200 || status >= 300) {
-    throw errorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+    throw errorForStatus(status, json, 'label lookup');
   }
   const payload = record(json);
   const result = shipStationLabelResult(payload.label ?? json);
@@ -403,15 +400,21 @@ export async function createShipStationLabelFromRate(
     options,
   );
   if (status === 408) {
-    throw new ShipStationLabelProviderError('deadline-exceeded', 'ShipStation request timed out');
+    const { message, diagnostics } = shipStationErrorDetails(json, 'ShipStation request timed out', status);
+    throw new ShipStationLabelProviderError('deadline-exceeded', `ShipStation label purchase timed out: ${message}`, {
+      ...diagnostics, operation: 'label purchase',
+    });
   }
   if (status < 200 || status >= 300) {
-    throw errorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+    throw errorForStatus(status, json, 'label purchase');
   }
   const payload = record(json);
   const result = shipStationLabelResult(payload.label ?? json);
   if (!result) {
-    throw new ShipStationLabelProviderError('internal', 'ShipStation returned an invalid label');
+    const { message, diagnostics } = shipStationErrorDetails(json, 'ShipStation returned an invalid label', status);
+    throw new ShipStationLabelProviderError('internal', `ShipStation label purchase was not confirmed: ${message}`, {
+      ...diagnostics, operation: 'label purchase',
+    });
   }
   return result;
 }
@@ -441,12 +444,15 @@ export async function voidShipStationLabel(
     options,
   );
   if (status === 408) {
-    throw new ShipStationLabelProviderError('deadline-exceeded', 'ShipStation request timed out');
+    const { message, diagnostics } = shipStationErrorDetails(json, 'ShipStation request timed out', status);
+    throw new ShipStationLabelProviderError('deadline-exceeded', `ShipStation label void request timed out: ${message}`, {
+      ...diagnostics, operation: 'label void request',
+    });
   }
   if (status < 200 || status >= 300) {
     throw errorForStatus(
       status,
-      shipStationErrorMessage(json, `HTTP ${status}`),
+      json,
       'label void request',
     );
   }

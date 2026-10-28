@@ -411,6 +411,10 @@ function shipStationLabelPurchaseFailure(error: unknown): { code: string; messag
   return { code: 'internal', message: 'Failed to purchase the ShipStation label' };
 }
 
+function shipStationDiagnosticId(value: string): string | undefined {
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(value) ? value : undefined;
+}
+
 async function failFulfillmentShipStationLabelPurchase(args: {
   body: z.infer<typeof shipStationLabelPurchaseSchema>;
   common: CommerceWriteCommon;
@@ -528,29 +532,29 @@ async function purchaseFulfillmentShipStationLabel(
   const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
   rejectIrlShipStationOrder(initial.data);
   const shipmentId = requireShipStationShipmentId(initial.data);
-  const reconciled = await reconcileFulfillmentShipStationLabel({
-    apiKey,
-    common,
-    deliveryId: body.deliveryId,
-    dropId,
-    order: initial.data,
-    refreshInactiveStoredLabel: false,
-    shipmentId,
-    wallet,
-  });
-  if (reconciled.active) {
-    return {
-      deliveryId: body.deliveryId,
-      shipmentId,
-      label: reconciled.active,
-      ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
-      alreadyPurchased: true,
-    };
-  }
   let claimAcquired = false;
   let purchaseAttempted = false;
   let purchaseAccepted = false;
   try {
+    const reconciled = await reconcileFulfillmentShipStationLabel({
+      apiKey,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      order: initial.data,
+      refreshInactiveStoredLabel: false,
+      shipmentId,
+      wallet,
+    });
+    if (reconciled.active) {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        label: reconciled.active,
+        ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
+        alreadyPurchased: true,
+      };
+    }
     const claim = await claimFulfillmentShipStationLabelPurchase({ body, common, dropId, shipmentId, wallet });
     if (claim.alreadyPurchased) {
       const result = await getShipStationLabelById(apiKey, claim.label.labelId, {
@@ -680,10 +684,26 @@ async function purchaseFulfillmentShipStationLabel(
         || label.labelId !== resolution.result.label.labelId,
     };
   } catch (error) {
+    const failure = shipStationLabelPurchaseFailure(error);
+    const diagnostics = error instanceof ShipStationLabelProviderError
+      || error instanceof ShipStationRatesProviderError
+      || error instanceof ShipStationProfileError
+      ? error.diagnostics : undefined;
+    console.error(JSON.stringify({
+      event: 'fulfillment_shipstation_label_purchase_failed',
+      dropId,
+      deliveryId: body.deliveryId,
+      shipmentId: shipStationDiagnosticId(shipmentId),
+      rateId: shipStationDiagnosticId(body.rateId),
+      purchaseRequestId: body.requestId,
+      purchaseAttempted,
+      purchaseAccepted,
+      code: failure.code,
+      ...(diagnostics ? { provider: diagnostics } : {}),
+    }));
     if (!claimAcquired) throw error;
     const signalCancelled = isSignalCancellationError(common.signal, error);
     const clientCancellation = clientCancellationReason(error, common);
-    const failure = shipStationLabelPurchaseFailure(error);
     const ambiguous = purchaseAccepted || (
       purchaseAttempted
       && ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].includes(failure.code)

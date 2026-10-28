@@ -13,6 +13,7 @@ import {
   parseShipStationPackage,
   type ShipStationPackageInput,
 } from './shipstationPackage.ts';
+import { shipStationErrorDetails, type ShipStationErrorDiagnostics } from './shipstationErrors.ts';
 
 const SHIPSTATION_API_BASE = 'https://api.shipstation.com/v2';
 const SHIPSTATION_TIMEOUT_MS = 15_000;
@@ -30,6 +31,7 @@ export class ShipStationRatesProviderError extends Error {
   constructor(
     readonly code: ShipStationRatesProviderErrorCode,
     message: string,
+    readonly diagnostics?: ShipStationErrorDiagnostics,
   ) {
     super(message);
     this.name = 'ShipStationRatesProviderError';
@@ -40,8 +42,9 @@ export class ShipStationAddressCorrectionProviderError extends ShipStationRatesP
   constructor(
     message: string,
     readonly fields: ShipStationEditableAddressField[],
+    diagnostics?: ShipStationErrorDiagnostics,
   ) {
-    super('failed-precondition', message);
+    super('failed-precondition', message, diagnostics);
     this.name = 'ShipStationAddressCorrectionProviderError';
   }
 }
@@ -1215,29 +1218,16 @@ async function readBoundedText(response: Response, maxBytes: number, signal: Abo
   return new TextDecoder().decode(merged);
 }
 
-function errorMessage(value: unknown, fallback: string): string {
-  const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
-  const details = Array.from(new Set(errors.flatMap((entry) => {
-    const error = record(entry);
-    const code = safeProviderIdentifier(error.error_code);
-    if (!code) return [];
-    const safeFieldName = safeProviderFieldName(error.field_name);
-    return [`${code}${safeFieldName ? ` (${safeFieldName})` : ''}`];
-  }))).slice(0, 5);
-  const codes = details.map((detail) => detail.split(' (', 1)[0]);
-  if (codes.some((code) => /balance|fund|postage/i.test(code))) {
-    return 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.';
-  }
-  return details.length ? details.join('; ') : fallback;
-}
-
-function errorForStatus(status: number, message: string): ShipStationRatesProviderError {
+function errorForStatus(status: number, value: unknown, operation: string): ShipStationRatesProviderError {
+  const details = shipStationErrorDetails(value, 'ShipStation returned an unrecognized error.', status);
+  const { message } = details;
+  const diagnostics = { ...details.diagnostics, operation };
   if (status === 401 || status === 403) {
-    return new ShipStationRatesProviderError('failed-precondition', `ShipStation rejected the API key: ${message}`);
+    return new ShipStationRatesProviderError('failed-precondition', `ShipStation rejected the API key during ${operation}: ${message}`, diagnostics);
   }
-  if (status === 429) return new ShipStationRatesProviderError('resource-exhausted', `ShipStation rate limit: ${message}`);
-  if (status >= 500) return new ShipStationRatesProviderError('unavailable', `ShipStation is unavailable: ${message}`);
-  return new ShipStationRatesProviderError('failed-precondition', `ShipStation rejected the shipment: ${message}`);
+  if (status === 429) return new ShipStationRatesProviderError('resource-exhausted', `ShipStation rate limit during ${operation}: ${message}`, diagnostics);
+  if (status >= 500) return new ShipStationRatesProviderError('unavailable', `ShipStation is unavailable during ${operation}: ${message}`, diagnostics);
+  return new ShipStationRatesProviderError('failed-precondition', `ShipStation rejected the ${operation}: ${message}`, diagnostics);
 }
 
 async function shipStationFetch(
@@ -1304,7 +1294,7 @@ export async function getShipStationShipmentById(
   const { status, json, validJson } = await shipStationFetch(apiKey, `/shipments/${encodeURIComponent(shipmentId)}`, {
     method: 'GET',
   }, options);
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'shipment lookup');
   if (!validJson) throw providerResponseError();
   const raw = record(json);
   const shipment = shipmentValue(Object.keys(record(raw.shipment)).length ? raw.shipment : raw);
@@ -1330,7 +1320,7 @@ export async function getShipStationShipmentByExternalId(
     options,
   );
   if (status === 404) return null;
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'shipment lookup');
   if (!validJson) throw providerResponseError();
   const raw = record(json);
   const rawShipment = Object.keys(record(raw.shipment)).length ? record(raw.shipment) : raw;
@@ -1356,33 +1346,41 @@ export async function createShipStationShipment(
       }],
     },
   }, options);
-  if (status === 408) throw new ShipStationRatesProviderError('deadline-exceeded', 'ShipStation request timed out');
+  if (status === 408) {
+    const { message, diagnostics } = shipStationErrorDetails(json, 'ShipStation request timed out', status);
+    throw new ShipStationRatesProviderError('deadline-exceeded', `ShipStation shipment creation timed out: ${message}`, {
+      ...diagnostics, operation: 'shipment creation',
+    });
+  }
   if (status < 200 || status >= 300) {
-    const message = errorMessage(json, `HTTP ${status}`);
+    const { message, diagnostics } = shipStationErrorDetails(json, 'ShipStation returned an unrecognized error.', status);
     const correctionFields = shipStationAddressCorrectionFields(json);
     if (![401, 403, 429, 504].includes(status) && correctionFields.length) {
       throw new ShipStationAddressCorrectionProviderError(
         `ShipStation rejected the shipment: ${message}`,
         correctionFields,
+        { ...diagnostics, operation: 'shipment creation' },
       );
     }
-    throw errorForStatus(status, message);
+    throw errorForStatus(status, json, 'shipment creation');
   }
   if (!validJson) throw providerResponseError();
   const root = record(json);
   const rawShipment = Array.isArray(root.shipments) ? record(root.shipments[0]) : {};
   const shipmentErrors = Array.isArray(rawShipment.errors) ? rawShipment.errors : [];
   if (root.has_errors === true || shipmentErrors.length) {
-    const errors = { errors: [...providerErrors(root), ...shipmentErrors] };
-    const message = `ShipStation rejected the shipment: ${errorMessage(
-      errors,
-      errorMessage(root, 'ShipStation reported an error'),
-    )}`;
+    const errors = { request_id: root.request_id, errors: [...providerErrors(root), ...shipmentErrors] };
+    const details = shipStationErrorDetails(errors, 'ShipStation reported an error', status);
+    const message = `ShipStation rejected the shipment: ${details.message}`;
     const correctionFields = shipStationAddressCorrectionFields(errors);
     if (correctionFields.length) {
-      throw new ShipStationAddressCorrectionProviderError(message, correctionFields);
+      throw new ShipStationAddressCorrectionProviderError(message, correctionFields, {
+        ...details.diagnostics, operation: 'shipment creation',
+      });
     }
-    throw new ShipStationRatesProviderError('failed-precondition', message);
+    throw new ShipStationRatesProviderError('failed-precondition', message, {
+      ...details.diagnostics, operation: 'shipment creation',
+    });
   }
   const created = shipmentValue(rawShipment);
   if (!stringValue(created.shipment_id)) throw providerResponseError();
@@ -1410,7 +1408,7 @@ export async function updateShipStationShipment(
     method: 'PUT',
     body: update,
   }, options);
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'shipment update');
   if (!validJson) throw providerResponseError();
   const raw = record(json);
   const shipment = shipmentValue(Object.keys(record(raw.shipment)).length ? raw.shipment : raw);
@@ -1432,7 +1430,7 @@ export async function requestShipStationShipmentRates(
     options,
   );
   if (carriersResponse.status < 200 || carriersResponse.status >= 300) {
-    throw errorForStatus(carriersResponse.status, errorMessage(carriersResponse.json, `HTTP ${carriersResponse.status}`));
+    throw errorForStatus(carriersResponse.status, carriersResponse.json, 'carrier lookup');
   }
   if (!carriersResponse.validJson) throw providerResponseError();
   const carriersPayload = record(carriersResponse.json);
@@ -1455,7 +1453,7 @@ export async function requestShipStationShipmentRates(
     method: 'POST',
     body: { shipment_id: shipmentId, rate_options: { carrier_ids: carrierIds } },
   }, options);
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'rate request');
   if (!validJson) throw providerResponseError();
   const response = validatedRateResponse(json, shipmentId);
   if (!response) throw providerResponseError();
@@ -1477,7 +1475,7 @@ export async function getShipStationShipmentRates(
     { method: 'GET' },
     options,
   );
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'rate lookup');
   if (!validJson) throw providerResponseError();
   const response = validatedRateResponse(json, shipmentId, expectedRequest.requestId);
   if (!response) {
@@ -1505,7 +1503,7 @@ export async function getShipStationRateById(
     { method: 'GET' },
     options,
   );
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) throw errorForStatus(status, json, 'selected rate lookup');
   if (!validJson) throw providerResponseError();
   const payload = record(json);
   const raw = Object.keys(record(payload.rate)).length ? record(payload.rate) : payload;

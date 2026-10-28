@@ -29,6 +29,7 @@ import {
 } from '../../../../../shared/shipstationRates.js';
 import { type ShipStationPackageInput } from '../../../../../shared/shipstationPackage.js';
 import type { FulfillmentShipStationAddressCorrectionDetails } from '../../../../../shared/contracts.js';
+import type { ShipStationErrorDiagnostics } from '../../../../../shared/shipstationErrors.js';
 import { isSignalCancellationError } from '../boundedRequest.js';
 import {
   ProfileReadError,
@@ -57,6 +58,7 @@ export class ShipStationProfileError extends ProfileReadError {
     status: number,
     message: string,
     readonly details?: unknown,
+    readonly diagnostics?: ShipStationErrorDiagnostics,
   ) {
     super(code, status, message);
   }
@@ -173,9 +175,14 @@ export function profileErrorForShipStation(
     error instanceof ShipStationAddressCorrectionProviderError
       ? { kind: 'shipstation-address-correction', fields: error.fields }
       : undefined;
-  if (error.code === 'deadline-exceeded') return new ShipStationProfileError(error.code, 504, error.message);
-  if (error.code === 'resource-exhausted') return new ShipStationProfileError(error.code, 429, error.message);
-  if (error.code === 'failed-precondition') return new ShipStationProfileError(error.code, 409, error.message, details);
-  if (error.code === 'internal') return new ShipStationProfileError('unavailable', 502, error.message);
-  return new ShipStationProfileError(error.code, 502, error.message);
+  const status = error.code === 'deadline-exceeded' ? 504
+    : error.code === 'resource-exhausted' ? 429
+      : error.code === 'failed-precondition' ? 409 : 502;
+  return new ShipStationProfileError(
+    error.code === 'internal' ? 'unavailable' : error.code,
+    status,
+    error.message,
+    details,
+    error.diagnostics,
+  );
 }

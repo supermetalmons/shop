@@ -217,6 +217,9 @@ Do not store runtime secrets in `release.env`, repository files, command
 arguments, logs, or frontend environment variables.
 `SHIPSTATION_SHIP_FROM` is one JSON object; its Worker secret value is the
 canonical fulfillment origin address.
+Use `"name": "mons shop"` and `"company_name": "mons.shop"` for this origin.
+USPS rejects `"name": "mons.shop"` because its full-name validation requires
+two parts containing at least two alphabetic characters each.
 
 ## Background work
 

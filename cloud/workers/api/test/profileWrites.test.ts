@@ -3685,6 +3685,95 @@ test('ShipStation label purchase route records definite failures and unresolved 
   }
 });
 
+test('ShipStation purchase failures retain safe provider diagnostics after a successful retry', async () => {
+  for (const stage of ['label lookup', 'rate lookup', 'label purchase'] as const) {
+    const harness = createCommerceD1Harness();
+    const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+    seedCommerceDocument(harness, { key, data: {
+      deliveryId: 7,
+      owner: OWNER,
+      status: 'ready_to_ship',
+      items: [{ kind: 'dude', refId: 1 }],
+      shipstation: {
+        shipmentId: 'shipment-1',
+        rateQuotes: [{
+          rateId: 'rate-1',
+          shipmentId: 'shipment-1',
+          totalAmount: { currency: 'usd', amount: 10 },
+        }],
+      },
+    } });
+    let reject = true;
+    const logs: string[] = [];
+    const providerFetch: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      assert.equal(url.hostname, 'api.shipstation.com');
+      const currentStage = url.pathname === '/v2/labels' ? 'label lookup'
+        : url.pathname === '/v2/rates/rate-1' ? 'rate lookup' : 'label purchase';
+      if (reject && currentStage === stage) {
+        return Response.json({
+          request_id: 'provider-request-123',
+          errors: [{
+            error_code: 'unspecified',
+            error_type: 'validation',
+            error_source: 'carrier',
+            field_name: 'ship_to.phone',
+            message: 'Invalid phone for Private 100 Main St Bearer secret-token shipstation-api-key',
+            field_value: 'private-phone',
+          }],
+        }, { status: 400 });
+      }
+      if (currentStage === 'label lookup') return Response.json({ labels: [] });
+      if (currentStage === 'rate lookup') return Response.json(SHIPSTATION_RATE);
+      assert.equal(url.pathname, '/v2/labels/rates/rate-1');
+      return Response.json({ label_id: 'label-1', shipment_id: 'shipment-1', status: 'completed' });
+    };
+    const run = (requestId: string) => handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, { ...LABEL_PURCHASE_BODY, requestId }),
+      { ...fulfillmentEnv, COMMERCE_DB: harness.db },
+      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+      {},
+      d1Dependencies(providerFetch),
+    );
+    const originalConsoleError = console.error;
+    console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
+    try {
+      const failed = await run(LABEL_PURCHASE_BODY.requestId);
+      assert.equal(failed.response.status, 409, stage);
+      const payload = await failed.response.json() as { error: { message: string } };
+      assert.match(payload.error.message, /phone/i);
+      assert.ok(payload.error.message.includes(stage));
+      assert.match(payload.error.message, /HTTP 400/);
+      assert.match(payload.error.message, /provider-request-123/);
+      assert.doesNotMatch(JSON.stringify(payload), /Private|100 Main|secret-token|shipstation-api-key|private-phone/);
+      assert.equal(logs.length, 1);
+      const diagnostic = JSON.parse(logs[0]);
+      assert.equal(diagnostic.event, 'fulfillment_shipstation_label_purchase_failed');
+      assert.equal(diagnostic.deliveryId, 7);
+      assert.equal(diagnostic.dropId, 'card_nft_2');
+      assert.equal(diagnostic.shipmentId, 'shipment-1');
+      assert.equal(diagnostic.rateId, 'rate-1');
+      assert.equal(diagnostic.purchaseRequestId, LABEL_PURCHASE_BODY.requestId);
+      assert.equal(diagnostic.purchaseAttempted, stage === 'label purchase');
+      assert.equal(diagnostic.provider.requestId, 'provider-request-123');
+      assert.equal(diagnostic.provider.status, 400);
+      assert.equal(diagnostic.provider.operation, stage === 'rate lookup' ? 'selected rate lookup' : stage);
+      assert.equal(diagnostic.provider.errors[0].source, 'carrier');
+      reject = false;
+      const success = await run('6ba7b811-9dad-11d1-80b4-00c04fd430c8');
+      assert.equal(success.response.status, 200, stage);
+      const stored = await new D1CommerceRepository(harness.db).get(key);
+      const shipstation = stored?.data.shipstation as Record<string, unknown>;
+      assert.equal(shipstation.labelPurchase, undefined);
+      assert.equal((shipstation.label as { labelId: string }).labelId, 'label-1');
+      assert.equal(logs.length, 1);
+      assert.doesNotMatch(logs[0], /Private|100 Main|Bearer|secret-token|shipstation-api-key|private-phone/);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  }
+});
+
 test('ShipStation label purchase stays unknown after a successful charge and repeated Commerce conflicts', async () => {
   let purchaseState: Record<string, unknown> | undefined;
   let purchaseCalls = 0;
