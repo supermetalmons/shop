@@ -1,0 +1,67 @@
+{
+  "runtime": "native-workerd",
+  "storage": "isolated-local-sqlite-and-r2",
+  "loopbackConnectionsPerOrigin": 64,
+  "seeded": 111111,
+  "seedMs": 433.4,
+  "singleCrate": {
+    "artworks": 20,
+    "apiMs": 55.09,
+    "rpcCalls": 4
+  },
+  "concurrent": {
+    "requests": 200,
+    "artworks": 4000,
+    "totalMs": 10459.74,
+    "p50Ms": 5355.86,
+    "p95Ms": 10030.32,
+    "maxMs": 10447.49,
+    "rpcCalls": 800,
+    "maximumRpcHandlerConcurrency": 2,
+    "sameOriginAndIp": true,
+    "rateLimitedRequests": 0
+  },
+  "publication": {
+    "artworks": 4000,
+    "totalMsFromAdmission": 10601.17
+  },
+  "sameIpPolling": {
+    "requests": 200,
+    "totalMs": 1023.49,
+    "rateLimitedRequests": 0
+  },
+  "sqlite": {
+    "frozen": 4020,
+    "uniqueAssets": 4020,
+    "inspectionMs": 133.53
+  },
+  "restartedFrozenReads": {
+    "requests": 2,
+    "totalMs": 40.11,
+    "rpcCalls": 0
+  },
+  "rpc": {
+    "total": 836,
+    "handlerP95Ms": 0.13,
+    "methods": {
+      "eth_chainId": 208,
+      "eth_getBlockByNumber": 212,
+      "eth_getCode": 3,
+      "eth_call": 2,
+      "eth_getTransactionReceipt": 205,
+      "eth_blockNumber": 204,
+      "eth_getLogs": 1,
+      "eth_getTransactionByHash": 1
+    }
+  },
+  "publicationConflictPreserved": true,
+  "publicationRecoveredAfterRestart": true,
+  "publicationContinuesDuringSlowRpc": true,
+  "partialThenFullTransaction": true,
+  "unrelatedHistoryUnrevealed": true,
+  "fullTransientBudget": {
+    "queued": 10000,
+    "verifiedUnpacksAccepted": 200,
+    "rateLimitedRequests": 0
+  }
+}

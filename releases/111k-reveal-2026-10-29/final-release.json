@@ -1,0 +1,119 @@
+{
+  "verifiedAt": "2026-10-29T20:56:17.014Z",
+  "sourceCommit": "4a207b91ac98f6cc3a420bfd94272169e0a6c74e",
+  "apiVersion": "8d0b2349-2b5c-4b7c-b11a-6889a99ebb0f",
+  "frontendVersion": "da721a0d-2b4b-429f-b4bd-e2b73e8caaba",
+  "validation": {
+    "apiTests": [
+      2730,
+      41
+    ],
+    "frontendTests": [
+      4,
+      29,
+      1,
+      4997
+    ],
+    "contractDeploymentTests": 3,
+    "toolingTypecheck": "passed",
+    "deadCode": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "frontendBuild": "passed",
+    "browserBundle": "passed",
+    "productionDatabaseIntegrity": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "durableObjectSchema": "automatic additive admission bookkeeping and scheduler index upgrade"
+  },
+  "admission": {
+    "transientLimitPerCollection": 10000,
+    "unknownLifetimeMs": 900000,
+    "cleanupBatch": 128,
+    "recentFailedReceipts": "retained through canonical confirmation checks within the same cap",
+    "verifiedUnpacksBypassTransientCapacity": true
+  },
+  "rateLimitsPerOriginIpPerMinute": {
+    "admission": 10000,
+    "total": 120000
+  },
+  "gallery": {
+    "intendedCrateIdsPersisted": true,
+    "bundledTransactionsFiltered": true,
+    "inventoryMediaRetained": true,
+    "reducedMotionRespected": true
+  },
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-29T20:54:37.404Z",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "api": {
+      "transaction": {
+        "status": 200,
+        "cors": "https://www.vvv.so",
+        "cacheControl": "no-store",
+        "body": {
+          "deploymentId": "sepolia-8b4044db",
+          "dropId": "111k_devnet",
+          "chainId": 11155111,
+          "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+          "status": "not_unpack",
+          "artworks": [],
+          "retryAfterMs": 0
+        }
+      },
+      "tokens": {
+        "status": 200,
+        "cors": "https://vvv.so",
+        "cacheControl": "no-store",
+        "body": {
+          "deploymentId": "sepolia-8b4044db",
+          "dropId": "111k_devnet",
+          "chainId": 11155111,
+          "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+          "artworks": [],
+          "unresolved": [
+            {
+              "tokenId": "111111",
+              "status": "unminted"
+            }
+          ],
+          "retryAfterMs": 0
+        }
+      },
+      "denied": {
+        "status": 403
+      },
+      "preflight": {
+        "status": 204
+      }
+    }
+  },
+  "frontendSmoke": {
+    "verifiedAt": "2026-10-29T20:55:33.386Z",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "frontend": {
+      "status": 200,
+      "script": "/assets/index-BIgxi8XE.js",
+      "sha256": "916579fdee7740940c13b82a678984a34f1b7f4ade079a2a5725b75a346bc14b",
+      "trackingGenerationBundled": true
+    }
+  },
+  "loadTest": "final-load-test.json",
+  "historicalBackfill": false,
+  "onchainDeploymentRequired": false
+}
