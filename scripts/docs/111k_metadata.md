@@ -27,6 +27,8 @@ The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Loca
 
 The `cdn-mons-shop` bucket contains 344948 JSON objects per network, 689896 total, and remains in Eastern North America (`enam`). Both networks now use the same JSON contents; the network determines only the destination prefix. Historical release manifests describe their own publications and remain unchanged.
 
+The [111k_devnet reveal asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios for upcoming reveals. It is a dormant archive with no application, metadata generation, or publication integration.
+
 ## Templates
 
 Each template contains `name`, `description`, `image`, and `attributes`. The initial minimal format uses an empty description and one lowercase `type` trait:
