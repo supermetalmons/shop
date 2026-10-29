@@ -1,3 +1,5 @@
+import type { EthereumArtworkAspectRatio, EthereumArtworkCategory } from './reveal.ts';
+
 export const ETHEREUM_111K_DROP_ID = '111k_devnet' as const;
 const ARTWORK_COUNT = 111_111;
 const CRATE_COUNT = 5_555;
@@ -103,6 +105,10 @@ export type EthereumMetadata = {
   name: string;
   description?: string;
   image: string;
+  animation_url?: string;
+  aspectRatio?: EthereumArtworkAspectRatio;
+  category?: EthereumArtworkCategory;
+  revealStatus?: 'unrevealed' | 'revealed';
   attributes?: Array<{ trait_type: string; value: string | number }>;
 };
 

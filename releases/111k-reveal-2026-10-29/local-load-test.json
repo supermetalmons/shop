@@ -1,0 +1,49 @@
+{
+  "runtime": "native-workerd",
+  "storage": "isolated-local-sqlite-and-r2",
+  "loopbackRpcConnections": 64,
+  "seeded": 111111,
+  "seedMs": 413.06,
+  "singleCrate": {
+    "artworks": 20,
+    "apiMs": 55.25,
+    "rpcCalls": 4
+  },
+  "concurrent": {
+    "requests": 200,
+    "artworks": 4000,
+    "totalMs": 5379.98,
+    "p50Ms": 3307.56,
+    "p95Ms": 4997.23,
+    "maxMs": 5379.5,
+    "rpcCalls": 800,
+    "maximumRpcHandlerConcurrency": 1
+  },
+  "sqlite": {
+    "frozen": 4020,
+    "uniqueAssets": 4020,
+    "inspectionMs": 23.39
+  },
+  "restartedFrozenReads": {
+    "requests": 2,
+    "totalMs": 30.28,
+    "rpcCalls": 0
+  },
+  "rpc": {
+    "total": 822,
+    "handlerP95Ms": 0.13,
+    "methods": {
+      "eth_chainId": 205,
+      "eth_getBlockByNumber": 207,
+      "eth_call": 2,
+      "eth_getCode": 1,
+      "eth_getTransactionReceipt": 203,
+      "eth_blockNumber": 203,
+      "eth_getLogs": 1
+    }
+  },
+  "publicationConflictPreserved": true,
+  "publicationRecoveredAfterRestart": true,
+  "partialThenFullTransaction": true,
+  "unrelatedHistoryUnrevealed": true
+}

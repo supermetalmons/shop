@@ -177,6 +177,7 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       '0006_cover_expiry_cleanup_indexes.sql',
       '0007_mi_note_auth.sql',
       '0008_ethereum_profiles.sql',
+      '0009_ethereum_reveal_deployments.sql',
     ]);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
       FROM sqlite_schema

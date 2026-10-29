@@ -63,7 +63,7 @@ test('local deployment rejects current-address payees and deploys one collection
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/local-deployment-test/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {

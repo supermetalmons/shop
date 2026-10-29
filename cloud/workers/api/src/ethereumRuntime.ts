@@ -3,6 +3,9 @@ import type { Ethereum111kConfig } from '../../../../shared/ethereum/api.js';
 import { ethereumHexQuantity } from '../../../../shared/ethereum/protocol.js';
 import { EthereumApiError } from './ethereumError.js';
 import { readBoundedResponseJson } from './boundedResponse.js';
+import { rpcInteger } from './ethereumRpcValue.js';
+
+export { rpcInteger } from './ethereumRpcValue.js';
 
 const CONTRACT_READ_BATCH_SIZE = 4;
 const CONTRACT_READ_CONCURRENCY = 2;
@@ -17,7 +20,8 @@ export type EthereumEnvironment = Pick<Env,
   'ETHEREUM_111K_RPC_URL' |
   'STAFF_AUTH_CHALLENGE_RATE_LIMITER' | 'STAFF_AUTH_SESSION_RATE_LIMITER' |
   'PUBLIC_SHOP_RATE_LIMITER'
-> & { ETHEREUM_111K_SIGNER_SECRET?: string };
+> & Partial<Pick<Env, 'ETHEREUM_REVEAL' | 'ETHEREUM_REVEAL_READ_RATE_LIMITER' | 'ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER'>> &
+  { ETHEREUM_111K_SIGNER_SECRET?: string };
 
 export type EthereumContext = {
   env: EthereumEnvironment;
@@ -179,13 +183,4 @@ export function ethereumTransactionHash(value: unknown): string {
     throw new EthereumApiError('invalid-argument', 'Invalid Ethereum transaction hash.');
   }
   return value.toLowerCase();
-}
-
-export function rpcInteger(value: unknown): number {
-  if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) {
-    throw new EthereumApiError('unavailable', 'Invalid Ethereum block number.');
-  }
-  const number = Number(BigInt(value));
-  if (!Number.isSafeInteger(number) || number < 0) throw new EthereumApiError('unavailable', 'Invalid Ethereum number.');
-  return number;
 }

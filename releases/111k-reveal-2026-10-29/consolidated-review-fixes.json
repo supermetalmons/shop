@@ -1,0 +1,19 @@
+{
+  "verifiedAt": "2026-10-29T17:44:34.053Z",
+  "apiVersion": "2461b917-1d04-45ed-8e01-e8c3a3bddc7f",
+  "frontendVersion": "9e595da4-b808-4ffc-9cfa-67f09672370b",
+  "uniqueFindingsAddressed": 6,
+  "tests": 536,
+  "nativeRuntimePassed": true,
+  "opsMigrationRequired": false,
+  "apiSmoke": {
+    "status": 200,
+    "result": "not_unpack",
+    "artworks": 0,
+    "publishedMetadataFlagsMatch": true
+  },
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-TddyXGXs.js"
+  }
+}

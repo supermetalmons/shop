@@ -1,0 +1,14 @@
+{
+  "verifiedAt": "2026-10-29T15:22:17.500Z",
+  "frontendVersion": "e6cfca7b-df6a-452a-a4d8-ebcb060c28f7",
+  "fix": "pause-hidden-repeat-polling",
+  "frontendTests": 255,
+  "initialHiddenSubmissionPreserved": true,
+  "inFlightRequestsPreserved": true,
+  "queryEvictionCovered": true,
+  "retryDelaysPreserved": true,
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-BFlpkEqt.js"
+  }
+}

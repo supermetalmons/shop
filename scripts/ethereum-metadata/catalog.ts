@@ -34,7 +34,7 @@ export interface MetadataManifest {
   sourceSha256: Record<string, string>;
 }
 
-export type MetadataTemplates = Record<EthereumItemKind, Required<EthereumMetadata>>;
+export type MetadataTemplates = Record<EthereumItemKind, EthereumMetadata & { description: string; attributes: NonNullable<EthereumMetadata['attributes']> }>;
 
 const DEFAULT_TEMPLATES_DIRECTORY = fileURLToPath(new URL('./templates/', import.meta.url));
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -45,7 +45,7 @@ function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function metadataShape(value: unknown): value is Required<EthereumMetadata> {
+function metadataShape(value: unknown): value is MetadataTemplates[EthereumItemKind] {
   if (!record(value) || typeof value.name !== 'string' || !value.name || typeof value.description !== 'string' ||
     typeof value.image !== 'string' || !Array.isArray(value.attributes)) return false;
   return value.attributes.every(attribute => record(attribute) && typeof attribute.trait_type === 'string' &&
@@ -53,7 +53,7 @@ function metadataShape(value: unknown): value is Required<EthereumMetadata> {
       typeof attribute.value === 'number' && Number.isFinite(attribute.value)));
 }
 
-function requireTemplate(value: unknown, kind: EthereumItemKind): Required<EthereumMetadata> {
+function requireTemplate(value: unknown, kind: EthereumItemKind): MetadataTemplates[EthereumItemKind] {
   if (!metadataShape(value)) throw new Error(`Invalid metadata template: ${kind}`);
   const body = JSON.stringify(value).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (/\{\{|\}\}/.test(body)) throw new Error(`Unresolved metadata template placeholder: ${kind}`);
@@ -78,7 +78,7 @@ export async function loadMetadataTemplates(directory = DEFAULT_TEMPLATES_DIRECT
   };
 }
 
-export function renderMetadata(kind: EthereumItemKind, displayId: number, templates: MetadataTemplates): Required<EthereumMetadata> {
+export function renderMetadata(kind: EthereumItemKind, displayId: number, templates: MetadataTemplates): MetadataTemplates[EthereumItemKind] {
   const tokenId = ethereumMetadataTokenId(kind, displayId);
   const value = requireTemplate(templates[kind], kind);
   const body = JSON.stringify(value).replaceAll('{{tokenId}}', tokenId).replaceAll('{{displayId}}', String(displayId));

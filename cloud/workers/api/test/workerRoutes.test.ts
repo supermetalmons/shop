@@ -8,7 +8,7 @@ import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY, STRIPE_CHECKOUT_RETRY_HEADER, STRIP
 
 type ExpectedExactRoute = readonly [
   pathname: string,
-  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'ethereum-checkout-status' | 'pack-status',
+  cors: 'none' | 'public' | 'rpc' | 'profile' | 'staff-auth' | 'mi-note' | 'ethereum' | 'ethereum-checkout-status' | 'ethereum-reveal' | 'pack-status',
   profileOriginGate: boolean,
   staff: 'skip' | 'optional' | 'required',
   commerceMutation: boolean,
@@ -75,6 +75,8 @@ const EXPECTED_EXACT_ROUTES = [
   ['/ethereum/111k/stats', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/stats'],
   ['/ethereum/111k/inventory', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/inventory'],
   ['/ethereum/111k/metadata', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/metadata'],
+  ['/ethereum/111k/reveal/transaction', 'ethereum-reveal', false, 'skip', false, 'profile', '/ethereum/111k/reveal/transaction'],
+  ['/ethereum/111k/reveal/tokens', 'ethereum-reveal', false, 'skip', false, 'profile', '/ethereum/111k/reveal/tokens'],
   ['/ethereum/111k/transactions/confirm', 'ethereum', true, 'skip', false, 'profile', '/ethereum/111k/transactions/confirm'],
   ['/ethereum/auth/challenge', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/challenge'],
   ['/ethereum/auth/verify', 'ethereum', true, 'skip', false, 'profile', '/ethereum/auth/verify'],
@@ -161,6 +163,19 @@ test('unexpected Ethereum errors preserve wallet session CORS policy', () => {
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
   assert.match(response.headers.get('Access-Control-Allow-Headers') || '', /X-Mons-Ethereum-Session/);
   assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, POST, OPTIONS');
+});
+
+test('unexpected Ethereum reveal errors preserve the narrow partner CORS policy', async () => {
+  for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens']) {
+    const response = unexpectedWorkerRouteResponse(workerRouteRegistry.resolve(path),
+      new Request(`https://api.mons.shop${path}`, { headers: { Origin: 'https://vvv.so' } }));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://vvv.so');
+    assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'POST, OPTIONS');
+    assert.equal(response.headers.get('Access-Control-Allow-Headers'), 'Accept, Content-Type, X-Mons-CSRF');
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.deepEqual(await response.json(), { ok: false, error: { code: 'unavailable', message: 'Reveal is temporarily unavailable.' } });
+  }
 });
 
 test('pack-status route resolution distinguishes valid, invalid, and nonmatching paths', () => {

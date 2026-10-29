@@ -24,6 +24,7 @@ const { useShopActionHandlers } = await import('../src/shop/useShopActionHandler
 const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi } = await import('../src/ethereum/api.ts');
+const { ethereumRevealApi } = await import('../src/ethereum/revealApi.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
 const { ethereumInventoryQueryKey, ethereumInventoryScope, readEthereumExpected, readEthereumPending, readEthereumSubmission, writeEthereumExpected, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 const { checkoutApi, CheckoutApiError } = await import('../src/checkout/api.ts');
@@ -64,6 +65,11 @@ beforeEach(context => {
   t.mock.method(ethereumApi, 'config', async () => config);
   t.mock.method(ethereumApi, 'stats', async () => stats());
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [item()], nextCursor: null, observedBlock: 10 }));
+  t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000 }));
+  t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', artworks: [], retryAfterMs: 2_000,
+    unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
 });
 afterEach(() => { cleanup(); clients.splice(0).forEach(client => client.clear()); dom.window.close(); });
 function page(overrides: Partial<Parameters<typeof Ethereum111kPage>[0]> = {}, initialize?: (client: InstanceType<typeof QueryClient>) => void) {

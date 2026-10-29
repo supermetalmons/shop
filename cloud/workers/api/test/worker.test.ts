@@ -1,5 +1,6 @@
 import { emptyReconciliationResult } from '../src/reconciliationResult.ts';
 import test from 'node:test';
+import { unusedEthereumRevealBindings } from './unusedEthereumRevealBindings.ts';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -103,6 +104,7 @@ function env(options: {
   };
   return {
     DATA_DB: options.dataDb || {} as D1Database,
+    ...unusedEthereumRevealBindings(),
     OPS_DB: options.opsDb || {} as D1Database,
     COMMERCE_DB: options.commerceDb || d1Database(function prepare(sql) {
       if (sql.includes('commerce_preorder')) {
@@ -244,6 +246,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       receiptClaims: async () => { calls.push('receiptClaims'); return emptyReconciliationResult(); },
       receiptClaimNotifications: async () => { calls.push('receiptClaimNotifications'); return emptyReconciliationResult(); },
       ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
+      ethereumReveal: async () => { calls.push('ethereumReveal'); return emptyReconciliationResult(); },
     }),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
@@ -251,7 +254,7 @@ test('scheduled reconciliation isolates all subsystems and reports failures afte
       return true;
     },
   );
-  assert.deepEqual(calls.sort(), ['ethereum', 'notifications', 'ops', 'packStatus', 'receiptClaimNotifications', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
+  assert.deepEqual(calls.sort(), ['ethereum', 'ethereumReveal', 'notifications', 'ops', 'packStatus', 'receiptClaimNotifications', 'receiptClaims', 'shippedNotifications', 'stripe', 'stripeNotifications']);
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {
@@ -274,8 +277,9 @@ test('commerce maintenance blocks HTTP mutations and skips commerce cron work', 
     packStatus: async () => { calls.push('packStatus'); return emptyReconciliationResult(); },
     stripe: async () => { calls.push('stripe'); return emptyReconciliationResult(); },
     stripeNotifications: async () => { calls.push('stripeNotifications'); return emptyReconciliationResult(); },
+    ethereumReveal: async () => { calls.push('ethereumReveal'); return emptyReconciliationResult(); },
   });
-  assert.deepEqual(calls, ['ops']);
+  assert.deepEqual(calls, ['ops', 'ethereumReveal']);
 });
 
 test('request boundary distinguishes staff rejection from authentication infrastructure failure', async () => {
@@ -2097,6 +2101,8 @@ test('internal notification enqueue rejects signed invalid jobs and surfaces que
 test('production config has exact authentication rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.deepEqual(config.ratelimits, [
+    { name: 'ETHEREUM_REVEAL_READ_RATE_LIMITER', namespace_id: '1950264150', simple: { limit: 120000, period: 60 } },
+    { name: 'ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER', namespace_id: '1950264151', simple: { limit: 10000, period: 60 } },
     { name: 'PREORDER_PREPARE_RATE_LIMITER', namespace_id: '2185819631', simple: { limit: 10, period: 60 } },
     { name: 'PREORDER_PREPARE_IP_RATE_LIMITER', namespace_id: '2185819632', simple: { limit: 30, period: 60 } },
     {
@@ -2135,6 +2141,31 @@ test('production config has exact authentication rate limits', () => {
       simple: { limit: 60, period: 60 },
     },
   ]);
+});
+
+test('Ethereum reveal preflights permit partner browsers without opening other Ethereum routes', async () => {
+  for (const origin of ['https://mons.shop', 'https://vvv.so', 'https://www.vvv.so']) {
+    for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens']) {
+      const response = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+        method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'content-type,x-mons-csrf' },
+      }), env(), quietDependencies(fetch));
+      assert.equal(response.status, 204);
+      assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
+      assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'POST, OPTIONS');
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    }
+  }
+  for (const path of ['/ethereum/111k/reveal/transaction', '/ethereum/111k/reveal/tokens']) {
+    const denied = await handleRequest(new Request(`https://api.mons.shop${path}`, {
+      method: 'OPTIONS', headers: { Origin: 'https://evil.example' },
+    }), env(), quietDependencies(fetch));
+    assert.equal(denied.status, 403);
+  }
+  const restricted = await handleRequest(new Request('https://api.mons.shop/ethereum/111k/inventory', {
+    method: 'OPTIONS', headers: { Origin: 'https://vvv.so' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(restricted.status, 403);
 });
 
 test('public routes accept only mons.shop and local browser origins', async () => {

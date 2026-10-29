@@ -1,7 +1,8 @@
 import type { Ethereum111kConfig, EthereumInventoryItem, EthereumSession } from '../../shared/ethereum/api';
-import { ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ETHEREUM_MAX_UNBOX_QUANTITY, ethereumAssetId, normalizeEthereumAddress, normalizeEthereumTokenId } from '../../shared/ethereum/protocol';
 import type { InventoryItem } from '../types';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
+import { decodeReturn, encodeCall } from '../../shared/ethereum/abi';
 
 export type EthereumAction = 'mint' | 'unbox' | 'delivery' | 'claim' | 'transfer' | 'cancel';
 export type EthereumPendingTransaction = {
@@ -18,6 +19,7 @@ export type EthereumPendingTransaction = {
   actionBeforeCancellation?: Exclude<EthereumAction, 'cancel'>;
 };
 export type EthereumSubmission = Omit<EthereumPendingTransaction, 'hash'>;
+export type EthereumRevealJob = { transactionHash: string; submittedAt: number; trackingId: string; crateTokenIds?: string[] };
 type EthereumInventoryRecovery = { hash: string; sourceIds: string[]; mintedIds: string[] };
 
 export type EthereumInventoryView = InventoryItem & { ethereum: EthereumInventoryItem };
@@ -35,6 +37,8 @@ export function ethereumInventoryView(item: EthereumInventoryItem): EthereumInve
     id: ethereumAssetId(item.chainId, item.contractAddress, item.tokenId),
     dropId: '111k_devnet', name: item.name, image: containerMedia?.src ?? item.image,
     ...(containerMedia ? { imageDimensions: { width: containerMedia.width, height: containerMedia.height } } : {}),
+    ...(!containerMedia && item.aspectRatio ? { imageDimensions: item.aspectRatio } : {}),
+    ...(item.animation_url ? { previewVideo: { sources: [{ src: item.animation_url }], posterSrc: item.image } } : {}),
     kind: item.kind.endsWith('_receipt') ? 'certificate' : item.kind === 'artwork' ? 'dude' : 'box',
     ...(item.kind === 'artwork' || item.kind === 'artwork_receipt' ? { dudeId: item.displayId } : { boxId: String(item.displayId) }),
     attributes: item.attributes?.map(attribute => ({ trait_type: attribute.trait_type, value: String(attribute.value) })),
@@ -157,11 +161,11 @@ export function isEthereumPendingSaved(scope: string, hash: string): boolean {
   } catch { return false; }
 }
 
-export function subscribeEthereumPending(scope: string, listener: () => void): () => void {
-  const key = `${scope}:pending`;
-  const changed = (event: Event) => { if ((event as CustomEvent<string>).detail === key) listener(); };
+function subscribeEthereumStorage(key: string, listener: () => void, prefixes: readonly string[] = []): () => void {
+  const matches = (value: unknown) => typeof value === 'string' && (value === key || prefixes.some(prefix => value.startsWith(prefix)));
+  const changed = (event: Event) => { if (matches((event as CustomEvent<string>).detail)) listener(); };
   const storage = (event: StorageEvent) => {
-    if (event.key !== null && event.key !== `${STORAGE_PREFIX}${key}`) return;
+    if (event.key !== null && (!event.key.startsWith(STORAGE_PREFIX) || !matches(event.key.slice(STORAGE_PREFIX.length)))) return;
     try { if (event.storageArea && event.storageArea !== window.localStorage) return; } catch { return; }
     listener();
   };
@@ -172,6 +176,139 @@ export function subscribeEthereumPending(scope: string, listener: () => void): (
     window.removeEventListener('storage', storage);
   };
 }
+
+export function subscribeEthereumPending(scope: string, listener: () => void): () => void {
+  return subscribeEthereumStorage(`${scope}:pending`, listener);
+}
+
+export function subscribeEthereumRevealJobs(scope: string, listener: () => void): () => void {
+  return subscribeEthereumStorage(`${scope}:reveals`, listener, [revealJobPrefix(scope), revealClosedPrefix(scope)]);
+}
+
+const REVEAL_HASH = /^0x[0-9a-f]{64}$/;
+const REVEAL_TRACKING_ID = /^(?:legacy|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+const revealJobPrefix = (scope: string) => `${scope}:reveal-job:v2:`;
+const revealClosedPrefix = (scope: string) => `${scope}:reveal-closed:v2:`;
+const revealClosedKey = (scope: string, hash: string, trackingId: string) => `${revealClosedPrefix(scope)}${hash}:${trackingId}`;
+
+function ethereumStorageKeys(prefix: string): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  const keys = new Set([...storageFallbacks.get(window)?.keys() ?? [], ...storageSnapshots.get(window)?.keys() ?? []]
+    .filter(key => key.startsWith(prefix)));
+  try {
+    const storage = window.localStorage;
+    for (let index = 0; index < storage.length; index++) {
+      const key = storage.key(index);
+      if (key?.startsWith(`${STORAGE_PREFIX}${prefix}`)) keys.add(key.slice(STORAGE_PREFIX.length));
+    }
+  } catch {}
+  return keys;
+}
+
+function validRevealCrateIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.length <= ETHEREUM_MAX_UNBOX_QUANTITY &&
+    new Set(value).size === value.length && value.every(id => typeof id === 'string' && /^\d{6}$/.test(id) && Number(id) >= 111112 && Number(id) <= 116666);
+}
+
+function revealJob(value: unknown, trackingId?: string): EthereumRevealJob | null {
+  if (value === null || typeof value !== 'object' || !('transactionHash' in value) ||
+    typeof value.transactionHash !== 'string' || !REVEAL_HASH.test(value.transactionHash) ||
+    !('submittedAt' in value) || !Number.isSafeInteger(value.submittedAt) || Number(value.submittedAt) < 0) return null;
+  const id = trackingId ?? ('trackingId' in value ? value.trackingId : undefined);
+  if (typeof id !== 'string' || !REVEAL_TRACKING_ID.test(id)) return null;
+  return { transactionHash: value.transactionHash, submittedAt: Number(value.submittedAt), trackingId: id,
+    ...('crateTokenIds' in value && validRevealCrateIds(value.crateTokenIds) ? { crateTokenIds: value.crateTokenIds } : {}) };
+}
+
+function legacyEthereumRevealJobs(scope: string): EthereumRevealJob[] {
+  const value = readEthereumStorage<unknown>(`${scope}:reveals`);
+  return Array.isArray(value) ? value.flatMap(entry => { const job = revealJob(entry, 'legacy'); return job ? [job] : []; }) : [];
+}
+
+function currentEthereumRevealJob(scope: string, hash: string): EthereumRevealJob | null {
+  const job = revealJob(readEthereumStorage(`${revealJobPrefix(scope)}${hash}`));
+  return job?.transactionHash === hash ? job : legacyEthereumRevealJobs(scope).find(value => value.transactionHash === hash) ?? null;
+}
+
+function ethereumRevealJobClosed(scope: string, job: EthereumRevealJob): boolean {
+  return readEthereumStorage(revealClosedKey(scope, job.transactionHash, job.trackingId)) === true;
+}
+
+function intendedRevealCrateIds(scope: string, hash: string, operation?: EthereumSubmission | null): string[] | null {
+  return operation?.scope === scope && (!('hash' in operation) || typeof operation.hash === 'string' && operation.hash.toLowerCase() === hash) &&
+    normalizeEthereumAddress(operation.intent?.to) === scope.split(':')[1] ? ethereumCrateUnpackIds(operation) : null;
+}
+
+export function readEthereumRevealJobs(scope: string): EthereumRevealJob[] {
+  const jobs = new Map(legacyEthereumRevealJobs(scope).map(job => [job.transactionHash, job]));
+  const prefix = revealJobPrefix(scope);
+  for (const key of ethereumStorageKeys(prefix)) {
+    const job = revealJob(readEthereumStorage(key));
+    if (job && key === `${prefix}${job.transactionHash}`) jobs.set(job.transactionHash, job);
+  }
+  const pending = readEthereumPending(scope);
+  return [...jobs.values()].filter(job => !ethereumRevealJobClosed(scope, job)).map(job => {
+    const crateTokenIds = !job.crateTokenIds ? intendedRevealCrateIds(scope, job.transactionHash, pending) : null;
+    return crateTokenIds ? { ...job, crateTokenIds } : job;
+  })
+    .sort((a, b) => a.submittedAt - b.submittedAt || a.transactionHash.localeCompare(b.transactionHash));
+}
+
+export function rememberEthereumRevealJob(scope: string, transactionHash: string, submittedAt = Date.now(), operation?: EthereumSubmission): void {
+  const hash = transactionHash.toLowerCase();
+  if (!REVEAL_HASH.test(hash) || !Number.isSafeInteger(submittedAt) || submittedAt < 0) return;
+  const crateTokenIds = intendedRevealCrateIds(scope, hash, operation);
+  const current = currentEthereumRevealJob(scope, hash);
+  if (current && !ethereumRevealJobClosed(scope, current)) {
+    if (!current.crateTokenIds && crateTokenIds) writeEthereumStorage(`${revealJobPrefix(scope)}${hash}`, { ...current, crateTokenIds });
+    return;
+  }
+  writeEthereumStorage(`${revealJobPrefix(scope)}${hash}`, { transactionHash: hash, submittedAt, trackingId: crypto.randomUUID(),
+    ...(crateTokenIds ? { crateTokenIds } : {}) });
+}
+
+export function forgetEthereumRevealJob(scope: string, transactionHash: string, expectedTrackingId?: string): void {
+  const hash = transactionHash.toLowerCase();
+  if (!REVEAL_HASH.test(hash)) return;
+  const trackingId = expectedTrackingId ?? currentEthereumRevealJob(scope, hash)?.trackingId ?? 'legacy';
+  if (!REVEAL_TRACKING_ID.test(trackingId)) return;
+  const key = revealClosedKey(scope, hash, trackingId);
+  if (readEthereumStorage(key) !== true) writeEthereumStorage(key, true);
+}
+
+export async function restorePendingEthereumRevealJob(scope: string, transactionHash: string): Promise<void> {
+  await withEthereumSubmissionLock(scope, () => {
+    const pending = readEthereumPending(scope);
+    if (!pending || pending.hash.toLowerCase() !== transactionHash.toLowerCase() || !isEthereumCrateUnpack(pending)) return;
+    const hash = pending.hash.toLowerCase();
+    const current = currentEthereumRevealJob(scope, hash);
+    if (current) {
+      if (!ethereumRevealJobClosed(scope, current)) rememberEthereumRevealJob(scope, hash, pending.submittedAt, pending);
+      return;
+    }
+    const prefix = `${revealClosedPrefix(scope)}${hash}:`;
+    if ([...ethereumStorageKeys(prefix)].some(key => REVEAL_TRACKING_ID.test(key.slice(prefix.length)) && readEthereumStorage(key) === true)) return;
+    rememberEthereumRevealJob(scope, hash, pending.submittedAt, pending);
+  });
+}
+
+function ethereumCrateUnpackIds(operation: EthereumSubmission): string[] | null {
+  if (operation.action !== 'unbox' || !operation.intent) return null;
+  try {
+    if (BigInt(operation.intent.value) !== 0n) return null;
+    const data = operation.intent.data.toLowerCase();
+    const batch = data.slice(0, 10) === encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, [], []);
+    const signature = batch ? ETHEREUM_FUNCTIONS.unboxCrates : ETHEREUM_FUNCTIONS.unboxCrate;
+    if (data.slice(0, 10) !== encodeCall(signature, [], [])) return null;
+    const types = [batch ? 'uint256[]' : 'uint256'];
+    const args = decodeReturn(types, `0x${data.slice(10)}`);
+    if (encodeCall(signature, types, args) !== data) return null;
+    const ids = (batch ? args[0] as bigint[] : [args[0] as bigint]).map(String);
+    return validRevealCrateIds(ids) ? ids : null;
+  } catch { return null; }
+}
+
+export function isEthereumCrateUnpack(operation: EthereumSubmission): boolean { return ethereumCrateUnpackIds(operation) !== null; }
 
 function readEthereumTransaction(scope: string): (EthereumPendingTransaction & { awaitingHash?: boolean }) | null {
   const value = readEthereumStorage<EthereumPendingTransaction & { awaitingHash?: boolean }>(`${scope}:pending`);

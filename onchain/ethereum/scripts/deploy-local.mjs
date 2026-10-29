@@ -7,10 +7,10 @@ const root = new URL('../', import.meta.url);
 const metadataBaseURI = process.env.ETHEREUM_111K_LOCAL_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/';
 const metadataUrl = new URL(metadataBaseURI);
 const hostedMetadata = metadataUrl.origin === 'https://cdn.mons.shop' &&
-  ['/111k/', '/111k-sepolia/'].includes(metadataUrl.pathname);
+  /^\/111k(?:-sepolia)?\/(?:[a-z0-9][a-z0-9-]{0,63}\/)?$/.test(metadataUrl.pathname);
 if (!hostedMetadata || metadataUrl.href !== metadataBaseURI || metadataUrl.username || metadataUrl.password ||
     metadataUrl.search || metadataUrl.hash || !metadataUrl.pathname.endsWith('/')) {
-  throw new Error('Local metadata must use https://cdn.mons.shop/111k-sepolia/ or https://cdn.mons.shop/111k/.');
+  throw new Error('Local metadata must use a canonical https://cdn.mons.shop/111k-sepolia/ or /111k/ collection prefix, optionally followed by a deployment ID.');
 }
 const rpcUrl = new URL(process.env.ETHEREUM_111K_LOCAL_RPC_URL || 'http://127.0.0.1:8545');
 if (!['127.0.0.1', 'localhost', '[::1]'].includes(rpcUrl.hostname) || rpcUrl.protocol !== 'http:' || rpcUrl.username || rpcUrl.password) {

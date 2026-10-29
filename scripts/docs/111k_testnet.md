@@ -118,6 +118,8 @@ npm run ethereum111k-control -- pause --chain-id 11155111 --contract OLD_ADDRESS
 npm run ethereum111k-control -- pause --chain-id 11155111 --contract OLD_ADDRESS --expected-revision REVISION --write
 ```
 
+Before replacing a reveal-enabled collection, also pause its reveal admission using `npm run ethereum-reveal-control -- pause --deployment-id OLD_DEPLOYMENT_ID --expected-revision REVEAL_REVISION --write`. Keep its permanent OPS deployment record, private reservations, frozen assignments, and metadata objects. Ethereum commerce reset does not remove this reveal state. Publish and verify placeholders at a fresh `111k-sepolia/<deploymentId>/` prefix, pass that exact URL as `ETHEREUM_111K_METADATA_BASE_URI` to the new contract deployment, and register/provision the new reveal deployment using the [reveal operator guide](111k_reveal_ops.md#operator-setup). Never reuse the old metadata prefix.
+
 For a replacement, bind the initial paused control to the old contract, publish the API with the new contract configuration, and allow at least 65 seconds for in-flight operations to drain. Recheck the revision, then preview the reset:
 
 ```sh
@@ -132,6 +134,8 @@ After verifying the reset and publishing the matching frontend, resume using the
 ```sh
 npm run ethereum111k-control -- resume --chain-id 11155111 --contract NEW_ADDRESS --expected-revision REVISION --write
 ```
+
+Activate the new reveal deployment only after its status is `ready` and the matching API/frontend have been published. Previously admitted work for the paused deployment continues to reconcile; its frozen artwork remains available by its original chain and contract.
 
 Changing the allowed contract requires the old scope to be empty. The control does not change onchain sale or redemption switches; administer those separately and leave historical contracts as explicitly intended by the release.
 

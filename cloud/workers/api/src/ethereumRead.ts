@@ -62,6 +62,17 @@ function parseMetadata(value: unknown): EthereumMetadata {
     throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata.');
   }
   return { name: value.name, image: value.image,
+    ...('category' in value && (value.category === 'egg' || value.category === 'painting' || value.category === 'video')
+      ? { category: value.category } : {}),
+    ...('revealStatus' in value && (value.revealStatus === 'unrevealed' || value.revealStatus === 'revealed')
+      ? { revealStatus: value.revealStatus } : {}),
+    ...('animation_url' in value && typeof value.animation_url === 'string' && /^https:\/\//i.test(value.animation_url) &&
+      isEthereumMetadataImage(value.animation_url) ? { animation_url: value.animation_url } : {}),
+    ...('aspectRatio' in value && value.aspectRatio && typeof value.aspectRatio === 'object' &&
+      'width' in value.aspectRatio && 'height' in value.aspectRatio &&
+      typeof value.aspectRatio.width === 'number' && Number.isFinite(value.aspectRatio.width) && value.aspectRatio.width > 0 &&
+      typeof value.aspectRatio.height === 'number' && Number.isFinite(value.aspectRatio.height) && value.aspectRatio.height > 0
+      ? { aspectRatio: { width: value.aspectRatio.width, height: value.aspectRatio.height } } : {}),
     ...('description' in value && typeof value.description === 'string' ? { description: value.description } : {}),
     ...('attributes' in value && Array.isArray(value.attributes) ? { attributes: value.attributes } : {}) };
 }

@@ -63,6 +63,13 @@ pack-status, ops-state, and commerce read-model integrity, and then publishes th
 native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
 
+API deployment disables automatic resource provisioning with
+`--experimental-provision=false`. Its named databases, queues, and R2 bucket
+already exist. This avoids an unnecessary bucket-administration lookup when
+deploying an existing binding with Worker edit permissions; Durable Object
+class migrations still travel with the Worker deployment. See Cloudflare's
+[binding permissions](https://developers.cloudflare.com/workers/authorization/#bindings).
+
 Both API and frontend release checks verify generated catalog and schema files.
 `generate:db` updates the catalog first, then replays all three D1 migration sets
 to build the committed `scripts/generated/commerceSchemaManifest.json`,

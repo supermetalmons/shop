@@ -1,0 +1,16 @@
+{
+  "verifiedAt": "2026-10-29T14:44:50.325Z",
+  "frontendVersion": "0a6b9cf8-3dc2-4665-a2cf-f321bdfa9da5",
+  "fixedReviewIssues": [
+    "complete-gallery-results",
+    "uncertain-write-drain"
+  ],
+  "frontendTests": 249,
+  "leaseTests": 23,
+  "writeLeaseDrainMs": 65000,
+  "apiRedeployed": false,
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-BcXdazc0.js"
+  }
+}

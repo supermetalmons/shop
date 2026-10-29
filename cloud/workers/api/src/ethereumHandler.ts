@@ -21,7 +21,8 @@ export async function handleEthereumRequest(request: Request, env: EthereumEnvir
     const methods: readonly string[] = route?.methods || ['POST'];
     if (!methods.includes(request.method)) return jsonResponse({ ok: false, error: { code: 'invalid-argument', message: 'Method not allowed.' } }, 405,
       { headers: { Allow: [...methods, 'OPTIONS'].join(', ') } });
-    ethereumRequestOrigin(request, route?.originPolicy === 'checkout-status' ? isAllowedEthereumCheckoutStatusOrigin : undefined);
+    ethereumRequestOrigin(request, route?.originPolicy === 'checkout-status' || route?.originPolicy === 'reveal'
+      ? isAllowedEthereumCheckoutStatusOrigin : undefined);
     if (request.method === 'POST' && request.headers.get('X-Mons-CSRF') !== '1') {
       throw new EthereumApiError('permission-denied', 'Invalid Ethereum request.');
     }

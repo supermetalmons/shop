@@ -1,0 +1,19 @@
+{
+  "verifiedAt": "2026-10-29T14:06:52.892Z",
+  "apiVersion": "1c2757c5-afa0-46ae-8326-a5507b302c2d",
+  "frontendVersion": "b14bfa05-658b-4d44-8318-4b2652702d20",
+  "fixedReviewIssues": 7,
+  "focusedRegressionTests": 89,
+  "nativeAlarmIsolation": true,
+  "legacyRecoveryRepair": "recovery-cursors-v1",
+  "opsMigrationRequired": false,
+  "apiSmoke": {
+    "status": 200,
+    "unmintedToken": "111111",
+    "artworks": 0
+  },
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-C4bIF4_u.js"
+  }
+}

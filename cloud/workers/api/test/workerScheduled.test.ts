@@ -59,6 +59,7 @@ function commerceReconcilers(calls: string[] = []): Omit<ScheduledReconcilers, '
     receiptClaimNotifications: async () => { calls.push('receiptClaimNotifications'); return emptyReconciliationResult(); },
     preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
+    ethereumReveal: async () => emptyReconciliationResult(),
   };
 }
 
@@ -117,13 +118,14 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
     preorders: async () => { calls.push('preorders'); return { ...emptyReconciliationResult(), attempted: 0, completed: 0 }; },
     ethereum: async () => { calls.push('ethereum'); return emptyReconciliationResult(); },
     ops: async () => { calls.push('ops'); return emptyReconciliationResult(); },
+    ethereumReveal: async () => { calls.push('ethereumReveal'); return emptyReconciliationResult(); },
   });
   assert.deepEqual(calls, [
     'stripe', 'stripeNotifications', 'shippedNotifications', 'packStatus',
-    'notifications', 'receiptClaims', 'receiptClaimNotifications', 'preorders', 'ethereum', 'ops',
+    'notifications', 'receiptClaims', 'receiptClaimNotifications', 'preorders', 'ethereum', 'ops', 'ethereumReveal',
   ]);
   await reconciliation;
-  assert.equal(logs.length, 10);
+  assert.equal(logs.length, 11);
   for (const entry of logs) {
     assert.equal(entry.event, 'scheduled_reconciliation_job');
     assert.equal(entry.outcome, 'succeeded');
@@ -142,6 +144,7 @@ test('scheduled jobs report their own result counts and preserve immediate invoc
     receiptClaimNotifications: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     preorders: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     ethereum: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
+    ethereumReveal: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
     ops: { event: 'scheduled_reconciliation_job', outcome: 'succeeded', attempted: 0, completed: 0, deferred: 0, skipped: 0, failed: 0 },
   });
 });
@@ -367,9 +370,9 @@ test('commerce authority failure waits for independent OPS cleanup and retains b
   assert.deepEqual(commerceCalls, []);
   opsFinished.resolve();
   await rejection;
-  assert.equal(logs.length, 1);
-  assert.equal(logs[0].job, 'ops');
-  assert.equal(logs[0].outcome, 'failed');
+  assert.equal(logs.length, 2);
+  assert.equal(logs.find(entry => entry.job === 'ops')?.outcome, 'failed');
+  assert.equal(logs.find(entry => entry.job === 'ethereumReveal')?.outcome, 'succeeded');
 });
 
 test('commerce reconciliation and OPS failures retain their existing aggregate shape', async () => {
@@ -436,11 +439,12 @@ test('OPS cleanup preserves completion and backlog logs while commerce is paused
   const miNoteCounts = { sessionsDeleted: 1, challengesDeleted: miNoteCount, limitReached: true, hasMore: true };
   const ethereumCounts = { sessionsDeleted: ethereumCount, challengesDeleted: 2, limitReached: true, hasMore: true };
   const jobLogs = logs.filter((entry) => entry.event === 'scheduled_reconciliation_job');
-  assert.equal(jobLogs.length, 1);
-  assert.equal(jobLogs[0].job, 'ops');
-  assert.equal(jobLogs[0].outcome, 'succeeded');
+  assert.equal(jobLogs.length, 2);
+  const opsJob = jobLogs.find(entry => entry.job === 'ops')!;
+  assert.equal(opsJob.outcome, 'succeeded');
+  assert.equal(jobLogs.find(entry => entry.job === 'ethereumReveal')?.outcome, 'succeeded');
   assert.deepEqual(Object.fromEntries(['attempted', 'completed', 'deferred', 'skipped', 'failed']
-    .map((field) => [field, jobLogs[0][field]])), {
+    .map((field) => [field, opsJob[field]])), {
     attempted: 5, completed: 0, deferred: 5, skipped: 0, failed: 0,
   });
   assert.deepEqual(logs.filter((entry) => entry.event !== 'scheduled_reconciliation_job'), [

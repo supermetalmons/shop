@@ -41,7 +41,7 @@ function requiredChecks(name: string, required: string[], scripts = packageJson.
 }
 
 function wranglerOptions(tokens: string[]): Map<string, string | true> {
-  const valueOptions = new Set(['--config', '--env-file', '--outfile']);
+  const valueOptions = new Set(['--config', '--env-file', '--outfile', '--experimental-provision']);
   const flagOptions = new Set(['--strict', '--dry-run', '--remote']);
   const options = new Map<string, string | true>();
   for (let index = 0; index < tokens.length; index += 1) {
@@ -52,6 +52,7 @@ function wranglerOptions(tokens: string[]): Map<string, string | true> {
     if (valueOptions.has(name)) {
       const value = inlineValue ?? tokens[++index];
       assert.ok(value && !value.startsWith('-'), `${name} requires one value`);
+      if (name === '--experimental-provision') assert.equal(value, 'false');
       options.set(name, value);
     } else {
       assert.ok(inlineValue === undefined || inlineValue === 'true', `${name} must be enabled`);
@@ -119,6 +120,7 @@ function assertPublicationPolicy(scripts = packageJson.scripts) {
     assert.ok(!options.has('--dry-run'));
     assert.equal(options.get('--config'), config);
     assert.equal(options.get('--env-file'), envFile);
+    assert.equal(options.get('--experimental-provision'), name === 'deploy:api' ? 'false' : undefined);
   }
 
   const stages = commandStages('deploy:api', scripts);
@@ -134,6 +136,14 @@ function assertPublicationPolicy(scripts = packageJson.scripts) {
 
 test('publication uses strict native Wrangler with isolated production configuration after checks', () => {
   assertPublicationPolicy();
+});
+
+test('API publication uses existing infrastructure without automatic resource provisioning', () => {
+  for (const replacement of ['', '--experimental-provision=true', '--experimental-provision=false --experimental-provision=false']) {
+    assert.throws(() => assertPublicationPolicy({ ...packageJson.scripts,
+      'deploy:api': packageJson.scripts['deploy:api'].replace('--experimental-provision=false', replacement),
+    }), assert.AssertionError);
+  }
 });
 
 function assertDryRunPolicy(scripts = packageJson.scripts) {

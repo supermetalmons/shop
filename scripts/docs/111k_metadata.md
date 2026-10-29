@@ -27,7 +27,7 @@ The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Loca
 
 The `cdn-mons-shop` bucket contains 344948 JSON objects per network, 689896 total, and remains in Eastern North America (`enam`). Both networks now use the same JSON contents; the network determines only the destination prefix. Historical release manifests describe their own publications and remain unchanged.
 
-The [111k_devnet reveal asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios for upcoming reveals. It is a dormant archive with no application, metadata generation, or publication integration.
+The [111k_devnet reveal asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios for upcoming reveals. The [unpack reveal service](111k_reveal.md) uses this catalog for private reservations and permanent, confirmation-gated artwork publication.
 
 ## Templates
 
@@ -46,6 +46,10 @@ The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are J
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
 ## Generate and publish
+
+After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
+
+After upload or restore attempts any writes, its prefix remains locked for 65 seconds after the command exits, even on failure, to let outstanding storage requests drain. Wait for that interval before another upload, restore, or reveal registration for the same prefix. Read-only verification may run during the interval.
 
 Use the committed CLI through `npm run ethereum:metadata -- <command>`. `generate` and `validate` operate on one canonical collection without a network option. `upload`, `verify`, and `restore` require an explicit `--network sepolia|mainnet|all`. The default directory is `.cache/111k-metadata/current`; choose a new named revision directory for each publication. Generation refuses to overwrite a completed revision, preserving its manifest, journals, and rollback snapshot.
 
@@ -87,7 +91,7 @@ Use `--network all` to run either command for both networks. Remote work default
 
 Journal headers are committed atomically. Resume truncates an incomplete final record without rewriting the validated header. Existing malformed or mismatched headers remain rejected for inspection.
 
-Full verification checks the remote listing against every expected key, byte size, and checksum, then reads public samples through `cdn.mons.shop`. Sample verification does not mark a full publication complete. Store concise manifests and upload/verification reports in a new release directory, alongside the compatibility deployment IDs and browser/export evidence. Keep full generated artifacts and rollback snapshots locally until they are no longer needed.
+Full verification checks the selected prefix’s direct token JSONs against every expected key, byte size, and checksum, then reads public samples through `cdn.mons.shop`. Nested deployment namespaces are separate inventories and are excluded from a legacy root audit; unexpected direct files still fail verification. Sample verification does not mark a full publication complete. Store concise manifests and upload/verification reports in a new release directory, alongside the compatibility deployment IDs and browser/export evidence. Keep full generated artifacts and rollback snapshots locally until they are no longer needed.
 
 For the next template revision, reuse the previous canonical dataset when building both networks' rollback snapshots:
 
@@ -133,11 +137,13 @@ Use the same exposed-header list in the bucket CORS policy. This permits anonymo
 
 The API fetches the contract's exact expected public URL over HTTP with `cache: 'no-store'`, rejects redirects, and applies a ten-second timeout. Metadata bodies are bounded to 128 KiB, with eight concurrent reads and cancellation. Ownership reads remain pinned to a canonical block snapshot. Fulfillment previews deduplicate only pending reads and fetch again on subsequent requests.
 
-Freshness applies when a client requests metadata. An already rendered page or a marketplace's indexed copy does not refresh merely because the R2 object changes. Future updates should use the existing ERC-4906 refresh mechanism and any marketplace refresh tools as needed. This release implements no reveal workflow, update scheduler, or marketplace refresh automation. See [R2 consistency](https://developers.cloudflare.com/r2/reference/consistency/) and [ERC-4906](https://eips.ethereum.org/EIPS/eip-4906).
+Freshness applies when a client requests metadata. An already rendered page or a marketplace's indexed copy does not refresh merely because the R2 object changes. The [unpack reveal service](111k_reveal.md) returns confirmed artwork immediately and publishes frozen JSON through durable background jobs. Marketplaces maintain their own caches; use their refresh tools or the existing ERC-4906 refresh mechanism when necessary. See [R2 consistency](https://developers.cloudflare.com/r2/reference/consistency/) and [ERC-4906](https://eips.ethereum.org/EIPS/eip-4906).
 
 ## Local development and checks
 
-Local deployment manifest version 8 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts only the existing HTTPS CDN prefixes `/111k-sepolia/` and `/111k/`. The local API verifies that value against the collection’s `baseURI()` and fetches the CDN directly. Every manifest older than version 8 requires a fresh single-contract deployment, including manifests with matching CDN URLs. Local development requires network access and reports unavailable metadata rather than falling back to local files or generated output.
+Local deployment manifest version 8 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 8 requires a fresh single-contract deployment, including manifests with matching CDN URLs. Local baseline metadata reads still require network access.
+
+Publish the baseline metadata for a custom namespace before using it locally. Local artwork media is verified against the local reveal ledger even if shared CDN metadata was already revealed by a different collection.
 
 ```sh
 npm run check:api

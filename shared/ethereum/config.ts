@@ -51,7 +51,8 @@ export function ethereumMetadataBaseUri(value: string, chainId: number): string 
   const url = new URL(value);
   const hostedPaths = chainId === 31337 ? ['/111k-sepolia/', '/111k/'] :
     chainId === 11155111 ? ['/111k-sepolia/'] : chainId === 1 ? ['/111k/'] : [];
-  const hosted = url.origin === 'https://cdn.mons.shop' && hostedPaths.includes(url.pathname);
+  const hosted = url.origin === 'https://cdn.mons.shop' && hostedPaths.some(prefix =>
+    url.pathname === prefix || new RegExp(`^${prefix}[a-z0-9][a-z0-9-]{0,63}/$`).test(url.pathname));
   if (!hosted || url.username || url.password || url.search || url.hash ||
     !url.pathname.endsWith('/') || url.href !== value) throw new Error('Invalid Ethereum metadata base URI');
   return url.href;

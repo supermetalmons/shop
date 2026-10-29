@@ -3,7 +3,8 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumHexQuantity } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity } from '../../shared/ethereum/protocol';
+import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
@@ -11,6 +12,7 @@ import { authenticateEthereumWallet } from './auth';
 import {
   clearEthereumInventoryRecovery, clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumInventoryExpected, readEthereumOperation, readEthereumPending,
   readEthereumSession, readEthereumSubmission, replaceEthereumInventoryRecovery, reserveEthereumSubmission, restoreEthereumExpected, runEthereumOperation, saveEthereumSession, subscribeEthereumOperation, subscribeEthereumPending, withEthereumSubmissionLock, writeEthereumExpected, writeEthereumStorage, type EthereumAction, type EthereumPendingTransaction, type EthereumSubmission,
+  forgetEthereumRevealJob, isEthereumCrateUnpack, readEthereumRevealJobs, rememberEthereumRevealJob,
 } from './state';
 import { ethereumAddress, ethereumChainId, ethereumOperation, ethereumWalletError } from './wallet';
 import { checkedEthereumClaim, checkedEthereumDelivery } from './prepared';
@@ -18,6 +20,7 @@ import { recoverEthereumTransaction, readEthereumSubmittedTransaction } from './
 import { ethereumAddressEncryptionKey } from './addressEncryption';
 import { EMPTY_ETHEREUM_DISCOUNT_ROOT, ethereumDiscounts, ethereumMintQuote, type EthereumMintQuote } from './discounts';
 import { checkoutReservesItems } from './checkoutReservations';
+import { useEthereumReveals } from './useEthereumReveals';
 
 export type EthereumWallet = ReturnType<typeof useMiNoteEthereumWallet>;
 export type EthereumDeliveryAddress = { formatted: string; country: string; countryCode: string; email: string };
@@ -61,7 +64,8 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
   }, []);
   const [pendingState, setPending] = useState<EthereumPendingTransaction | null>(null);
   const [submissionState, setSubmission] = useState<EthereumSubmission | null>(null);
-  const [revealed, setRevealed] = useState<{ scope: string; items: EthereumInventoryItem[] } | null>(null);
+  const [revealed, setRevealed] = useState<{ scope: string; transactionHash: string; submittedAt: number; items: EthereumInventoryItem[] } | null>(null);
+  const announcedReveals = useRef(new Set<string>());
   const session = sessionState?.address === owner && sessionState.chainId === config.chainId && sessionState.expiresAtMs > Date.now() ? sessionState : null;
   const pending = pendingState?.scope === scope ? pendingState : null;
   const submission = submissionState?.scope === scope ? submissionState : null;
@@ -153,6 +157,24 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     getNextPageParam: page => page.nextCursor,
     retry: false, refetchInterval: 30_000,
   });
+  const rawItems = useMemo(() => owner && scope ? [...new Map((inventory.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()] : [], [inventory.data, owner, scope]);
+  const onArtworksRevealed = useCallback((transactionHash: string, artworks: EthereumRevealedArtwork[], submittedAt: number) => {
+    if (!scope || !owner || !config.contractAddress || !mounted.current || scopeRef.current !== scope) return;
+    const key = `${scope}:${transactionHash}`;
+    const announced = announcedReveals.current.has(key);
+    announcedReveals.current.add(key);
+    setRevealed(current => {
+      const matching = current?.scope === scope && current.transactionHash === transactionHash;
+      if (!matching && (announced || current?.scope === scope && current.submittedAt > submittedAt)) return current;
+      return { scope, transactionHash, submittedAt, items: artworks.map(artwork => ({
+        ...artwork, id: ethereumAssetId(config.chainId, config.contractAddress!, artwork.tokenId),
+        chainId: config.chainId, contractAddress: config.contractAddress!, owner,
+        kind: 'artwork', displayId: Number(artwork.tokenId), revealStatus: 'revealed',
+      })) };
+    });
+  }, [scope, owner, config.chainId, config.contractAddress]);
+  const { applyArtwork } = useEthereumReveals(config, scope, rawItems, pending, onArtworksRevealed);
+  const items = useMemo(() => rawItems.map(applyArtwork), [rawItems, applyArtwork]);
   const profile = useQuery({ queryKey: ['ethereum111k', 'profile', scope, session?.token],
     queryFn: ({ signal }) => ethereumApi.profile(session!, signal), enabled: Boolean(session), retry: false });
   const shipments = useQuery({ queryKey: ['ethereum111k', 'shipments', scope, session?.token],
@@ -252,12 +274,18 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
           if (pending.action === 'cancel') restoreEthereumExpected(scope, pending.hash);
           if (!inclusion.applied) updateInventory();
           if (requiresFinalization) updateExpected(false);
+          if (isEthereumCrateUnpack(pending) && readEthereumRevealJobs(scope).some(job => job.transactionHash === pending.hash.toLowerCase())) {
+            rememberEthereumRevealJob(scope, pending.hash, pending.submittedAt, pending);
+          }
           writeEthereumStorage(`${scope}:pending`, null);
           return true;
         });
         if (!cleared) { release(); return; }
         if (mounted.current && scopeRef.current === scope) {
-          if (pending.action === 'unbox' && result.items.length) setRevealed({ scope, items: result.items });
+          if (pending.action === 'unbox' && result.items.length && !announcedReveals.current.has(transactionKey)) {
+            announcedReveals.current.add(transactionKey);
+            setRevealed({ scope, transactionHash: pending.hash, submittedAt: pending.submittedAt, items: result.items });
+          }
           if (pending.action === 'cancel') setNotice('Your wallet cancellation is confirmed.');
           setError(null);
         }
@@ -292,7 +320,6 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       if (mounted.current && scopeRef.current === scope) setError(ethereumWalletError(cause));
     });
   }, [confirmation.error, pending, scope, queryClient]);
-  const items = useMemo(() => owner && scope ? [...new Map((inventory.data?.pages.flatMap(page => page.items) ?? []).map(item => [item.id, item])).values()] : [], [inventory.data, owner, scope]);
   const run = async (label: string, action: (operation: ReturnType<typeof ethereumOperation>, capturedScope: string) => Promise<void>, allowPending = false): Promise<boolean> => {
     if (scope && readEthereumOperation(scope)) return false;
     if (!config.enabled || !scope || !owner) { setError(config.enabled ? 'Connect your Ethereum wallet first.' : 'The testnet contract is not deployed yet.'); return false; }
@@ -342,6 +369,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     const { nonce: _reservedNonce, ...submitted } = submission;
     const record: EthereumPendingTransaction = { ...submitted, hash };
     writeEthereumStorage(`${capturedScope}:pending`, record);
+    if (isEthereumCrateUnpack(record)) rememberEthereumRevealJob(capturedScope, hash, record.submittedAt, record);
     void readEthereumSubmittedTransaction(operation.provider, hash, config.chainId, operation.address, transaction).then(async actual => {
       if (!actual) return;
       await withEthereumSubmissionLock(capturedScope, () => {
@@ -440,6 +468,8 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       throw new Error('The pending transaction changed. Refresh and try again.');
     }
     if (captured) replaceEthereumInventoryRecovery(capturedScope, captured.hash, replacement.hash);
+    if (isEthereumCrateUnpack(replacement)) rememberEthereumRevealJob(capturedScope, replacement.hash, replacement.submittedAt, replacement);
+    if (captured && captured.hash !== replacement.hash) forgetEthereumRevealJob(capturedScope, captured.hash);
     writeEthereumStorage(`${capturedScope}:pending`, replacement);
   }, true);
   const dismissPending = async () => {
@@ -450,6 +480,11 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
         const currentSubmission = readEthereumSubmission(scope);
         if (pending ? current?.hash !== pending.hash : current || currentSubmission?.submittedAt !== submission?.submittedAt) return false;
         writeEthereumStorage(`${scope}:pending`, null);
+        if (current) {
+          forgetEthereumRevealJob(scope, current.hash);
+          queryClient.removeQueries({ queryKey: ['ethereum111k', 'reveal-transaction', config.chainId, config.contractAddress, current.hash.toLowerCase()], exact: true });
+          queryClient.removeQueries({ queryKey: ['ethereum111k', 'transaction', scope, current.hash], exact: true });
+        }
         return true;
       });
       if (!cleared || !mounted.current || scopeRef.current !== scope) return;
@@ -471,11 +506,14 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'discountProof'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'shipments'] });
     void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] });
+    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'] });
+    void queryClient.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-tokens'] });
   }, [scope, queryClient]);
   return {
     config, configQuery, stats, discountProof, discountCheckRequired, mintQuote, inventory, items, scope, owner, chainId, profile, shipments, session,
     pending, submission, storageWarning, requiredConfirmations, confirmations: confirmation.data?.confirmations ?? 0, busy, notice, error: error ?? (confirmation.error && confirmationErrorKey !== dismissedConfirmationError ? ethereumWalletError(confirmation.error) : null),
-    revealed: revealed?.scope === scope ? revealed.items : null,
+    revealed: revealed?.scope === scope ? revealed.items.map(applyArtwork) : null,
+    applyArtwork,
     closeReveal: () => setRevealed(null), clearError: () => { setError(null); setDismissedConfirmationError(confirmationErrorKey); },
     mint, unbox, deliver, transfer, claim, signIn, disconnect, refresh, replacePending, dismissPending,
   };

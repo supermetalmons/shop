@@ -1,0 +1,124 @@
+{
+  "verifiedAt": "2026-10-29T18:43:43.010Z",
+  "apiVersion": "18cfe8be-3b78-4f33-a6a5-a4887fd15bc8",
+  "frontendVersion": "e7c9ca4b-fa8e-4937-a1ba-5b7d3d99b2a2",
+  "uniqueFindingsAddressed": 8,
+  "findings": [
+    "partial recovery preserves admitted crate scope",
+    "registration validates onchain identity before permanent insert",
+    "cross-tab tracking uses per-hash generations and close markers",
+    "replacement recovery supports more than 15 crates",
+    "recent failed receipts remain watched through 64 confirmations",
+    "permissive shared-IP admission and polling limits",
+    "publication drains successive bounded batches",
+    "generation guards prevent concurrent replacement retirement"
+  ],
+  "rateLimitsPerOriginIpPerMinute": {
+    "admission": 10000,
+    "total": 120000
+  },
+  "publicationDrain": {
+    "batchSize": 8,
+    "maxJobs": 512,
+    "timeBudgetMs": 5000
+  },
+  "checks": {
+    "api": [
+      2708,
+      41
+    ],
+    "frontend": [
+      4,
+      29,
+      1,
+      4975
+    ],
+    "toolsTypecheck": "passed",
+    "deadCode": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "browserBundle": "passed",
+    "productionIntegrity": "passed"
+  },
+  "opsMigrationRequired": false,
+  "ledgerRepair": "tracking-scope-v2",
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "publicGuide": "scripts/docs/111k_reveal.md",
+  "internalRunbook": "scripts/docs/111k_reveal_ops.md",
+  "localLoad": {
+    "sameOriginAndIp": true,
+    "submissions": 200,
+    "polls": 200,
+    "rateLimitedRequests": 0,
+    "publishedArtworks": 4000,
+    "publicationMsFromAdmission": 11557.24
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-29T18:41:33.847Z",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "api": {
+      "transaction": {
+        "status": 200,
+        "cors": "https://www.vvv.so",
+        "cacheControl": "no-store",
+        "body": {
+          "deploymentId": "sepolia-8b4044db",
+          "dropId": "111k_devnet",
+          "chainId": 11155111,
+          "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+          "status": "not_unpack",
+          "artworks": [],
+          "retryAfterMs": 0
+        }
+      },
+      "tokens": {
+        "status": 200,
+        "cors": "https://vvv.so",
+        "cacheControl": "no-store",
+        "body": {
+          "deploymentId": "sepolia-8b4044db",
+          "dropId": "111k_devnet",
+          "chainId": 11155111,
+          "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+          "artworks": [],
+          "unresolved": [
+            {
+              "tokenId": "111111",
+              "status": "unminted"
+            }
+          ],
+          "retryAfterMs": 0
+        }
+      },
+      "denied": {
+        "status": 403
+      },
+      "preflight": {
+        "status": 204
+      }
+    }
+  },
+  "frontendSmoke": {
+    "verifiedAt": "2026-10-29T18:42:49.391Z",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "frontend": {
+      "status": 200,
+      "script": "/assets/index-DL65sSCG.js",
+      "sha256": "6ed907b8a662bec870c268a827aeeeac7062bc7153691351a5231a62a24f64c2",
+      "trackingGenerationBundled": true
+    }
+  },
+  "historicalBackfill": false,
+  "recoveryLimit": "Previously erased crate associations can only be reconstructed from retained transaction-associated evidence."
+}

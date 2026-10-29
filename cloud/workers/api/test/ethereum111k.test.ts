@@ -3238,6 +3238,32 @@ test('all five metadata kinds preserve HTTPS images, empty descriptions and a si
   } finally { f.close(); }
 });
 
+test('artwork metadata preserves video playback and exact aspect ratios without unsafe media URLs', async () => {
+  const f = fixture();
+  try {
+    const metadata = { name: '1', image: 'https://wip.lil.org/videos/1.webp',
+      animation_url: 'https://wip.lil.org/videos/1.mp4', aspectRatio: { width: 16, height: 9 },
+      category: 'video' as const, revealStatus: 'revealed' as const };
+    f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}1.json`, metadata);
+    const result = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.body, metadata);
+    const items = await ethereumInventoryItems(readContext(f), [{ tokenId: '1', kind: 'artwork', displayId: 1, owner: WALLET }]);
+    assert.equal(items[0].animation_url, metadata.animation_url);
+    assert.deepEqual(items[0].aspectRatio, metadata.aspectRatio);
+    assert.equal(items[0].category, 'video');
+    assert.equal(items[0].revealStatus, 'revealed');
+    f.metadata.fetch = async () => Response.json({ ...metadata, animation_url: 'javascript:alert(1)',
+      aspectRatio: { width: -1, height: 9 }, category: 'unknown', revealStatus: true });
+    const unsafe = await f.request(`${paths.metadata}?kind=artwork&displayId=1`);
+    assert.equal(unsafe.response.status, 200);
+    assert.equal(unsafe.body.animation_url, undefined);
+    assert.equal(unsafe.body.aspectRatio, undefined);
+    assert.equal(unsafe.body.category, undefined);
+    assert.equal(unsafe.body.revealStatus, undefined);
+  } finally { f.close(); }
+});
+
 for (const uri of ['https://other.example/1.json', 'https://cdn.mons.shop/111k/1.json',
   'https://cdn.mons.shop/111k-sepolia/2.json', 'https://cdn.mons.shop/111k-sepolia/01.json',
   'https://cdn.mons.shop/111k-sepolia/1.json?version=2', 'data:application/json;base64,e30=']) {

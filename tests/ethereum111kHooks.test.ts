@@ -7,6 +7,7 @@ import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../s
 import { ethereumReceiptIdsHash } from '../shared/ethereum/crypto.ts';
 import { ETHEREUM_FUNCTIONS, ethereumAssetId } from '../shared/ethereum/protocol.ts';
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumSession, EthereumTransactionConfirmResponse } from '../shared/ethereum/api.ts';
+import type { EthereumRevealTransactionResponse } from '../shared/ethereum/reveal.ts';
 import type { EIP1193Provider } from '../src/wallet/injectedEthereumProviders.ts';
 
 let { dom } = setupFrontendDom();
@@ -15,9 +16,10 @@ const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query
 const { useEthereum111k } = await import('../src/ethereum/useEthereum111k.ts');
 const { useMiNoteEthereumWallet } = await import('../src/hooks/useMiNoteEthereumWallet.ts');
 const { ethereumApi, EthereumApiError } = await import('../src/ethereum/api.ts');
+const { ethereumRevealApi } = await import('../src/ethereum/revealApi.ts');
 const { ethereumDiscounts, EMPTY_ETHEREUM_DISCOUNT_ROOT } = await import('../src/ethereum/discounts.ts');
 const { rememberCheckoutReservation } = await import('../src/ethereum/checkoutReservations.ts');
-const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumSession, readEthereumSubmission, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
+const { ethereumInventoryScope, readEthereumExpected, readEthereumOperation, readEthereumPending, readEthereumRevealJobs, readEthereumSession, readEthereumSubmission, rememberEthereumRevealJob, reserveEthereumSubmission, saveEthereumSession, writeEthereumStorage } = await import('../src/ethereum/state.ts');
 type Wallet = Parameters<typeof useEthereum111k>[0];
 dom.window.close();
 
@@ -58,6 +60,11 @@ beforeEach(context => {
   t.mock.method(ethereumApi, 'stats', async (_config, address) => ({ ...statistics, owner: address }));
   t.mock.method(ethereumApi, 'inventory', async () => ({ items: [], nextCursor: null, observedBlock: 1 }));
   t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'pending', confirmations: 1, items: [], burnedTokenIds: [] }));
+  t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'pending', artworks: [], retryAfterMs: 2_000 }));
+  t.mock.method(ethereumRevealApi, 'tokens', async (_config, tokenIds) => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', artworks: [], retryAfterMs: 2_000,
+    unresolved: tokenIds.map(tokenId => ({ tokenId, status: 'recovering' as const })) }));
 });
 afterEach(async () => {
   await act(async () => { cleanup(); clients.splice(0).forEach(client => client.clear()); });
@@ -486,6 +493,237 @@ test('unboxing reveals artwork at first inclusion without waiting for fulfillmen
   assert.equal(view.result.current.revealed?.[0].displayId, 821);
   assert.equal(view.result.current.pending, null);
   assert.equal(connected.sent.length, 1);
+});
+
+test('crate unpack starts artwork retrieval at broadcast and displays the faster confirmed reveal before receipt polling finishes', async t => {
+  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1), crateTokenId: index < 20 ? '111112' : '111113',
+    category: 'painting' as const, name: `Painting ${index + 1}`, image: `https://wip.lil.org/reveal-test/${index + 1}.webp`,
+    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } }));
+  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => {
+    assert.equal(requestedHash, hash);
+    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+      status: 'revealed', artworks, retryAfterMs: 0 };
+  });
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.scope));
+  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
+  await waitFor(() => assert.equal(view.result.current.revealed?.[0].image, artworks[0].image));
+  assert.equal(view.result.current.revealed?.length, 20);
+  assert.deepEqual(view.result.current.revealed?.[0].aspectRatio, { width: 400, height: 600 });
+  assert.equal(view.result.current.pending?.hash, hash);
+  assert.equal(view.result.current.items.length, 0);
+  assert.equal(connected.sent.length, 1);
+  assert.equal(readEthereumRevealJobs(view.result.current.scope!).length, 0);
+  act(() => view.result.current.closeReveal());
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
+    items: artworks.slice(0, 20).map(artwork => ({ ...token(owner, artwork.tokenId), ...artwork, kind: 'artwork' as const })), burnedTokenIds: ['111112'] }));
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  assert.equal(view.result.current.revealed, null);
+});
+
+for (const replacement of [false, true]) test(`a bundled unpack gallery retains its crate scope after reload${replacement ? ' and wrapped replacement' : ''}`, async t => {
+  const replacementHash = `0x${'cd'.repeat(32)}`;
+  const connected = wallet();
+  const first = harness(connected);
+  await waitFor(() => assert.ok(first.result.current.scope));
+  await act(async () => { assert.equal(await first.result.current.unbox(token()), true); });
+  const scope = first.result.current.scope!;
+  const originalJob = readEthereumRevealJobs(scope)[0];
+  assert.deepEqual(originalJob.crateTokenIds, ['111112']);
+  first.unmount();
+  const request = connected.provider!.request;
+  connected.provider!.request = async args => {
+    if (args.method === 'eth_getTransactionByHash') {
+      if ((args.params as string[])[0] === hash) return null;
+      return { hash: replacementHash, from: other, to: owner, input: '0x5678', value: '0x0', nonce: '0x9', chainId: '0xaa36a7' };
+    }
+    if (args.method === 'eth_getCode') return '0x6000';
+    if (args.method === 'eth_getTransactionReceipt') return {
+      transactionHash: replacementHash, status: '0x1', blockNumber: '0x65', blockHash: wrappedBlockHash,
+      logs: [owner, other].map((address, index) => ({ address: contract,
+        topics: [ETHEREUM_EVENT_TOPICS.CrateUnboxed, encodeAbi(['uint256'], [111112 + index]), encodeAbi(['address'], [address])],
+        data: encodeAbi(['uint256', 'uint256'], [1 + index * 20, 20]),
+      })),
+    };
+    if (args.method === 'eth_getBlockByNumber') return { hash: wrappedBlockHash };
+    return request(args);
+  };
+  const view = harness(connected);
+  await waitFor(() => assert.equal(view.result.current.pending?.hash, hash));
+  assert.deepEqual(readEthereumRevealJobs(scope), [originalJob]);
+  if (replacement) {
+    await act(async () => { assert.equal(await view.result.current.replacePending(replacementHash), true); });
+    assert.deepEqual(readEthereumRevealJobs(scope).map(job => [job.transactionHash, job.crateTokenIds]), [[replacementHash, ['111112']]]);
+  }
+  const trackedHash = replacement ? replacementHash : hash;
+  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1),
+    crateTokenId: index < 20 ? '111112' : '111113', category: 'painting' as const, name: `Painting ${index + 1}`,
+    image: `https://wip.lil.org/reveal-test/${index + 1}.webp`, aspectRatio: { width: 400, height: 600 },
+    observation: { transactionHash: trackedHash, blockNumber: 101, blockHash: wrappedBlockHash },
+  }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
+    items: [{ ...token(owner, '1'), kind: 'artwork' }], burnedTokenIds: ['111112'] }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [{ ...token(owner, '1'), kind: 'artwork' }], nextCursor: null, observedBlock: 101 }));
+  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => {
+    assert.equal(requestedHash, trackedHash);
+    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+      status: 'revealed', artworks, retryAfterMs: 0 };
+  });
+  act(() => view.result.current.refresh());
+  await waitFor(() => assert.equal(view.result.current.revealed?.length, 20));
+  assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.slice(0, 20).map(item => item.tokenId));
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId), ['1']);
+  assert.equal(view.result.current.applyArtwork({ ...token(other, '40'), kind: 'artwork' }).image, artworks[39].image);
+  assert.equal(connected.sent.length, 1);
+});
+
+test('confirmation persists a legacy gallery scope before delayed restoration loses the pending intent', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:reveals`, [{ transactionHash: hash, submittedAt: 1 }]);
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: 1,
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } });
+  const requestLock = navigator.locks.request.bind(navigator.locks);
+  const releaseRestore = Promise.withResolvers<void>();
+  let delayed = false;
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { async request(name: string,
+    options: { ifAvailable?: boolean }, run: (lock: object | null) => unknown) {
+    if (!delayed && !options.ifAvailable) { delayed = true; await releaseRestore.promise; }
+    return requestLock(name, options, run);
+  } } });
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: 'confirmed', confirmations: 1,
+    items: [{ ...token(owner, '1'), kind: 'artwork' }], burnedTokenIds: ['111112'] }));
+  const view = harness();
+  try {
+    await waitFor(() => assert.ok(view.result.current.revealed));
+    await waitFor(() => assert.equal(view.result.current.pending, null));
+    assert.deepEqual(readEthereumRevealJobs(scope), [{ transactionHash: hash, submittedAt: 1, trackingId: 'legacy', crateTokenIds: ['111112'] }]);
+  } finally { releaseRestore.resolve(); }
+  const artworks = Array.from({ length: 40 }, (_, index) => ({ tokenId: String(index + 1),
+    crateTokenId: index < 20 ? '111112' : '111113', category: 'painting' as const, name: `Painting ${index + 1}`,
+    image: `https://wip.lil.org/reveal-test/${index + 1}.webp`, aspectRatio: { width: 400, height: 600 },
+    observation: { transactionHash: hash, blockNumber: 101, blockHash: wrappedBlockHash } }));
+  t.mock.method(ethereumRevealApi, 'transaction', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', status: 'revealed', artworks, retryAfterMs: 0 }));
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'reveal-transaction'], refetchType: 'all' }); });
+  await waitFor(() => assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.slice(0, 20).map(item => item.tokenId)));
+});
+
+test('published inventory artwork survives an older delayed transaction confirmation', async t => {
+  const published: EthereumInventoryItem = { ...token(owner, '1'), kind: 'artwork', name: 'Revealed artwork',
+    description: 'Published description', image: 'https://wip.lil.org/reveal-test/1.webp', revealStatus: 'revealed',
+    category: 'video', animation_url: 'https://wip.lil.org/reveal-test/1.mp4', aspectRatio: { width: 400, height: 600 },
+    attributes: [{ trait_type: 'type', value: 'video' }] };
+  const placeholder: EthereumInventoryItem = { ...token(owner, '1'), kind: 'artwork', name: 'Artwork 1',
+    image: 'https://wip.lil.org/111k/artwork_placeholder.png', revealStatus: 'unrevealed' };
+  const confirmation = Promise.withResolvers<EthereumTransactionConfirmResponse>();
+  const laterInventory = Promise.withResolvers<EthereumInventoryResponse>();
+  let inventoryCalls = 0;
+  t.mock.method(ethereumApi, 'inventory', async () => ++inventoryCalls === 1
+    ? { items: [published], nextCursor: null, observedBlock: 42 } : laterInventory.promise);
+  t.mock.method(ethereumApi, 'confirm', () => confirmation.promise);
+  const scope = ethereumInventoryScope(config, owner)!;
+  writeEthereumStorage(`${scope}:pending`, { scope, hash, action: 'unbox', submittedAt: 1,
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } });
+  const view = harness();
+  await waitFor(() => assert.deepEqual(view.result.current.items, [published]));
+  await act(async () => { confirmation.resolve({ status: 'confirmed', confirmations: 1,
+    items: [placeholder], burnedTokenIds: ['111112'] }); });
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  assert.deepEqual(view.result.current.items, [published]);
+  assert.deepEqual(view.result.current.revealed, [published]);
+  await act(async () => { laterInventory.resolve({ items: [placeholder], nextCursor: null, observedBlock: 43 }); });
+  await waitFor(() => assert.equal(view.result.current.inventory.isFetching, false));
+  assert.deepEqual(view.result.current.items, [published]);
+});
+
+for (const gallery of ['open', 'closed', 'newer'] as const) test(`complete unpack media preserves ownership and the ${gallery} gallery`, async t => {
+  const minted = Array.from({ length: 311 }, (_, index) => ({ ...token(owner, String(index + 1)), kind: 'artwork' as const }));
+  const crates = [...Array.from({ length: 14 }, (_, index) => token(owner, String(111112 + index))), token(owner, '116666')];
+  const newerHash = `0x${'cd'.repeat(32)}`;
+  const newer = { ...token(owner, '1000'), kind: 'artwork' as const };
+  const owned = minted.slice(0, 1);
+  t.mock.method(ethereumApi, 'confirm', async requestedHash => ({ status: 'confirmed', confirmations: 1,
+    items: requestedHash === hash ? minted.slice(0, 1) : [newer], burnedTokenIds: requestedHash === hash ? crates.map(item => item.tokenId) : ['111127'] }));
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [...owned], nextCursor: null, observedBlock: 42 }));
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.scope));
+  await act(async () => { assert.equal(await view.result.current.unbox(crates), true); });
+  await waitFor(() => assert.equal(view.result.current.pending, null));
+  assert.equal(readEthereumRevealJobs(view.result.current.scope!).length, 1);
+  assert.equal(view.result.current.revealed?.length, 1);
+  assert.equal(view.result.current.revealed?.[0].image, minted[0].image);
+  if (gallery !== 'open') act(() => view.result.current.closeReveal());
+  if (gallery === 'newer') {
+    owned.push(newer);
+    const request = connected.provider!.request;
+    connected.provider!.request = args => args.method === 'eth_sendTransaction' ? Promise.resolve(newerHash) : request(args);
+    await act(async () => { assert.equal(await view.result.current.unbox(token(owner, '111127')), true); });
+    await waitFor(() => assert.equal(view.result.current.revealed?.[0].tokenId, newer.tokenId));
+  }
+  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => ({
+    chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+    status: requestedHash === hash ? 'revealed' : 'pending', retryAfterMs: 0,
+    artworks: requestedHash === hash ? [...minted, ...Array.from({ length: 20 }, (_, index) => token(other, String(312 + index)))].map((artwork, index) => ({ tokenId: artwork.tokenId,
+      crateTokenId: index < 280 ? String(111112 + Math.floor(index / 20)) : index < 311 ? '116666' : '111126', category: 'egg' as const,
+      name: `Egg ${artwork.tokenId}`, image: `https://wip.lil.org/reveal-test/egg-${artwork.tokenId}.webp`,
+      aspectRatio: { width: 800, height: 800 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } })) : [],
+  }));
+  await act(async () => { await view.client.invalidateQueries({
+    queryKey: ['ethereum111k', 'reveal-transaction', config.chainId, contract, hash], refetchType: 'all',
+  }); });
+  await waitFor(() => assert.ok(readEthereumRevealJobs(view.result.current.scope!).every(job => job.transactionHash !== hash)));
+  if (gallery === 'open') {
+    assert.equal(view.result.current.revealed?.length, 311);
+    assert.ok(view.result.current.revealed?.every(item => item.category === 'egg'));
+  } else if (gallery === 'closed') assert.equal(view.result.current.revealed, null);
+  else assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), [newer.tokenId]);
+  assert.deepEqual(view.result.current.items.map(item => item.tokenId).sort(), owned.map(item => item.tokenId).sort());
+  assert.equal(view.result.current.items.find(item => item.tokenId === '1')?.image, 'https://wip.lil.org/reveal-test/egg-1.webp');
+});
+
+for (const source of ['newer unpack', 'older saved job', 'another account'] as const) test(`first reveal from ${source} respects the current gallery`, async t => {
+  const first = { ...token(owner, '1'), kind: 'artwork' as const };
+  const incomingHash = `0x${'cd'.repeat(32)}`;
+  const artworks = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 21), crateTokenId: '111113',
+    category: 'painting' as const, name: `Painting ${index + 21}`, image: `https://wip.lil.org/reveal-test/${index + 21}.webp`,
+    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: incomingHash, blockNumber: 43, blockHash: `0x${'cc'.repeat(32)}` } }));
+  t.mock.method(ethereumApi, 'confirm', async requestedHash => ({ status: requestedHash === hash ? 'confirmed' : 'pending', confirmations: 1,
+    items: requestedHash === hash ? [first] : [], burnedTokenIds: requestedHash === hash ? ['111112'] : [] }));
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.scope));
+  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
+  await waitFor(() => assert.equal(view.result.current.revealed?.[0].tokenId, first.tokenId));
+  t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash) => ({
+    chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test', retryAfterMs: 2_000,
+    status: requestedHash === incomingHash ? 'revealed' : 'pending', artworks: requestedHash === incomingHash ? artworks : [],
+  }));
+  if (source === 'newer unpack') {
+    const request = connected.provider!.request;
+    connected.provider!.request = args => args.method === 'eth_sendTransaction' ? Promise.resolve(incomingHash) : request(args);
+    await act(async () => { assert.equal(await view.result.current.unbox(token(owner, '111113')), true); });
+  } else if (source === 'older saved job') {
+    const scope = view.result.current.scope!;
+    act(() => rememberEthereumRevealJob(scope, incomingHash, 1, { scope, action: 'unbox', submittedAt: 1,
+      intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111113']), value: '0x0' } }));
+  } else {
+    const otherScope = ethereumInventoryScope(config, other)!;
+    rememberEthereumRevealJob(otherScope, incomingHash, 1, { scope: otherScope, action: 'unbox', submittedAt: 1,
+      intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111113']), value: '0x0' } });
+    view.rerender({ wallet: wallet(other) });
+  }
+  await waitFor(() => assert.ok(readEthereumRevealJobs(view.result.current.scope!).every(job => job.transactionHash !== incomingHash)));
+  if (source === 'older saved job') assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), [first.tokenId]);
+  else {
+    await waitFor(() => assert.deepEqual(view.result.current.revealed?.map(item => item.tokenId), artworks.map(item => item.tokenId)));
+    assert.ok(view.result.current.revealed?.every(item => item.owner === (source === 'another account' ? other : owner)));
+    if (source === 'newer unpack') assert.equal(view.result.current.pending?.hash, incomingHash);
+  }
+  assert.ok(view.result.current.items.every(item => !artworks.some(artwork => artwork.tokenId === item.tokenId)));
 });
 
 test('unboxing checks new checkout reservations after the final wallet network read', async t => {
@@ -1330,6 +1568,49 @@ test('explicit stop-tracking unlocks the UI without claiming cancellation or sub
   assert.equal(connected.sent.length, 0);
 });
 
+for (const status of ['pending', 'revealed'] as const) test(`stop-tracking removes only its reveal job and ignores a late ${status} response`, async t => {
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const unrelatedHash = `0x${'cd'.repeat(32)}`;
+  let revealSignal: AbortSignal | undefined;
+  const requests = t.mock.method(ethereumRevealApi, 'transaction', async (_config, requestedHash, signal) => {
+    if (requestedHash === hash) { revealSignal = signal; return late.promise; }
+    return { chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+      status: 'pending' as const, artworks: [], retryAfterMs: 1000 };
+  });
+  const artworks = Array.from({ length: 20 }, (_, index) => ({ tokenId: String(index + 1), crateTokenId: '111112',
+    category: 'painting' as const, name: `Painting ${index + 1}`, image: `https://wip.lil.org/reveal-test/${index + 1}.webp`,
+    aspectRatio: { width: 400, height: 600 }, observation: { transactionHash: hash, blockNumber: 42, blockHash: `0x${'cc'.repeat(32)}` } }));
+  const view = harness();
+  await waitFor(() => assert.ok(view.result.current.scope));
+  const scope = view.result.current.scope!;
+  await act(async () => { assert.equal(await view.result.current.unbox(token()), true); });
+  await waitFor(() => assert.ok(revealSignal));
+  act(() => rememberEthereumRevealJob(scope, unrelatedHash, now - 1));
+  await act(async () => { await view.result.current.dismissPending(); });
+  assert.equal(readEthereumPending(scope), null);
+  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [unrelatedHash]);
+  assert.equal(revealSignal!.aborted, true);
+  assert.equal(view.client.getQueryState(['ethereum111k', 'reveal-transaction', config.chainId, contract, hash]), undefined);
+  await act(async () => {
+    late.resolve({ chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+      status, artworks: status === 'revealed' ? artworks : [], retryAfterMs: 1000 });
+    await late.promise;
+    now += 60_000;
+    await new Promise(resolve => setTimeout(resolve, 300));
+  });
+  assert.equal(requests.mock.calls.filter(call => call.arguments[1] === hash).length, 1);
+  assert.equal(view.result.current.revealed, null);
+  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [unrelatedHash]);
+  t.mock.method(ethereumApi, 'inventory', async () => ({ items: [{ ...token(owner, '1'), kind: 'artwork' as const }], nextCursor: null, observedBlock: 42 }));
+  t.mock.method(ethereumRevealApi, 'tokens', async () => ({ chainId: config.chainId, contractAddress: contract,
+    dropId: config.dropId, deploymentId: 'test', artworks: [artworks[0]], unresolved: [], retryAfterMs: 0 }));
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'inventory', scope] }); });
+  await waitFor(() => assert.equal(view.result.current.items[0]?.image, artworks[0].image));
+  assert.equal(view.result.current.revealed, null);
+});
+
 function savedSession(address: string): EthereumSession {
   const session: EthereumSession = { token: `session-${address}`, address, chainId: config.chainId, dropId: config.dropId, expiresAtMs: Date.now() + 3_600_000 };
   saveEthereumSession(ethereumInventoryScope(config, address)!, session);
@@ -1960,6 +2241,37 @@ test('stop-tracking rechecks the displayed transaction after waiting for another
   await act(async () => { release!(); await competing; await dismissed; });
   assert.equal(readEthereumPending(scope)?.hash, nextHash);
   assert.equal(view.result.current.notice, null);
+});
+
+test('stop-tracking cannot remove reveal jobs or requests after a newer unpack takes its place', async t => {
+  const scope = ethereumInventoryScope(config, owner)!;
+  const previous = { scope, hash, action: 'unbox' as const, submittedAt: 1,
+    intent: { to: contract, data: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], ['111112']), value: '0x0' } };
+  writeEthereumStorage(`${scope}:pending`, previous);
+  const late = Promise.withResolvers<EthereumRevealTransactionResponse>();
+  const signals: AbortSignal[] = [];
+  t.mock.method(ethereumRevealApi, 'transaction', (_config, _hash, signal) => { signals.push(signal!); return late.promise; });
+  const view = harness();
+  await waitFor(() => assert.equal(signals.length, 1));
+  const release = Promise.withResolvers<void>();
+  const competing = navigator.locks.request(`ethereum111k-submission:${scope}`, {}, () => release.promise);
+  let dismissed: Promise<void> | undefined;
+  act(() => { dismissed = view.result.current.dismissPending(); });
+  const nextHash = `0x${'cd'.repeat(32)}`;
+  act(() => {
+    rememberEthereumRevealJob(scope, nextHash, 2);
+    writeEthereumStorage(`${scope}:pending`, { ...previous, hash: nextHash, submittedAt: 2 });
+  });
+  await act(async () => { release.resolve(); await competing; await dismissed; });
+  assert.equal(readEthereumPending(scope)?.hash, nextHash);
+  assert.deepEqual(readEthereumRevealJobs(scope).map(job => job.transactionHash), [hash, nextHash]);
+  assert.ok(signals.every(signal => !signal.aborted));
+  assert.equal(view.result.current.notice, null);
+  await act(async () => {
+    late.resolve({ chainId: config.chainId, contractAddress: contract, dropId: config.dropId, deploymentId: 'test',
+      status: 'pending', artworks: [], retryAfterMs: 2000 });
+    await late.promise;
+  });
 });
 
 for (const failure of ['missing', 'error'] as const) {

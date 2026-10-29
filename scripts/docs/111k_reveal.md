@@ -44,7 +44,7 @@ POST /ethereum/111k/reveal/transaction
 
 Other statuses have empty `artworks`. Non-pending responses use `retryAfterMs: 0`. Optional `observedBlock` contains `{ "number": 123, "hash": "0x…" }`.
 
-Requests are idempotent. Resume pending hashes after reload; submit replacement hashes when provided by the wallet. Group results by `crateTokenId`; display every returned artwork.
+Requests are idempotent. Resume pending hashes after reload; submit replacement hashes when provided by the wallet. Bundled transactions can include several wallets' unpacks. For a wallet's gallery, save its intended crate IDs and show only artworks with matching `crateTokenId`, regardless of current ownership.
 
 ## 2. Recover artwork by token ID
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Agent } from 'node:https';
 import { GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import type { MetadataWriteFence } from './publicationLease.ts';
 
 export type MetadataNetwork = 'sepolia' | 'mainnet';
 export type MetadataNetworkSelection = MetadataNetwork | 'all';
@@ -11,14 +12,16 @@ export interface MetadataStorage {
   destination: UploadDestination;
   list(prefix: string, range?: MetadataListRange): AsyncIterable<RemoteObject>;
   get(key: string): Promise<Buffer>;
-  put(key: string, body: Buffer): Promise<void>;
+  put(key: string, body: Buffer, expectedEtag?: string | null, fence?: MetadataWriteFence): Promise<void>;
   close(): void;
 }
 
-export function metadataPrefix(network: MetadataNetwork): string {
-  if (network === 'sepolia') return '111k-sepolia/';
-  if (network === 'mainnet') return '111k/';
-  throw new Error('Network must be sepolia or mainnet');
+export function metadataPrefix(network: MetadataNetwork, prefix?: string): string {
+  const root = network === 'sepolia' ? '111k-sepolia/' : network === 'mainnet' ? '111k/' : '';
+  if (!root) throw new Error('Network must be sepolia or mainnet');
+  if (prefix === undefined || prefix === root) return root;
+  if (!new RegExp(`^${root}[a-z0-9][a-z0-9-]{0,63}/$`).test(prefix)) throw new Error('Invalid deployment metadata prefix');
+  return prefix;
 }
 
 export function metadataNetworks(network: MetadataNetworkSelection): MetadataNetwork[] {
@@ -67,8 +70,13 @@ export class S3MetadataStorage implements MetadataStorage {
     let previous = range.startAfter;
     do {
       const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.destination.bucket,
-        Prefix: prefix, MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : { StartAfter: range.startAfter }),
+        Prefix: prefix, Delimiter: '/', MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : { StartAfter: range.startAfter }),
       }), { abortSignal: AbortSignal.timeout(30_000) });
+      for (const namespace of page.CommonPrefixes ?? []) {
+        if (!namespace.Prefix?.startsWith(prefix) || !/^[a-z0-9][a-z0-9-]{0,63}\/$/.test(namespace.Prefix.slice(prefix.length))) {
+          throw new Error(`Invalid nested metadata namespace: ${namespace.Prefix ?? '(missing prefix)'}`);
+        }
+      }
       for (const object of page.Contents ?? []) {
         if (!object.Key?.startsWith(prefix) || (previous !== undefined && object.Key <= previous)) {
           throw new Error(`Invalid remote metadata key order: ${object.Key ?? '(missing key)'}`);
@@ -98,13 +106,19 @@ export class S3MetadataStorage implements MetadataStorage {
     return body;
   }
 
-  async put(key: string, body: Buffer): Promise<void> {
+  async put(key: string, body: Buffer, expectedEtag?: string | null, fence?: MetadataWriteFence): Promise<void> {
     const md5 = metadataMd5(body);
-    const response = await this.client.send(new PutObjectCommand({ Bucket: this.destination.bucket, Key: key, Body: body,
+    const command = new PutObjectCommand({ Bucket: this.destination.bucket, Key: key, Body: body,
       ContentLength: body.length, ContentType: 'application/json; charset=utf-8', CacheControl: 'no-store',
       ContentMD5: Buffer.from(md5, 'hex').toString('base64'),
+      ...(expectedEtag === null ? { IfNoneMatch: '*' } : expectedEtag !== undefined ? { IfMatch: expectedEtag } : {}),
       Metadata: { sha256: createHash('sha256').update(body).digest('hex') },
-    }), { abortSignal: AbortSignal.timeout(30_000) });
+    });
+    if (fence) command.middlewareStack.add(next => async args => { fence.assertWritable(); return next(args); },
+      { step: 'finalizeRequest', priority: 'low', name: 'metadataPublicationFence' });
+    const timeout = AbortSignal.timeout(30_000);
+    fence?.assertWritable();
+    const response = await this.client.send(command, { abortSignal: fence ? AbortSignal.any([timeout, fence.signal]) : timeout });
     if (response.ETag !== `"${md5}"`) throw new Error(`Uploaded object checksum mismatch: ${key}`);
   }
 

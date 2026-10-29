@@ -13,6 +13,7 @@ import { reconcileReceiptClaimWorkflows } from './stripeReceiptClaimWorkflowDisp
 import { reconcileReceiptClaimFailureNotifications } from './receiptClaimFailureNotifications.js';
 import { reconcilePendingPreorders } from './preorders.js';
 import { reconcileEthereum111k } from './ethereumReconciliation.js';
+import { reconcileEthereumReveals } from './ethereumRevealReconciliation.js';
 import {
   emptyReconciliationResult, recordReconciliationOutcome, reportReconciliationFailure,
   reportReconciliationResult, reconciliationLogger, type ReconciliationOptions, type ReconciliationResult,
@@ -31,6 +32,7 @@ export type ScheduledReconcilers = {
   receiptClaimNotifications: typeof reconcileReceiptClaimFailureNotifications;
   preorders: typeof reconcilePendingPreorders;
   ethereum: typeof reconcileEthereum111k;
+  ethereumReveal: typeof reconcileEthereumReveals;
 };
 
 async function cleanupScheduledOpsState(
@@ -142,6 +144,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   receiptClaimNotifications: reconcileReceiptClaimFailureNotifications,
   preorders: reconcilePendingPreorders,
   ethereum: reconcileEthereum111k,
+  ethereumReveal: reconcileEthereumReveals,
 };
 
 type ScheduledJobOutcome =
@@ -219,11 +222,13 @@ export async function runScheduledReconciliations(
   overrides: Partial<ScheduledReconcilers> = {},
 ): Promise<void> {
   const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
-  const [commerce, ops] = await Promise.allSettled([
+  const [commerce, ops, reveal] = await Promise.allSettled([
     runScheduledCommerceReconciliations(env, signal, reconcilers),
     runScheduledJob('ops', (onResult) => reconcilers.ops(env, signal, { onResult })),
+    runScheduledJob('ethereumReveal', (onResult) => reconcilers.ethereumReveal(env, signal, { onResult })),
   ]);
   const failures = commerce.status === 'rejected' ? [commerce.reason] : commerce.value;
   if (ops.status === 'rejected') failures.push(ops.reason);
+  if (reveal.status === 'rejected') failures.push(reveal.reason);
   if (failures.length) throw new AggregateError(failures, 'Scheduled reconciliation failed');
 }

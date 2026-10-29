@@ -43,6 +43,7 @@ import {
 export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkflow.js';
 export { StripeReceiptClaimWorkflowV1 } from './stripeReceiptClaimWorkflow.js';
 export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
+export { EthereumRevealObject } from './ethereumRevealObject.js';
 
 type RequestExecution = {
   defer: DeferredWork;

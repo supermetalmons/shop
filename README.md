@@ -90,6 +90,8 @@ Release evidence describes the recorded verification time, not live service stat
 | Mi Note inventory, deployment, pack layouts | [Inventory](scripts/docs/mi_note_public_inventory.md), [deployment](scripts/docs/mi_note_drop_deployment.md), [pack layouts](scripts/docs/mi_note_pack_setups.md) |
 | Ethereum checkout | [111K checkout](scripts/docs/111k_checkout.md) |
 | Ethereum metadata and CDN | [111K metadata](scripts/docs/111k_metadata.md) |
+| Ethereum unpack reveals and VVV integration | [111K reveals](scripts/docs/111k_reveal.md) |
+| Ethereum reveal registration and operations | [111K reveal operations](scripts/docs/111k_reveal_ops.md) |
 | Metadata fields | [Drop metadata](scripts/docs/drop_metadata.md) |
 | One-off Worker-signed transactions | [Worker transactions](scripts/docs/worker_transactions.md) |
 | Card video rendering | [Native Mi Note renderer](scripts/mi-note-video/README.md) |

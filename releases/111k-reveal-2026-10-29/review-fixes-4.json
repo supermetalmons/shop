@@ -1,0 +1,20 @@
+{
+  "verifiedAt": "2026-10-29T15:52:34.574Z",
+  "apiVersion": "da9e5108-f1bf-4759-8d8f-b48df04c196c",
+  "frontendVersion": "5110f868-195a-415f-a6d4-fb00296cce84",
+  "fixes": [
+    "paused-complete-transaction-reads",
+    "token-recovery-focus-reconnect-cooldown"
+  ],
+  "backendTests": 11,
+  "frontendTests": 263,
+  "apiSmoke": {
+    "status": 200,
+    "result": "not_unpack",
+    "artworks": 0
+  },
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-DBJI8T9K.js"
+  }
+}

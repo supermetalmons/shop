@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { unusedEthereumRevealBindings } from './unusedEthereumRevealBindings.ts';
 import type { BackgroundJobMessage } from '../src/backgroundJobOutcome.ts';
 import {
   availableCommerceDudeIds,
@@ -56,6 +57,7 @@ function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backl
 
 function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
+    ...unusedEthereumRevealBindings(),
     DATA_DB: {} as D1Database,
     OPS_DB: {} as D1Database,
     COMMERCE_DB: createCommerceD1(),

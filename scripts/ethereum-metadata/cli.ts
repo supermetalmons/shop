@@ -13,6 +13,7 @@ export type MetadataCliOptions = {
   tokenIds?: string[];
   snapshotDirectory?: string;
   priorCacheRoot?: string;
+  prefix?: string;
 };
 
 const usage = `Usage: npm run ethereum:metadata -- <command> [options]
@@ -21,6 +22,7 @@ Commands: generate, validate, upload, verify, restore
 
   --directory PATH           Generated collection directory (default: .cache/111k-metadata/current)
   --network NETWORK          Required for upload, verify and restore: sepolia, mainnet or all
+  --prefix PREFIX            Deployment prefix, e.g. 111k-sepolia/test-2/ (one network only)
   --concurrency NUMBER       Concurrent remote requests (default: 32, maximum: 256)
   --token-ids IDS             Comma-separated token IDs for a sample upload or verification
   --snapshot-directory PATH  Upload rollback snapshot directory
@@ -37,6 +39,7 @@ export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null 
     options: {
       directory: { type: 'string', default: '.cache/111k-metadata/current' },
       network: { type: 'string' },
+      prefix: { type: 'string' },
       concurrency: { type: 'string' },
       'token-ids': { type: 'string' },
       'snapshot-directory': { type: 'string' },
@@ -53,6 +56,10 @@ export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null 
   const remote = ['upload', 'verify', 'restore'].includes(command);
   if (remote && !['sepolia', 'mainnet', 'all'].includes(values.network ?? '')) {
     throw new Error('--network must explicitly select sepolia, mainnet or all');
+  }
+  if (values.prefix !== undefined) {
+    const root = values.network === 'sepolia' ? '111k-sepolia/' : values.network === 'mainnet' ? '111k/' : '';
+    if (!remote || !root || !new RegExp(`^${root}[a-z0-9][a-z0-9-]{0,63}/$`).test(values.prefix)) throw new Error('--prefix requires a canonical deployment prefix and one explicit network');
   }
   if (!remote && values.network !== undefined) throw new Error('generate and validate use one network-independent collection; omit --network');
   if (!remote && values.concurrency !== undefined) throw new Error('--concurrency applies only to remote commands');
@@ -78,6 +85,7 @@ export function parseMetadataCliArgs(args: string[]): MetadataCliOptions | null 
     directory: resolve(values.directory),
     networks: !remote ? [] : values.network === 'all' ? ['sepolia', 'mainnet'] : [values.network as MetadataNetwork],
     concurrency,
+    ...(values.prefix ? { prefix: values.prefix } : {}),
     ...(tokenIds ? { tokenIds } : {}),
     ...(values['snapshot-directory'] ? { snapshotDirectory: resolve(values['snapshot-directory']) } : {}),
     ...(values['prior-cache-root'] ? { priorCacheRoot: resolve(values['prior-cache-root']) } : {}),
@@ -103,6 +111,7 @@ async function main(): Promise<void> {
   for (const network of options.networks) {
     const common = {
       concurrency: options.concurrency,
+      prefix: options.prefix,
       progress: (counts: object) => process.stderr.write(`${command} ${network}: ${JSON.stringify(counts)}\n`),
     };
     const report = command === 'upload'

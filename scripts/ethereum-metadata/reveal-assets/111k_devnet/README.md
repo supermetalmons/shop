@@ -1,8 +1,8 @@
 # 111k_devnet reveal asset catalog
 
 [manifest.json](manifest.json) preserves the asset counts, CDN path templates, and
-exact aspect ratios for upcoming `/111k_devnet` reveals. It is a dormant data
-archive with no application, metadata generation, or publication integration.
+exact aspect ratios for upcoming `/111k_devnet` reveals. The unpack reveal service uses this catalog for private assignments and
+confirmation-gated publication; see the [reveal guide](../../../docs/111k_reveal.md).
 
 ## Assets
 
@@ -15,6 +15,8 @@ from 1 through the category's `count`, inclusive, with no gaps or leading zeros.
 | Paintings | 85,556 | `paintings/{id}.webp` | Per ID, using the ratio palette |
 | Videos | 3,333 | `videos/{id}.mp4` | 16:9 |
 | Receipts | 85,556 | `receipts/{id}.webp` | 1:1 |
+
+Video posters use `videos/{id}.webp` with the same category-local ID and 16:9 ratio.
 
 `artworkCount` is 111,111: eggs, paintings, and videos combined. Receipts are
 additional assets and are excluded from this total. This catalog defines no

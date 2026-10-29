@@ -14,7 +14,7 @@ import type { EthereumLog } from '../../shared/ethereum/abi';
 import type { EthereumSubmission } from './state';
 import { matchesEthereumOperationEvent } from './recovery';
 import { ethereumMetadataBaseUri } from '../../shared/ethereum/config';
-import { isEthereumMetadataImage } from '../../shared/ethereum/metadataImage';
+import { hasValidEthereumMedia } from './artworkMedia';
 
 export class EthereumApiError extends Error {
   constructor(readonly status: number, message: string, readonly code: string | null = null, readonly rejectedSessionToken: string | null = null) { super(message); }
@@ -63,7 +63,7 @@ export function parseEthereumInventoryItem(value: unknown, config: Ethereum111kC
     !ETHEREUM_ITEM_KINDS.includes(value.kind as EthereumInventoryItem['kind']) || typeof value.name !== 'string' ||
     !Number.isSafeInteger(value.displayId) || Number(value.displayId) < 1 ||
     Number(value.displayId) > ethereumItemDisplayIdMaximum(value.kind as EthereumInventoryItem['kind']) ||
-    !isEthereumMetadataImage(value.image)) return invalid();
+    !hasValidEthereumMedia(value)) return invalid();
   const id = ethereumAssetId(config.chainId, config.contractAddress!, value.tokenId as string);
   if (value.id !== id) return invalid();
   return value as EthereumInventoryItem;

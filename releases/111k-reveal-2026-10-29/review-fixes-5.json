@@ -1,0 +1,14 @@
+{
+  "verifiedAt": "2026-10-29T16:30:49.716Z",
+  "frontendVersion": "b0e6fbc4-9a9b-48c4-8718-92b5cd40f706",
+  "fixes": [
+    "shared-token-cooldown",
+    "stop-rate-limited-batches"
+  ],
+  "frontendTests": 271,
+  "apiRedeployed": false,
+  "frontendSmoke": {
+    "status": 200,
+    "script": "/assets/index-v9WAipKE.js"
+  }
+}

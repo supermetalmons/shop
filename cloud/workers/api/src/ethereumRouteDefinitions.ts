@@ -1,24 +1,33 @@
 import { ETHEREUM_API_PATHS } from '../../../../shared/ethereum/api.js';
 import { ETHEREUM_CHECKOUT_PATHS } from '../../../../shared/ethereum/checkout.js';
+import { ETHEREUM_REVEAL_PATHS } from '../../../../shared/ethereum/reveal.js';
 import { ethereumAuth } from './ethereumAuth.js';
 import { ethereumCheckout } from './ethereumCheckout.js';
 import { ethereumCommerce } from './ethereumCommerce.js';
 import { ethereumProfile } from './ethereumProfile.js';
 import { ethereumPublicRead } from './ethereumRead.js';
+import { ethereumReveal } from './ethereumReveal.js';
 import type { EthereumContext } from './ethereumRuntime.js';
 
 type EthereumRoutePath = typeof ETHEREUM_API_PATHS[keyof typeof ETHEREUM_API_PATHS] |
-  typeof ETHEREUM_CHECKOUT_PATHS[keyof typeof ETHEREUM_CHECKOUT_PATHS];
+  typeof ETHEREUM_CHECKOUT_PATHS[keyof typeof ETHEREUM_CHECKOUT_PATHS] |
+  typeof ETHEREUM_REVEAL_PATHS[keyof typeof ETHEREUM_REVEAL_PATHS];
 
 type EthereumRouteDefinition = Readonly<{
   methods: readonly ('GET' | 'POST')[];
   handler: (request: Request, context: EthereumContext, path: string) => Promise<unknown>;
   commerceMutation: boolean;
-  originPolicy: 'profile' | 'checkout-status';
+  originPolicy: 'profile' | 'checkout-status' | 'reveal';
   publicRateLimit: boolean;
 }>;
 
 export const ethereumRouteDefinitions = {
+  [ETHEREUM_REVEAL_PATHS.transaction]: {
+    methods: ['POST'], handler: ethereumReveal, commerceMutation: false, originPolicy: 'reveal', publicRateLimit: false,
+  },
+  [ETHEREUM_REVEAL_PATHS.tokens]: {
+    methods: ['POST'], handler: ethereumReveal, commerceMutation: false, originPolicy: 'reveal', publicRateLimit: false,
+  },
   [ETHEREUM_API_PATHS.config]: {
     methods: ['GET'], handler: ethereumPublicRead, commerceMutation: false, originPolicy: 'profile', publicRateLimit: true,
   },

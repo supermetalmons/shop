@@ -21,6 +21,11 @@
 		"ETHEREUM_111K_DEPLOYMENT_BLOCK": "12005467",
 		"ETHEREUM_111K_RPC_URL": ""
 	},
+	"durable_objects": {
+		"bindings": [{ "name": "ETHEREUM_REVEAL", "class_name": "EthereumRevealObject" }]
+	},
+	"migrations": [{ "tag": "ethereum-reveal-v1", "new_sqlite_classes": ["EthereumRevealObject"] }],
+	"r2_buckets": [{ "binding": "ETHEREUM_REVEAL_METADATA", "bucket_name": "cdn-mons-shop" }],
 	"d1_databases": [
 		{
 			"binding": "DATA_DB",
@@ -42,6 +47,16 @@
 		}
 	],
 	"ratelimits": [
+		{
+			"name": "ETHEREUM_REVEAL_READ_RATE_LIMITER",
+			"namespace_id": "1950264150",
+			"simple": { "limit": 120000, "period": 60 }
+		},
+		{
+			"name": "ETHEREUM_REVEAL_ADMISSION_RATE_LIMITER",
+			"namespace_id": "1950264151",
+			"simple": { "limit": 10000, "period": 60 }
+		},
 		{
 			"name": "PREORDER_PREPARE_RATE_LIMITER",
 			"namespace_id": "2185819631",

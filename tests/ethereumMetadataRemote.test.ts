@@ -136,6 +136,54 @@ test('remote inventory requires complete unique collection keys and valid checks
   }
 });
 
+test('metadata inventories isolate direct token files from nested deployment namespaces', async () => {
+  const storage = new MemoryStorage();
+  for (const deployment of ['1', 'next-collection', 'zz-later']) {
+    storage.values.set(`${prefix}${deployment}/1.json`, Buffer.from('other deployment'));
+    storage.values.set(`${prefix}${deployment}/2.json`, Buffer.from('different metadata'));
+  }
+  const inventory = await remoteInventory(storage, prefix, files());
+  assert.deepEqual([...inventory.keys()], ['1.json', '2.json', '3.json']);
+  assert.equal(inventory.get('1.json')?.md5, metadataMd5(Buffer.from('old one')));
+  const child = await remoteInventory(storage, `${prefix}next-collection/`, new Set(['1.json', '2.json']));
+  assert.equal(child.size, 2);
+  assert.equal(child.get('1.json')?.md5, metadataMd5(Buffer.from('other deployment')));
+  for (const invalid of ['invalid.json', '4.json', '../1.json', '_invalid/1.json']) {
+    storage.values.set(prefix + invalid, Buffer.from('invalid direct entry'));
+    await assert.rejects(remoteInventory(storage, prefix, files()), /Unexpected remote metadata key/);
+    storage.values.delete(prefix + invalid);
+  }
+});
+
+test('parallel root inventory ignores child namespaces inside and beyond direct-file ranges', async () => {
+  const storage = new MemoryStorage({});
+  const expected = new Set(Array.from({ length: 10_001 }, (_, index) => `${index + 1}.json`));
+  for (const file of expected) storage.values.set(prefix + file, Buffer.from('x'));
+  for (const namespace of ['1', '5000', 'next']) storage.values.set(`${prefix}${namespace}/1.json`, Buffer.from('other scope'));
+  const inventory = await remoteInventory(storage, prefix, expected);
+  assert.equal(inventory.size, expected.size);
+  assert.deepEqual([...inventory.keys()].sort(), [...expected].sort());
+});
+
+test('S3 listing uses a delimiter to avoid enumerating child deployment objects', async () => {
+  const requests: Record<string, unknown>[] = [];
+  const row = { Key: `${prefix}1.json`, Size: 1, ETag: `"${metadataMd5(Buffer.from('x'))}"` };
+  const pages = [
+    { Contents: [], CommonPrefixes: [{ Prefix: `${prefix}0-test/` }], IsTruncated: true, NextContinuationToken: 'direct' },
+    { Contents: [row], CommonPrefixes: [{ Prefix: `${prefix}test-2/` }], IsTruncated: false },
+  ];
+  const client = { send: async (command: { input: Record<string, unknown> }) => {
+    requests.push(command.input);
+    return pages.shift();
+  }, destroy() {} } as unknown as S3Client;
+  const storage = new S3MetadataStorage({ endpoint: 'https://example.invalid', bucket: 'cdn-mons-shop' }, client);
+  assert.deepEqual((await collect(storage.list(prefix))).map(object => object.key), [`${prefix}1.json`]);
+  assert.ok(requests.every(request => request.Delimiter === '/'));
+  assert.equal(requests[1].ContinuationToken, 'direct');
+  const invalidClient = { send: async () => ({ CommonPrefixes: [{ Prefix: `${prefix}../` }], IsTruncated: false }), destroy() {} } as unknown as S3Client;
+  await assert.rejects(collect(new S3MetadataStorage(storage.destination, invalidClient).list(prefix)), /Invalid nested metadata namespace/);
+});
+
 test('parallel inventory ranges include every boundary once and retain an open final range', async () => {
   const storage = new MemoryStorage({});
   const expected = new Set(Array.from({ length: 20_001 }, (_, index) => `${index + 1}.json`));

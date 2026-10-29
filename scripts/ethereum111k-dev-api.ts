@@ -8,6 +8,7 @@ import { ethereumSignerAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
 import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, requireEthereumAddress } from '../shared/ethereum/protocol.ts';
 import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
+import { initializeLocalEthereumReveal, localEthereumRevealBindings } from './shared/ethereum111kLocalReveal.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const deploymentFile = resolve(root, process.env.ETHEREUM_111K_LOCAL_DEPLOYMENT || 'onchain/ethereum/.local/deployment.json');
@@ -103,6 +104,7 @@ const addressKeyPair = nacl.box.keyPair();
 const addressPublicKey = Buffer.from(addressKeyPair.publicKey).toString('base64');
 const config = {
   ...rawConfig,
+  ...localEthereumRevealBindings(),
   main: resolve(root, 'cloud/workers/api/src/index.ts'),
   vars: { ...rawConfig.vars, ...emptySecrets,
     ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_CONTRACT_ADDRESS: contractAddress,
@@ -138,6 +140,12 @@ try {
   const worker = server.getWorker('mons-shop-api');
   for (const name of ['DATA_DB', 'OPS_DB', 'COMMERCE_DB'] as const) await worker.applyD1Migrations(name);
   const env = await worker.getEnv();
+  const revealDeployment = await initializeLocalEthereumReveal({
+    ETHEREUM_111K_CHAIN_ID: config.vars.ETHEREUM_111K_CHAIN_ID,
+    ETHEREUM_111K_CONTRACT_ADDRESS: config.vars.ETHEREUM_111K_CONTRACT_ADDRESS,
+    ETHEREUM_111K_RPC_URL: config.vars.ETHEREUM_111K_RPC_URL,
+    OPS_DB: env.OPS_DB, ETHEREUM_REVEAL: env.ETHEREUM_REVEAL,
+  }, { contractAddress, metadataBaseUri: deployment.metadataBaseURI, deploymentBlock: deployment.deploymentBlock });
   const existing = await env.COMMERCE_DB.prepare('SELECT COUNT(*) AS count FROM commerce_documents').first() as { count: number } | null;
   const authority = await env.COMMERCE_DB.prepare('SELECT authority_state FROM commerce_authority_control WHERE singleton = 1')
     .first() as { authority_state: string } | null;
@@ -184,6 +192,7 @@ try {
   console.log(`Local Ethereum API: ${url.origin}`);
   console.log(`Collection metadata: ${deployment.metadataBaseURI}`);
   console.log(`Collection: ${contractAddress}`);
+  console.log(`Artwork reveal: ${revealDeployment.deploymentId}; metadata writes use isolated local R2 only.`);
   console.log('Fresh in-memory databases only. All production API credentials are disabled.');
   console.log(`Frontend: VITE_MONS_API_ORIGIN=${url.origin} VITE_111K_LOCAL_ADDRESS_PUBLIC_KEY=${addressPublicKey} npm run dev`);
   console.log('Open /111k_devnet. Import an Anvil test account into your wallet; do not use its key outside this local chain.');

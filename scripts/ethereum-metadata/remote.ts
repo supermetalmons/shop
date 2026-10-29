@@ -13,10 +13,11 @@ import {
   type MetadataNetwork, type MetadataNetworkSelection, type MetadataStorage, type RemoteObject, type UploadDestination,
 } from './storage.ts';
 import { withMetadataLock } from './lock.ts';
+import { acquireMetadataPublicationLease, type MetadataPublicationLease, type MetadataWriteFence } from './publicationLease.ts';
 
 export type { MetadataNetwork, MetadataNetworkSelection } from './storage.ts';
 type Progress = (value: { phase: string; network: MetadataNetwork; completed: number; total: number }) => void;
-type CommonOptions = { concurrency?: number; progress?: Progress; storage?: MetadataStorage };
+type CommonOptions = { concurrency?: number; progress?: Progress; storage?: MetadataStorage; prefix?: string; publicationLease?: (baseUri: string) => Promise<MetadataPublicationLease> };
 type ObjectDigest = { file: string; bytes: number; md5: string; sha256: string };
 type SnapshotObject = ObjectDigest & { body: Buffer };
 type PublishObject = ObjectDigest & ({ body: Buffer } | { readBody: () => Promise<Buffer> });
@@ -66,13 +67,17 @@ export async function remoteInventory(storage: MetadataStorage, prefix: string,
     let previous = range?.startAfter;
     for await (const object of storage.list(prefix, range)) {
       const file = object.key.slice(prefix.length);
-      if (!object.key.startsWith(prefix) || !files.has(file) || found.has(file) ||
-        (previous !== undefined && object.key <= previous) || (range?.endAt !== undefined && object.key > range.endAt) ||
-        !Number.isSafeInteger(object.bytes) || object.bytes < 0 || typeof object.md5 !== 'string' ||
-        !options.allowInvalidMetadata && (object.bytes < 1 || object.bytes > 128 * 1024 || !/^[a-f0-9]{32}$/.test(object.md5))) {
+      if (!object.key.startsWith(prefix) || (previous !== undefined && object.key <= previous) ||
+        (range?.endAt !== undefined && object.key > range.endAt)) {
         throw new Error(`Unexpected remote metadata key or checksum: ${object.key}`);
       }
       previous = object.key;
+      if (/^[a-z0-9][a-z0-9-]{0,63}\//.test(file)) continue;
+      if (!files.has(file) || found.has(file) || !Number.isSafeInteger(object.bytes) || object.bytes < 0 ||
+        typeof object.md5 !== 'string' || !options.allowInvalidMetadata &&
+        (object.bytes < 1 || object.bytes > 128 * 1024 || !/^[a-f0-9]{32}$/.test(object.md5))) {
+        throw new Error(`Unexpected remote metadata key or checksum: ${object.key}`);
+      }
       found.set(file, object);
     }
   });
@@ -80,17 +85,17 @@ export async function remoteInventory(storage: MetadataStorage, prefix: string,
   return found;
 }
 
-async function withDestinationLock<T>(storage: MetadataStorage, network: MetadataNetwork, work: () => Promise<T>): Promise<T> {
-  const path = resolve('.cache/111k-metadata-locks', `${sha256(JSON.stringify({ ...storage.destination, network }))}.lock`);
+async function withDestinationLock<T>(storage: MetadataStorage, network: MetadataNetwork, work: () => Promise<T>, prefix?: string): Promise<T> {
+  const path = resolve('.cache/111k-metadata-locks', `${sha256(JSON.stringify({ ...storage.destination, network, prefix: metadataPrefix(network, prefix) }))}.lock`);
   return withMetadataLock(path, work);
 }
 
 async function readSnapshotManifest(directory: string, storage: MetadataStorage, network: MetadataNetwork,
-  expectedCount = COLLECTION_SIZE, publicationManifestSha256?: string): Promise<SnapshotManifest> {
+  expectedCount = COLLECTION_SIZE, publicationManifestSha256?: string, prefix?: string): Promise<SnapshotManifest> {
   const manifest: SnapshotManifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'));
   if (manifest.version !== 1 && manifest.version !== 2 ||
     manifest.version === 2 && !/^[a-f0-9]{64}$/.test(manifest.publicationManifestSha256) ||
-    manifest.network !== network || manifest.prefix !== metadataPrefix(network) ||
+    manifest.network !== network || manifest.prefix !== metadataPrefix(network, prefix) ||
     manifest.destination?.endpoint !== storage.destination.endpoint || manifest.destination.bucket !== storage.destination.bucket ||
     manifest.archive !== 'objects.jsonl.gz' || manifest.objectCount !== expectedCount || !Number.isSafeInteger(manifest.totalBytes) ||
     manifest.totalBytes < 1 || !/^[a-f0-9]{64}$/.test(manifest.archiveSha256)) {
@@ -105,13 +110,13 @@ async function readSnapshotManifest(directory: string, storage: MetadataStorage,
 }
 
 async function existingSnapshot(directory: string, storage: MetadataStorage, network: MetadataNetwork,
-  publicationManifestSha256: string, expectedCount = COLLECTION_SIZE): Promise<SnapshotManifest | undefined> {
+  publicationManifestSha256: string, expectedCount = COLLECTION_SIZE, prefix?: string): Promise<SnapshotManifest | undefined> {
   try { await readFile(join(directory, 'manifest.json')); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  return readSnapshotManifest(directory, storage, network, expectedCount, publicationManifestSha256);
+  return readSnapshotManifest(directory, storage, network, expectedCount, publicationManifestSha256, prefix);
 }
 
 export async function snapshotMetadata(storage: MetadataStorage, network: MetadataNetwork, directory: string,
@@ -164,7 +169,7 @@ export async function snapshotMetadata(storage: MetadataStorage, network: Metada
     await completion;
     await rename(temporary, archive);
     const manifest: SnapshotManifest = { version: 2, publicationManifestSha256, network,
-      prefix: metadataPrefix(network), destination: storage.destination,
+      prefix: metadataPrefix(network, options.prefix), destination: storage.destination,
       objectCount: completed, totalBytes, archive: 'objects.jsonl.gz', archiveSha256: await fileSha256(archive), createdAt: new Date().toISOString() };
     await writeReport(join(directory, 'manifest.json'), manifest);
     options.progress?.({ phase: 'snapshot', network, completed, total: inventory.size });
@@ -223,9 +228,9 @@ async function initializeJournal(path: string, header: string): Promise<void> {
 
 export async function publishObjects(args: {
   storage: MetadataStorage; network: MetadataNetwork; objects: AsyncIterable<PublishObject>; inventory: Map<string, RemoteObject>;
-  journal: string; sourceHash: string; concurrency: number; total: number; progress?: Progress; restoreFiles?: ReadonlySet<string>;
+  journal: string; sourceHash: string; concurrency: number; total: number; progress?: Progress; restoreFiles?: ReadonlySet<string>; prefix?: string; beforePut?: () => Promise<void>; writeFence?: MetadataWriteFence; initializeOnly?: boolean;
 }) {
-  const header = { version: 1, ...args.storage.destination, network: args.network, sourceHash: args.sourceHash };
+  const header = { version: 1, ...args.storage.destination, network: args.network, ...(args.prefix ? { prefix: metadataPrefix(args.network, args.prefix) } : {}), sourceHash: args.sourceHash };
   await mkdir(resolve(args.journal, '..'), { recursive: true });
   const completedHashes = new Map<string, string>();
   try {
@@ -259,10 +264,14 @@ export async function publishObjects(args: {
       const priorHash = completedHashes.get(object.file);
       if (priorHash && priorHash !== object.sha256) throw new Error(`Upload journal checksum mismatch: ${object.file}`);
       const current = args.inventory.get(object.file);
-      if (!current && !args.restoreFiles?.has(object.file)) throw new Error(`Object is not in the verified destination inventory: ${object.file}`);
+      if (!current && !args.initializeOnly && !args.restoreFiles?.has(object.file)) throw new Error(`Object is not in the verified destination inventory: ${object.file}`);
+      if (args.initializeOnly && current && (current.bytes !== object.bytes || current.md5 !== object.md5)) {
+        throw new Error(`Deployment prefix already contains different metadata: ${object.file}`);
+      }
       if (!args.restoreFiles && current && current.bytes === object.bytes && current.md5 === object.md5) skipped++;
       else {
-        await args.storage.put(metadataPrefix(args.network) + object.file, body);
+        await args.beforePut?.();
+        await args.storage.put(metadataPrefix(args.network, args.prefix) + object.file, body, current ? `"${current.md5}"` : null, args.writeFence);
         uploaded++;
       }
       if (!priorHash) {
@@ -309,12 +318,12 @@ async function* generatedObjects(directory: string, selected?: Set<string>): Asy
 }
 
 export async function selectedInventory(storage: MetadataStorage, network: MetadataNetwork,
-  selected: Set<string>, concurrency: number): Promise<Map<string, RemoteObject>> {
+  selected: Set<string>, concurrency: number, prefix?: string): Promise<Map<string, RemoteObject>> {
   const inventory = new Map<string, RemoteObject>();
   selectedIds([...selected]);
   await uploadWithConcurrency(selected, concurrency, async tokenId => {
     const file = `${tokenId}.json`;
-    const key = metadataPrefix(network) + file;
+    const key = metadataPrefix(network, prefix) + file;
     const body = await storage.get(key);
     if (!body.length || body.length > 128 * 1024) throw new Error(`Invalid remote metadata size: ${key}`);
     inventory.set(file, { key, bytes: body.length, md5: metadataMd5(body) });
@@ -331,34 +340,49 @@ export async function uploadMetadata(directory: string, network: MetadataNetwork
   const publicationManifestSha256 = await fileSha256(join(directory, 'manifest.json'));
   const storage = options.storage ?? environmentStorage(concurrency);
   const reports = [];
+  if (options.prefix && network === 'all') throw new Error('A deployment prefix requires one network');
   try {
     for (const selectedNetwork of metadataNetworks(network)) {
-      reports.push(await withDestinationLock(storage, selectedNetwork, async () => {
+      const prefix = metadataPrefix(selectedNetwork, options.prefix);
+      const lease = options.publicationLease || !options.storage
+        ? await (options.publicationLease ?? acquireMetadataPublicationLease)(`https://cdn.mons.shop/${prefix}`) : undefined;
+      try { reports.push(await withDestinationLock(storage, selectedNetwork, async () => {
         options.progress?.({ phase: 'inventory', network: selectedNetwork, completed: 0, total: manifest.objectCount });
+        if (options.prefix) {
+          const inventory = await remoteInventory(storage, prefix, expectedFiles(), { allowMissing: true });
+          const counts = await publishObjects({ storage, network: selectedNetwork, prefix, initializeOnly: true,
+            beforePut: () => lease?.beforePut() ?? Promise.resolve(), writeFence: lease, objects: generatedObjects(directory, selected), inventory,
+            journal: join(directory, 'uploads', `${selectedNetwork}-${sha256(prefix).slice(0, 12)}.jsonl`),
+            sourceHash: manifest.objectsSha256, concurrency, total: selected?.size ?? manifest.objectCount, progress: options.progress });
+          const report = { network: selectedNetwork, ...storage.destination, prefix, ...counts, initialized: true,
+            objectsSha256: manifest.objectsSha256, complete: !selected, tokenIds: selected ? [...selected] : undefined, finishedAt: new Date().toISOString() };
+          await writeReport(join(directory, `upload-${selectedNetwork}-${sha256(prefix).slice(0, 12)}.json`), report);
+          return report;
+        }
         const snapshotDirectory = join(options.snapshotDirectory ?? join(directory, 'snapshots'), selectedNetwork);
-        let snapshot = await existingSnapshot(snapshotDirectory, storage, selectedNetwork, publicationManifestSha256);
-        const inventory = selected && snapshot ? await selectedInventory(storage, selectedNetwork, selected, concurrency)
-          : await remoteInventory(storage, metadataPrefix(selectedNetwork));
+        let snapshot = await existingSnapshot(snapshotDirectory, storage, selectedNetwork, publicationManifestSha256, COLLECTION_SIZE, options.prefix);
+        const inventory = selected && snapshot ? await selectedInventory(storage, selectedNetwork, selected, concurrency, options.prefix)
+          : await remoteInventory(storage, metadataPrefix(selectedNetwork, options.prefix));
         snapshot ??= await snapshotMetadata(storage, selectedNetwork, snapshotDirectory, inventory, publicationManifestSha256,
           { ...options, concurrency, priorCacheRoot: options.priorCacheRoot ?? resolve('.cache/111k-metadata') });
-        const counts = await publishObjects({ storage, network: selectedNetwork, objects: generatedObjects(directory, selected), inventory,
+        const counts = await publishObjects({ storage, network: selectedNetwork, prefix: options.prefix, beforePut: () => lease?.beforePut() ?? Promise.resolve(), writeFence: lease, objects: generatedObjects(directory, selected), inventory,
           journal: join(directory, 'uploads', `${selectedNetwork}.jsonl`), sourceHash: manifest.objectsSha256, concurrency,
           total: selected?.size ?? manifest.objectCount, progress: options.progress });
-        const report = { network: selectedNetwork, ...storage.destination, prefix: metadataPrefix(selectedNetwork),
+        const report = { network: selectedNetwork, ...storage.destination, prefix: metadataPrefix(selectedNetwork, options.prefix),
           objectsSha256: manifest.objectsSha256, snapshotDirectory: resolve(snapshotDirectory), snapshotSha256: snapshot.archiveSha256,
           ...counts, complete: !selected, tokenIds: selected ? [...selected] : undefined, finishedAt: new Date().toISOString() };
         await writeReport(join(directory, `upload-${selectedNetwork}${selected ? '-sample' : ''}.json`), report);
         return report;
-      }));
+      }, options.prefix)); } finally { await lease?.close(); }
     }
     return reports;
   } finally { if (!options.storage) storage.close(); }
 }
 
-async function publicChecks(directory: string, network: MetadataNetwork, ids: string[], concurrency: number) {
+async function publicChecks(directory: string, network: MetadataNetwork, ids: string[], concurrency: number, prefix?: string) {
   const checks: Array<{ tokenId: string; sha256: string; cacheControl: string | null; cors: string | null }> = [];
   await uploadWithConcurrency(ids, Math.min(concurrency, 8), async tokenId => {
-    const url = `https://cdn.mons.shop/${metadataPrefix(network)}${tokenId}.json`;
+    const url = `https://cdn.mons.shop/${metadataPrefix(network, prefix)}${tokenId}.json`;
     const response = await fetch(url, { headers: { Origin: 'https://mons.shop', Accept: 'application/json' },
       cache: 'no-store', redirect: 'manual', signal: AbortSignal.timeout(15_000) });
     if (response.status !== 200 || !response.headers.get('content-type')?.startsWith('application/json') ||
@@ -379,10 +403,11 @@ export async function verifyMetadata(directory: string, network: MetadataNetwork
   const concurrency = metadataUploadConcurrency(options.concurrency);
   const storage = options.storage ?? environmentStorage(concurrency);
   const reports = [];
+  if (options.prefix && network === 'all') throw new Error('A deployment prefix requires one network');
   try {
     for (const selectedNetwork of metadataNetworks(network)) {
-      const inventory = selected ? await selectedInventory(storage, selectedNetwork, selected, concurrency)
-        : await remoteInventory(storage, metadataPrefix(selectedNetwork));
+      const inventory = selected ? await selectedInventory(storage, selectedNetwork, selected, concurrency, options.prefix)
+        : await remoteInventory(storage, metadataPrefix(selectedNetwork, options.prefix));
       let verified = 0;
       let totalBytes = 0;
       for await (const object of metadataObjects(directory)) {
@@ -395,8 +420,8 @@ export async function verifyMetadata(directory: string, network: MetadataNetwork
       if (verified !== (selected?.size ?? manifest.objectCount) || !selected && totalBytes !== manifest.totalBytes) {
         throw new Error('Verified metadata count or size mismatch');
       }
-      const samples = await publicChecks(directory, selectedNetwork, selected ? [...selected] : SAMPLE_IDS, concurrency);
-      const report = { network: selectedNetwork, ...storage.destination, prefix: metadataPrefix(selectedNetwork),
+      const samples = await publicChecks(directory, selectedNetwork, selected ? [...selected] : SAMPLE_IDS, concurrency, options.prefix);
+      const report = { network: selectedNetwork, ...storage.destination, prefix: metadataPrefix(selectedNetwork, options.prefix),
         objectsSha256: manifest.objectsSha256, objectCount: verified, totalBytes, complete: !selected, samples, verifiedAt: new Date().toISOString() };
       await writeReport(join(directory, `verification-${selectedNetwork}${selected ? '-sample' : ''}.json`), report);
       options.progress?.({ phase: 'verify', network: selectedNetwork, completed: verified, total: selected?.size ?? manifest.objectCount });
@@ -410,20 +435,24 @@ export async function restoreMetadata(snapshotDirectory: string, network: Metada
   const concurrency = metadataUploadConcurrency(options.concurrency);
   const storage = options.storage ?? environmentStorage(concurrency);
   const reports = [];
+  if (options.prefix && network === 'all') throw new Error('A deployment prefix requires one network');
   try {
     for (const selectedNetwork of metadataNetworks(network)) {
-      reports.push(await withDestinationLock(storage, selectedNetwork, async () => {
+      const prefix = metadataPrefix(selectedNetwork, options.prefix);
+      const lease = options.publicationLease || !options.storage
+        ? await (options.publicationLease ?? acquireMetadataPublicationLease)(`https://cdn.mons.shop/${prefix}`) : undefined;
+      try { reports.push(await withDestinationLock(storage, selectedNetwork, async () => {
         const directory = join(snapshotDirectory, selectedNetwork);
-        const manifest = await readSnapshotManifest(directory, storage, selectedNetwork);
+        const manifest = await readSnapshotManifest(directory, storage, selectedNetwork, COLLECTION_SIZE, undefined, options.prefix);
         const expected = new Map<string, ObjectDigest>();
         for await (const { body: _, ...object } of snapshotObjects(directory, manifest)) expected.set(object.file, object);
         const restoreFiles = new Set(expected.keys());
-        const inventory = await remoteInventory(storage, metadataPrefix(selectedNetwork), restoreFiles,
+        const inventory = await remoteInventory(storage, metadataPrefix(selectedNetwork, options.prefix), restoreFiles,
           { allowMissing: true, allowInvalidMetadata: true });
-        const counts = await publishObjects({ storage, network: selectedNetwork, inventory, objects: snapshotObjects(directory, manifest),
+        const counts = await publishObjects({ storage, network: selectedNetwork, prefix: options.prefix, beforePut: () => lease?.beforePut() ?? Promise.resolve(), writeFence: lease, inventory, objects: snapshotObjects(directory, manifest),
           journal: join(directory, 'restore-journal.jsonl'), sourceHash: manifest.archiveSha256, concurrency, total: manifest.objectCount,
           progress: options.progress, restoreFiles });
-        const restored = await remoteInventory(storage, metadataPrefix(selectedNetwork), restoreFiles);
+        const restored = await remoteInventory(storage, metadataPrefix(selectedNetwork, options.prefix), restoreFiles);
         for (const [file, object] of expected) {
           const actual = restored.get(file)!;
           if (actual.bytes !== object.bytes || actual.md5 !== object.md5) throw new Error(`Restored object checksum mismatch: ${actual.key}`);
@@ -432,7 +461,7 @@ export async function restoreMetadata(snapshotDirectory: string, network: Metada
           snapshotSha256: manifest.archiveSha256, restoredAt: new Date().toISOString() };
         await writeReport(join(directory, 'restore.json'), report);
         return report;
-      }));
+      }, options.prefix)); } finally { await lease?.close(); }
     }
     return reports;
   } finally { if (!options.storage) storage.close(); }

@@ -216,11 +216,13 @@ export type EthereumLog = {
 
 export type EthereumDecodedEvent =
   | { name: 'Transfer'; from: string; to: string; tokenId: string; log: EthereumLog }
+  | { name: 'CrateUnboxed'; crateTokenId: string; owner: string; firstArtToken: number; count: number; log: EthereumLog }
   | { name: 'DeliveryRedeemed'; orderId: number; wallet: string; fee: string; tokenIds: string[]; receiptIds: string[]; log: EthereumLog }
   | { name: 'CrateReceiptClaimed'; claimId: string; wallet: string; receiptId: string; receiptIds: string[]; log: EthereumLog };
 
 export const ETHEREUM_EVENT_TOPICS = {
   Transfer: eventTopic('Transfer(address,address,uint256)'),
+  CrateUnboxed: eventTopic('CrateUnboxed(uint256,address,uint256,uint256)'),
   DeliveryRedeemed: eventTopic('DeliveryRedeemed(uint256,address,uint256,uint256[],uint256[])'),
   CrateReceiptClaimed: eventTopic('CrateReceiptClaimed(bytes32,address,uint256,uint256[])'),
 } as const;
@@ -235,6 +237,13 @@ export function decodeEventLogs(logs: readonly EthereumLog[], contractAddress?: 
       return [{ name: 'Transfer', from: decodeReturn(['address'], log.topics[1])[0] as string,
         to: decodeReturn(['address'], log.topics[2])[0] as string,
         tokenId: String(decodeReturn(['uint256'], log.topics[3])[0]), log } satisfies EthereumDecodedEvent];
+    }
+    if (topic === ETHEREUM_EVENT_TOPICS.CrateUnboxed) {
+      if (log.topics.length !== 3 || log.data.length !== 130) throw new Error('Invalid crate unbox event');
+      const [first, count] = decodeReturn(['uint256', 'uint256'], log.data) as [bigint, bigint];
+      return [{ name: 'CrateUnboxed', crateTokenId: String(decodeReturn(['uint256'], log.topics[1])[0]),
+        owner: decodeReturn(['address'], log.topics[2])[0] as string,
+        firstArtToken: safeSize(first, 111_111), count: safeSize(count, 111_111), log } satisfies EthereumDecodedEvent];
     }
     if (topic === ETHEREUM_EVENT_TOPICS.DeliveryRedeemed) {
       if (log.topics.length !== 3) throw new Error('Invalid delivery event');

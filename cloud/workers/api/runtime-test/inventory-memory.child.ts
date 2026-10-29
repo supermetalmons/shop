@@ -11,6 +11,7 @@ import type { ProviderFetch } from '../src/publicRouteSupport.js';
 import { MAX_INVENTORY_RESPONSE_BODY_BYTES } from '../src/inventoryLimits.js';
 import { loadApiWorkerIndex } from '../test/cloudflareWorkersTestLoader.js';
 import { failOnDeferredWork } from '../test/deferredWork.js';
+import { unusedEthereumRevealBindings } from '../test/unusedEthereumRevealBindings.ts';
 
 const { handleRequest } = await loadApiWorkerIndex();
 
@@ -163,6 +164,7 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 };
 
 const env: Env = {
+  ...unusedEthereumRevealBindings(),
   DATA_DB: {} as D1Database,
   OPS_DB: {} as D1Database,
   COMMERCE_DB: {} as D1Database,

@@ -176,15 +176,26 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoActive, setVideoActive] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true);
   const sourceKey = sources.map((source) => `${source.src}:${source.type || ''}`).join('|');
   const videoKey = `${posterSrc || ''}|${sourceKey}`;
-  const showVideo = videoActive && !videoFailed;
+  const showVideo = videoActive && !videoFailed && !reducedMotion;
   const showPoster = Boolean(posterSrc);
   const showPlaceholder = !showVideo && !showPoster;
 
   useEffect(() => {
     setVideoFailed(false);
   }, [posterSrc, sourceKey]);
+
+  useEffect(() => {
+    const preference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!preference) return;
+    const update = () => setReducedMotion(preference.matches);
+    update();
+    preference.addEventListener('change', update);
+    return () => preference.removeEventListener('change', update);
+  }, []);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -217,12 +228,15 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
   }, [showVideo, sourceKey]);
 
   return (
-    <div ref={rootRef} className="inventory__video-stack" role="img" aria-label={item.name}>
+    <div ref={rootRef} className="inventory__video-stack" role="img" aria-label={item.name}
+      style={item.imageDimensions ? { aspectRatio: item.imageDimensions.width / item.imageDimensions.height } : undefined}>
       {posterSrc ? (
         <ColorSchemeImage
           dropId={item.dropId}
           className="inventory__video-poster"
           src={posterSrc}
+          width={item.imageDimensions?.width}
+          height={item.imageDimensions?.height}
           alt=""
           aria-hidden="true"
           loading="lazy"
@@ -241,6 +255,8 @@ function InventoryVideoMedia({ item, sources, posterSrc }: InventoryVideoMediaPr
           playsInline
           preload="metadata"
           poster={posterSrc}
+          width={item.imageDimensions?.width}
+          height={item.imageDimensions?.height}
           aria-hidden="true"
           draggable={false}
           onDragStart={(evt) => evt.preventDefault()}

@@ -11,6 +11,7 @@ type WorkerRouteCorsPolicy =
   | 'mi-note'
   | 'ethereum'
   | 'ethereum-checkout-status'
+  | 'ethereum-reveal'
   | 'pack-status';
 
 type WorkerRouteStaffPolicy = 'skip' | 'optional' | 'required';

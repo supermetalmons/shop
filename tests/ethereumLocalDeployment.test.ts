@@ -5,6 +5,40 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parseProceedsConfig } from '../onchain/ethereum/scripts/proceeds-config.mjs';
+import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
+
+test('the local deployment launcher validates canonical collection namespaces before any RPC', () => {
+  const preload = `data:text/javascript,${encodeURIComponent('globalThis.fetch = async () => { throw new Error("LOCAL_RPC_REACHED"); };')}`;
+  const start = (metadataBaseURI: string) => spawnSync(process.execPath, ['--import', preload, 'onchain/ethereum/scripts/deploy-local.mjs'], {
+    encoding: 'utf8', timeout: 5000,
+    env: { ...process.env, ETHEREUM_111K_LOCAL_METADATA_BASE_URI: metadataBaseURI,
+      ETHEREUM_111K_LOCAL_RPC_URL: 'http://127.0.0.1:8545' },
+  });
+  for (const root of ['111k', '111k-sepolia']) {
+    const base = `https://cdn.mons.shop/${root}/`;
+    for (const suffix of ['', 'a/', 'test-2/', `${'a'.repeat(64)}/`]) {
+      const uri = base + suffix;
+      assert.equal(ethereumMetadataBaseUri(uri, 31337), uri);
+      const result = start(uri);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /LOCAL_RPC_REACHED/, uri);
+    }
+    for (const uri of [
+      ...['../other/', 'a/../', '%61/', 'UPPER/', '-test/', 'a/b/', 'a//', 'test', `${'a'.repeat(65)}/`, '?q=1', '#hash'].map(suffix => base + suffix),
+      base.replace('https:', 'http:'), base.replace('cdn.mons.shop', 'example.com'),
+      base.replace('cdn.mons.shop', 'cdn.mons.shop.evil.example'), base.replace('cdn.mons.shop', 'user@cdn.mons.shop'),
+      base.replace('cdn.mons.shop', 'cdn.mons.shop:443'),
+    ]) {
+      assert.throws(() => ethereumMetadataBaseUri(uri, 31337), undefined, uri);
+      const result = start(uri);
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Local metadata must use a canonical/, uri);
+      assert.doesNotMatch(result.stderr, /LOCAL_RPC_REACHED/, uri);
+    }
+  }
+});
 
 test('the local API rejects old deployment manifests before connecting to Anvil', () => {
   const directory = mkdtempSync(join(tmpdir(), '111k-deployment-test-'));

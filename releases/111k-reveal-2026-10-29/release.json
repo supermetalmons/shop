@@ -1,0 +1,32 @@
+{
+  "recordedAt": "2026-10-29T12:57:53.808Z",
+  "deploymentId": "sepolia-8b4044db",
+  "dropId": "111k_devnet",
+  "chainId": 11155111,
+  "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+  "registryState": "active",
+  "registryRevision": 3,
+  "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/",
+  "templateSha256": "2a06b658c7ad002b0dc64df1d19073fcbc00673f25628b924c3258424cdbbb33",
+  "apiVersion": "5958be23-dfac-443d-bb1a-3f4e4ec3cbb0",
+  "frontendVersion": "5fc524f8-c7ee-4d7f-8617-1d61db08e681",
+  "opsMigration": "0009_ethereum_reveal_deployments.sql",
+  "finalApiSmoke": {
+    "status": 200,
+    "body": {
+      "deploymentId": "sepolia-8b4044db",
+      "dropId": "111k_devnet",
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915",
+      "artworks": [],
+      "unresolved": [
+        {
+          "tokenId": "111111",
+          "status": "unminted"
+        }
+      ],
+      "retryAfterMs": 0
+    }
+  },
+  "historicalBackfill": false
+}

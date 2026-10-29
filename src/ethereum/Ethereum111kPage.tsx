@@ -15,6 +15,7 @@ import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryVie
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 import { useEthereumMintAction } from './useEthereumMintAction';
 import { EthereumCheckoutReturn, type EthereumCheckoutReturnStatus } from './EthereumCheckoutReturn';
+import { EthereumArtworkMedia } from './EthereumArtworkMedia';
 import { checkoutReservesItems, useCheckoutReservations } from './checkoutReservations';
 
 export type Ethereum111kPageProps = {
@@ -255,7 +256,7 @@ export default function Ethereum111kPage({
   const mintStatus = model.configQuery.data?.enabled === false ? 'Mint unavailable' :
     model.stats.data && !model.stats.data.saleActive ? 'Minting is paused' : undefined;
   const revealItems = model.revealed ?? [];
-  const viewedImage = viewed ? ethereumInventoryView(viewed) : null;
+  const viewedArtwork = viewed ? model.applyArtwork(viewed) : null;
 
   return <>
     <div className="drop-page-frame drop-page-frame--active">
@@ -366,11 +367,10 @@ export default function Ethereum111kPage({
           </> : <button type="button" className="ghost" onClick={() => setConfirmDismiss(true)} disabled={Boolean(model.busy)}>Stop tracking…</button>}
         </div>
       </Modal>
-      <Modal open={viewerOpen} title={viewed?.name ?? '111K artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
+      <Modal open={viewerOpen} title={viewedArtwork?.name ?? '111K artwork'} onClose={() => { if (!model.busy) { setViewed(null); setReceiptAction(null); } }} className="ethereum111k__viewer" suspended={suspended}>
         {viewed ? <>
-          <img className="ethereum111k__view-image" src={viewedImage?.image} width={viewedImage?.imageDimensions?.width} height={viewedImage?.imageDimensions?.height}
-            style={{ width: viewedImage?.imageDimensions?.width }} alt={viewed.name} />
-          {viewed.description ? <p className="muted small">{viewed.description}</p> : null}
+          <EthereumArtworkMedia item={viewedArtwork!} viewer />
+          {viewedArtwork?.description ? <p className="muted small">{viewedArtwork.description}</p> : null}
           {viewed.kind.endsWith('_receipt') ? <div className="ethereum111k__receipt-actions">
             <button type="button" onClick={() => { setReceiptAction('transfer'); setRecipient(''); }} disabled={disabled}>Transfer receipt</button>
             {viewed.kind === 'crate_receipt' ? <button type="button" onClick={() => { setReceiptAction('claim'); setClaimCode(viewed.tokenId === claimReceiptId ? linkedClaimCode ?? '' : ''); }} disabled={disabled}>Claim crate contents</button> : null}
@@ -385,9 +385,8 @@ export default function Ethereum111kPage({
       <Modal open={revealOpen} title={revealItems[0]?.kind === 'crate' ? 'Your crates' : 'Your artworks'} onClose={model.closeReveal} className="ethereum111k__reveal" suspended={suspended}>
         <p className="muted small">{revealItems.length} {revealItems[0]?.kind === 'crate' ? 'crates' : 'artworks'}</p>
         <div className="ethereum111k__reveal-grid">{revealItems.map((item, index) => {
-          const preview = ethereumInventoryView(item);
           return <button type="button" key={item.id} style={{ animationDelay: `${Math.min(index, 10) * 35}ms` }} onClick={() => { model.closeReveal(); setViewed(item); }}>
-            <img src={preview.image} width={preview.imageDimensions?.width} height={preview.imageDimensions?.height} alt={item.name} loading="lazy" decoding="async" />
+            <EthereumArtworkMedia item={item} />
             <span>{item.name}</span>
           </button>;
         })}</div>

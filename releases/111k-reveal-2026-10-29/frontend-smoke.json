@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-29T12:52:31.884Z",
+  "url": "https://mons.shop/111k_devnet",
+  "status": 200,
+  "script": "/assets/index-9MyKASeV.js",
+  "revealChunks": [
+    "index-9MyKASeV.js"
+  ],
+  "transactionEndpointBundled": true,
+  "tokenEndpointBundled": true
+}
