@@ -183,6 +183,12 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isAllowedShipStationCarrier(value: unknown): boolean {
+  const code = stringValue(value).toLowerCase();
+  return code === 'usps' || code === 'usps_walleted' || code === 'stamps_com' || code === 'endicia' ||
+    code.startsWith('dhl_') || code === 'deutsche_post_dhl';
+}
+
 function boundedString(value: unknown, maxLength: number): string {
   const normalized = stringValue(value);
   return normalized.length <= maxLength ? normalized : '';
@@ -645,13 +651,13 @@ function providerFieldErrorMessage(fieldName: string): string | null {
 
 function responseInvalidRates(value: unknown): FulfillmentShipStationInvalidRate[] {
   const errors = Array.isArray(value) ? value : value ? [value] : [];
-  const summaries = errors.map((candidate): FulfillmentShipStationInvalidRate => {
+  const summaries = errors.flatMap((candidate): FulfillmentShipStationInvalidRate[] => {
     if (typeof candidate === 'string') {
-      return invalidRate(
+      return [invalidRate(
         { carrier_friendly_name: 'ShipStation', service_type: 'Rating' },
         rateErrorMessages([candidate]),
         true,
-      );
+      )];
     }
     const error = record(candidate);
     const code = safeProviderIdentifier(error.error_code) || safeProviderIdentifier(error.code);
@@ -663,18 +669,21 @@ function responseInvalidRates(value: unknown): FulfillmentShipStationInvalidRate
     const carrierName = stringValue(error.carrier_name) || stringValue(error.carrier_friendly_name) ||
       stringValue(error.carrier_nickname);
     const hasCarrierIdentity = Boolean(carrierId || carrierCode || carrierName);
+    if ((hasCarrierIdentity || source.toLowerCase() === 'carrier') && !isAllowedShipStationCarrier(carrierCode)) {
+      return [];
+    }
     const responseIssue = !hasCarrierIdentity || Boolean(source && source.toLowerCase() !== 'carrier');
     const fieldMessage = providerFieldErrorMessage(fieldName);
     const details = [fieldMessage || code || 'rate_error'];
     if (type) details.push(`type: ${type}`);
     if (fieldName && !fieldMessage) details.push(`field: ${fieldName}`);
     if (source) details.push(`source: ${source}`);
-    return invalidRate({
+    return [invalidRate({
       carrier_id: carrierId,
       carrier_code: carrierCode,
       carrier_friendly_name: carrierName || (!hasCarrierIdentity ? 'ShipStation' : undefined),
       service_type: 'Rating',
-    }, [details.join(' · ').slice(0, 500)], responseIssue);
+    }, [details.join(' · ').slice(0, 500)], responseIssue)];
   });
   const grouped = new Map<string, FulfillmentShipStationInvalidRate>();
   for (const summary of summaries) {
@@ -707,6 +716,7 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
   const rejectedRates: FulfillmentShipStationInvalidRate[] = [];
   for (const candidate of Array.isArray(raw.rates) ? raw.rates : []) {
     const rate = record(candidate);
+    if (!isAllowedShipStationCarrier(rate.carrier_code)) continue;
     const rateId = stringValue(rate.rate_id);
     const rateShipmentId = stringValue(rate.shipment_id) || shipmentId;
     const rejectionMessages = rateErrorMessages(rate.error_messages);
@@ -799,9 +809,11 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
     a.totalAmount.amount - b.totalAmount.amount ||
     a.carrierName.localeCompare(b.carrierName) ||
     a.serviceName.localeCompare(b.serviceName));
-  const explicitInvalidRates = (Array.isArray(raw.invalid_rates) ? raw.invalid_rates : []).map((candidate) => {
+  const explicitInvalidRates = (Array.isArray(raw.invalid_rates) ? raw.invalid_rates : []).flatMap((candidate) => {
     const rate = record(candidate);
-    return invalidRate(rate, rateErrorMessages(rate.error_messages));
+    return isAllowedShipStationCarrier(rate.carrier_code)
+      ? [invalidRate(rate, rateErrorMessages(rate.error_messages))]
+      : [];
   });
   const invalidRates = [
     ...responseInvalidRates(raw.errors),
@@ -812,10 +824,9 @@ export function shipStationRateSummaries(value: unknown, expectedRateRequestId?:
     return all.findIndex((candidate) => invalidRateKey(candidate) === key) === index;
   }).slice(0, 50);
   if (!rates.length && !invalidRates.length) {
-    const status = stringValue(raw.status);
     invalidRates.push(invalidRate(
       { carrier_friendly_name: 'ShipStation', service_type: 'Rating' },
-      [`ShipStation returned no rate entries or rejection details${status ? ` (status: ${status})` : ''}.`],
+      ['No USPS or DHL rates are available for this shipment.'],
     ));
   }
   return {
@@ -1439,14 +1450,15 @@ export async function requestShipStationShipmentRates(
   const carrierIds = Array.from(new Set(carriers.flatMap((candidate): string[] => {
     const carrier = record(candidate);
     const carrierId = stringValue(carrier.carrier_id);
-    if (!carrierId || carrier.send_rates === false || carrier.disabled_by_billing_plan === true ||
+    if (!carrierId || !isAllowedShipStationCarrier(carrier.carrier_code) ||
+      carrier.send_rates === false || carrier.disabled_by_billing_plan === true ||
       stringValue(carrier.connection_status) === 'pending_approval') return [];
     return [carrierId];
   })));
   if (!carrierIds.length) {
     throw new ShipStationRatesProviderError(
       'failed-precondition',
-      'No connected ShipStation carriers are available for rate shopping.',
+      'No connected USPS or DHL carriers are available for rate shopping.',
     );
   }
   const { status, json, validJson } = await shipStationFetch(apiKey, '/rates', {

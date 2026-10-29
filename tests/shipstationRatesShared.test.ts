@@ -6,6 +6,7 @@ import {
   getShipStationShipmentByExternalId,
   getShipStationShipmentById,
   getShipStationShipmentRates,
+  getShipStationRateById,
   parseShipStationShipFrom,
   requestShipStationShipmentRates,
   shipStationAddressCorrectionFields,
@@ -43,6 +44,32 @@ const SHIP_TO = {
   instructions: 'Side door',
   geolocation: [{ type: 'what3words', value: 'cats.with.thumbs' }],
 };
+
+function rateQuote(rateId: string, carrierCode: string | undefined, amount = 10) {
+  return {
+    rate_id: rateId,
+    shipment_id: 'shipment-1',
+    carrier_id: `carrier-${rateId}`,
+    carrier_code: carrierCode,
+    carrier_friendly_name: 'Custom account name',
+    service_code: 'service-1',
+    service_type: 'Shipping service',
+    validation_status: 'valid',
+    shipping_amount: { currency: 'usd', amount },
+    insurance_amount: { currency: 'usd', amount: 0 },
+    confirmation_amount: { currency: 'usd', amount: 0 },
+    other_amount: { currency: 'usd', amount: 0 },
+  };
+}
+
+function rateResponse(rates: ReturnType<typeof rateQuote>[] = []) {
+  return {
+    shipment_id: 'shipment-1',
+    rate_request_id: 'request-1',
+    status: 'completed',
+    rates,
+  };
+}
 
 test('shared ShipStation rates client validates the origin secret', () => {
   assert.deepEqual(parseShipStationShipFrom(JSON.stringify({
@@ -100,7 +127,7 @@ test('shared ShipStation address correction fields are allowlisted, canonical, a
 });
 
 test('shared ShipStation rates client rejects malformed and inconsistent success responses', async () => {
-  const carriers = Response.json({ carriers: [{ carrier_id: 'active', send_rates: true }] });
+  const carriers = Response.json({ carriers: [{ carrier_id: 'active', carrier_code: 'stamps_com', send_rates: true }] });
   for (const rateResponse of [
     new Response('not-json', { status: 200 }),
     Response.json({ shipment_id: 'shipment-2', rate_request_id: 'request-1', status: 'completed', rates: [] }),
@@ -517,13 +544,14 @@ test('shared ShipStation parsing never coerces provider numbers', async () => {
   const response = await requestShipStationShipmentRates('api-key', 'shipment-1', {
     fetch: async () => {
       calls += 1;
-      if (calls === 1) return Response.json({ carriers: [{ carrier_id: 'carrier-1' }] });
+      if (calls === 1) return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com' }] });
       return Response.json({
         shipment_id: 'shipment-1',
         rate_request_id: 'request-1',
         status: 'completed',
         rates: [{
           rate_id: 'rate-1',
+          carrier_code: 'stamps_com',
           shipment_id: 'shipment-1',
           validation_status: 'valid',
           shipping_amount: { currency: 'usd', amount: '10' },
@@ -644,7 +672,21 @@ test('shared ShipStation rates client injects fetch and bounds provider response
   );
 });
 
-test('shared ShipStation rate shopping sends only connected rate-capable carriers', async () => {
+test('shared ShipStation rate shopping requests each eligible USPS or DHL account once', async () => {
+  const carrierCodes = [
+    'usps',
+    'usps_walleted',
+    'stamps_com',
+    'endicia',
+    'dhl_express',
+    'dhl_express_uk',
+    'dhl_ecommerce',
+    'dhl_global_mail',
+    'deutsche_post_dhl',
+    '  StAmPs_CoM  ',
+    ' DHL_Express ',
+  ];
+  const carrierIds = carrierCodes.map((_, index) => `active-${index}`);
   const requests: Array<{ path: string; body?: unknown }> = [];
   const response = await requestShipStationShipmentRates('api-key', 'shipment-1', {
     fetch: async (input, init) => {
@@ -656,39 +698,124 @@ test('shared ShipStation rate shopping sends only connected rate-capable carrier
       if (url.pathname === '/v2/carriers') {
         return Response.json({
           carriers: [
-            { carrier_id: 'active', send_rates: true },
-            { carrier_id: 'disabled', disabled_by_billing_plan: true },
+            ...carrierCodes.map((carrier_code, index) => ({
+              carrier_id: carrierIds[index], carrier_code, send_rates: true,
+            })),
+            { carrier_id: carrierIds[0], carrier_code: 'usps' },
+            { carrier_id: 'disabled', carrier_code: 'stamps_com', disabled_by_billing_plan: true },
+            { carrier_id: 'no-rates', carrier_code: 'dhl_express', send_rates: false },
+            { carrier_id: 'pending', carrier_code: 'endicia', connection_status: 'pending_approval' },
+            { carrier_code: 'usps' },
+            { carrier_id: 'ups', carrier_code: 'ups', friendly_name: 'USPS' },
+            { carrier_id: 'fedex', carrier_code: 'fedex', nickname: 'DHL' },
+            { carrier_id: 'unknown', carrier_code: 'other' },
+            { carrier_id: 'missing', friendly_name: 'USPS' },
           ],
         });
       }
-      return Response.json({
-        shipment_id: 'shipment-1',
-        rate_request_id: 'request-1',
-        status: 'completed',
-        rates: [{
-          rate_id: 'rate-1',
-          carrier_id: 'active',
-          carrier_code: 'ups',
-          carrier_friendly_name: 'UPS',
-          service_code: 'ups_ground',
-          service_type: 'UPS Ground',
-          validation_status: 'valid',
-          shipping_amount: { currency: 'usd', amount: 10 },
-          insurance_amount: { currency: 'usd', amount: 0 },
-          confirmation_amount: { currency: 'usd', amount: 0 },
-          other_amount: { currency: 'usd', amount: 0 },
-          warning_messages: [],
-          error_messages: [],
-        }],
-      });
+      return Response.json(rateResponse(carrierCodes.map((code, index) => ({
+        ...rateQuote(`rate-${index}`, code, index + 10), carrier_id: carrierIds[index],
+      }))));
     },
   });
-  assert.equal(response.rates[0].rateId, 'rate-1');
+  assert.deepEqual(response.rates.map((rate) => rate.carrierId), carrierIds);
   assert.deepEqual(requests, [
     { path: '/v2/carriers?page_size=50&include_extended_details=false' },
     {
       path: '/v2/rates',
-      body: { shipment_id: 'shipment-1', rate_options: { carrier_ids: ['active'] } },
+      body: { shipment_id: 'shipment-1', rate_options: { carrier_ids: carrierIds } },
     },
   ]);
+});
+
+test('shared ShipStation rate shopping stops before requesting rates without eligible USPS or DHL accounts', async () => {
+  const requests: string[] = [];
+  await assert.rejects(requestShipStationShipmentRates('api-key', 'shipment-1', {
+    fetch: async (input) => {
+      const path = new URL(String(input)).pathname;
+      requests.push(path);
+      assert.equal(path, '/v2/carriers');
+      return Response.json({ carriers: [
+        { carrier_id: 'ups', carrier_code: 'ups', friendly_name: 'USPS' },
+        { carrier_id: 'missing', nickname: 'DHL' },
+        { carrier_id: 'disabled', carrier_code: 'stamps_com', disabled_by_billing_plan: true },
+        { carrier_id: 'no-rates', carrier_code: 'dhl_express', send_rates: false },
+        { carrier_id: 'pending', carrier_code: 'usps', connection_status: 'pending_approval' },
+      ] });
+    },
+  }), (error) => error instanceof ShipStationRatesProviderError &&
+    error.code === 'failed-precondition' &&
+    error.message === 'No connected USPS or DHL carriers are available for rate shopping.');
+  assert.deepEqual(requests, ['/v2/carriers']);
+});
+
+test('shared ShipStation initial and polled rates exclude other carriers while keeping allowed services and generic errors', async () => {
+  const payload = {
+    ...rateResponse([
+      { ...rateQuote('ups', 'ups', 1), carrier_friendly_name: 'USPS' },
+      { ...rateQuote('missing', undefined, 2), carrier_friendly_name: 'DHL' },
+      rateQuote('fedex', 'fedex', 3),
+      rateQuote('unknown', 'other', 4),
+      { ...rateQuote('globalpost', 'stamps_com', 5), service_code: 'globalpost_economy', service_type: 'GlobalPost Economy' },
+      rateQuote('dhl', 'dhl_express', 8),
+      rateQuote('usps', 'usps', 6),
+    ]),
+    invalid_rates: [
+      { ...rateQuote('bad-ups', 'ups'), error_messages: ['Invalid postal code'] },
+      { ...rateQuote('bad-usps', 'stamps_com'), error_messages: ['Invalid postal code'] },
+      { ...rateQuote('bad-missing', undefined), error_messages: ['Invalid postal code'] },
+    ],
+    errors: [
+      { carrier_id: 'fedex', carrier_code: 'fedex', error_code: 'carrier_error', error_source: 'carrier' },
+      { carrier_id: 'unknown-account', error_code: 'carrier_error', error_source: 'carrier' },
+      { carrier_id: 'dhl', carrier_code: 'dhl_express', error_code: 'carrier_error', error_source: 'carrier' },
+      { error_code: 'rate_limit', error_source: 'shipstation' },
+    ],
+  };
+  const initial = await requestShipStationShipmentRates('api-key', 'shipment-1', {
+    fetch: async (input) => new URL(String(input)).pathname === '/v2/carriers'
+      ? Response.json({ carriers: [{ carrier_id: 'active', carrier_code: 'stamps_com' }] })
+      : Response.json(payload),
+  });
+  const polled = await getShipStationShipmentRates('api-key', 'shipment-1', { requestId: 'request-1' }, {
+    fetch: async () => Response.json([payload]),
+  });
+  for (const response of [initial, polled]) {
+    assert.deepEqual(response.rates.map((rate) => rate.rateId), ['globalpost', 'usps', 'dhl']);
+    assert.equal(response.rates[0].serviceName, 'GlobalPost Economy');
+    assert.deepEqual(response.invalidRates.map((rate) => rate.carrierCode), ['dhl_express', '', 'stamps_com']);
+    assert.equal(response.invalidRates.find((rate) => !rate.carrierCode)?.responseIssue, true);
+    assert.match(response.invalidRates.find((rate) => !rate.carrierCode)?.errorMessages.join(' ') ?? '', /rate_limit/);
+  }
+});
+
+test('shared ShipStation excluded and unidentified quotes produce the USPS and DHL empty state', async () => {
+  const response = await getShipStationShipmentRates('api-key', 'shipment-1', { requestId: 'request-1' }, {
+    fetch: async () => Response.json(rateResponse([
+      rateQuote('ups', 'ups'),
+      rateQuote('fedex', 'fedex'),
+      rateQuote('missing', undefined),
+      rateQuote('unknown', 'other'),
+      rateQuote('usps-lookalike', 'usps_other'),
+      rateQuote('dhl-lookalike', 'dhlfake'),
+    ])),
+  });
+  assert.deepEqual(response.rates, []);
+  assert.equal(response.invalidRates.length, 1);
+  assert.deepEqual(response.invalidRates[0].errorMessages, ['No USPS or DHL rates are available for this shipment.']);
+});
+
+test('shared ShipStation selected-rate lookup rejects excluded carriers and accepts USPS GlobalPost', async () => {
+  for (const carrierCode of ['ups', 'fedex', 'other', undefined]) {
+    await assert.rejects(getShipStationRateById('api-key', 'selected', 'shipment-1', {
+      fetch: async () => Response.json({ ...rateQuote('selected', carrierCode), carrier_friendly_name: 'USPS' }),
+    }), (error) => error instanceof ShipStationRatesProviderError && error.code === 'failed-precondition');
+  }
+  const response = await getShipStationRateById('api-key', 'selected', 'shipment-1', {
+    fetch: async () => Response.json({
+      ...rateQuote('selected', 'stamps_com'), service_code: 'globalpost_economy', service_type: 'GlobalPost Economy',
+    }),
+  });
+  assert.equal(response.rateId, 'selected');
+  assert.equal(response.serviceName, 'GlobalPost Economy');
 });

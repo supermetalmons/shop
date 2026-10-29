@@ -137,11 +137,11 @@ test('valid ShipStation rates include every charge and are sorted by total', () 
       rates: [
         {
           rate_id: 'se-expensive',
-          carrier_id: 'se-ups',
-          carrier_code: 'ups',
-          carrier_friendly_name: 'UPS',
-          service_code: 'ups_ground',
-          service_type: 'UPS Ground',
+          carrier_id: 'se-dhl',
+          carrier_code: 'dhl_express',
+          carrier_friendly_name: 'DHL',
+          service_code: 'express_worldwide',
+          service_type: 'DHL Express Worldwide',
           validation_status: 'valid',
           shipping_amount: { currency: 'usd', amount: 12 },
           insurance_amount: { currency: 'usd', amount: 1 },
@@ -197,10 +197,10 @@ test('valid ShipStation rates include every charge and are sorted by total', () 
 test('invalid, errored, incomplete, and mixed-currency ShipStation rates are omitted', () => {
   const base = {
     carrier_id: 'se-carrier',
-    carrier_code: 'ups',
-    carrier_friendly_name: 'UPS',
-    service_code: 'ups_ground',
-    service_type: 'UPS Ground',
+    carrier_code: 'dhl_express',
+    carrier_friendly_name: 'DHL',
+    service_code: 'express_worldwide',
+    service_type: 'DHL Express Worldwide',
     shipping_amount: { currency: 'usd', amount: 10 },
     insurance_amount: { currency: 'usd', amount: 0 },
     confirmation_amount: { currency: 'usd', amount: 0 },
@@ -254,11 +254,11 @@ test('invalid ShipStation rate explanations are preserved for operators', () => 
     rates: [],
     invalid_rates: [
       {
-        carrier_id: 'se-ups',
-        carrier_code: 'ups',
-        carrier_friendly_name: 'UPS',
-        service_code: 'ups_ground',
-        service_type: 'UPS Ground',
+        carrier_id: 'se-dhl',
+        carrier_code: 'dhl_express',
+        carrier_friendly_name: 'DHL',
+        service_code: 'express_worldwide',
+        service_type: 'DHL Express Worldwide',
         error_messages: ['Destination postal code is not supported'],
       },
       {
@@ -270,11 +270,11 @@ test('invalid ShipStation rate explanations are preserved for operators', () => 
 
   assert.deepEqual(response.invalidRates, [
     {
-      carrierId: 'se-ups',
-      carrierCode: 'ups',
-      carrierName: 'UPS',
-      serviceCode: 'ups_ground',
-      serviceName: 'UPS Ground',
+      carrierId: 'se-dhl',
+      carrierCode: 'dhl_express',
+      carrierName: 'DHL',
+      serviceCode: 'express_worldwide',
+      serviceName: 'DHL Express Worldwide',
       errorMessages: ['The carrier rejected the postal code.'],
     },
     {
@@ -299,26 +299,26 @@ test('top-level ShipStation rating errors are preserved for operators', () => {
       error_type: 'validation',
       field_name: 'shipment.ship_to.postal_code',
       error_source: 'carrier',
-      carrier_id: 'se-ups-account',
-      carrier_code: 'ups',
-      carrier_name: 'UPS account',
+      carrier_id: 'se-dhl-account',
+      carrier_code: 'dhl_express',
+      carrier_name: 'DHL account',
       message: '12 Private Street is invalid',
     }, {
       error_code: 'unspecified',
       error_type: 'business_rules',
       error_source: 'carrier',
-      carrier_id: 'se-ups-account',
-      carrier_code: 'ups',
-      carrier_name: 'UPS account',
+      carrier_id: 'se-dhl-account',
+      carrier_code: 'dhl_express',
+      carrier_name: 'DHL account',
       message: 'Private carrier detail',
     }],
   });
 
   assert.deepEqual(response.invalidRates, [
     {
-      carrierId: 'se-ups-account',
-      carrierCode: 'ups',
-      carrierName: 'UPS account',
+      carrierId: 'se-dhl-account',
+      carrierCode: 'dhl_express',
+      carrierName: 'DHL account',
       serviceCode: '',
       serviceName: 'Rating',
       errorMessages: [
@@ -344,6 +344,7 @@ test('customs rate failures use safe operator messages without provider details'
     rates: [],
     invalid_rates: messages.map((message, index) => ({
       carrier_id: `se-carrier-${index}`,
+      carrier_code: 'dhl_express',
       carrier_friendly_name: `Carrier ${index}`,
       error_messages: [message],
     })),
@@ -353,24 +354,28 @@ test('customs rate failures use safe operator messages without provider details'
       field_name: 'shipment.packages[0].products[0].harmonized_tariff_code',
       error_source: 'carrier',
       carrier_id: 'se-field-carrier',
+      carrier_code: 'dhl_express',
       carrier_name: 'Field carrier',
       message: '12 Private Street',
     }, {
       error_code: 'field_value_required',
       field_name: 'shipment.customs.contents',
       carrier_id: 'se-contents-field',
+      carrier_code: 'dhl_express',
       carrier_name: 'Contents field carrier',
       message: '12 Private Street',
     }, {
       error_code: 'field_value_required',
       field_name: 'shipment.packages[0].products[0].country_of_origin',
       carrier_id: 'se-origin-field',
+      carrier_code: 'dhl_express',
       carrier_name: 'Origin field carrier',
       message: '12 Private Street',
     }, {
       error_code: 'field_value_required',
       field_name: 'customs (12 Private Street)',
       carrier_id: 'se-malformed-field',
+      carrier_code: 'dhl_express',
       carrier_name: 'Malformed field carrier',
       message: '12 Private Street',
     }],
@@ -398,18 +403,18 @@ test('top-level rating errors keep distinct carrier accounts without carrier ids
     errors: [
       {
         error_code: 'invalid_field_value',
-        carrier_code: 'ups',
-        carrier_name: 'UPS warehouse',
+        carrier_code: 'dhl_express',
+        carrier_name: 'DHL warehouse',
       },
       {
         error_code: 'invalid_field_value',
-        carrier_code: 'ups',
-        carrier_name: 'UPS studio',
+        carrier_code: 'dhl_express',
+        carrier_name: 'DHL studio',
       },
       {
         error_code: 'invalid_field_value',
-        carrier_code: 'fedex',
-        carrier_name: 'FedEx',
+        carrier_code: 'usps_walleted',
+        carrier_name: 'USPS',
       },
       {
         error_code: 'invalid_field_value',
@@ -419,9 +424,9 @@ test('top-level rating errors keep distinct carrier accounts without carrier ids
   });
 
   assert.deepEqual(response.invalidRates.map((rate) => rate.carrierName), [
-    'UPS warehouse',
-    'UPS studio',
-    'FedEx',
+    'DHL warehouse',
+    'DHL studio',
+    'USPS',
     'dhl_express',
   ]);
 });
@@ -432,11 +437,11 @@ test('unattributed top-level errors remain visible alongside valid rates', () =>
     status: 'completed',
     rates: [{
       rate_id: 'se-rate',
-      carrier_id: 'se-ups',
-      carrier_code: 'ups',
-      carrier_friendly_name: 'UPS',
-      service_code: 'ups_ground',
-      service_type: 'UPS Ground',
+      carrier_id: 'se-dhl',
+      carrier_code: 'dhl_express',
+      carrier_friendly_name: 'DHL',
+      service_code: 'express_worldwide',
+      service_type: 'DHL Express Worldwide',
       validation_status: 'valid',
       shipping_amount: { currency: 'usd', amount: 10 },
       insurance_amount: { currency: 'usd', amount: 0 },
@@ -464,7 +469,85 @@ test('unattributed top-level errors remain visible alongside valid rates', () =>
   }]);
 });
 
-test('an empty ShipStation rate response reports that no details were provided', () => {
+test('rate diagnostics exclude other and unidentified carriers while preserving general errors', () => {
+  const excludedCarriers = [
+    { carrier_code: 'ups', carrier_friendly_name: 'USPS' },
+    { carrier_code: 'fedex', carrier_friendly_name: 'DHL' },
+    { carrier_code: 'unknown_carrier' },
+    { carrier_id: 'se-unknown', carrier_friendly_name: 'USPS' },
+    {},
+  ];
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'partial',
+    rates: excludedCarriers.map((carrier, index) => ({
+      ...carrier,
+      rate_id: `se-rejected-${index}`,
+      validation_status: 'invalid',
+      error_messages: ['Invalid postal code'],
+    })),
+    invalid_rates: [
+      ...excludedCarriers.map((carrier) => ({ ...carrier, error_messages: ['Invalid postal code'] })),
+      { carrier_code: 'usps_walleted', error_messages: ['Invalid postal code'] },
+      { carrier_code: 'dhl_express', error_messages: ['Invalid package weight'] },
+    ],
+    errors: [
+      ...excludedCarriers.filter((carrier) => Object.keys(carrier).length).map((carrier) => ({
+        ...carrier,
+        error_code: 'invalid_field_value',
+        error_source: 'carrier',
+      })),
+      { error_code: 'invalid_field_value', error_source: 'carrier' },
+      { error_code: 'rating_partial_failure', error_source: 'shipstation' },
+      'Invalid shipment address',
+    ],
+  });
+
+  assert.deepEqual(response.rates, []);
+  assert.deepEqual(response.invalidRates.map((rate) => rate.carrierName), [
+    'ShipStation',
+    'usps_walleted',
+    'dhl_express',
+  ]);
+  assert.deepEqual(response.invalidRates[0].errorMessages, [
+    'rating_partial_failure · source: shipstation',
+    'The carrier rejected the address.',
+  ]);
+  assert.equal(response.invalidRates[0].responseIssue, true);
+});
+
+test('excluded carrier diagnostics do not consume the response limits', () => {
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    errors: [
+      ...Array.from({ length: 12 }, (_, index) => ({
+        carrier_id: `se-excluded-${index}`,
+        carrier_code: 'ups',
+        error_code: 'invalid_field_value',
+      })),
+      { carrier_code: 'dhl_express', error_code: 'invalid_field_value' },
+      { error_code: 'rating_partial_failure', error_source: 'shipstation' },
+    ],
+    invalid_rates: [
+      ...Array.from({ length: 60 }, (_, index) => ({
+        carrier_id: `se-excluded-${index}`,
+        carrier_code: 'fedex',
+        error_messages: ['Invalid package weight'],
+      })),
+      { carrier_code: 'usps_walleted', error_messages: ['Invalid postal code'] },
+    ],
+  });
+
+  assert.deepEqual(response.invalidRates.map((rate) => rate.carrierName), [
+    'dhl_express',
+    'ShipStation',
+    'usps_walleted',
+  ]);
+});
+
+test('an empty ShipStation rate response reports that no USPS or DHL rates are available', () => {
   const response = shipStationRateSummaries({
     shipment_id: 'se-shipment',
     status: 'completed',
@@ -474,7 +557,7 @@ test('an empty ShipStation rate response reports that no details were provided',
   });
 
   assert.deepEqual(response.invalidRates[0].errorMessages, [
-    'ShipStation returned no rate entries or rejection details (status: completed).',
+    'No USPS or DHL rates are available for this shipment.',
   ]);
 });
 
@@ -487,10 +570,10 @@ test('rate shopping requests fresh rates from connected rate-capable carriers', 
     if (url.endsWith('/carriers?page_size=50&include_extended_details=false')) {
       return new Response(JSON.stringify({
         carriers: [
-          { carrier_id: 'se-active', send_rates: true },
-          { carrier_id: 'se-no-rates', send_rates: false },
-          { carrier_id: 'se-disabled', send_rates: true, disabled_by_billing_plan: true },
-          { carrier_id: 'se-pending', send_rates: true, connection_status: 'pending_approval' },
+          { carrier_id: 'se-active', carrier_code: 'dhl_express', send_rates: true },
+          { carrier_id: 'se-no-rates', carrier_code: 'dhl_express', send_rates: false },
+          { carrier_id: 'se-disabled', carrier_code: 'dhl_express', send_rates: true, disabled_by_billing_plan: true },
+          { carrier_id: 'se-pending', carrier_code: 'dhl_express', send_rates: true, connection_status: 'pending_approval' },
         ],
       }), { status: 200 });
     }
@@ -504,10 +587,10 @@ test('rate shopping requests fresh rates from connected rate-capable carriers', 
         rates: [{
           rate_id: 'se-rate',
           carrier_id: 'se-active',
-          carrier_code: 'ups',
-          carrier_friendly_name: 'UPS',
-          service_code: 'ups_ground',
-          service_type: 'UPS Ground',
+          carrier_code: 'dhl_express',
+          carrier_friendly_name: 'DHL',
+          service_code: 'express_worldwide',
+          service_type: 'DHL Express Worldwide',
           validation_status: 'valid',
           shipping_amount: { currency: 'usd', amount: 10 },
           insurance_amount: { currency: 'usd', amount: 0 },
@@ -547,10 +630,10 @@ test('shipment rate polling selects only the expected rate request', async () =>
   const rate = (rateId: string) => ({
     rate_id: rateId,
     carrier_id: 'se-carrier',
-    carrier_code: 'ups',
-    carrier_friendly_name: 'UPS',
-    service_code: 'ups_ground',
-    service_type: 'UPS Ground',
+    carrier_code: 'dhl_express',
+    carrier_friendly_name: 'DHL',
+    service_code: 'express_worldwide',
+    service_type: 'DHL Express Worldwide',
     validation_status: 'valid',
     shipping_amount: { currency: 'usd', amount: 10 },
     insurance_amount: { currency: 'usd', amount: 0 },

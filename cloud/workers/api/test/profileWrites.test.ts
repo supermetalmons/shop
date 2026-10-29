@@ -102,10 +102,10 @@ const SHIPSTATION_RATE = {
   rate_id: 'rate-1',
   shipment_id: 'shipment-1',
   carrier_id: 'carrier-1',
-  carrier_code: 'ups',
-  carrier_friendly_name: 'UPS',
-  service_code: 'ups_ground',
-  service_type: 'UPS Ground',
+  carrier_code: 'stamps_com',
+  carrier_friendly_name: 'USPS',
+  service_code: 'usps_priority_mail',
+  service_type: 'USPS Priority Mail',
   validation_status: 'valid',
   shipping_amount: { currency: 'usd', amount: 10 },
   insurance_amount: { currency: 'usd', amount: 0 },
@@ -3497,10 +3497,10 @@ test('ShipStation label purchase route claims, validates, purchases, and atomica
       rateId: 'rate-1',
       trackingNumber: 'tracking-1',
       carrierId: 'carrier-1',
-      carrierCode: 'ups',
-      carrierName: 'UPS',
-      serviceCode: 'ups_ground',
-      serviceName: 'UPS Ground',
+      carrierCode: 'stamps_com',
+      carrierName: 'USPS',
+      serviceCode: 'usps_priority_mail',
+      serviceName: 'USPS Priority Mail',
       shipmentCost: { currency: 'usd', amount: 10 },
       totalCost: { currency: 'usd', amount: 10 },
       purchasedAt: NOW_MS,
@@ -4365,7 +4365,7 @@ test('ShipStation rates route refreshes a single package without replacing its S
         });
       }
       if (url.pathname === '/v2/carriers') {
-        return Response.json({ carriers: [{ carrier_id: 'carrier-1', send_rates: true }] });
+        return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com', send_rates: true }] });
       }
       if (url.pathname === '/v2/rates') {
         return Response.json({
@@ -4376,10 +4376,10 @@ test('ShipStation rates route refreshes a single package without replacing its S
             rate_id: 'rate-1',
             shipment_id: 'shipment-1',
             carrier_id: 'carrier-1',
-            carrier_code: 'ups',
-            carrier_friendly_name: 'UPS',
-            service_code: 'ups_ground',
-            service_type: 'UPS Ground',
+            carrier_code: 'stamps_com',
+            carrier_friendly_name: 'USPS',
+            service_code: 'usps_priority_mail',
+            service_type: 'USPS Priority Mail',
             validation_status: 'valid',
             shipping_amount: { currency: 'usd', amount: 10 },
             insurance_amount: { currency: 'usd', amount: 1 },
@@ -4510,7 +4510,7 @@ test('ShipStation rates route preserves manual declarations, repairs zeroed pack
           });
         }
         if (url.pathname === '/v2/carriers') {
-          return Response.json({ carriers: [{ carrier_id: 'carrier-1', send_rates: true }] });
+          return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com', send_rates: true }] });
         }
         if (url.pathname === '/v2/rates') {
           return Response.json({
@@ -4757,10 +4757,10 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
     rate_id: 'rate-1',
     shipment_id: 'shipment-1',
     carrier_id: 'carrier-1',
-    carrier_code: 'ups',
-    carrier_friendly_name: 'UPS',
-    service_code: 'ups_ground',
-    service_type: 'UPS Ground',
+    carrier_code: 'stamps_com',
+    carrier_friendly_name: 'USPS',
+    service_code: 'usps_priority_mail',
+    service_type: 'USPS Priority Mail',
     validation_status: 'valid',
     shipping_amount: { currency: 'usd', amount: 10 },
     insurance_amount: { currency: 'usd', amount: 0 },
@@ -4833,7 +4833,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
           });
         }
         if (url.pathname === '/v2/carriers') {
-          return Response.json({ carriers: [{ carrier_id: 'carrier-1' }] });
+          return Response.json({ carriers: [{ carrier_id: 'carrier-1', carrier_code: 'stamps_com' }] });
         }
         if (url.pathname === '/v2/rates' && method === 'POST') {
           return Response.json({
