@@ -16,9 +16,9 @@ export type EthereumAuthChallenge = { challengeId: string; message: string; expi
 export type EthereumSession = { token: string; address: string; chainId: number; dropId: '111k_devnet'; expiresAtMs: number };
 export type EthereumStats = {
   chainId: number; contractAddress: string; owner: string | null;
-  allocatedCrates: number; warehousesMinted: number; artworksMinted: number;
-  cratePriceWei: string; warehousePriceWei: string; saleActive: boolean;
-  remainingCrates: number; remainingWarehouses: number;
+  allocatedCrates: number; warehousesMinted: number; reliquariesMinted: number; artworksMinted: number;
+  cratePriceWei: string; warehousePriceWei: string; reliquaryPriceWei: string; saleActive: boolean;
+  remainingCrates: number; remainingWarehouses: number; remainingReliquaries: number;
   discountMerkleRoot: string; discountCratePriceWei: string; discountAllowance: number; discountUsed: number;
 };
 export type EthereumInventoryResponse = { items: EthereumInventoryItem[]; nextCursor: string | null; observedBlock: number };

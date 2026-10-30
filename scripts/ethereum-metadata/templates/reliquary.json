@@ -1,0 +1,8 @@
+{
+  "name": "Reliquary #{{displayId}}",
+  "description": "",
+  "image": "https://wip.lil.org/111k/monuments/{{displayId}}.webp",
+  "attributes": [
+    { "trait_type": "type", "value": "reliquary" }
+  ]
+}

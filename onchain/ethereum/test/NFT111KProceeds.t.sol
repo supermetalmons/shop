@@ -123,6 +123,7 @@ contract NFT111KProceedsTest is TestSupport {
         vm.deal(BUYER, 100 ether);
         (address[] memory recipients, uint256[] memory shares) = _split(4);
         token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
     }
 
     function testEverySupportedRecipientCount() public {
@@ -222,6 +223,7 @@ contract NFT111KProceedsTest is TestSupport {
     function testRoundingRemainsMonotonicAndIndependentOfReleaseOrder() public {
         (address[] memory recipients, uint256[] memory shares) = _split(3);
         token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
         for (uint256 i; i < 17; ++i) {
             _buyAt(1);
             token.releaseMint(recipients[2]);
@@ -239,6 +241,7 @@ contract NFT111KProceedsTest is TestSupport {
         shares[0] = uint256(shareSeed) % 9999 + 1;
         shares[1] = 10_000 - shares[0];
         token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
         uint256 received = uint256(firstAmount) + uint256(secondAmount);
         vm.deal(BUYER, received);
         _buyAt(firstAmount);
@@ -258,6 +261,7 @@ contract NFT111KProceedsTest is TestSupport {
     function testUint256ScaleEntitlementDoesNotOverflow() public {
         (address[] memory recipients, uint256[] memory shares) = _split(2);
         token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
         uint256 amount = type(uint256).max;
         vm.deal(BUYER, amount);
         _buyAt(amount);
@@ -303,6 +307,7 @@ contract NFT111KProceedsTest is TestSupport {
         (address[] memory recipients, uint256[] memory shares) = _split(2);
         recipients[0] = address(receiver);
         token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
         receiver.configure(token, true, false, payable(address(0)));
         token.releaseMint(address(receiver));
         _buyAt(100);
@@ -346,6 +351,7 @@ contract NFT111KProceedsTest is TestSupport {
         (address[] memory recipients, uint256[] memory shares) = _split(2);
         recipients[0] = address(mintReceiver);
         token = _deploy(recipients, shares, payable(address(deliveryReceiver)));
+        token.setSaleActive(true);
         mintReceiver.configure(token, false, true, payable(address(0)));
         deliveryReceiver.configure(token, false, true, payable(address(0)));
         _buyAt(100);
@@ -534,7 +540,7 @@ contract NFT111KProceedsTest is TestSupport {
     }
 
     function _buyAt(uint256 amount) private {
-        token.setPrices(amount, amount, amount);
+        token.setPrices(amount, amount, amount, 0.0088 ether);
         vm.prank(BUYER);
         token.mintCrates{value: amount}(1);
     }

@@ -1,8 +1,9 @@
+import type { EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 
 type EthereumContainerPreviewProps = Pick<PrimaryMediaControls, 'hidden' | 'onReady' | 'onError'> & {
-  kind: 'crate' | 'warehouse';
+  kind: EthereumMintKind;
   className?: string;
 };
 

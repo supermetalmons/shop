@@ -1,5 +1,7 @@
+import type { EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumStats } from '../../shared/ethereum/api';
 import { verifyEthereumDiscountProof } from '../../shared/ethereum/discounts';
+import { ethereumMintPrice } from './mint';
 
 export const EMPTY_ETHEREUM_DISCOUNT_ROOT = `0x${'0'.repeat(64)}`;
 
@@ -41,12 +43,12 @@ export const ethereumDiscounts = {
   },
 };
 
-export function ethereumMintQuote(kind: 'crate' | 'warehouse', quantity: number, stats: EthereumStats, eligible: boolean): EthereumMintQuote {
+export function ethereumMintQuote(kind: EthereumMintKind, quantity: number, stats: EthereumStats, eligible: boolean): EthereumMintQuote {
   const discounted = kind === 'crate' && eligible && stats.discountMerkleRoot !== EMPTY_ETHEREUM_DISCOUNT_ROOT &&
     quantity <= Math.max(0, stats.discountAllowance - stats.discountUsed);
   return {
     discounted,
-    unitPriceWei: kind === 'warehouse' ? stats.warehousePriceWei : discounted ? stats.discountCratePriceWei : stats.cratePriceWei,
+    unitPriceWei: discounted ? stats.discountCratePriceWei : ethereumMintPrice(kind, stats),
     discountMerkleRoot: kind === 'crate' ? stats.discountMerkleRoot : null,
   };
 }

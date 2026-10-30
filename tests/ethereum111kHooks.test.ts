@@ -28,8 +28,8 @@ const other = '0x2222222222222222222222222222222222222222';
 const contract = '0x3333333333333333333333333333333333333333';
 const hash = `0x${'ab'.repeat(32)}`;
 const config = resolveEthereum111kConfig({ contractAddress: contract });
-const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0,
-  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505,
+const statistics = { chainId: config.chainId, contractAddress: contract, owner, allocatedCrates: 0, warehousesMinted: 0, reliquariesMinted: 0, artworksMinted: 0,
+  cratePriceWei: config.cratePriceWei, warehousePriceWei: config.warehousePriceWei, reliquaryPriceWei: config.reliquaryPriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingReliquaries: 30,
   discountMerkleRoot: EMPTY_ETHEREUM_DISCOUNT_ROOT, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0 };
 const clients: InstanceType<typeof QueryClient>[] = [];
 
@@ -223,7 +223,7 @@ for (const change of [
   });
 }
 
-test('discount usage refreshes after confirmation and never changes warehouse pricing', async t => {
+test('discount usage refreshes after confirmation and never changes warehouse or reliquary pricing', async t => {
   let used = 0;
   let confirmed = false;
   t.mock.method(ethereumApi, 'stats', async () => ({ ...statistics, discountMerkleRoot: `0x${'12'.repeat(32)}`, discountUsed: used }));
@@ -234,6 +234,7 @@ test('discount usage refreshes after confirmation and never changes warehouse pr
   const view = harness(connected);
   await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, true));
   assert.equal(view.result.current.mintQuote('warehouse', 1)?.discounted, false);
+  assert.equal(view.result.current.mintQuote('reliquary', 1)?.discounted, false);
   await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
   const sent = (connected.sent[0] as [{ data: string; value: string }])[0];
   assert.equal(sent.data, encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [1, []]));
@@ -245,6 +246,7 @@ test('discount usage refreshes after confirmation and never changes warehouse pr
   await waitFor(() => assert.equal(view.result.current.mintQuote('crate', 1)?.discounted, false));
   assert.equal(view.result.current.stats.data?.discountUsed, 1);
   assert.equal(view.result.current.mintQuote('warehouse', 1)?.unitPriceWei, config.warehousePriceWei);
+  assert.equal(view.result.current.mintQuote('reliquary', 1)?.unitPriceWei, config.reliquaryPriceWei);
 });
 
 test('late discount data from another wallet cannot change the current wallet quote or usage', async t => {
@@ -782,12 +784,13 @@ for (const count of [1, 15, 16, 50]) {
   });
 }
 
-test('opening rejects duplicate, mixed, foreign and multiple warehouse selections', async () => {
+for (const kind of ['warehouse', 'reliquary'] as const) test(`opening rejects duplicate, mixed, foreign and multiple ${kind} selections`, async () => {
   const connected = wallet();
   const view = harness(connected);
   await waitFor(() => assert.ok(view.result.current.scope));
   const crate = token();
-  const warehouse: EthereumInventoryItem = { ...token(owner, '116667'), kind: 'warehouse' };
+  const firstId = kind === 'warehouse' ? '116667' : '117172';
+  const warehouse: EthereumInventoryItem = { ...token(owner, firstId), kind };
   for (const selected of [[], [crate, crate], [crate, warehouse], [warehouse, { ...warehouse, tokenId: '116668' }],
     [{ ...crate, kind: 'artwork' as const }], [token(other)], [{ ...crate, chainId: 1 }], [{ ...crate, contractAddress: other }]]) {
     await act(async () => { assert.equal(await view.result.current.unbox(selected), false); });
@@ -795,7 +798,7 @@ test('opening rejects duplicate, mixed, foreign and multiple warehouse selection
   assert.equal(connected.sent.length, 0);
   await act(async () => { assert.equal(await view.result.current.unbox([warehouse]), true); });
   assert.equal(connected.sent.length, 1);
-  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall('unboxWarehouse(uint256)', ['uint256'], ['116667']));
+  assert.equal((connected.sent[0] as [{ data: string }])[0].data, encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [firstId]));
 });
 
 test('a fifteen-crate bonus batch retains all 311 artworks through first inclusion, stale indexing and reload', async t => {
@@ -2679,5 +2682,51 @@ test('a known contract-wallet unbox recovers a new relayer transaction and unblo
   await waitFor(() => assert.equal(view.result.current.pending, null));
   assert.equal(readEthereumPending(scope), null);
   await act(async () => { assert.equal(await view.result.current.mint('crate', 1), true); });
+  assert.equal(connected.sent.length, 1);
+});
+
+
+test('reliquary mint rechecks availability and price before requesting a transaction', async t => {
+  let current = { ...statistics };
+  t.mock.method(ethereumApi, 'stats', async () => current);
+  const connected = wallet();
+  const view = harness(connected);
+  await waitFor(() => assert.ok(view.result.current.mintQuote('reliquary', 1)));
+  const quote = view.result.current.mintQuote('reliquary', 1)!;
+  current = { ...current, reliquaryPriceWei: '9000000000000000' };
+  await act(async () => { assert.equal(await view.result.current.mint('reliquary', 1, quote), false); });
+  assert.match(view.result.current.error ?? '', /terms changed/);
+  current = { ...statistics, remainingReliquaries: 0, reliquariesMinted: 30 };
+  await act(async () => { assert.equal(await view.result.current.mint('reliquary', 1, quote), false); });
+  assert.match(view.result.current.error ?? '', /no longer available/);
+  assert.equal(connected.sent.length, 0);
+});
+
+
+test('a reliquary opening retains all 111 crates through stale indexing and reload', async t => {
+  const reliquary: EthereumInventoryItem = { ...token(owner, '117172'), kind: 'reliquary', name: 'Reliquary #1' };
+  const crates = Array.from({ length: 111 }, (_, index) => ({ ...token(owner, String(111112 + index)),
+    displayId: index + 1, name: `Crate #${index + 1}` }));
+  const scope = ethereumInventoryScope(config, owner)!;
+  let included = false;
+  t.mock.method(ethereumApi, 'inventory', async (_config, _owner, _cursor, _signal, expected = []) => ({
+    items: included ? crates.filter(crate => expected.includes(crate.tokenId)) : [reliquary],
+    nextCursor: null, observedBlock: 10,
+  }));
+  t.mock.method(ethereumApi, 'confirm', async () => ({ status: included ? 'confirmed' : 'pending', confirmations: included ? 1 : 0,
+    items: included ? crates : [], burnedTokenIds: included ? [reliquary.tokenId] : [] }));
+  const connected = wallet();
+  let view = harness(connected);
+  await waitFor(() => assert.equal(view.result.current.items.length, 1));
+  await act(async () => { assert.equal(await view.result.current.unbox(reliquary), true); });
+  included = true;
+  await act(async () => { await view.client.invalidateQueries({ queryKey: ['ethereum111k', 'transaction'] }); });
+  await waitFor(() => assert.equal(view.result.current.revealed?.length, 111));
+  assert.equal(view.result.current.pending, null);
+  assert.deepEqual(readEthereumExpected(scope), crates.map(crate => crate.tokenId));
+  view.unmount();
+  view.client.clear();
+  view = harness(connected);
+  await waitFor(() => assert.deepEqual(view.result.current.items.map(crate => crate.tokenId), crates.map(crate => crate.tokenId)));
   assert.equal(connected.sent.length, 1);
 });

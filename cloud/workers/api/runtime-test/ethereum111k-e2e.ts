@@ -9,9 +9,10 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog } from '../../../../shared/ethereum/abi.ts';
 import { checksumEthereumAddress, crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
+import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE } from '../../../../shared/ethereum/protocol.ts';
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.ts';
-import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
+import { ethereumMetadataBaseUri } from '../../../../shared/ethereum/config.ts';
+import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats, type EthereumInventoryResponse } from '../../../../shared/ethereum/api.ts';
 import { ETHEREUM_CHECKOUT_PATHS, type EthereumCheckoutStatusResponse, type EthereumCheckoutPrepareResponse, type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
 import { encryptAddressCipherText, serializeAddressCipherPayload } from '../../../../shared/addressCipher.ts';
 import { parseProceedsConfig } from '../../../../onchain/ethereum/scripts/proceeds-config.mjs';
@@ -21,6 +22,7 @@ import { reconcileEthereum111k } from '../src/ethereumReconciliation.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { readBoundedResponseJson } from '../src/boundedResponse.ts';
 import { runEthereumRevealE2E } from './ethereum111k-reveal-e2e.ts';
+import { readMetadataManifest } from '../../../../scripts/ethereum-metadata/catalog.ts';
 
 type Receipt = { status: string; transactionHash: string; blockNumber: string; blockHash: string; contractAddress: string | null; gasUsed: string; logs: EthereumLog[] };
 const root = resolve(import.meta.dirname, '../../../..');
@@ -28,8 +30,18 @@ const project = resolve(root, 'onchain/ethereum');
 const output = resolve(root, '.cache/111k-e2e');
 const build = spawnSync('forge', ['build', '--offline'], { cwd: project, stdio: 'inherit' });
 if (build.status !== 0) throw new Error('Contract compilation failed');
-const metadataBaseURI = 'https://cdn.mons.shop/111k-sepolia/';
-await readCdnMetadata(`${metadataBaseURI}1.json`);
+const metadataBaseURI = ethereumMetadataBaseUri(process.env.ETHEREUM_111K_E2E_METADATA_BASE_URI || 'https://cdn.mons.shop/111k-sepolia/', 31337);
+const metadataDirectory = process.env.ETHEREUM_111K_E2E_METADATA_DIRECTORY;
+const metadataManifest = metadataDirectory ? await readMetadataManifest(metadataDirectory) : null;
+const metadataFetch: typeof fetch = async (input, init) => {
+  const uri = input instanceof Request ? input.url : String(input);
+  if (!metadataDirectory || !uri.startsWith(metadataBaseURI)) return fetch(input, init);
+  const file = uri.slice(metadataBaseURI.length);
+  assert.match(file, /^[1-9][0-9]*\.json$/);
+  const body = await readFile(resolve(metadataDirectory, file), 'utf8');
+  return new Response(body, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+};
+await readTestMetadata(`${metadataBaseURI}1.json`);
 
 const port = await new Promise<number>((done, reject) => {
   const server = createServer();
@@ -76,17 +88,27 @@ async function call(to: string, signature: string, types: string[] = [], args: u
 async function deploy(name: string, from: string, types: string[] = [], args: unknown[] = []): Promise<Receipt> {
   const artifact = JSON.parse(await readFile(resolve(project, `out/${name}.sol/${name}.json`), 'utf8')) as { bytecode: { object: string }; deployedBytecode: { object: string } };
   assert.ok(artifact.deployedBytecode.object.replace(/^0x/, '').length / 2 <= 24_576, 'Contract exceeds EIP-170 size');
-  return send(from, `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(types, args).slice(2)}`);
+  const receipt = await send(from, `0x${artifact.bytecode.object.replace(/^0x/, '')}${encodeAbi(types, args).slice(2)}`);
+  if (name === 'NFT111K') {
+    assert.ok(receipt.contractAddress);
+    assert.equal(typeof args[0], 'string');
+    assert.deepEqual(await call(receipt.contractAddress, 'saleActive()', [], [], ['bool']), [false]);
+    for (const field of ['totalSupply', 'allocatedCrates', 'warehousesMinted', 'reliquariesMinted', 'totalMintReceived']) {
+      assert.deepEqual(await call(receipt.contractAddress, `${field}()`, [], [], ['uint256']), [0n]);
+    }
+    await send(args[0] as string, encodeCall('setSaleActive(bool)', ['bool'], [true]), receipt.contractAddress);
+  }
+  return receipt;
 }
 
-async function readCdnMetadata(uri: string): Promise<EthereumMetadata> {
+async function readTestMetadata(uri: string): Promise<EthereumMetadata> {
   const signal = AbortSignal.timeout(10_000);
-  const response = await fetch(uri, { headers: { Accept: 'application/json' }, cache: 'no-store', redirect: 'manual', signal })
-    .catch(error => { throw new Error(`CDN metadata is unavailable: ${uri}`, { cause: error }); });
-  assert.equal(response.status, 200, `CDN metadata is unavailable: ${uri}`);
+  const response = await metadataFetch(uri, { headers: { Accept: 'application/json' }, cache: 'no-store', redirect: 'manual', signal })
+    .catch(error => { throw new Error(`Test metadata is unavailable: ${uri}`, { cause: error }); });
+  assert.equal(response.status, 200, `Test metadata is unavailable: ${uri}`);
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   const metadata = await readBoundedResponseJson(response, { maxBytes: 128 * 1024, contentType: 'require-json', signal,
-    createError: () => new Error(`CDN metadata is invalid: ${uri}`) });
+    createError: () => new Error(`Test metadata is invalid: ${uri}`) });
   assert.ok(metadata && typeof metadata === 'object' && 'name' in metadata && 'image' in metadata);
   assert.equal(typeof metadata.name, 'string');
   assert.ok(isEthereumMetadataImage(metadata.image));
@@ -112,7 +134,7 @@ function apiClient(environment: EthereumEnvironment) {
         'Content-Type': 'application/json', 'X-Mons-CSRF': '1', ...(session ? { [ETHEREUM_SESSION_HEADER]: session.token } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const response = await handleEthereumRequest(request, environment, path.split('?')[0]);
+    const response = await handleEthereumRequest(request, environment, path.split('?')[0], { fetch: metadataFetch });
     const result = await response.json();
     assert.equal(response.status, 200, `${path}: ${JSON.stringify(result)}`);
     return result as T;
@@ -351,7 +373,7 @@ try {
     const rpcCalls: Array<{ method: string; params: unknown[] }> = [];
     const envelopes: number[] = [];
     const trackingFetch: typeof fetch = async (input, init) => {
-      if (String(input).startsWith(metadataBaseURI)) return fetch(input, init);
+      if (String(input).startsWith(metadataBaseURI)) return metadataFetch(input, init);
       const payload = JSON.parse(String(init?.body)) as { method: string; params: unknown[] } | Array<{ method: string; params: unknown[] }>;
       rpcCalls.push(...Array.isArray(payload) ? payload : [payload]);
       if (Array.isArray(payload)) envelopes.push(payload.length);
@@ -497,7 +519,7 @@ try {
       const path = `${ETHEREUM_CHECKOUT_PATHS.status}?${new URLSearchParams({ checkoutId })}`;
       const response = await handleEthereumRequest(new Request(`https://mons.shop${path}`, {
         headers: { Origin: 'https://vvv.so', 'CF-Connecting-IP': '192.0.2.112' },
-      }), environment, ETHEREUM_CHECKOUT_PATHS.status);
+      }), environment, ETHEREUM_CHECKOUT_PATHS.status, { fetch: metadataFetch });
       assert.equal(response.status, 200, 'An external caller can read checkout status without a wallet session');
       const status = await response.json() as EthereumCheckoutStatusResponse;
       assert.doesNotMatch(JSON.stringify(status), /111k-test@example\.test|111 Example Street|Local test|addressSnapshot|addressId|encrypted|cipherText/);
@@ -591,7 +613,7 @@ try {
         .get(attemptId) as { status: string; transaction_hash: string | null };
       assert.deepEqual({ ...unreported }, { status: 'started', transaction_hash: null });
       if (recovery === 'scheduled reconciliation') {
-        const reconciled = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000));
+        const reconciled = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000), { fetch: metadataFetch });
         assert.equal(reconciled.failed, 0);
         assert.ok(reconciled.completed > 0);
       } else {
@@ -600,7 +622,7 @@ try {
       }
       const recovered = await publicCheckout(created.checkoutId);
       assertPublishedCheckout(recovered, quote, transactionHash, tokenIds, beforeOrders);
-      const replay = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000));
+      const replay = await reconcileEthereum111k(environment, AbortSignal.timeout(45_000), { fetch: metadataFetch });
       assert.equal(replay.failed, 0);
       assertPublishedCheckout(await publicCheckout(created.checkoutId), quote, transactionHash, tokenIds, beforeOrders);
       assert.equal((ops.prepare('SELECT COUNT(*) AS count FROM ethereum_auth_sessions').get() as { count: number }).count, 0);
@@ -685,9 +707,71 @@ try {
   }
   assert.equal(await balance(mixedCaseContract), 0n);
 
+  const reliquaryDeployment = await deploy('NFT111K', admin, constructorTypes,
+    [admin, signer, proceeds.deliveryPaymentReceiver, metadataBaseURI, discounts.root,
+      proceeds.mintRecipients, proceeds.mintSharesBps]);
+  const reliquaryContract = reliquaryDeployment.contractAddress!;
+  const reliquaryDatabase = new DatabaseSync(':memory:');
+  try {
+    const db = d1Database(reliquaryDatabase);
+    const api = apiClient(testEnvironment(reliquaryContract, key, db, db));
+    const initial = await api<EthereumStats>(ETHEREUM_API_PATHS.stats);
+    assert.equal(initial.reliquariesMinted, 0);
+    assert.equal(initial.remainingReliquaries, 30);
+    assert.equal(initial.reliquaryPriceWei, '8800000000000000');
+    const purchased = await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.mintReliquaries, ['uint256'], [2]),
+      reliquaryContract, 17600000000000000n);
+    gas.mintReliquaries2 = BigInt(purchased.gasUsed).toString();
+    const confirmed = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,
+      { transactionHash: purchased.transactionHash });
+    assert.equal(confirmed.status, 'confirmed');
+    assert.deepEqual(confirmed.items.map(item => [item.tokenId, item.kind, item.displayId, item.image]), [
+      ['117172', 'reliquary', 1, 'https://wip.lil.org/111k/monuments/1.webp'],
+      ['117173', 'reliquary', 2, 'https://wip.lil.org/111k/monuments/2.webp'],
+    ]);
+    const inventory = await api<EthereumInventoryResponse>(`${ETHEREUM_API_PATHS.inventory}?owner=${buyer}`);
+    assert.deepEqual(inventory.items.map(item => item.tokenId).sort(), ['117172', '117173']);
+    await send(buyer, encodeCall(ETHEREUM_FUNCTIONS.transfer, ['address', 'address', 'uint256'],
+      [buyer, secondBuyer, 117172]), reliquaryContract);
+    const transferred = await api<EthereumInventoryResponse>(`${ETHEREUM_API_PATHS.inventory}?owner=${secondBuyer}`);
+    assert.deepEqual(transferred.items.map(item => [item.tokenId, item.owner]), [['117172', secondBuyer.toLowerCase()]]);
+    await assert.rejects(send(buyer, encodeCall(ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [117172]), reliquaryContract));
+    const opened = await send(secondBuyer, encodeCall(ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [117172]), reliquaryContract);
+    gas.unboxReliquary = BigInt(opened.gasUsed).toString();
+    const crates = Array.from({ length: 111 }, (_, index) => String(111112 + index));
+    const unpacked = await api<EthereumTransactionConfirmResponse>(ETHEREUM_API_PATHS.transactionsConfirm,
+      { transactionHash: opened.transactionHash });
+    assert.equal(unpacked.status, 'confirmed');
+    assert.deepEqual(unpacked.burnedTokenIds, ['117172']);
+    assert.deepEqual(unpacked.items.map(item => [item.tokenId, item.kind, item.owner]),
+      crates.map(tokenId => [tokenId, 'crate', secondBuyer.toLowerCase()]));
+    const recovered = new Set<string>();
+    batching.reliquaryInventoryRequests = 0;
+    for (let offset = 0; offset < crates.length; offset += ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE) {
+      const result = await api<EthereumInventoryResponse>(`${ETHEREUM_API_PATHS.inventory}?${new URLSearchParams({
+        owner: secondBuyer, expectedTokenIds: crates.slice(offset, offset + ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE).join(','),
+      })}`);
+      batching.reliquaryInventoryRequests++;
+      for (const item of result.items) {
+        assert.equal(item.owner, secondBuyer.toLowerCase());
+        assert.equal(item.kind, 'crate');
+        recovered.add(item.tokenId);
+      }
+    }
+    assert.equal(batching.reliquaryInventoryRequests, 2);
+    assert.deepEqual([...recovered].sort(), [...crates].sort());
+    const stats = await api<EthereumStats>(ETHEREUM_API_PATHS.stats);
+    assert.equal(stats.reliquariesMinted, 2);
+    assert.equal(stats.remainingReliquaries, 28);
+    assert.equal(stats.allocatedCrates, 222);
+    assert.equal(stats.remainingCrates, 5333);
+    assert.equal(stats.artworksMinted, 0);
+    assert.deepEqual(await call(reliquaryContract, 'totalMintReceived()', [], [], ['uint256']), [17600000000000000n]);
+  } finally { reliquaryDatabase.close(); }
+
   await mkdir(output, { recursive: true });
-  const previews = [{ kind: 1, id: 111111 }, { kind: 2, id: 5555 }, { kind: 3, id: 505 }, { kind: 4, id: 111111 }, { kind: 5, id: 5555 }];
-  const metadataChecks: Array<{ uri: string; kind: string; displayId: number; apiMatchesCdn: boolean }> = [];
+  const previews = [{ kind: 1, id: 111111 }, { kind: 2, id: 5555 }, { kind: 3, id: 505 }, { kind: 4, id: 111111 }, { kind: 5, id: 5555 }, { kind: 6, id: 1 }, { kind: 6, id: 30 }];
+  const metadataChecks: Array<{ uri: string; kind: string; displayId: number; apiMatchesSource: boolean }> = [];
   const previewDatabase = new DatabaseSync(':memory:');
   try {
     const db = d1Database(previewDatabase);
@@ -697,19 +781,22 @@ try {
       const expectedUri = `${metadataBaseURI}${ethereumMetadataTokenId(kind, preview.id)}.json`;
       const [uri] = await call(contract, ETHEREUM_FUNCTIONS.previewTokenURI, ['uint8', 'uint256'], [preview.kind, preview.id], ['string']);
       assert.equal(uri, expectedUri);
-      const metadata = await readCdnMetadata(expectedUri);
+      const metadata = await readTestMetadata(expectedUri);
       const actual = await api<EthereumMetadata>(`${ETHEREUM_API_PATHS.metadata}?kind=${kind}&displayId=${preview.id}`);
       assert.equal(actual.name, metadata.name);
       assert.equal(actual.image, metadata.image);
       assert.equal(actual.description, metadata.description);
       assert.deepEqual(actual.attributes, metadata.attributes);
-      metadataChecks.push({ uri: expectedUri, kind, displayId: preview.id, apiMatchesCdn: true });
+      metadataChecks.push({ uri: expectedUri, kind, displayId: preview.id, apiMatchesSource: true });
     }
   } finally { previewDatabase.close(); }
-  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details', 'all five metadata types read from the live CDN and preserved by the API'] };
-  const reveal = await runEthereumRevealE2E({ root, rpcUrl, contractAddress: mixedCaseContract.toLowerCase(),
-    deploymentBlock: Number(BigInt(mixedCaseDeployment.blockNumber)), metadataBaseUri: metadataBaseURI, buyer, rpc });
-  Object.assign(report, { reveal });
+  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details'] };
+  const reveal = await runEthereumRevealE2E({ root, rpcUrl, contractAddress: reliquaryContract.toLowerCase(),
+    deploymentBlock: Number(BigInt(reliquaryDeployment.blockNumber)), metadataBaseUri: metadataBaseURI, buyer: secondBuyer, rpc });
+  Object.assign(report, { reveal, reliquaryContract, metadataSource: metadataDirectory ? 'generated-files' : 'live-cdn',
+    metadataObjectCount: metadataManifest?.objectCount });
+  report.passed.push('reliquary mint, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests',
+    'reliquary lifetime count and crate reservations survive unpacking', 'all six metadata types match the selected metadata source');
   report.passed.push('first-confirmation reveal, private pending allocations, local R2 publication, immutable reorg handling, and hash-free token recovery');
   await writeFile(resolve(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));

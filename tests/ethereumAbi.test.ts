@@ -127,10 +127,12 @@ test('delivery and claim digests and calldata match Solidity-generated fixtures'
 
 test('batch calldata and ordered crate hashes match Solidity-generated fixtures', () => {
   const fixture = JSON.parse(readFileSync(new URL('../onchain/ethereum/fixtures/eip712.json', import.meta.url), 'utf8')) as {
-    calls: { unboxCratesUnsorted: string; getTokenInfos: string; previewTokenURIs: string };
+    calls: { unboxCratesUnsorted: string; mintReliquaries2: string; unboxReliquary30: string; getTokenInfos: string; previewTokenURIs: string };
     batchUnbox: { tokenIds: number[]; artworkCount: number; tokenIdsHash: string };
   };
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [fixture.batchUnbox.tokenIds]), fixture.calls.unboxCratesUnsorted);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.mintReliquaries, ['uint256'], [2]), fixture.calls.mintReliquaries2);
+  assert.equal(encodeCall(ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [117201]), fixture.calls.unboxReliquary30);
   assert.equal(ethereumTokenIdsHash(fixture.batchUnbox.tokenIds), fixture.batchUnbox.tokenIdsHash);
   assert.equal(fixture.batchUnbox.tokenIds.flatMap(id => physicalCrateArtworkIds(id - 111111)).length, fixture.batchUnbox.artworkCount);
   assert.equal(encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [[1, 0, 111112]]), fixture.calls.getTokenInfos);

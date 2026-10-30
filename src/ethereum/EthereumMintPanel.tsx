@@ -1,3 +1,4 @@
+import { ETHEREUM_MINT_KINDS, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import { MintPanelFrame, MintPanelPurchaseFooter, MintPanelTitle, MintQuantityControl } from '../components/MintPanel';
 import { MintPanelActions } from '../components/MintPanelActions';
 import type { PrimaryMediaControls } from '../components/MediaWithFallback';
@@ -6,7 +7,7 @@ import { EthereumContainerIcon } from './EthereumContainerIcon';
 import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 
 type EthereumMintPanelProps = {
-  kind: 'crate' | 'warehouse';
+  kind: EthereumMintKind;
   kindDisabled: boolean;
   quantity: number;
   maxQuantity: number;
@@ -18,20 +19,21 @@ type EthereumMintPanelProps = {
   statusText?: string;
   disabled: boolean;
   busy: boolean;
-  onKindChange: (kind: 'crate' | 'warehouse') => void;
+  onKindChange: (kind: EthereumMintKind) => void;
   onQuantityChange: (quantity: number) => void;
   onMint: () => void;
 };
 
 const containerPreviews = {
   crate: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="crate" className="mint-panel__box" {...controls} />,
+  reliquary: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="reliquary" className="mint-panel__box" {...controls} />,
   warehouse: (controls: PrimaryMediaControls) => <EthereumContainerPreview kind="warehouse" className="mint-panel__box" {...controls} />,
 };
 
 export function EthereumMintPanel({
   kind, kindDisabled, quantity, maxQuantity, remaining, total, price, discountPrice, useDiscountMint, statusText, disabled, busy, onKindChange, onQuantityChange, onMint,
 }: EthereumMintPanelProps) {
-  const quantityLabel = `${quantity} ${kind}${quantity === 1 ? '' : 's'}`;
+  const quantityLabel = `${quantity} ${quantity === 1 ? kind : ETHEREUM_CONTAINER_MEDIA[kind].pluralLabel.toLowerCase()}`;
   const showQuantitySlider = maxQuantity > 1;
   const formId = 'ethereum-mint-form';
 
@@ -50,8 +52,8 @@ export function EthereumMintPanel({
         <div className="ethereum111k__mint-title">
           <MintPanelTitle title="111K" />
           <fieldset className="ethereum111k__mint-kind" aria-label="Container type" disabled={kindDisabled}>
-            {(['crate', 'warehouse'] as const).map(value => <label key={value} title={value === 'crate' ? 'Crate' : 'Warehouse'}>
-              <input type="radio" name="ethereum-container" value={value} aria-label={value === 'crate' ? 'Crate' : 'Warehouse'}
+            {ETHEREUM_MINT_KINDS.map(value => <label key={value} title={ETHEREUM_CONTAINER_MEDIA[value].label}>
+              <input type="radio" name="ethereum-container" value={value} aria-label={ETHEREUM_CONTAINER_MEDIA[value].label}
                 checked={kind === value} onChange={() => onKindChange(value)} />
               <span><EthereumContainerIcon kind={value} /></span>
             </label>)}

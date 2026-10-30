@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Ethereum111kConfig } from '../../shared/ethereum/config';
+import type { EthereumMintKind } from '../../shared/ethereum/protocol';
+import { ETHEREUM_CONTAINER_MEDIA } from './containerMedia';
 import type { EthereumWallet } from './useEthereum111k';
 import type { EthereumMintQuote } from './discounts';
 
 type EthereumMintActionOptions = {
   wallet: EthereumWallet;
   config?: Pick<Ethereum111kConfig, 'enabled' | 'chainId' | 'contractAddress'>;
-  kind: 'crate' | 'warehouse';
+  kind: EthereumMintKind;
   quantity: number;
   remaining: number | undefined;
   saleActive: boolean | undefined;
@@ -14,12 +16,12 @@ type EthereumMintActionOptions = {
   blocked: boolean;
   suspended: boolean;
   priceKey?: string;
-  mintQuote?: (kind: 'crate' | 'warehouse', quantity: number) => EthereumMintQuote | null;
-  onMint: (kind: 'crate' | 'warehouse', quantity: number, quote?: EthereumMintQuote) => Promise<boolean>;
+  mintQuote?: (kind: EthereumMintKind, quantity: number) => EthereumMintQuote | null;
+  onMint: (kind: EthereumMintKind, quantity: number, quote?: EthereumMintQuote) => Promise<boolean>;
 };
 
 type MintAttempt = {
-  kind: 'crate' | 'warehouse';
+  kind: EthereumMintKind;
   quantity: number;
   config: { chainId: number; contractAddress: string } | null;
   wallet: { address: string; provider: NonNullable<EthereumWallet['provider']> } | null;
@@ -91,8 +93,8 @@ export function useEthereumMintAction(options: EthereumMintActionOptions) {
     }
     if (current.remaining !== undefined && current.remaining < attempt.quantity) {
       fail(current.remaining <= 0
-        ? `${attempt.kind === 'crate' ? 'Crates' : 'Warehouses'} are sold out.`
-        : `That quantity is no longer available. Choose fewer ${attempt.kind}s.`);
+        ? `${ETHEREUM_CONTAINER_MEDIA[attempt.kind].pluralLabel} are sold out.`
+        : `That quantity is no longer available. Choose fewer ${ETHEREUM_CONTAINER_MEDIA[attempt.kind].pluralLabel.toLowerCase()}.`);
       return;
     }
     const wallet = current.wallet;

@@ -100,7 +100,9 @@ async function main(): Promise<void> {
   }
   const { command, directory } = options;
   if (command === 'generate' || command === 'validate') {
-    const progress = (count: number) => process.stderr.write(`${command}: ${count}/344948\n`);
+    const { metadataCounts } = await import('./catalog.ts');
+    const total = Object.values(metadataCounts()).reduce((sum, count) => sum + count, 0);
+    const progress = (count: number) => process.stderr.write(`${command}: ${count}/${total}\n`);
     const report = command === 'generate'
       ? await (await import('./generate.ts')).generateMetadata(directory, { progress })
       : await (await import('./validate.ts')).validateMetadata(directory, { progress });

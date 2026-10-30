@@ -120,6 +120,7 @@ contract NFT111KSeaportForkTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
         vm.prank(seller);
         token.mintCrates{value: 0.0001 ether}(1);
         _;

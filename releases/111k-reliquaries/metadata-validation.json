@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "generatedDirectory": ".cache/111k-metadata/reliquaries-v1",
+  "publicationStatus": "30-reliquary-objects-published-per-network",
+  "deploymentStatus": "not-deployed",
+  "counts": {
+    "artwork": 111111,
+    "crate": 5555,
+    "warehouse": 505,
+    "artwork_receipt": 222222,
+    "crate_receipt": 5555,
+    "reliquary": 30
+  },
+  "reliquaries": {
+    "count": 30,
+    "firstTokenId": "117172",
+    "lastTokenId": "117201",
+    "firstDisplayId": 1,
+    "lastDisplayId": 30,
+    "firstImage": "https://wip.lil.org/111k/monuments/1.webp",
+    "lastImage": "https://wip.lil.org/111k/monuments/30.webp",
+    "everyGeneratedPayloadVerified": true,
+    "cratesPerReliquary": 111
+  },
+  "manifestSha256": "dbd46e9ead3fd0818e469b69477067970a02b0a3c55fc5a02d553ea06d0b2e2f",
+  "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb",
+  "objectCount": 344978,
+  "totalBytes": 71174527,
+  "templateSha256": {
+    "artwork": "7f55fe6733d79ddd5da7c4de60cde80e19f9f1d01eb5fcb6be08820f2e3bee17",
+    "crate": "1c7e6a48a08e8f625f4d32ac54435c2ea91d8c8765d2522a256e3f12858141f9",
+    "warehouse": "53001409fb307945670d4e8b67ea2a69cddbb2c96dc5ce9ee07ac3d9941c554f",
+    "artwork_receipt": "600662656f86202a9e81b6f4b20fd7e70d43a01eceb033052cc5621d15be98c1",
+    "crate_receipt": "3547c4599e05da5c2753ccb17d6a795c7c71fabb1db89da7fef93840bc26d04a",
+    "reliquary": "28be9cb2b01f48dcf870fa456e8c9002c8af4d45927915c77d46a114fb3c748a"
+  },
+  "sourceSha256": {
+    "../../shared/ethereum/protocol.ts": "0fd97c32907c2e4413aee55076a65d7fba4c3adf2332ad75526fad7101bc6d7d",
+    "../../shared/ethereum/metadataImage.ts": "72766d4b6d8577e55bf94ba73dc2df07ec170aa694283d579e79650ef1f04780",
+    "./catalog.ts": "c6e9c81ee8d1ecc4ff8bc074aa777e35b626c20c8979ff3a06b15db475a69de2",
+    "./generate.ts": "9a523b9bd5763289df7fab13d2bc409a1d8495ecfd608428f10054c21984b923"
+  },
+  "publishedPrefixes": [
+    "https://cdn.mons.shop/111k-sepolia/reliquaries-v1/",
+    "https://cdn.mons.shop/111k/reliquaries-v1/"
+  ],
+  "tests": {
+    "command": "node --import tsx --test --test-skip-pattern='restoration repairs missing objects' tests/ethereumMetadata*.test.ts",
+    "passed": 80,
+    "failed": 0
+  }
+}

@@ -41,6 +41,8 @@ contract SecurityReceiver {
     uint256 public sourceTransferFailures;
     bool private checkPurchaseTotals;
     uint256[3] private expectedPurchaseTotals;
+    uint256 private expectedReliquaries;
+    bool private checkReliquaries;
     bool private checkProceeds;
     uint256[2] private expectedProceeds;
     uint256[] private deliverySources;
@@ -67,6 +69,7 @@ contract SecurityReceiver {
         transferOtherId = 0;
         sourceTransferFailures = 0;
         checkPurchaseTotals = false;
+        checkReliquaries = false;
         checkProceeds = false;
         delete deliverySources;
         delete deliveryReceipts;
@@ -77,6 +80,11 @@ contract SecurityReceiver {
     function expectPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) external {
         checkPurchaseTotals = true;
         expectedPurchaseTotals = [allocated, warehouses, artworks];
+    }
+
+    function expectReliquaryCount(uint256 count) external {
+        checkReliquaries = true;
+        expectedReliquaries = count;
     }
 
     function expectProceeds(uint256 mintReceived, uint256 deliveryReceived) external {
@@ -161,8 +169,15 @@ contract SecurityReceiver {
             require(token.totalMintReceived() == expectedProceeds[0], "callback mint proceeds mismatch");
             require(token.totalDeliveryReceived() == expectedProceeds[1], "callback delivery proceeds mismatch");
         }
+        if (checkReliquaries) {
+            (,,,,,,,,,, uint256 reliquaries,) = token.stats(address(0));
+            require(
+                reliquaries == expectedReliquaries && token.reliquariesMinted() == expectedReliquaries,
+                "callback reliquary count mismatch"
+            );
+        }
         if (checkPurchaseTotals) {
-            (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
+            (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
             require(token.allocatedCrates() == expectedPurchaseTotals[0], "callback allocation mismatch");
             require(token.warehousesMinted() == expectedPurchaseTotals[1], "callback warehouse count mismatch");
             require(allocated == expectedPurchaseTotals[0], "callback stats allocation mismatch");
@@ -275,6 +290,7 @@ contract NFT111KSecurityTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
     }
 
     function testRenunciationPreservesOwnershipBeforeDuringAndAfterTransfer() public {
@@ -994,7 +1010,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _reentry(uint256 route) internal {
         SecurityReceiver buyer = _receiver();
         SecurityCall memory call_ = _route(buyer, route);
-        SecurityCall[] memory attacks = new SecurityCall[](10);
+        SecurityCall[] memory attacks = new SecurityCall[](12);
         attacks[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         attacks[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         attacks[2] = SecurityCall(abi.encodeCall(token.unboxWarehouse, (116667)), 0);
@@ -1022,11 +1038,13 @@ contract NFT111KSecurityTest is TestSupport {
         attacks[8] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
         attacks[9] =
             SecurityCall(abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0))), token.discountCratePrice());
+        attacks[10] = SecurityCall(abi.encodeCall(token.mintReliquaries, (1)), 0.0088 ether);
+        attacks[11] = SecurityCall(abi.encodeCall(token.unboxReliquary, (117172)), 0);
         buyer.configureAttacks(attacks);
         _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);
         assertEq(buyer.callbacks(), _count(route));
-        assertEq(buyer.blockedCalls(), 10 * _count(route));
+        assertEq(buyer.blockedCalls(), 12 * _count(route));
         assertFalse(token.usedDeliveryOrders(99));
         assertFalse(token.usedClaims(INNER_CLAIM));
         _assertOutputs(route, address(buyer));
@@ -1097,7 +1115,7 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _assertPurchaseTotals(uint256 allocated, uint256 warehouses, uint256 artworks) internal view {
-        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,,,,,) = token.stats(address(0));
+        (uint256 actualAllocated, uint256 actualWarehouses, uint256 actualArtworks,,,,,,,,,) = token.stats(address(0));
         assertEq(token.allocatedCrates(), allocated);
         assertEq(token.warehousesMinted(), warehouses);
         assertEq(actualAllocated, allocated);
@@ -1216,7 +1234,7 @@ contract NFT111KSecurityTest is TestSupport {
     }
 
     function _artworksMinted() internal view returns (uint256 value) {
-        (,, value,,,,,,,) = token.stats(address(0));
+        (,, value,,,,,,,,,) = token.stats(address(0));
     }
 
     function _info(uint256 tokenId, uint8 kind, uint256 displayId, address holder) internal view {

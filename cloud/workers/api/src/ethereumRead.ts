@@ -3,7 +3,7 @@ import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
 import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
 import {
-  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS,
+  ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS, ETHEREUM_MAX_RELIQUARIES, ETHEREUM_CRATES_PER_RELIQUARY,
   ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
   ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
@@ -216,7 +216,7 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
   if (path.endsWith('/stats')) {
     const owner = url.searchParams.has('owner') ? ethereumAddress(url.searchParams.get('owner')) : null;
     const values = decodeReturn(
-      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
+      ['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
       await ethereumCall(context, encodeCall(ETHEREUM_FUNCTIONS.stats, ['address'], [owner ?? `0x${'0'.repeat(40)}`])),
     );
     const allocatedCrates = Number(values[0]);
@@ -225,7 +225,9 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
       cratePriceWei: String(values[3]), warehousePriceWei: String(values[4]), saleActive: values[5],
       remainingCrates: 5555 - allocatedCrates, remainingWarehouses: Math.floor((5555 - allocatedCrates) / 11),
       discountMerkleRoot: values[6], discountCratePriceWei: String(values[7]),
-      discountAllowance: Number(values[8]), discountUsed: Number(values[9]) };
+      discountAllowance: Number(values[8]), discountUsed: Number(values[9]),
+      reliquariesMinted: Number(values[10]), reliquaryPriceWei: String(values[11]),
+      remainingReliquaries: Math.min(ETHEREUM_MAX_RELIQUARIES - Number(values[10]), Math.floor((5555 - allocatedCrates) / ETHEREUM_CRATES_PER_RELIQUARY)) };
   }
   if (path.endsWith('/metadata')) {
     const kind = url.searchParams.get('kind') as EthereumItemKind;

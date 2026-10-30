@@ -1,6 +1,6 @@
 # 111K contracts
 
-An ERC721A collection with public crate and warehouse sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata with embedded SVG placeholders. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata base URL. Mint recipients and their shares are fixed at deployment.
+An ERC721A collection with public crate, warehouse, and reliquary sales, allowlist crate discounts, atomic unpacking, signed delivery quotes, physical crate claims, and offchain JSON metadata. Contract logic is non-upgradeable. The owner can change prices, discount eligibility and allowance, sale status, the emergency redemption pause, the authorization signer, delivery-payment receiver, and metadata base URL. Mint recipients and their shares are fixed at deployment.
 
 The [single-contract release](../../releases/111k-sepolia-single-contract/README.md) records the current collection and verification. The [offchain metadata release](../../releases/111k-sepolia-offchain/README.md) records the previous collection and separate URL renderer. The [Seaport release](../../releases/111k-sepolia-seaport/README.md) and earlier releases remain historical records; the [first Sepolia deployment](../../releases/111k-sepolia/README.md) records the original SVG renderer. Sepolia's Glamsterdam state-creation pricing requires live RPC gas estimates; the local Prague benchmarks and Forge simulation estimates must not be used as Sepolia deployment limits.
 
@@ -24,7 +24,7 @@ npm run build
 npm run abi
 ```
 
-The tests cover every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
+The tests cover reliquary supply and lifetime caps, mixed reliquary/warehouse/direct allocation, every allocation in a 5,555-crate mixed warehouse/direct sale, all 111,111 resulting artwork identities, the 31-item bonus on both routes, sequential digital identities and disjoint physical receipts, arbitrary unpacking order, transfers and burns, replay protection, receiver callbacks, rollback, independent payout failures, and metadata. Delivery tests also verify receipt commitments and confirm that token-based artwork identities stay stable after an opening-order reorg.
 
 Stateful invariant tests mix public and discounted purchases, transfers, unpacking, delivery, claims, and pause changes across multiple owners. An independent model checks token identities, ownership, balances, allocations, discount usage, and consumed authorizations. Normal checks use 128 sequences of 64 calls and fail on unexpected handler reverts. Run the longer campaign with:
 
@@ -63,9 +63,16 @@ In another terminal:
 npm run deploy:local
 ```
 
-The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the collection using Anvil's first unlocked account. It writes the collection address, the deployment block, the discount root, the proceeds configuration, `metadataBaseURI`, and `protocolVersion: 8` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Metadata defaults to `https://cdn.mons.shop/111k-sepolia/`, matching the deployed shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts published HTTPS CDN collection prefixes under `/111k-sepolia/` or `/111k/`, including one deployment namespace such as `/111k-sepolia/test-2/`. Deployment IDs contain 1–64 lowercase letters, digits, or hyphens and start with a letter or digit. Baseline metadata is read from the CDN; local reveal writes use an isolated local R2 bucket. Other optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
+The deployment helper accepts only a loopback Anvil RPC with chain ID 31337. It deploys the collection using Anvil's first unlocked account. It writes the collection address, the deployment block, the discount root, the proceeds configuration, `metadataBaseURI`, and `protocolVersion: 9` to `.local/deployment.json`. The default discount root comes from `src/ethereum/discounts/111k.json`. Metadata defaults to `https://cdn.mons.shop/111k-sepolia/`, matching the deployed shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts published HTTPS CDN collection prefixes under `/111k-sepolia/` or `/111k/`, including one deployment namespace such as `/111k-sepolia/test-2/`. Deployment IDs contain 1–64 lowercase letters, digits, or hyphens and start with a letter or digit. Baseline metadata is read from the CDN; local reveal writes use an isolated local R2 bucket. Other optional overrides are `ETHEREUM_111K_LOCAL_RPC_URL`, `ETHEREUM_111K_LOCAL_OWNER`, `ETHEREUM_111K_LOCAL_QUOTE_SIGNER`, and `ETHEREUM_111K_LOCAL_DISCOUNT_ROOT`.
 
-Local deployment manifest version 8 identifies the single-contract deployment, the recorded `metadataBaseURI`, sequential digital identities, and disjoint physical-only receipt identities, alongside mint splits, delivery proceeds, discounts, and batch operations. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, checks `baseURI()` on the collection, probes the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
+The new collection has zero supply and sales closed. Before local minting, explicitly open sales from its owner. Replace `OWNER_ADDRESS` and `COLLECTION_ADDRESS` below with `owner` and `contractAddress` from `.local/deployment.json`, and use its `rpcUrl` if overridden. The default owner is Anvil's first unlocked account; a custom owner must submit the same call from its own account.
+
+```sh
+cast send --rpc-url http://127.0.0.1:8545 --unlocked --from OWNER_ADDRESS \
+  COLLECTION_ADDRESS 'setSaleActive(bool)' true
+```
+
+Local deployment manifest version 9 adds reliquary support and identifies the single-contract deployment, the recorded `metadataBaseURI`, sequential digital identities, and disjoint physical-only receipt identities, alongside mint splits, delivery proceeds, discounts, and batch operations. Restart Anvil, rerun `deploy:local`, and restart the local API with its fresh database when upgrading any older local deployment. The API rejects older manifests, checks `baseURI()` on the collection, probes the reliquary constants and extended statistics plus the payout getters, and verifies immutable mint recipients and shares before starting. It accepts a valid owner-rotated delivery receiver without requiring a new manifest. Existing contracts require a fresh deployment because they are not upgradeable. Both delivery and crate-claim authorizations retain EIP-712 domain name `111K`, version `2`, and their existing signed fields. Authorizations remain bound to their original chain and contract address.
 
 Start the isolated API from the repository root:
 
@@ -75,9 +82,23 @@ npm run dev:ethereum:api
 
 The helper reads `.local/deployment.json`, injects the public local test signer, creates temporary databases, and reads metadata directly from the CDN. Local manifests with loopback metadata URLs require a fresh local deployment; matching CDN manifests remain valid. Metadata reads require CDN connectivity and have no local fallback. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
 
-Anvil's exposed accounts and keys are for local development only. The collection starts with sales active, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
+Anvil's exposed accounts and keys are for local development only. The collection starts with sales closed, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, reliquary price `0.0088 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
 
-`script/Deploy111K.s.sol` prepares an explicitly configured deployment using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, and `ETHEREUM_111K_DISCOUNT_ROOT`. It is not invoked by the local helper or any check. Public testnet deployment and funding are separate operator actions.
+## Future public network deployments
+
+`script/Deploy111K.s.sol` prepares a fresh collection on Ethereum mainnet (chain ID 1) or Sepolia (11155111) using `ETHEREUM_111K_DEPLOYER_KEY`, `ETHEREUM_111K_OWNER`, `ETHEREUM_111K_QUOTE_SIGNER`, `ETHEREUM_111K_DISCOUNT_ROOT`, and `ETHEREUM_111K_METADATA_BASE_URI`. It reads the immutable mint split and initial delivery receiver from `config/proceeds.json`. Existing contracts are non-upgradeable; the reliquary release requires a new collection address. Replacing the existing Sepolia collection also uses its scoped commerce-state reset. The first mainnet deployment starts with fresh state.
+
+Sales are closed from contract creation. Verify the fresh collection's zero issuance, configuration, bytecode, and metadata while it remains closed, then have the owner call `setSaleActive(true)` as a separate launch action. Public acceptance uses read-only checks; minting and opening tests run on the local EVM. No deployment-time pause transaction is needed. Existing deployed contracts retain their current sale state.
+
+Each public deployment requires its own metadata namespace: `https://cdn.mons.shop/111k/{deploymentId}/` on mainnet or `https://cdn.mons.shop/111k-sepolia/{deploymentId}/` on Sepolia. Deployment IDs must be unique across networks; use distinct IDs such as `mainnet-reliquaries-v1` and `v7`. The script rejects bare collection roots, the other network's prefix, and unsupported chain IDs. Publish and validate the full six-kind metadata set for the selected namespace before configuring it on a deployed collection. The set includes reliquary tokens 117172–117201 alongside the existing artwork, crate, warehouse, and receipt ranges.
+
+`NFT111KDeploymentTest` executes the deployment script locally for both public chain IDs with test keys and configuration. It checks the deployed collection's owner, signer, EIP-712 domain, proceeds configuration, default prices, runtime size, and metadata boundaries for all six kinds. It verifies zero issuance while closed, rejects all four purchase paths and unauthorized activation, and explicitly opens sales as the owner. It then mints the lifetime maximum of 30 reliquaries at two independently configured prices, transfers one through the network's default Seaport approval, opens its 111 reserved crates, verifies the cap remains consumed, and releases mint proceeds to the configured recipients. Run this focused integration check without a public RPC:
+
+```sh
+forge test --offline --match-contract '^NFT111KDeploymentTest$' --gas-snapshot-emit=false
+```
+
+This check runs in Foundry's local EVM. Public deployment, funding, metadata publication, and the commerce-state reset remain separate operator actions.
 
 ## Seaport trading
 
@@ -85,7 +106,7 @@ Future deployments automatically approve Seaport 1.6 at `0x0000000000000068F116a
 
 Each holder can revoke this default with `setApprovalForAll(SEAPORT, false)` and restore it with `setApprovalForAll(SEAPORT, true)`. These calls emit the standard `ApprovalForAll` event. Revocation remains in effect for that wallet across mints, unboxing, redemption, and incoming transfers. Other holders retain their own approval settings. As with ordinary ERC721 approvals, revoking an operator does not clear a separately granted token-specific approval.
 
-The fixed Seaport operator is authorized for every token kind: artworks, crates, warehouses, and receipts. Seaport still validates order authorization and settlement; a seller normally signs an offchain listing and the buyer submits the fulfillment transaction. Unboxing, delivery, and receipt claims still require the actual token owner. The collection owner cannot replace or extend the automatically approved operator.
+The fixed Seaport operator is authorized for every token kind: artworks, crates, warehouses, reliquaries, and receipts. Seaport still validates order authorization and settlement; a seller normally signs an offchain listing and the buyer submits the fulfillment transaction. Unboxing, delivery, and receipt claims still require the actual token owner. The collection owner cannot replace or extend the automatically approved operator.
 
 The NFT transfer must use direct Seaport routing: a seller's listing uses a zero `conduitKey`, while a seller accepting an offer uses a zero `fulfillerConduitKey`. Conduits, including OpenSea's conduit, require separate explicit approvals. Integrations must query `isApprovedForAll` before requesting approval; the default permission does not emit an initial `ApprovalForAll` event. This removes the NFT approval step only; ERC20 payment approvals and settlement transactions retain their normal requirements.
 
@@ -101,7 +122,7 @@ These tests deploy and trade only inside the local fork. They are explicitly ski
 
 Both deployment scripts read [`config/proceeds.json`](config/proceeds.json). It starts with four valid placeholder mint addresses and shares of `5000 / 2500 / 1500 / 1000` basis points (50% / 25% / 15% / 10%), plus a different placeholder delivery receiver. Replace these placeholders before deploying for real proceeds. There are no treasury environment overrides. Configuration is validated before broadcasting, including duplicate receivers, shipping overlap, and the predicted collection address.
 
-A deployment accepts 2–8 distinct, nonzero mint recipients with positive integer basis points totaling 10,000. Their addresses and shares cannot change. Public crates, discounted crates, and warehouses credit their actual ETH payment to `totalMintReceived`; unboxing and receipt claims do not earn additional proceeds. Delivery fees only credit `totalDeliveryReceived`.
+A deployment accepts 2–8 distinct, nonzero mint recipients with positive integer basis points totaling 10,000. Their addresses and shares cannot change. Public crates, discounted crates, warehouses, and reliquaries credit their actual ETH payment to `totalMintReceived`; unboxing and receipt claims do not earn additional proceeds. Delivery fees only credit `totalDeliveryReceived`.
 
 `mintRecipientCount()`, `mintRecipients(index)`, and `mintSharesBps(recipient)` expose the fixed split. `mintReleased(recipient)`, `totalMintReleased`, `totalDeliveryReleased`, `releasableMint(recipient)`, and `releasableDelivery()` expose payouts and pending amounts. Each mint recipient is entitled to `floor(totalMintReceived * shareBps / 10000) - mintReleased(recipient)`. Entitlements use cumulative receipts, so small payments do not repeatedly lose rounding fractions; after everyone claims, at most seven wei remain reserved for later accrual and can remain permanently after the final sale.
 
@@ -111,13 +132,13 @@ The owner may call `setDeliveryPaymentReceiver(address)` to rotate the shipping 
 
 ## Allowlist crate discounts
 
-`mintCratesDiscounted(uint256 quantity, bytes32[] proof)` proves the caller's address against `discountMerkleRoot` using OpenZeppelin's standard double-hashed address leaf. It accepts only the exact `quantity * discountCratePrice` payment and increments `discountUsed[msg.sender]` before receiver callbacks. Discounted purchases share public crate inventory and emit the same `CratesPurchased` event with the actual payment. Warehouses have no discounted mint entrypoint.
+`mintCratesDiscounted(uint256 quantity, bytes32[] proof)` proves the caller's address against `discountMerkleRoot` using OpenZeppelin's standard double-hashed address leaf. It accepts only the exact `quantity * discountCratePrice` payment and increments `discountUsed[msg.sender]` before receiver callbacks. Discounted purchases share public crate inventory and emit the same `CratesPurchased` event with the actual payment. Warehouses and reliquaries have no discounted mint entrypoint.
 
 Every eligible wallet initially receives one discounted crate. The owner can call `setDiscountConfig(root, allowance)` with an allowance from 1 through 10. Usage remains cumulative across root replacements and allowance changes, including removing and re-adding an address. Increasing the allowance from 1 to 3 gives a wallet that already used one two more discounted crates. Setting the root to zero disables discounted minting. Public purchases, transfers, and unpacking do not consume or restore discount usage.
 
-`setPrices(cratePrice, warehousePrice, discountCratePrice)` updates all three fixed prices atomically and rejects a discounted price above the public crate price. A public-price change does not automatically change the discounted price. Failed transactions revert payment, allocation, and discount usage.
+`setPrices(cratePrice, warehousePrice, discountCratePrice, reliquaryPrice)` updates all four fixed prices atomically and rejects a discounted price above the public crate price. A public-price change does not automatically change the discounted price. Failed transactions revert payment, allocation, and discount usage.
 
-`stats(address wallet)` returns the existing six global statistics followed by the root, discounted crate price, allowance, and queried wallet's used count. This gives the page one coherent contract read for price and remaining allowance. Passing the zero address returns zero usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
+`stats(address wallet)` returns the existing six global statistics followed by the root, discounted crate price, allowance, queried wallet's used count, lifetime reliquary count, and reliquary price. This gives the page one coherent contract read for price and remaining allowance. Passing the zero address returns zero usage. The draft holder snapshot and its generated proof fixture are checked independently of the live collection; no source-collection ownership query is required during minting.
 
 The page uses the same discount button behavior as Solana: if the selected crate quantity exceeds the remaining allowance, the entire selection uses the public mint price. There is no partial discount within a transaction.
 
@@ -128,15 +149,16 @@ The page uses the same discount button behavior as Solana: if the selected crate
 | Artwork | 1–111111, issued sequentially in unpacking order | Same as token ID |
 | Crate | 111112–116666 | 1–5555 |
 | Warehouse | 116667–117171 | 1–505 |
+| Reliquary | 117172–117201 | 1–30 |
 | Digital artwork receipt | 1000001–1111111 | Original digital token ID |
 | Physical-only artwork receipt | 1111112–1222222 | 111112–222222 |
 | Crate receipt | 2000000 + crate number | Original crate number |
 
 Digital unboxing assigns the next sequential artwork token IDs, and each artwork display number equals its token ID. A physical claim for crate `n` instead uses artwork display numbers `111111 + 20 × (n − 1) + 1` through `111111 + 20 × n`. Crate 5555 always contains 31 items and its physical range ends at 222222. These are placeholder identities; no randomness or reveal process is implemented.
 
-Warehouse purchases reserve eleven crate identities immediately. Unpacking mints those reserved crates without consuming supply again. A crate can either be unpacked into artworks or redeemed into a crate receipt. Claiming a physical crate burns its receipt and creates its fixed physical-only artwork receipt numbers. Digital artwork `T` redeems into receipt `1000000 + T` with the same flower. Mutually exclusive crate paths cap actual artwork issuance at 111111. Warehouses cannot be delivered, and artwork receipts cannot be redeemed again. Receipts remain transferable.
+Warehouse purchases reserve eleven crate identities immediately. `mintReliquaries(uint256)` reserves 111 crate identities per reliquary from the same 5,555-crate pool. `reliquariesMinted` counts lifetime purchases and cannot exceed 30, including reliquaries already unpacked. Minting requires both enough unallocated crates and enough remaining reliquary slots. `unboxReliquary(uint256)` burns the reliquary and mints its 111 reserved crates to the owner. Unpacking mints those reserved crates without consuming supply again. A crate can either be unpacked into artworks or redeemed into a crate receipt. Claiming a physical crate burns its receipt and creates its fixed physical-only artwork receipt numbers. Digital artwork `T` redeems into receipt `1000000 + T` with the same flower. Mutually exclusive crate paths cap actual artwork issuance at 111111. Warehouses and reliquaries cannot be delivered, and artwork receipts cannot be redeemed again. Receipts remain transferable.
 
-The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates or warehouses; warehouse supply checks count eleven crate allocations per warehouse. `unboxCrate` and `unboxWarehouse` retain their single-container behavior. `unboxCrates(uint256[])` opens 1–15 distinct owned crates in one transaction. Delivery accepts 1–50 items.
+The contract rejects reuse of every spot-minted ID, including IDs burned earlier. Product actions require the actual token owner, even if a caller is an approved operator. Purchases accept 1–15 crates, warehouses, or reliquaries; warehouse and reliquary supply checks count eleven and 111 crate allocations per item respectively. `unboxCrate`, `unboxWarehouse`, and `unboxReliquary` each open one container. `unboxCrates(uint256[])` opens 1–15 distinct owned crates in one transaction. Delivery accepts 1–50 items.
 
 `getTokenInfo` returns `(0, 0, address(0))` for nonexistent or burned tokens. The artwork count in `stats(address)` counts digital artwork NFTs ever minted, including those subsequently redeemed; physical artwork receipts are not part of that counter. Digital artwork display numbers equal token IDs and remain stable through ownership changes.
 
@@ -189,7 +211,7 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ### Batch operations (2026-10-27)
 
-The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the current collection. All 113 gas measurements are checked in `snapshots/NFT111KGasTest.json`. The collection runtime is 21,780 bytes, leaving 2,796 bytes below the EIP-170 limit.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before reliquary support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 118 measurements are checked in `snapshots/NFT111KGasTest.json`; the reliquary-enabled collection runtime is 22,679 bytes with 1,897 bytes of headroom.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |
@@ -235,7 +257,7 @@ At that revision, collection deployment costs 3,619,228 gas (+230,924); renderer
 
 Every configuration uses the same legacy/200 test harness and receiver bytecode. Candidate contracts are deployed from their compiled artifacts at identical addresses, keeping signed calldata and callback costs constant. The [historical legacy/200 baseline](benchmarks/compiler-legacy-200.json) records the source, harness, dependency and compiler provenance for those 89 measurements. The [CDN legacy/200 baseline](benchmarks/compiler-legacy-200-cdn.json) preserves the former two-contract implementation. Current tooling uses the [single-contract legacy/200 baseline](benchmarks/compiler-legacy-200-single-contract.json) and [single-contract comparison](benchmarks/compiler-single-contract.json). Normal runs reject changed provenance or measurements; they never silently replace the active baseline. In these records, `sourceCommit` identifies the checkout’s base revision; SHA-256 hashes identify the exact measured working-tree inputs.
 
-The current source has 113 benchmarks and uses the single-contract baseline. The selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
+The source before reliquary support had 113 benchmarks and used the single-contract baseline. The selected legacy/1000 collection deploys in 5,338,642 gas on Prague Anvil; its creation bytecode is 25,616 bytes plus 640 constructor bytes for four recipients (896 for eight). Sepolia deployment gas must be estimated against the live chain. Reproduce the earlier comparison from its recorded source revision. To compare current sources against the active baseline, run:
 
 ```sh
 node scripts/benchmark-compiler.mjs /tmp/111k-compiler-settings.json legacy 200 1000

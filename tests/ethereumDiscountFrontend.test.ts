@@ -43,8 +43,8 @@ test('the published draft proves the explicit wallet and distinguishes an absent
 test('stats requests scope wallet usage and reject another owner, chain, deployment, or malformed discount data', async t => {
   const valid = {
     chainId: config.chainId, contractAddress: config.contractAddress, owner,
-    allocatedCrates: 0, warehousesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
-    warehousePriceWei: config.warehousePriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505,
+    allocatedCrates: 0, warehousesMinted: 0, reliquariesMinted: 0, artworksMinted: 0, cratePriceWei: config.cratePriceWei,
+    warehousePriceWei: config.warehousePriceWei, reliquaryPriceWei: config.reliquaryPriceWei, saleActive: true, remainingCrates: 5555, remainingWarehouses: 505, remainingReliquaries: 30,
     discountMerkleRoot: dataset.root, discountCratePriceWei: '50000000000000', discountAllowance: 1, discountUsed: 0,
   };
   let value: unknown = valid;
@@ -58,6 +58,7 @@ test('stats requests scope wallet usage and reject another owner, chain, deploym
   for (const changed of [
     { owner: other }, { owner: null }, { chainId: 31337 }, { contractAddress: other },
     { discountMerkleRoot: '0x1234' }, { discountAllowance: 11 }, { discountUsed: -1 }, { discountCratePriceWei: '-1' },
+    { reliquaryPriceWei: '-1' }, { reliquariesMinted: -1 }, { remainingReliquaries: -1 },
   ]) {
     value = { ...valid, ...changed };
     await assert.rejects(ethereumApi.stats(config, owner), /invalid response/);

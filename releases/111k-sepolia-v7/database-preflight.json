@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "checkedAt": "2026-10-30T20:05:34.896Z",
+  "readOnly": true,
+  "wranglerVersion": "4.156.0",
+  "migrationListing": {
+    "requestedCommandSkipped": "wrangler d1 migrations list",
+    "reason": "Pinned handler calls initMigrationsTable(), issuing CREATE TABLE IF NOT EXISTS before reading.",
+    "replacementQuery": "SELECT name FROM d1_migrations ORDER BY id"
+  },
+  "databases": [
+    {
+      "binding": "DATA_DB",
+      "database": "mons-shop-data",
+      "localMigrationCount": 3,
+      "appliedMigrationCount": 3,
+      "latestApplied": "0003_pack_status_historical_replay.sql",
+      "pending": [],
+      "unexpectedApplied": [],
+      "duplicateApplied": false,
+      "rowsWritten": 0,
+      "changedDatabase": false,
+      "status": "passed"
+    },
+    {
+      "binding": "OPS_DB",
+      "database": "mons-shop-ops",
+      "localMigrationCount": 9,
+      "appliedMigrationCount": 9,
+      "latestApplied": "0009_ethereum_reveal_deployments.sql",
+      "pending": [],
+      "unexpectedApplied": [],
+      "duplicateApplied": false,
+      "rowsWritten": 0,
+      "changedDatabase": false,
+      "status": "passed"
+    },
+    {
+      "binding": "COMMERCE_DB",
+      "database": "mons-shop-commerce",
+      "localMigrationCount": 46,
+      "appliedMigrationCount": 46,
+      "latestApplied": "0046_frozen_commerce_metadata_cleanup.sql",
+      "pending": [],
+      "unexpectedApplied": [],
+      "duplicateApplied": false,
+      "rowsWritten": 0,
+      "changedDatabase": false,
+      "status": "passed"
+    }
+  ],
+  "checks": [
+    {
+      "name": "pack-status",
+      "command": "npm run check:pack-status-d1",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1264,
+      "summary": "D1 pack status is healthy: 3 summaries, 897 events, cache generation 3."
+    },
+    {
+      "name": "ops",
+      "command": "npm run check:ops-d1",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1327,
+      "summary": "Ops D1 is healthy: anonymous auth 1425 sessions; reveal submissions 457, active, revision 6; profiles 789, addresses 556; auth-wallet bindings 1494."
+    },
+    {
+      "name": "commerce-deployment",
+      "command": "npm run check:commerce-d1 -- --for-deployment",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 315697,
+      "summary": {
+        "authorityState": "d1",
+        "authorityRevision": 25,
+        "inventoryMode": "rows",
+        "notificationOutboxMode": "table",
+        "notificationOutboxPreparation": "ready",
+        "notificationOutboxGroups": 119,
+        "notificationOutboxFailures": [],
+        "receiptClaimFailureOutboxRows": 5,
+        "receiptClaimFailureOutboxStates": [
+          {
+            "state": "queued",
+            "last_error_code": null,
+            "count": 5,
+            "oldest_pending_at_ms": null
+          }
+        ],
+        "stripeCheckoutStateMode": "table",
+        "stripeCheckoutStatePreparation": "ready",
+        "stripeCheckoutStateRows": 323,
+        "packStatusOutboxMode": "table",
+        "packStatusOutboxPreparation": "ready",
+        "packStatusOutboxRows": 10,
+        "deliveryRecoveryStateMode": "table",
+        "deliveryRecoveryStatePreparation": "ready",
+        "deliveryRecoveryStateRows": 594,
+        "inventoryDrops": 8,
+        "availableDudes": 5298,
+        "authoritativeDocuments": 16037,
+        "deliveryOwnerRevisions": 29,
+        "documentPathRevisions": 16041,
+        "kindCounts": {
+          "admin_irl_redeem_pack_marker": 110,
+          "admin_irl_redeem_receipt_marker": 116,
+          "admin_irl_redeem_request": 35,
+          "box_assignment": 3859,
+          "claim_code": 595,
+          "delivery_order": 594,
+          "dude_assignment": 10279,
+          "dude_pool": 6,
+          "offchain_order": 120,
+          "stripe_checkout": 323
+        }
+      }
+    }
+  ],
+  "checksStartedAt": "2026-10-30T20:06:04.812Z",
+  "finishedAt": "2026-10-30T20:11:20.513Z",
+  "status": "passed"
+}

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useQueryClient } from '@tanstack/react-query';
 import { ethereumExplorerTransaction } from '../../shared/ethereum/config';
 import { ETHEREUM_CHECKOUT_ID, checkoutEntryUrl, type EthereumCheckoutStatusResponse } from '../../shared/ethereum/checkout';
-import { ETHEREUM_MAX_EXPECTED_IDS, ethereumReceiptTokenId, formatEtherAmount } from '../../shared/ethereum/protocol';
+import { ETHEREUM_MAX_EXPECTED_IDS, ethereumItemDisplayIdMaximum, ethereumReceiptTokenId, formatEtherAmount, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumInventoryItem } from '../../shared/ethereum/api';
 import { InventoryGrid } from '../components/InventoryGrid';
 import { Modal } from '../components/Modal';
@@ -11,6 +11,7 @@ import { getInjectedWalletIconSrc } from '../wallet/injectedEthereumProviders';
 import { navigate } from '../navigation';
 import type { InventoryItem } from '../types';
 import { EthereumMintPanel } from './EthereumMintPanel';
+import { ethereumMintPrice, ethereumMintRemaining } from './mint';
 import { ethereumInventoryQueryKey, ethereumInventoryScope, ethereumInventoryView, isEthereumInventoryView, readEthereumExpected, toggleEthereumSelection, writeEthereumExpected } from './state';
 import { useEthereum111k, type EthereumWallet } from './useEthereum111k';
 import { useEthereumMintAction } from './useEthereumMintAction';
@@ -46,7 +47,7 @@ export default function Ethereum111kPage({
   pendingRevealIds, onSolanaReveal, onSolanaView, canOpenSolanaBoxes, solanaRevealLoading,
   solanaInventoryReady, externalBusy = false, suspended = false, onModalOpenChange, showToast,
 }: Ethereum111kPageProps) {
-  const [kind, setKind] = useState<'crate' | 'warehouse'>('crate');
+  const [kind, setKind] = useState<EthereumMintKind>('crate');
   const model = useEthereum111k(wallet, addressEncryptionPublicKey, kind);
   const queryClient = useQueryClient();
   const onCheckoutConfirmed = useCallback((checkout: EthereumCheckoutStatusResponse) => {
@@ -95,12 +96,10 @@ export default function Ethereum111kPage({
   const operationBlocked = Boolean(model.busy || model.pending || model.submission || externalBusy || suspended);
   const walletPickerOpen = wallet.status === 'choosing';
   const hasSubmittedTransaction = Boolean(model.pending || (model.submission && !model.busy));
-  const remaining = kind === 'crate' ? model.stats.data?.remainingCrates : model.stats.data?.remainingWarehouses;
+  const remaining = model.stats.data ? ethereumMintRemaining(kind, model.stats.data) : undefined;
   const maxQuantity = Math.max(1, Math.min(model.config.maxMintQuantity, remaining ?? model.config.maxMintQuantity));
-  const total = kind === 'crate' ? 5_555 : 505;
-  const unitPrice = kind === 'crate'
-    ? model.stats.data?.cratePriceWei ?? model.config.cratePriceWei
-    : model.stats.data?.warehousePriceWei ?? model.config.warehousePriceWei;
+  const total = ethereumItemDisplayIdMaximum(kind);
+  const unitPrice = ethereumMintPrice(kind, model.stats.data ?? model.config);
   const price = formatEtherAmount(BigInt(unitPrice) * BigInt(quantity));
   const quote = model.mintQuote(kind, quantity);
   const discountPrice = quote?.discounted ? formatEtherAmount(BigInt(quote.unitPriceWei) * BigInt(quantity)) : price;
@@ -111,7 +110,7 @@ export default function Ethereum111kPage({
   const mintAction = useEthereumMintAction({
     wallet, config: model.configQuery.data, kind, quantity, remaining, saleActive: model.stats.data?.saleActive,
     loadError: mintDataError, blocked: operationBlocked,
-    priceKey: model.stats.data ? kind === 'warehouse' ? model.stats.data.warehousePriceWei :
+    priceKey: model.stats.data ? kind !== 'crate' ? ethereumMintPrice(kind, model.stats.data) :
       [model.stats.data.cratePriceWei, model.stats.data.discountCratePriceWei, model.stats.data.discountMerkleRoot].join(':') : undefined,
     suspended, onMint: model.mint, mintQuote: model.mintQuote,
   });
@@ -125,7 +124,7 @@ export default function Ethereum111kPage({
   const receipts = useMemo(() => model.items.filter(item => item.kind.endsWith('_receipt')).map(ethereumInventoryView), [model.items]);
   const inventoryItems = useMemo(() => [...ethereumItems, ...solanaInventoryItems], [ethereumItems, solanaInventoryItems]);
   const combinedSelection = useMemo(() => selected.size ? selected : solanaSelected, [selected, solanaSelected]);
-  const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
+  const selectedContainer = selectedItems.length === 1 && ['crate', 'warehouse', 'reliquary'].includes(selectedItems[0].kind) ? selectedItems[0] : null;
   const selectedCrates = selectedItems.length > 0 && selectedItems.every(item => item.kind === 'crate');
   const unboxLimitExceeded = selectedCrates && selectedItems.length > model.config.maxUnboxQuantity;
   const canDeliver = selectedItems.length > 0 && selectedItems.length <= model.config.maxDeliveryItems && selectedItems.every(item => ['crate', 'artwork'].includes(item.kind));
@@ -303,7 +302,7 @@ export default function Ethereum111kPage({
           onReveal={onSolanaReveal} canRevealItem={item => !isEthereumInventoryView(item) && canOpenSolanaBoxes(item.dropId)}
           onViewItem={view} revealLoadingId={solanaRevealLoading} revealDisabled={disabled} figureMediaMode="image"
           emptyStateVisibility={solanaInventoryReady && (!model.owner || !model.config.enabled || model.inventory.isFetched) ? 'visible' : 'hidden'}
-          emptyStateContent={model.owner ? 'Your crates, warehouses and artworks appear here.' : 'Connect Ethereum to see your 111K collection.'} />
+          emptyStateContent={model.owner ? 'Your crates, warehouses, reliquaries and artworks appear here.' : 'Connect Ethereum to see your 111K collection.'} />
         {model.inventory.error ? <p className="error" role="alert">Couldn’t refresh Ethereum inventory. <button type="button" className="ghost" onClick={model.refresh}>Retry</button></p> : null}
         {model.inventory.hasNextPage ? <button type="button" className="ghost" onClick={() => void model.inventory.fetchNextPage()} disabled={model.inventory.isFetchingNextPage}>{model.inventory.isFetchingNextPage ? 'Loading…' : 'Load more Ethereum items'}</button> : null}
       </section>

@@ -55,6 +55,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "CRATES_PER_RELIQUARY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "CRATES_PER_WAREHOUSE",
     "inputs": [],
     "outputs": [
@@ -198,6 +211,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_RELIQUARIES",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_TOKEN_INFO_BATCH_SIZE",
     "inputs": [],
     "outputs": [
@@ -225,6 +251,19 @@ export const nft111KAbi = [
   {
     "type": "function",
     "name": "MAX_WAREHOUSES",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "RELIQUARY_TOKEN_START",
     "inputs": [],
     "outputs": [
       {
@@ -678,6 +717,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "mintReliquaries",
+    "inputs": [
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
     "name": "mintSharesBps",
     "inputs": [
       {
@@ -944,6 +996,51 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "reliquariesMinted",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "reliquaryFirstCrate",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "reliquaryPrice",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "remainingCrates",
     "inputs": [],
     "outputs": [
@@ -1106,6 +1203,11 @@ export const nft111KAbi = [
         "name": "discountCratePrice_",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "reliquaryPrice_",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -1208,6 +1310,16 @@ export const nft111KAbi = [
       },
       {
         "name": "discountUsed_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "reliquariesMinted_",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "reliquaryPrice_",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1387,6 +1499,19 @@ export const nft111KAbi = [
         "name": "tokenIds",
         "type": "uint256[]",
         "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "unboxReliquary",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -1897,6 +2022,12 @@ export const nft111KAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
+      },
+      {
+        "name": "reliquaryPrice",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -1923,6 +2054,68 @@ export const nft111KAbi = [
         "type": "bool",
         "indexed": false,
         "internalType": "bool"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ReliquariesPurchased",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "firstReliquaryToken",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "quantity",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "paid",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ReliquaryUnboxed",
+    "inputs": [
+      {
+        "name": "reliquaryToken",
+        "type": "uint256",
+        "indexed": true,
+        "internalType": "uint256"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "firstCrateToken",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "count",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false

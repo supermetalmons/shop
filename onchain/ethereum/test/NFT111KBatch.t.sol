@@ -24,6 +24,7 @@ contract NFT111KBatchTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
     }
 
     function testBatchLimitsAndRuntimeSize() public view {
@@ -76,7 +77,7 @@ contract NFT111KBatchTest is TestSupport {
             assertEq(token.totalSupply(), supply + 311 - 15);
             assertEq(token.allocatedCrates(), 5555);
             assertEq(token.warehousesMinted(), 503);
-            (,, uint256 artworks,,,,,,,) = token.stats(address(0));
+            (,, uint256 artworks,,,,,,,,,) = token.stats(address(0));
             assertEq(artworks, 331);
             _assertSummary(logs[logs.length - 1], ids, 21, 311);
             assertTrue(vm.revertToState(snapshot));
@@ -208,8 +209,10 @@ contract NFT111KBatchTest is TestSupport {
         uint8[] memory kinds = new uint8[](30);
         uint256[] memory ids = new uint256[](30);
         for (uint256 i; i < ids.length; ++i) {
-            kinds[i] = uint8(i % 5 + 1);
-            ids[i] = kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : kinds[i] == 4 ? 222222 : 111111;
+            kinds[i] = uint8(i % 6 + 1);
+            ids[i] = kinds[i] == 6
+                ? 30
+                : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : kinds[i] == 4 ? 222222 : 111111;
         }
         string[] memory uris = token.previewTokenURIs(kinds, ids);
         assertEq(uris.length, ids.length);
@@ -230,8 +233,8 @@ contract NFT111KBatchTest is TestSupport {
         uint256[] memory ids = new uint256[](2);
         kinds[0] = 1;
         ids[0] = 42;
-        uint8[7] memory invalidKinds = [uint8(0), 6, 1, 2, 3, 4, 5];
-        uint256[7] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 222223, 5556];
+        uint8[9] memory invalidKinds = [uint8(0), 7, 1, 2, 3, 4, 5, 6, 6];
+        uint256[9] memory invalidIds = [uint256(1), 1, 0, 5556, 506, 222223, 5556, 0, 31];
         for (uint256 i; i < invalidKinds.length; ++i) {
             kinds[1] = invalidKinds[i];
             ids[1] = invalidIds[i];
@@ -283,7 +286,7 @@ contract NFT111KBatchTest is TestSupport {
     }
 
     function _state() private view returns (bytes32) {
-        (uint256 allocations, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
+        (uint256 allocations, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
         return keccak256(abi.encode(allocations, warehouses, artworks, token.totalSupply(), token.balanceOf(ALICE)));
     }
 

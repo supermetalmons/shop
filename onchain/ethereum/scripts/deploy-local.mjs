@@ -65,7 +65,7 @@ if (!collection.contractAddress || Number(collection.status) !== 1) throw new Er
 if (collection.contractAddress.toLowerCase() !== predictedCollection.toLowerCase()) throw new Error('Unexpected collection deployment address.');
 
 const result = {
-  protocolVersion: 8,
+  protocolVersion: 9,
   chainId: 31337, rpcUrl: rpcUrl.href, contractAddress: collection.contractAddress,
   metadataBaseURI, deploymentBlock: Number(collection.blockNumber),
   owner, quoteSigner: signer, deliveryPaymentReceiver, mintRecipients, mintSharesBps, discountRoot,

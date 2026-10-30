@@ -56,6 +56,7 @@ contract NFT111KDiscountTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
         vm.deal(ALICE, 100 ether);
         vm.deal(BOB, 100 ether);
         vm.deal(STRANGER, 100 ether);
@@ -139,17 +140,17 @@ contract NFT111KDiscountTest is TestSupport {
         token.setDiscountConfig(root, 3);
         vm.prank(ALICE);
         vm.expectRevert();
-        token.setPrices(1 ether, 11 ether, 0.5 ether);
+        token.setPrices(1 ether, 11 ether, 0.5 ether, 0.0088 ether);
         vm.expectRevert(NFT111K.InvalidDiscountConfig.selector);
         token.setDiscountConfig(root, 0);
         vm.expectRevert(NFT111K.InvalidDiscountConfig.selector);
         token.setDiscountConfig(root, 11);
         vm.expectRevert(NFT111K.InvalidDiscountConfig.selector);
-        token.setPrices(1, 11, 2);
-        token.setPrices(0.0002 ether, 0.0022 ether, PRICE);
+        token.setPrices(1, 11, 2, 0.0088 ether);
+        token.setPrices(0.0002 ether, 0.0022 ether, PRICE, 0.0088 ether);
         assertEq(token.discountCratePrice(), PRICE);
         _buy(ALICE, 1);
-        token.setPrices(0.0002 ether, 0.0022 ether, 0);
+        token.setPrices(0.0002 ether, 0.0022 ether, 0, 0.0088 ether);
         vm.prank(BOB);
         token.mintCratesDiscounted(1, _proof(BOB));
         assertEq(token.discountUsed(BOB), 1);
@@ -241,14 +242,14 @@ contract NFT111KDiscountTest is TestSupport {
 
     function testStatsReturnDiscountTermsAndOnlyQueriedWalletUsage() public {
         _buy(ALICE, 1);
-        (,,,,,, bytes32 actualRoot, uint256 price, uint256 allowance, uint256 used) = token.stats(ALICE);
+        (,,,,,, bytes32 actualRoot, uint256 price, uint256 allowance, uint256 used,,) = token.stats(ALICE);
         assertEq(actualRoot, root);
         assertEq(price, PRICE);
         assertEq(allowance, 1);
         assertEq(used, 1);
-        (,,,,,,,,, used) = token.stats(BOB);
+        (,,,,,,,,, used,,) = token.stats(BOB);
         assertEq(used, 0);
-        (,,,,,,,,, used) = token.stats(address(0));
+        (,,,,,,,,, used,,) = token.stats(address(0));
         assertEq(used, 0);
     }
 

@@ -45,6 +45,7 @@ contract NFT111KSeaportTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
     }
 
     function testSeaportTransfersWithoutApprovalOnMainnetAndSepolia() public {

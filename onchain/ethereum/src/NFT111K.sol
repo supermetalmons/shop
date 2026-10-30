@@ -18,7 +18,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         Crate,
         Warehouse,
         ArtworkReceipt,
-        CrateReceipt
+        CrateReceipt,
+        Reliquary
     }
 
     struct DeliveryQuote {
@@ -41,6 +42,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MAX_CRATES = 5_555;
     uint256 public constant MAX_WAREHOUSES = 505;
     uint256 public constant CRATES_PER_WAREHOUSE = 11;
+    uint256 public constant MAX_RELIQUARIES = 30;
+    uint256 public constant CRATES_PER_RELIQUARY = 111;
     uint256 public constant MAX_PURCHASE_QUANTITY = 15;
     uint256 public constant MAX_DISCOUNT_ALLOWANCE = 10;
     uint256 public constant MAX_UNBOX_QUANTITY = 15;
@@ -50,6 +53,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MAX_QUOTE_LIFETIME = 10 minutes;
     uint256 public constant CRATE_TOKEN_START = 111_112;
     uint256 public constant WAREHOUSE_TOKEN_START = 116_667;
+    uint256 public constant RELIQUARY_TOKEN_START = 117_172;
     uint256 public constant ARTWORK_RECEIPT_OFFSET = 1_000_000;
     uint256 public constant CRATE_RECEIPT_OFFSET = 2_000_000;
 
@@ -61,12 +65,14 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     uint256 public allocatedCrates;
     uint256 public warehousesMinted;
+    uint256 public reliquariesMinted;
     uint256 public cratePrice = 0.0001 ether;
     uint256 public warehousePrice = 0.0011 ether;
     uint256 public discountCratePrice = 0.00005 ether;
+    uint256 public reliquaryPrice = 0.0088 ether;
     uint256 public discountAllowance = 1;
     bytes32 public discountMerkleRoot;
-    bool public saleActive = true;
+    bool public saleActive;
     bool public redemptionsPaused;
     address public quoteSigner;
     address payable public deliveryPaymentReceiver;
@@ -79,6 +85,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public totalDeliveryReleased;
     string public baseURI;
     mapping(uint256 => uint256) public warehouseFirstCrate;
+    mapping(uint256 => uint256) public reliquaryFirstCrate;
     mapping(uint256 => bool) public usedDeliveryOrders;
     mapping(bytes32 => bool) public usedClaims;
     mapping(address => uint256) public discountUsed;
@@ -110,6 +117,10 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     event CratesPurchased(address indexed wallet, uint256 firstCrateToken, uint256 quantity, uint256 paid);
     event WarehousesPurchased(address indexed wallet, uint256 firstWarehouseToken, uint256 quantity, uint256 paid);
+    event ReliquariesPurchased(address indexed wallet, uint256 firstReliquaryToken, uint256 quantity, uint256 paid);
+    event ReliquaryUnboxed(
+        uint256 indexed reliquaryToken, address indexed owner, uint256 firstCrateToken, uint256 count
+    );
     event WarehouseUnboxed(
         uint256 indexed warehouseToken, address indexed owner, uint256 firstCrateToken, uint256 count
     );
@@ -123,7 +134,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event CrateReceiptClaimed(
         bytes32 indexed claimId, address indexed wallet, uint256 indexed receiptId, uint256[] receiptIds
     );
-    event PricesUpdated(uint256 cratePrice, uint256 warehousePrice, uint256 discountCratePrice);
+    event PricesUpdated(uint256 cratePrice, uint256 warehousePrice, uint256 discountCratePrice, uint256 reliquaryPrice);
     event DiscountConfigUpdated(bytes32 root, uint256 allowance);
     event SaleStatusUpdated(bool active);
     event RedemptionsPauseUpdated(bool paused);
@@ -195,6 +206,31 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             _mintSpotOnce(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse + i - 1);
         }
         emit WarehousesPurchased(msg.sender, WAREHOUSE_TOKEN_START + firstWarehouse - 1, quantity, msg.value);
+    }
+
+    function mintReliquaries(uint256 quantity) external payable nonReentrant {
+        _checkPurchase(quantity, quantity * CRATES_PER_RELIQUARY, reliquaryPrice);
+        if (quantity > MAX_RELIQUARIES - reliquariesMinted) revert SoldOut();
+        uint256 firstReliquary = reliquariesMinted + 1;
+        uint256 firstCrate = allocatedCrates + 1;
+        allocatedCrates += quantity * CRATES_PER_RELIQUARY;
+        reliquariesMinted += quantity;
+        totalMintReceived += msg.value;
+        for (uint256 i; i < quantity; ++i) {
+            reliquaryFirstCrate[firstReliquary + i] = firstCrate + i * CRATES_PER_RELIQUARY;
+            _mintSpotOnce(msg.sender, RELIQUARY_TOKEN_START + firstReliquary + i - 1);
+        }
+        emit ReliquariesPurchased(msg.sender, RELIQUARY_TOKEN_START + firstReliquary - 1, quantity, msg.value);
+    }
+
+    function unboxReliquary(uint256 tokenId) external nonReentrant {
+        uint256 number = _requireOwnedKind(tokenId, ItemKind.Reliquary);
+        uint256 firstToken = CRATE_TOKEN_START + reliquaryFirstCrate[number] - 1;
+        _burn(tokenId);
+        for (uint256 i; i < CRATES_PER_RELIQUARY; ++i) {
+            _mintSpotOnce(msg.sender, firstToken + i);
+        }
+        emit ReliquaryUnboxed(tokenId, msg.sender, firstToken, CRATES_PER_RELIQUARY);
     }
 
     function unboxWarehouse(uint256 tokenId) external nonReentrant {
@@ -333,6 +369,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (tokenId >= WAREHOUSE_TOKEN_START && tokenId < WAREHOUSE_TOKEN_START + MAX_WAREHOUSES) {
             return (uint8(ItemKind.Warehouse), tokenId - WAREHOUSE_TOKEN_START + 1, holder);
         }
+        if (tokenId >= RELIQUARY_TOKEN_START && tokenId < RELIQUARY_TOKEN_START + MAX_RELIQUARIES) {
+            return (uint8(ItemKind.Reliquary), tokenId - RELIQUARY_TOKEN_START + 1, holder);
+        }
         if (tokenId > ARTWORK_RECEIPT_OFFSET && tokenId <= ARTWORK_RECEIPT_OFFSET + MAX_ARTWORK_RECEIPTS) {
             return (uint8(ItemKind.ArtworkReceipt), tokenId - ARTWORK_RECEIPT_OFFSET, holder);
         }
@@ -363,7 +402,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
             bytes32 discountMerkleRoot_,
             uint256 discountCratePrice_,
             uint256 discountAllowance_,
-            uint256 discountUsed_
+            uint256 discountUsed_,
+            uint256 reliquariesMinted_,
+            uint256 reliquaryPrice_
         )
     {
         allocatedCrates_ = allocatedCrates;
@@ -376,6 +417,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         discountCratePrice_ = discountCratePrice;
         discountAllowance_ = discountAllowance;
         discountUsed_ = discountUsed[wallet];
+        reliquariesMinted_ = reliquariesMinted;
+        reliquaryPrice_ = reliquaryPrice;
     }
 
     function remainingCrates() external view returns (uint256) {
@@ -412,12 +455,18 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         revert OwnershipRenunciationDisabled();
     }
 
-    function setPrices(uint256 cratePrice_, uint256 warehousePrice_, uint256 discountCratePrice_) external onlyOwner {
+    function setPrices(
+        uint256 cratePrice_,
+        uint256 warehousePrice_,
+        uint256 discountCratePrice_,
+        uint256 reliquaryPrice_
+    ) external onlyOwner {
         if (discountCratePrice_ > cratePrice_) revert InvalidDiscountConfig();
         cratePrice = cratePrice_;
         warehousePrice = warehousePrice_;
         discountCratePrice = discountCratePrice_;
-        emit PricesUpdated(cratePrice_, warehousePrice_, discountCratePrice_);
+        reliquaryPrice = reliquaryPrice_;
+        emit PricesUpdated(cratePrice_, warehousePrice_, discountCratePrice_, reliquaryPrice_);
     }
 
     function setDiscountConfig(bytes32 root, uint256 allowance) external onlyOwner {
@@ -562,6 +611,9 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (kind == uint8(ItemKind.Crate) && displayId <= MAX_CRATES) return CRATE_TOKEN_START + displayId - 1;
         if (kind == uint8(ItemKind.Warehouse) && displayId <= MAX_WAREHOUSES) {
             return WAREHOUSE_TOKEN_START + displayId - 1;
+        }
+        if (kind == uint8(ItemKind.Reliquary) && displayId <= MAX_RELIQUARIES) {
+            return RELIQUARY_TOKEN_START + displayId - 1;
         }
         if (kind == uint8(ItemKind.ArtworkReceipt) && displayId <= MAX_ARTWORK_RECEIPTS) {
             return ARTWORK_RECEIPT_OFFSET + displayId;

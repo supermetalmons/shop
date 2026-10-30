@@ -21,13 +21,21 @@ npm --prefix onchain/ethereum run chain:local
 Terminal 2 deploys the collection to that local chain, then starts the local API:
 
 ```sh
-npm --prefix onchain/ethereum run deploy:local
+ETHEREUM_111K_LOCAL_METADATA_BASE_URI=https://cdn.mons.shop/111k-sepolia/v7/ npm --prefix onchain/ethereum run deploy:local
 npm run dev:ethereum:api
 ```
 
 The deployment is written to `onchain/ethereum/.local/deployment.json`. The API validates the local chain, deployed bytecode and public test signer, creates fresh in-memory D1 databases, applies migrations, and prints its API origin.
 
-The current local deployment manifest uses `protocolVersion: 8`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. The manifest records `metadataBaseURI`, which is verified against the collection’s `baseURI()`. Local metadata defaults to `https://cdn.mons.shop/111k-sepolia/`, the same authoritative JSONs as the deployed shop. No metadata server or generator runs locally. CDN connectivity is required; unavailable metadata produces an error rather than a local fallback. All manifests older than version 8 require a fresh single-contract deployment, including older manifests with matching CDN URLs. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
+Fresh deployments have `saleActive()` false. Before testing purchases, open the local sale explicitly from the unlocked Anvil owner. Use `contractAddress` and `owner` from the deployment manifest for these placeholders:
+
+```sh
+cast send LOCAL_CONTRACT_ADDRESS 'setSaleActive(bool)' true --from LOCAL_OWNER_ADDRESS --unlocked --rpc-url http://127.0.0.1:8545
+```
+
+Starting the API and provisioning local reveal inventory leave this switch unchanged. If you selected a custom owner or RPC port, use that owner's signer and the deployment's RPC URL.
+
+The current local deployment manifest uses `protocolVersion: 9`. Restart Anvil, rerun `deploy:local`, and restart the API when upgrading an older local deployment; the API rejects older manifests with redeployment instructions and probes the batch, wallet-aware stats, and payout getters before starting. It checks immutable mint recipients and shares against the manifest while allowing owner rotation of the delivery receiver. The manifest records `metadataBaseURI`, which is verified against the collection’s `baseURI()`. The command above selects the complete Sepolia v7 publication. If `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` is unset, the deployment script retains its original `https://cdn.mons.shop/111k-sepolia/` default. No metadata server or generator runs in normal local development. CDN connectivity is required; unavailable metadata produces an error rather than a local fallback. All manifests older than version 9 require a fresh deployment with reliquary support, including older manifests with matching CDN URLs. Use a published reliquary-ready namespace to read reliquary metadata locally. EIP-712 retains the domain name `111K`, version `2`, and the existing signed field schemas; signatures remain bound to their original contract address.
 
 Both deployment scripts load `onchain/ethereum/config/proceeds.json`: four valid placeholder recipients at 50% / 25% / 15% / 10%, and a separate placeholder shipping receiver. Replace the placeholders before deploying for real proceeds. The configuration supports 2–8 mint recipients whose positive basis points total 10,000; addresses must be distinct and must not be the collection. Mint recipients/shares are fixed. The owner may rotate the shipping receiver using `setDeliveryPaymentReceiver(address)`, which moves all unpaid and future shipping fees to the new receiver. Treasury environment settings are no longer used.
 
@@ -54,12 +62,14 @@ For a different local RPC port, set `ETHEREUM_111K_LOCAL_RPC_URL` when deploying
 
 ## Collection behavior
 
-- One collection contains artwork, crates, warehouses, artwork receipts and crate receipts. Digital artwork display numbers equal their sequential ERC-721 token IDs; the flower SVGs intentionally omit visible numbers.
-- A shared supply of 5,555 crate allocations covers individual purchases and warehouses. Each warehouse reserves 11 allocations immediately; warehouse opening burns it and mints the reserved crates.
+- One collection contains artwork, crates, warehouses, reliquaries, artwork receipts and crate receipts. Digital artwork display numbers equal their sequential ERC-721 token IDs.
+- A shared supply of 5,555 crate allocations covers individual purchases, warehouses and reliquaries. Each warehouse reserves 11 allocations immediately; each reliquary reserves 111. Opening either container burns it and mints its reserved crates.
+- At most 30 reliquaries can ever be minted. Opening reliquaries does not restore this allowance or return crate allocations. A reliquary purchase requires enough remaining crate allocations for every requested reliquary and enough room below the lifetime cap.
 - Digital opening assigns the next 20 artwork token IDs, or 31 for crate #5555. Physical-only claim artwork numbers use `111111 + 20 × (n − 1) + 1` onward; crate #5555 ends at #222222.
-- Minting accepts 1–15 crates or warehouses per transaction. Prices are 0.0001 test ETH per crate and 0.0011 test ETH per warehouse.
-- Digital opening accepts 1–15 crates in one atomic transaction, producing up to 311 artworks when crate #5555 is included. All selected crates burn before the first receiver callback; any failure rolls back the complete batch. Warehouses open individually. Metadata is served from token-ID JSON files at `cdn.mons.shop`, with SVGs embedded in each JSON. The backend performs no randomness or reveal transaction. See [offchain metadata](111k_metadata.md).
-- Delivery accepts up to 50 owned artworks/crates, requires a backend authorization, and charges 0.0001 test ETH per order. One user transaction burns the originals and mints their receipts. Warehouses and receipts are ineligible for delivery.
+- Minting accepts 1–15 crates, warehouses or reliquaries per transaction. Initial prices are 0.0001 test ETH per crate, 0.0011 test ETH per warehouse and 0.0088 test ETH per reliquary. Each price is independently configurable.
+- Sales start closed. Only the owner can open them with `setSaleActive(true)`; use `setSaleActive(false)` to close purchases again.
+- Digital opening accepts 1–15 crates in one atomic transaction, producing up to 311 artworks when crate #5555 is included. All selected crates burn before the first receiver callback; any failure rolls back the complete batch. Warehouses and reliquaries open individually. Metadata is served from token-ID JSON files at `cdn.mons.shop`; crate opening uses the [reveal service](111k_reveal.md). See [offchain metadata](111k_metadata.md).
+- Delivery accepts up to 50 owned artworks/crates, requires a backend authorization, and charges 0.0001 test ETH per order. One user transaction burns the originals and mints their receipts. Warehouses, reliquaries and receipts are ineligible for delivery.
 - New app deliveries sort a copied selection numerically by original token ID before signing. Receipt identities remain paired with those tokens. The contract validates the whole selection, burns every original, then safely mints receipts; callbacks see all originals already burned. Arbitrary signed input order remains supported.
 - The owner can use `setRedemptionsPaused(true)` as an emergency onchain stop for delivery and crate-receipt claims. It leaves sales, unpacking, transfers, and withdrawals unchanged. The app and API do not read this switch. Pausing does not consume or extend signatures; use the existing signer rotation before resuming after a signer compromise.
 - After three confirmations, the order becomes available in fulfillment. Re-mining below that threshold returns it to processing. Physical crates receive stable secret codes and their fixed placeholder contents. Entering a matching code lets the current crate-receipt owner submit one signed claim transaction that burns it and mints 20/31 artwork receipts.
@@ -73,9 +83,9 @@ Re-mined claims awaiting three confirmations show “Confirming” in fulfillmen
 
 The draft allowlist contains the 317 holders of Ethereum mainnet collection `0x30f9efa712dde239a13a5fef1a8c7a6ac530a26d` at finalized block `26235186`, plus `0xE26067c76fdbe877F48b0a8400cf5Db8B47aF0fE`: 318 addresses total. The block hash, source collection, token range, counts, and canonical address digest are recorded in `onchain/ethereum/fixtures/discounts/source.json`; the holder list and explicit additions remain reproducible. Contract wallets and delegated EOAs are included.
 
-The initial allowance is one discounted crate per wallet, priced at 0.00005 ETH. The owner can change the total allowance to 1–10 using `setDiscountConfig(root, allowance)` without resetting usage. Setting the root to zero disables discounts. `setPrices(cratePrice, warehousePrice, discountCratePrice)` changes the three fixed prices together and rejects a discounted price above the public crate price. Changes to public prices do not automatically recalculate the discounted price.
+The initial allowance is one discounted crate per wallet, priced at 0.00005 ETH. The owner can change the total allowance to 1–10 using `setDiscountConfig(root, allowance)` without resetting usage. Setting the root to zero disables discounts. `setPrices(cratePrice, warehousePrice, discountCratePrice, reliquaryPrice)` changes the four fixed prices together and rejects a discounted price above the public crate price. Changes to public prices do not automatically recalculate the discounted price or the reliquary price.
 
-Only successful `mintCratesDiscounted(quantity, proof)` purchases consume allowance. Public crate purchases, warehouse purchases, transfers, and unboxing do not change it. Warehouses always use public pricing. The existing discounted mint button appears when the connected wallet is listed and its entire selected crate quantity fits the remaining allowance. Selecting more uses public pricing for the entire purchase, matching the Solana drops.
+Only successful `mintCratesDiscounted(quantity, proof)` purchases consume allowance. Public crate purchases, warehouse and reliquary purchases, transfers, and unboxing do not change it. Warehouses and reliquaries always use public pricing. The existing discounted mint button appears when the connected wallet is listed and its entire selected crate quantity fits the remaining allowance. Selecting more uses public pricing for the entire purchase, matching the Solana drops.
 
 The page loads the static Ethereum proof dataset once and reads the root, prices, allowance, and wallet usage through `GET /ethereum/111k/stats?owner=ADDRESS`, backed by one `stats(address)` contract call. It does not query the source collection while browsing. Connection, proof loading, and failed reads cannot silently submit a public-price transaction; mint terms are checked again before wallet submission. A root update requires publishing its matching proof dataset.
 
@@ -120,6 +130,8 @@ npm run ethereum111k-control -- pause --chain-id 11155111 --contract OLD_ADDRESS
 
 Before replacing a reveal-enabled collection, also pause its reveal admission using `npm run ethereum-reveal-control -- pause --deployment-id OLD_DEPLOYMENT_ID --expected-revision REVEAL_REVISION --write`. Keep its permanent OPS deployment record, private reservations, frozen assignments, and metadata objects. Ethereum commerce reset does not remove this reveal state. Publish and verify placeholders at a fresh `111k-sepolia/<deploymentId>/` prefix, pass that exact URL as `ETHEREUM_111K_METADATA_BASE_URI` to the new contract deployment, and register/provision the new reveal deployment using the [reveal operator guide](111k_reveal_ops.md#operator-setup). Never reuse the old metadata prefix.
 
+The v7 replacement uses deployment ID `v7` and metadata URI `https://cdn.mons.shop/111k-sepolia/v7/`. Its full 344978-object baseline must be verified before deployment and registration. Keep its onchain sale closed while configuration, reveal provisioning, scoped commerce reset, and application verification complete.
+
 For a replacement, bind the initial paused control to the old contract, publish the API with the new contract configuration, and allow at least 65 seconds for in-flight operations to drain. Recheck the revision, then preview the reset:
 
 ```sh
@@ -135,7 +147,7 @@ After verifying the reset and publishing the matching frontend, resume using the
 npm run ethereum111k-control -- resume --chain-id 11155111 --contract NEW_ADDRESS --expected-revision REVISION --write
 ```
 
-Activate the new reveal deployment only after its status is `ready` and the matching API/frontend have been published. Previously admitted work for the paused deployment continues to reconcile; its frozen artwork remains available by its original chain and contract.
+Activate the new reveal deployment only after its status is `ready` and the matching API/frontend have been published. After the approved opening checks, the new owner separately calls `setSaleActive(true)` to enable purchases. Previously admitted work for the paused deployment continues to reconcile; its frozen artwork remains available by its original chain and contract.
 
 Changing the allowed contract requires the old scope to be empty. The control does not change onchain sale or redemption switches; administer those separately and leave historical contracts as explicitly intended by the release.
 

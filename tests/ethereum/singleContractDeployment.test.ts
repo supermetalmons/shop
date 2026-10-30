@@ -90,7 +90,7 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(result.status, 0, result.stderr);
     const manifest = JSON.parse(result.stdout);
     assert.deepEqual(manifest, JSON.parse(readFileSync(join(project, '.local/deployment.json'), 'utf8')));
-    assert.equal(manifest.protocolVersion, 8);
+    assert.equal(manifest.protocolVersion, 9);
     assert.equal(manifest.contractAddress.toLowerCase(), predicted.toLowerCase());
     assert.equal(manifest.metadataBaseURI, baseURI);
     assert.deepEqual(Object.keys(manifest).filter(key => /renderer/i.test(key)), []);
@@ -100,6 +100,10 @@ test('local deployment rejects current-address payees and deploys one collection
     assert.equal(transaction.to, null);
     const encodedBase = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('baseURI()', [], []) }, 'latest']);
     assert.deepEqual(decodeReturn(['string'], encodedBase as `0x${string}`), [baseURI]);
+    const encodedSale = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('saleActive()', [], []) }, 'latest']);
+    assert.deepEqual(decodeReturn(['bool'], encodedSale as `0x${string}`), [false]);
+    const encodedSupply = await rpc<string>('eth_call', [{ to: manifest.contractAddress, data: encodeCall('totalSupply()', [], []) }, 'latest']);
+    assert.deepEqual(decodeReturn(['uint256'], encodedSupply as `0x${string}`), [0n]);
   } finally {
     if (anvil.exitCode === null && anvil.pid) {
       const stopped = once(anvil, 'exit');

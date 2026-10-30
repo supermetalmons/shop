@@ -267,7 +267,7 @@ test('Ethereum inventory and confirmations preserve metadata while container pre
   assert.deepEqual((await ethereumApi.inventory(config, owner, null)).items, [artwork]);
   assert.deepEqual((await ethereumApi.confirm(hash, config, owner)).items, [artwork]);
   assert.deepEqual(ethereumInventoryView(artwork).attributes, artwork.attributes);
-  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt'] as const) {
+  for (const kind of ['artwork', 'artwork_receipt', 'crate_receipt', 'reliquary'] as const) {
     const view = ethereumInventoryView({ ...artwork, kind });
     assert.equal(view.image, artwork.image);
     assert.equal(view.imageDimensions, undefined);
@@ -315,6 +315,24 @@ test('Ethereum inventory reads all live and rollback IDs in two parallel bounded
   assert.equal(result.observedBlock, 20);
   controller.abort();
   assert.ok(requests.every(entry => entry.signal.aborted));
+});
+
+test('a reliquary opening recovers all 111 crates across the inventory request boundary', async t => {
+  const crates = Array.from({ length: 111 }, (_, index) => ({
+    ...item(String(111112 + index), 'crate'), displayId: index + 1, name: `Crate #${index + 1}`,
+  }));
+  const requested: string[][] = [];
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input));
+    const ids = url.searchParams.get('expectedTokenIds')!.split(',');
+    requested.push(ids);
+    return Response.json({ items: crates.filter(crate => ids.includes(crate.tokenId)), nextCursor: null, observedBlock: 42 });
+  });
+  const result = await ethereumApi.inventory(config, owner, null, undefined, crates.map(crate => crate.tokenId));
+  assert.deepEqual(requested.map(ids => ids.length), [100, 11]);
+  assert.deepEqual(requested.flat(), crates.map(crate => crate.tokenId));
+  assert.deepEqual(result.items, crates);
+  assert.equal(result.observedBlock, 42);
 });
 
 test('Ethereum inventory cursor pages use one request without repeating expected IDs', async t => {

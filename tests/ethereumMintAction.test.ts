@@ -331,14 +331,14 @@ for (const failure of [
   });
 }
 
-test('warehouse readiness failures use the selected container label', () => {
-  const view = harness({ kind: 'warehouse', remaining: undefined });
+for (const [kind, plural] of [['warehouse', 'Warehouses'], ['reliquary', 'Reliquaries']] as const) test(`${kind} readiness failures use the selected container label`, () => {
+  const view = harness({ kind, remaining: undefined });
   act(() => view.result.current.mint());
   view.update({ remaining: 1 });
-  assert.equal(view.result.current.error, 'That quantity is no longer available. Choose fewer warehouses.');
+  assert.equal(view.result.current.error, `That quantity is no longer available. Choose fewer ${plural.toLowerCase()}.`);
   view.update({ remaining: 0 });
   act(() => view.result.current.mint());
-  assert.equal(view.result.current.error, 'Warehouses are sold out.');
+  assert.equal(view.result.current.error, `${plural} are sold out.`);
 });
 
 test('a readiness error can be dismissed and a new explicit attempt clears earlier errors', async () => {

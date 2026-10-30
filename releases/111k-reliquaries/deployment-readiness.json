@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "status": "validated-for-fresh-deployments",
+  "scope": "contract-and-metadata",
+  "legacyCollectionCompatibility": "out-of-scope",
+  "collection": {
+    "objectCount": 344978,
+    "counts": {
+      "artwork": 111111,
+      "crate": 5555,
+      "warehouse": 505,
+      "artwork_receipt": 222222,
+      "crate_receipt": 5555,
+      "reliquary": 30
+    },
+    "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb"
+  },
+  "networks": [
+    {
+      "network": "sepolia",
+      "chainId": 11155111,
+      "deploymentId": "sepolia-reliquaries-v1",
+      "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/sepolia-reliquaries-v1/"
+    },
+    {
+      "network": "mainnet",
+      "chainId": 1,
+      "deploymentId": "mainnet-reliquaries-v1",
+      "metadataBaseUri": "https://cdn.mons.shop/111k/mainnet-reliquaries-v1/"
+    }
+  ],
+  "checks": {
+    "deploymentScriptTestsPassed": 4,
+    "actualDeploymentScriptExecutedInLocalEvmForBothChains": true,
+    "sixKindMetadataBoundaries": true,
+    "reliquaryMintTransferUnboxAndLifetimeCap": true,
+    "independentPricesAndProceeds": true,
+    "publicationRegistrationTestsPassed": 3,
+    "sharedRegistryAcceptsBothDistinctNetworkIds": true,
+    "reusedDeploymentIdRejected": true,
+    "sampleOnlyPublicationRejected": true,
+    "missingReliquaryRejected": true,
+    "corruptReliquaryRejected": true,
+    "completeCollectionRegistrationAccepted": true,
+    "currentCollectionRestorationTestsPassed": 1,
+    "allThirtyReliquariesRestored": true,
+    "toolsTypecheckPassed": true,
+    "whitespaceCheckPassed": true
+  },
+  "launchState": {
+    "fullCollectionPublicationAtFuturePrefixes": "pending",
+    "contractDeployments": "pending",
+    "mainnetShopActivation": "deferred",
+    "previouslyPublishedReliquaryPreviewObjectsPerNetwork": 30,
+    "newRemoteWritesPerformed": false
+  },
+  "sourceSha256": {
+    "onchain/ethereum/script/Deploy111K.s.sol": "76daaec98890f5c5c5ed483e07e315b27f2f5e2442cbf283f7a39d1922623ee5",
+    "onchain/ethereum/test/NFT111KDeployment.t.sol": "10300504c9d88b9ce83e0f182d407ecda00b0f54f99a375fdfe50e4afd74ecf7",
+    "tests/ethereumMetadataPublication.test.ts": "127755e7f3ef3ef2c7e526c6b37f98cdbbe67cbee595c13ba0579f192d5f06ad",
+    "tests/ethereumMetadataRemote.test.ts": "2f6d570f67a1826feb964752d14ce36a76e4a9a28aee7124ae5a67de5870deba",
+    "scripts/ops/ethereumRevealControl.ts": "fdff7ff7d58903b120322dabbdd63ed002032f886752cb9562d0a29087a4d754"
+  }
+}

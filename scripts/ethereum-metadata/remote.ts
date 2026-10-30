@@ -26,7 +26,7 @@ type SnapshotManifest = {
   objectCount: number; totalBytes: number; archive: 'objects.jsonl.gz'; archiveSha256: string; createdAt: string;
 } & ({ version: 1 } | { version: 2; publicationManifestSha256: string });
 const COLLECTION_SIZE = Object.values(metadataCounts()).reduce((sum, count) => sum + count, 0);
-const SAMPLE_IDS = ['1', '55556', '111111', '111112', '116666', '116667', '117171',
+const SAMPLE_IDS = ['1', '55556', '111111', '111112', '116666', '116667', '117171', '117172', '117201',
   '1000001', '1111111', '1111112', '1222222', '2000001', '2005555'];
 
 async function writeReport(path: string, report: unknown): Promise<void> {

@@ -1,0 +1,497 @@
+{
+  "version": 1,
+  "scope": "30 reliquary JSONs per network",
+  "directory": ".cache/111k-metadata/reliquaries-v1",
+  "reports": [
+    {
+      "network": "sepolia",
+      "prefix": "111k-sepolia/reliquaries-v1/",
+      "publication": [
+        {
+          "network": "sepolia",
+          "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+          "bucket": "cdn-mons-shop",
+          "prefix": "111k-sepolia/reliquaries-v1/",
+          "uploaded": 30,
+          "skipped": 0,
+          "initialized": true,
+          "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb",
+          "complete": false,
+          "tokenIds": [
+            "117172",
+            "117173",
+            "117174",
+            "117175",
+            "117176",
+            "117177",
+            "117178",
+            "117179",
+            "117180",
+            "117181",
+            "117182",
+            "117183",
+            "117184",
+            "117185",
+            "117186",
+            "117187",
+            "117188",
+            "117189",
+            "117190",
+            "117191",
+            "117192",
+            "117193",
+            "117194",
+            "117195",
+            "117196",
+            "117197",
+            "117198",
+            "117199",
+            "117200",
+            "117201"
+          ],
+          "finishedAt": "2026-10-30T18:40:17.713Z"
+        }
+      ],
+      "verification": [
+        {
+          "network": "sepolia",
+          "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+          "bucket": "cdn-mons-shop",
+          "prefix": "111k-sepolia/reliquaries-v1/",
+          "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb",
+          "objectCount": 30,
+          "totalBytes": 5922,
+          "complete": false,
+          "samples": [
+            {
+              "tokenId": "117172",
+              "sha256": "b8efcde407895c46d1dedc7b181acccd2a632d2520a7aab831cd3f8654c571bf",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117173",
+              "sha256": "10624b17b916e35fcbe2f98146b10d93d79e7204e75fd2a5443c51d9e4370c8a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117174",
+              "sha256": "0460b908b91af54d003100835fde33710586037b69286addece4b82787834034",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117175",
+              "sha256": "df8f9f481393835afa879050c2855d5eeeee5a52034ebd5adf8a185f478622ce",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117176",
+              "sha256": "9fce1966c0697373057f5af3c2614e1fb71f490cb1eb8a8d44e616ade9278332",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117177",
+              "sha256": "420b2fe293c1aa718970643979d81e8ea2d0bd0207078105a0ce35f7de9d1c43",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117178",
+              "sha256": "318ef567ec9e06aeafc506de5188c1ed5ab8a1b18c8c08da67941e2809476891",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117179",
+              "sha256": "fddacb3fa97400c2068c558c324d9986ec51c966b6115c658107ed3d9f26861a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117180",
+              "sha256": "2b08b54565dca270ff474b74e3f7e6d6e6e051edc43f9748e384367c6f5dca0d",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117181",
+              "sha256": "d389b32d58f6777f2c45f362b9a16564dce28ac0596650d79784dc4af597a88f",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117182",
+              "sha256": "7173b3462f1c1fcbcfb72b2547144041928693df6fd8736af64c9b92b0cd7ded",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117183",
+              "sha256": "6129b87cafbe20a90e464ee0d540aa2d3e004cba26f385798138dc270e478118",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117184",
+              "sha256": "e8b34e54bbeddff4e5f2414e24d89ffe4c985b78a7fda12e2d19e15d22f817ca",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117185",
+              "sha256": "24013a0e2f4fb566184eb09e3d5234ccd25c90cd29d35937efb5eb76e118310d",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117186",
+              "sha256": "1c5604ae7c6d79b68bae38e410d94bb99d5a229462ee4441fec0f6c5f0ba8608",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117187",
+              "sha256": "8be91ed1c3cdb451a3f4ef357381b3b329a4e3a742604a2ca016ab606c7a1cd7",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117188",
+              "sha256": "a33e615b84f79cf2c4ab0906513acd0191978689b3e9b4d6e1bf7bbb5ad724d2",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117189",
+              "sha256": "8fe3c94df278e3cf5cdc12ef880a5b3cfe44a8c97ea125376d1658f49c89dda9",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117190",
+              "sha256": "24714696178a8d1100e3fa88b74397ca474c1bc2d44c024989471f1599568794",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117191",
+              "sha256": "e8ec12c88974bbf59029cd03cb1a72c85b429d71e5ffb89b25bf338a271745a0",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117192",
+              "sha256": "8ac0479e3d5a0c43d9c5f232453db3a54aae6e90dac670a9ec975cf26872c4d3",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117193",
+              "sha256": "eb6f2affb7af37a30ff6c2bdad14cc6da6078a11a06bbeca240f5c19286fd247",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117194",
+              "sha256": "ba37dafc7ffe07d8ff6795ad3fa586a1e33f475b1cee680864f3092d135d9ac0",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117195",
+              "sha256": "b696468c8f409d1a743f0338a29e225af4915af8aa24690469837bedd1c7e725",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117196",
+              "sha256": "da4ea1633871e86714f1c9cb0b0d2d6e8fb7ce432f5bb2faa4fbed81cf9669b4",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117197",
+              "sha256": "f3d1ae3aee0dcad43741a6dba0734ea929e17c33292df3e9bbc660e95bc18c5a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117198",
+              "sha256": "a1784b643664b4398c0b6dbf572e7e934dbddd57d2ac1b88a8d86494c9954443",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117199",
+              "sha256": "33281704b39dc45a421ded23bac336e79611774d0c8ffcff0302cfc0d6b1d887",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117200",
+              "sha256": "2eda93862e81e7db3259fece2d651831db1338fd79a9948cb1e6fad004960ee4",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117201",
+              "sha256": "8dc0f1a35e67ebc14c5a5bf26e406caecb4239d56298eeba0a112ba5c0871cc2",
+              "cacheControl": "no-store",
+              "cors": "*"
+            }
+          ],
+          "verifiedAt": "2026-10-30T18:40:23.151Z"
+        }
+      ]
+    },
+    {
+      "network": "mainnet",
+      "prefix": "111k/reliquaries-v1/",
+      "publication": [
+        {
+          "network": "mainnet",
+          "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+          "bucket": "cdn-mons-shop",
+          "prefix": "111k/reliquaries-v1/",
+          "uploaded": 30,
+          "skipped": 0,
+          "initialized": true,
+          "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb",
+          "complete": false,
+          "tokenIds": [
+            "117172",
+            "117173",
+            "117174",
+            "117175",
+            "117176",
+            "117177",
+            "117178",
+            "117179",
+            "117180",
+            "117181",
+            "117182",
+            "117183",
+            "117184",
+            "117185",
+            "117186",
+            "117187",
+            "117188",
+            "117189",
+            "117190",
+            "117191",
+            "117192",
+            "117193",
+            "117194",
+            "117195",
+            "117196",
+            "117197",
+            "117198",
+            "117199",
+            "117200",
+            "117201"
+          ],
+          "finishedAt": "2026-10-30T18:40:29.486Z"
+        }
+      ],
+      "verification": [
+        {
+          "network": "mainnet",
+          "endpoint": "https://e25f90fc073ea309b54b8b5144bf28e0.r2.cloudflarestorage.com",
+          "bucket": "cdn-mons-shop",
+          "prefix": "111k/reliquaries-v1/",
+          "objectsSha256": "2470e1df54bac7771ef66fe7579f4f15a9e497b60ddf27073fafffec06cb74bb",
+          "objectCount": 30,
+          "totalBytes": 5922,
+          "complete": false,
+          "samples": [
+            {
+              "tokenId": "117172",
+              "sha256": "b8efcde407895c46d1dedc7b181acccd2a632d2520a7aab831cd3f8654c571bf",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117173",
+              "sha256": "10624b17b916e35fcbe2f98146b10d93d79e7204e75fd2a5443c51d9e4370c8a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117174",
+              "sha256": "0460b908b91af54d003100835fde33710586037b69286addece4b82787834034",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117175",
+              "sha256": "df8f9f481393835afa879050c2855d5eeeee5a52034ebd5adf8a185f478622ce",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117176",
+              "sha256": "9fce1966c0697373057f5af3c2614e1fb71f490cb1eb8a8d44e616ade9278332",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117177",
+              "sha256": "420b2fe293c1aa718970643979d81e8ea2d0bd0207078105a0ce35f7de9d1c43",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117178",
+              "sha256": "318ef567ec9e06aeafc506de5188c1ed5ab8a1b18c8c08da67941e2809476891",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117179",
+              "sha256": "fddacb3fa97400c2068c558c324d9986ec51c966b6115c658107ed3d9f26861a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117180",
+              "sha256": "2b08b54565dca270ff474b74e3f7e6d6e6e051edc43f9748e384367c6f5dca0d",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117181",
+              "sha256": "d389b32d58f6777f2c45f362b9a16564dce28ac0596650d79784dc4af597a88f",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117182",
+              "sha256": "7173b3462f1c1fcbcfb72b2547144041928693df6fd8736af64c9b92b0cd7ded",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117183",
+              "sha256": "6129b87cafbe20a90e464ee0d540aa2d3e004cba26f385798138dc270e478118",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117184",
+              "sha256": "e8b34e54bbeddff4e5f2414e24d89ffe4c985b78a7fda12e2d19e15d22f817ca",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117185",
+              "sha256": "24013a0e2f4fb566184eb09e3d5234ccd25c90cd29d35937efb5eb76e118310d",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117186",
+              "sha256": "1c5604ae7c6d79b68bae38e410d94bb99d5a229462ee4441fec0f6c5f0ba8608",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117187",
+              "sha256": "8be91ed1c3cdb451a3f4ef357381b3b329a4e3a742604a2ca016ab606c7a1cd7",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117188",
+              "sha256": "a33e615b84f79cf2c4ab0906513acd0191978689b3e9b4d6e1bf7bbb5ad724d2",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117189",
+              "sha256": "8fe3c94df278e3cf5cdc12ef880a5b3cfe44a8c97ea125376d1658f49c89dda9",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117190",
+              "sha256": "24714696178a8d1100e3fa88b74397ca474c1bc2d44c024989471f1599568794",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117191",
+              "sha256": "e8ec12c88974bbf59029cd03cb1a72c85b429d71e5ffb89b25bf338a271745a0",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117192",
+              "sha256": "8ac0479e3d5a0c43d9c5f232453db3a54aae6e90dac670a9ec975cf26872c4d3",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117193",
+              "sha256": "eb6f2affb7af37a30ff6c2bdad14cc6da6078a11a06bbeca240f5c19286fd247",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117194",
+              "sha256": "ba37dafc7ffe07d8ff6795ad3fa586a1e33f475b1cee680864f3092d135d9ac0",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117195",
+              "sha256": "b696468c8f409d1a743f0338a29e225af4915af8aa24690469837bedd1c7e725",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117196",
+              "sha256": "da4ea1633871e86714f1c9cb0b0d2d6e8fb7ce432f5bb2faa4fbed81cf9669b4",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117197",
+              "sha256": "f3d1ae3aee0dcad43741a6dba0734ea929e17c33292df3e9bbc660e95bc18c5a",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117198",
+              "sha256": "a1784b643664b4398c0b6dbf572e7e934dbddd57d2ac1b88a8d86494c9954443",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117199",
+              "sha256": "33281704b39dc45a421ded23bac336e79611774d0c8ffcff0302cfc0d6b1d887",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117200",
+              "sha256": "2eda93862e81e7db3259fece2d651831db1338fd79a9948cb1e6fad004960ee4",
+              "cacheControl": "no-store",
+              "cors": "*"
+            },
+            {
+              "tokenId": "117201",
+              "sha256": "8dc0f1a35e67ebc14c5a5bf26e406caecb4239d56298eeba0a112ba5c0871cc2",
+              "cacheControl": "no-store",
+              "cors": "*"
+            }
+          ],
+          "verifiedAt": "2026-10-30T18:40:35.298Z"
+        }
+      ]
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { ETHEREUM_API_PATHS as paths, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge,
-  type EthereumSession } from '../../../../shared/ethereum/api.ts';
+  type EthereumSession, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { ethereumSignerAddress, personalMessageHash, signDigest } from '../../../../shared/ethereum/crypto.ts';
 import { encodeAbi } from '../../../../shared/ethereum/abi.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
@@ -50,8 +50,8 @@ test('native Ethereum reconciliation and HTTP reads use the default Worker fetch
     methods.push(method);
     const results: Record<string, unknown> = {
       eth_chainId: '0x7a69', eth_blockNumber: '0x66', eth_getLogs: [],
-      eth_call: encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
-        [0, 0, 0, 100000000000000n, 1100000000000000n, true, `0x${'ab'.repeat(32)}`, 50000000000000n, 1, 0]),
+      eth_call: encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+        [0, 0, 0, 100000000000000n, 1100000000000000n, true, `0x${'ab'.repeat(32)}`, 50000000000000n, 1, 0, 0, 8800000000000000n]),
     };
     response.writeHead(Object.hasOwn(results, method) ? 200 : 400, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ jsonrpc: '2.0', id, result: results[method] }));
@@ -120,7 +120,11 @@ export default {
     headers: { Origin: ORIGIN, 'CF-Connecting-IP': '203.0.113.42' },
   });
   assert.equal(stats.status, 200, await stats.clone().text());
-  assert.equal((await stats.json() as { remainingCrates: number }).remainingCrates, 5555);
+  const current = await stats.json() as EthereumStats;
+  assert.equal(current.remainingCrates, 5555);
+  assert.equal(current.reliquariesMinted, 0);
+  assert.equal(current.remainingReliquaries, 30);
+  assert.equal(current.reliquaryPriceWei, '8800000000000000');
   assert.deepEqual(methods, ['eth_chainId', 'eth_blockNumber', 'eth_getLogs', 'eth_chainId', 'eth_call']);
 });
 

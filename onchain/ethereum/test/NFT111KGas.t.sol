@@ -31,6 +31,7 @@ contract NFT111KGasTest is TestSupport {
         vm.chainId(31337);
         vm.warp(2_000_000_000);
         token = _deployCollection(_proceedsRecipients(), _proceedsSharesBps());
+        token.setSaleActive(true);
         receiver = address(new MinimalGasReceiver());
         vm.deal(alice, 100 ether);
         vm.deal(receiver, 100 ether);
@@ -89,6 +90,7 @@ contract NFT111KGasTest is TestSupport {
             shares[i] = 1250;
         }
         token = _deployCollection(recipients, shares);
+        token.setSaleActive(true);
         assertEq(token.mintRecipientCount(), 8);
         assertTrue(address(token).code.length <= 24576);
     }
@@ -173,6 +175,26 @@ contract NFT111KGasTest is TestSupport {
     function testGasMintCrates15AfterWarehouse() public {
         _buyWarehouses(alice, 1);
         _mintCrates(alice, 15, "mintCrates15AfterWarehouse");
+    }
+
+    function testGasMintReliquaries1() public {
+        _mintReliquaries(alice, 1, "mintReliquaries1");
+    }
+
+    function testGasMintReliquaries15() public {
+        _mintReliquaries(alice, 15, "mintReliquaries15");
+    }
+
+    function testGasMintReliquaries15Receiver() public {
+        _mintReliquaries(receiver, 15, "mintReliquaries15Receiver");
+    }
+
+    function testGasUnboxReliquary() public {
+        _unboxReliquary(alice, "unboxReliquary");
+    }
+
+    function testGasUnboxReliquaryReceiver() public {
+        _unboxReliquary(receiver, "unboxReliquaryReceiver");
     }
 
     function testGasMintWarehouses1() public {
@@ -631,7 +653,7 @@ contract NFT111KGasTest is TestSupport {
             uint256 artworks,
             uint256 cratePrice,
             uint256 warehousePrice,
-            bool saleActive,,,,
+            bool saleActive,,,,,,
         ) = token.stats(alice);
         vm.snapshotGasLastCall("stats");
         assertEq(allocated, 12);
@@ -670,6 +692,24 @@ contract NFT111KGasTest is TestSupport {
         vm.prank(wallet);
         token.mintCrates{value: quantity * 0.0001 ether}(quantity);
         vm.snapshotGasLastCall(name);
+    }
+
+    function _mintReliquaries(address wallet, uint256 quantity, string memory name) internal {
+        vm.prank(wallet);
+        token.mintReliquaries{value: quantity * 0.0088 ether}(quantity);
+        vm.snapshotGasLastCall(name);
+        assertEq(token.reliquariesMinted(), quantity);
+        assertEq(token.allocatedCrates(), quantity * 111);
+    }
+
+    function _unboxReliquary(address wallet, string memory name) internal {
+        vm.prank(wallet);
+        token.mintReliquaries{value: 0.0088 ether}(1);
+        vm.prank(wallet);
+        token.unboxReliquary(117172);
+        vm.snapshotGasLastCall(name);
+        assertEq(token.balanceOf(wallet), 111);
+        assertEq(token.ownerOf(111222), wallet);
     }
 
     function _mintWarehouses(address wallet, uint256 quantity, string memory name) internal {
@@ -718,7 +758,7 @@ contract NFT111KGasTest is TestSupport {
             token.unboxCrates(ids);
             vm.snapshotGasLastCall(name);
         }
-        (,, uint256 count,,,,,,,) = token.stats(address(0));
+        (,, uint256 count,,,,,,,,,) = token.stats(address(0));
         assertEq(count, quantity * 20 + (bonus ? 11 : 0));
         (uint8 kind, uint256 displayId, address holder) = token.getTokenInfo(count);
         assertEq(kind, 1);
@@ -730,8 +770,8 @@ contract NFT111KGasTest is TestSupport {
         uint8[] memory kinds = new uint8[](count);
         uint256[] memory ids = new uint256[](count);
         for (uint256 i; i < count; ++i) {
-            kinds[i] = kind == 0 ? uint8(i % 5 + 1) : kind;
-            ids[i] = kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
+            kinds[i] = kind == 0 ? uint8(i % 6 + 1) : kind;
+            ids[i] = kinds[i] == 6 ? 30 : kinds[i] == 3 ? 505 : kinds[i] == 2 || kinds[i] == 5 ? 5555 : 111111;
         }
         string[] memory uris = token.previewTokenURIs(kinds, ids);
         vm.snapshotGasLastCall(name);

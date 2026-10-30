@@ -1,8 +1,10 @@
 # 111K offchain metadata
 
-The [minimal metadata release](../../releases/111k-minimal-metadata/README.md) records the current templates, publication, application compatibility, verification, and rollback evidence.
+The [minimal metadata release](../../releases/111k-minimal-metadata/README.md) records the existing publication, application compatibility, verification, and rollback evidence. The [reliquary metadata preparation](../../releases/111k-reliquaries/metadata-validation.json) records the regenerated collection for the next deployment.
 
-New 111K deployments return `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` on Sepolia and `https://cdn.mons.shop/111k/{tokenId}.json` on Ethereum mainnet. Each decimal filename is the ERC-721 token ID. The current shop integration remains Sepolia/Anvil only; publishing the mainnet files does not enable mainnet sales.
+All 30 reliquary JSONs (`117172.json`–`117201.json`) are published and verified as previews under `https://cdn.mons.shop/111k-sepolia/reliquaries-v1/` and `https://cdn.mons.shop/111k/reliquaries-v1/`. The [publication report](../../releases/111k-reliquaries/publication.json) records this selected-object upload; neither prefix contains a complete collection. Deployment IDs are globally unique across networks, so future deployments use distinct IDs such as `v7` and `mainnet-reliquaries-v1`, with matching prefix suffixes. Publish and verify all 344978 objects at each new prefix before deployment and registration. The existing reveal-managed Sepolia prefix remains associated with its original deployment.
+
+111K metadata uses `https://cdn.mons.shop/111k-sepolia/` on Sepolia and `https://cdn.mons.shop/111k/` on Ethereum mainnet, followed by a decimal `{tokenId}.json` filename. Replacement deployments add a unique `<deploymentId>/` namespace beneath the network prefix. Each decimal filename is the ERC-721 token ID. The current shop integration remains Sepolia/Anvil only; publishing mainnet files does not enable mainnet sales.
 
 ## Identities
 
@@ -11,11 +13,14 @@ New 111K deployments return `https://cdn.mons.shop/111k-sepolia/{tokenId}.json` 
 | Digital artwork | 1–111111 | Token ID |
 | Crate | 111112–116666 | 1–5555 |
 | Warehouse | 116667–117171 | 1–505 |
+| Reliquary | 117172–117201 | 1–30 |
 | Digital artwork receipt | 1000001–1111111 | Token ID minus 1000000 |
 | Physical-only artwork receipt | 1111112–1222222 | Token ID minus 1000000 |
 | Crate receipt | 2000001–2005555 | Token ID minus 2000000 |
 
 Digital opening keeps sequential ERC721A batch minting. Artwork `T` and receipt `1000000 + T` refer to the same artwork number. Physical-only artwork numbers start at 111112: crate `n` uses `111111 + 20 × (n − 1) + 1` onward. The final crate has 31 items and ends at artwork number 222222. The physical and digital receipt ranges cannot collide. A crate can only be digitally opened or physically redeemed, so at most 111111 artwork identities are issued across both paths.
+
+Each reliquary reserves 111 crates from the same 5555-crate allocation pool as individual crates and warehouses. At most 30 reliquaries can ever be minted, and opening one burns it and mints its 111 reserved crates. Reliquary metadata exists for all 30 possible display IDs even when the remaining crate supply permits fewer reliquary mints.
 
 `NFT111K` builds each CDN URL directly. `tokenURI` checks existence and uses the token ID as the filename; previews validate and map each kind/item number to its exact token filename before minting. There is no separate renderer in new deployments. Historical contracts retain their original renderers and numbering.
 
@@ -25,7 +30,7 @@ The owner can call `setBaseURI(string)` to update the prefix. Both construction 
 
 The JSON objects on `cdn.mons.shop` are the authoritative runtime metadata. Local development and the deployed shop read those same objects. The editable JSON files in [`scripts/ethereum-metadata/templates`](../ethereum-metadata/templates/) define the next generated publication. They are authoring inputs, not a runtime fallback or local metadata server.
 
-The `cdn-mons-shop` bucket contains 344948 JSON objects per network, 689896 total, and remains in Eastern North America (`enam`). Both networks now use the same JSON contents; the network determines only the destination prefix. Historical release manifests describe their own publications and remain unchanged.
+The reliquary-ready generator produces 344978 JSON objects per deployment, including 30 reliquaries. Both networks use the same generated JSON contents; the network determines only the destination prefix. Existing publications contain 344948 objects per network and retain their original metadata. The `cdn-mons-shop` bucket remains in Eastern North America (`enam`). Historical release manifests describe their own publications and remain unchanged.
 
 The [111k_devnet reveal asset catalog](../ethereum-metadata/reveal-assets/111k_devnet/README.md) preserves counts, CDN path templates, and exact aspect ratios for upcoming reveals. The [unpack reveal service](111k_reveal.md) uses this catalog for private reservations and permanent, confirmation-gated artwork publication.
 
@@ -37,6 +42,7 @@ Each template contains `name`, `description`, `image`, and `attributes`. The ini
 | --- | --- | --- | --- |
 | `artwork.json` | `{{tokenId}}` | `artwork_placeholder.png` | `painting` |
 | `warehouse.json` | `Warehouse #{{displayId}}` | `warehouse.webp` | `warehouse` |
+| `reliquary.json` | `Reliquary #{{displayId}}` | `monuments/{{displayId}}.webp` | `reliquary` |
 | `crate.json` | `Crate #{{displayId}}` | `crate.jpg` | `crate` |
 | `crate_receipt.json` | `Crate Receipt #{{displayId}}` | `crate_receipt.webp` | `crate receipt` |
 | `artwork_receipt.json` | `Receipt #{{displayId}}` | `artwork_placeholder_receipt.webp` | `receipt` |
@@ -51,70 +57,56 @@ After a metadata prefix is registered using the [reveal operations runbook](111k
 
 After upload or restore attempts any writes, its prefix remains locked for 65 seconds after the command exits, even on failure, to let outstanding storage requests drain. Wait for that interval before another upload, restore, or reveal registration for the same prefix. Read-only verification may run during the interval.
 
-Use the committed CLI through `npm run ethereum:metadata -- <command>`. `generate` and `validate` operate on one canonical collection without a network option. `upload`, `verify`, and `restore` require an explicit `--network sepolia|mainnet|all`. The default directory is `.cache/111k-metadata/current`; choose a new named revision directory for each publication. Generation refuses to overwrite a completed revision, preserving its manifest, journals, and rollback snapshot.
+Use the committed CLI through `npm run ethereum:metadata -- <command>`. `generate` and `validate` operate on one canonical collection without a network option. Deployment publication and verification require an explicit network and its exact `--prefix`; run separate commands for Sepolia and mainnet because `--network all` cannot select deployment prefixes. Choose a new named revision directory for each template revision. Generation refuses to overwrite a completed revision, preserving its manifest and journals.
 
 Generation and publishing share an owner-tracked lock that recovers interrupted processes on the same host. Legacy plain-file locks fail with recovery instructions; remove those only after confirming no operation is running.
 
-After editing the five templates:
+After editing the templates, generate and validate a new revision:
 
 ```sh
-metadata_dir=.cache/111k-metadata/minimal-v1
+metadata_dir=.cache/111k-metadata/reliquaries-v2
 npm run ethereum:metadata -- generate --directory "$metadata_dir"
 npm run ethereum:metadata -- validate --directory "$metadata_dir"
 ```
 
-Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344948 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files.
+Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344978 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Reliquary display IDs 1–30 generate files `117172.json`–`117201.json` with images `monuments/1.webp`–`monuments/30.webp`.
+
+The already prepared `.cache/111k-metadata/reliquaries-v1` directory contains the full collection and can be reused unchanged for both future deployments. Set `metadata_dir` to that directory and validate it again; do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
 
 Authenticate with `R2_ENDPOINT` or `CLOUDFLARE_ACCOUNT_ID`, and either `R2_ACCESS_KEY_ID` plus `R2_SECRET_ACCESS_KEY`, or `R2_ACCESS_KEY_ID`/`CLOUDFLARE_API_TOKEN_ID` plus `CLOUDFLARE_API_TOKEN`. The latter derives the S3 secret in memory using Cloudflare's documented SHA-256 conversion. Optional `R2_SESSION_TOKEN` supports temporary S3 credentials. The destination bucket is restricted to `cdn-mons-shop`; other `R2_BUCKET` values are rejected. Supply secrets through the environment, never command arguments, tracked files, or reports. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
 
-Upload a representative Sepolia sample before the full publication:
+Choose a globally unique deployment ID for each network. The examples below use fresh prefixes, independent of the preview-only `reliquaries-v1/` prefixes:
 
 ```sh
-npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --token-ids 1,111112,116667,1000001,1111112,2000001
-npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --token-ids 1,111112,116667,1000001,1111112,2000001
+sepolia_prefix=111k-sepolia/v7/
+mainnet_prefix=111k/mainnet-reliquaries-v1/
 ```
 
-Before the first replacement in each network, upload preserves a verified rollback snapshot of the entire existing collection. By default snapshots live under `<directory>/snapshots`; `--snapshot-directory PATH` selects a durable alternative. Each network has a compressed `objects.jsonl.gz` archive containing original bodies and checksums, plus its own manifest. `--prior-cache-root PATH` accepts either a previous canonical dataset or a legacy root with network directories. For each object, it checks `<root>/<network>/<tokenId>.json` first, then `<root>/<tokenId>.json`; only regular files with the exact remote size and MD5 checksum are reused. The default legacy root is `.cache/111k-metadata`. Missing or mismatching cached objects are downloaded from R2. A sample upload still requires the full snapshot and may take several minutes.
-
-Version 2 snapshots record the publishing manifest's SHA-256. Reuse a snapshot directory only when resuming that publication; a different revision requires a fresh directory. Existing version 1 archives remain usable for restoration, but cannot be reused for a new upload.
-
-After checking the sample through the live shop:
+An optional representative sample includes all six kinds and both reliquary boundaries:
 
 ```sh
-npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia
-npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia
-npm run ethereum:metadata -- upload --directory "$metadata_dir" --network mainnet
-npm run ethereum:metadata -- verify --directory "$metadata_dir" --network mainnet
+npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117201,1000001,1111112,2000001
+npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix" --token-ids 1,111112,116667,117172,117201,1000001,1111112,2000001
 ```
 
-Use `--network all` to run either command for both networks. Remote work defaults to 32 concurrent requests; `--concurrency N` permits 1–256. The uploader replaces only manifest-listed collection objects, preserves JSON content type and `no-store`, and skips objects already matching the desired contents. It uses retries and journals tied to the manifest and destination; rerunning the same command resumes interrupted work. Use the same revision directory and snapshot directory when resuming. Never reuse a journal for a different manifest.
+Sample reports have `complete: false`. Even a verified sample containing all 30 reliquaries cannot qualify for registration. Wait 65 seconds after a sample upload before the next upload to that prefix, then complete and verify each network without `--token-ids`:
+
+```sh
+npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix"
+npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --prefix "$sepolia_prefix"
+npm run ethereum:metadata -- upload --directory "$metadata_dir" --network mainnet --prefix "$mainnet_prefix"
+npm run ethereum:metadata -- verify --directory "$metadata_dir" --network mainnet --prefix "$mainnet_prefix"
+```
+
+Fresh-prefix initialization creates missing objects with conditional writes, skips matching objects, and rejects differing contents. It preserves JSON content type and `no-store`. There is no prior collection to snapshot at a fresh prefix. Retries and journals are tied to the manifest and destination; rerun the same command with the same revision directory and prefix to resume interrupted work. If the intended contents change, generate a new revision and choose a new deployment ID and prefix. Remote work defaults to 32 concurrent requests; `--concurrency N` permits 1–256.
 
 Journal headers are committed atomically. Resume truncates an incomplete final record without rewriting the validated header. Existing malformed or mismatched headers remain rejected for inspection.
 
-Full verification checks the selected prefix’s direct token JSONs against every expected key, byte size, and checksum, then reads public samples through `cdn.mons.shop`. Nested deployment namespaces are separate inventories and are excluded from a legacy root audit; unexpected direct files still fail verification. Sample verification does not mark a full publication complete. Store concise manifests and upload/verification reports in a new release directory, alongside the compatibility deployment IDs and browser/export evidence. Keep full generated artifacts and rollback snapshots locally until they are no longer needed.
+Full verification checks every direct token JSON against its expected key, byte size, and checksum, including all 30 reliquaries, then reads public boundary samples through `cdn.mons.shop`. Missing objects, including a single reliquary, fail verification. Require `complete: true` and `objectCount: 344978` in each network's report. Save those reports with the manifest hashes, unique deployment IDs and exact prefixes in the release directory. Keep the generated revision available for registration and resumption.
 
-For the next template revision, reuse the previous canonical dataset when building both networks' rollback snapshots:
+Registration repeats full verification from `publicationDirectory` rather than trusting a sample or a saved success report. It also verifies the onchain deployment and exact metadata URI. Wait 65 seconds after the last upload before registration. After registration, the reveal publisher permanently owns the prefix and generic upload or restore is blocked. Preparing or registering a collection does not activate the shop; storefront activation remains a separate launch step.
 
-```sh
-previous_metadata_dir=.cache/111k-metadata/minimal-v1
-metadata_dir=.cache/111k-metadata/minimal-v2
-npm run ethereum:metadata -- generate --directory "$metadata_dir"
-npm run ethereum:metadata -- validate --directory "$metadata_dir"
-npm run ethereum:metadata -- upload --directory "$metadata_dir" --network sepolia --token-ids 1,111112,116667,1000001,1111112,2000001 --prior-cache-root "$previous_metadata_dir"
-npm run ethereum:metadata -- verify --directory "$metadata_dir" --network sepolia --token-ids 1,111112,116667,1000001,1111112,2000001
-```
-
-After checking that sample, complete the publication with `upload --network all --prior-cache-root "$previous_metadata_dir"` and `verify --network all`, both using the new `--directory "$metadata_dir"`.
-
-To restore the original contents saved by a publication:
-
-```sh
-npm run ethereum:metadata -- restore --directory "$metadata_dir/snapshots" --network all
-```
-
-Restoration rewrites every object from the validated backup, including missing or damaged files. It reapplies JSON content type and `no-store` even when bytes already match, then verifies the complete inventory and checksums. It does not regenerate from current templates. Preserve the snapshot directory separately before cleaning ignored build artifacts.
-
-Deploy reader compatibility changes before publishing metadata that needs them. The minimal HTTPS-image release requires both API and frontend deployment because their prior validators accepted only embedded SVGs. Subsequent template-only edits within the accepted format require no application deployment. Neither publishing nor restoration changes contracts, base URIs, databases, or collection ownership.
+Snapshot restoration, when used for an unregistered destination, requires a complete 344978-object snapshot matching that destination and network. Historical five-kind backups are not supported by this baseline. Restoration rewrites the snapshot bytes and headers and verifies the complete inventory; it cannot reset a registered reveal prefix. New deployment recovery normally consists of resuming the validated fresh-prefix publication before registration.
 
 ## Serving and freshness
 
@@ -141,9 +133,11 @@ Freshness applies when a client requests metadata. An already rendered page or a
 
 ## Local development and checks
 
-Local deployment manifest version 8 records `metadataBaseURI`, defaulting to `https://cdn.mons.shop/111k-sepolia/` to match the deployed Sepolia shop. `ETHEREUM_111K_LOCAL_METADATA_BASE_URI` accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 8 requires a fresh single-contract deployment, including manifests with matching CDN URLs. Local baseline metadata reads still require network access.
+Local deployment manifest version 9 records `metadataBaseURI`. Set `ETHEREUM_111K_LOCAL_METADATA_BASE_URI=https://cdn.mons.shop/111k-sepolia/v7/` when deploying locally against the complete v7 publication; the script's unset default remains the original `https://cdn.mons.shop/111k-sepolia/` prefix. The variable accepts HTTPS CDN collection prefixes, including deployment-specific namespaces. The local API verifies that value against the collection’s `baseURI()` and reads baseline metadata from the CDN. Reveal writes use isolated local R2 and the frontend displays the reveal API results. Every manifest older than version 9 requires a fresh deployment with reliquary support, including manifests with matching CDN URLs. Local baseline metadata reads still require network access, and reliquary metadata requires a namespace containing the new full collection.
 
 Publish the baseline metadata for a custom namespace before using it locally. Local artwork media is verified against the local reveal ledger even if shared CDN metadata was already revealed by a different collection.
+
+Fresh contracts start with sales closed. After local deployment, the Anvil owner must explicitly call `setSaleActive(true)` before testing purchases, as shown in the [local setup](111k_testnet.md#run-locally). Starting the local API or activating its reveal service does not open the contract sale.
 
 ```sh
 npm run check:api
@@ -152,6 +146,14 @@ npm run test:ethereum:e2e
 ```
 
 Unit and native-runtime tests remain offline using small, explicitly synthetic HTTP responses. They cover URL/token mapping, ordering, batching, response bounds, redirects, failures, timeouts, and cancellation without reproducing collection artwork. The Anvil end-to-end test requires CDN connectivity and reads current JSONs; it verifies URLs and API compatibility without pinning original names, artwork geometry, or hashes.
+
+Before remote publication, exercise the reliquary collection in the Anvil test using the generated metadata directory:
+
+```sh
+ETHEREUM_111K_E2E_METADATA_DIRECTORY=.cache/111k-metadata/reliquaries-v1 npm run test:ethereum:e2e
+```
+
+That test adapter serves the selected generated metadata to the isolated test. Normal local development continues to read the configured CDN. After publication, `ETHEREUM_111K_E2E_METADATA_BASE_URI` selects the new live namespace for the end-to-end test.
 
 Bucket custom domains and CORS require bucket-administration access; object-upload permissions alone are insufficient. Manage the hostname's CORS response headers and cache bypass in the `mons.shop` zone. Verify GET, HEAD, and OPTIONS from arbitrary origins against both collection prefixes, confirm `no-store`, and check that repeated responses are not cache hits. Template-only changes within the supported metadata format do not require an application deployment.
 

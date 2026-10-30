@@ -3,11 +3,12 @@ import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@
 import type { EthereumInventoryItem, EthereumInventoryResponse, EthereumPreparedTransaction, EthereumSession, EthereumTransactionConfirmResponse } from '../../shared/ethereum/api';
 import { DEFAULT_ETHEREUM_111K_CONFIG } from '../../shared/ethereum/config';
 import { encodeCall } from '../../shared/ethereum/abi';
-import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity } from '../../shared/ethereum/protocol';
+import { ETHEREUM_FUNCTIONS, ETHEREUM_MAX_EXPECTED_IDS, ethereumAssetId, ethereumHexQuantity, type EthereumMintKind } from '../../shared/ethereum/protocol';
 import type { EthereumRevealedArtwork } from '../../shared/ethereum/reveal';
 import type { useMiNoteEthereumWallet } from '../hooks/useMiNoteEthereumWallet';
 import { encryptAddressPayload } from '../lib/solana';
 import { ethereumApi, EthereumApiError } from './api';
+import { ethereumMintRemaining } from './mint';
 import { authenticateEthereumWallet } from './auth';
 import {
   clearEthereumInventoryRecovery, clearEthereumSession, ethereumInventoryQueryKey, ethereumInventoryScope, isEthereumPendingSaved, readEthereumExpected, readEthereumInventoryExpected, readEthereumOperation, readEthereumPending,
@@ -29,7 +30,7 @@ function isTransactionFailure(error: unknown): error is EthereumApiError {
   return error instanceof EthereumApiError && (error.code === 'transaction-reverted' || error.code === 'operation-failed');
 }
 
-export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: 'crate' | 'warehouse' = 'crate') {
+export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, mintKind: EthereumMintKind = 'crate') {
   const queryClient = useQueryClient();
   const configQuery = useQuery({ queryKey: ['ethereum111k', 'config'], queryFn: ({ signal }) => ethereumApi.config(signal), retry: false, refetchInterval: 60_000 });
   const config = configQuery.data ?? DEFAULT_ETHEREUM_111K_CONFIG;
@@ -145,7 +146,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     enabled: mintKind === 'crate' && discountCheckRequired,
     retry: false, staleTime: Infinity,
   });
-  const mintQuote = (kind: 'crate' | 'warehouse', quantity: number): EthereumMintQuote | null => {
+  const mintQuote = (kind: EthereumMintKind, quantity: number): EthereumMintQuote | null => {
     if (!owner || !stats.data) return null;
     if (kind === 'crate' && discountCheckRequired && !discountProof.isSuccess) return null;
     return ethereumMintQuote(kind, quantity, stats.data, discountProof.data != null);
@@ -379,7 +380,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     }).catch(() => {});
   };
   const transaction = (data: string, value = '0x0'): EthereumPreparedTransaction => ({ to: config.contractAddress!, data, value, chainId: config.chainId });
-  const mint = (kind: 'crate' | 'warehouse', quantity: number, quote?: EthereumMintQuote) => {
+  const mint = (kind: EthereumMintKind, quantity: number, quote?: EthereumMintQuote) => {
     const expected = quote ?? mintQuote(kind, quantity);
     return run('Confirm mint in your wallet…', async (operation, capturedScope) => {
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > config.maxMintQuantity) throw new Error('Choose a quantity from 1 to 15.');
@@ -391,7 +392,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       });
       operation.assertCurrent();
       if (!current.saleActive) throw new Error('Minting is not open yet.');
-      if (quantity > (kind === 'crate' ? current.remainingCrates : current.remainingWarehouses)) throw new Error('That quantity is no longer available. Choose fewer containers.');
+      if (quantity > ethereumMintRemaining(kind, current)) throw new Error('That quantity is no longer available. Choose fewer containers.');
       if (kind === 'crate' && current.discountMerkleRoot !== expected.discountMerkleRoot) {
         throw new Error('Your mint terms changed. Check the updated price and try again.');
       }
@@ -404,7 +405,7 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
       }
       const data = latest.discounted
         ? encodeCall(ETHEREUM_FUNCTIONS.mintCratesDiscounted, ['uint256', 'bytes32[]'], [quantity, proof!])
-        : encodeCall(kind === 'crate' ? ETHEREUM_FUNCTIONS.mintCrates : ETHEREUM_FUNCTIONS.mintWarehouses, ['uint256'], [quantity]);
+        : encodeCall({ crate: ETHEREUM_FUNCTIONS.mintCrates, warehouse: ETHEREUM_FUNCTIONS.mintWarehouses, reliquary: ETHEREUM_FUNCTIONS.mintReliquaries }[kind], ['uint256'], [quantity]);
       await submit(operation, capturedScope, 'mint', transaction(data, ethereumHexQuantity(BigInt(expected.unitPriceWei) * BigInt(quantity))));
     });
   };
@@ -412,15 +413,15 @@ export function useEthereum111k(wallet: EthereumWallet, encryptionKey: string, m
     const items: readonly EthereumInventoryItem[] = Array.isArray(selected) ? selected : [selected as EthereumInventoryItem];
     if (!items.length || items.length > config.maxUnboxQuantity || new Set(items.map(item => item.tokenId)).size !== items.length ||
       items.some(item => item.owner !== operation.address || item.chainId !== config.chainId || item.contractAddress !== config.contractAddress ||
-        (item.kind !== 'crate' && !(items.length === 1 && item.kind === 'warehouse')))) {
-      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse.`);
+        (item.kind !== 'crate' && !(items.length === 1 && (item.kind === 'warehouse' || item.kind === 'reliquary'))))) {
+      throw new Error(`Select up to ${config.maxUnboxQuantity} of your crates, or one warehouse or reliquary.`);
     }
     const assertAvailable = () => {
       if (checkoutReservesItems(items) || canOpen?.() === false) throw new Error('Check the redemption status of your selected items before opening them.');
     };
     assertAvailable();
     const data = items.length === 1
-      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
+      ? encodeCall(items[0].kind === 'crate' ? ETHEREUM_FUNCTIONS.unboxCrate : items[0].kind === 'reliquary' ? ETHEREUM_FUNCTIONS.unboxReliquary : ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], [items[0].tokenId])
       : encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [items.map(item => item.tokenId)]);
     await submit(operation, capturedScope, 'unbox', transaction(data), {}, assertAvailable);
   });

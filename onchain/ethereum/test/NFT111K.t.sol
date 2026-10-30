@@ -97,6 +97,7 @@ contract NFT111KTest is TestSupport {
             _proceedsRecipients(),
             _proceedsSharesBps()
         );
+        token.setSaleActive(true);
     }
 
     function testCollectionNameSymbolAndSigningDomain() public view {
@@ -155,7 +156,7 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         token.unboxCrate(111112);
         assertEq(token.balanceOf(alice), 20);
-        token.setPrices(1 wei, 11 wei, 0);
+        token.setPrices(1 wei, 11 wei, 0, 0.0088 ether);
         token.setSaleActive(true);
         vm.prank(bob);
         token.mintWarehouses{value: 11 wei}(1);
@@ -313,7 +314,7 @@ contract NFT111KTest is TestSupport {
         _info(1111112, 4, 111112, alice);
         _info(1111131, 4, 111131, alice);
         _missingToken(1);
-        (,, uint256 artworksBefore,,,,,,,) = token.stats(address(0));
+        (,, uint256 artworksBefore,,,,,,,,,) = token.stats(address(0));
         assertEq(artworksBefore, 0);
         assertEq(token.tokenURI(1111112), "https://cdn.mons.shop/111k-sepolia/1111112.json");
         vm.prank(alice);
@@ -326,7 +327,7 @@ contract NFT111KTest is TestSupport {
         _info(1111112, 4, 111112, alice);
         assertEq(token.tokenURI(1000001), "https://cdn.mons.shop/111k-sepolia/1000001.json");
         assertEq(token.totalSupply(), 40);
-        (,, uint256 artworksAfter,,,,,,,) = token.stats(address(0));
+        (,, uint256 artworksAfter,,,,,,,,,) = token.stats(address(0));
         assertEq(artworksAfter, 20);
     }
 
@@ -362,6 +363,19 @@ contract NFT111KTest is TestSupport {
         vm.prank(alice);
         vm.expectRevert(NFT111K.WrongItemKind.selector);
         token.redeemForDelivery{value: quote.fee}(receipt, quote, signature);
+    }
+
+    function testReliquaryCannotBeDelivered() public {
+        vm.prank(alice);
+        token.mintReliquaries{value: 0.0088 ether}(1);
+        uint256[] memory ids = _one(117172);
+        NFT111K.DeliveryQuote memory quote = _quote(alice, 1, ids);
+        bytes memory signature = _deliverySignature(ids, quote);
+        vm.prank(alice);
+        vm.expectRevert(NFT111K.WrongItemKind.selector);
+        token.redeemForDelivery{value: quote.fee}(ids, quote, signature);
+        _info(117172, 6, 1, alice);
+        assertFalse(token.usedDeliveryOrders(1));
     }
 
     function testSignaturesBindWalletItemsFeeOrderAndDomain() public {
@@ -763,7 +777,7 @@ contract NFT111KTest is TestSupport {
         for (uint256 displayId = 222192; displayId <= 222222; ++displayId) {
             _info(1_000_000 + displayId, 4, displayId, alice);
         }
-        (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,) = token.stats(address(0));
+        (uint256 allocated, uint256 warehouses, uint256 artworks,,,,,,,,,) = token.stats(address(0));
         assertEq(allocated, 5555);
         assertEq(warehouses, 504);
         assertEq(artworks, 111080);

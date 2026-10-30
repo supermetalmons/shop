@@ -88,6 +88,7 @@ function fixture(controlActive = true) {
     now: NOW, head: 102, blockTimestamp: null as number | null, rpcChainId: null as number | null,
     finalizedBlock: null as { number: number; timestamp: number } | null,
     expectedSigner: SIGNER, contractCode: new Set<string>(), magic: '0x1626ba7e',
+    allocatedCrates: 25, reliquariesMinted: 0,
     discountRoot: `0x${'ab'.repeat(32)}`, discountAllowance: 3, discountUsed: new Map<string, number>([[WALLET, 1]]),
     tokens: new Map<string, Item>([['111112', { kind: 2, displayId: 1, owner: WALLET }],
       ['111113', { kind: 2, displayId: 2, owner: WALLET }], ['7', { kind: 1, displayId: 7, owner: WALLET }]]),
@@ -172,9 +173,9 @@ function fixture(controlActive = true) {
       if (selector === functionSelector('isValidSignature(bytes32,bytes)')) return encodeAbi(['bytes4'], [state.magic]);
       if (selector === functionSelector('stats(address)')) {
         const [owner] = decodeReturn(['address'], argumentsHex) as [string];
-        return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256'],
-          [25, 2, 20, '100000000000000', '1100000000000000', true, state.discountRoot,
-            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0]);
+        return encodeAbi(['uint256', 'uint256', 'uint256', 'uint256', 'uint256', 'bool', 'bytes32', 'uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+          [state.allocatedCrates, 2, 20, '100000000000000', '1100000000000000', true, state.discountRoot,
+            '50000000000000', state.discountAllowance, state.discountUsed.get(owner) ?? 0, state.reliquariesMinted, '8800000000000000']);
       }
     }
     throw new Error(`Unexpected mocked RPC: ${payload.method}`);
@@ -1401,9 +1402,9 @@ test('public stats include wallet discount usage with one coherent contract read
       assert.equal(result.response.status, 200);
       assert.deepEqual(result.body, {
         chainId: 31337, contractAddress: CONTRACT, owner,
-        allocatedCrates: 25, warehousesMinted: 2, artworksMinted: 20,
-        cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', saleActive: true,
-        remainingCrates: 5530, remainingWarehouses: 502,
+        allocatedCrates: 25, warehousesMinted: 2, reliquariesMinted: 0, artworksMinted: 20,
+        cratePriceWei: '100000000000000', warehousePriceWei: '1100000000000000', reliquaryPriceWei: '8800000000000000', saleActive: true,
+        remainingCrates: 5530, remainingWarehouses: 502, remainingReliquaries: 30,
         discountMerkleRoot: f.state.discountRoot, discountCratePriceWei: '50000000000000',
         discountAllowance: 3, discountUsed: owner === WALLET ? 1 : 0,
       });
@@ -3220,10 +3221,10 @@ test('offchain metadata fetches current JSON over HTTP without storing previous 
   } finally { f.close(); }
 });
 
-test('all five metadata kinds preserve HTTPS images, empty descriptions and a single type attribute', async () => {
+test('all six metadata kinds preserve HTTPS images, empty descriptions and a single type attribute', async () => {
   const f = fixture();
   try {
-    const kinds = ['artwork', 'warehouse', 'crate', 'crate_receipt', 'artwork_receipt'] as const;
+    const kinds = ['artwork', 'warehouse', 'crate', 'crate_receipt', 'artwork_receipt', 'reliquary'] as const;
     const metadata = kinds.map(kind => ({ name: `${kind} #1`, description: '',
       image: `https://future-cdn.example/${kind}.webp`, attributes: [{ trait_type: 'type', value: kind }] }));
     const infos = kinds.map(kind => ({ tokenId: ethereumMetadataTokenId(kind, 1), kind, displayId: 1, owner: WALLET }));
@@ -3375,7 +3376,7 @@ test('offchain metadata HTTP reads stop when the request deadline expires', { ti
   } finally { f.close(); }
 });
 
-for (const token of [[0, 1, WALLET], [6, 1, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
+for (const token of [[0, 1, WALLET], [7, 1, WALLET], [6, 31, WALLET], [1, 0, WALLET], [2, 5556, WALLET], [1, 1, ZERO]]) {
   test(`token information rejects an inconsistent tuple ${token.join(':')}`, async () => {
     const f = fixture();
     try {
@@ -4053,3 +4054,43 @@ for (const kind of ['delivery', 'claim']) {
     } finally { f.close(); }
   });
 }
+
+
+test('reliquary availability enforces both the lifetime cap and shared crate capacity', async () => {
+  const f = fixture();
+  try {
+    for (const [allocatedCrates, reliquariesMinted, expected] of [
+      [0, 0, 30], [3330, 30, 0], [3219, 29, 1], [5444, 0, 1], [5445, 0, 0], [5333, 29, 1], [5333, 0, 2],
+    ]) {
+      f.state.allocatedCrates = allocatedCrates;
+      f.state.reliquariesMinted = reliquariesMinted;
+      const result = await f.request<EthereumStats>(paths.stats);
+      assert.equal(result.response.status, 200);
+      assert.equal(result.body.remainingReliquaries, expected);
+      assert.equal(result.body.reliquariesMinted, reliquariesMinted);
+    }
+  } finally { f.close(); }
+});
+
+
+test('reliquary token information and numbered metadata are available throughout the thirty-item range', async () => {
+  const f = fixture();
+  try {
+    for (const displayId of [1, 30]) {
+      const tokenId = String(117171 + displayId);
+      const metadata = { name: `Reliquary #${displayId}`, description: '',
+        image: `https://wip.lil.org/111k/monuments/${displayId}.webp`, attributes: [{ trait_type: 'type', value: 'reliquary' }] };
+      f.state.tokens.set(tokenId, { kind: 6, displayId, owner: WALLET });
+      f.state.metadataValues.set(`${f.env.ETHEREUM_111K_METADATA_BASE_URI}${tokenId}.json`, metadata);
+      const infos = await ethereumTokenInfos(readContext(f), [tokenId]);
+      assert.deepEqual(infos, [{ tokenId, kind: 'reliquary', displayId, owner: WALLET }]);
+      const [item] = await ethereumInventoryItems(readContext(f), infos);
+      assert.equal(item.image, metadata.image);
+      assert.equal(item.name, metadata.name);
+      assert.equal((await f.request(`${paths.metadata}?kind=reliquary&displayId=${displayId}`)).response.status, 200);
+    }
+    for (const displayId of [0, 31]) {
+      assert.equal((await f.request(`${paths.metadata}?kind=reliquary&displayId=${displayId}`)).response.status, 400);
+    }
+  } finally { f.close(); }
+});

@@ -1,0 +1,163 @@
+{
+  "chainId": 31337,
+  "contract": "0x5fbdb2315678afecb367f032d93f642f64180aa3",
+  "gas": {
+    "deploy": "5578447",
+    "mintDiscountedCrate": "176531",
+    "mintWarehouse": "187880",
+    "unboxWarehouse": "349603",
+    "unboxCrate": "111875",
+    "redeemArtwork": "136065",
+    "redeemCrate": "116850",
+    "claimCrate": "603125",
+    "unboxCrates15IncludingBonus": "1198866",
+    "unboxCrates15SeparateTransactions": "1699312",
+    "unboxSpecialCrate": "133062",
+    "claimSpecialCrate": "889172",
+    "apiSignedDelivery": "116862",
+    "apiSignedClaim": "603125",
+    "apiSignedMixedDelivery": "259363",
+    "checkoutLostHashScheduled": "179310",
+    "checkoutLostHashRefresh": "116874",
+    "releaseMint1": "108187",
+    "releaseMint2": "91087",
+    "releaseMint3": "91087",
+    "releaseMint4": "91087",
+    "releaseDelivery": "84472",
+    "deployEightRecipients": "5759883",
+    "mintEightRecipients": "142888",
+    "releaseEightRecipient1": "107983",
+    "releaseEightRecipient2": "90883",
+    "releaseEightRecipient3": "90883",
+    "releaseEightRecipient4": "90883",
+    "releaseEightRecipient5": "90883",
+    "releaseEightRecipient6": "90883",
+    "releaseEightRecipient7": "90883",
+    "releaseEightRecipient8": "90883",
+    "mintReliquaries2": "236146",
+    "unboxReliquary": "2896198"
+  },
+  "batching": {
+    "metadata30ResponseBytes": 7846,
+    "confirm311ContractCalls": 3,
+    "reliquaryInventoryRequests": 2
+  },
+  "checkoutRecovery": [
+    {
+      "recovery": "scheduled reconciliation",
+      "checkoutId": "0e4a6c7f-faa2-4d85-869e-b5e9ada2aaab",
+      "orderId": 360906073,
+      "transactionHash": "0xc45c0e79c97bf05c0ea66e351db8fef624e608a31999860422699ca227190ed9",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    },
+    {
+      "recovery": "anonymous refresh",
+      "checkoutId": "d46f5f0e-497b-437a-979f-cd1df619d578",
+      "orderId": 1967898744,
+      "transactionHash": "0x0c8f9bb9efae97e4a41d7afc56a4efd4b1b1c246bfa0bd566963ac41919d31b4",
+      "fulfillmentOrders": 1,
+      "confirmations": 3
+    }
+  ],
+  "metadataChecks": [
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/111111.json",
+      "kind": "artwork",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/116666.json",
+      "kind": "crate",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/117171.json",
+      "kind": "warehouse",
+      "displayId": 505,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/1111111.json",
+      "kind": "artwork_receipt",
+      "displayId": 111111,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/2005555.json",
+      "kind": "crate_receipt",
+      "displayId": 5555,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/117172.json",
+      "kind": "reliquary",
+      "displayId": 1,
+      "apiMatchesSource": true
+    },
+    {
+      "uri": "https://cdn.mons.shop/111k-sepolia/v7/117201.json",
+      "kind": "reliquary",
+      "displayId": 30,
+      "apiMatchesSource": true
+    }
+  ],
+  "passed": [
+    "mint receipts reconcile to canonical purchase events",
+    "permissionless mint payouts match configured shares",
+    "shipping fees remain separate and follow receiver rotation",
+    "eight-recipient deployment, mint and independent payouts",
+    "mixed-case recipients and a former payout caller as payee receive exact payouts",
+    "draft allowlist proof and one discounted crate",
+    "wallet stats and discounted transaction confirmation",
+    "allowance increase to three preserves usage",
+    "public crates and warehouses do not consume discounts",
+    "warehouse mint/unpack",
+    "mixed direct supply",
+    "artwork identity equals token ID across opening order",
+    "transfers preserve artwork identity",
+    "signed artwork delivery",
+    "signed crate delivery",
+    "transferred receipt claim",
+    "supply exhaustion",
+    "15-crate batch with 311 artwork identities and exact aggregate proof",
+    "batch opening saves gas against separate transactions",
+    "311-artwork first-inclusion confirmation and inventory recovery",
+    "150-token-info and 30-metadata contract reads with bounded RPC envelopes",
+    "31-artwork digital unpack",
+    "31-artwork physical receipt claim",
+    "replay rejection",
+    "Ethereum API login and encrypted profile",
+    "API quote and real-chain redemption",
+    "three-confirmation fulfillment publication",
+    "API orphaned crate redelivery under a new order",
+    "token identity and receipt authorization stay stable after opening-order reorg",
+    "API secret-code claim and real-chain receipts",
+    "mixed inventory ownership read",
+    "unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment",
+    "checkout create and submission start retries are idempotent",
+    "unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation",
+    "anonymous checkout refresh recovers a lost transaction hash without a wallet",
+    "checkout public status excludes shipping and callback details",
+    "reliquary mint, distinct imagery, transfer, 111-crate unpack and complete inventory recovery across two requests",
+    "reliquary lifetime count and crate reservations survive unpacking",
+    "all six metadata types match the selected metadata source",
+    "first-confirmation reveal, private pending allocations, local R2 publication, immutable reorg handling, and hash-free token recovery"
+  ],
+  "reveal": {
+    "deploymentId": "local-a513e6e4b8f2a923d98304ec87f64353c4d5c853",
+    "contractAddress": "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853",
+    "transactionHash": "0xf930faad4e5a971270be6515c3cde6b84ea661e18c739fb8181d73143a600f25",
+    "recoveryHash": "0x8ca1357a4cd7637c54fb16dc43fd547c7c49faf0584cf9601089a0826e02788b",
+    "pendingMediaHidden": true,
+    "firstConfirmationArtworkCount": 20,
+    "metadataStorage": "isolated-local-r2",
+    "immutableAfterReorg": true,
+    "tokenRecovery": true
+  },
+  "reliquaryContract": "0xa513e6e4b8f2a923d98304ec87f64353c4d5c853",
+  "metadataSource": "generated-files",
+  "metadataObjectCount": 344978
+}

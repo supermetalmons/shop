@@ -323,10 +323,12 @@ test('S3 ranged listing stops above a missing boundary and rejects repeated cont
 
 test('selected inventory reads only requested token IDs without listing the collection', async () => {
   const storage = new MemoryStorage();
+  storage.values.set(prefix + '117172.json', Buffer.from('first reliquary'));
+  storage.values.set(prefix + '117201.json', Buffer.from('last reliquary'));
   storage.list = async function* () { throw new Error('A sample must not list the full collection'); };
-  const inventory = await selectedInventory(storage, 'sepolia', new Set(['1', '3']), 2);
-  assert.deepEqual(storage.reads.sort(), [prefix + '1.json', prefix + '3.json']);
-  assert.deepEqual([...inventory.keys()].sort(), ['1.json', '3.json']);
+  const inventory = await selectedInventory(storage, 'sepolia', new Set(['1', '3', '117172', '117201']), 2);
+  assert.deepEqual(storage.reads.sort(), [prefix + '1.json', prefix + '117172.json', prefix + '117201.json', prefix + '3.json']);
+  assert.deepEqual([...inventory.keys()].sort(), ['1.json', '117172.json', '117201.json', '3.json']);
   for (const [file, object] of inventory) {
     const body = storage.values.get(prefix + file)!;
     assert.deepEqual(object, { key: prefix + file, bytes: body.length, md5: metadataMd5(body) });
@@ -340,7 +342,7 @@ test('selected inventory reads only requested token IDs without listing the coll
 
 test('selected inventory rejects invalid IDs before any remote access', async () => {
   const storage = new MemoryStorage();
-  for (const selected of [new Set<string>(), new Set(['0']), new Set(['01']), new Set(['../1']), new Set(['117172']), new Set(['2005556'])]) {
+  for (const selected of [new Set<string>(), new Set(['0']), new Set(['01']), new Set(['../1']), new Set(['117202']), new Set(['2005556'])]) {
     await assert.rejects(selectedInventory(storage, 'sepolia', selected, 2), /outside the collection/);
   }
   assert.equal(storage.reads.length, 0);
@@ -541,6 +543,9 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
   const body = Buffer.from('x');
   const digest = { bytes: body.length, md5: metadataMd5(body), sha256: sha256(body), body: body.toString('base64') };
   const allFiles = Array.from(metadataIdentities(), identity => identity.file);
+  assert.equal(allFiles.length, 344978);
+  const reliquaryFiles = Array.from({ length: 30 }, (_, index) => `${117172 + index}.json`);
+  assert.ok(reliquaryFiles.every(file => allFiles.includes(file)));
   const archive = gzipSync(allFiles.map(file => `${JSON.stringify({ file, ...digest })}\n`).join(''));
   const keys = allFiles.map(file => prefix + file).sort();
   const indices = new Map(keys.map((key, index) => [key, index]));
@@ -574,6 +579,7 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
   await writeFile(join(directory, 'objects.jsonl.gz'), archive);
   for (const version of [1, 2] as const) {
     damaged.set(keys[9999], null);
+    damaged.set(prefix + '117186.json', null);
     for (const [index, bytes, md5] of [
       [0, 0, metadataMd5(Buffer.alloc(0))],
       [10_000, 128 * 1024 + 1, metadataMd5(Buffer.alloc(128 * 1024 + 1))],
@@ -594,6 +600,7 @@ test('restoration repairs missing objects, damaged metadata and headers from bot
     assert.equal(report.skipped, 0);
     assert.equal(damaged.size, 0);
     assert.equal(writes.size, allFiles.length);
+    assert.ok(reliquaryFiles.every(file => writes.has(prefix + file)));
     assert.deepEqual(headers, { contentType: 'application/json; charset=utf-8', cacheControl: 'no-store' });
     assert.equal(await readFile(join(directory, 'manifest.json'), 'utf8'), manifestBody);
     assert.deepEqual(await readFile(join(directory, manifest.archive)), archive);

@@ -1,0 +1,93 @@
+{
+  "version": 3,
+  "status": "validated-and-reliquary-metadata-published",
+  "deployed": false,
+  "commerceReset": false,
+  "reliquary": {
+    "cratesPerItem": 111,
+    "lifetimeMaximum": 30,
+    "defaultPriceWei": "8800000000000000",
+    "itemKind": 6,
+    "firstTokenId": "117172",
+    "lastTokenId": "117201",
+    "localProtocolVersion": 9,
+    "allocationAtLifetimeCap": 3330,
+    "cratesRemainingAtLifetimeCap": 2225
+  },
+  "contract": {
+    "runtimeBytes": 22679,
+    "testsPassed": 161,
+    "optionalForkTestsSkipped": 3,
+    "gasBenchmarksPassed": 118,
+    "invariantRuns": 128,
+    "invariantDepth": 64,
+    "invariantHandlerReverts": 0,
+    "gas": {
+      "mintReliquaries1": "188103",
+      "mintReliquaries15": "860705",
+      "mintReliquaries15Receiver": "886217",
+      "unboxReliquary": "2896198",
+      "unboxReliquaryReceiver": "3084992"
+    }
+  },
+  "application": {
+    "appTestsPassed": 422,
+    "apiTestsPassed": 192,
+    "abiTestsPassed": 12,
+    "nativeTestsPassed": 5,
+    "deploymentAndStartupTestsPassed": 8,
+    "frontendTypecheckPassed": true,
+    "apiTypecheckPassed": true,
+    "toolsTypecheckPassed": true,
+    "buildPassed": true,
+    "browserBundleValidationPassed": true,
+    "inventoryRecoveryBatches": [
+      100,
+      11
+    ],
+    "confirmationAndReloadPreserveAllCrates": true
+  },
+  "metadata": {
+    "testsPassed": 80,
+    "objectCount": 344978,
+    "fullValidationPassed": true,
+    "allThirtyReliquaryPayloadsVerified": true,
+    "publishedObjectsPerNetwork": 30,
+    "publishedPrefixes": [
+      "https://cdn.mons.shop/111k-sepolia/reliquaries-v1/",
+      "https://cdn.mons.shop/111k/reliquaries-v1/"
+    ],
+    "fullCollectionPublished": false
+  },
+  "integration": {
+    "anvilEndToEndPassed": true,
+    "mintTransferUnboxRevealPassed": true,
+    "inventoryRecoveryRequests": 2,
+    "unboxGas": 2896198,
+    "whitespaceCheckPassed": true
+  },
+  "artifacts": {
+    "metadata": "metadata-validation.json",
+    "endToEnd": "e2e-validation.json",
+    "publication": "publication.json",
+    "generatedDirectory": ".cache/111k-metadata/reliquaries-v1",
+    "deploymentReadiness": "deployment-readiness.json"
+  },
+  "sourceSha256": {
+    "onchain/ethereum/src/NFT111K.sol": "096db7af2ba59fa89ec3af6ffc3c82879a1673651639eabfa994d8986dbe0cfb",
+    "shared/ethereum/protocol.ts": "0fd97c32907c2e4413aee55076a65d7fba4c3adf2332ad75526fad7101bc6d7d",
+    "shared/ethereum/abi.generated.ts": "5167588e783187cab988d81d83994db69583d894a5c323db28f0e5232e936541",
+    "scripts/ethereum-metadata/templates/reliquary.json": "28be9cb2b01f48dcf870fa456e8c9002c8af4d45927915c77d46a114fb3c748a",
+    "cloud/workers/api/runtime-test/ethereum111k-e2e.ts": "588cb77fd647fa331cace04de43678b60e4e2e7ad7c2611777dfcf219b8f468f"
+  },
+  "futureDeploymentValidation": {
+    "networks": [
+      11155111,
+      1
+    ],
+    "collectionSize": 344978,
+    "legacyCollectionCompatibilityRequired": false,
+    "contractAndMetadataValidated": true,
+    "mainnetShopActivation": "deferred"
+  }
+}

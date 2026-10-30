@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "scope": "Sepolia v7 default-closed release",
+  "defaultSaleActive": false,
+  "constructorAbiChanged": false,
+  "tests": {
+    "solidityPassed": 162,
+    "optionalForkTestsSkipped": 3,
+    "gasBenchmarksPassed": 118,
+    "invariantCalls": 8192,
+    "invariantReverts": 0,
+    "frontendPassed": 5020,
+    "frontendTimedOut": 1,
+    "metadataRestorationRetryPassed": true,
+    "apiUnitPassed": 2880,
+    "apiRuntimeInitialPassed": 41,
+    "apiRuntimeInitialFailed": 2,
+    "failedRuntimeFilesPairedRetryPassed": 8,
+    "newIsolationRuntimeTestsPassed": 7,
+    "existingRevealGuardsPassed": 102,
+    "anvilE2ePassed": true,
+    "frontendApiToolsTypechecksPassed": true,
+    "deadCodeChecksPassed": true,
+    "frontendBuildPassed": true,
+    "browserBundlePassed": true,
+    "apiBundlePassed": true,
+    "apiStartupPassed": true
+  },
+  "notes": [
+    "The metadata restoration test hit its90-second limit under broad parallel execution and passed in isolation.",
+    "Local Worker fixture overload was resolved by bounding isolation-test fixture R2 I/O; both affected native test files then passed together."
+  ],
+  "sourceSha256": {
+    "onchain/ethereum/src/NFT111K.sol": "fb09f6b3d3512495ab0f7f7fbe146d8856a4c7b3865276a1a0086201cf76ca14",
+    "onchain/ethereum/script/Deploy111K.s.sol": "b079dedc2d329f9c10896a7322c38ddd885a5a7fba6170192c42160fa500b3c6",
+    "shared/ethereum/protocol.ts": "0fd97c32907c2e4413aee55076a65d7fba4c3adf2332ad75526fad7101bc6d7d",
+    "shared/ethereum/abi.generated.ts": "5167588e783187cab988d81d83994db69583d894a5c323db28f0e5232e936541",
+    "cloud/workers/api/runtime-test/ethereum111k-e2e.ts": "8e801e00acef33cf9fafa64dd1f999a35b4c2aa1d43ba7a0a43827d85c8d94ef",
+    "cloud/workers/api/runtime-test/ethereum-reveal-isolation-runtime.test.ts": "725d819e13e9b9176fb3eab9b30405fc77e35d8a230b609ab34aec56d02969c6"
+  }
+}

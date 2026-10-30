@@ -12,6 +12,7 @@ contract NFT111KMetadataTest is TestSupport {
 
     function setUp() public {
         token = _deploy(BASE);
+        token.setSaleActive(true);
     }
 
     function testEveryTokenRangeBoundaryUsesItsTokenId() public view {
@@ -28,6 +29,8 @@ contract NFT111KMetadataTest is TestSupport {
         _uri(4, 222222, 1222222);
         _uri(5, 1, 2000001);
         _uri(5, 5555, 2005555);
+        _uri(6, 1, 117172);
+        _uri(6, 30, 117201);
     }
 
     function testFuzzArtworkAndReceiptNamesShareArtworkId(uint256 seed) public view {
@@ -37,8 +40,8 @@ contract NFT111KMetadataTest is TestSupport {
     }
 
     function testInvalidKindsAndDisplayNumbersRevert() public {
-        uint8[9] memory kinds = [uint8(0), 6, 1, 1, 2, 3, 4, 4, 5];
-        uint256[9] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556];
+        uint8[11] memory kinds = [uint8(0), 7, 1, 1, 2, 3, 4, 4, 5, 6, 6];
+        uint256[11] memory ids = [uint256(1), 1, 0, 111112, 5556, 506, 0, 222223, 5556, 0, 31];
         for (uint256 i; i < kinds.length; ++i) {
             vm.expectRevert(NFT111K.InvalidMetadataItem.selector);
             token.previewTokenURI(kinds[i], ids[i]);
@@ -112,9 +115,9 @@ contract NFT111KMetadataTest is TestSupport {
         assertEq(token.ownerOf(111112), alice);
         assertEq(token.totalSupply(), 1);
         assertEq(token.tokenURI(111112), "https://cdn.mons.shop/111k/111112.json");
-        uint8[] memory kinds = new uint8[](5);
-        uint256[] memory displayIds = new uint256[](5);
-        uint256[5] memory tokenIds = [uint256(1), 111112, 116667, 1000001, 2000001];
+        uint8[] memory kinds = new uint8[](6);
+        uint256[] memory displayIds = new uint256[](6);
+        uint256[6] memory tokenIds = [uint256(1), 111112, 116667, 1000001, 2000001, 117172];
         for (uint256 i; i < kinds.length; ++i) {
             kinds[i] = uint8(i + 1);
             displayIds[i] = 1;

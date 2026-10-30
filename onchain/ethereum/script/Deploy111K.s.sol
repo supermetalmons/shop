@@ -16,9 +16,8 @@ contract Deploy111K {
 
     function _validateDeploymentMetadataBaseURI(string memory uri, uint256 chainId) internal pure {
         if (chainId != 1 && chainId != 11155111) revert NFT111K.InvalidBaseURI();
-        bytes memory prefix = bytes(
-            chainId == 1 ? "https://cdn.mons.shop/111k/" : "https://cdn.mons.shop/111k-sepolia/"
-        );
+        bytes memory prefix =
+            bytes(chainId == 1 ? "https://cdn.mons.shop/111k/" : "https://cdn.mons.shop/111k-sepolia/");
         bytes memory value = bytes(uri);
         if (value.length < prefix.length + 2 || value.length > prefix.length + 65 || value[value.length - 1] != "/") {
             revert NFT111K.InvalidBaseURI();

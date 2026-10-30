@@ -804,10 +804,10 @@ test('late reveal results cannot open another account or deployment and leave it
   assert.equal(readEthereumRevealJobs(scope).length, 1);
 });
 
-test('warehouse opening does not register an artwork reveal job', async t => {
+for (const kind of ['warehouse', 'reliquary'] as const) test(`${kind} opening does not register an artwork reveal job`, async t => {
   const mocks = mockPending(t);
   const operation = pending();
-  operation.intent!.data = encodeCall(ETHEREUM_FUNCTIONS.unboxWarehouse, ['uint256'], ['116667']);
+  operation.intent!.data = encodeCall(kind === 'warehouse' ? ETHEREUM_FUNCTIONS.unboxWarehouse : ETHEREUM_FUNCTIONS.unboxReliquary, ['uint256'], [kind === 'warehouse' ? '116667' : '117172']);
   harness({ pending: operation });
   await act(async () => {});
   assert.equal(mocks.transaction.mock.callCount(), 0);
