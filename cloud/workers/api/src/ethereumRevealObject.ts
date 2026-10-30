@@ -105,24 +105,31 @@ export class EthereumRevealObject extends DurableObject<Env> {
     if (known && snapshot.unresolved.every(value => value.status === 'unminted')) return { kind: 'ready', value: snapshot };
     if (!known && !admit) return { kind: 'admission' };
     if (!known) this.requireAdmission(deployment);
+    const waitingTokens = new Set(snapshot.artworks.length ? [
+      ...snapshot.unresolved.filter(value => value.status === 'unminted').map(value => value.tokenId),
+      ...this.store.recoveringTokenIds(snapshot.unresolved.map(value => value.tokenId)),
+    ] : []);
     this.store.admitTokens(tokenIds, deployment.deploymentBlock, Date.now());
     await this.arm();
     this.startBackground(deployment, undefined, tokenIds);
-    const refreshingUnminted = new Set(snapshot.artworks.length
-      ? snapshot.unresolved.filter(value => value.status === 'unminted').map(value => value.tokenId) : []);
-    if (!snapshot.artworks.length || refreshingUnminted.size) {
-      const needed = refreshingUnminted.size ? refreshingUnminted : new Set(tokenIds);
+    if (!snapshot.artworks.length || waitingTokens.size) {
+      const needed = waitingTokens.size ? waitingTokens : new Set(tokenIds);
       while (Date.now() < deadline) {
         const response = this.store.tokensResponse(deployment, tokenIds);
-        if (refreshingUnminted.size
-          ? response.unresolved.every(value => !refreshingUnminted.has(value.tokenId) || value.status === 'unminted')
+        if (waitingTokens.size
+          ? response.unresolved.every(value => !waitingTokens.has(value.tokenId) || value.status === 'unminted')
           : response.artworks.length || response.unresolved.every(value => value.status === 'unminted')) break;
         const hashes = new Set(this.store.provenance([...needed]).map(value => value.transactionHash));
-        const tasks = [...this.scans.values()].filter(value => value.claim.kind === 'tokens' &&
+        const tasks: Promise<unknown>[] = [...this.scans.values()].filter(value => value.claim.kind === 'tokens' &&
           value.claim.tokenIds.some(id => needed.has(id))).map(value => value.promise);
         for (const hash of hashes) {
           const work = this.receipts.get(hash)?.promise;
           if (work) tasks.push(work);
+        }
+        if (!tasks.length) {
+          tasks.push(...[...this.scans.values(), ...this.receipts.values()].map(value => value.promise));
+          tasks.push(...this.overflow.values());
+          if (this.migrationRun) tasks.push(this.migrationRun);
         }
         if (!tasks.length || !await this.withinBudget(Promise.race(tasks), deadline)) break;
       }

@@ -362,6 +362,12 @@ export class EthereumRevealRecoveryStore {
     return tokenIds.every(id => known.has(id));
   }
 
+  recoveringTokenIds(tokenIds: string[]): string[] {
+    return this.sql.exec<{ token_id: string }>(`SELECT t.token_id FROM token_recovery t
+      JOIN recovery_jobs j ON j.id=t.job_id WHERE t.status='recovering'
+      AND t.token_id IN (SELECT value FROM json_each(?))`, JSON.stringify(tokenIds)).toArray().map(row => row.token_id);
+  }
+
   admitTokens(tokenIds: string[], fromBlock: number, now: number): void {
     this.atomic(() => {
       const frozen = new Set(this.hooks.frozen(tokenIds).map(row => row.tokenId));

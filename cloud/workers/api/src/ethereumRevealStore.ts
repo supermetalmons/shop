@@ -318,6 +318,7 @@ export class EthereumRevealStore {
   migrateChunk(now: number, limit = 128) { return this.recovery.migrateChunk(now, limit); }
   knownTransaction(hash: string): boolean { return this.recovery.knownTransaction(hash); }
   knownTokens(ids: string[], now: number): boolean { return this.recovery.knownTokens(ids, now); }
+  recoveringTokenIds(ids: string[]): string[] { return this.recovery.recoveringTokenIds(ids); }
   admitTransaction(hash: string, fromBlock: number, now: number) { return this.recovery.admitTransaction(hash, fromBlock, now); }
   admitTokens(ids: string[], fromBlock: number, now: number): void { this.recovery.admitTokens(ids, fromBlock, now); }
   tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) { return this.recovery.tokensResponse(deployment, ids); }

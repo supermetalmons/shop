@@ -747,6 +747,124 @@ test('expired mixed negative results recheck later mints instead of returning st
   assert.deepEqual(f.store.frozen(ids(41)), []);
 });
 
+for (const includeUnknown of [false, true]) test(`concurrent mixed refresh joins admitted work${includeUnknown ? ' without waiting for a new token' : ''}`, async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  f.freeze(hash(1));
+  f.state.minted = 20;
+  await f.object.revealTokens(deployment, ['21'], true);
+  await f.settle();
+  now += 2_000;
+  const held = Promise.withResolvers<void>(), unknown = Promise.withResolvers<void>();
+  const provider = globalThis.fetch;
+  let statsCalls = 0, completed = false;
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    if (JSON.parse(String(args[1]?.body)).method === 'eth_call') {
+      await abortable(++statsCalls === 1 ? held.promise : unknown.promise, args[1]?.signal);
+    }
+    return provider(...args);
+  });
+  const first = f.object.revealTokens(deployment, ['1', '21'], true);
+  try {
+    await waitFor(() => statsCalls === 1);
+    const second = f.object.revealTokens(deployment, includeUnknown ? ['1', '21', '22'] : ['1', '21'], true).then(result => {
+      completed = true;
+      return value(result);
+    });
+    if (includeUnknown) await waitFor(() => statsCalls === 2);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(completed, false);
+    held.resolve();
+    await waitFor(() => completed);
+    const response = await second;
+    assert.deepEqual(response.artworks.map(artwork => artwork.tokenId), ['1']);
+    assert.deepEqual(response.unresolved, [{ tokenId: '21', status: 'unminted' },
+      ...(includeUnknown ? [{ tokenId: '22', status: 'recovering' }] : [])]);
+    assert.equal(response.retryAfterMs, includeUnknown ? 2_000 : 0);
+    assert.deepEqual(value(await first).unresolved, [{ tokenId: '21', status: 'unminted' }]);
+    assert.equal(statsCalls, includeUnknown ? 2 : 1);
+  } finally { held.resolve(); unknown.resolve(); await f.settle(); }
+});
+
+test('queued mixed negative refresh waits for occupied scan slots within its deadline', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  f.freeze(hash(1));
+  f.state.minted = 20;
+  await f.object.revealTokens(deployment, ['21'], true);
+  await f.settle();
+  for (let cycle = 0; cycle < 2; cycle++) {
+    now += 2_000;
+    const held = Promise.withResolvers<void>();
+    const provider = globalThis.fetch;
+    let statsCalls = 0, completed = false;
+    const mock = t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+      if (JSON.parse(String(args[1]?.body)).method === 'eth_call' && ++statsCalls <= 2) {
+        await abortable(held.promise, args[1]?.signal);
+      }
+      return provider(...args);
+    });
+    const unrelated = [f.object.revealTokens(deployment, [String(200 + cycle * 2)], true),
+      f.object.revealTokens(deployment, [String(201 + cycle * 2)], true)];
+    try {
+      await waitFor(() => statsCalls === 2);
+      const response = f.object.revealTokens(deployment, ['1', '21'], true, now + 2_000).then(result => {
+        completed = true;
+        return value(result);
+      });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(completed, false);
+      held.resolve();
+      const result = await response;
+      assert.deepEqual(result.artworks.map(artwork => artwork.tokenId), ['1']);
+      assert.deepEqual(result.unresolved, [{ tokenId: '21', status: 'unminted' }]);
+      assert.equal(result.retryAfterMs, 0);
+      assert.equal(statsCalls, 3);
+    } finally { held.resolve(); await Promise.all(unrelated); await f.settle(); mock.mock.restore(); }
+  }
+});
+
+test('queued mixed negative refresh keeps its original deadline and continues durably', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  f.freeze(hash(1));
+  f.state.minted = 20;
+  await f.object.revealTokens(deployment, ['21'], true);
+  await f.settle();
+  now += 2_000;
+  const held = Promise.withResolvers<void>();
+  const provider = globalThis.fetch;
+  let statsCalls = 0;
+  t.mock.method(globalThis, 'fetch', async (...args: Parameters<typeof fetch>) => {
+    if (JSON.parse(String(args[1]?.body)).method === 'eth_call' && ++statsCalls <= 2) {
+      await abortable(held.promise, args[1]?.signal);
+    }
+    return provider(...args);
+  });
+  const unrelated = [f.object.revealTokens(deployment, ['200'], true), f.object.revealTokens(deployment, ['201'], true)];
+  try {
+    await waitFor(() => statsCalls === 2);
+    const waits: number[] = [];
+    const withinBudget = f.object.withinBudget.bind(f.object);
+    t.mock.method(f.object, 'withinBudget', (work: Promise<unknown>, deadline: number) => {
+      waits.push(deadline);
+      return withinBudget(work, deadline);
+    });
+    const response = value(await f.object.revealTokens(deployment, ['1', '21'], true, now + 20));
+    assert.deepEqual(response.unresolved, [{ tokenId: '21', status: 'recovering' }]);
+    assert.equal(response.retryAfterMs, 2_000);
+    assert.ok(waits.length && waits.every(deadline => deadline === now + 20));
+    assert.ok(f.getAlarm() !== null);
+    assert.equal(f.rows("SELECT COUNT(*) AS count FROM token_recovery WHERE token_id='21' AND job_id IS NOT NULL")[0].count, 1);
+  } finally { held.resolve(); await Promise.all(unrelated); await f.settle(); }
+  const response = value(await f.object.revealTokens(deployment, ['1', '21']));
+  assert.deepEqual(response.unresolved, [{ tokenId: '21', status: 'unminted' }]);
+  assert.equal(response.retryAfterMs, 0);
+});
+
 test('a slow mixed negative refresh honors its original deadline and continues durably', async t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
