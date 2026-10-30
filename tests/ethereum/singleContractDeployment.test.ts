@@ -63,14 +63,13 @@ test('local deployment rejects current-address payees and deploys one collection
     const proceeds = JSON.parse(readFileSync(proceedsPath, 'utf8'));
     const fixture = JSON.parse(readFileSync(join(project, 'fixtures/eip712.json'), 'utf8'));
     const discounts = JSON.parse(readFileSync(join(directory, 'src/ethereum/discounts/111k.json'), 'utf8'));
-    const baseURI = 'https://cdn.mons.shop/111k-sepolia/local-deployment-test/';
+    const baseURI = 'https://cdn.mons.shop/111k-sepolia/v7/';
     const run = () => spawnSync(process.execPath, ['scripts/deploy-local.mjs'], {
       cwd: project, encoding: 'utf8', timeout: 60_000,
       env: {
-        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(FOUNDRY_|DAPP_)/.test(name))),
+        ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(FOUNDRY_|DAPP_)/.test(name) && name !== 'ETHEREUM_111K_LOCAL_METADATA_BASE_URI')),
         ETHEREUM_111K_LOCAL_RPC_URL: rpcUrl, ETHEREUM_111K_LOCAL_OWNER: deployer,
         ETHEREUM_111K_LOCAL_QUOTE_SIGNER: fixture.signer, ETHEREUM_111K_LOCAL_DISCOUNT_ROOT: discounts.root,
-        ETHEREUM_111K_LOCAL_METADATA_BASE_URI: baseURI,
       },
     });
     for (const invalid of [

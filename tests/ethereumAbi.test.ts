@@ -176,7 +176,7 @@ test('digital and physical-only receipt identities occupy separate complete rang
 });
 
 test('metadata base URIs accept only the published CDN namespaces', () => {
-  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/');
+  assert.equal(resolveEthereum111kConfig().metadataBaseUri, 'https://cdn.mons.shop/111k-sepolia/v7/');
   assert.equal(resolveEthereum111kConfig({ chainId: 31337, metadataBaseUri: 'https://cdn.mons.shop/111k/' }).metadataBaseUri,
     'https://cdn.mons.shop/111k/');
   assert.throws(() => resolveEthereum111kConfig({ metadataBaseUri: 'https://cdn.mons.shop/111k/' }));

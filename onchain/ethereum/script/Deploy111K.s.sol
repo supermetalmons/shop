@@ -8,7 +8,7 @@ contract Deploy111K {
 
     function _metadataBaseURI() internal returns (string memory uri) {
         if (block.chainid == 31337) {
-            return vm.envOr("ETHEREUM_111K_METADATA_BASE_URI", "https://cdn.mons.shop/111k-sepolia/");
+            return vm.envOr("ETHEREUM_111K_METADATA_BASE_URI", "https://cdn.mons.shop/111k-sepolia/v7/");
         }
         uri = vm.envString("ETHEREUM_111K_METADATA_BASE_URI");
         _validateDeploymentMetadataBaseURI(uri, block.chainid);
