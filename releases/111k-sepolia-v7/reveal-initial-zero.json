@@ -1,0 +1,12 @@
+{
+  "event": "ethereum_reveal_recovery_health",
+  "deploymentId": "v7",
+  "ready": true,
+  "seeded": 111111,
+  "available": 111111,
+  "reserved": 0,
+  "frozen": 0,
+  "publication": {},
+  "observedAt": "2026-10-30T20:45:09.684Z",
+  "eventTimestamp": 1793393108942
+}

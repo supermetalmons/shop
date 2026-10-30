@@ -1,0 +1,131 @@
+{
+  "releaseId": "111k-v7-2026-10-30T20-30-54-197Z-8c1bd873",
+  "manifestSha256": "3a56d4ffa391be54f795dbc49fda78019a7703dfcf8283854e8d878ea5d5d3aa",
+  "chainId": 11155111,
+  "deploymentId": "v7",
+  "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+  "metadataBaseURI": "https://cdn.mons.shop/111k-sepolia/v7/",
+  "checkedAt": "2026-10-30T20:48:08.719Z",
+  "status": "passed",
+  "readOnly": true,
+  "stateOverridesOnly": true,
+  "realTransactionsSubmitted": 0,
+  "keysUnlocked": false,
+  "frozenHelpersUnchanged": true,
+  "simulationSourceSha256": "33b3aec638b1c8b60d7b73486bd1e0ebc708ddb9167b438321b8805c5bc243d8",
+  "simulationHelperSha256": "8c2f3a696859ff382413abf92fdc4a70c25823b3176f08c9d3f706e66ba0c9ae",
+  "compiler": {
+    "runtimeSha256": "1dfe19b885fd07cd75d6b009a74503e0ea8fbbaac52bdf6433670cf925b7cf27",
+    "runtimeBytes": 4584,
+    "compilerVersion": "0.8.30+commit.73712a01",
+    "optimizerRuns": 1000,
+    "evmVersion": "prague"
+  },
+  "overrides": {
+    "owner": {
+      "address": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+      "virtualBalanceWei": "10000000000000000000",
+      "runtimeSha256": "1dfe19b885fd07cd75d6b009a74503e0ea8fbbaac52bdf6433670cf925b7cf27"
+    },
+    "syntheticCaller": {
+      "address": "0x000000000000000000000000000000000000a110",
+      "virtualBalanceWei": "10000000000000000000"
+    },
+    "collectionOverridden": false
+  },
+  "before": {
+    "blockNumber": 12029156,
+    "blockHash": "0xc19450389e03604c6ac933d997667879d26894485485017919f1f14ab42f7146",
+    "blockGasLimit": "199999809",
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "ownerCode": "0x",
+    "syntheticCallerCode": "0x",
+    "saleActive": false,
+    "counters": {
+      "totalSupply": "0",
+      "allocatedCrates": "0",
+      "warehousesMinted": "0",
+      "reliquariesMinted": "0",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "ownerTokenBalance": "0",
+      "contractBalanceWei": "0"
+    },
+    "stats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      false,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0",
+      "0",
+      "8800000000000000"
+    ],
+    "contractRuntimeSha256": "b27713a29e5eef8c8eec38d9b81e157d604f73d26c30a91449c87ae84837a289"
+  },
+  "after": {
+    "blockNumber": 12029156,
+    "blockHash": "0xc19450389e03604c6ac933d997667879d26894485485017919f1f14ab42f7146",
+    "blockGasLimit": "199999809",
+    "owner": "0xd58d143ca63d9baccc33fdf69ea203f59c58ae93",
+    "ownerCode": "0x",
+    "syntheticCallerCode": "0x",
+    "saleActive": false,
+    "counters": {
+      "totalSupply": "0",
+      "allocatedCrates": "0",
+      "warehousesMinted": "0",
+      "reliquariesMinted": "0",
+      "totalMintReceived": "0",
+      "totalMintReleased": "0",
+      "totalDeliveryReceived": "0",
+      "totalDeliveryReleased": "0",
+      "ownerTokenBalance": "0",
+      "contractBalanceWei": "0"
+    },
+    "stats": [
+      "0",
+      "0",
+      "0",
+      "100000000000000",
+      "1100000000000000",
+      false,
+      "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+      "50000000000000",
+      "1",
+      "0",
+      "0",
+      "8800000000000000"
+    ],
+    "contractRuntimeSha256": "b27713a29e5eef8c8eec38d9b81e157d604f73d26c30a91449c87ae84837a289"
+  },
+  "actualStateUnchanged": true,
+  "actualMintTransferEvents": 0,
+  "simulation": {
+    "gasEstimate": "14114867",
+    "gasLimit": "16987841",
+    "internalGasConsumed": "13986836",
+    "gasLimitIncludesTransactionOverhead": true,
+    "internalGasExcludesOuterTransactionAndReturnEncoding": true,
+    "allocatedCrates": "111",
+    "reliquariesMinted": "1",
+    "artworksMinted": "20",
+    "ownerTokenBalance": "130",
+    "totalSupply": "130",
+    "totalMintReceivedWei": "8800000000000000",
+    "firstArtworkURI": "https://cdn.mons.shop/111k-sepolia/v7/1.json",
+    "saleActiveInsideSimulation": true,
+    "operations": [
+      "setSaleActive(true)",
+      "mintReliquaries(1)",
+      "unboxReliquary(117172)",
+      "unboxCrate(111112)"
+    ]
+  }
+}
