@@ -1,0 +1,220 @@
+{
+  "verifiedAt": "2026-10-30T16:57:45.860Z",
+  "sourceCommit": "335cd49eb5bd34ce7ffc18c2dd3824f9554287b0",
+  "apiVersion": "21c8d01b-7d58-4e4d-8809-b60b590b34a9",
+  "worker": "mons-shop-api",
+  "apiBaseUrl": "https://api.mons.shop",
+  "trafficPercentage": 100,
+  "deploymentId": "a7cbef54-252c-49e1-aac8-b7a2b1b9af3f",
+  "deployedAt": "2026-10-30T16:56:56.959354Z",
+  "validation": {
+    "apiTests": 2873,
+    "nativeRuntimeTests": 42,
+    "generatedSchemas": "passed",
+    "apiTypes": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "productionDatabaseIntegrity": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "newStateMigrationRequired": false
+  },
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-30T16:57:31.455Z",
+    "apiVersion": "21c8d01b-7d58-4e4d-8809-b60b590b34a9",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "passed": true,
+    "samples": {
+      "frozenMetadata": {
+        "status": 200,
+        "durationMs": 517,
+        "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48"
+      },
+      "historicalMetadata": {
+        "status": 200,
+        "durationMs": 493,
+        "sha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4"
+      },
+      "denied": {
+        "status": 403,
+        "durationMs": 819,
+        "sha256": "97e1536b5a21b2062ed85226465bf58984a39da3f727fa61cd8a87ef1dce36e3"
+      },
+      "preflight": {
+        "status": 204,
+        "durationMs": 1111,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "wwwPreflight": {
+        "status": 204,
+        "durationMs": 1178,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "frozenBefore": {
+        "status": 200,
+        "durationMs": 1260,
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "artworkCount": 1,
+        "unresolved": [],
+        "retryAfterMs": 0
+      },
+      "singletonInitial1": {
+        "status": 200,
+        "durationMs": 657,
+        "sha256": "5c0c62acdd29b9c7c3ebed950a632aaa42e0fb3cd86f078ba58302b80320edb8",
+        "artworkCount": 0,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0
+      },
+      "mixedAfterExpiry1": {
+        "status": 200,
+        "durationMs": 972,
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2202
+      },
+      "mixedAfterExpiry2": {
+        "status": 200,
+        "durationMs": 809,
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2202
+      },
+      "mixedAfterExpiry3": {
+        "status": 200,
+        "durationMs": 401,
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2202
+      },
+      "singletonAfterExpiry": {
+        "status": 200,
+        "durationMs": 961,
+        "sha256": "5c0c62acdd29b9c7c3ebed950a632aaa42e0fb3cd86f078ba58302b80320edb8",
+        "artworkCount": 0,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2201
+      },
+      "frozenAfter": {
+        "status": 200,
+        "durationMs": 531,
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "artworkCount": 1,
+        "unresolved": [],
+        "retryAfterMs": 0
+      }
+    },
+    "frozenTokenUnchanged": true,
+    "frozenMetadataUnchanged": true,
+    "historicalToken1StillPlaceholder": true,
+    "mixedAfterExpiryChecks": 3,
+    "unmintedHasNoArtwork": true,
+    "unmintedRetryAfterMs": 0,
+    "completedAt": "2026-10-30T16:57:45.860Z"
+  },
+  "recoveryHealth": {
+    "scriptVersion": {
+      "id": "21c8d01b-7d58-4e4d-8809-b60b590b34a9"
+    },
+    "outcome": "ok",
+    "health": {
+      "event": "ethereum_reveal_recovery_health",
+      "deploymentId": "sepolia-8b4044db",
+      "ready": true,
+      "seeded": 111111,
+      "available": 110871,
+      "reserved": 0,
+      "frozen": 240,
+      "publication": {
+        "published": 240
+      },
+      "recovery": {
+        "migrationReady": true,
+        "migration": {
+          "phase": "ready",
+          "cursor": "",
+          "rowKey": null,
+          "offset": 0
+        },
+        "opaque": 0,
+        "opaqueCapacity": {
+          "used": 0,
+          "limit": 10000,
+          "available": 10000
+        },
+        "crates": {
+          "observed": 12
+        },
+        "due": {
+          "active": {
+            "receiptJobs": 0,
+            "scanJobs": 1,
+            "oldestDueAgeMs": 0
+          },
+          "background": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          }
+        },
+        "dispatch": {
+          "limit": 64,
+          "inFlight": 0,
+          "active": 0,
+          "background": 0,
+          "pauseUntilMs": 0,
+          "nextRecoveryMs": null,
+          "earliestLeaseUntilMs": null
+        }
+      }
+    }
+  },
+  "resolvedObservation": "Mixed requests for tokens 260 and 111111 now return 111111 as unminted with retryAfterMs: 0 after negative-cache expiry.",
+  "frontendDeploymentRequired": false,
+  "onchainDeploymentRequired": false,
+  "historicalBackfill": false
+}

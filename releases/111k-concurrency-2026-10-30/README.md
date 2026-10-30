@@ -47,7 +47,7 @@ The release workflow passed all 2,867 API tests, 42 native-runtime tests, genera
 
 Live transaction and token responses still agree on all 20 known artworks. Repeated reads, metadata API responses, and token 260's CDN checksum are unchanged. Token 1 remains a placeholder. Both VVV origins and preflights pass; an unrelated origin is rejected. No historical reveal backfill was performed.
 
-A pre-existing observation remains: token 111111 returned `recovering` throughout bounded polling both before deployment (15 attempts) and afterward (25 attempts over approximately 65 seconds). Its response disclosed no artwork. The rollout does not claim that lookup completed; the observation is retained explicitly in the release record.
+A pre-existing observation remains: token 111111 returned `recovering` throughout bounded polling both before deployment (15 attempts) and afterward (25 attempts over approximately 65 seconds). Its response disclosed no artwork. The rollout does not claim that lookup completed; the observation is retained explicitly in the release record. This response-timing issue was subsequently fixed and verified in the [unminted recovery rollout](../111k-unminted-2026-10-30/README.md).
 
 ## Reproduce
 
