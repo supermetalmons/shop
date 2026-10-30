@@ -25,7 +25,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   assert.equal(wranglerWorkerdPackage.version, wranglerPackage.dependencies.workerd);
   assert.equal(miniflareWorkerdPackage.version, miniflarePackage.dependencies.workerd);
   assert.equal(productionConfig.compatibility_date, '2026-08-08');
-  assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat', 'enable_request_signal']);
+  assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat', 'enable_request_signal', 'durable_object_io_tasks_prevent_eviction']);
   assert.deepEqual(productionConfig.workflows, [{
     binding: 'ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW',
     name: 'mons-shop-admin-irl-redeem-finalize-v1',

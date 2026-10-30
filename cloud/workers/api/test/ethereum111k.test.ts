@@ -104,7 +104,7 @@ function fixture(controlActive = true) {
       const url = String(input);
       state.metadataRequests.push({ url, init });
       const value = state.metadataValues.get(url);
-      return value ? Response.json(value) : new Response(null, { status: 404 });
+      return Response.json(value ?? SYNTHETIC_METADATA);
     },
   };
   const responseFor = async (payload: Rpc): Promise<unknown> => {
@@ -3188,7 +3188,7 @@ test('contract read batches preserve duplicate positions and omit absent token t
     const items = await ethereumInventoryItems(context, infos);
     assert.deepEqual(items.map(item => item.name), ['First response', 'First response', 'Second response']);
     assert.equal(f.state.metadataRequests.length, 2);
-    assert.deepEqual(f.state.batchSizes, [1, 1]);
+    assert.deepEqual(f.state.batchSizes, [1]);
     assert.ok(f.state.calls.filter(call => call.method === 'eth_call').every(call => call.params[1] === 'latest'));
   } finally { f.close(); }
 });
@@ -3264,25 +3264,18 @@ test('artwork metadata preserves video playback and exact aspect ratios without 
   } finally { f.close(); }
 });
 
-for (const uri of ['https://other.example/1.json', 'https://cdn.mons.shop/111k/1.json',
-  'https://cdn.mons.shop/111k-sepolia/2.json', 'https://cdn.mons.shop/111k-sepolia/01.json',
-  'https://cdn.mons.shop/111k-sepolia/1.json?version=2', 'data:application/json;base64,e30=']) {
-  test(`offchain metadata rejects an unexpected token URL ${uri}`, async () => {
-    const f = fixture();
-    try {
-      const providerFetch: typeof fetch = async (input, init) => {
-        if (!init?.body) return f.providerFetch(input, init);
-        const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
-        if (!Array.isArray(payload)) return f.providerFetch(input, init);
-        return Response.json(payload.map(call => ({ jsonrpc: '2.0', id: call.id, result: encodeAbi(['string[]'], [[uri]]) })));
-      };
-      await assert.rejects(ethereumInventoryItems(readContext(f, providerFetch), [
-        { tokenId: '1', kind: 'artwork', displayId: 1, owner: WALLET },
-      ]), /Invalid Ethereum metadata URL/);
-      assert.equal(f.state.metadataRequests.length, 0);
-    } finally { f.close(); }
-  });
-}
+for (const info of [
+  { tokenId: '1', kind: 'artwork' as const, displayId: 2 },
+  { tokenId: '111112', kind: 'artwork' as const, displayId: 1 },
+  { tokenId: '01', kind: 'artwork' as const, displayId: 1 },
+]) test(`inventory rejects inconsistent metadata identity ${JSON.stringify(info)}`, async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(ethereumInventoryItems(readContext(f), [{ ...info, owner: WALLET }]), /Invalid Ethereum token information/);
+    assert.equal(f.state.metadataRequests.length, 0);
+    assert.equal(f.state.calls.length, 0);
+  } finally { f.close(); }
+});
 
 for (const [name, response] of [
   ['redirect', () => new Response(null, { status: 302, headers: { Location: 'https://other.example/1.json' } })],
@@ -3397,31 +3390,24 @@ for (const token of [[0, 1, WALLET], [6, 1, WALLET], [1, 0, WALLET], [2, 5556, W
   });
 }
 
-test('a later metadata envelope failure returns no partial inventory and cancels the other envelope', { timeout: 5000 }, async () => {
+test('metadata and known inventory identities remain readable without RPC', async () => {
   const f = fixture();
   try {
-    let envelopes = 0;
-    let cancelled = false;
-    let started!: () => void;
-    const held = new Promise<void>(resolve => { started = resolve; });
     const providerFetch: typeof fetch = async (input, init) => {
-      if (!init?.body) return f.providerFetch(input, init);
-      const payload = JSON.parse(String(init?.body)) as Rpc | Rpc[];
-      if (!Array.isArray(payload)) return f.providerFetch(input, init);
-      if (++envelopes === 1) {
-        started();
-        return new Promise<Response>((_resolve, reject) => {
-          init!.signal!.addEventListener('abort', () => { cancelled = true; reject(init!.signal!.reason); }, { once: true });
-        });
-      }
-      await held;
-      return Response.json(payload.map(rpc => ({ jsonrpc: '2.0', id: rpc.id, error: { code: -32000, message: 'Metadata unavailable' } })));
+      if (init?.body) throw new Error('RPC unavailable');
+      return f.providerFetch(input, init);
     };
     const infos = Array.from({ length: 311 }, (_, index) => ({ tokenId: String(index + 1), kind: 'artwork' as const,
       displayId: index + 1, owner: WALLET }));
-    await assert.rejects(ethereumInventoryItems(readContext(f, providerFetch), infos), /Ethereum RPC returned an invalid response/);
-    assert.equal(envelopes, 2);
-    assert.equal(cancelled, true);
+    const items = await ethereumInventoryItems(readContext(f, providerFetch), infos);
+    assert.deepEqual(items.map(item => item.tokenId), infos.map(info => info.tokenId));
+    const metadata = await f.request(`${paths.metadata}?kind=crate_receipt&displayId=5555`, undefined, undefined, { fetch: providerFetch });
+    assert.equal(metadata.response.status, 200);
+    assert.equal(f.state.metadataRequests.at(-1)?.url, 'https://cdn.mons.shop/111k-sepolia/2005555.json');
+    assert.equal(f.state.calls.length, 0);
+    const inventory = await f.request(`${paths.inventory}?owner=${WALLET}`, undefined, undefined, { fetch: providerFetch });
+    assert.equal(inventory.response.status, 503);
+    assert.equal(inventory.body.items, undefined);
   } finally { f.close(); }
 });
 
@@ -3487,14 +3473,14 @@ for (const failure of ['missing-response', 'duplicate-id', 'unknown-id', 'rpc-er
   });
 }
 
-for (const kind of ['token information', 'metadata'] as const) for (const extra of [false, true]) {
-  test(`inventory rejects ${extra ? 'extra' : 'missing'} ${kind} rows instead of shifting identities`, async () => {
+for (const extra of [false, true]) {
+  test(`inventory rejects ${extra ? 'extra' : 'missing'} token information rows instead of shifting identities`, async () => {
     const f = fixture();
     try {
       f.env.ETHEREUM_111K_CHAIN_ID = '11155111';
       f.state.alchemyNfts = ['111112', '111113'].map(tokenId => ({ tokenId, contract: { address: CONTRACT } }));
-      const signature = kind === 'metadata' ? 'previewTokenURIs(uint8[],uint256[])' : 'getTokenInfos(uint256[])';
-      const type = kind === 'metadata' ? 'string[]' : '(uint8,uint256,address)[]';
+      const signature = 'getTokenInfos(uint256[])';
+      const type = '(uint8,uint256,address)[]';
       const providerFetch: typeof fetch = async (input, init) => {
         const response = await f.providerFetch(input, init);
         if (!init?.body) return response;
@@ -3517,7 +3503,7 @@ for (const kind of ['token information', 'metadata'] as const) for (const extra 
 }
 
 for (const chainId of [31337, 11155111]) {
-  test(`${chainId} inventory reads 30 items in two contract calls pinned to the returned block`, async () => {
+  test(`${chainId} inventory reads 30 items in one contract call pinned to the returned block`, async () => {
     const f = fixture();
     try {
       f.env.ETHEREUM_111K_CHAIN_ID = String(chainId);
@@ -3535,7 +3521,7 @@ for (const chainId of [31337, 11155111]) {
       assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
       assert.equal(result.body.observedBlock, 102);
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
-      assert.equal(reads.length, 2);
+      assert.equal(reads.length, 1);
       assert.ok(reads.every(call => call.params[1] === blockHash(102)));
       assert.ok(f.state.calls.filter(call => call.method === 'eth_getLogs').every(call => (call.params[0] as { toBlock: string }).toBlock === '0x66'));
     } finally { f.close(); }
@@ -3551,10 +3537,10 @@ for (const path of [paths.inventory, paths.transactionsConfirm]) {
       f.setReceipt(HASH, [{ address: CONTRACT,
         topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber('111112')],
         data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: '0x0' }]);
-      f.state.afterRpc = async call => {
-        if (call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) {
-          f.state.canonical.set(102, blockHash(999));
-        }
+      const metadataFetch = f.metadata.fetch;
+      f.metadata.fetch = async (input, init) => {
+        f.state.canonical.set(102, blockHash(999));
+        return metadataFetch(input, init);
       };
       const result = await f.request(path === paths.inventory ? `${path}?owner=${WALLET}` : path,
         path === paths.transactionsConfirm ? { transactionHash: HASH } : undefined);
@@ -3582,11 +3568,9 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
       for (const result of body) {
         const call = payload.find(entry => entry.id === result.id)!;
         const data = (call.params[0] as { data: string }).data;
-        if (!data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) continue;
-        const [, displayIds] = decodeReturn(['uint8[]', 'uint256[]'], `0x${data.slice(10)}`) as [bigint[], bigint[]];
-        if (displayIds[0] !== 31n || call.params[1] === blockHash(102)) continue;
-        const [uris] = decodeReturn(['string[]'], result.result) as [string[]];
-        result.result = encodeAbi(['string[]'], [[uris[0].replace('/31.json', '/32.json')]]);
+        if (!data.startsWith(functionSelector('getTokenInfos(uint256[])')) || call.params[1] === blockHash(102)) continue;
+        const [tokens] = decodeReturn(['(uint8,uint256,address)[]'], result.result) as [Array<[bigint, bigint, string]>];
+        result.result = encodeAbi(['(uint8,uint256,address)[]'], [tokens.map(token => [token[0], token[1], OTHER_WALLET])]);
       }
       return Response.json(body);
     };
@@ -3596,7 +3580,7 @@ test('inventory metadata remains coherent when an RPC pool serves another fork a
     assert.equal(result.body.observedBlock, 102);
     assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
     const reads = f.state.calls.filter(call => call.method === 'eth_call');
-    assert.equal(reads.length, 3);
+    assert.equal(reads.length, 1);
     assert.ok(reads.every(call => call.params[1] === blockHash(102)));
     assert.equal(f.state.calls.filter(call => call.method === 'eth_getBlockByNumber' && call.params[0] === '0x66').length, 1);
   } finally { f.close(); }
@@ -3608,10 +3592,10 @@ test('public transaction confirmation rechecks its receipt block after reading c
     f.setReceipt(HASH, [{ address: CONTRACT,
       topics: [ETHEREUM_EVENT_TOPICS.Transfer, topicAddress(ZERO), topicAddress(WALLET), topicNumber('111112')],
       data: '0x', blockNumber: '0x64', blockHash: blockHash(100), transactionHash: HASH, logIndex: '0x0' }]);
-    f.state.afterRpc = async call => {
-      if (call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith(functionSelector('previewTokenURIs(uint8[],uint256[])'))) {
-        f.state.canonical.set(100, blockHash(999));
-      }
+    const metadataFetch = f.metadata.fetch;
+    f.metadata.fetch = async (input, init) => {
+      f.state.canonical.set(100, blockHash(999));
+      return metadataFetch(input, init);
     };
     const result = await f.request(paths.transactionsConfirm, { transactionHash: HASH });
     assert.equal(result.response.status, 503);
@@ -3639,7 +3623,7 @@ for (const count of [311, 620]) {
       assert.deepEqual(result.body.items.map(item => item.tokenId), ids);
       assert.deepEqual(result.body.items.map(item => item.displayId), ids.map(Number));
       const reads = f.state.calls.filter(call => call.method === 'eth_call');
-      assert.equal(reads.length, Math.ceil(count / 150) + Math.ceil(count / 30));
+      assert.equal(reads.length, Math.ceil(count / 150));
       assert.ok(reads.every(call => call.params[1] === blockHash(102)));
       assert.ok(f.state.batchSizes.every(size => size <= 4));
     } finally { f.close(); }
@@ -3670,7 +3654,7 @@ test('bundled transactions confirm more than 150 minted items with complete meta
     assert.ok(result.body.items.every(item => item.owner === WALLET && item.kind === 'crate' &&
       item.image.startsWith('data:image/svg+xml;base64,')));
     assert.deepEqual(result.body.burnedTokenIds, burned);
-    assert.deepEqual(f.state.batchSizes, [2, 4, 2]);
+    assert.deepEqual(f.state.batchSizes, [2]);
   } finally { f.close(); }
 });
 

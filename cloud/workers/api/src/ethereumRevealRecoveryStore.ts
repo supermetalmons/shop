@@ -5,12 +5,16 @@ import type { RevealCrate, RevealSearchRange, RevealSql } from './ethereumReveal
 
 export type RevealWorkLane = 'active' | 'background';
 export type RevealReceiptClaim = { hash: string; claimId: string; startedAtMs: number; leaseUntilMs: number; active: boolean };
+export type RevealDispatchState = { limit: number; inFlight: number; active: number; background: number;
+  pauseUntilMs: number; nextRecoveryMs: number | null; earliestLeaseUntilMs: number | null };
 export type RevealScanClaim = { kind: 'crate' | 'tokens'; id: string; claimId: string; leaseUntilMs: number;
   active: boolean; range: RevealSearchRange; crateTokenIds: string[]; tokenIds: string[] };
 
 type ReceiptRow = { hash: string; requested_all: number; observed: number; opaque: number; active_until_ms: number;
   next_check_ms: number; last_checked_ms: number; attempts: number; claim_id: string | null; lease_until_ms: number;
+  claim_active: number;
   created_at_ms: number; request_pending: number; resolved: number; legacy_pending: number; result_json: string | null };
+type DispatchRow = { concurrency_limit: number; pause_until_ms: number; recovery_at_ms: number };
 type CrateRow = { crate_token_id: string; mode: string; observed_hash: string | null; active_until_ms: number;
   receipt_due_ms: number; scan_due_ms: number | null; receipt_served_ms: number; scan_served_ms: number;
   generation: number; from_block: number; ranges_json: string; scan_attempts: number;
@@ -33,6 +37,9 @@ const COOLDOWN_MS = 2_000;
 const OPAQUE_LIMIT = 10_000;
 const UNKNOWN_MS = 15 * 60_000;
 const RECEIPT_LEASE_MS = 30_000;
+const RECEIPT_CONCURRENCY = 64;
+const RECEIPT_MIN_CONCURRENCY = 4;
+const CONCURRENCY_RECOVERY_MS = 30_000;
 const SCAN_LEASE_MS = 60_000;
 const DAY_MS = 86_400_000;
 const ELIGIBLE_CANDIDATE = "(j.mode!='observed' OR j.observed_hash=c.hash OR c.evidence_version>c.checked_version)";
@@ -55,9 +62,17 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS receipt_work (hash TEXT PRIMARY KEY REFERENCES transactions(hash),requested_all INTEGER NOT NULL DEFAULT 0,
     observed INTEGER NOT NULL DEFAULT 0,opaque INTEGER NOT NULL DEFAULT 0,active_until_ms INTEGER NOT NULL DEFAULT 0,
     next_check_ms INTEGER NOT NULL DEFAULT 0,last_checked_ms INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,
-    claim_id TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,created_at_ms INTEGER NOT NULL,request_pending INTEGER NOT NULL DEFAULT 0,resolved INTEGER NOT NULL DEFAULT 0,
+    claim_id TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,claim_active INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,request_pending INTEGER NOT NULL DEFAULT 0,resolved INTEGER NOT NULL DEFAULT 0,
     legacy_pending INTEGER NOT NULL DEFAULT 0,result_json TEXT)`,
   `CREATE INDEX IF NOT EXISTS receipt_opaque_due ON receipt_work(next_check_ms,last_checked_ms,hash) WHERE opaque=1 AND resolved=0`,
+  `CREATE TABLE IF NOT EXISTS reveal_dispatch_control (id INTEGER PRIMARY KEY CHECK(id=1),
+    concurrency_limit INTEGER NOT NULL DEFAULT 64 CHECK(concurrency_limit BETWEEN 4 AND 64),
+    pause_until_ms INTEGER NOT NULL DEFAULT 0,recovery_at_ms INTEGER NOT NULL DEFAULT 0)`,
+  `INSERT OR IGNORE INTO reveal_dispatch_control(id) VALUES(1)`,
+  `CREATE TABLE IF NOT EXISTS reveal_overflow_claims (hash TEXT PRIMARY KEY,claim_id TEXT NOT NULL UNIQUE,
+    started_at_ms INTEGER NOT NULL,lease_until_ms INTEGER NOT NULL)`,
+  `CREATE INDEX IF NOT EXISTS reveal_overflow_lease ON reveal_overflow_claims(lease_until_ms)`,
   `CREATE INDEX IF NOT EXISTS receipt_unresolved_due ON receipt_work(next_check_ms,last_checked_ms,hash) WHERE resolved=0`,
   `CREATE TABLE IF NOT EXISTS crate_candidates (crate_token_id TEXT NOT NULL REFERENCES crate_recovery_jobs(crate_token_id),
     hash TEXT NOT NULL REFERENCES receipt_work(hash),evidence_version INTEGER NOT NULL DEFAULT 0,checked_version INTEGER NOT NULL DEFAULT 0,
@@ -91,6 +106,12 @@ export class EthereumRevealRecoveryStore {
       if (!this.sql.exec<{ name: string }>('PRAGMA table_info(receipt_work)').toArray().some(row => row.name === 'request_pending')) {
         this.sql.exec('ALTER TABLE receipt_work ADD COLUMN request_pending INTEGER NOT NULL DEFAULT 0');
       }
+      if (!this.sql.exec<{ name: string }>('PRAGMA table_info(receipt_work)').toArray().some(row => row.name === 'claim_active')) {
+        this.sql.exec('ALTER TABLE receipt_work ADD COLUMN claim_active INTEGER NOT NULL DEFAULT 0');
+        this.sql.exec('UPDATE receipt_work SET claim_active=1 WHERE claim_id IS NOT NULL AND active_until_ms>last_checked_ms');
+      }
+      this.sql.exec(`CREATE INDEX IF NOT EXISTS receipt_live_claims ON receipt_work(lease_until_ms,claim_active)
+        WHERE claim_id IS NOT NULL`);
       if (!this.sql.exec<{ name: string }>('PRAGMA table_info(crate_recovery_jobs)').toArray().some(row => row.name === 'updated_at_ms')) {
         this.sql.exec('ALTER TABLE crate_recovery_jobs ADD COLUMN updated_at_ms INTEGER NOT NULL DEFAULT 0');
       }
@@ -381,11 +402,71 @@ export class EthereumRevealRecoveryStore {
       contractAddress: deployment.contractAddress, artworks, unresolved, retryAfterMs: unresolved.some(row => row.status === 'recovering') ? COOLDOWN_MS : 0 };
   }
 
+  dispatchState(now: number): RevealDispatchState {
+    return this.atomic(() => {
+      this.sql.exec('DELETE FROM reveal_overflow_claims WHERE lease_until_ms<=?', now);
+      const control = this.sql.exec<DispatchRow>('SELECT * FROM reveal_dispatch_control WHERE id=1').toArray()[0];
+      if (control.concurrency_limit < RECEIPT_CONCURRENCY && control.recovery_at_ms > 0 && now >= control.recovery_at_ms) {
+        const intervals = Math.floor((now - control.recovery_at_ms) / CONCURRENCY_RECOVERY_MS) + 1;
+        control.concurrency_limit = Math.min(RECEIPT_CONCURRENCY, control.concurrency_limit + intervals * 4);
+        control.recovery_at_ms = control.concurrency_limit === RECEIPT_CONCURRENCY ? 0
+          : control.recovery_at_ms + intervals * CONCURRENCY_RECOVERY_MS;
+        this.sql.exec('UPDATE reveal_dispatch_control SET concurrency_limit=?,recovery_at_ms=? WHERE id=1',
+          control.concurrency_limit, control.recovery_at_ms);
+      }
+      const running = this.sql.exec<{ in_flight: number; active: number; earliest: number | null }>(`SELECT COUNT(*) AS in_flight,
+        COALESCE(SUM(active),0) AS active,MIN(lease_until_ms) AS earliest FROM (
+          SELECT claim_active AS active,lease_until_ms FROM receipt_work WHERE claim_id IS NOT NULL AND lease_until_ms>?
+          UNION ALL SELECT 1 AS active,lease_until_ms FROM reveal_overflow_claims)`, now).toArray()[0];
+      return { limit: control.concurrency_limit, inFlight: running.in_flight, active: running.active,
+        background: running.in_flight - running.active, pauseUntilMs: control.pause_until_ms,
+        nextRecoveryMs: control.recovery_at_ms || null, earliestLeaseUntilMs: running.earliest };
+    });
+  }
+
+  recordThrottle(now: number, retryAfterMs: number): void {
+    this.atomic(() => {
+      const state = this.dispatchState(now);
+      const delay = Number.isFinite(retryAfterMs) && retryAfterMs >= 0 ? Math.max(1_000, Math.ceil(retryAfterMs)) : COOLDOWN_MS;
+      const pauseUntilMs = Math.max(state.pauseUntilMs, Math.min(8_640_000_000_000_000 - CONCURRENCY_RECOVERY_MS, now + delay));
+      const limit = state.pauseUntilMs > now ? state.limit : Math.max(RECEIPT_MIN_CONCURRENCY, Math.floor(state.limit / 2));
+      this.sql.exec('UPDATE reveal_dispatch_control SET concurrency_limit=?,pause_until_ms=?,recovery_at_ms=? WHERE id=1',
+        limit, pauseUntilMs, pauseUntilMs + CONCURRENCY_RECOVERY_MS);
+    });
+  }
+
+  claimOverflow(hash: string, now: number, deadlineMs: number): RevealReceiptClaim | null {
+    if (!this.migrationReady() || !Number.isFinite(deadlineMs) || deadlineMs <= now) return null;
+    return this.atomic(() => {
+      const state = this.dispatchState(now);
+      if (state.pauseUntilMs > now || state.inFlight >= state.limit ||
+        this.sql.exec('SELECT 1 FROM receipt_work WHERE hash=? AND claim_id IS NOT NULL AND lease_until_ms>?', hash, now).toArray().length ||
+        this.sql.exec('SELECT 1 FROM reveal_overflow_claims WHERE hash=?', hash).toArray().length) return null;
+      const claim = { hash, claimId: crypto.randomUUID(), startedAtMs: now,
+        leaseUntilMs: Math.min(now + RECEIPT_LEASE_MS, deadlineMs), active: true };
+      this.sql.exec('INSERT INTO reveal_overflow_claims(hash,claim_id,started_at_ms,lease_until_ms) VALUES(?,?,?,?)',
+        claim.hash, claim.claimId, claim.startedAtMs, claim.leaseUntilMs);
+      return claim;
+    });
+  }
+
+  validOverflow(claim: RevealReceiptClaim, now: number): boolean {
+    return this.sql.exec('SELECT 1 FROM reveal_overflow_claims WHERE hash=? AND claim_id=? AND lease_until_ms>?',
+      claim.hash, claim.claimId, now).toArray().length > 0;
+  }
+
+  releaseOverflow(claim: RevealReceiptClaim): boolean {
+    return this.sql.exec('DELETE FROM reveal_overflow_claims WHERE hash=? AND claim_id=? RETURNING hash',
+      claim.hash, claim.claimId).toArray().length > 0;
+  }
+
   claimReceipt(now: number, lane: RevealWorkLane, preferredHash?: string, excludeHashes: string[] = []): RevealReceiptClaim | null {
     if (!this.migrationReady() || preferredHash && excludeHashes.includes(preferredHash)) return null;
     return this.atomic(() => {
+      const state = this.dispatchState(now);
+      if (state.pauseUntilMs > now || state.inFlight >= state.limit) return null;
       const laneSql = lane === 'active' ? '>?' : '<=?';
-      const hashFilter = `${preferredHash ? ' AND w.hash=?' : ''}${excludeHashes.length ? ` AND w.hash NOT IN (${excludeHashes.map(() => '?').join(',')})` : ''}`;
+      const hashFilter = ` AND NOT EXISTS(SELECT 1 FROM reveal_overflow_claims o WHERE o.hash=w.hash)${preferredHash ? ' AND w.hash=?' : ''}${excludeHashes.length ? ` AND w.hash NOT IN (${excludeHashes.map(() => '?').join(',')})` : ''}`;
       const hashBindings = [...(preferredHash ? [preferredHash] : []), ...excludeHashes];
       const choices: Array<{ hash: string; served: number }> = [];
       const opaque = this.sql.exec<{ hash: string; served: number }>(`SELECT w.hash,w.last_checked_ms AS served FROM receipt_work w
@@ -415,7 +496,8 @@ export class EthereumRevealRecoveryStore {
       this.sql.exec(`INSERT INTO receipt_claim_crates(hash,claim_id,crate_token_id,evidence_version,generation)
         SELECT ?,?,c.crate_token_id,c.evidence_version,j.generation FROM crate_candidates c JOIN crate_recovery_jobs j ON j.crate_token_id=c.crate_token_id WHERE c.hash=?`, hash, claimId, hash);
       this.sql.exec('INSERT INTO receipt_claim_tokens(hash,claim_id,token_id) SELECT ?,?,token_id FROM receipt_token_interest WHERE hash=?', hash, claimId, hash);
-      this.sql.exec('UPDATE receipt_work SET claim_id=?,lease_until_ms=?,last_checked_ms=?,request_pending=0,resolved=0,attempts=attempts+1 WHERE hash=?', claimId, leaseUntilMs, now, hash);
+      this.sql.exec('UPDATE receipt_work SET claim_id=?,lease_until_ms=?,claim_active=?,last_checked_ms=?,request_pending=0,resolved=0,attempts=attempts+1 WHERE hash=?',
+        claimId, leaseUntilMs, lane === 'active' ? 1 : 0, now, hash);
       this.sql.exec('UPDATE crate_candidates SET last_checked_ms=?,attempts=attempts+1 WHERE hash=?', now, hash);
       this.sql.exec(`UPDATE crate_recovery_jobs SET receipt_due_ms=?,receipt_served_ms=? WHERE crate_token_id IN
         (SELECT crate_token_id FROM receipt_claim_crates WHERE hash=? AND claim_id=?)`, leaseUntilMs, now, hash, claimId);
@@ -427,12 +509,14 @@ export class EthereumRevealRecoveryStore {
     return this.sql.exec<ReceiptRow>('SELECT * FROM receipt_work WHERE hash=? AND claim_id=? AND lease_until_ms>?', claim.hash, claim.claimId, now).toArray()[0];
   }
 
+  validReceiptClaim(claim: RevealReceiptClaim, now: number): boolean { return !!this.validReceipt(claim, now); }
+
   recordReceiptPresence(claim: RevealReceiptClaim, now: number): boolean {
     return this.sql.exec<{ hash: string }>('UPDATE receipt_work SET observed=1,legacy_pending=0 WHERE hash=? AND claim_id=? AND lease_until_ms>? RETURNING hash', claim.hash, claim.claimId, now).toArray().length > 0;
   }
 
   private releaseReceipt(claim: RevealReceiptClaim, next: number): void {
-    this.sql.exec('UPDATE receipt_work SET claim_id=NULL,lease_until_ms=0,next_check_ms=?,legacy_pending=0 WHERE hash=? AND claim_id=?', next, claim.hash, claim.claimId);
+    this.sql.exec('UPDATE receipt_work SET claim_id=NULL,lease_until_ms=0,claim_active=0,next_check_ms=?,legacy_pending=0 WHERE hash=? AND claim_id=?', next, claim.hash, claim.claimId);
     const crates = this.sql.exec<{ crate_token_id: string }>('SELECT crate_token_id FROM crate_candidates WHERE hash=?', claim.hash).toArray();
     this.sql.exec('DELETE FROM receipt_claim_crates WHERE hash=? AND claim_id=?', claim.hash, claim.claimId);
     this.sql.exec('DELETE FROM receipt_claim_tokens WHERE hash=? AND claim_id=?', claim.hash, claim.claimId);
@@ -594,7 +678,7 @@ export class EthereumRevealRecoveryStore {
       this.work(hash, now);
       this.sql.exec('UPDATE receipt_work SET requested_all=1,observed=1,opaque=0,active_until_ms=? WHERE hash=?', now + ACTIVE_MS, hash);
       const claimId = crypto.randomUUID();
-      this.sql.exec('UPDATE receipt_work SET claim_id=?,lease_until_ms=?,last_checked_ms=?,request_pending=0,attempts=attempts+1 WHERE hash=?',
+      this.sql.exec('UPDATE receipt_work SET claim_id=?,lease_until_ms=?,claim_active=1,last_checked_ms=?,request_pending=0,attempts=attempts+1 WHERE hash=?',
         claimId, now + RECEIPT_LEASE_MS, startedAtMs, hash);
       return this.completeReceipt(deployment, { hash, claimId, startedAtMs, leaseUntilMs: now + RECEIPT_LEASE_MS, active: true }, result, now);
     });
@@ -603,6 +687,7 @@ export class EthereumRevealRecoveryStore {
   claimScan(now: number, lane: RevealWorkLane, scope?: { tokenIds?: string[] }): RevealScanClaim | null {
     if (!this.migrationReady()) return null;
     return this.atomic(() => {
+      if (this.dispatchState(now).pauseUntilMs > now) return null;
       const condition = lane === 'active' ? '>?' : '<=?';
       const tokenIds = scope?.tokenIds;
       const tokenFilter = tokenIds?.length ? ` AND EXISTS(SELECT 1 FROM token_recovery t WHERE t.job_id=r.id AND t.token_id IN (SELECT value FROM json_each(?)))` : '';
@@ -712,13 +797,24 @@ export class EthereumRevealRecoveryStore {
 
   nextWake(now: number): number | null {
     if (!this.migrationReady()) return now + 250;
-    const row = this.sql.exec<{ due: number | null }>(`SELECT MIN(due) AS due FROM (
+    const state = this.dispatchState(now);
+    const receipt = this.sql.exec<{ due: number | null }>(`SELECT MIN(due) AS due FROM (
       SELECT MIN(MAX(w.next_check_ms,w.lease_until_ms,CASE WHEN w.attempts>0 THEN w.last_checked_ms+2000 ELSE 0 END)) AS due
         FROM receipt_work w WHERE w.resolved=0 AND (w.opaque=1 OR w.request_pending=1 OR EXISTS(SELECT 1 FROM receipt_token_interest i WHERE i.hash=w.hash))
-      UNION ALL SELECT MIN(receipt_due_ms) FROM crate_recovery_jobs WHERE receipt_due_ms<9007199254740991
-      UNION ALL SELECT MIN(MAX(scan_due_ms,scan_lease_until_ms)) FROM crate_recovery_jobs WHERE scan_due_ms IS NOT NULL
+      UNION ALL SELECT MIN(receipt_due_ms) FROM crate_recovery_jobs WHERE receipt_due_ms<9007199254740991)`).toArray()[0]?.due;
+    const scan = this.sql.exec<{ due: number | null }>(`SELECT MIN(due) AS due FROM (
+      SELECT MIN(MAX(scan_due_ms,scan_lease_until_ms)) AS due FROM crate_recovery_jobs WHERE scan_due_ms IS NOT NULL
       UNION ALL SELECT MIN(MAX(next_check_ms,lease_until_ms)) FROM recovery_jobs)`).toArray()[0];
-    return row?.due == null ? null : Math.max(now + 250, row.due);
+    const overflow = this.sql.exec<{ due: number | null }>('SELECT MIN(lease_until_ms) AS due FROM reveal_overflow_claims').toArray()[0]?.due;
+    const times: number[] = [];
+    if (receipt != null) {
+      const capacityAt = state.inFlight < state.limit ? now
+        : Math.min(state.earliestLeaseUntilMs ?? Infinity, state.nextRecoveryMs ?? Infinity);
+      times.push(Math.max(receipt, state.pauseUntilMs, capacityAt));
+    }
+    if (scan?.due != null) times.push(Math.max(scan.due, state.pauseUntilMs));
+    if (overflow != null) times.push(overflow);
+    return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }
 
   summary() {
@@ -745,6 +841,6 @@ export class EthereumRevealRecoveryStore {
     return { migrationReady: migration.phase === 'ready', migration: { phase: migration.phase, cursor: migration.cursor,
       rowKey: migration.row_key, offset: migration.offset }, opaque, opaqueCapacity: { used: opaque, limit: OPAQUE_LIMIT,
       available: Math.max(0, OPAQUE_LIMIT - opaque) }, crates: Object.fromEntries(crates.map(row => [row.mode, row.count])),
-      due: { active: due(1), background: due(0) } };
+      due: { active: due(1), background: due(0) }, dispatch: this.dispatchState(now) };
   }
 }

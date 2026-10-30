@@ -2,7 +2,7 @@ import { decodeEventLogs, decodeReturn, encodeCall, ETHEREUM_EVENT_TOPICS } from
 import { ethereumHexQuantity, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY } from '../../../../shared/ethereum/protocol.js';
 import type { EthereumRevealObservation } from '../../../../shared/ethereum/reveal.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
-import { readBoundedResponseJson } from './boundedResponse.js';
+import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
 import { rpcInteger } from './ethereumRpcValue.js';
 
@@ -42,6 +42,17 @@ export type EthereumRevealCrateRecovery = Omit<EthereumRevealTokenRecovery, 'min
 
 class RevealRangeTooLarge extends Error {}
 
+export class EthereumRevealThrottleError extends Error {
+  constructor(readonly retryAfterMs: number) { super('Ethereum reveal provider is throttled.'); }
+}
+
+function providerRetryAfter(response: Response): number {
+  const value = response.headers.get('Retry-After')?.trim();
+  if (!value) return 2_000;
+  const delay = /^\d+(?:\.\d+)?$/.test(value) ? Math.ceil(Number(value) * 1_000) : Date.parse(value) - Date.now();
+  return Number.isSafeInteger(delay) && delay >= 0 ? Math.max(1, delay) : 2_000;
+}
+
 function unavailable(): EthereumApiError {
   return new EthereumApiError('unavailable', 'Ethereum reveal verification is temporarily unavailable.');
 }
@@ -78,9 +89,20 @@ function createRpc(env: RevealChainEnvironment, deployment: RevealChainDeploymen
     try {
       const response = await providerFetch(url, { method: 'POST', redirect: 'manual', signal: requestSignal,
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) });
+      if (response.status === 429) {
+        await cancelResponseBody(response);
+        throw new EthereumRevealThrottleError(providerRetryAfter(response));
+      }
       const body = record(await readBoundedResponseJson(response, { maxBytes: 3 * 1024 * 1024,
         signal: requestSignal, contentType: 'require-json',
         createError: failure => method === 'eth_getLogs' && failure === 'too-large' ? new RevealRangeTooLarge() : unavailable() }));
+      if (body.error && typeof body.error === 'object') {
+        const error = record(body.error);
+        if (error.code === 429 || typeof error.message === 'string' &&
+          /rate.?limit|quota|credits|compute units|throughput|too many requests|requests per second/i.test(error.message)) {
+          throw new EthereumRevealThrottleError(providerRetryAfter(response));
+        }
+      }
       if (method === 'eth_getLogs' && body.error && typeof body.error === 'object') {
         const error = record(body.error);
         if (typeof error.message === 'string' && !/rate|quota|credits|compute units/i.test(error.message) &&
@@ -93,7 +115,7 @@ function createRpc(env: RevealChainEnvironment, deployment: RevealChainDeploymen
     } catch (error) {
       signal.throwIfAborted();
       if (method === 'eth_getLogs' && timeout.aborted) throw new RevealRangeTooLarge();
-      throw error instanceof EthereumApiError || error instanceof RevealRangeTooLarge ? error : unavailable();
+      throw error instanceof EthereumApiError || error instanceof RevealRangeTooLarge || error instanceof EthereumRevealThrottleError ? error : unavailable();
     }
   };
 }
@@ -302,6 +324,7 @@ export async function recoverRevealTokens(env: RevealChainEnvironment, deploymen
         topics: [ETHEREUM_EVENT_TOPICS.Transfer, `0x${'0'.repeat(64)}`, null, candidates.map(id => ethereumHexQuantity(id).slice(2).padStart(64, '0')).map(id => `0x${id}`)] }]);
     } catch (error) {
       signal.throwIfAborted();
+      if (error instanceof EthereumRevealThrottleError) throw error;
       if (!(error instanceof RevealRangeTooLarge) || range.fromBlock === toBlock) throw unavailable();
       const middle = Math.floor((range.fromBlock + toBlock) / 2);
       result.remainingRanges = [{ fromBlock: middle + 1, toBlock }, { fromBlock: range.fromBlock, toBlock: middle }];
@@ -358,6 +381,7 @@ export async function recoverRevealCrates(env: RevealChainEnvironment, deploymen
         topics: [ETHEREUM_EVENT_TOPICS.CrateUnboxed, crateTokenIds.map(id => `0x${BigInt(id).toString(16).padStart(64, '0')}`)] }]);
     } catch (error) {
       signal.throwIfAborted();
+      if (error instanceof EthereumRevealThrottleError) throw error;
       if (!(error instanceof RevealRangeTooLarge) || range.fromBlock === toBlock) throw unavailable();
       const middle = Math.floor((range.fromBlock + toBlock) / 2);
       result.remainingRanges = [{ fromBlock: middle + 1, toBlock }, { fromBlock: range.fromBlock, toBlock: middle }];

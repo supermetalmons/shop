@@ -48,6 +48,8 @@ Requests are idempotent. Resume pending hashes after reload; submit replacement 
 
 Available results are read from the reveal ledger. When verification is needed, the request waits for up to two seconds of chain work before returning the current result. This is an inline work budget, not a network latency guarantee. Admitted work continues in the background after the response or a disconnect. Once RPC has confirmed that a pending transaction exists, including a wrapped transaction, it has no tracking expiry merely because it remains pending.
 
+Independent unpacks are verified concurrently with bounded capacity. A busy collection can return `pending` while admitted work waits for a slot; keep polling the same hash at the supplied interval. Metadata publication has separate capacity and does not delay an available API result.
+
 ## 2. Recover artwork by token ID
 
 Use this when the unpack hash is unavailable or inventory still shows the placeholder:
@@ -110,6 +112,8 @@ Each artwork has this shape (illustrative values):
 - `observation`: the first transaction/block that authorized reveal; it does not prove ownership or finality.
 
 Cache media by `(chainId, contractAddress, tokenId)`. Revealed artwork stays unchanged through reorgs and remints. Use inventory data for ownership.
+
+Metadata JSON addresses follow the collection's configured base URI plus the decimal token ID and `.json`. The JSON address itself is predictable before minting; it contains only the placeholder until reveal. Use the methods above to establish reveal status and obtain media immediately, without waiting for CDN or marketplace refreshes.
 
 ## Errors and retries
 

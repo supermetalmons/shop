@@ -135,15 +135,21 @@ test('receipt claims use native Workerd fetch for DAS, web3 reads, and completed
     }};`;
   const bundle = await build({ stdin: { contents: source, loader: 'ts', resolveDir: resolve('.') }, bundle: true,
     write: false, format: 'esm', platform: 'browser', target: 'es2022', external: ['node:*', 'cloudflare:*'] });
-  const worker = new Miniflare({ modules: true, script: bundle.outputFiles[0].text,
-    compatibilityDate: '2026-08-08', compatibilityFlags: ['nodejs_compat', 'enable_request_signal'],
-    d1Databases: ['COMMERCE_DB'], bindings: { HELIUS_API_KEY: 'local-test-only', STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: 'true' },
-    outboundService: async (request: Request) => {
+  const worker = new Miniflare({ workers: [{ config: {
+    name: 'receipt-claim-fetch-test', compatibilityDate: '2026-08-08', compatibilityFlags: ['nodejs_compat', 'enable_request_signal'],
+    manifest: { mainModule: 'receipt-claim.mjs', modulesRoot: resolve('.'), modules: {
+      'receipt-claim.mjs': { type: 'esm', contents: bundle.outputFiles[0].text },
+    } },
+    env: { COMMERCE_DB: { type: 'd1', id: 'COMMERCE_DB' }, HELIUS_API_KEY: { type: 'text', value: 'local-test-only' },
+      STRIPE_RECEIPT_CLAIM_ADMISSION_ENABLED: { type: 'text', value: 'true' } },
+  }, dev: {
+    outboundService: { type: 'fetcher', handler: async (request: Request) => {
       assert.equal(new URL(request.url).hostname, 'mainnet.helius-rpc.com');
       const response = await fetch(providerUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: await request.text() });
       return new OutboundResponse(await response.text(), { status: response.status, headers: { 'Content-Type': 'application/json' } });
-    },
-  });
+    } },
+  },
+  }] });
   try {
     const db: D1Database = await worker.getD1Database('COMMERCE_DB');
     for (const definition of definitions) await db.prepare(definition).run();

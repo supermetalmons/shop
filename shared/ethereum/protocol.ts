@@ -11,7 +11,6 @@ export const ETHEREUM_MAX_MINT_QUANTITY = 15;
 export const ETHEREUM_MAX_UNBOX_QUANTITY = 15;
 export const ETHEREUM_MAX_DELIVERY_ITEMS = 50;
 export const ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE = 150;
-export const ETHEREUM_MAX_METADATA_BATCH_SIZE = 30;
 export const ETHEREUM_MAX_EXPECTED_IDS = 500;
 export const ETHEREUM_MAX_INVENTORY_EXPECTED_IDS = 2 * ETHEREUM_MAX_EXPECTED_IDS;
 export const ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE = 100;
@@ -25,10 +24,6 @@ export const ETHEREUM_ITEM_KINDS: readonly EthereumItemKind[] = [
 
 export function ethereumItemKind(value: number): EthereumItemKind | null {
   return ETHEREUM_ITEM_KINDS[value - 1] ?? null;
-}
-
-export function ethereumItemKindNumber(kind: EthereumItemKind): number {
-  return ETHEREUM_ITEM_KINDS.indexOf(kind) + 1;
 }
 
 export function ethereumItemDisplayIdMaximum(kind: EthereumItemKind): number {

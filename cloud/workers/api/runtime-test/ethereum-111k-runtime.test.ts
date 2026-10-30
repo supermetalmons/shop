@@ -240,6 +240,7 @@ export default {
     const provider = async (input, init) => {
       if (String(input).startsWith(env.ETHEREUM_111K_METADATA_BASE_URI)) {
         metadataUrls.push(String(input));
+        if (url.searchParams.has('reorg')) changed = true;
         return Response.json({ name: 'Synthetic runtime metadata', image: 'https://future-cdn.example/artwork.webp',
           description: '', attributes: [{ trait_type: 'type', value: 'artwork' }] });
       }
@@ -264,11 +265,6 @@ export default {
             const [ids] = decodeReturn(['uint256[]'], argumentsHex);
             if (ids.length > 150) throw new Error('Token information batch is too large');
             result = encodeAbi(['(uint8,uint256,address)[]'], [ids.map(id => [1, id, wallet])]);
-          } else if (data.startsWith(selector('previewTokenURIs(uint8[],uint256[])'))) {
-            const [kinds, ids] = decodeReturn(['uint8[]', 'uint256[]'], argumentsHex);
-            if (ids.length > 30 || kinds.length !== ids.length) throw new Error('Metadata batch is invalid');
-            result = encodeAbi(['string[]'], [ids.map(id => env.ETHEREUM_111K_METADATA_BASE_URI + id + '.json')]);
-            if (url.searchParams.has('reorg')) changed = true;
           } else throw new Error('Unexpected contract read');
         } else throw new Error('Unexpected RPC: ' + rpc.method);
         return { jsonrpc: '2.0', id: rpc.id, result };
@@ -312,8 +308,8 @@ export default {
       item.attributes[0].value === 'artwork'));
     assert.equal(confirmed.headers.get('X-Test-Metadata-Reads'), '311');
     assert.equal(confirmed.headers.get('X-Test-Unique-Metadata-Reads'), '311');
-    assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '14');
-    assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '4');
+    assert.equal(confirmed.headers.get('X-Test-Contract-Calls'), '3');
+    assert.equal(confirmed.headers.get('X-Test-Max-Envelope'), '3');
     assert.equal(confirmed.headers.get('X-Test-Pinned-Calls'), 'true');
     const orphaned = await confirm('?reorg=1');
     assert.equal(orphaned.status, 503);

@@ -8,12 +8,15 @@ import { ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
 import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.ts';
 import type { EthereumRevealStore, RevealSql, RevealReceiptClaim, RevealScanClaim } from '../src/ethereumRevealStore.ts';
+import type { RevealVerificationResult, RevealVerificationScope, RevealVerificationWork } from '../src/ethereumRevealVerification.ts';
 import { handleEthereumRequest } from '../src/ethereumHandler.ts';
 import type { EthereumEnvironment } from '../src/ethereumRuntime.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 import { d1Database } from './commerceD1Harness.ts';
 
 const { EthereumRevealObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealObject.ts'));
+const { EthereumRevealVerifierObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealVerifierObject.ts'));
+const { EthereumRevealPublisherObject } = await loadCloudflareWorkersModule(() => import('../src/ethereumRevealPublisherObject.ts'));
 const hash = (value: number) => `0x${value.toString(16).padStart(64, '0')}`;
 const CONTRACT = `0x${'11'.repeat(20)}`;
 const OWNER = `0x${'22'.repeat(20)}`;
@@ -56,6 +59,9 @@ type InternalObject = {
   alarm(): Promise<void>;
   processReceipt(deployment: EthereumRevealDeployment, claim: RevealReceiptClaim): Promise<void>;
   processScan(deployment: EthereumRevealDeployment, claim: RevealScanClaim): Promise<void>;
+  withinBudget(work: Promise<unknown>, deadline: number): Promise<boolean>;
+  validateReceiptWork(scope: RevealVerificationScope, work: RevealVerificationWork): Promise<boolean>;
+  recordReceiptPresence(scope: RevealVerificationScope, work: RevealVerificationWork): Promise<boolean>;
   runPublications(deployment: EthereumRevealDeployment): Promise<void>;
   receipts: Map<string, { active: boolean; promise: Promise<void> }>;
   scans: Map<string, { claim: RevealScanClaim; promise: Promise<void> }>;
@@ -127,9 +133,27 @@ function fixture(t: TestContext) {
       void promise.finally(() => tasks.delete(promise)).catch(() => undefined);
     },
   };
+  let current: InternalObject;
+  const verifiers = new Map<string, InstanceType<typeof EthereumRevealVerifierObject>>();
+  let publisher: InstanceType<typeof EthereumRevealPublisherObject>;
   const env = { ETHEREUM_111K_CHAIN_ID: '31337', ETHEREUM_111K_RPC_URL: 'http://127.0.0.1:8545',
-    ALCHEMY_MI_NOTE_API_KEY: '', ETHEREUM_REVEAL_METADATA: metadata, OPS_DB: d1Database(database) };
-  const make = () => new EthereumRevealObject(context as unknown as DurableObjectState, env as unknown as Env) as unknown as InternalObject;
+    ALCHEMY_MI_NOTE_API_KEY: '', ETHEREUM_REVEAL_METADATA: metadata, OPS_DB: d1Database(database),
+    ETHEREUM_REVEAL: { getByName: () => current },
+    ETHEREUM_REVEAL_PUBLISHER: { getByName: () => publisher },
+    ETHEREUM_REVEAL_VERIFIER: { getByName(name: string) {
+      let verifier = verifiers.get(name);
+      if (!verifier) {
+        verifier = new EthereumRevealVerifierObject(context as unknown as DurableObjectState, env as unknown as Env);
+        verifiers.set(name, verifier);
+      }
+      return verifier;
+    } },
+  };
+  publisher = new EthereumRevealPublisherObject(context as unknown as DurableObjectState, env as unknown as Env);
+  const make = () => {
+    current = new EthereumRevealObject(context as unknown as DurableObjectState, env as unknown as Env) as unknown as InternalObject;
+    return current;
+  };
   const object = make();
   object.store.configure(deployment);
   while (!object.store.initializeChunk()) {}
@@ -203,6 +227,7 @@ function fixture(t: TestContext) {
     { transactionHash, blockNumber: 101, blockHash: hash(101) }, [{ crateTokenId, tokenIds: ids(first) }], Date.now(), all);
   return { object, store: object.store, database, sql, state, published, metadata, media, firstBatch: firstBatch.promise,
     pending, freeze, settle, reopen: make, getAlarm: () => alarm,
+    verifier: (transactionHash: string) => env.ETHEREUM_REVEAL_VERIFIER.getByName(`${deployment.chainId}:${CONTRACT}:${transactionHash}`),
     rows: (query: string) => database.prepare(query).all() };
 }
 
@@ -406,28 +431,178 @@ test('full opaque capacity rejects nonpersisted work while verified crates and c
   assert.equal(f.store.opaqueCount(), 10_000);
 });
 
-test('receipt work reserves a background lane and globally limits concurrent hashes to four', async t => {
+test('receipt work reserves sixteen background lanes and limits concurrent hashes to sixty-four', async t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
   const f = fixture(t);
   const holds = new Map<number, ReturnType<typeof Promise.withResolvers<Receipt | null>>>();
-  for (let index = 1; index <= 10; index++) {
+  for (let index = 1; index <= 100; index++) {
     const held = Promise.withResolvers<Receipt | null>();
     holds.set(index, held);
     f.state.receipts.set(hash(index), held.promise);
-    f.store.admitTransaction(hash(index), 100, index <= 2 ? now - 60_000 : now);
+    f.store.admitTransaction(hash(index), 100, index <= 20 ? now - 60_000 : now);
   }
   try {
     await f.object.watchdog(deployment);
-    await waitFor(() => f.state.runningReceipts === 4);
-    assert.equal([...f.object.receipts.values()].filter(work => work.active).length, 3);
-    assert.equal([...f.object.receipts.values()].filter(work => !work.active).length, 1);
+    await waitFor(() => f.state.runningReceipts === 64);
+    assert.equal([...f.object.receipts.values()].filter(work => work.active).length, 48);
+    assert.equal([...f.object.receipts.values()].filter(work => !work.active).length, 16);
     assert.ok(f.state.receiptLookups.includes(hash(1)) || f.state.receiptLookups.includes(hash(2)));
-    assert.equal(f.state.peakReceipts, 4);
+    assert.equal(f.state.peakReceipts, 64);
     for (let pass = 0; pass < 3; pass++) await f.object.watchdog(deployment);
-    assert.equal(f.state.receiptLookups.length, 4);
+    assert.equal(f.state.receiptLookups.length, 64);
   } finally { for (const held of holds.values()) held.resolve(null); await f.settle(); }
-  assert.ok(f.state.peakReceipts <= 4);
+  assert.ok(f.state.peakReceipts <= 64);
+});
+
+test('an initially queued hash returns its revealed artwork within the original request', async t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  const holds = Array.from({ length: 64 }, () => Promise.withResolvers<Receipt | null>());
+  for (const [index, held] of holds.entries()) {
+    f.state.receipts.set(hash(index + 1), held.promise);
+    f.store.admitTransaction(hash(index + 1), 100, now);
+  }
+  f.state.receipts.set(hash(65), receipt(hash(65), 1000));
+  let returned = false;
+  try {
+    await f.object.watchdog(deployment);
+    await waitFor(() => f.state.runningReceipts === 64);
+    const response = f.object.revealTransaction(deployment, hash(65), true).then(result => { returned = true; return value(result); });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal(returned, false);
+    holds[0].resolve(null);
+    const result = await response;
+    assert.equal(result.status, 'revealed');
+    assert.equal(result.artworks.length, 20);
+    assert.ok(f.state.peakReceipts <= 64);
+  } finally { for (const held of holds) held.resolve(null); await f.settle(); }
+});
+
+test('coordinator restart counts delegated inspections still running against its durable ceiling', async t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  const holds = Array.from({ length: 100 }, () => Promise.withResolvers<Receipt | null>());
+  for (const [index, held] of holds.entries()) {
+    f.state.receipts.set(hash(index + 1), held.promise);
+    f.store.admitTransaction(hash(index + 1), 100, now);
+  }
+  try {
+    await f.object.watchdog(deployment);
+    await waitFor(() => f.state.runningReceipts === 64);
+    const restored = f.reopen();
+    await restored.watchdog(deployment);
+    assert.equal(restored.receipts.size, 0);
+    assert.equal(f.state.receiptLookups.length, 64);
+    assert.equal(restored.store.dispatchState(now).inFlight, 64);
+  } finally { for (const held of holds) held.resolve(null); await f.settle(); }
+  assert.ok(f.state.peakReceipts <= 64);
+});
+
+test('a stalled verifier RPC times out locally and cannot strand or later overwrite its retry', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const original = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
+    original(callback, milliseconds === 20_000 ? 20 : milliseconds, ...args));
+  const f = fixture(t);
+  const late = Promise.withResolvers<RevealVerificationResult>();
+  const inspect = t.mock.method(f.verifier(hash(1)), 'inspect', () => late.promise);
+  assert.equal(value(await f.object.revealTransaction(deployment, hash(1), true)).status, 'pending');
+  await f.settle();
+  assert.equal(f.object.receipts.size, 0);
+  assert.equal(f.store.dispatchState(now).inFlight, 0);
+  assert.equal(f.store.knownTransaction(hash(1)), true);
+  inspect.mock.restore();
+  now += 2_001;
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  const result = value(await f.object.revealTransaction(deployment, hash(1)));
+  assert.equal(result.status, 'revealed');
+  const before = f.store.frozen(ids(1));
+  late.resolve({ kind: 'inspected', inspection: { status: 'confirmed',
+    observation: { transactionHash: hash(1), blockNumber: 1001, blockHash: hash(1001) }, confirmations: 1,
+    crates: [{ crateTokenId: '111113', tokenIds: ids(21) }] } });
+  await f.settle();
+  assert.deepEqual(f.store.frozen(ids(1)), before);
+  assert.deepEqual(f.store.frozen(ids(21)), []);
+});
+
+test('a stalled presence callback cannot outlive the verifier deadline or authorize disclosure', async t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const original = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
+    original(callback, milliseconds === 20_000 ? 20 : milliseconds, ...args));
+  const f = fixture(t);
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000));
+  const callback = Promise.withResolvers<boolean>();
+  t.mock.method(f.object, 'recordReceiptPresence', () => callback.promise);
+  assert.equal(value(await f.object.revealTransaction(deployment, hash(1), true)).status, 'pending');
+  await f.settle();
+  assert.equal(f.object.receipts.size, 0);
+  assert.equal(f.store.summary().frozen, 0);
+  assert.equal(f.published.size, 0);
+  assert.equal(f.state.calls.includes('eth_blockNumber'), false);
+  callback.resolve(true);
+  await f.settle();
+  assert.equal(f.store.summary().frozen, 0);
+});
+
+test('verifier throttling pauses dispatch without losing watches or delaying frozen reads and publication', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  f.freeze(hash(10));
+  const provider = globalThis.fetch;
+  const throttle = t.mock.method(globalThis, 'fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const { method } = JSON.parse(String(init?.body));
+    if (method === 'eth_getTransactionReceipt') return new Response('throttled', { status: 429, headers: { 'Retry-After': '5' } });
+    return provider(input, init);
+  });
+  const pending = value(await f.object.revealTransaction(deployment, hash(1), true));
+  assert.equal(pending.status, 'pending');
+  assert.deepEqual(pending.artworks, []);
+  await f.settle();
+  assert.equal(f.store.dispatchState(now).limit, 32);
+  assert.equal(f.store.dispatchState(now).pauseUntilMs, now + 5_000);
+  assert.equal(f.store.knownTransaction(hash(1)), true);
+  assert.equal(f.published.size, 20);
+  const calls = throttle.mock.callCount();
+  assert.equal(value(await f.object.revealTransaction(deployment, hash(10))).status, 'revealed');
+  now += 4_999;
+  await f.object.watchdog(deployment);
+  await f.settle();
+  assert.equal(throttle.mock.callCount(), calls);
+  throttle.mock.restore();
+  f.state.receipts.set(hash(1), receipt(hash(1), 1000, [{ crateTokenId: '111113', first: 21 }]));
+  now++;
+  await f.object.watchdog(deployment);
+  await f.settle();
+  assert.equal(value(await f.object.revealTransaction(deployment, hash(1))).status, 'revealed');
+});
+
+test('a failed inspection cancels its remaining provider requests before releasing its concurrency slot', async t => {
+  const f = fixture(t);
+  let cancelled = false;
+  t.mock.method(globalThis, 'fetch', async (_input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> => {
+    const { method } = JSON.parse(String(init?.body));
+    if (method === 'eth_chainId') return new Promise((_resolve, reject) => {
+      const signal = init!.signal!;
+      const abort = () => { cancelled = true; reject(signal.reason); };
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    });
+    assert.equal(method, 'eth_getTransactionReceipt');
+    return new Response('throttled', { status: 429, headers: { 'Retry-After': '2' } });
+  });
+  const response = value(await f.object.revealTransaction(deployment, hash(1), true));
+  await f.settle();
+  assert.equal(response.status, 'pending');
+  assert.deepEqual(response.artworks, []);
+  assert.equal(cancelled, true);
+  assert.equal(f.store.dispatchState(Date.now()).inFlight, 0);
 });
 
 test('active and background scans advance independently of four blocked receipt checks', async t => {
@@ -657,6 +832,23 @@ test('publication drains while unrelated receipts and scans remain blocked', asy
     await f.object.watchdog(deployment);
     assert.equal(f.published.size, 40);
   } finally { blocked.resolve(null); logs.resolve(); await f.settle(); }
+});
+
+test('publication continues while every receipt verification slot is stalled', async t => {
+  const f = fixture(t);
+  const holds = Array.from({ length: 64 }, () => Promise.withResolvers<Receipt | null>());
+  for (const [index, held] of holds.entries()) {
+    f.state.receipts.set(hash(index + 1), held.promise);
+    f.store.admitTransaction(hash(index + 1), 100, Date.now());
+  }
+  f.freeze(hash(500));
+  try {
+    await f.object.watchdog(deployment);
+    assert.equal(f.state.runningReceipts, 64);
+    assert.equal(f.published.size, 20);
+    assert.equal(f.rows("SELECT COUNT(*) AS count FROM publication WHERE status='published'")[0].count, 20);
+    assert.equal(f.store.summary().frozen, 20);
+  } finally { for (const held of holds) held.resolve(null); await f.settle(); }
 });
 
 test('publication yields after 512 jobs with a durable continuation', async t => {
@@ -1003,13 +1195,10 @@ test('an internal deadline cannot extend the Object inline wait beyond two secon
   const blocked = Promise.withResolvers<Receipt | null>();
   f.state.receipts.set(hash(1), blocked.promise);
   const waits: number[] = [];
-  const timer = globalThis.setTimeout;
-  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) => {
-    if (milliseconds !== undefined && milliseconds > 100) {
-      waits.push(milliseconds);
-      return timer(callback, 10, ...args);
-    }
-    return timer(callback, milliseconds, ...args);
+  const withinBudget = f.object.withinBudget.bind(f.object);
+  t.mock.method(f.object, 'withinBudget', (work: Promise<unknown>, deadline: number) => {
+    waits.push(deadline - Date.now());
+    return withinBudget(work, Math.min(deadline, Date.now() + 10));
   });
   try {
     const response = value(await f.object.revealTransaction(deployment, hash(1), true, Date.now() + 60_000));

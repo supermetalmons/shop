@@ -166,11 +166,11 @@
     "jsdom": "^30.0.1",
     "knip": "^6.31.0",
     "mediabunny": "^1.52.3",
-    "miniflare": "5.20260801.1-alpha",
+    "miniflare": "5.20261023.3-beta",
     "npm-check-updates": "^23.0.1",
     "tsx": "^4.23.7",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite": "^8.2.0",
-    "wrangler": "4.120.0"
+    "wrangler": "4.156.0"
   }
 }

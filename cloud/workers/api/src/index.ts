@@ -44,6 +44,8 @@ export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkfl
 export { StripeReceiptClaimWorkflowV1 } from './stripeReceiptClaimWorkflow.js';
 export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
 export { EthereumRevealObject } from './ethereumRevealObject.js';
+export { EthereumRevealVerifierObject } from './ethereumRevealVerifierObject.js';
+export { EthereumRevealPublisherObject } from './ethereumRevealPublisherObject.js';
 
 type RequestExecution = {
   defer: DeferredWork;

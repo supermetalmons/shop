@@ -1,0 +1,857 @@
+{
+  "fixture": {
+    "runtime": "native-workerd",
+    "source": "/tmp/111k-reveal-baseline-e6406378",
+    "sourceHashes": {
+      "ethereumRevealObject.ts": "e0167794b1a810acb77ad13c2edb6067f47601d6d938d454b4d9772c06a1dfb7",
+      "ethereumRevealStore.ts": "ce3766011e0a769bf306d1b62af0460711827ddbdcbaf28fd9059977dc0010df",
+      "ethereumRevealRecoveryStore.ts": "aa14d6c8409c81b1e23220a20291322412a0c23ba3c891979611b538b0cb9dd6",
+      "ethereumRevealChain.ts": "536875f6e2a194a706b8c40c4d692ea67b394155be0a1fff597d9748373b7542",
+      "index.ts": "20e4c1d5312a6bd39d7aefcc147402e8e9d06bbee4ca5a708c5a489212090862",
+      "cloud/workers/api/wrangler.jsonc": "9ad97fd3c7f8f1cd51b76ac2459c8492a1e51f4abfe1949b919017742ba51f1b",
+      "cloud/workers/api/worker-configuration.d.ts": "c34e654c9edd6fec0e90e40d8c2652280fa2ec9eba977d85530ca11e0c21d47c",
+      "scripts/shared/ethereum111kLocalReveal.ts": "77699133790ec1a4d55798734ace9bf77431ac2a06d4ccde1376e1f4c2a2f79f",
+      "releases/111k-concurrency-2026-10-30/benchmark.ts": "f368c6b2421eeb4b0263b30187727f33f8df0a8db637af15aafc64b139d3c095",
+      "releases/111k-concurrency-2026-10-30/benchmark-rpc.ts": "adecd2fef1edb665f71b4387e5cfacb87ffe2cf31037ba07ae9a69ffee6265ed",
+      "releases/111k-concurrency-2026-10-30/benchmark-driver.ts": "c29b48b7ebc86724edf1563dea15668cfd38bf137bd5f14b8e3693d63e913f7b"
+    },
+    "recordedAt": "2026-10-30T14:44:25.961Z",
+    "isolation": "coordinator",
+    "sourceInstrumentation": "Transaction inspector adds a hash HTTP header for RPC header-slot isolation; a fixture-only HTTP route invokes a read-only async coordinator benchmarkReadiness method returning a JSON string. Production verification, storage mutations, and publication logic are unchanged.",
+    "responseTiming": "RPC fixture runs in an independent worker thread so synchronous runtime-storage inspection cannot delay network timers. All RPC delay precedes HTTP response headers. Receipt/block data and delay hash are identical across implementations.",
+    "readinessTiming": "Read-only HTTP observations of complete frozen transaction responses every25ms through native async DO RPC; includes observer delay. No live Miniflare storage/proxy calls; observer does not drive recovery.",
+    "latency": {
+      "nominal": "90% 100 ms; 9% 300 ms; 1% 1000 ms, deterministic hash(method, params, transaction)",
+      "slow": "90% 250 ms; 9% 1000 ms; 1% 5000 ms",
+      "throttle": "nominal plus first receipt attempt gets HTTP 429/Retry-After: 2 for deterministic 20% of hashes",
+      "pending": "nominal with receipts becoming visible at 3000 ms"
+    },
+    "clientTransport": "One fixture Worker dispatches the entire burst concurrently via service-binding.fetch to the unchanged public API Worker routes. HTTP response timings are measured inside native workerd and exclude external ingress/network latency. No Node TCP pool or synchronous storage proxy participates in burst dispatch.",
+    "versions": {
+      "node": "v22.23.1",
+      "wrangler": "4.156.0",
+      "miniflare": "5.20261023.3-beta"
+    },
+    "diagnostics": {
+      "wrapper": null,
+      "publicationDisabled": false
+    },
+    "r2": "native local R2; no artificial remote latency",
+    "counts": [
+      1,
+      100,
+      200,
+      500
+    ],
+    "repetitions": 3,
+    "profiles": [
+      "nominal"
+    ]
+  },
+  "scenarios": [
+    {
+      "profile": "nominal",
+      "count": 1,
+      "repetition": 1,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 256,
+        "p95Ms": 256,
+        "maxMs": 256
+      },
+      "admission": {
+        "p50Ms": 8,
+        "p95Ms": 8,
+        "maxMs": 8
+      },
+      "requestDispatchSpreadMs": 0,
+      "nativeHttpBatchMs": 256,
+      "artworkReadiness": {
+        "p50Ms": 287.26,
+        "p95Ms": 287.26,
+        "maxMs": 287.26
+      },
+      "drainMs": 287.62,
+      "publicationMs": 290.02,
+      "wallMs": 292.4,
+      "initiallyPending": 0,
+      "initialRevealed": 1,
+      "rpc": {
+        "count": 4,
+        "peak": 2,
+        "headerSlotPeak": 2,
+        "headerQueuePeak": 0,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 100,
+          "maxMs": 100
+        },
+        "endToEnd": {
+          "p50Ms": 102.43,
+          "p95Ms": 102.62,
+          "maxMs": 102.62
+        },
+        "queue": {
+          "p50Ms": 0.05,
+          "p95Ms": 0.14,
+          "maxMs": 0.14
+        },
+        "methods": {
+          "eth_chainId": 1,
+          "eth_getTransactionReceipt": 1,
+          "eth_blockNumber": 1,
+          "eth_getBlockByNumber": 1
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 20,
+          "uniqueAssets": 20,
+          "uniqueTokens": 20
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 1,
+      "repetition": 2,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 256,
+        "p95Ms": 256,
+        "maxMs": 256
+      },
+      "admission": {
+        "p50Ms": 9,
+        "p95Ms": 9,
+        "maxMs": 9
+      },
+      "requestDispatchSpreadMs": 1,
+      "nativeHttpBatchMs": 257,
+      "artworkReadiness": {
+        "p50Ms": 284.41,
+        "p95Ms": 284.41,
+        "maxMs": 284.41
+      },
+      "drainMs": 284.43,
+      "publicationMs": 286.87,
+      "wallMs": 289.19,
+      "initiallyPending": 0,
+      "initialRevealed": 1,
+      "rpc": {
+        "count": 4,
+        "peak": 2,
+        "headerSlotPeak": 2,
+        "headerQueuePeak": 0,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 100,
+          "maxMs": 100
+        },
+        "endToEnd": {
+          "p50Ms": 101.4,
+          "p95Ms": 102.68,
+          "maxMs": 102.68
+        },
+        "queue": {
+          "p50Ms": 0.06,
+          "p95Ms": 0.17,
+          "maxMs": 0.17
+        },
+        "methods": {
+          "eth_chainId": 1,
+          "eth_getTransactionReceipt": 1,
+          "eth_blockNumber": 1,
+          "eth_getBlockByNumber": 1
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 20,
+          "uniqueAssets": 20,
+          "uniqueTokens": 20
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 1,
+      "repetition": 3,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 254,
+        "p95Ms": 254,
+        "maxMs": 254
+      },
+      "admission": {
+        "p50Ms": 9,
+        "p95Ms": 9,
+        "maxMs": 9
+      },
+      "requestDispatchSpreadMs": 0,
+      "nativeHttpBatchMs": 254,
+      "artworkReadiness": {
+        "p50Ms": 281.46,
+        "p95Ms": 281.46,
+        "maxMs": 281.46
+      },
+      "drainMs": 281.46,
+      "publicationMs": 283.55,
+      "wallMs": 285.73,
+      "initiallyPending": 0,
+      "initialRevealed": 1,
+      "rpc": {
+        "count": 4,
+        "peak": 2,
+        "headerSlotPeak": 2,
+        "headerQueuePeak": 0,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 100,
+          "maxMs": 100
+        },
+        "endToEnd": {
+          "p50Ms": 102.3,
+          "p95Ms": 102.68,
+          "maxMs": 102.68
+        },
+        "queue": {
+          "p50Ms": 0.04,
+          "p95Ms": 0.17,
+          "maxMs": 0.17
+        },
+        "methods": {
+          "eth_chainId": 1,
+          "eth_getTransactionReceipt": 1,
+          "eth_blockNumber": 1,
+          "eth_getBlockByNumber": 1
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 20,
+          "uniqueAssets": 20,
+          "uniqueTokens": 20
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 100,
+      "repetition": 1,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 287,
+        "p95Ms": 288,
+        "maxMs": 1095
+      },
+      "admission": {
+        "p50Ms": 196,
+        "p95Ms": 217,
+        "maxMs": 220
+      },
+      "requestDispatchSpreadMs": 3,
+      "nativeHttpBatchMs": 1095,
+      "artworkReadiness": {
+        "p50Ms": 5116.45,
+        "p95Ms": 9666.23,
+        "maxMs": 9927.73
+      },
+      "drainMs": 9927.79,
+      "publicationMs": 9929.88,
+      "wallMs": 9936.04,
+      "initiallyPending": 96,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 400,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.46,
+          "p95Ms": 309.99,
+          "maxMs": 1035.19
+        },
+        "queue": {
+          "p50Ms": 0.09,
+          "p95Ms": 53.31,
+          "maxMs": 101.6
+        },
+        "methods": {
+          "eth_chainId": 100,
+          "eth_getTransactionReceipt": 100,
+          "eth_blockNumber": 100,
+          "eth_getBlockByNumber": 100
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 2000,
+          "uniqueAssets": 2000,
+          "uniqueTokens": 2000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 100,
+      "repetition": 2,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 282,
+        "p95Ms": 283,
+        "maxMs": 1091
+      },
+      "admission": {
+        "p50Ms": 191,
+        "p95Ms": 212,
+        "maxMs": 214
+      },
+      "requestDispatchSpreadMs": 3,
+      "nativeHttpBatchMs": 1092,
+      "artworkReadiness": {
+        "p50Ms": 5112.95,
+        "p95Ms": 9666.91,
+        "maxMs": 9930.17
+      },
+      "drainMs": 9930.22,
+      "publicationMs": 9934.01,
+      "wallMs": 9939.55,
+      "initiallyPending": 96,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 400,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.55,
+          "p95Ms": 302.97,
+          "maxMs": 1031.73
+        },
+        "queue": {
+          "p50Ms": 0.09,
+          "p95Ms": 55.39,
+          "maxMs": 100.69
+        },
+        "methods": {
+          "eth_chainId": 100,
+          "eth_getTransactionReceipt": 100,
+          "eth_blockNumber": 100,
+          "eth_getBlockByNumber": 100
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 2000,
+          "uniqueAssets": 2000,
+          "uniqueTokens": 2000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 100,
+      "repetition": 3,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 283,
+        "p95Ms": 285,
+        "maxMs": 1095
+      },
+      "admission": {
+        "p50Ms": 191,
+        "p95Ms": 213,
+        "maxMs": 215
+      },
+      "requestDispatchSpreadMs": 3,
+      "nativeHttpBatchMs": 1095,
+      "artworkReadiness": {
+        "p50Ms": 5117.77,
+        "p95Ms": 9672.45,
+        "maxMs": 9933.19
+      },
+      "drainMs": 9933.25,
+      "publicationMs": 9935.24,
+      "wallMs": 9941.31,
+      "initiallyPending": 96,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 400,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.59,
+          "p95Ms": 305.49,
+          "maxMs": 1027.14
+        },
+        "queue": {
+          "p50Ms": 0.1,
+          "p95Ms": 56.42,
+          "maxMs": 102.02
+        },
+        "methods": {
+          "eth_chainId": 100,
+          "eth_getTransactionReceipt": 100,
+          "eth_blockNumber": 100,
+          "eth_getBlockByNumber": 100
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 2000,
+          "uniqueAssets": 2000,
+          "uniqueTokens": 2000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 200,
+      "repetition": 1,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 499,
+        "p95Ms": 501,
+        "maxMs": 1343
+      },
+      "admission": {
+        "p50Ms": 368,
+        "p95Ms": 411,
+        "maxMs": 415
+      },
+      "requestDispatchSpreadMs": 5,
+      "nativeHttpBatchMs": 1343,
+      "artworkReadiness": {
+        "p50Ms": 10178.77,
+        "p95Ms": 33917.77,
+        "maxMs": 34824.38
+      },
+      "drainMs": 34824.47,
+      "publicationMs": 34826.53,
+      "wallMs": 34835.69,
+      "initiallyPending": 196,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 1440,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 161,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.5,
+          "p95Ms": 303.19,
+          "maxMs": 1091.74
+        },
+        "queue": {
+          "p50Ms": 0.08,
+          "p95Ms": 60.99,
+          "maxMs": 101.34
+        },
+        "methods": {
+          "eth_chainId": 361,
+          "eth_getTransactionReceipt": 361,
+          "eth_blockNumber": 359,
+          "eth_getBlockByNumber": 359
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 4000,
+          "uniqueAssets": 4000,
+          "uniqueTokens": 4000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 200,
+      "repetition": 2,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 502,
+        "p95Ms": 505,
+        "maxMs": 1346
+      },
+      "admission": {
+        "p50Ms": 372,
+        "p95Ms": 417,
+        "maxMs": 422
+      },
+      "requestDispatchSpreadMs": 6,
+      "nativeHttpBatchMs": 1346,
+      "artworkReadiness": {
+        "p50Ms": 10203.9,
+        "p95Ms": 33966.98,
+        "maxMs": 34864.43
+      },
+      "drainMs": 34864.53,
+      "publicationMs": 34867.25,
+      "wallMs": 34876.46,
+      "initiallyPending": 196,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 1441,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 162,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.39,
+          "p95Ms": 310.76,
+          "maxMs": 1057.29
+        },
+        "queue": {
+          "p50Ms": 0.07,
+          "p95Ms": 59.21,
+          "maxMs": 101.62
+        },
+        "methods": {
+          "eth_chainId": 361,
+          "eth_getTransactionReceipt": 362,
+          "eth_blockNumber": 359,
+          "eth_getBlockByNumber": 359
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 4000,
+          "uniqueAssets": 4000,
+          "uniqueTokens": 4000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 200,
+      "repetition": 3,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 500,
+        "p95Ms": 502,
+        "maxMs": 1348
+      },
+      "admission": {
+        "p50Ms": 368,
+        "p95Ms": 413,
+        "maxMs": 417
+      },
+      "requestDispatchSpreadMs": 6,
+      "nativeHttpBatchMs": 1348,
+      "artworkReadiness": {
+        "p50Ms": 10204.2,
+        "p95Ms": 33963.61,
+        "maxMs": 34892.42
+      },
+      "drainMs": 34892.5,
+      "publicationMs": 34895.68,
+      "wallMs": 34904.51,
+      "initiallyPending": 196,
+      "initialRevealed": 4,
+      "rpc": {
+        "count": 1444,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 162,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.38,
+          "p95Ms": 303.09,
+          "maxMs": 1090.2
+        },
+        "queue": {
+          "p50Ms": 0.07,
+          "p95Ms": 65.29,
+          "maxMs": 102.62
+        },
+        "methods": {
+          "eth_chainId": 362,
+          "eth_getTransactionReceipt": 362,
+          "eth_blockNumber": 360,
+          "eth_getBlockByNumber": 360
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 4000,
+          "uniqueAssets": 4000,
+          "uniqueTokens": 4000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 500,
+      "repetition": 1,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 1203,
+        "p95Ms": 1208,
+        "maxMs": 2021
+      },
+      "admission": {
+        "p50Ms": 951,
+        "p95Ms": 1075,
+        "maxMs": 1090
+      },
+      "requestDispatchSpreadMs": 13,
+      "nativeHttpBatchMs": 2021,
+      "artworkReadiness": {
+        "p50Ms": 41040.94,
+        "p95Ms": 78220.25,
+        "maxMs": 87502.7
+      },
+      "drainMs": 87502.92,
+      "publicationMs": 87505.71,
+      "wallMs": 87522.29,
+      "initiallyPending": 497,
+      "initialRevealed": 3,
+      "rpc": {
+        "count": 3674,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 419,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.43,
+          "p95Ms": 302.64,
+          "maxMs": 1095.89
+        },
+        "queue": {
+          "p50Ms": 0.07,
+          "p95Ms": 58.25,
+          "maxMs": 101.54
+        },
+        "methods": {
+          "eth_chainId": 919,
+          "eth_getTransactionReceipt": 919,
+          "eth_blockNumber": 918,
+          "eth_getBlockByNumber": 918
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 10000,
+          "uniqueAssets": 10000,
+          "uniqueTokens": 10000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 500,
+      "repetition": 2,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 1209,
+        "p95Ms": 1215,
+        "maxMs": 2021
+      },
+      "admission": {
+        "p50Ms": 947,
+        "p95Ms": 1077,
+        "maxMs": 1093
+      },
+      "requestDispatchSpreadMs": 14,
+      "nativeHttpBatchMs": 2021,
+      "artworkReadiness": {
+        "p50Ms": 41095.17,
+        "p95Ms": 78416.55,
+        "maxMs": 87742.68
+      },
+      "drainMs": 87742.91,
+      "publicationMs": 87745.9,
+      "wallMs": 87762.81,
+      "initiallyPending": 497,
+      "initialRevealed": 3,
+      "rpc": {
+        "count": 3674,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 419,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.46,
+          "p95Ms": 303.09,
+          "maxMs": 1069.59
+        },
+        "queue": {
+          "p50Ms": 0.06,
+          "p95Ms": 66.1,
+          "maxMs": 101.42
+        },
+        "methods": {
+          "eth_chainId": 919,
+          "eth_getTransactionReceipt": 919,
+          "eth_blockNumber": 918,
+          "eth_getBlockByNumber": 918
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 10000,
+          "uniqueAssets": 10000,
+          "uniqueTokens": 10000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 500,
+      "repetition": 3,
+      "rpcHeaderIsolation": "coordinator",
+      "acknowledgment": {
+        "p50Ms": 1210,
+        "p95Ms": 1215,
+        "maxMs": 2021
+      },
+      "admission": {
+        "p50Ms": 944,
+        "p95Ms": 1079,
+        "maxMs": 1094
+      },
+      "requestDispatchSpreadMs": 14,
+      "nativeHttpBatchMs": 2022,
+      "artworkReadiness": {
+        "p50Ms": 41216.83,
+        "p95Ms": 84568.95,
+        "maxMs": 87115.31
+      },
+      "drainMs": 87115.53,
+      "publicationMs": 87118.29,
+      "wallMs": 87135.7,
+      "initiallyPending": 497,
+      "initialRevealed": 3,
+      "rpc": {
+        "count": 3640,
+        "peak": 6,
+        "headerSlotPeak": 6,
+        "headerQueuePeak": 2,
+        "retries": 411,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 102.43,
+          "p95Ms": 302.64,
+          "maxMs": 1064.46
+        },
+        "queue": {
+          "p50Ms": 0.07,
+          "p95Ms": 67.26,
+          "maxMs": 102.4
+        },
+        "methods": {
+          "eth_chainId": 911,
+          "eth_getTransactionReceipt": 911,
+          "eth_blockNumber": 909,
+          "eth_getBlockByNumber": 909
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 10000,
+          "uniqueAssets": 10000,
+          "uniqueTokens": 10000
+        },
+        "allPublished": true
+      }
+    }
+  ]
+}

@@ -12,8 +12,14 @@ test('local reveal bindings override remote storage with a separate local bucket
   const config = { durable_objects: { bindings: [{ name: 'ETHEREUM_REVEAL', script_name: 'production', class_name: 'WrongObject' }] },
     r2_buckets: [{ binding: 'ETHEREUM_REVEAL_METADATA', bucket_name: 'cdn-mons-shop', remote: true }],
     ...localEthereumRevealBindings() };
-  assert.deepEqual(config.durable_objects.bindings, [{ name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' }]);
-  assert.deepEqual(config.migrations[0].new_sqlite_classes, ['EthereumRevealObject']);
+  assert.deepEqual(config.durable_objects.bindings, [
+    { name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' },
+    { name: 'ETHEREUM_REVEAL_VERIFIER', class_name: 'EthereumRevealVerifierObject' },
+    { name: 'ETHEREUM_REVEAL_PUBLISHER', class_name: 'EthereumRevealPublisherObject' },
+  ]);
+  assert.deepEqual(config.migrations.map(migration => migration.new_sqlite_classes), [
+    ['EthereumRevealObject'], ['EthereumRevealVerifierObject'], ['EthereumRevealPublisherObject'],
+  ]);
   assert.equal(config.r2_buckets[0].remote, false);
   assert.equal(config.r2_buckets[0].bucket_name, 'local-ethereum-reveal-metadata');
 });

@@ -1,0 +1,125 @@
+{
+  "comparison": "Three nominal repetitions per size; gates use the slowest updated p95 and fastest baseline p95.",
+  "versions": {
+    "node": "v22.23.1",
+    "wrangler": "4.156.0",
+    "miniflare": "5.20261023.3-beta"
+  },
+  "comparisons": [
+    {
+      "count": 1,
+      "baseline": {
+        "p95MedianMs": 284.41,
+        "p95MinimumMs": 281.46,
+        "p95MaximumMs": 287.26,
+        "drainMedianMs": 284.43,
+        "publicationMedianMs": 286.87,
+        "acknowledgmentP95MedianMs": 256,
+        "admissionP95MedianMs": 9,
+        "rpcCountMedian": 4,
+        "rpcPeakMaximum": 2
+      },
+      "updated": {
+        "p95MedianMs": 292.39,
+        "p95MinimumMs": 286.72,
+        "p95MaximumMs": 320.98,
+        "drainMedianMs": 292.39,
+        "publicationMedianMs": 294.42,
+        "acknowledgmentP95MedianMs": 257,
+        "admissionP95MedianMs": 9,
+        "rpcCountMedian": 4,
+        "rpcPeakMaximum": 2
+      },
+      "medianP95Speedup": 0.97,
+      "conservativeP95Speedup": 0.88
+    },
+    {
+      "count": 100,
+      "baseline": {
+        "p95MedianMs": 9666.91,
+        "p95MinimumMs": 9666.23,
+        "p95MaximumMs": 9672.45,
+        "drainMedianMs": 9930.22,
+        "publicationMedianMs": 9934.01,
+        "acknowledgmentP95MedianMs": 285,
+        "admissionP95MedianMs": 213,
+        "rpcCountMedian": 400,
+        "rpcPeakMaximum": 6
+      },
+      "updated": {
+        "p95MedianMs": 1994.19,
+        "p95MinimumMs": 1972.54,
+        "p95MaximumMs": 2040.31,
+        "drainMedianMs": 2593.78,
+        "publicationMedianMs": 5623.07,
+        "acknowledgmentP95MedianMs": 1972,
+        "admissionP95MedianMs": 340,
+        "rpcCountMedian": 400,
+        "rpcPeakMaximum": 128
+      },
+      "medianP95Speedup": 4.85,
+      "conservativeP95Speedup": 4.74
+    },
+    {
+      "count": 200,
+      "baseline": {
+        "p95MedianMs": 33963.61,
+        "p95MinimumMs": 33917.77,
+        "p95MaximumMs": 33966.98,
+        "drainMedianMs": 34864.53,
+        "publicationMedianMs": 34867.25,
+        "acknowledgmentP95MedianMs": 502,
+        "admissionP95MedianMs": 413,
+        "rpcCountMedian": 1441,
+        "rpcPeakMaximum": 6
+      },
+      "updated": {
+        "p95MedianMs": 3616.04,
+        "p95MinimumMs": 3568.23,
+        "p95MaximumMs": 3687.72,
+        "drainMedianMs": 4169.25,
+        "publicationMedianMs": 10714.92,
+        "acknowledgmentP95MedianMs": 2139,
+        "admissionP95MedianMs": 559,
+        "rpcCountMedian": 800,
+        "rpcPeakMaximum": 128
+      },
+      "medianP95Speedup": 9.39,
+      "conservativeP95Speedup": 9.2
+    },
+    {
+      "count": 500,
+      "baseline": {
+        "p95MedianMs": 78416.55,
+        "p95MinimumMs": 78220.25,
+        "p95MaximumMs": 84568.95,
+        "drainMedianMs": 87502.92,
+        "publicationMedianMs": 87505.71,
+        "acknowledgmentP95MedianMs": 1215,
+        "admissionP95MedianMs": 1077,
+        "rpcCountMedian": 3674,
+        "rpcPeakMaximum": 6
+      },
+      "updated": {
+        "p95MedianMs": 8221.67,
+        "p95MinimumMs": 8193.67,
+        "p95MaximumMs": 9286.36,
+        "drainMedianMs": 9105.08,
+        "publicationMedianMs": 32786.15,
+        "acknowledgmentP95MedianMs": 2502,
+        "admissionP95MedianMs": 1254,
+        "rpcCountMedian": 4000,
+        "rpcPeakMaximum": 128
+      },
+      "medianP95Speedup": 9.54,
+      "conservativeP95Speedup": 8.42
+    }
+  ],
+  "gates": {
+    "twoHundredP95WithinSixSeconds": true,
+    "twoHundredAtLeastFiveTimesFaster": true,
+    "fiveHundredP95WithinTwelveSeconds": true,
+    "noPrematureResponsesOrDuplicateAssignments": true,
+    "allMetadataPublished": true
+  }
+}

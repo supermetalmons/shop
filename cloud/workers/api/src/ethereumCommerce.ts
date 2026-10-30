@@ -498,7 +498,7 @@ export async function ethereumCommerce(request: Request, context: EthereumContex
     if (snapshot.blockNumber < receiptBlock) throw new EthereumApiError('unavailable', 'Ethereum changed while confirming your transaction. Try again.');
     const blockReference = snapshot.blockHash;
     const ids = transferTokenIds(receipt, requireEthereumContract(context));
-    const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted, blockReference), blockReference);
+    const items = await ethereumInventoryItems(context, await ethereumTokenInfos(context, ids.minted, blockReference));
     const logs = receipt.logs.filter(log => log.address.toLowerCase() === context.config.contractAddress);
     await Promise.all([verifyEthereumBlockSnapshot(context, snapshot),
       verifyEthereumBlockSnapshot(context, { blockNumber: receiptBlock, blockHash: receipt.blockHash })]);

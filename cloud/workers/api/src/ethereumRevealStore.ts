@@ -1,8 +1,8 @@
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation,
   EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
-import { EthereumRevealRecoveryStore, type RevealReceiptClaim, type RevealScanClaim, type RevealWorkLane } from './ethereumRevealRecoveryStore.js';
+import { EthereumRevealRecoveryStore, type RevealDispatchState, type RevealReceiptClaim, type RevealScanClaim, type RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
-export type { RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
+export type { RevealDispatchState, RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, REVEAL_CATEGORY_COUNTS,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
@@ -21,8 +21,9 @@ export type RevealTransactionJob = {
   incarnation: string; transient: number; admission_expires_at_ms: number;
 };
 export type RevealPublicationJob = {
-  token_id: string; metadata_json: string; placeholder_json: string; attempts: number;
+  token_id: string; metadata_json: string; placeholder_json: string; attempts: number; claim_id?: string;
 };
+export type RevealPublicationResult = { job: RevealPublicationJob; status: 'published' | 'conflict' | 'retry' };
 export type RevealSearchRange = { fromBlock: number; toBlock?: number };
 
 const SCHEMA = [
@@ -80,7 +81,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS observations (transaction_hash TEXT NOT NULL, block_hash TEXT NOT NULL, crate_token_id TEXT NOT NULL,
     block_number INTEGER NOT NULL, token_ids_json TEXT NOT NULL, PRIMARY KEY(transaction_hash,block_hash,crate_token_id))`,
   `CREATE TABLE IF NOT EXISTS publication (token_id TEXT PRIMARY KEY REFERENCES assignments(token_id),
-    status TEXT NOT NULL DEFAULT 'pending', next_check_ms INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT)`,
+    status TEXT NOT NULL DEFAULT 'pending', next_check_ms INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,claim_id TEXT)`,
   `CREATE INDEX IF NOT EXISTS publication_due_numeric ON publication(status,next_check_ms,CAST(token_id AS INTEGER))`,
   `DROP INDEX IF EXISTS publication_due`,
   `CREATE TABLE IF NOT EXISTS recovery_jobs (id TEXT PRIMARY KEY, token_ids_json TEXT NOT NULL, ranges_json TEXT NOT NULL,
@@ -120,6 +122,9 @@ export class EthereumRevealStore {
         ['receipt_seen', 'INTEGER NOT NULL DEFAULT 0'], ['failure_json', 'TEXT'], ['incarnation', "TEXT NOT NULL DEFAULT ''"],
         ['transient', 'INTEGER NOT NULL DEFAULT 1'], ['admission_expires_at_ms', 'INTEGER NOT NULL DEFAULT 0']]) {
         if (!columns.has(name)) this.sql.exec(`ALTER TABLE transactions ADD COLUMN ${name} ${definition}`);
+      }
+      if (!this.sql.exec<{ name: string }>('PRAGMA table_info(publication)').toArray().some(row => row.name === 'claim_id')) {
+        this.sql.exec('ALTER TABLE publication ADD COLUMN claim_id TEXT');
       }
     });
     this.recovery = new EthereumRevealRecoveryStore(sql, action => this.transaction(action), {
@@ -317,6 +322,14 @@ export class EthereumRevealStore {
   admitTokens(ids: string[], fromBlock: number, now: number): void { this.recovery.admitTokens(ids, fromBlock, now); }
   tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) { return this.recovery.tokensResponse(deployment, ids); }
   opaqueCount(): number { return this.recovery.opaqueCount(); }
+  dispatchState(now: number): RevealDispatchState { return this.recovery.dispatchState(now); }
+  recordThrottle(now: number, retryAfterMs: number): void { this.recovery.recordThrottle(now, retryAfterMs); }
+  claimOverflow(hash: string, now: number, deadlineMs: number): RevealReceiptClaim | null {
+    return this.recovery.claimOverflow(hash, now, deadlineMs);
+  }
+  validOverflow(claim: RevealReceiptClaim, now: number): boolean { return this.recovery.validOverflow(claim, now); }
+  releaseOverflow(claim: RevealReceiptClaim): boolean { return this.recovery.releaseOverflow(claim); }
+  validReceiptClaim(claim: RevealReceiptClaim, now: number): boolean { return this.recovery.validReceiptClaim(claim, now); }
   claimReceipt(now: number, lane: RevealWorkLane, preferredHash?: string, excludeHashes: string[] = []): RevealReceiptClaim | null {
     return this.recovery.claimReceipt(now, lane, preferredHash, excludeHashes);
   }
@@ -356,19 +369,52 @@ export class EthereumRevealStore {
       const rows = this.sql.exec<RevealPublicationJob>(`SELECT p.token_id,a.metadata_json,a.placeholder_json,p.attempts FROM publication p
         JOIN assignments a ON a.token_id=p.token_id WHERE p.status='pending' AND p.next_check_ms<=?
         ORDER BY p.next_check_ms,CAST(p.token_id AS INTEGER) LIMIT ?`, now, limit).toArray();
-      for (const row of rows) this.sql.exec('UPDATE publication SET next_check_ms=?,attempts=attempts+1 WHERE token_id=?', now + 60_000, row.token_id);
+      if (!rows.length) return rows;
+      const claimId = crypto.randomUUID();
+      for (const row of rows) {
+        row.claim_id = claimId;
+        this.sql.exec('UPDATE publication SET next_check_ms=?,attempts=attempts+1,claim_id=? WHERE token_id=?',
+          now + 60_000, claimId, row.token_id);
+      }
       return rows;
     });
   }
 
-  publicationComplete(tokenId: string): void {
-    this.sql.exec(`UPDATE publication SET status='published',last_error=NULL WHERE token_id=?`, tokenId);
+  releasePublicationClaims(jobs: RevealPublicationJob[], now: number): void {
+    this.transaction(() => {
+      for (const job of jobs) {
+        this.sql.exec(`UPDATE publication SET attempts=?,next_check_ms=?,claim_id=NULL
+          WHERE token_id=? AND status='pending' AND attempts=? AND claim_id IS ?`,
+        job.attempts, now, job.token_id, job.attempts + 1, job.claim_id ?? null);
+      }
+    });
   }
 
-  publicationFailed(tokenId: string, now: number, attempts: number, conflict = false): void {
-    this.sql.exec('UPDATE publication SET status=?,last_error=?,next_check_ms=? WHERE token_id=?',
+  completePublications(results: RevealPublicationResult[], now: number): RevealPublicationResult[] {
+    return this.transaction(() => {
+      const applied: RevealPublicationResult[] = [];
+      for (const result of results) {
+        const { job, status } = result;
+        const updated = status === 'published' ? this.publicationComplete(job.token_id, job.attempts + 1, job.claim_id)
+          : this.publicationFailed(job.token_id, now, job.attempts, status === 'conflict', job.attempts + 1, job.claim_id);
+        if (updated) applied.push(result);
+      }
+      return applied;
+    });
+  }
+
+  publicationComplete(tokenId: string, expectedAttempts?: number, expectedClaimId?: string): boolean {
+    return this.sql.exec(`UPDATE publication SET status='published',last_error=NULL,claim_id=NULL WHERE token_id=?${
+      expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
+      tokenId, ...(expectedAttempts === undefined ? [] : [expectedAttempts, expectedClaimId ?? null])).toArray().length > 0;
+  }
+
+  publicationFailed(tokenId: string, now: number, attempts: number, conflict = false, expectedAttempts?: number, expectedClaimId?: string): boolean {
+    return this.sql.exec(`UPDATE publication SET status=?,last_error=?,next_check_ms=?,claim_id=NULL WHERE token_id=?${
+      expectedAttempts === undefined ? '' : " AND status='pending' AND attempts=? AND claim_id IS ?"} RETURNING token_id`,
       conflict ? 'conflict' : 'pending', conflict ? 'metadata-conflict' : 'publication-unavailable',
-      now + Math.min(300_000, 1_000 * 2 ** Math.min(attempts + 1, 8)), tokenId);
+      now + Math.min(300_000, 1_000 * 2 ** Math.min(attempts + 1, 8)), tokenId,
+      ...(expectedAttempts === undefined ? [] : [expectedAttempts, expectedClaimId ?? null])).toArray().length > 0;
   }
 
   publicationError(): 'metadata-conflict' | 'publication-unavailable' | null {

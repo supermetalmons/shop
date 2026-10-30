@@ -200,10 +200,16 @@ test('uploaded signer runtime works independently of an older production Worker 
   await api.upload({ snapshot, bundle: bundle.outputFiles[0].text, operationId: randomUUID(), onUploadChange: () => {} });
   assert.ok(uploaded);
   assert.notEqual(uploaded.compatibility_date, snapshot.compatibilityDate);
-  const worker = new Miniflare({ modules: true, script: Buffer.from(uploaded.modules[0].content_base64, 'base64').toString(),
-    compatibilityDate: uploaded.compatibility_date, compatibilityFlags: uploaded.compatibility_flags, bindings: f.env,
-    outboundService: async () => { assert.fail('Signer made an outbound request'); },
-  });
+  const worker = new Miniflare({ workers: [{ config: {
+    name: 'transaction-signer-test', compatibilityDate: uploaded.compatibility_date, compatibilityFlags: uploaded.compatibility_flags,
+    manifest: { mainModule: 'signer.mjs', modulesRoot: root, modules: {
+      'signer.mjs': { type: 'esm', contents: Buffer.from(uploaded.modules[0].content_base64, 'base64').toString() },
+    } },
+    env: { TEST_SIGNER: { type: 'text', value: f.env.TEST_SIGNER } },
+  }, dev: {
+    outboundService: { type: 'fetcher', handler: async () => { assert.fail('Signer made an outbound request'); } },
+  },
+  }] });
   try {
     let previous: string | undefined;
     for (const body of [undefined, '']) {

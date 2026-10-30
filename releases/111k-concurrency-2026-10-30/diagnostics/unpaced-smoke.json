@@ -1,0 +1,188 @@
+{
+  "fixture": {
+    "runtime": "native-workerd",
+    "source": "/Users/ivan/Developer/mons/shop",
+    "sourceHashes": {
+      "ethereumRevealObject.ts": "c44cca0eb9e7c6918a96abdf87f43856c5781014d903d5fbbe754c49c4cfb581",
+      "ethereumRevealStore.ts": "12bd974a5b6ba4229cd5cd5c22ca810a224b208de4cbe6c7dc92964ce77352b0",
+      "ethereumRevealRecoveryStore.ts": "4ce9f1782ac094438f094e66a73551e2328b77d9f08667f1fdec0e9df7f63db1",
+      "ethereumRevealChain.ts": "92a9f60cede404a407ffb247434322e928eee1d7c8b502605efe299cdb4db198",
+      "ethereumRevealVerifierObject.ts": "152103c28c4a5dc84550763b63f58f5e3165df6e385b948464091dcd37856248",
+      "ethereumRevealVerification.ts": "d8fcfc6f8d0333692a3f631237032e26a8d808842eefe57073b0bead8f4ca1b4",
+      "ethereumRevealPublisherObject.ts": "7b24dbb5bedf99aa4cd7bb88190854573832eb37189ed867bc78c569e1ea3ca8",
+      "index.ts": "98cd58b6ed7744d3b804fd8975d4be78f147c32100288bff09bf7f2f6885c2da",
+      "cloud/workers/api/wrangler.jsonc": "7d9a95d7732c31e5987dd2a28b2a5d039eca6895f2a8100488ab2012cb2a25f3",
+      "cloud/workers/api/worker-configuration.d.ts": "687ffa224172401c4920dc85f099ddfaa87d81e2b447d34791b693a343fbe262",
+      "scripts/shared/ethereum111kLocalReveal.ts": "0010985ccdd806fa54332be82895bcf3b61f6e53f3217134e1225e149f59bd08",
+      "releases/111k-concurrency-2026-10-30/benchmark.ts": "f368c6b2421eeb4b0263b30187727f33f8df0a8db637af15aafc64b139d3c095",
+      "releases/111k-concurrency-2026-10-30/benchmark-rpc.ts": "adecd2fef1edb665f71b4387e5cfacb87ffe2cf31037ba07ae9a69ffee6265ed",
+      "releases/111k-concurrency-2026-10-30/benchmark-driver.ts": "c29b48b7ebc86724edf1563dea15668cfd38bf137bd5f14b8e3693d63e913f7b"
+    },
+    "recordedAt": "2026-10-30T14:55:04.192Z",
+    "isolation": "transaction",
+    "sourceInstrumentation": "Transaction inspector adds a hash HTTP header for RPC header-slot isolation; a fixture-only HTTP route invokes a read-only async coordinator benchmarkReadiness method returning a JSON string. Production verification, storage mutations, and publication logic are unchanged.",
+    "responseTiming": "RPC fixture runs in an independent worker thread so synchronous runtime-storage inspection cannot delay network timers. All RPC delay precedes HTTP response headers. Receipt/block data and delay hash are identical across implementations.",
+    "readinessTiming": "Read-only HTTP observations of complete frozen transaction responses every25ms through native async DO RPC; includes observer delay. No live Miniflare storage/proxy calls; observer does not drive recovery.",
+    "latency": {
+      "nominal": "90% 100 ms; 9% 300 ms; 1% 1000 ms, deterministic hash(method, params, transaction)",
+      "slow": "90% 250 ms; 9% 1000 ms; 1% 5000 ms",
+      "throttle": "nominal plus first receipt attempt gets HTTP 429/Retry-After: 2 for deterministic 20% of hashes",
+      "pending": "nominal with receipts becoming visible at 3000 ms"
+    },
+    "clientTransport": "One fixture Worker dispatches the entire burst concurrently via service-binding.fetch to the unchanged public API Worker routes. HTTP response timings are measured inside native workerd and exclude external ingress/network latency. No Node TCP pool or synchronous storage proxy participates in burst dispatch.",
+    "versions": {
+      "node": "v22.23.1",
+      "wrangler": "4.156.0",
+      "miniflare": "5.20261023.3-beta"
+    },
+    "diagnostics": {
+      "wrapper": null,
+      "publicationDisabled": false
+    },
+    "r2": "native local R2; no artificial remote latency",
+    "counts": [
+      200,
+      500
+    ],
+    "repetitions": 1,
+    "profiles": [
+      "nominal"
+    ]
+  },
+  "scenarios": [
+    {
+      "profile": "nominal",
+      "count": 200,
+      "repetition": 1,
+      "rpcHeaderIsolation": "transaction",
+      "acknowledgment": {
+        "p50Ms": 2128,
+        "p95Ms": 2220,
+        "maxMs": 2228
+      },
+      "admission": {
+        "p50Ms": 517,
+        "p95Ms": 573,
+        "maxMs": 579
+      },
+      "requestDispatchSpreadMs": 5,
+      "nativeHttpBatchMs": 2233,
+      "artworkReadiness": {
+        "p50Ms": 5512.2,
+        "p95Ms": 8609.37,
+        "maxMs": 8609.37
+      },
+      "drainMs": 8609.49,
+      "publicationMs": 8612.5,
+      "wallMs": 8622.08,
+      "initiallyPending": 178,
+      "initialRevealed": 22,
+      "rpc": {
+        "count": 800,
+        "peak": 128,
+        "headerSlotPeak": 128,
+        "headerQueuePeak": 0,
+        "retries": 0,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 100.96,
+          "p95Ms": 301.01,
+          "maxMs": 1001.36
+        },
+        "queue": {
+          "p50Ms": 0.02,
+          "p95Ms": 0.07,
+          "maxMs": 0.18
+        },
+        "methods": {
+          "eth_chainId": 200,
+          "eth_getTransactionReceipt": 200,
+          "eth_blockNumber": 200,
+          "eth_getBlockByNumber": 200
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 4000,
+          "uniqueAssets": 4000,
+          "uniqueTokens": 4000
+        },
+        "allPublished": true
+      }
+    },
+    {
+      "profile": "nominal",
+      "count": 500,
+      "repetition": 1,
+      "rpcHeaderIsolation": "transaction",
+      "acknowledgment": {
+        "p50Ms": 2259,
+        "p95Ms": 2460,
+        "maxMs": 2480
+      },
+      "admission": {
+        "p50Ms": 1262,
+        "p95Ms": 1454,
+        "maxMs": 1474
+      },
+      "requestDispatchSpreadMs": 20,
+      "nativeHttpBatchMs": 2500,
+      "artworkReadiness": {
+        "p50Ms": 13445.38,
+        "p95Ms": 22872.03,
+        "maxMs": 23983.18
+      },
+      "drainMs": 23983.41,
+      "publicationMs": 23986.49,
+      "wallMs": 24003.51,
+      "initiallyPending": 500,
+      "initialRevealed": 0,
+      "rpc": {
+        "count": 2575,
+        "peak": 128,
+        "headerSlotPeak": 128,
+        "headerQueuePeak": 0,
+        "retries": 145,
+        "throttleResponses": 0,
+        "errors": [],
+        "headerDelay": {
+          "p50Ms": 100,
+          "p95Ms": 300,
+          "maxMs": 1000
+        },
+        "endToEnd": {
+          "p50Ms": 100.97,
+          "p95Ms": 300.86,
+          "maxMs": 1002.03
+        },
+        "queue": {
+          "p50Ms": 0.01,
+          "p95Ms": 0.07,
+          "maxMs": 0.22
+        },
+        "methods": {
+          "eth_chainId": 648,
+          "eth_getTransactionReceipt": 645,
+          "eth_blockNumber": 642,
+          "eth_getBlockByNumber": 640
+        }
+      },
+      "checks": {
+        "prematureResponses": 0,
+        "frozen": {
+          "frozen": 10000,
+          "uniqueAssets": 10000,
+          "uniqueTokens": 10000
+        },
+        "allPublished": true
+      }
+    }
+  ]
+}

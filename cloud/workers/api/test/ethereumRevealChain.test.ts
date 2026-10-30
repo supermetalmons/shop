@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodeReturn, encodeAbi, encodeCall, ETHEREUM_EVENT_TOPICS } from '../../../../shared/ethereum/abi.ts';
 import { ethereumHexQuantity, ETHEREUM_FUNCTIONS } from '../../../../shared/ethereum/protocol.ts';
-import { inspectRevealTransaction, recoverRevealCrates, recoverRevealTokens, verifyRevealDeployment } from '../src/ethereumRevealChain.ts';
+import { EthereumRevealThrottleError, inspectRevealTransaction, recoverRevealCrates, recoverRevealTokens, verifyRevealDeployment } from '../src/ethereumRevealChain.ts';
 
 const CONTRACT = `0x${'11'.repeat(20)}`;
 const WALLET = `0x${'22'.repeat(20)}`;
@@ -88,6 +88,30 @@ test('reveal verifies canonical inclusion and every mint and burn at one confirm
   assert.deepEqual(result.observation, { transactionHash: HASH, blockNumber: 500, blockHash: BLOCK_HASH });
   assert.deepEqual(result.crates, [{ crateTokenId: '111112', tokenIds: Array.from({ length: 20 }, (_, index) => String(index + 1)) }]);
   assert.ok(state.urls.every(url => url === 'https://eth-sepolia.g.alchemy.com/v2/test-only'));
+});
+
+for (const response of [
+  { label: 'HTTP seconds', status: 429, body: 'not json', retryAfter: '600', expected: 600_000 },
+  { label: 'HTTP date', status: 429, body: 'not json', retryAfter: new Date(1_005_000).toUTCString(), expected: 5_000 },
+  { label: 'HTTP invalid header', status: 429, body: 'not json', retryAfter: 'invalid', expected: 2_000 },
+  { label: 'RPC code', status: 200, body: JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: 429, message: 'throttled' } }), retryAfter: '3', expected: 3_000 },
+  { label: 'RPC quota', status: 200, body: JSON.stringify({ jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'compute units exceeded' } }), retryAfter: '', expected: 2_000 },
+]) test(`provider throttling preserves ${response.label} backoff without revealing artwork`, async t => {
+  t.mock.method(Date, 'now', () => 1_000_000);
+  const providerFetch: typeof fetch = async () => new Response(response.body, {
+    status: response.status, headers: { 'Content-Type': 'application/json', 'Retry-After': response.retryAfter },
+  });
+  await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), error =>
+    error instanceof EthereumRevealThrottleError && error.retryAfterMs === response.expected);
+});
+
+test('log RPC throttling is not mistaken for a splittable block range', async () => {
+  const { state, providerFetch } = fixture();
+  state.logError = { code: -32005, message: 'Rate limit exceeded' };
+  await assert.rejects(recoverRevealTokens(ENV, DEPLOYMENT, ['1'], { fromBlock: 100 }, signal(), providerFetch),
+    error => error instanceof EthereumRevealThrottleError);
+  await assert.rejects(recoverRevealCrates(ENV, DEPLOYMENT, ['111112'], { fromBlock: 100 }, signal(), providerFetch),
+    error => error instanceof EthereumRevealThrottleError);
 });
 
 test('reveal supports wrapped transactions, multiple calls, and the 31-item final crate', async () => {
@@ -325,7 +349,8 @@ test('recovery persists split work for provider range limits and retries service
   assert.equal(result.scannedRange, null);
   assert.deepEqual(result.remainingRanges, [{ fromBlock: 301, toBlock: 500 }, { fromBlock: 100, toBlock: 300 }]);
   state.logError = { code: -32005, message: 'Rate limit exceeded.' };
-  await assert.rejects(recoverRevealTokens(ENV, DEPLOYMENT, ['1'], { fromBlock: 100 }, signal(), providerFetch), /verification is temporarily unavailable/);
+  await assert.rejects(recoverRevealTokens(ENV, DEPLOYMENT, ['1'], { fromBlock: 100 }, signal(), providerFetch),
+    error => error instanceof EthereumRevealThrottleError);
 });
 
 test('recovery rejects wrong token, contract, range, duplicate, and noncanonical evidence', async () => {

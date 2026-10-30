@@ -1,10 +1,11 @@
 import { encodeCall, decodeReturn } from '../../../../shared/ethereum/abi.js';
 import type { EthereumInventoryItem, EthereumItemKind, EthereumMetadata } from '../../../../shared/ethereum/protocol.js';
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.js';
+import { ethereumTokenMetadataUri } from '../../../../shared/ethereum/metadataUri.js';
 import {
   ETHEREUM_FUNCTIONS, ETHEREUM_INVENTORY_EXPECTED_REQUEST_SIZE, ETHEREUM_ITEM_KINDS,
-  ETHEREUM_MAX_METADATA_BATCH_SIZE, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
-  ethereumItemKindNumber, ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
+  ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ethereumAssetId, ethereumHexQuantity, ethereumItemKind,
+  ethereumItemDisplayIdMaximum, ethereumMetadataTokenId, normalizeEthereumTokenId,
 } from '../../../../shared/ethereum/protocol.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { EthereumApiError } from './ethereumError.js';
@@ -77,10 +78,8 @@ function parseMetadata(value: unknown): EthereumMetadata {
     ...('attributes' in value && Array.isArray(value.attributes) ? { attributes: value.attributes } : {}) };
 }
 
-async function readMetadata(context: EthereumContext, uri: unknown, tokenId: string): Promise<EthereumMetadata> {
-  if (uri !== `${context.config.metadataBaseUri}${tokenId}.json`) {
-    throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata URL.');
-  }
+async function readMetadata(context: EthereumContext, tokenId: string): Promise<EthereumMetadata> {
+  const uri = ethereumTokenMetadataUri(context.config, tokenId);
   const signal = AbortSignal.any([context.signal, AbortSignal.timeout(10_000)]);
   signal.throwIfAborted();
   let response: Response;
@@ -101,8 +100,7 @@ async function readMetadata(context: EthereumContext, uri: unknown, tokenId: str
 }
 
 async function ethereumMetadata(context: EthereumContext, kind: EthereumItemKind, displayId: number): Promise<EthereumMetadata> {
-  const value = await ethereumCall(context, encodeCall('previewTokenURI(uint8,uint256)', ['uint8', 'uint256'], [ethereumItemKindNumber(kind), displayId]));
-  return readMetadata(context, decodeReturn(['string'], value)[0], ethereumMetadataTokenId(kind, displayId));
+  return readMetadata(context, ethereumMetadataTokenId(kind, displayId));
 }
 
 function readChunks<T>(values: T[], size: number): T[][] {
@@ -128,33 +126,27 @@ export async function ethereumTokenInfos(context: EthereumContext, ids: string[]
   });
 }
 
-export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[], blockReference = 'latest'): Promise<EthereumInventoryItem[]> {
-  const batches = readChunks(infos, ETHEREUM_MAX_METADATA_BATCH_SIZE);
-  const values = await ethereumCallBatch(context, batches.map((batch) => encodeCall(ETHEREUM_FUNCTIONS.previewTokenURIs,
-    ['uint8[]', 'uint256[]'], [batch.map((info) => ethereumItemKindNumber(info.kind)), batch.map((info) => info.displayId)])), blockReference);
+export async function ethereumInventoryItems(context: EthereumContext, infos: EthereumTokenInfo[]): Promise<EthereumInventoryItem[]> {
   const contractAddress = requireEthereumContract(context);
-  const entries = values.flatMap((value, index) => {
-    const [uris] = decodeReturn(['string[]'], value);
-    if (!Array.isArray(uris) || uris.length !== batches[index].length) throw new EthereumApiError('unavailable', 'Ethereum metadata is incomplete.');
-    return uris.map((uri, itemIndex) => ({ uri, info: batches[index][itemIndex] }));
-  });
-  const items = new Array<EthereumInventoryItem>(entries.length);
+  for (const info of infos) {
+    if (ethereumMetadataTokenId(info.kind, info.displayId) !== info.tokenId) {
+      throw new EthereumApiError('unavailable', 'Invalid Ethereum token information.');
+    }
+  }
+  const items = new Array<EthereumInventoryItem>(infos.length);
   const cancellation = new AbortController();
   const metadataContext = { ...context, signal: AbortSignal.any([context.signal, cancellation.signal]) };
   const pending = new Map<string, Promise<EthereumMetadata>>();
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(entries.length, 8) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(infos.length, 8) }, async () => {
     try {
-      while (next < entries.length) {
+      while (next < infos.length) {
         metadataContext.signal.throwIfAborted();
         const index = next++;
-        const { uri, info } = entries[index];
-        if (uri !== `${context.config.metadataBaseUri}${info.tokenId}.json`) {
-          throw new EthereumApiError('unavailable', 'Invalid Ethereum metadata URL.');
-        }
+        const info = infos[index];
         let metadata = pending.get(info.tokenId);
         if (!metadata) {
-          metadata = readMetadata(metadataContext, uri, info.tokenId);
+          metadata = readMetadata(metadataContext, info.tokenId);
           pending.set(info.tokenId, metadata);
         }
         items[index] = { ...info, ...await metadata, id: ethereumAssetId(context.config.chainId, contractAddress, info.tokenId),
@@ -270,7 +262,7 @@ export async function ethereumPublicRead(request: Request, context: EthereumCont
     infos = await ethereumTokenInfos(context, [...new Set([...page.ids, ...recentIds])], blockReference);
     nextCursor = page.nextCursor;
   }
-  const items = await ethereumInventoryItems(context, infos.filter((info) => info.owner === wallet), blockReference);
+  const items = await ethereumInventoryItems(context, infos.filter((info) => info.owner === wallet));
   await verifyEthereumBlockSnapshot(context, snapshot);
   return { items, nextCursor, observedBlock: snapshot.blockNumber };
 }

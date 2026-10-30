@@ -1,0 +1,59 @@
+{
+  "scope": "Local implementation and validation; no remote deployment or ledger mutation",
+  "applicationCheckRuntime": {
+    "node": "v26.5.0",
+    "wrangler": "4.156.0",
+    "miniflare": "5.20261023.3-beta"
+  },
+  "benchmarkRuntime": {
+    "node": "v22.23.1",
+    "wrangler": "4.156.0",
+    "miniflare": "5.20261023.3-beta"
+  },
+  "apiUnitTests": {
+    "passed": 2867,
+    "failed": 0
+  },
+  "apiNativeRuntimeTests": {
+    "passed": 42,
+    "failed": 0,
+    "note": "The Worker configuration assertion was updated for the added compatibility flag and its three-test file passed on recheck."
+  },
+  "frontendChecks": {
+    "applicationTests": 5004,
+    "workerTests": 4,
+    "apiClientTests": 29,
+    "commonIdTests": 1,
+    "failed": 0,
+    "build": true,
+    "bundleValidation": true
+  },
+  "generatedDatabaseAndWorkerTypes": true,
+  "apiTypecheck": true,
+  "frontendTypecheck": true,
+  "toolsTypecheck": true,
+  "apiDryRunAndCredentialScan": true,
+  "apiStartupProfile": true,
+  "deadCodeAndExports": true,
+  "anvilEndToEnd": {
+    "passed": true,
+    "confirmationContractCallsFor311Artworks": 3,
+    "reveal": {
+      "deploymentId": "local-cf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
+      "contractAddress": "0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9",
+      "transactionHash": "0xc4b2a3430e5277a2a4032220eb278775549125f9814f12ecba1c9f5062053ead",
+      "recoveryHash": "0xa752631f312f1d7183f8b1ad9db3d190e17314349354b4eda026391038b70e0e",
+      "pendingMediaHidden": true,
+      "firstConfirmationArtworkCount": 20,
+      "metadataStorage": "isolated-local-r2",
+      "immutableAfterReorg": true,
+      "tokenRecovery": true
+    }
+  },
+  "benchmarkScenarios": {
+    "passed": 30,
+    "failed": 0,
+    "coreSourceFingerprintsMatch": true
+  },
+  "environmentNote": "Two existing Node 22 API unit failures also reproduce at the original baseline in deliveryRecoveryStore and workerScheduled. Application gates were verified with the workspace Node 26 runtime; both benchmark implementations use the same pinned Node 22 runtime."
+}

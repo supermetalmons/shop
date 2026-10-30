@@ -9,7 +9,7 @@ import { keccak_256 } from '@noble/hashes/sha3';
 import { bytesToHex } from '@noble/hashes/utils';
 import { decodeEventLogs, decodeReturn, encodeAbi, encodeCall, type EthereumLog } from '../../../../shared/ethereum/abi.ts';
 import { checksumEthereumAddress, crateClaimDigest, deliveryDigest, ethereumReceiptIdsHash, ethereumTokenIdsHash, ethereumSignerAddress, signDigest } from '../../../../shared/ethereum/crypto.ts';
-import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE, ETHEREUM_MAX_METADATA_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
+import { physicalCrateArtworkIds, ethereumHexQuantity, ethereumReceiptTokenId, ethereumItemKind, ethereumMetadataTokenId, type EthereumMetadata, ETHEREUM_FUNCTIONS, ETHEREUM_MAX_UNBOX_QUANTITY, ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE } from '../../../../shared/ethereum/protocol.ts';
 import { isEthereumMetadataImage } from '../../../../shared/ethereum/metadataImage.ts';
 import { ETHEREUM_API_PATHS, ETHEREUM_SESSION_HEADER, type EthereumAuthChallenge, type EthereumSession, type EthereumDeliveryPrepareResponse, type EthereumDeliveryConfirmResponse, type EthereumClaimPrepareResponse, type EthereumSaveAddressResponse, type EthereumShipmentsResponse, type EthereumTransactionConfirmResponse, type EthereumStats } from '../../../../shared/ethereum/api.ts';
 import { ETHEREUM_CHECKOUT_PATHS, type EthereumCheckoutStatusResponse, type EthereumCheckoutPrepareResponse, type EthereumCheckoutSubmissionResponse } from '../../../../shared/ethereum/checkout.ts';
@@ -163,7 +163,7 @@ try {
   for (const [name, expected] of [
     ['MAX_UNBOX_QUANTITY', ETHEREUM_MAX_UNBOX_QUANTITY],
     ['MAX_TOKEN_INFO_BATCH_SIZE', ETHEREUM_MAX_TOKEN_INFO_BATCH_SIZE],
-    ['MAX_METADATA_BATCH_SIZE', ETHEREUM_MAX_METADATA_BATCH_SIZE],
+    ['MAX_METADATA_BATCH_SIZE', 30],
   ] as const) assert.deepEqual(await call(contract, `${name}()`, [], [], ['uint256']), [BigInt(expected)]);
   const deadline = async () => Number(BigInt((await rpc<{ timestamp: string }>('eth_getBlockByNumber', ['latest', false])).timestamp)) + 600;
   let orderId = 0;
@@ -374,7 +374,7 @@ try {
     assert.deepEqual(confirmedBatch.logs.filter(log => log.topics[0] === cratesUnboxedTopic), batchEvents);
     const confirmedReads = rpcCalls.filter(request => request.method === 'eth_call');
     batching.confirm311ContractCalls = confirmedReads.length;
-    assert.equal(batching.confirm311ContractCalls, Math.ceil(311 / 150) + Math.ceil(311 / 30));
+    assert.equal(batching.confirm311ContractCalls, Math.ceil(311 / 150));
     assert.ok(confirmedReads.every(request => request.params[1] === batch.blockHash), 'Every confirmation read must target the exact inclusion block hash');
     assert.ok(envelopes.every(length => length <= 4));
     const observed = new Set<string>();

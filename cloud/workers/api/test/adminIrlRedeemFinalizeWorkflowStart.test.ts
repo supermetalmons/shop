@@ -31,6 +31,15 @@ async function setup() {
       receiptTxs: [],
     },
   });
+  async function createBatch(options: WorkflowBatchCreateOptions<AdminIrlRedeemFinalizeWorkflowPayload>): Promise<WorkflowBatchCreateResult>;
+  async function createBatch(values: WorkflowInstanceCreateOptions<AdminIrlRedeemFinalizeWorkflowPayload>[]): Promise<WorkflowInstance[]>;
+  async function createBatch(values: WorkflowBatchCreateOptions<AdminIrlRedeemFinalizeWorkflowPayload> |
+    WorkflowInstanceCreateOptions<AdminIrlRedeemFinalizeWorkflowPayload>[]): Promise<WorkflowBatchCreateResult | WorkflowInstance[]> {
+    assert.ok(Array.isArray(values), 'Workflow coordinator must pass explicit instance IDs');
+    binding.created.push(...values);
+    await binding.beforeCreate?.();
+    return [];
+  }
   const binding = {
     created: [] as Array<{ id?: string; params?: AdminIrlRedeemFinalizeWorkflowPayload }>,
     beforeCreate: undefined as (() => void | Promise<void>) | undefined,
@@ -40,11 +49,10 @@ async function setup() {
     async create(): Promise<WorkflowInstance> {
       assert.fail('Workflow coordinator must use createBatch');
     },
-    async createBatch(values: Array<{ id?: string; params?: AdminIrlRedeemFinalizeWorkflowPayload }>): Promise<WorkflowInstance[]> {
-      this.created.push(...values);
-      await this.beforeCreate?.();
-      return [];
+    async deleteBatch(): Promise<never> {
+      assert.fail('Workflow coordinator must not delete workflows');
     },
+    createBatch,
   };
   const workflow: Workflow<AdminIrlRedeemFinalizeWorkflowPayload> = binding;
   const client = new AbortController();

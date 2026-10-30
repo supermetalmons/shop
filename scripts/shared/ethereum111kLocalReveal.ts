@@ -8,8 +8,16 @@ import { buildEthereumRevealRegistration, buildEthereumRevealTransition } from '
 
 export function localEthereumRevealBindings() {
   return {
-    durable_objects: { bindings: [{ name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' }] },
-    migrations: [{ tag: 'local-ethereum-reveal-v1', new_sqlite_classes: ['EthereumRevealObject'] }],
+    durable_objects: { bindings: [
+      { name: 'ETHEREUM_REVEAL', class_name: 'EthereumRevealObject' },
+      { name: 'ETHEREUM_REVEAL_VERIFIER', class_name: 'EthereumRevealVerifierObject' },
+      { name: 'ETHEREUM_REVEAL_PUBLISHER', class_name: 'EthereumRevealPublisherObject' },
+    ] },
+    migrations: [
+      { tag: 'local-ethereum-reveal-v1', new_sqlite_classes: ['EthereumRevealObject'] },
+      { tag: 'local-ethereum-reveal-verifier-v1', new_sqlite_classes: ['EthereumRevealVerifierObject'] },
+      { tag: 'local-ethereum-reveal-publisher-v1', new_sqlite_classes: ['EthereumRevealPublisherObject'] },
+    ],
     r2_buckets: [{ binding: 'ETHEREUM_REVEAL_METADATA', bucket_name: 'local-ethereum-reveal-metadata', remote: false }],
   };
 }
