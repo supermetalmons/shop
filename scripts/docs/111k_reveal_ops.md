@@ -79,6 +79,8 @@ Initial admission and foreground readmission after expiry use the same pause, ra
 
 Receipt verification has four slots, preferring three active requests and one background job. Discovery has one slot for each priority; idle slots can be borrowed without interrupting running work. Publication keeps its independent eight-write limit. Migration advances at most 128 evidence associations per turn, with frozen reads and publication available throughout. The watchdog's `ethereum_reveal_recovery_health` logs report migration progress, active/background due work, oldest due age, and watch-capacity usage at most once per minute per object.
 
+The lifecycle upgrade uses the same resumable migration path to restore lost admission reservations, recompute receipt deadlines, and remove obsolete token interests in batches of at most 128 rows. Already accepted unresolved watches count toward capacity immediately, including before their rows are repaired. If corrected usage exceeds 10,000, existing work stays admitted and new admission waits for capacity. Crates without receipt candidates wait on their discovery schedule. An unminted result closes token-only receipt interests; independent transaction and crate recovery continue. Polling respects the two-second discovery retry floor, while saved split ranges remain eligible for immediate continuation.
+
 ## Pausing, replacement, and local development
 
 ```sh

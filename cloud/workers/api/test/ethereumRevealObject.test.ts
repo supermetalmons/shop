@@ -456,6 +456,33 @@ test('active and background scans advance independently of four blocked receipt 
   assert.ok(f.state.peakScans <= 2);
 });
 
+for (const kind of ['tokens', 'crate'] as const) test(`${kind} API polling cannot restart failed discovery before its retry deadline`, async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t);
+  f.state.logsUnavailable = true;
+  f.state.minted = 1;
+  if (kind === 'crate') f.pending(hash(1));
+  const request = (admit = false) => kind === 'tokens'
+    ? f.object.revealTokens(deployment, ['1'], admit) : f.object.revealTransaction(deployment, hash(1), admit);
+  assert.equal((await request(true)).kind, 'ready');
+  await f.settle();
+  const scans = () => f.state.calls.filter(method => method === 'eth_getLogs').length;
+  assert.equal(scans(), 1);
+  const completedAt = now;
+  for (const elapsed of [1, 300, 1_999]) {
+    now = completedAt + elapsed;
+    assert.equal((await request()).kind, 'ready');
+    await f.settle();
+    assert.equal(scans(), 1);
+  }
+  now = completedAt + 2_000;
+  assert.equal((await request()).kind, 'ready');
+  await f.settle();
+  assert.equal(scans(), 2);
+  assert.equal(f.store.summary().frozen, 0);
+});
+
 test('token requests partition provider scans and return exact unminted results without creating crate jobs', async t => {
   const f = fixture(t);
   const claims: RevealScanClaim[] = [];
@@ -1110,4 +1137,41 @@ test('direct non-unpack input resolves its watch while matching opaque wrapper i
     { hash: direct, observed: 1, opaque: 0, resolved: 1 },
     { hash: wrapped, observed: 1, opaque: 1, resolved: 0 },
   ]);
+});
+
+test('a reorg that makes a requested token unminted leaves no recurring receipt poller', async t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture(t), transactionHash = hash(1);
+  f.state.minted = 40;
+  f.state.receipts.set(transactionHash, receipt(transactionHash, 1000, [{ crateTokenId: '111112', first: 21 }]));
+  f.state.failedReceipts.add(transactionHash);
+  const initial = value(await f.object.revealTokens(deployment, ['21'], true));
+  await f.settle();
+  assert.deepEqual(initial.unresolved, [{ tokenId: '21', status: 'recovering' }]);
+  assert.equal(f.rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 1);
+  f.state.failedReceipts.clear();
+  f.state.head = 1001;
+  f.state.minted = 20;
+  f.state.canonicalHashes.set(1000, hash(9000));
+  f.state.receipts.set(transactionHash, receipt(transactionHash, 1001));
+  now += 2_000;
+  const closed = value(await f.object.revealTokens(deployment, ['21'], true));
+  await f.settle();
+  assert.deepEqual(closed.unresolved, [{ tokenId: '21', status: 'unminted' }]);
+  assert.deepEqual(closed.artworks, []);
+  assert.equal(closed.retryAfterMs, 0);
+  assert.equal(f.rows('SELECT COUNT(*) AS count FROM recovery_jobs')[0].count, 0);
+  assert.equal(f.rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 0);
+  const lookups = f.state.receiptLookups.length;
+  now += 86_400_000;
+  const restored = f.reopen();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await restored.watchdog(deployment);
+    await f.settle();
+    now += 300_000;
+  }
+  assert.equal(f.state.receiptLookups.length, lookups);
+  assert.equal(restored.store.summary().frozen, 0);
+  assert.deepEqual(restored.store.tokensResponse(deployment, ['21']).unresolved, [{ tokenId: '21', status: 'unminted' }]);
 });

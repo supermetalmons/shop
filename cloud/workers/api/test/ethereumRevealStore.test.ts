@@ -589,6 +589,96 @@ test('background completion cannot renew the thirty-second active window and qui
   assert.ok(store.claimReceipt(now, 'active', hash));
 });
 
+for (const kind of ['tokens', 'crate'] as const) for (const outcome of ['failure', 'completed'] as const) {
+  test(`${kind} polling preserves two seconds after a slow ${outcome} scan`, t => {
+    let now = 1_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const { store, rows } = fixture(t);
+    const hash = observation(1).transactionHash;
+    const promote = () => kind === 'tokens' ? store.admitTokens(['1'], 100, now) : store.admitTransaction(hash, 100, now);
+    if (kind === 'tokens') promote();
+    else pendingCrates(store, 1, [crateId(0)], now);
+    const first = store.claimScan(now, 'active');
+    assert.ok(first);
+    assert.equal(first.kind, kind);
+    now += 3_000;
+    if (outcome === 'failure') assert.equal(store.failScan(first, now), true);
+    else if (kind === 'crate') assert.equal(store.completeCrateScan(first, crateScan(first), now), true);
+    else assert.equal(store.completeTokenScan(first, { ...crateScan(first), mintedThrough: 1, provenance: [] }, now), true);
+    const completedAt = now;
+    for (const elapsed of [1, 300, 1_999]) {
+      now = completedAt + elapsed;
+      promote();
+      assert.equal(store.claimScan(now, 'active'), null);
+      const due = rows(kind === 'tokens' ? 'SELECT next_check_ms AS due FROM recovery_jobs' : 'SELECT scan_due_ms AS due FROM crate_recovery_jobs')[0].due;
+      assert.equal(due, completedAt + 2_000);
+    }
+    now = completedAt + 2_000;
+    promote();
+    assert.equal(store.claimScan(now, 'active')?.id, first.id);
+  });
+}
+
+for (const kind of ['tokens', 'crate'] as const) test(`${kind} foreground promotion shortens quiet backoff without delaying genuinely new scope`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = observation(1).transactionHash;
+  if (kind === 'tokens') store.admitTokens(['1'], 100, now);
+  else pendingCrates(store, 1, [crateId(0)], now);
+  const first = store.claimScan(now, 'active');
+  assert.ok(first);
+  store.failScan(first, now);
+  now += 30_001;
+  const quiet = store.claimScan(now, 'background');
+  assert.ok(quiet);
+  store.failScan(quiet, now);
+  const completedAt = now;
+  const dueQuery = kind === 'tokens' ? 'SELECT next_check_ms AS due FROM recovery_jobs' : 'SELECT scan_due_ms AS due FROM crate_recovery_jobs';
+  assert.ok(Number(rows(dueQuery)[0].due) > now + 2_000);
+  now += 1;
+  if (kind === 'tokens') store.admitTokens(['1'], 100, now);
+  else store.admitTransaction(hash, 100, now);
+  assert.equal(rows(dueQuery)[0].due, completedAt + 2_000);
+  if (kind === 'tokens') store.admitTokens(['2'], 100, now);
+  else pendingCrates(store, 2, [crateId(1)], now);
+  const fresh = store.claimScan(now, 'active');
+  assert.ok(fresh);
+  assert.notEqual(fresh.id, first.id);
+  assert.deepEqual(kind === 'tokens' ? fresh.tokenIds : fresh.crateTokenIds, kind === 'tokens' ? ['2'] : [crateId(1)]);
+});
+
+for (const kind of ['tokens', 'crate'] as const) test(`${kind} split-range continuation remains immediate through repeated foreground promotion`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store } = fixture(t);
+  const hash = observation(1).transactionHash;
+  const promote = () => kind === 'tokens' ? store.admitTokens(['1'], 100, now) : store.admitTransaction(hash, 100, now);
+  if (kind === 'tokens') promote();
+  else pendingCrates(store, 1, [crateId(0)], now);
+  const first = store.claimScan(now, 'active');
+  assert.ok(first);
+  now += 3_000;
+  const middle = Math.floor((first.range.fromBlock + 1000) / 2);
+  const ranges = [{ fromBlock: middle + 1, toBlock: 1000 }, { fromBlock: first.range.fromBlock, toBlock: middle }];
+  const split = { provenance: [], scannedRange: null, remainingRanges: ranges,
+    observedBlock: { number: 1000, hash: observation(1, 1000).blockHash } };
+  if (kind === 'tokens') store.completeTokenScan(first, { ...split, mintedThrough: 1 }, now);
+  else store.completeCrateScan(first, split, now);
+  now += 1;
+  promote();
+  const upper = store.claimScan(now, 'active');
+  assert.ok(upper);
+  assert.deepEqual(upper.range, ranges[0]);
+  const scanned = { ...split, scannedRange: ranges[0], remainingRanges: [] };
+  if (kind === 'tokens') store.completeTokenScan(upper, { ...scanned, mintedThrough: 1 }, now);
+  else store.completeCrateScan(upper, scanned, now);
+  promote();
+  const lower = store.claimScan(now, 'active');
+  assert.ok(lower);
+  assert.deepEqual(lower.range, ranges[1]);
+});
+
 test('active and background claims remain separate and honor caller exclusions', t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
@@ -1307,4 +1397,298 @@ test('preferred hashes obey monitor due times until explicitly readmitted', t =>
   assert.ok(claim);
   assert.equal(claim.hash, hash);
   assert.equal(claim.active, true);
+});
+
+test('unminted recovery closes every receipt interest and stale scans cannot recreate it', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  store.admitTokens(['21'], 100, now);
+  const first = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(first);
+  const evidence = { provenance: [{ ...observation(1, 500), tokenIds: ['21'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 40,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } };
+  assert.equal(store.completeTokenScan(first, evidence, now), true);
+  now += 2_000;
+  const second = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(second);
+  assert.equal(store.completeTokenScan(second, { ...evidence, provenance: [{ ...observation(2, 501), tokenIds: ['21'] }],
+    scannedRange: { fromBlock: 100, toBlock: 501 }, observedBlock: { number: 501, hash: observation(2, 501).blockHash } }, now), true);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 2);
+  now += 2_000;
+  const closing = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(closing);
+  assert.equal(store.completeTokenScan(closing, { provenance: [], scannedRange: null, remainingRanges: [], mintedThrough: 20,
+    observedBlock: { number: 502, hash: observation(2, 502).blockHash } }, now), true);
+  assert.deepEqual(store.tokensResponse(deployment, ['21']).unresolved, [{ tokenId: '21', status: 'unminted' }]);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM recovery_jobs')[0].count, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 0);
+  assert.equal(store.completeTokenScan(first, evidence, now), false);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 0);
+  now += 86_400_000;
+  const restored = reopen();
+  assert.equal(restored.claimReceipt(now, 'background'), null);
+  assert.equal(restored.claimScan(now, 'background'), null);
+  assert.equal(restored.summary().frozen, 0);
+});
+
+for (const outcome of ['pending', 'confirmed'] as const) test(`an in-flight ${outcome} token receipt cannot revive recovery after it closes as unminted`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  store.admitTokens(['21'], 100, now);
+  const scan = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(scan);
+  store.completeTokenScan(scan, { provenance: [{ ...observation(1, 500), tokenIds: ['21'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 40,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } }, now);
+  const receipt = store.claimReceipt(now, 'active', observation(1).transactionHash);
+  assert.ok(receipt);
+  now += 2_000;
+  const closing = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(closing);
+  store.completeTokenScan(closing, { provenance: [], scannedRange: null, remainingRanges: [], mintedThrough: 20,
+    observedBlock: { number: 501, hash: observation(2, 501).blockHash } }, now);
+  assert.equal(store.completeReceipt(deployment, receipt, outcome === 'pending'
+    ? { status: 'pending', seen: true, crates: [crateId(0)], fromBlock: 501 }
+    : confirmed(1, [{ crateTokenId: crateId(0), tokenIds: ids(21) }]), now), true);
+  assert.equal(store.transactionJob(receipt.hash)!.crates_json, '[]');
+  assert.equal(store.summary().reserved, 0);
+  assert.equal(store.summary().frozen, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM publication')[0].count, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_recovery_jobs')[0].count, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 0);
+  assert.deepEqual(store.tokensResponse(deployment, ['21']).unresolved, [{ tokenId: '21', status: 'unminted' }]);
+  now += 2_000;
+  const restored = reopen();
+  assert.equal(restored.claimReceipt(now, 'active'), null);
+  assert.equal(restored.claimScan(now, 'active'), null);
+  assert.equal(restored.nextWake(now), null);
+});
+
+for (const authorization of ['full hash', 'crate'] as const) for (const outcome of ['pending', 'confirmed'] as const) test(`closing token recovery preserves independent ${authorization} authorization for ${outcome} receipts`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = observation(1).transactionHash;
+  store.admitTokens(['21'], 100, now);
+  const tokenScan = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(tokenScan);
+  store.completeTokenScan(tokenScan, { provenance: [{ ...observation(1, 500), tokenIds: ['21'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 40,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } }, now);
+  if (authorization === 'full hash') assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  else {
+    pendingCrates(store, 9, [crateId(0)], now);
+    const crate = store.claimScan(now, 'active');
+    assert.ok(crate && crate.kind === 'crate');
+    store.completeCrateScan(crate, crateScan(crate, 1, 500), now);
+    assert.equal(store.transactionJob(hash)!.requested_all, 0);
+  }
+  const receipt = store.claimReceipt(now, 'active', hash);
+  assert.ok(receipt);
+  now += 2_000;
+  const closing = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(closing);
+  store.completeTokenScan(closing, { provenance: [], scannedRange: null, remainingRanges: [], mintedThrough: 20,
+    observedBlock: { number: 501, hash: observation(2, 501).blockHash } }, now);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 0);
+  if (outcome === 'pending') {
+    store.completeReceipt(deployment, receipt, { status: 'pending', seen: true, crates: [crateId(0), crateId(1)], fromBlock: 501 }, now);
+    const expected = authorization === 'full hash' ? [crateId(0), crateId(1)] : [crateId(0)];
+    assert.deepEqual(JSON.parse(store.transactionJob(hash)!.crates_json), expected);
+    assert.deepEqual(rows('SELECT crate_token_id FROM crate_recovery_jobs ORDER BY crate_token_id').map(row => row.crate_token_id), expected);
+    assert.equal(store.summary().reserved, expected.length * 20);
+    now += 2_000;
+    const next = store.claimReceipt(now, 'active', hash);
+    assert.ok(next);
+    store.completeReceipt(deployment, next, confirmed(1, [
+      { crateTokenId: crateId(0), tokenIds: ids(21) }, { crateTokenId: crateId(1), tokenIds: ids(41) },
+    ]), now);
+    assert.equal(store.frozen(ids(41)).length, authorization === 'full hash' ? 20 : 0);
+  } else assert.equal(store.completeReceipt(deployment, receipt, confirmed(1, [{ crateTokenId: crateId(0), tokenIds: ids(21) }]), now), true);
+  assert.equal(store.frozen(ids(21)).length, 20);
+  assert.equal(rows(`SELECT observed_hash FROM crate_recovery_jobs WHERE crate_token_id='${crateId(0)}'`)[0].observed_hash, hash);
+});
+
+test('token provenance preserves an existing full transaction reservation at capacity', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows, reopen } = fixture(t);
+  fillOpaqueWatches(database, now);
+  const hash = observation(1).transactionHash;
+  store.admitTokens(['1'], 100, now);
+  const scan = store.claimScan(now, 'active', { tokenIds: ['1'] });
+  assert.ok(scan);
+  store.completeTokenScan(scan, { provenance: [{ ...observation(1, 500), tokenIds: ['1'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 20,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } }, now);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count, 0);
+  assert.equal(store.opaqueCount(), 10_000);
+  assert.equal(store.admitTransaction(observation(20_000).transactionHash, 100, now), 'capacity');
+  const restored = reopen();
+  assert.equal(restored.admitTransaction(hash, 100, now), 'accepted');
+  const receipt = restored.claimReceipt(now, 'active', hash);
+  assert.ok(receipt);
+  restored.completeReceipt(deployment, receipt, confirmed(1), now);
+  assert.equal(restored.opaqueCount(), 9_999);
+  assert.equal(restored.admitTransaction(observation(20_000).transactionHash, 100, now), 'accepted');
+});
+
+test('legacy provenance import preserves an admitted unresolved reservation', t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, rows, reopen } = fixture(t);
+  const observed = observation(1, 500);
+  database.prepare('INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms) VALUES(?,100,1,?,?)')
+    .run(observed.transactionHash, now, now);
+  database.exec("INSERT INTO recovery_jobs(id,token_ids_json,ranges_json) VALUES('legacy-token','[\"1\"]','[{\"fromBlock\":100}]')");
+  database.exec("INSERT INTO token_recovery(token_id,job_id,status) VALUES('1','legacy-token','recovering')");
+  database.prepare("INSERT INTO provenance(token_id,transaction_hash,block_number,block_hash) VALUES('1',?,500,?)")
+    .run(observed.transactionHash, observed.blockHash);
+  database.exec('DELETE FROM reveal_recovery_migration');
+  let store = reopen();
+  assert.equal(store.opaqueCount(), 1);
+  while (!store.migrationReady()) {
+    store.migrateChunk(now, 2);
+    assert.equal(store.opaqueCount(), 1);
+    store = reopen();
+  }
+  assert.equal(rows('SELECT opaque FROM receipt_work')[0].opaque, 1);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count, 0);
+  assert.equal(store.admitTransaction(observed.transactionHash, 100, now), 'accepted');
+});
+
+test('migrated orphan reservations wake only for discovery after backoff', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows, reopen } = fixture(t);
+  store.reserve([crateId(0)]);
+  database.exec('DELETE FROM reveal_recovery_migration');
+  const migrated = reopen();
+  while (!migrated.migrationReady()) migrated.migrateChunk(now, 128);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count, 0);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const scan = migrated.claimScan(now, 'background');
+    assert.ok(scan);
+    migrated.completeCrateScan(scan, crateScan(scan, undefined, 500), now);
+    const job = rows('SELECT receipt_due_ms,scan_due_ms FROM crate_recovery_jobs')[0];
+    assert.equal(job.receipt_due_ms, Number.MAX_SAFE_INTEGER);
+    assert.equal(migrated.nextWake(now), Number(job.scan_due_ms));
+    assert.equal(migrated.claimReceipt(now + 250, 'background'), null);
+    assert.equal(migrated.claimScan(now + 250, 'background'), null);
+    if (attempt === 7) assert.equal(Number(job.scan_due_ms) - now, 300_000);
+    now = Number(job.scan_due_ms);
+  }
+  assert.equal(migrated.summary().reserved, 20);
+});
+
+test('deployed lifecycle repair is bounded and restartable while preserving admitted work and immutable state', t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows, reopen } = fixture(t);
+  fillOpaqueWatches(database, now);
+  store.freeze(deployment, observation(90_000), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+  store.reserve([crateId(1)]);
+  for (const index of [20_000, 20_001]) {
+    const hash = observation(index).transactionHash;
+    database.prepare('INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms) VALUES(?,100,1,?,?)').run(hash, now, now);
+    database.prepare('INSERT INTO receipt_work(hash,requested_all,observed,opaque,created_at_ms) VALUES(?,1,1,0,?)').run(hash, now);
+  }
+  database.prepare(`INSERT INTO crate_recovery_jobs(crate_token_id,from_block,ranges_json,receipt_due_ms,scan_due_ms,
+    scan_claim_id,scan_lease_until_ms,generation,scan_claim_generation) VALUES(?,100,'[{"fromBlock":100,"toBlock":500}]',0,?,'kept-scan',?,3,3)`)
+    .run(crateId(1), now + 300_000, now + 30_000);
+  database.exec("INSERT INTO recovery_jobs(id,token_ids_json,ranges_json) VALUES('live-token','[\"5001\"]','[{\"fromBlock\":100}]')");
+  database.exec("INSERT INTO token_recovery(token_id,job_id,status) VALUES('5001','live-token','recovering')");
+  database.prepare("INSERT INTO receipt_token_interest(hash,token_id) VALUES(?,'5001')").run(observation(20_000).transactionHash);
+  database.exec(`WITH RECURSIVE ids(id) AS (SELECT 4001 UNION ALL SELECT id+1 FROM ids WHERE id<4200)
+    INSERT INTO token_recovery(token_id,status,checked_at_ms) SELECT CAST(id AS TEXT),'unminted',1000000 FROM ids`);
+  database.prepare(`INSERT INTO receipt_token_interest(hash,token_id) SELECT ?,token_id FROM token_recovery WHERE status='unminted'`)
+    .run(observation(1).transactionHash);
+  for (const token of ['1', '6000']) database.prepare('INSERT INTO receipt_token_interest(hash,token_id) VALUES(?,?)').run(observation(1).transactionHash, token);
+  database.prepare("UPDATE receipt_work SET claim_id='kept-receipt',lease_until_ms=? WHERE hash=?").run(now + 30_000, observation(1).transactionHash);
+  database.prepare("INSERT INTO receipt_claim_tokens(hash,claim_id,token_id) VALUES(?,'kept-receipt','4001')").run(observation(1).transactionHash);
+  database.exec("DELETE FROM reveal_migrations WHERE name='reveal-recovery-lifecycle-v1'");
+  let restored = reopen();
+  assert.equal(restored.migrationReady(), false);
+  assert.equal(rows('SELECT phase FROM reveal_recovery_migration')[0].phase, 'repair-watches');
+  assert.equal(restored.opaqueCount(), 10_002);
+  assert.equal(restored.admitTransaction(observation(30_000).transactionHash, 100, now), 'capacity');
+  assert.equal(restored.admitTransaction(observation(20_000).transactionHash, 100, now), 'accepted');
+  assert.equal(restored.frozen(ids(1)).length, 20);
+  assert.equal(restored.claimPublications(now, 1).length, 1);
+  const preserved = ['settings', 'pools', 'free_slots', 'crates', 'assignments', 'observations', 'publication', 'transactions', 'token_recovery', 'recovery_jobs', 'receipt_claim_tokens'];
+  const before = preserved.map(table => createHash('sha256').update(JSON.stringify(rows(`SELECT * FROM ${table} ORDER BY rowid`))).digest('hex'));
+  const scanState = rows(`SELECT from_block,ranges_json,scan_due_ms,scan_claim_id,scan_lease_until_ms,generation,scan_claim_generation FROM crate_recovery_jobs WHERE crate_token_id='${crateId(1)}'`);
+  let batches = 0;
+  while (!restored.migrationReady()) {
+    assert.equal(restored.claimReceipt(now, 'active'), null);
+    const result = restored.migrateChunk(now, 128);
+    assert.ok(result.processed <= 128);
+    assert.ok(++batches < 100);
+    const cursor = rows('SELECT * FROM reveal_recovery_migration');
+    restored = reopen();
+    assert.deepEqual(rows('SELECT * FROM reveal_recovery_migration'), cursor);
+  }
+  assert.ok(batches > 2);
+  assert.deepEqual(preserved.map(table => createHash('sha256').update(JSON.stringify(rows(`SELECT * FROM ${table} ORDER BY rowid`))).digest('hex')), before);
+  assert.deepEqual(rows(`SELECT from_block,ranges_json,scan_due_ms,scan_claim_id,scan_lease_until_ms,generation,scan_claim_generation FROM crate_recovery_jobs WHERE crate_token_id='${crateId(1)}'`), scanState);
+  assert.equal(rows(`SELECT receipt_due_ms FROM crate_recovery_jobs WHERE crate_token_id='${crateId(1)}'`)[0].receipt_due_ms, Number.MAX_SAFE_INTEGER);
+  assert.equal(restored.opaqueCount(), 10_002);
+  assert.equal(rows(`SELECT opaque FROM receipt_work WHERE hash='${observation(20_001).transactionHash}'`)[0].opaque, 1);
+  assert.deepEqual(rows('SELECT token_id FROM receipt_token_interest').map(row => row.token_id), ['5001']);
+  assert.equal(rows(`SELECT claim_id FROM receipt_work WHERE hash='${observation(1).transactionHash}'`)[0].claim_id, 'kept-receipt');
+  assert.equal(rows("SELECT COUNT(*) AS count FROM reveal_migrations WHERE name='reveal-recovery-lifecycle-v1'")[0].count, 1);
+  assert.deepEqual(restored.migrateChunk(now, 128), { ready: true, processed: 0 });
+  assert.equal(restored.admitTransaction(observation(30_000).transactionHash, 100, now), 'capacity');
+  conservation(database, 20);
+});
+
+test('lifecycle repair rolls back its changes and cursor together after storage failure', t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows, reopen } = fixture(t);
+  store.admitTransaction(observation(1).transactionHash, 100, now);
+  database.exec("UPDATE receipt_work SET opaque=0; DELETE FROM reveal_migrations WHERE name='reveal-recovery-lifecycle-v1'");
+  const restored = reopen();
+  const before = rows('SELECT * FROM reveal_recovery_migration');
+  database.exec("CREATE TRIGGER reject_watch_repair BEFORE UPDATE OF opaque ON receipt_work BEGIN SELECT RAISE(ABORT,'Repair unavailable'); END");
+  assert.throws(() => restored.migrateChunk(now, 128), /Repair unavailable/);
+  assert.deepEqual(rows('SELECT * FROM reveal_recovery_migration'), before);
+  assert.equal(rows('SELECT opaque FROM receipt_work')[0].opaque, 0);
+  assert.equal(restored.opaqueCount(), 1);
+  database.exec('DROP TRIGGER reject_watch_repair');
+  while (!restored.migrationReady()) restored.migrateChunk(now, 128);
+  assert.equal(rows('SELECT opaque FROM receipt_work')[0].opaque, 1);
+});
+
+test('live token-only recovery waits for matching receipt IDs before admitting bundled pending crates', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  store.admitTokens(['21'], 100, now);
+  const scan = store.claimScan(now, 'active', { tokenIds: ['21'] });
+  assert.ok(scan);
+  store.completeTokenScan(scan, { provenance: [{ ...observation(1, 500), tokenIds: ['21'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 40,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } }, now);
+  const pending = store.claimReceipt(now, 'active');
+  assert.ok(pending);
+  store.completeReceipt(deployment, pending, { status: 'pending', seen: true, crates: [crateId(0), crateId(1)], fromBlock: 501 }, now);
+  assert.equal(store.transactionJob(pending.hash)!.crates_json, '[]');
+  assert.equal(store.summary().reserved, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_recovery_jobs')[0].count, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count, 0);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM receipt_token_interest')[0].count, 1);
+  const restored = reopen();
+  now += 2_000;
+  const receipt = restored.claimReceipt(now, 'active');
+  assert.ok(receipt);
+  restored.completeReceipt(deployment, receipt, confirmed(1, [
+    { crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) },
+  ]), now);
+  assert.equal(restored.frozen(ids(1)).length, 0);
+  assert.equal(restored.frozen(ids(21)).length, 20);
+  assert.deepEqual(rows('SELECT crate_token_id FROM crate_recovery_jobs').map(row => row.crate_token_id), [crateId(1)]);
 });
