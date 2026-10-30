@@ -1,0 +1,137 @@
+{
+  "verifiedAt": "2026-10-30T12:50:37.981Z",
+  "sourceCommit": "962e326577b8438cf81c64f89a5fc81146b5e29e",
+  "apiVersion": "f47aaa80-e867-4f67-817d-3d36573447e0",
+  "trafficPercentage": 100,
+  "worker": "mons-shop-api",
+  "apiBaseUrl": "https://api.mons.shop",
+  "validation": {
+    "apiTests": 2819,
+    "nativeRuntimeTests": 42,
+    "generatedSchemas": "passed",
+    "apiTypes": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "productionDatabaseIntegrity": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "durableObjectLifecycleRepair": "ready"
+  },
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-30T12:50:37.981Z",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "samples": {
+      "frozenToken": {
+        "status": 200,
+        "durationMs": 908,
+        "identicalToBaseline": true
+      },
+      "transaction": {
+        "status": 200,
+        "durationMs": 749,
+        "transactionHash": "0x08fe2f87f6498eba24df0c8bc35137f853cd743840e7df8d016fdb9d013aa293",
+        "artworkCount": 20
+      },
+      "tokenBatch": {
+        "status": 200,
+        "durationMs": 597,
+        "artworkCount": 20,
+        "matchesTransaction": true
+      },
+      "mixedTokens": {
+        "status": 200,
+        "artworks": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ]
+      },
+      "nonUnpack": {
+        "status": 200,
+        "result": "not_unpack"
+      },
+      "repeatedToken": {
+        "status": 200,
+        "durationMs": 867,
+        "identicalToBaseline": true
+      },
+      "cors": {
+        "deniedOriginStatus": 403,
+        "preflightStatus": 204
+      },
+      "metadata": {
+        "tokenId": "260",
+        "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48",
+        "unchanged": true,
+        "historicalToken1StillUnrevealed": true
+      }
+    }
+  },
+  "recoveryHealth": {
+    "scriptVersion": {
+      "id": "f47aaa80-e867-4f67-817d-3d36573447e0"
+    },
+    "outcome": "ok",
+    "health": {
+      "event": "ethereum_reveal_recovery_health",
+      "deploymentId": "sepolia-8b4044db",
+      "ready": true,
+      "seeded": 111111,
+      "available": 110871,
+      "reserved": 0,
+      "frozen": 240,
+      "publication": {
+        "published": 240
+      },
+      "recovery": {
+        "migrationReady": true,
+        "migration": {
+          "phase": "ready",
+          "cursor": "",
+          "rowKey": null,
+          "offset": 0
+        },
+        "opaque": 0,
+        "opaqueCapacity": {
+          "used": 0,
+          "limit": 10000,
+          "available": 10000
+        },
+        "crates": {
+          "observed": 12
+        },
+        "due": {
+          "active": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          },
+          "background": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          }
+        }
+      }
+    }
+  },
+  "localLoadTest": "local-load-test.json",
+  "frontendDeploymentRequired": false,
+  "onchainDeploymentRequired": false,
+  "historicalBackfill": false,
+  "acceptedLimitation": "Deep reorgs combined with unavailable log discovery can delay recovery until discovery resumes."
+}
