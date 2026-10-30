@@ -108,12 +108,16 @@ export class EthereumRevealObject extends DurableObject<Env> {
     this.store.admitTokens(tokenIds, deployment.deploymentBlock, Date.now());
     await this.arm();
     this.startBackground(deployment, undefined, tokenIds);
-    if (!snapshot.artworks.length) {
-      const needed = new Set(tokenIds);
+    const refreshingUnminted = new Set(snapshot.artworks.length
+      ? snapshot.unresolved.filter(value => value.status === 'unminted').map(value => value.tokenId) : []);
+    if (!snapshot.artworks.length || refreshingUnminted.size) {
+      const needed = refreshingUnminted.size ? refreshingUnminted : new Set(tokenIds);
       while (Date.now() < deadline) {
         const response = this.store.tokensResponse(deployment, tokenIds);
-        if (response.artworks.length || response.unresolved.every(value => value.status === 'unminted')) break;
-        const hashes = new Set(this.store.provenance(tokenIds).map(value => value.transactionHash));
+        if (refreshingUnminted.size
+          ? response.unresolved.every(value => !refreshingUnminted.has(value.tokenId) || value.status === 'unminted')
+          : response.artworks.length || response.unresolved.every(value => value.status === 'unminted')) break;
+        const hashes = new Set(this.store.provenance([...needed]).map(value => value.transactionHash));
         const tasks = [...this.scans.values()].filter(value => value.claim.kind === 'tokens' &&
           value.claim.tokenIds.some(id => needed.has(id))).map(value => value.promise);
         for (const hash of hashes) {

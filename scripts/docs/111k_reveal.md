@@ -82,6 +82,8 @@ The response contains available `artworks` and an `unresolved` array:
 
 Display successful results immediately and retry only unresolved IDs. Token recovery uses the same bounded inline wait and continues in the background; a slow lookup must not prevent displaying artwork already returned.
 
+Mixed requests can include revealed and unminted IDs. When a previously unminted result needs refreshing, the API waits within its existing two-second budget for that check before returning the current status. A slow or failed check remains `recovering`; it never substitutes an expired `unminted` result for fresh mint evidence.
+
 ## Response fields and media
 
 Both responses include `deploymentId`, `dropId`, `chainId`, `contractAddress`, `artworks`, and `retryAfterMs` (milliseconds), without a wrapper. Check the returned chain and contract.

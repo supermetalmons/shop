@@ -342,6 +342,16 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     assert.ok(alarmPublished, 'Alarms must publish subsequent batches while an unrelated RPC remains blocked.');
     assert.equal((await alarmPublished.json<{ image: string }>()).image, freshReveal.artworks[19].image);
     releaseReceipt.resolve();
+    const unminted = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['111111'] });
+    assert.deepEqual(unminted.artworks, []);
+    assert.deepEqual(unminted.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await new Promise(done => setTimeout(done, 2_100));
+      const mixed = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '111111'] });
+      assert.deepEqual(mixed.artworks, baseline.artworks.slice(0, 1));
+      assert.deepEqual(mixed.unresolved, [{ tokenId: '111111', status: 'unminted' }]);
+      assert.equal(mixed.retryAfterMs, 0);
+    }
     assert.deepEqual(rpcErrors, []);
     const report = {
       runtime: 'native-workerd', storage: 'isolated-local-sqlite-and-r2', loopbackConnectionsPerOrigin: 64, seeded: 111111, seedMs: rounded(seedMs),
@@ -356,7 +366,7 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       rpc: { total: rpcCalls.length, handlerP95Ms: percentile(rpcCalls.map(call => call.durationMs), 0.95),
         methods: Object.fromEntries([...new Set(rpcCalls.map(call => call.method))].map(method => [method, rpcCalls.filter(call => call.method === method).length])) },
       publicationConflictPreserved: true, publicationRecoveredAfterRestart: true, publicationContinuesDuringSlowRpc: true,
-      partialThenFullTransaction: true, unrelatedHistoryUnrevealed: true,
+      partialThenFullTransaction: true, unrelatedHistoryUnrevealed: true, mixedUnmintedRefresh: true,
     };
     await mkdir(resolve('.cache'), { recursive: true });
     await writeFile(resolve('.cache/111k-reveal-runtime-results.json'), `${JSON.stringify(report, null, 2)}\n`);
