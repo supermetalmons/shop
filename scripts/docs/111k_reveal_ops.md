@@ -4,11 +4,11 @@ This runbook covers Mons deployment and maintenance. Share the standalone [VVV i
 
 ## Operator setup
 
-Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; the existing Sepolia collection retains `111k-sepolia/`. Deployment IDs are globally unique across all networks, so use distinct IDs such as `v7` and `mainnet-reliquaries-v1`. Each URI suffix must equal its deployment ID. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
+Each registered chain/contract has an independent 111111-asset pool and permanently owns one metadata prefix. New prefixes are `111k-sepolia/<deploymentId>/` and `111k/<deploymentId>/`; the retired Sepolia collection retains `111k-sepolia/`, and the active v7 collection owns `111k-sepolia/v7/`. Deployment IDs are globally unique across all networks; `v7` is already registered, and future deployments must use unused IDs. Each URI suffix must equal its deployment ID. Never reuse a registered prefix for a replacement contract. Apply OPS migrations before publication or reveal operations.
 
-The reliquary-ready collection contains 344978 metadata objects, including reliquary tokens 117172–117201. Publish the complete collection to each replacement prefix before deployment and registration. The 30-object previews at `111k-sepolia/reliquaries-v1/` and `111k/reliquaries-v1/` are incomplete and their common suffix cannot identify two registrations. Use the distinct future prefixes below. Reliquary images are fixed at `https://wip.lil.org/111k/monuments/1.webp` through `30.webp`; opening a reliquary creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
+The reliquary-ready collection contains 344978 metadata objects, including reliquary tokens 117172–117201. Publish the complete collection to each replacement prefix before deployment and registration. The 30-object previews at `111k-sepolia/reliquaries-v1/` and `111k/reliquaries-v1/` are incomplete and their common suffix cannot identify two registrations. The examples below record v7 setup and a separate future mainnet prefix. Substitute a new unused ID for another Sepolia replacement. Reliquary images are fixed at `https://wip.lil.org/111k/monuments/1.webp` through `30.webp`; opening a reliquary creates 111 ordinary crates, so the artwork reveal pool and receipt assignments retain their existing sizes and behavior.
 
-For a fresh prefix, publish and verify the complete generated, validated placeholder collection:
+For a fresh prefix, publish and verify the complete generated, validated placeholder collection. Do not rerun the v7 upload after its registration:
 
 ```sh
 npm run ethereum:metadata -- upload --network sepolia --prefix 111k-sepolia/v7/ --directory <generated-directory>
