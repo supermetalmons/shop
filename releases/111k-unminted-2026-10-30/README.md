@@ -13,3 +13,11 @@ Regression coverage includes polling at and beyond cache expiry, fresh cached re
 Commit `335cd49eb5bd34ce7ffc18c2dd3824f9554287b0` is deployed as API version `21c8d01b-7d58-4e4d-8809-b60b590b34a9`, serving 100% of traffic. All 2,873 API tests, 42 native-runtime tests, release checks, and production database integrity checks passed. No state migration, frontend deployment, or contract deployment was needed.
 
 Three live mixed requests, each made more than 2.2 seconds after the preceding response, all returned token `111111` as `unminted` with `retryAfterMs: 0`; response times were 972, 809, and 401 ms. Singleton checks before and after expiry also returned `unminted` with no artwork. Token 260's artwork and metadata checksums, token 1's placeholder bytes, and CORS behavior remain unchanged. The prior rollout's recovery-loop warning is resolved. [release.json](release.json) contains the verification evidence.
+
+## Concurrent and queued recovery follow-up
+
+Commit `576082904a933b3ef2a9b5076d66f1fc2dd9f12e` is deployed as API version `5fa6254e-05ae-4ed8-b3f1-7fd593c10b7b`, serving 100% of traffic. Mixed callers now join already-admitted recovery even after another request has reset its negative result. Queued requests wait for scheduler progress within the original deadline. First-time unknown tokens retain immediate partial responses; the change adds no persistent state or migration.
+
+The release passed 2,877 API tests, 42 native-runtime tests, generated-schema/type/bundle/startup checks, and production database integrity checks. All D1 migrations were already current.
+
+Live verification issued three cycles of four concurrent requests for tokens `260` and `111111`, with at least 2.25 seconds between cycles. All twelve responses returned the same frozen artwork and `111111` as `unminted` with `retryAfterMs: 0`. Singleton checks, metadata checksums, token 1's placeholder, and VVV CORS/preflights also passed. The new version reports all 240 frozen artworks published and no due recovery work. Queued-scan saturation and deadline behavior were verified locally; production queues were not artificially filled. [concurrent-waits-release.json](concurrent-waits-release.json) records the results.

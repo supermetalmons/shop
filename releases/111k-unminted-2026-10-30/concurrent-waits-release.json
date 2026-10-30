@@ -1,0 +1,462 @@
+{
+  "verifiedAt": "2026-10-30T17:33:46.854Z",
+  "sourceCommit": "576082904a933b3ef2a9b5076d66f1fc2dd9f12e",
+  "apiVersion": "5fa6254e-05ae-4ed8-b3f1-7fd593c10b7b",
+  "worker": "mons-shop-api",
+  "apiBaseUrl": "https://api.mons.shop",
+  "trafficPercentage": 100,
+  "deploymentId": "df5dc992-74c1-4485-984c-2b228e388266",
+  "deployedAt": "2026-10-30T17:33:07.771967Z",
+  "previousVersions": [
+    {
+      "version_id": "21c8d01b-7d58-4e4d-8809-b60b590b34a9",
+      "percentage": 100
+    }
+  ],
+  "validation": {
+    "apiTests": 2877,
+    "nativeRuntimeTests": 42,
+    "generatedSchemas": "passed",
+    "apiTypes": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "productionDatabaseIntegrity": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "newStateMigrationRequired": false
+  },
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-30T17:33:27.167Z",
+    "apiVersion": "5fa6254e-05ae-4ed8-b3f1-7fd593c10b7b",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "passed": true,
+    "samples": {
+      "historicalMetadata": {
+        "status": 200,
+        "durationMs": 454,
+        "cors": "*",
+        "sha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4"
+      },
+      "frozenMetadata": {
+        "status": 200,
+        "durationMs": 468,
+        "cors": "*",
+        "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48"
+      },
+      "preflight": {
+        "status": 204,
+        "durationMs": 869,
+        "cors": "https://vvv.so",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "denied": {
+        "status": 403,
+        "durationMs": 869,
+        "cors": null,
+        "sha256": "97e1536b5a21b2062ed85226465bf58984a39da3f727fa61cd8a87ef1dce36e3"
+      },
+      "wwwPreflight": {
+        "status": 204,
+        "durationMs": 932,
+        "cors": "https://www.vvv.so",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "frozenBefore": {
+        "status": 200,
+        "durationMs": 1922,
+        "cors": "https://vvv.so",
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "artworkCount": 1,
+        "unresolved": [],
+        "retryAfterMs": 0
+      },
+      "singletonInitial1": {
+        "status": 200,
+        "durationMs": 1183,
+        "cors": "https://vvv.so",
+        "sha256": "5c0c62acdd29b9c7c3ebed950a632aaa42e0fb3cd86f078ba58302b80320edb8",
+        "artworkCount": 0,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0
+      },
+      "mixedCycle1Request1": {
+        "status": 200,
+        "durationMs": 768,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle1Request2": {
+        "status": 200,
+        "durationMs": 1292,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "mixedCycle1Request3": {
+        "status": 200,
+        "durationMs": 1808,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle1Request4": {
+        "status": 200,
+        "durationMs": 2482,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "mixedCycle2Request1": {
+        "status": 200,
+        "durationMs": 441,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle2Request2": {
+        "status": 200,
+        "durationMs": 962,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "mixedCycle2Request3": {
+        "status": 200,
+        "durationMs": 1205,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle2Request4": {
+        "status": 200,
+        "durationMs": 1470,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "mixedCycle3Request1": {
+        "status": 200,
+        "durationMs": 997,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle3Request2": {
+        "status": 200,
+        "durationMs": 1249,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "mixedCycle3Request3": {
+        "status": 200,
+        "durationMs": 1479,
+        "cors": "https://vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://vvv.so"
+      },
+      "mixedCycle3Request4": {
+        "status": 200,
+        "durationMs": 1982,
+        "cors": "https://www.vvv.so",
+        "sha256": "fef8b246599123655c455a74b7abd62f25eb0ca3315554d48e68480b00f83adb",
+        "artworkCount": 1,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251,
+        "origin": "https://www.vvv.so"
+      },
+      "singletonAfterExpiry": {
+        "status": 200,
+        "durationMs": 409,
+        "cors": "https://vvv.so",
+        "sha256": "5c0c62acdd29b9c7c3ebed950a632aaa42e0fb3cd86f078ba58302b80320edb8",
+        "artworkCount": 0,
+        "unresolved": [
+          {
+            "tokenId": "111111",
+            "status": "unminted"
+          }
+        ],
+        "retryAfterMs": 0,
+        "expiryWaitMs": 2251
+      },
+      "frozenAfter": {
+        "status": 200,
+        "durationMs": 558,
+        "cors": "https://www.vvv.so",
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "artworkCount": 1,
+        "unresolved": [],
+        "retryAfterMs": 0
+      },
+      "preflightAfter": {
+        "status": 204,
+        "durationMs": 169,
+        "cors": "https://vvv.so",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "frozenMetadataAfter": {
+        "status": 200,
+        "durationMs": 402,
+        "cors": "*",
+        "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48"
+      },
+      "historicalMetadataAfter": {
+        "status": 200,
+        "durationMs": 440,
+        "cors": "*",
+        "sha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4"
+      },
+      "wwwPreflightAfter": {
+        "status": 204,
+        "durationMs": 474,
+        "cors": "https://www.vvv.so",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "deniedAfter": {
+        "status": 403,
+        "durationMs": 671,
+        "cors": null,
+        "sha256": "97e1536b5a21b2062ed85226465bf58984a39da3f727fa61cd8a87ef1dce36e3"
+      }
+    },
+    "cycles": [
+      {
+        "cycle": 1,
+        "expiryWaitMs": 2251,
+        "concurrency": 4,
+        "dispatchSpreadMs": 1,
+        "passed": true,
+        "durationMs": [
+          768,
+          1292,
+          1808,
+          2482
+        ]
+      },
+      {
+        "cycle": 2,
+        "expiryWaitMs": 2251,
+        "concurrency": 4,
+        "dispatchSpreadMs": 0,
+        "passed": true,
+        "durationMs": [
+          441,
+          962,
+          1205,
+          1470
+        ]
+      },
+      {
+        "cycle": 3,
+        "expiryWaitMs": 2251,
+        "concurrency": 4,
+        "dispatchSpreadMs": 0,
+        "passed": true,
+        "durationMs": [
+          997,
+          1249,
+          1479,
+          1982
+        ]
+      }
+    ],
+    "frozenTokenUnchanged": true,
+    "frozenMetadataUnchanged": true,
+    "historicalToken1StillPlaceholder": true,
+    "mixedAfterExpiryChecks": 12,
+    "concurrentCycles": 3,
+    "concurrencyPerCycle": 4,
+    "liveScope": "Concurrent same-token refresh after negative-cache expiry; production queues were not saturated.",
+    "unmintedHasNoArtwork": true,
+    "unmintedRetryAfterMs": 0,
+    "completedAt": "2026-10-30T17:33:46.854Z"
+  },
+  "recoveryHealth": {
+    "scriptVersion": {
+      "id": "5fa6254e-05ae-4ed8-b3f1-7fd593c10b7b"
+    },
+    "outcome": "ok",
+    "health": {
+      "event": "ethereum_reveal_recovery_health",
+      "deploymentId": "sepolia-8b4044db",
+      "ready": true,
+      "seeded": 111111,
+      "available": 110871,
+      "reserved": 0,
+      "frozen": 240,
+      "publication": {
+        "published": 240
+      },
+      "recovery": {
+        "migrationReady": true,
+        "migration": {
+          "phase": "ready",
+          "cursor": "",
+          "rowKey": null,
+          "offset": 0
+        },
+        "opaque": 0,
+        "opaqueCapacity": {
+          "used": 0,
+          "limit": 10000,
+          "available": 10000
+        },
+        "crates": {
+          "observed": 12
+        },
+        "due": {
+          "active": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          },
+          "background": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          }
+        },
+        "dispatch": {
+          "limit": 64,
+          "inFlight": 0,
+          "active": 0,
+          "background": 0,
+          "pauseUntilMs": 0,
+          "nextRecoveryMs": null,
+          "earliestLeaseUntilMs": null
+        }
+      }
+    }
+  },
+  "verificationScope": {
+    "live": "Concurrent mixed token requests after negative-cache expiry, immutable metadata, singleton lookups, and CORS.",
+    "local": "Queued recovery and occupied scan slots, concurrent new/known tokens, shared deadline and durable continuation. Production queues were not saturated."
+  },
+  "frontendDeploymentRequired": false,
+  "onchainDeploymentRequired": false,
+  "historicalBackfill": false
+}
