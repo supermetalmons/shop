@@ -175,9 +175,10 @@ test('existing ledgers replace old scheduler indexes without changing rows', t =
   database.exec(`UPDATE transactions SET dormant=1;
     DROP INDEX transactions_active_due;
     DROP INDEX publication_due_numeric;
+    DROP INDEX receipt_unresolved_due;
     CREATE INDEX transactions_due ON transactions(next_check_ms);
     CREATE INDEX publication_due ON publication(status,next_check_ms)`);
-  const tables = ['assignments', 'publication', 'transactions'];
+  const tables = ['assignments', 'publication', 'transactions', 'receipt_work'];
   const before = tables.map(table => rows(`SELECT * FROM ${table} ORDER BY rowid`));
   for (let attempt = 0; attempt < 2; attempt++) {
     reopen();
@@ -185,6 +186,7 @@ test('existing ledgers replace old scheduler indexes without changing rows', t =
     const indexes = rows("SELECT name FROM sqlite_schema WHERE type='index'").map(row => row.name);
     assert.ok(indexes.includes('transactions_active_due'));
     assert.ok(indexes.includes('publication_due_numeric'));
+    assert.ok(indexes.includes('receipt_unresolved_due'));
     assert.ok(!indexes.includes('transactions_due'));
     assert.ok(!indexes.includes('publication_due'));
   }
@@ -1310,7 +1312,7 @@ for (const outcome of ['error', 'absent', 'pending', 'reverted', 'not_unpack'] a
 test('terminal non-unpack input releases opaque capacity without deleting its response history', t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
-  const { store, rows, reopen } = fixture(t);
+  const { store, database, rows, queries, reopen } = fixture(t);
   const hash = observation(1).transactionHash;
   assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
   assert.equal(store.opaqueCount(), 1);
@@ -1325,8 +1327,19 @@ test('terminal non-unpack input releases opaque capacity without deleting its re
   assert.deepEqual(response.artworks, []);
   now += 86_400_000;
   const restored = reopen();
+  assert.equal(restored.claimReceipt(now, 'active'), null);
   assert.equal(restored.claimReceipt(now, 'background'), null);
   assert.equal(restored.nextWake(now), null);
+  const receiptQueries = queries().filter(query => query.startsWith('SELECT w.hash,w.last_checked_ms') && !query.includes('AND w.hash=?'));
+  assert.equal(receiptQueries.length, 2);
+  for (const query of receiptQueries) {
+    const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all(now, now, now, now - 2_000);
+    assert.match(plan.map(row => row.detail).join('\n'), /receipt_unresolved_due/);
+  }
+  const wakeQuery = queries().find(query => query.startsWith('SELECT MIN(due) AS due FROM'));
+  assert.ok(wakeQuery);
+  const wakePlan = database.prepare(`EXPLAIN QUERY PLAN ${wakeQuery}`).all();
+  assert.match(wakePlan.map(row => row.detail).join('\n'), /receipt_unresolved_due/);
   assert.deepEqual(restored.transactionResponse(deployment, hash), response);
   assert.equal(restored.knownTransaction(hash), true);
   assert.equal(restored.admitTransaction(observation(2).transactionHash, 100, now), 'accepted');

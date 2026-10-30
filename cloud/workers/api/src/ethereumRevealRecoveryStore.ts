@@ -58,6 +58,7 @@ const SCHEMA = [
     claim_id TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,created_at_ms INTEGER NOT NULL,request_pending INTEGER NOT NULL DEFAULT 0,resolved INTEGER NOT NULL DEFAULT 0,
     legacy_pending INTEGER NOT NULL DEFAULT 0,result_json TEXT)`,
   `CREATE INDEX IF NOT EXISTS receipt_opaque_due ON receipt_work(next_check_ms,last_checked_ms,hash) WHERE opaque=1 AND resolved=0`,
+  `CREATE INDEX IF NOT EXISTS receipt_unresolved_due ON receipt_work(next_check_ms,last_checked_ms,hash) WHERE resolved=0`,
   `CREATE TABLE IF NOT EXISTS crate_candidates (crate_token_id TEXT NOT NULL REFERENCES crate_recovery_jobs(crate_token_id),
     hash TEXT NOT NULL REFERENCES receipt_work(hash),evidence_version INTEGER NOT NULL DEFAULT 0,checked_version INTEGER NOT NULL DEFAULT 0,
     evidence_key TEXT,next_check_ms INTEGER NOT NULL DEFAULT 0,last_checked_ms INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,
