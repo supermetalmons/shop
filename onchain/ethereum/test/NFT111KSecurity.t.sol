@@ -1010,7 +1010,7 @@ contract NFT111KSecurityTest is TestSupport {
     function _reentry(uint256 route) internal {
         SecurityReceiver buyer = _receiver();
         SecurityCall memory call_ = _route(buyer, route);
-        SecurityCall[] memory attacks = new SecurityCall[](12);
+        SecurityCall[] memory attacks = new SecurityCall[](13);
         attacks[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         attacks[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         attacks[2] = SecurityCall(abi.encodeCall(token.unboxWarehouse, (116667)), 0);
@@ -1040,11 +1040,12 @@ contract NFT111KSecurityTest is TestSupport {
             SecurityCall(abi.encodeCall(token.mintCratesDiscounted, (1, new bytes32[](0))), token.discountCratePrice());
         attacks[10] = SecurityCall(abi.encodeCall(token.mintReliquaries, (1)), 0.0088 ether);
         attacks[11] = SecurityCall(abi.encodeCall(token.unboxReliquary, (117172)), 0);
+        attacks[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
         buyer.configureAttacks(attacks);
         _expectRoutePurchaseTotals(buyer, route);
         buyer.execute(call_.data, call_.value);
         assertEq(buyer.callbacks(), _count(route));
-        assertEq(buyer.blockedCalls(), 12 * _count(route));
+        assertEq(buyer.blockedCalls(), attacks.length * _count(route));
         assertFalse(token.usedDeliveryOrders(99));
         assertFalse(token.usedClaims(INNER_CLAIM));
         _assertOutputs(route, address(buyer));

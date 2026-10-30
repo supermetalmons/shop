@@ -82,7 +82,7 @@ npm run dev:ethereum:api
 
 The helper reads `.local/deployment.json`, injects the public local test signer, creates temporary databases, and reads metadata directly from the CDN. Local manifests with loopback metadata URLs require a fresh local deployment; matching CDN manifests remain valid. Metadata reads require CDN connectivity and have no local fallback. Follow the [local API and frontend setup](../../scripts/docs/111k_testnet.md#run-locally). Public networks require a separately provisioned signer.
 
-Anvil's exposed accounts and keys are for local development only. The collection starts with sales closed, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, reliquary price `0.0088 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseMint(recipient)` or `releaseDelivery()`; payment always goes to the configured receiver.
+Anvil's exposed accounts and keys are for local development only. The collection starts with sales closed, crate price `0.0001 ETH`, warehouse price `0.0011 ETH`, reliquary price `0.0088 ETH`, and discounted crate price `0.00005 ETH`. Delivery fees are supplied by a signed quote; the local test flow uses `0.0001 ETH`. Mint and delivery payments accumulate in separate accounting pools in the collection. Anyone can trigger `releaseAllMint()`, `releaseMint(recipient)`, or `releaseDelivery()`; payment always goes to the configured receiver.
 
 ## Future public network deployments
 
@@ -122,11 +122,13 @@ These tests deploy and trade only inside the local fork. They are explicitly ski
 
 Both deployment scripts read [`config/proceeds.json`](config/proceeds.json). It starts with four valid placeholder mint addresses and shares of `5000 / 2500 / 1500 / 1000` basis points (50% / 25% / 15% / 10%), plus a different placeholder delivery receiver. Replace these placeholders before deploying for real proceeds. There are no treasury environment overrides. Configuration is validated before broadcasting, including duplicate receivers, shipping overlap, and the predicted collection address.
 
-A deployment accepts 2–8 distinct, nonzero mint recipients with positive integer basis points totaling 10,000. Their addresses and shares cannot change. Public crates, discounted crates, warehouses, and reliquaries credit their actual ETH payment to `totalMintReceived`; unboxing and receipt claims do not earn additional proceeds. Delivery fees only credit `totalDeliveryReceived`.
+A deployment accepts 2–32 distinct, nonzero mint recipients with positive integer basis points totaling 10,000. Their addresses and shares cannot change. Basis-point precision remains 0.01%; 32 exactly equal shares are not representable, but sixteen shares of 313 and sixteen of 312 total 10,000. Existing deployed contracts retain their original limits and functions; the expanded limit and batch release require a new deployment. Public crates, discounted crates, warehouses, and reliquaries credit their actual ETH payment to `totalMintReceived`; unboxing and receipt claims do not earn additional proceeds. Delivery fees only credit `totalDeliveryReceived`.
 
-`mintRecipientCount()`, `mintRecipients(index)`, and `mintSharesBps(recipient)` expose the fixed split. `mintReleased(recipient)`, `totalMintReleased`, `totalDeliveryReleased`, `releasableMint(recipient)`, and `releasableDelivery()` expose payouts and pending amounts. Each mint recipient is entitled to `floor(totalMintReceived * shareBps / 10000) - mintReleased(recipient)`. Entitlements use cumulative receipts, so small payments do not repeatedly lose rounding fractions; after everyone claims, at most seven wei remain reserved for later accrual and can remain permanently after the final sale.
+`mintRecipientCount()`, `mintRecipients(index)`, and `mintSharesBps(recipient)` expose the fixed split. `mintReleased(recipient)`, `totalMintReleased`, `totalDeliveryReleased`, `releasableMint(recipient)`, and `releasableDelivery()` expose payouts and pending amounts. Each mint recipient is entitled to `floor(totalMintReceived * shareBps / 10000) - mintReleased(recipient)`. Entitlements use cumulative receipts, so small payments do not repeatedly lose rounding fractions; after everyone claims, at most 31 wei remain reserved for later accrual and can remain permanently after the final sale.
 
-Anyone may call `releaseMint(address)` for a known recipient or `releaseDelivery()`. Zero pending amounts are a no-op. Callers cannot redirect or choose an amount. A failed ETH transfer reverts only that payout, and cannot block minting, delivery, or independent releases to other recipients. Sale and redemption pauses do not block releases. The old `withdraw()`, `treasury()`, and `setTreasury(address)` interfaces are removed; there is no unrestricted balance sweep. Approvals and transfers reject nonzero ETH payments. Forced ETH is not counted as either kind of revenue and cannot be recovered through these functions.
+Anyone may call `releaseAllMint()` to attempt all configured mint payouts in one transaction, `releaseMint(address)` for one known recipient, or `releaseDelivery()` for delivery fees. The caller pays transaction gas; no payout is automatically triggered by a purchase. Zero pending amounts are skipped. Callers cannot redirect or choose an amount. The batch forwards an explicit gas budget of 100,000 per ETH call (`MINT_PAYOUT_GAS_LIMIT`, plus the EVM value-transfer stipend), skips failed transfers, and emits `MintProceedsReleaseFailed(recipient, amount)` while preserving the full unpaid entitlement. Successful transfers emit `MintProceedsReleased`. Estimate transaction gas before submitting: insufficient remaining gas for a full payout attempt reverts the entire transaction with `InsufficientMintPayoutGas`, rather than misreporting underfunded calls as recipient failures. Contract wallets requiring more callback gas can use the individual `releaseMint(address)` fallback, which retains normal gas forwarding and reverts on a failed transfer.
+
+Batch and individual releases share reentrancy protection. Recipient failure cannot block minting, delivery, or independent releases to other recipients. Sale and redemption pauses do not block releases. Batch release pays only claimable mint proceeds; it does not release delivery fees or rounding dust. The old `withdraw()`, `treasury()`, and `setTreasury(address)` interfaces are removed; there is no unrestricted balance sweep. Approvals and transfers reject nonzero ETH payments. Forced ETH is not counted as either kind of revenue and cannot be recovered through these functions.
 
 The owner may call `setDeliveryPaymentReceiver(address)` to rotate the shipping wallet. The new receiver must be nonzero, different from the collection, and different from every mint recipient. It receives all unwithdrawn and future delivery fees. `DeliveryPaymentReceiverUpdated`, `MintProceedsReleased`, and `DeliveryProceedsReleased` record receiver changes and successful payments. The manifest records the initial delivery receiver; use `deliveryPaymentReceiver()` for its current value. Payouts need no new API route or customer UI and introduce no additional dependencies.
 
@@ -209,9 +211,25 @@ The owner can change the metadata prefix with `setBaseURI(string)`. The construc
 
 ## Gas comparison
 
+### Mint payout batches (2026-10-31)
+
+The current collection runtime is 23,128 bytes, leaving 1,448 bytes below the EIP-170 limit. The isolated Prague benchmarks use 32 fixed recipients with positive basis points totaling 10,000. First payouts to ordinary wallets include creation of previously empty accounts; repeat payouts follow another purchase. Failure benchmarks exhaust the callback gas allowance for every receiver and verify all entitlements remain unpaid.
+
+| Operation | Gas used |
+| --- | ---: |
+| Mint one crate, 8 or 32 recipients | 142,888 |
+| Release all, 4 recipients, first payout | 304,340 |
+| Release all, 4 recipients, repeat payout | 118,840 |
+| Release all, 32 recipients, first payout | 2,099,392 |
+| Release all, 32 recipients, repeat payout | 735,092 |
+| Release all, 32 recipients, nothing pending | 268,526 |
+| Release all, 32 receivers exhausting callback gas | 4,169,783 |
+
+These are measured gas usage, including transaction overhead and refunds, not transaction gas limits. Estimate gas against the target chain before submitting; the batch also needs enough remaining gas to supply each full callback budget. Tests bound first and repeat 32-recipient payouts below 3 million and 1 million gas respectively, and the all-failing case below 5 million gas. The individual payout fallback retains normal gas forwarding for receivers that need more than the batch allowance.
+
 ### Batch operations (2026-10-27)
 
-The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before reliquary support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 118 measurements are checked in `snapshots/NFT111KGasTest.json`; the reliquary-enabled collection runtime is 22,679 bytes with 1,897 bytes of headroom.
+The [batch report](benchmarks/batch-operations.json) records the source/toolchain hashes, deployed code size and bounded-read response sizes for the collection before reliquary support. That revision had 113 gas measurements and a 21,780-byte runtime, leaving 2,796 bytes below the EIP-170 limit. The current 125 measurements are checked in `snapshots/NFT111KGasTest.json`.
 
 | Opening | One batch | Fifteen separate transactions | Gas saved |
 | --- | ---: | ---: | ---: |

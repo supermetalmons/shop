@@ -275,6 +275,15 @@ contract NFT111KInvariantHandler is TestSupport {
         deliveryPaid = deliveryRevenue;
     }
 
+    function releaseAllMint(uint256 seed) external {
+        uint256[] memory shares = _proceedsSharesBps();
+        vm.prank(actors[seed % actors.length]);
+        token.releaseAllMint();
+        for (uint256 i; i < shares.length; ++i) {
+            mintPaid[i] = mintRevenue * shares[i] / 10000;
+        }
+    }
+
     function assertState() external view {
         assertEq(token.allocatedCrates(), allocations);
         assertEq(token.warehousesMinted(), warehouseCount);
@@ -620,7 +629,7 @@ contract NFT111KInvariantTest is TestSupport {
     }
 
     function targetSelectors() public view returns (FuzzSelector[] memory targets) {
-        bytes4[] memory selectors = new bytes4[](20);
+        bytes4[] memory selectors = new bytes4[](21);
         selectors[0] = handler.purchaseCrates.selector;
         selectors[1] = handler.purchaseWarehouse.selector;
         selectors[2] = handler.unboxWarehouse.selector;
@@ -641,6 +650,7 @@ contract NFT111KInvariantTest is TestSupport {
         selectors[17] = handler.releaseDelivery.selector;
         selectors[18] = handler.purchaseReliquary.selector;
         selectors[19] = handler.unboxReliquary.selector;
+        selectors[20] = handler.releaseAllMint.selector;
         targets = new FuzzSelector[](1);
         targets[0] = FuzzSelector(address(handler), selectors);
     }

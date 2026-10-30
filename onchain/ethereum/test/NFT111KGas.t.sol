@@ -13,6 +13,14 @@ contract MinimalGasReceiver {
     }
 }
 
+contract GasBurningMintReceiver {
+    receive() external payable {
+        assembly {
+            invalid()
+        }
+    }
+}
+
 contract NFT111KGasTest is TestSupport {
     NFT111K internal token;
     address internal alice = address(0xA110);
@@ -55,6 +63,67 @@ contract NFT111KGasTest is TestSupport {
         assertEq(recipient.balance, 0.0001 ether);
     }
 
+    function testGasReleaseAllMintFourRecipients() public {
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        vm.snapshotGasLastCall("releaseAllMintFourRecipients");
+        _assertMintReleased(0.0001 ether);
+    }
+
+    function testGasReleaseAllMintFourRecipientsAfterRelease() public {
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        vm.snapshotGasLastCall("releaseAllMintFourRecipientsAfterRelease");
+        _assertMintReleased(0.0002 ether);
+    }
+
+    function testGasReleaseAllMintThirtyTwoRecipients() public {
+        _configureThirtyTwoRecipients(false);
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        uint256 gasUsed = vm.snapshotGasLastCall("releaseAllMintThirtyTwoRecipients");
+        assertTrue(gasUsed < 3_000_000);
+        _assertMintReleased(0.0001 ether);
+    }
+
+    function testGasReleaseAllMintThirtyTwoRecipientsAfterRelease() public {
+        _configureThirtyTwoRecipients(false);
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        uint256 gasUsed = vm.snapshotGasLastCall("releaseAllMintThirtyTwoRecipientsAfterRelease");
+        assertTrue(gasUsed < 1_000_000);
+        _assertMintReleased(0.0002 ether);
+    }
+
+    function testGasReleaseAllMintThirtyTwoRecipientsEmpty() public {
+        _configureThirtyTwoRecipients(false);
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        token.releaseAllMint();
+        vm.snapshotGasLastCall("releaseAllMintThirtyTwoRecipientsEmpty");
+        _assertMintReleased(0.0001 ether);
+    }
+
+    function testGasReleaseAllMintThirtyTwoGasBurningRecipients() public {
+        _configureThirtyTwoRecipients(true);
+        _buyCrates(alice, 1);
+        token.releaseAllMint();
+        uint256 gasUsed = vm.snapshotGasLastCall("releaseAllMintThirtyTwoGasBurningRecipients");
+        assertTrue(gasUsed < 5_000_000);
+        assertEq(token.totalMintReleased(), 0);
+        assertEq(address(token).balance, 0.0001 ether);
+        for (uint256 i; i < 32; ++i) {
+            address recipient = token.mintRecipients(i);
+            assertEq(recipient.balance, 0);
+            assertEq(token.mintReleased(recipient), 0);
+            assertEq(token.releasableMint(recipient), 0.0001 ether * token.mintSharesBps(recipient) / 10_000);
+        }
+    }
+
     function testGasReleaseDelivery() public {
         _buyCrates(alice, 1);
         uint256[] memory ids = _range(111112, 1);
@@ -71,6 +140,11 @@ contract NFT111KGasTest is TestSupport {
     function testGasMintCrates1EightRecipients() public {
         _configureEightRecipients();
         _mintCrates(alice, 1, "mintCrates1EightRecipients");
+    }
+
+    function testGasMintCrates1ThirtyTwoRecipients() public {
+        _configureThirtyTwoRecipients(false);
+        _mintCrates(alice, 1, "mintCrates1ThirtyTwoRecipients");
     }
 
     function testGasReleaseMintEightRecipients() public {
@@ -93,6 +167,32 @@ contract NFT111KGasTest is TestSupport {
         token.setSaleActive(true);
         assertEq(token.mintRecipientCount(), 8);
         assertTrue(address(token).code.length <= 24576);
+    }
+
+    function _configureThirtyTwoRecipients(bool gasBurning) private {
+        address[] memory recipients = new address[](32);
+        uint256[] memory shares = new uint256[](32);
+        for (uint256 i; i < 32; ++i) {
+            recipients[i] = gasBurning ? address(new GasBurningMintReceiver()) : address(uint160(0xA00001 + i));
+            shares[i] = i < 16 ? 312 : 313;
+        }
+        token = _deployCollection(recipients, shares);
+        token.setSaleActive(true);
+        assertEq(token.mintRecipientCount(), 32);
+        assertTrue(address(token).code.length <= 24576);
+    }
+
+    function _assertMintReleased(uint256 received) private view {
+        assertEq(token.totalMintReceived(), received);
+        assertEq(token.totalMintReleased(), received);
+        assertEq(address(token).balance, 0);
+        for (uint256 i; i < token.mintRecipientCount(); ++i) {
+            address recipient = token.mintRecipients(i);
+            uint256 expected = received * token.mintSharesBps(recipient) / 10_000;
+            assertEq(recipient.balance, expected);
+            assertEq(token.mintReleased(recipient), expected);
+            assertEq(token.releasableMint(recipient), 0);
+        }
     }
 
     function _deployCollection(address[] memory recipients, uint256[] memory shares)

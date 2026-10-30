@@ -50,6 +50,8 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     uint256 public constant MAX_TOKEN_INFO_BATCH_SIZE = 150;
     uint256 public constant MAX_METADATA_BATCH_SIZE = 30;
     uint256 public constant MAX_DELIVERY_ITEMS = 50;
+    uint256 public constant MAX_MINT_RECIPIENTS = 32;
+    uint256 public constant MINT_PAYOUT_GAS_LIMIT = 100_000;
     uint256 public constant MAX_QUOTE_LIFETIME = 10 minutes;
     uint256 public constant CRATE_TOKEN_START = 111_112;
     uint256 public constant WAREHOUSE_TOKEN_START = 116_667;
@@ -107,6 +109,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     error InvalidMintSplit();
     error InvalidMintRecipient();
     error ProceedsPaymentFailed();
+    error InsufficientMintPayoutGas();
     error TokenAlreadyIssued();
     error InvalidMetadataItem();
     error InvalidBaseURI();
@@ -142,6 +145,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
     event DeliveryPaymentReceiverUpdated(address indexed receiver);
     event BaseURIUpdated(string baseURI);
     event MintProceedsReleased(address indexed recipient, uint256 amount);
+    event MintProceedsReleaseFailed(address indexed recipient, uint256 amount);
     event DeliveryProceedsReleased(address indexed receiver, uint256 amount);
     event BatchMetadataUpdate(uint256 fromTokenId, uint256 toTokenId);
 
@@ -157,7 +161,7 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
         if (signer == address(0)) revert InvalidAddress();
         _validateBaseURI(baseURI_);
         uint256 count = mintRecipients_.length;
-        if (count < 2 || count > 8 || mintSharesBps_.length != count) revert InvalidMintSplit();
+        if (count < 2 || count > MAX_MINT_RECIPIENTS || mintSharesBps_.length != count) revert InvalidMintSplit();
         uint256 totalShares;
         for (uint256 i; i < count; ++i) {
             address recipient = mintRecipients_[i];
@@ -517,12 +521,38 @@ contract NFT111K is ERC721A, Ownable2Step, ReentrancyGuardTransient, EIP712 {
 
     function releaseMint(address recipient) external nonReentrant {
         if (mintSharesBps[recipient] == 0) revert InvalidMintRecipient();
+        _releaseMint(recipient, false);
+    }
+
+    function releaseAllMint() external nonReentrant {
+        uint256 count = mintRecipients.length;
+        for (uint256 i; i < count; ++i) {
+            _releaseMint(mintRecipients[i], true);
+        }
+    }
+
+    function _releaseMint(address recipient, bool batch) private {
         uint256 amount = releasableMint(recipient);
         if (amount == 0) return;
         mintReleased[recipient] += amount;
         totalMintReleased += amount;
-        (bool paid,) = payable(recipient).call{value: amount}("");
-        if (!paid) revert ProceedsPaymentFailed();
+        bool paid;
+        if (batch) {
+            // Reserve gas for call overhead and failure accounting without underfunding the recipient call.
+            if (gasleft() < MINT_PAYOUT_GAS_LIMIT + 50_000) revert InsufficientMintPayoutGas();
+            assembly ("memory-safe") {
+                paid := call(MINT_PAYOUT_GAS_LIMIT, recipient, amount, 0, 0, 0, 0)
+            }
+        } else {
+            (paid,) = payable(recipient).call{value: amount}("");
+        }
+        if (!paid) {
+            if (!batch) revert ProceedsPaymentFailed();
+            mintReleased[recipient] -= amount;
+            totalMintReleased -= amount;
+            emit MintProceedsReleaseFailed(recipient, amount);
+            return;
+        }
         emit MintProceedsReleased(recipient, amount);
     }
 

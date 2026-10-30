@@ -49,7 +49,7 @@ contract Deploy111K {
         ) {
             revert NFT111K.InvalidAddress();
         }
-        if (recipients.length < 2 || recipients.length > 8 || recipients.length != shares.length) {
+        if (recipients.length < 2 || recipients.length > 32 || recipients.length != shares.length) {
             revert NFT111K.InvalidMintSplit();
         }
         uint256 totalShares;

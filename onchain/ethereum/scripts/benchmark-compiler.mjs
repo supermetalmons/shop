@@ -172,14 +172,15 @@ function measurements(directory, harnessDirectory) {
 function collectionArguments(owner, recipientCount = 4) {
   const recipients = Array.from({ length: recipientCount }, (_, index) =>
     `0x${(0xA00001 + index).toString(16).padStart(40, '0')}`);
-  const shares = recipientCount === 4 ? [5000, 2500, 1500, 1000] : Array(recipientCount).fill(1250);
+  const shares = recipientCount === 4 ? [5000, 2500, 1500, 1000] : Array.from({ length: recipientCount },
+    (_, index) => Math.floor(10_000 / recipientCount) + (index < 10_000 % recipientCount ? 1 : 0));
   return Buffer.from(encode(['address', 'address', 'address', 'string', 'bytes32', 'address[]', 'uint256[]'],
     [owner, '0x7e5f4552091a69125d5dfcb7b8c2659029395bdf', '0x000000000000000000000000000000000000beef',
       metadataBaseURI, `0x${'0'.repeat(64)}`, recipients, shares])).toString('hex');
 }
 
 const maximumCollectionArgumentBytes = collectionArguments(
-  '0x0000000000000000000000000000000000000001', 8).length / 2;
+  '0x0000000000000000000000000000000000000001', 32).length / 2;
 
 async function deploymentMeasurements(variants) {
   const server = createServer();

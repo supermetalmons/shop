@@ -11,7 +11,7 @@ const baseline = 'benchmarks/compiler-legacy-200-single-contract.json';
 const historical = ['compiler-legacy-200.json', 'compiler-legacy-200-cdn.json', 'compiler-settings.json'];
 const read = path => readFileSync(path, 'utf8');
 
-test('compiler benchmarks regenerate and reproduce both recipient configurations without changing historical baselines', () => {
+test('compiler benchmarks regenerate and reproduce supported recipient configurations without changing historical baselines', () => {
   const originalBaseline = read(join(root, baseline));
   const historicalBaselines = historical.map(name => read(join(root, 'benchmarks', name)));
   const directory = mkdtempSync(join(tmpdir(), '111k-compiler-test-'));
@@ -37,12 +37,14 @@ test('compiler benchmarks regenerate and reproduce both recipient configurations
       assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       const report = JSON.parse(read(join(directory, output)));
       assert.equal(report.status, 'complete');
-      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 896);
+      assert.equal(report.reproduction.maximumCollectionArgumentBytes, 2432);
       assert.equal(report.writeBenchmarkCount,
         Object.keys(report.variants[0].gas).filter(name => /^(mint|unbox|deliver|claim|release)/.test(name)).length);
       for (const variant of report.variants) {
         assert.equal(variant.status, 'measured');
-        for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'releaseMint', 'releaseMintEightRecipients']) {
+        for (const name of ['mintCrates1', 'mintCrates1EightRecipients', 'mintCrates1ThirtyTwoRecipients',
+          'releaseMint', 'releaseMintEightRecipients', 'releaseAllMintThirtyTwoRecipients',
+          'releaseAllMintThirtyTwoGasBurningRecipients']) {
           assert.ok(variant.gas[name] > 0, `${variant.label}: missing ${name}`);
         }
         assert.deepEqual(Object.keys(variant.artifacts), ['NFT111K']);

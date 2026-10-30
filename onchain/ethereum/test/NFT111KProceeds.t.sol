@@ -30,6 +30,7 @@ contract ProceedsReceiver {
         if (token.deliveryPaymentReceiver() == address(this)) require(token.releasableDelivery() == 0);
         if (attacking) {
             _blocked(abi.encodeCall(token.releaseMint, (token.mintRecipients(0))));
+            _blocked(abi.encodeCall(token.releaseAllMint, ()));
             _blocked(abi.encodeCall(token.releaseDelivery, ()));
             _blocked(abi.encodeCall(token.mintCrates, (1)));
             _blocked(abi.encodeCall(token.mintWarehouses, (1)));
@@ -44,6 +45,42 @@ contract ProceedsReceiver {
         (bool success, bytes memory reason) = address(token).call(data);
         require(!success && bytes4(reason) == bytes4(keccak256("ReentrancyGuardReentrantCall()")));
         blockedCalls++;
+    }
+}
+
+contract ProceedsGasReceiver {
+    bool public burning;
+    uint256[8] public writes;
+
+    function setBurning(bool value) external {
+        burning = value;
+    }
+
+    receive() external payable {
+        if (burning) {
+            assembly {
+                for {} 1 {} {}
+            }
+        }
+        for (uint256 i; i < writes.length; ++i) {
+            writes[i]++;
+        }
+    }
+}
+
+contract ProceedsReturnDataReceiver {
+    bool private immutable rejecting;
+
+    constructor(bool rejecting_) {
+        rejecting = rejecting_;
+    }
+
+    receive() external payable {
+        bool reject = rejecting;
+        assembly {
+            if reject { revert(0, 0x30000) }
+            return(0, 0x30000)
+        }
     }
 }
 
@@ -127,7 +164,7 @@ contract NFT111KProceedsTest is TestSupport {
     }
 
     function testEverySupportedRecipientCount() public {
-        for (uint256 count = 2; count <= 8; ++count) {
+        for (uint256 count = 2; count <= 32; ++count) {
             (address[] memory recipients, uint256[] memory shares) = _split(count);
             NFT111K configured = _deploy(recipients, shares, DELIVERY);
             assertEq(configured.mintRecipientCount(), count);
@@ -140,8 +177,8 @@ contract NFT111KProceedsTest is TestSupport {
     }
 
     function testInvalidRecipientCountsAndShares() public {
-        for (uint256 count; count <= 9; ++count) {
-            if (count >= 2 && count <= 8) continue;
+        for (uint256 count; count <= 33; ++count) {
+            if (count >= 2 && count <= 32) continue;
             (address[] memory invalidRecipients, uint256[] memory invalidShares) = _split(count);
             vm.expectRevert(NFT111K.InvalidMintSplit.selector);
             _deploy(invalidRecipients, invalidShares, DELIVERY);
@@ -218,6 +255,159 @@ contract NFT111KProceedsTest is TestSupport {
         token.releaseDelivery();
         assertEq(token.totalMintReleased(), 0);
         assertEq(token.totalDeliveryReleased(), 0);
+    }
+
+    function testBatchReleaseIsPermissionlessAndSkipsEmptyAndAlreadyPaidRecipients() public {
+        vm.recordLogs();
+        vm.prank(address(0xCA11));
+        token.releaseAllMint();
+        assertEq(vm.getRecordedLogs().length, 0);
+        _buyAt(100);
+        vm.prank(address(0xCA11));
+        token.releaseMint(token.mintRecipients(1));
+        vm.recordLogs();
+        vm.prank(address(0xCA11));
+        token.releaseAllMint();
+        assertEq(vm.getRecordedLogs().length, 3);
+        for (uint256 i; i < 4; ++i) {
+            address recipient = token.mintRecipients(i);
+            assertEq(recipient.balance, 25);
+            assertEq(token.mintReleased(recipient), 25);
+            assertEq(token.releasableMint(recipient), 0);
+        }
+        assertEq(token.totalMintReleased(), 100);
+        vm.recordLogs();
+        token.releaseAllMint();
+        token.releaseMint(token.mintRecipients(0));
+        assertEq(vm.getRecordedLogs().length, 0);
+        assertEq(token.totalMintReleased(), 100);
+        assertEq(address(token).balance, 0);
+    }
+
+    function testBatchReleasePreservesCumulativeRoundingFor32Recipients() public {
+        (address[] memory recipients, uint256[] memory shares) = _split(32);
+        token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
+        uint256 received;
+        for (uint256 round; round < 17; ++round) {
+            uint256 amount = round * 37 + 1;
+            received += amount;
+            _buyAt(amount);
+            token.releaseMint(recipients[round % recipients.length]);
+            token.releaseAllMint();
+            token.releaseMint(recipients[(round + 1) % recipients.length]);
+            uint256 released;
+            for (uint256 i; i < recipients.length; ++i) {
+                uint256 entitlement = received * shares[i] / 10_000;
+                assertEq(recipients[i].balance, entitlement);
+                assertEq(token.mintReleased(recipients[i]), entitlement);
+                assertEq(token.releasableMint(recipients[i]), 0);
+                released += entitlement;
+            }
+            assertEq(token.totalMintReceived(), received);
+            assertEq(token.totalMintReleased(), released);
+            assertEq(address(token).balance, received - released);
+            assertTrue(address(token).balance < recipients.length);
+        }
+    }
+
+    function testUnderfundedBatchRevertsAllAccountingAndCanBeRetried() public {
+        _buyAt(100);
+        vm.expectRevert(NFT111K.InsufficientMintPayoutGas.selector);
+        token.releaseAllMint{gas: 250_000}();
+        for (uint256 i; i < token.mintRecipientCount(); ++i) {
+            address recipient = token.mintRecipients(i);
+            assertEq(recipient.balance, 0);
+            assertEq(token.mintReleased(recipient), 0);
+            assertEq(token.releasableMint(recipient), 25);
+        }
+        assertEq(token.totalMintReleased(), 0);
+        assertEq(address(token).balance, 100);
+        token.releaseAllMint{gas: 1_000_000}();
+        assertEq(token.totalMintReleased(), 100);
+        assertEq(address(token).balance, 0);
+    }
+
+    function testBatchIgnoresLargeReturnAndRevertData() public {
+        for (uint256 mode; mode < 2; ++mode) {
+            bool rejecting = mode == 1;
+            (address[] memory recipients, uint256[] memory shares) = _split(32);
+            for (uint256 i; i < 31; ++i) {
+                recipients[i] = address(new ProceedsReturnDataReceiver(rejecting));
+            }
+            vm.deal(recipients[31], 0);
+            token = _deploy(recipients, shares, DELIVERY);
+            token.setSaleActive(true);
+            _buyAt(10_000);
+            vm.recordLogs();
+            token.releaseAllMint{gas: 6_000_000}();
+            Vm.Log[] memory logs = vm.getRecordedLogs();
+            assertEq(logs.length, 32);
+            uint256 released;
+            for (uint256 i; i < recipients.length; ++i) {
+                uint256 paid = rejecting && i < 31 ? 0 : shares[i];
+                assertEq(recipients[i].balance, paid);
+                assertEq(token.mintReleased(recipients[i]), paid);
+                assertEq(token.releasableMint(recipients[i]), shares[i] - paid);
+                assertEq(
+                    logs[i].topics[0],
+                    paid == 0
+                        ? keccak256("MintProceedsReleaseFailed(address,uint256)")
+                        : keccak256("MintProceedsReleased(address,uint256)")
+                );
+                released += paid;
+            }
+            assertEq(recipients[31].balance, shares[31]);
+            assertEq(token.totalMintReleased(), released);
+            assertEq(address(token).balance, 10_000 - released);
+        }
+    }
+
+    function testBatchReleaseContinuesPastRevertingRecipientsAtEveryPosition() public {
+        for (uint256 index; index < 5; index += 2) {
+            _assertBatchFailure(index, 0);
+        }
+    }
+
+    function testBatchReleaseContinuesPastGasBurningRecipientsAtEveryPosition() public {
+        for (uint256 index; index < 5; index += 2) {
+            _assertBatchFailure(index, 1);
+        }
+    }
+
+    function testExpensiveRecipientsCanUseIndividualReleaseAfterBatchFailure() public {
+        for (uint256 index; index < 5; index += 2) {
+            _assertBatchFailure(index, 2);
+        }
+    }
+
+    function testBatchReleaseReachesLastRecipientAfter31GasBurningRecipients() public {
+        (address[] memory recipients, uint256[] memory shares) = _split(32);
+        for (uint256 i; i < 31; ++i) {
+            ProceedsGasReceiver receiver = new ProceedsGasReceiver();
+            receiver.setBurning(true);
+            recipients[i] = address(receiver);
+        }
+        token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
+        _buyAt(10_000);
+        vm.recordLogs();
+        vm.prank(address(0xCA11));
+        token.releaseAllMint{gas: 6_000_000}();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, 32);
+        for (uint256 i; i < 31; ++i) {
+            assertEq(logs[i].topics[0], keccak256("MintProceedsReleaseFailed(address,uint256)"));
+            assertEq(logs[i].topics[1], bytes32(uint256(uint160(recipients[i]))));
+            assertEq(abi.decode(logs[i].data, (uint256)), shares[i]);
+            assertEq(token.mintReleased(recipients[i]), 0);
+            assertEq(token.releasableMint(recipients[i]), shares[i]);
+            assertEq(recipients[i].balance, 0);
+        }
+        assertEq(logs[31].topics[0], keccak256("MintProceedsReleased(address,uint256)"));
+        assertEq(recipients[31].balance, shares[31]);
+        assertEq(token.totalMintReleased(), shares[31]);
+        assertEq(address(token).balance, 10_000 - shares[31]);
     }
 
     function testRoundingRemainsMonotonicAndIndependentOfReleaseOrder() public {
@@ -360,11 +550,28 @@ contract NFT111KProceedsTest is TestSupport {
         token.releaseDelivery();
         assertEq(mintReceiver.callbacks(), 1);
         assertEq(deliveryReceiver.callbacks(), 1);
-        assertEq(mintReceiver.blockedCalls(), 5);
-        assertEq(deliveryReceiver.blockedCalls(), 5);
+        assertEq(mintReceiver.blockedCalls(), 6);
+        assertEq(deliveryReceiver.blockedCalls(), 6);
         assertEq(token.totalMintReceived(), 100);
         assertEq(token.totalMintReleased(), 50);
         assertEq(token.totalDeliveryReleased(), 17);
+    }
+
+    function testBatchCallbacksCannotReenterAndSeeReleasedAccounting() public {
+        ProceedsReceiver receiver = new ProceedsReceiver();
+        (address[] memory recipients, uint256[] memory shares) = _split(3);
+        recipients[1] = address(receiver);
+        token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
+        receiver.configure(token, false, true, payable(address(0)));
+        _buyAt(10_000);
+        token.releaseAllMint();
+        assertEq(receiver.callbacks(), 1);
+        assertEq(receiver.blockedCalls(), 6);
+        assertEq(address(receiver).balance, shares[1]);
+        assertEq(token.mintReleased(address(receiver)), shares[1]);
+        assertEq(token.totalMintReleased(), 10_000);
+        assertEq(address(token).balance, 0);
     }
 
     function testDeliveryReleaseEventUsesPaidReceiverDuringCallbackRotation() public {
@@ -395,7 +602,8 @@ contract NFT111KProceedsTest is TestSupport {
         _deliver(BUYER, 111112, 1, 7);
         token.setSaleActive(false);
         token.setRedemptionsPaused(true);
-        _releaseAll();
+        token.releaseMint(token.mintRecipients(0));
+        token.releaseAllMint();
         token.releaseDelivery();
         assertEq(token.totalMintReleased(), 100);
         assertEq(token.totalDeliveryReleased(), 7);
@@ -410,7 +618,10 @@ contract NFT111KProceedsTest is TestSupport {
         assertEq(token.totalDeliveryReceived(), 0);
         _buyAt(100);
         _deliver(BUYER, 111112, 1, 7);
-        _releaseAll();
+        token.releaseAllMint();
+        assertEq(token.totalDeliveryReleased(), 0);
+        assertEq(token.releasableDelivery(), 7);
+        assertEq(address(token).balance, 108);
         token.releaseDelivery();
         assertEq(address(token).balance, 101);
         assertEq(token.totalMintReleased(), 100);
@@ -509,6 +720,73 @@ contract NFT111KProceedsTest is TestSupport {
         buyer.execute(abi.encodeCall(token.redeemForDelivery, (ids, quote, signature)), 17);
         assertEq(token.totalDeliveryReceived(), 17);
         assertEq(token.totalMintReceived(), 0.0012 ether);
+    }
+
+    function _assertBatchFailure(uint256 index, uint256 mode) private {
+        (address[] memory recipients, uint256[] memory shares) = _split(5);
+        ProceedsReceiver rejecting;
+        ProceedsGasReceiver expensive;
+        if (mode == 0) {
+            rejecting = new ProceedsReceiver();
+            recipients[index] = address(rejecting);
+        } else {
+            expensive = new ProceedsGasReceiver();
+            expensive.setBurning(mode == 1);
+            recipients[index] = address(expensive);
+        }
+        for (uint256 i; i < recipients.length; ++i) {
+            vm.deal(recipients[i], 0);
+        }
+        token = _deploy(recipients, shares, DELIVERY);
+        token.setSaleActive(true);
+        if (mode == 0) rejecting.configure(token, true, false, payable(address(0)));
+        _buyAt(10_000);
+        vm.recordLogs();
+        vm.prank(address(0xCA11));
+        token.releaseAllMint();
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        assertEq(logs.length, recipients.length);
+        for (uint256 i; i < recipients.length; ++i) {
+            uint256 paid = i == index ? 0 : shares[i];
+            assertEq(recipients[i].balance, paid);
+            assertEq(token.mintReleased(recipients[i]), paid);
+            assertEq(token.releasableMint(recipients[i]), shares[i] - paid);
+            assertEq(logs[i].emitter, address(token));
+            assertEq(
+                logs[i].topics[0],
+                keccak256(
+                    bytes(
+                        i == index
+                            ? "MintProceedsReleaseFailed(address,uint256)"
+                            : "MintProceedsReleased(address,uint256)"
+                    )
+                )
+            );
+            assertEq(logs[i].topics[1], bytes32(uint256(uint160(recipients[i]))));
+            assertEq(abi.decode(logs[i].data, (uint256)), shares[i]);
+        }
+        assertEq(token.totalMintReleased(), 10_000 - shares[index]);
+        assertEq(address(token).balance, shares[index]);
+        vm.recordLogs();
+        token.releaseAllMint();
+        assertEq(vm.getRecordedLogs().length, 1);
+        assertEq(token.totalMintReleased(), 10_000 - shares[index]);
+        if (mode == 0) {
+            vm.expectRevert(NFT111K.ProceedsPaymentFailed.selector);
+            token.releaseMint(recipients[index]);
+            rejecting.configure(token, false, false, payable(address(0)));
+        } else {
+            expensive.setBurning(false);
+            for (uint256 i; i < 8; ++i) {
+                assertEq(expensive.writes(i), 0);
+            }
+        }
+        token.releaseMint(recipients[index]);
+        assertEq(recipients[index].balance, shares[index]);
+        assertEq(token.mintReleased(recipients[index]), shares[index]);
+        assertEq(token.releasableMint(recipients[index]), 0);
+        assertEq(token.totalMintReleased(), 10_000);
+        assertEq(address(token).balance, 0);
     }
 
     function _split(uint256 count) private pure returns (address[] memory recipients, uint256[] memory shares) {

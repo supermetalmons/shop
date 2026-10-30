@@ -1,7 +1,7 @@
 export function parseProceedsConfig(value, collectionAddress) {
   if (!value || typeof value !== 'object') throw new Error('Invalid proceeds configuration.');
   const { mintRecipients, mintSharesBps, deliveryPaymentReceiver } = value;
-  if (!Array.isArray(mintRecipients) || mintRecipients.length < 2 || mintRecipients.length > 8 ||
+  if (!Array.isArray(mintRecipients) || mintRecipients.length < 2 || mintRecipients.length > 32 ||
     !Array.isArray(mintSharesBps) || mintSharesBps.length !== mintRecipients.length ||
     mintSharesBps.some(share => !Number.isInteger(share) || share <= 0 || share > 10_000) ||
     mintSharesBps.reduce((total, share) => total + share, 0) !== 10_000) throw new Error('Invalid mint proceeds split.');

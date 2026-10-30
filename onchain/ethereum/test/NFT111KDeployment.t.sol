@@ -213,15 +213,21 @@ contract NFT111KDeploymentTest is TestSupport {
         assertEq(token.totalMintReceived(), received);
         assertEq(token.totalDeliveryReceived(), 0);
         assertEq(token.releasableDelivery(), 0);
+        uint256[] memory balances = new uint256[](token.mintRecipientCount());
+        for (uint256 i; i < balances.length; ++i) {
+            balances[i] = token.mintRecipients(i).balance;
+        }
+        vm.prank(BUYER);
+        token.releaseAllMint();
         uint256 released;
         for (uint256 i; i < token.mintRecipientCount(); ++i) {
             address recipient = token.mintRecipients(i);
             uint256 amount = received * token.mintSharesBps(recipient) / 10000;
-            uint256 beforeBalance = recipient.balance;
-            token.releaseMint(recipient);
-            assertEq(recipient.balance - beforeBalance, amount);
+            assertEq(recipient.balance - balances[i], amount);
             assertEq(token.mintReleased(recipient), amount);
             assertEq(token.releasableMint(recipient), 0);
+            token.releaseMint(recipient);
+            assertEq(recipient.balance - balances[i], amount);
             released += amount;
         }
         assertEq(token.totalMintReleased(), released);

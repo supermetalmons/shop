@@ -200,7 +200,7 @@ contract NFT111KReliquaryTest is TestSupport {
         buyer.configureAttacks(_attacks());
         buyer.execute(abi.encodeCall(token.mintReliquaries, (3)), 0.0264 ether);
         assertEq(buyer.callbacks(), 3);
-        assertEq(buyer.blockedCalls(), 36);
+        assertEq(buyer.blockedCalls(), 39);
         assertEq(token.reliquaryFirstCrate(3), 223);
     }
 
@@ -217,7 +217,7 @@ contract NFT111KReliquaryTest is TestSupport {
         buyer.configureAttacks(_attacks());
         buyer.execute(abi.encodeCall(token.unboxReliquary, (117172)), 0);
         assertEq(buyer.callbacks(), 111);
-        assertEq(buyer.blockedCalls(), 1332);
+        assertEq(buyer.blockedCalls(), 1443);
         assertEq(buyer.sourceTransferFailures(), 111);
         _crates(1, 111, address(buyer));
     }
@@ -283,7 +283,7 @@ contract NFT111KReliquaryTest is TestSupport {
     }
 
     function _attacks() private view returns (SecurityCall[] memory calls) {
-        calls = new SecurityCall[](12);
+        calls = new SecurityCall[](13);
         calls[0] = SecurityCall(abi.encodeCall(token.mintCrates, (1)), token.cratePrice());
         calls[1] = SecurityCall(abi.encodeCall(token.mintWarehouses, (1)), token.warehousePrice());
         calls[2] = SecurityCall(abi.encodeCall(token.mintReliquaries, (1)), token.reliquaryPrice());
@@ -298,6 +298,7 @@ contract NFT111KReliquaryTest is TestSupport {
         calls[9] = SecurityCall(abi.encodeCall(token.claimCrateReceipt, (2000001, bytes32(0), 0, bytes(""))), 0);
         calls[10] = SecurityCall(abi.encodeCall(token.releaseMint, (token.mintRecipients(0))), 0);
         calls[11] = SecurityCall(abi.encodeCall(token.releaseDelivery, ()), 0);
+        calls[12] = SecurityCall(abi.encodeCall(token.releaseAllMint, ()), 0);
     }
 
     function _receiver() private returns (SecurityReceiver buyer) {

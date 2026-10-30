@@ -185,6 +185,19 @@ export const nft111KAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_MINT_RECIPIENTS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_PURCHASE_QUANTITY",
     "inputs": [],
     "outputs": [
@@ -251,6 +264,19 @@ export const nft111KAbi = [
   {
     "type": "function",
     "name": "MAX_WAREHOUSES",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MINT_PAYOUT_GAS_LIMIT",
     "inputs": [],
     "outputs": [
       {
@@ -973,6 +999,13 @@ export const nft111KAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "releaseAllMint",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1946,6 +1979,25 @@ export const nft111KAbi = [
   },
   {
     "type": "event",
+    "name": "MintProceedsReleaseFailed",
+    "inputs": [
+      {
+        "name": "recipient",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "MintProceedsReleased",
     "inputs": [
       {
@@ -2286,6 +2338,11 @@ export const nft111KAbi = [
         "internalType": "bytes32"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "InsufficientMintPayoutGas",
+    "inputs": []
   },
   {
     "type": "error",

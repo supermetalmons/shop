@@ -643,18 +643,17 @@ try {
   assert.deepEqual(await call(contract, 'totalDeliveryReceived()', [], [], ['uint256']), [deliveryRevenue]);
   const balance = async (address: string) => BigInt(await rpc<string>('eth_getBalance', [address, 'latest']));
   let mintPaid = 0n;
+  const mintBalances = await Promise.all(proceeds.mintRecipients.map(balance));
+  gas.releaseAllMint = BigInt((await transact(payoutCaller, 'releaseAllMint()', [], [])).gasUsed).toString();
   for (let index = 0; index < proceeds.mintRecipients.length; index++) {
     const recipient = proceeds.mintRecipients[index];
     const expected = mintRevenue * BigInt(proceeds.mintSharesBps[index]) / 10_000n;
-    const before = await balance(recipient);
     assert.deepEqual(await call(contract, 'mintRecipients(uint256)', ['uint256'], [index], ['address']), [recipient]);
-    assert.deepEqual(await call(contract, 'releasableMint(address)', ['address'], [recipient], ['uint256']), [expected]);
-    gas[`releaseMint${index + 1}`] = BigInt((await transact(payoutCaller, 'releaseMint(address)', ['address'], [recipient])).gasUsed).toString();
-    assert.equal(await balance(recipient) - before, expected);
+    assert.equal(await balance(recipient) - mintBalances[index], expected);
     assert.deepEqual(await call(contract, 'mintReleased(address)', ['address'], [recipient], ['uint256']), [expected]);
     assert.deepEqual(await call(contract, 'releasableMint(address)', ['address'], [recipient], ['uint256']), [0n]);
     await transact(payoutCaller, 'releaseMint(address)', ['address'], [recipient]);
-    assert.equal(await balance(recipient) - before, expected);
+    assert.equal(await balance(recipient) - mintBalances[index], expected);
     mintPaid += expected;
   }
   assert.deepEqual(await call(contract, 'totalMintReleased()', [], [], ['uint256']), [mintPaid]);
@@ -673,18 +672,26 @@ try {
   assert.equal(await balance(contract), mintRevenue - mintPaid);
   assert.ok(mintRevenue - mintPaid < BigInt(proceeds.mintRecipients.length));
 
-  const eightRecipients = Array.from({ length: 8 }, () => reserveAddress());
+  const maxRecipients = Array.from({ length: 32 }, () => reserveAddress());
+  const maxShares = Array.from({ length: 32 }, (_, index) => index < 16 ? 313 : 312);
   const maxSplit = await deploy('NFT111K', admin, constructorTypes,
-    [admin, signer, replacementDeliveryReceiver, metadataBaseURI, discounts.root, eightRecipients, Array(8).fill(1250)]);
+    [admin, signer, replacementDeliveryReceiver, metadataBaseURI, discounts.root, maxRecipients, maxShares]);
   const maxContract = maxSplit.contractAddress!;
-  gas.deployEightRecipients = BigInt(maxSplit.gasUsed).toString();
-  assert.deepEqual(await call(maxContract, 'mintRecipientCount()', [], [], ['uint256']), [8n]);
-  gas.mintEightRecipients = BigInt((await send(buyer, encodeCall('mintCrates(uint256)', ['uint256'], [1]), maxContract, 100000000000000n)).gasUsed).toString();
-  for (const [index, recipient] of eightRecipients.entries()) {
-    const before = await balance(recipient);
-    gas[`releaseEightRecipient${index + 1}`] = BigInt((await send(payoutCaller, encodeCall('releaseMint(address)', ['address'], [recipient]), maxContract)).gasUsed).toString();
-    assert.equal(await balance(recipient) - before, 12500000000000n);
+  gas.deploy32Recipients = BigInt(maxSplit.gasUsed).toString();
+  assert.deepEqual(await call(maxContract, 'mintRecipientCount()', [], [], ['uint256']), [32n]);
+  const maxMintRevenue = 100000000000000n;
+  gas.mint32Recipients = BigInt((await send(buyer, encodeCall('mintCrates(uint256)', ['uint256'], [1]), maxContract, maxMintRevenue)).gasUsed).toString();
+  const maxBalances = await Promise.all(maxRecipients.map(balance));
+  await send(payoutCaller, encodeCall('releaseMint(address)', ['address'], [maxRecipients[0]]), maxContract);
+  gas.releaseAllMint32AfterIndividual = BigInt((await send(payoutCaller, encodeCall('releaseAllMint()', [], []), maxContract)).gasUsed).toString();
+  await send(payoutCaller, encodeCall('releaseAllMint()', [], []), maxContract);
+  for (const [index, recipient] of maxRecipients.entries()) {
+    const expected = maxMintRevenue * BigInt(maxShares[index]) / 10_000n;
+    assert.equal(await balance(recipient) - maxBalances[index], expected);
+    assert.deepEqual(await call(maxContract, 'mintReleased(address)', ['address'], [recipient], ['uint256']), [expected]);
+    assert.deepEqual(await call(maxContract, 'releasableMint(address)', ['address'], [recipient], ['uint256']), [0n]);
   }
+  assert.deepEqual(await call(maxContract, 'totalMintReleased()', [], [], ['uint256']), [maxMintRevenue]);
   assert.equal(await balance(maxContract), 0n);
 
   const mixedCaseRecipients = [checksumEthereumAddress(secondBuyer), `0x${'9'.repeat(40)}`];
@@ -790,7 +797,7 @@ try {
       metadataChecks.push({ uri: expectedUri, kind, displayId: preview.id, apiMatchesSource: true });
     }
   } finally { previewDatabase.close(); }
-  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', 'eight-recipient deployment, mint and independent payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details'] };
+  const report = { chainId: 31337, contract, gas, batching, checkoutRecovery, metadataChecks, passed: ['mint receipts reconcile to canonical purchase events', 'permissionless mint payouts match configured shares', 'shipping fees remain separate and follow receiver rotation', '32-recipient deployment, mint, individual and batch payouts', 'mixed-case recipients and a former payout caller as payee receive exact payouts', 'draft allowlist proof and one discounted crate', 'wallet stats and discounted transaction confirmation', 'allowance increase to three preserves usage', 'public crates and warehouses do not consume discounts', 'warehouse mint/unpack', 'mixed direct supply', 'artwork identity equals token ID across opening order', 'transfers preserve artwork identity', 'signed artwork delivery', 'signed crate delivery', 'transferred receipt claim', 'supply exhaustion', '15-crate batch with 311 artwork identities and exact aggregate proof', 'batch opening saves gas against separate transactions', '311-artwork first-inclusion confirmation and inventory recovery', '150-token-info and 30-metadata contract reads with bounded RPC envelopes', '31-artwork digital unpack', '31-artwork physical receipt claim', 'replay rejection', 'Ethereum API login and encrypted profile', 'API quote and real-chain redemption', 'three-confirmation fulfillment publication', 'API orphaned crate redelivery under a new order', 'token identity and receipt authorization stay stable after opening-order reorg', 'API secret-code claim and real-chain receipts', 'mixed inventory ownership read', 'unsorted mixed API quotes preserve receipt identities and grouped burn/mint logs through fulfillment', 'checkout create and submission start retries are idempotent', 'unreported checkout transactions publish exactly one order after auth removal through scheduled reconciliation', 'anonymous checkout refresh recovers a lost transaction hash without a wallet', 'checkout public status excludes shipping and callback details'] };
   const reveal = await runEthereumRevealE2E({ root, rpcUrl, contractAddress: reliquaryContract.toLowerCase(),
     deploymentBlock: Number(BigInt(reliquaryDeployment.blockNumber)), metadataBaseUri: metadataBaseURI, buyer: secondBuyer, rpc });
   Object.assign(report, { reveal, reliquaryContract, metadataSource: metadataDirectory ? 'generated-files' : 'live-cdn',
