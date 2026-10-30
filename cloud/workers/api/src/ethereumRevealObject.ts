@@ -1,12 +1,11 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { EthereumRevealObservation, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
+import type { EthereumRevealResult, EthereumRevealTokensResponse, EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
 import { ETHEREUM_REVEAL_CATALOG_VERSION, readEthereumRevealDeployment,
   type EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { EthereumApiError } from './ethereumError.js';
-import { inspectRevealTransaction, recoverRevealTokens, recoverRevealCrates, verifyRevealDeployment,
-  type EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
+import { inspectRevealTransaction, recoverRevealTokens, recoverRevealCrates, verifyRevealDeployment } from './ethereumRevealChain.js';
 import { validateRevealCatalog } from './ethereumRevealCatalog.js';
-import { EthereumRevealStore, type RevealSearchRange, type RevealTransactionJob, type RevealPublicationJob } from './ethereumRevealStore.js';
+import { EthereumRevealStore, type RevealReceiptClaim, type RevealScanClaim, type RevealPublicationJob } from './ethereumRevealStore.js';
 
 function unavailable(): EthereumApiError { return new EthereumApiError('unavailable', 'Artwork reveal is temporarily unavailable.'); }
 
@@ -18,9 +17,13 @@ async function finishTasks(tasks: Promise<void>[]): Promise<void> {
 
 export class EthereumRevealObject extends DurableObject<Env> {
   private readonly store: EthereumRevealStore;
-  private chainRun: Promise<void> | null = null;
+  private readonly receipts = new Map<string, { active: boolean; promise: Promise<void> }>();
+  private readonly scans = new Map<string, { claim: RevealScanClaim; promise: Promise<void> }>();
+  private readonly overflow = new Map<string, Promise<boolean>>();
+  private migrationRun: Promise<void> | null = null;
   private publicationRun: Promise<void> | null = null;
   private alarmUpdate: Promise<void> = Promise.resolve();
+  private lastHealthReportMs = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -42,6 +45,14 @@ export class EthereumRevealObject extends DurableObject<Env> {
     if (deployment.state !== 'active') throw new EthereumApiError('failed-precondition', 'New artwork reveals are paused for this collection.');
   }
 
+  private admitTransactionWork(deployment: EthereumRevealDeployment, hash: string, admit: boolean): 'accepted' | 'admission' | 'capacity' {
+    if (!this.store.knownTransaction(hash)) {
+      if (!admit) return 'admission';
+      this.requireAdmission(deployment);
+    }
+    return this.store.admitTransaction(hash, deployment.deploymentBlock, Date.now());
+  }
+
   async initialize(deployment: EthereumRevealDeployment): Promise<{ ready: boolean; seeded: number }> {
     this.configure(deployment);
     validateRevealCatalog();
@@ -61,213 +72,112 @@ export class EthereumRevealObject extends DurableObject<Env> {
     return { ready: summary.ready, seeded: summary.seeded };
   }
 
-  async hasTransaction(deployment: EthereumRevealDeployment, hash: string): Promise<boolean> {
-    this.configure(deployment);
-    const job = this.store.transactionJob(hash);
-    return job?.requested_all === 1 || deployment.state === 'paused' && job?.status === 'revealed' && job.revealed_all === 1;
-  }
-
-  async hasTokens(deployment: EthereumRevealDeployment, tokenIds: string[]): Promise<boolean> {
-    this.configure(deployment);
-    return this.store.knownTokens(tokenIds, Date.now());
-  }
-
-  async revealTransaction(deployment: EthereumRevealDeployment, hash: string): Promise<EthereumRevealTransactionResponse> {
+  async revealTransaction(deployment: EthereumRevealDeployment, hash: string, admit = false, deadlineMs?: number): Promise<EthereumRevealResult<EthereumRevealTransactionResponse>> {
+    const deadline = Math.min(Date.now() + 2_000, deadlineMs ?? Infinity);
     this.requireReady(deployment);
-    this.store.cleanupTransactions(Date.now());
-    const known = this.store.transactionJob(hash);
-    if (!known || !known.requested_all) {
-      if (deployment.state === 'paused' && known?.status === 'revealed' && known.revealed_all) {
-        return this.store.transactionResponse(deployment, hash);
-      }
-      this.requireAdmission(deployment);
+    const snapshot = this.store.transactionResponse(deployment, hash);
+    if (snapshot.status !== 'pending') return { kind: 'ready', value: snapshot };
+    const admission = this.admitTransactionWork(deployment, hash, admit);
+    if (admission === 'admission') return { kind: 'admission' };
+    if (admission === 'capacity') {
+      if (!await this.verifyAtCapacity(deployment, hash, deadline)) return { kind: 'capacity' };
     }
-    const admitted = this.store.registerTransaction(hash, deployment.deploymentBlock);
     await this.arm();
-    if (!admitted) return this.inspectUntrackedTransaction(deployment, hash);
-    if (known?.status === 'revealed' && known.revealed_all) {
-      this.ctx.waitUntil(this.processTransaction(deployment, hash).catch(() => undefined));
-      return this.store.transactionResponse(deployment, hash);
-    }
-    await this.processTransaction(deployment, hash);
+    this.startBackground(deployment, hash);
+    const work = this.receipts.get(hash)?.promise;
+    if (work) await this.withinBudget(work, deadline);
     const response = this.store.transactionResponse(deployment, hash);
-    this.startBackground(deployment);
-    return response;
-  }
-
-  private async inspectUntrackedTransaction(deployment: EthereumRevealDeployment, hash: string): Promise<EthereumRevealTransactionResponse> {
-    const signal = AbortSignal.timeout(20_000);
-    try {
-      const result = await inspectRevealTransaction(this.env, deployment, hash, signal);
-      signal.throwIfAborted();
-      if (result.status === 'confirmed') {
-        this.store.registerTransaction(hash, deployment.deploymentBlock, true, result.crates.map(crate => crate.crateTokenId));
-        this.store.freeze(deployment, result.observation, result.crates, Date.now());
-      } else if (result.status === 'pending' && result.crates?.length) {
-        this.store.registerTransaction(hash, result.fromBlock ?? deployment.deploymentBlock, true, result.crates);
-        this.store.pendingTransaction(hash, result.crates, result.fromBlock, Date.now());
-      } else return this.untrackedTransactionResponse(deployment, result);
-      const response = this.store.transactionResponse(deployment, hash);
-      this.startBackground(deployment);
-      return response;
-    } catch { throw unavailable(); }
-    finally { await this.arm(); }
-  }
-
-  private untrackedTransactionResponse(deployment: EthereumRevealDeployment,
-    result: Exclude<EthereumRevealTransactionInspection, { status: 'confirmed' }>): EthereumRevealTransactionResponse {
-    const status = result.status === 'pending' || result.source === 'receipt' && result.confirmations < 64 ? 'pending' : result.status;
-    return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
-      contractAddress: deployment.contractAddress, status, artworks: [], retryAfterMs: status === 'pending' ? 2_000 : 0,
-      ...('observation' in result ? { observedBlock: { number: result.observation.blockNumber, hash: result.observation.blockHash } } : {}) };
-  }
-
-  async revealTokens(deployment: EthereumRevealDeployment, tokenIds: string[]): Promise<EthereumRevealTokensResponse> {
-    this.requireReady(deployment);
-    if (!this.store.knownTokens(tokenIds, Date.now())) this.requireAdmission(deployment);
-    this.store.requestRecovery(tokenIds, deployment.deploymentBlock, Date.now());
-    await this.arm();
-    const needed = new Set(tokenIds);
-    const jobs = this.store.dueRecovery(Date.now(), 8).filter(job => (JSON.parse(job.token_ids_json) as string[]).some(id => needed.has(id)));
-    await finishTasks(jobs.slice(0, 2).map(job => this.processRecovery(deployment, job.id)));
-    this.startBackground(deployment);
-    const artworks = this.store.frozen(tokenIds);
-    const revealed = new Set(artworks.map(artwork => artwork.tokenId));
-    const unresolved = tokenIds.filter(id => !revealed.has(id)).map(tokenId => ({ tokenId, status: this.store.tokenStatus(tokenId) }));
-    return { deploymentId: deployment.deploymentId, dropId: deployment.dropId, chainId: deployment.chainId,
-      contractAddress: deployment.contractAddress, artworks, unresolved,
-      retryAfterMs: unresolved.some(value => value.status === 'recovering') ? 2_000 : 0 };
-  }
-
-  private async processTransaction(deployment: EthereumRevealDeployment, hash: string): Promise<void> {
-    const job = this.store.claimTransaction(hash, Date.now());
-    if (!job) return;
-    const signal = AbortSignal.timeout(20_000);
-    try {
-      const result = await inspectRevealTransaction(this.env, deployment, hash, signal);
-      signal.throwIfAborted();
-      const current = this.store.transactionJob(hash);
-      if (current?.incarnation !== job.incarnation) return;
-      if (result.status === 'confirmed') {
-        const selected = new Set<string>(JSON.parse(current.crates_json));
-        const crates = current.requested_all ? result.crates : result.crates.filter(crate => selected.has(crate.crateTokenId));
-        const frozenCrates = new Set((JSON.parse(current.tokens_json) as Array<{ crateTokenId: string }>).map(value => value.crateTokenId));
-        const unchanged = current.observation_json === JSON.stringify(result.observation) &&
-          crates.every(crate => frozenCrates.has(crate.crateTokenId)) && (current.revealed_all === 1 || crates.length < result.crates.length);
-        const generation = crates.length && !unchanged
-          ? this.store.freeze(deployment, result.observation, crates, Date.now(), crates.length === result.crates.length)
-          : current.tracking_generation;
-        const confirmedCrates = result.crates.map(crate => crate.crateTokenId);
-        let complete = [...selected].every(crate => confirmedCrates.includes(crate));
-        if (!complete) {
-          this.store.retryTransaction(hash, Date.now(), 30_000, generation);
-          complete = await this.findReplacement(deployment, this.store.transactionJob(hash)!, signal, confirmedCrates);
-        }
-        this.store.retryTransaction(hash, Date.now(), complete && result.confirmations >= 64 ? 86_400_000 : 15_000, generation);
-      } else if (result.status === 'pending') {
-        if (job.crates_json !== '[]' && job.attempts > 1 && await this.findReplacement(deployment, job, signal)) return;
-        this.store.pendingTransaction(hash, result.crates, result.fromBlock, Date.now(), job.tracking_generation);
-      } else {
-        if (job.crates_json !== '[]' && await this.findReplacement(deployment, job, signal)) return;
-        this.store.finishTransaction(hash, result.status, Date.now(), result.source === 'receipt' ? result : undefined, job.tracking_generation);
-      }
-    } catch {
-      if (this.store.transactionJob(hash)?.incarnation === job.incarnation) {
-        this.store.retryTransaction(hash, Date.now(), undefined, job.tracking_generation);
-      }
-      throw unavailable();
-    } finally { await this.arm(); }
-  }
-
-  private async findReplacement(deployment: EthereumRevealDeployment, job: RevealTransactionJob, signal: AbortSignal,
-    confirmedCrates: string[] = []): Promise<boolean> {
-    const finish = () => confirmedCrates.length ? this.store.replacementComplete(job.hash, job.tracking_generation)
-      : this.store.retireReplacedTransaction(job.hash, job.tracking_generation);
-    const chunk = this.store.replacementChunk(job.hash, job.tracking_generation, Date.now(), confirmedCrates);
-    if (!chunk) return finish();
-    const crates = JSON.parse(chunk.crate_ids_json) as string[];
-    const selected = new Set(crates), covered = new Set<string>(), checked = new Set<string>();
-    const verify = async (candidates: Array<{ transactionHash: string; crateTokenIds: string[] }>) => {
-      let offset = 0;
-      while (offset < candidates.length && checked.size < 15 && covered.size < crates.length) {
-        const batch = [];
-        while (offset < candidates.length && batch.length < 4 && checked.size < 15) {
-          const candidate = candidates[offset++];
-          if (checked.has(candidate.transactionHash) || candidate.crateTokenIds.every(crate => covered.has(crate))) continue;
-          checked.add(candidate.transactionHash);
-          batch.push(candidate);
-        }
-        await finishTasks(batch.map(async candidate => {
-          this.store.recordReplacementCheck(job.hash, candidate.transactionHash, [], Date.now());
-          const verified = await inspectRevealTransaction(this.env, deployment, candidate.transactionHash, signal);
-          signal.throwIfAborted();
-          if (verified.status !== 'confirmed') return;
-          const replacements = verified.crates.filter(crate => selected.has(crate.crateTokenId));
-          if (replacements.length) this.store.freeze(deployment, verified.observation, replacements, Date.now(), replacements.length === verified.crates.length);
-          this.store.recordReplacementCheck(job.hash, candidate.transactionHash, replacements.map(crate => crate.crateTokenId), Date.now());
-          for (const crate of replacements) covered.add(crate.crateTokenId);
-        }));
-      }
-    };
-    await verify(this.store.replacementCandidates(job.hash, crates));
-    if (this.store.completeReplacementChunk(job.hash, chunk, covered)) {
-      return finish();
+    if (response.status === 'pending' && !this.store.knownTransaction(hash)) {
+      const readmission = this.admitTransactionWork(deployment, hash, admit);
+      if (readmission !== 'accepted') return { kind: readmission };
+      await this.arm();
     }
-    if (this.store.transactionJob(job.hash)!.tracking_generation !== job.tracking_generation) return false;
-    const ranges = JSON.parse(chunk.ranges_json) as RevealSearchRange[];
-    const range = ranges.shift() || { fromBlock: Math.max(deployment.deploymentBlock, chunk.from_block - 64) };
-    const result = await recoverRevealCrates(this.env, deployment, crates, range, signal);
-    this.store.rememberReplacementCandidates(job.hash, result.provenance.filter(value => value.transactionHash !== job.hash));
-    await verify(this.store.replacementCandidates(job.hash, crates));
-    const remaining = [...result.remainingRanges, ...ranges];
-    this.store.replacementRanges(job.hash, remaining, Math.max(chunk.from_block, result.scannedRange?.toBlock ?? chunk.from_block),
-      job.tracking_generation, chunk.chunk_index);
-    this.store.completeReplacementChunk(job.hash, chunk, covered);
-    return finish();
+    return { kind: 'ready', value: response };
   }
 
-  private async processRecovery(deployment: EthereumRevealDeployment, id: string): Promise<void> {
-    const job = this.store.claimRecovery(id, Date.now());
-    if (!job) return;
+  async revealTokens(deployment: EthereumRevealDeployment, tokenIds: string[], admit = false, deadlineMs?: number): Promise<EthereumRevealResult<EthereumRevealTokensResponse>> {
+    const deadline = Math.min(Date.now() + 2_000, deadlineMs ?? Infinity);
+    this.requireReady(deployment);
+    const snapshot = this.store.tokensResponse(deployment, tokenIds);
+    if (!snapshot.unresolved.length) return { kind: 'ready', value: snapshot };
+    const known = this.store.knownTokens(tokenIds, Date.now());
+    if (known && snapshot.unresolved.every(value => value.status === 'unminted')) return { kind: 'ready', value: snapshot };
+    if (!known && !admit) return { kind: 'admission' };
+    if (!known) this.requireAdmission(deployment);
+    this.store.admitTokens(tokenIds, deployment.deploymentBlock, Date.now());
+    await this.arm();
+    this.startBackground(deployment, undefined, tokenIds);
+    if (!snapshot.artworks.length) {
+      const needed = new Set(tokenIds);
+      while (Date.now() < deadline) {
+        const response = this.store.tokensResponse(deployment, tokenIds);
+        if (response.artworks.length || response.unresolved.every(value => value.status === 'unminted')) break;
+        const hashes = new Set(this.store.provenance(tokenIds).map(value => value.transactionHash));
+        const tasks = [...this.scans.values()].filter(value => value.claim.kind === 'tokens' &&
+          value.claim.tokenIds.some(id => needed.has(id))).map(value => value.promise);
+        for (const hash of hashes) {
+          const work = this.receipts.get(hash)?.promise;
+          if (work) tasks.push(work);
+        }
+        if (!tasks.length || !await this.withinBudget(Promise.race(tasks), deadline)) break;
+      }
+    }
+    return { kind: 'ready', value: this.store.tokensResponse(deployment, tokenIds) };
+  }
+
+  private async withinBudget(work: Promise<unknown>, deadline: number): Promise<boolean> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work.then(() => true, () => true),
+        new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), remaining); }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+
+  private async verifyAtCapacity(deployment: EthereumRevealDeployment, hash: string, deadline: number): Promise<boolean> {
+    let work = this.overflow.get(hash);
+    if (!work) {
+      if (!this.store.migrationReady() || this.receipts.size + this.overflow.size >= 4 || Date.now() >= deadline) return false;
+      work = (async () => {
+        const startedAtMs = Date.now();
+        const signal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
+        const result = await inspectRevealTransaction(this.env, deployment, hash, signal);
+        signal.throwIfAborted();
+        return this.store.acceptVerified(deployment, hash, result, startedAtMs, Date.now());
+      })().catch(() => false).finally(() => { this.overflow.delete(hash); this.startBackground(deployment); });
+      this.overflow.set(hash, work);
+      this.ctx.waitUntil(work);
+    }
+    if (!await this.withinBudget(work, deadline)) return false;
+    return work;
+  }
+
+  private async processReceipt(deployment: EthereumRevealDeployment, claim: RevealReceiptClaim): Promise<void> {
     const signal = AbortSignal.timeout(20_000);
     try {
-      const ids = JSON.parse(job.token_ids_json) as string[];
-      const needed = new Set(ids);
-      const alreadyFrozen = new Set(this.store.frozen(ids).map(value => value.tokenId));
-      const cached = this.store.provenance(ids.filter(tokenId => !alreadyFrozen.has(tokenId)));
-      const verify = async (observation: EthereumRevealObservation) => {
-        const verified = await inspectRevealTransaction(this.env, deployment, observation.transactionHash, signal);
+      const result = await inspectRevealTransaction(this.env, deployment, claim.hash, signal, fetch,
+        () => { this.store.recordReceiptPresence(claim, Date.now()); });
+      signal.throwIfAborted();
+      this.store.completeReceipt(deployment, claim, result, Date.now());
+    } catch { this.store.failReceipt(claim, Date.now()); }
+  }
+
+  private async processScan(deployment: EthereumRevealDeployment, claim: RevealScanClaim): Promise<void> {
+    const signal = AbortSignal.timeout(45_000);
+    try {
+      if (claim.kind === 'crate') {
+        const result = await recoverRevealCrates(this.env, deployment, claim.crateTokenIds, claim.range, signal);
         signal.throwIfAborted();
-        if (verified.status !== 'confirmed') { this.store.discardProvenance(observation); return; }
-        const crates = verified.crates.filter(crate => crate.tokenIds.some(tokenId => needed.has(tokenId)));
-        if (crates.length) this.store.freeze(deployment, verified.observation, crates, Date.now(), crates.length === verified.crates.length);
-        else this.store.discardProvenance(observation);
-      };
-      await finishTasks(cached.slice(0, 4).map(verify));
-      const existing = new Set(this.store.frozen(ids).map(value => value.tokenId));
-      const unknown = ids.filter(tokenId => !existing.has(tokenId));
-      if (!unknown.length) { this.store.updateRecovery(id, [], [], [], Date.now()); return; }
-      if (cached.length > 4) {
-        this.store.updateRecovery(id, unknown, JSON.parse(job.ranges_json) as RevealSearchRange[], [], Date.now());
-        return;
+        this.store.completeCrateScan(claim, result, Date.now());
+      } else {
+        const result = await recoverRevealTokens(this.env, deployment, claim.tokenIds, claim.range, signal);
+        signal.throwIfAborted();
+        this.store.completeTokenScan(claim, result, Date.now());
       }
-      const ranges = JSON.parse(job.ranges_json) as RevealSearchRange[];
-      const range = ranges.shift() || { fromBlock: deployment.deploymentBlock };
-      const result = await recoverRevealTokens(this.env, deployment, unknown, range, signal);
-      for (const observation of result.provenance) {
-        this.store.saveProvenance(observation, observation.tokenIds);
-      }
-      await finishTasks(result.provenance.slice(0, Math.max(0, 4 - cached.length)).map(verify));
-      const frozen = new Set(this.store.frozen(ids).map(value => value.tokenId));
-      const unminted = ids.filter(tokenId => !frozen.has(tokenId) && Number(tokenId) > result.mintedThrough);
-      const remaining = ids.filter(tokenId => !frozen.has(tokenId) && Number(tokenId) <= result.mintedThrough);
-      const nextRanges = [...result.remainingRanges, ...ranges];
-      this.store.updateRecovery(id, remaining, nextRanges.length ? nextRanges : [{ fromBlock: deployment.deploymentBlock }],
-        unminted, Date.now(), nextRanges.length || result.provenance.length > 4 - cached.length ? 0 : 30_000);
-    } catch {
-      this.store.retryRecovery(id, Date.now());
-      throw unavailable();
-    } finally { await this.arm(); }
+    } catch { this.store.failScan(claim, Date.now()); }
   }
 
   private async publish(deployment: EthereumRevealDeployment, job: RevealPublicationJob): Promise<void> {
@@ -302,29 +212,58 @@ export class EthereumRevealObject extends DurableObject<Env> {
     }
   }
 
-  private startBackground(deployment: EthereumRevealDeployment): void {
-    this.ctx.waitUntil(this.runBackground(deployment));
+  private startBackground(deployment: EthereumRevealDeployment, preferredHash?: string, tokenIds?: string[]): void {
+    if (!this.store.migrationReady()) {
+      if (!this.migrationRun) {
+        this.migrationRun = Promise.resolve().then(async () => {
+          this.store.migrateChunk(Date.now(), 128);
+          await this.arm();
+        }).finally(() => {
+          this.migrationRun = null;
+          if (this.store.migrationReady()) this.pump(deployment, preferredHash, tokenIds);
+        });
+        this.ctx.waitUntil(this.migrationRun);
+      }
+    } else this.pump(deployment, preferredHash, tokenIds);
+    this.ctx.waitUntil(this.runPublications(deployment));
   }
 
-  private runBackground(deployment: EthereumRevealDeployment): Promise<void> {
-    this.ctx.waitUntil(this.runChain(deployment));
-    return this.runPublications(deployment);
-  }
-
-  private runChain(deployment: EthereumRevealDeployment): Promise<void> {
-    if (this.chainRun) return this.chainRun;
-    const work = async () => {
-      try {
-        this.store.cleanupTransactions(Date.now());
-        const results = await Promise.allSettled([
-          ...this.store.dueTransactions(Date.now()).map(job => this.processTransaction(deployment, job.hash)),
-          ...this.store.dueRecovery(Date.now(), 2).map(job => this.processRecovery(deployment, job.id)),
-        ]);
-        if (results.some(result => result.status === 'rejected')) console.error({ event: 'ethereum_reveal_retry_scheduled', deploymentId: deployment.deploymentId });
-      } finally { await this.arm(); }
-    };
-    this.chainRun = work().finally(() => { this.chainRun = null; });
-    return this.chainRun;
+  private pump(deployment: EthereumRevealDeployment, preferredHash?: string, tokenIds?: string[]): void {
+    if (!this.store.migrationReady()) return;
+    for (let dispatched = 0; dispatched < 15 && this.receipts.size + this.overflow.size < 4; dispatched++) {
+      const active = [...this.receipts.values()].filter(value => value.active).length + this.overflow.size;
+      const lane = active < 3 ? 'active' : 'background';
+      const excluded = [...this.receipts.keys(), ...this.overflow.keys()];
+      const claim = this.store.claimReceipt(Date.now(), lane, lane === 'active' ? preferredHash : undefined, excluded)
+        || this.store.claimReceipt(Date.now(), lane === 'active' ? 'background' : 'active', preferredHash, excluded);
+      preferredHash = undefined;
+      if (!claim) break;
+      const promise = this.processReceipt(deployment, claim).finally(async () => {
+        this.receipts.delete(claim.hash);
+        this.startBackground(deployment);
+        await this.arm();
+      });
+      this.receipts.set(claim.hash, { active: claim.active, promise });
+      this.ctx.waitUntil(promise);
+    }
+    for (let dispatched = 0; dispatched < 2 && this.scans.size < 2; dispatched++) {
+      const active = [...this.scans.values()].filter(value => value.claim.active).length;
+      const lane = active < 1 ? 'active' : 'background';
+      const scope = tokenIds ? { tokenIds } : undefined;
+      const claim = this.store.claimScan(Date.now(), lane, lane === 'active' ? scope : undefined)
+        || this.store.claimScan(Date.now(), lane === 'active' ? 'background' : 'active', scope);
+      tokenIds = undefined;
+      if (!claim) break;
+      const key = `${claim.kind}:${claim.id}`;
+      if (this.scans.has(key)) { this.store.failScan(claim, Date.now()); break; }
+      const promise = this.processScan(deployment, claim).finally(async () => {
+        this.scans.delete(key);
+        this.startBackground(deployment);
+        await this.arm();
+      });
+      this.scans.set(key, { claim, promise });
+      this.ctx.waitUntil(promise);
+    }
   }
 
   private runPublications(deployment: EthereumRevealDeployment): Promise<void> {
@@ -360,7 +299,12 @@ export class EthereumRevealObject extends DurableObject<Env> {
     this.configure(deployment);
     if (deployment.state === 'provisioning') { await this.initialize(deployment); return; }
     if (!this.store.ready()) throw unavailable();
-    await this.runBackground(deployment);
+    this.startBackground(deployment);
+    await this.runPublications(deployment);
+    if (Date.now() - this.lastHealthReportMs >= 60_000) {
+      this.lastHealthReportMs = Date.now();
+      console.log({ event: 'ethereum_reveal_recovery_health', deploymentId: deployment.deploymentId, ...this.store.summary() });
+    }
     const publicationError = this.store.publicationError();
     if (deployment.lastError !== publicationError && (deployment.lastError === null ||
       deployment.lastError === 'metadata-conflict' || deployment.lastError === 'publication-unavailable')) {

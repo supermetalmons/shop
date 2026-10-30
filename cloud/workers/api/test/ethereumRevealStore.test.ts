@@ -134,49 +134,6 @@ test('category selection uses initial weights while asset draws use current rema
   assert.deepEqual(maxima.slice(0, 12), [111111, 22222, 111111, 22221, 111111, 85556, 111111, 85555, 111111, 3333, 111111, 3332]);
 });
 
-test('pending, cancellation and replacement hashes keep private crate reservations without revealing media', t => {
-  const { database, store, rows } = fixture(t);
-  const first = observation(1).transactionHash;
-  const replacement = observation(2).transactionHash;
-  store.registerTransaction(first, deployment.deploymentBlock);
-  store.pendingTransaction(first, [crateId(0)], 101, 1);
-  const reserved = rows('SELECT category,asset_id,crate_token_id,slot FROM assignments ORDER BY slot');
-  store.pendingTransaction(first, [crateId(0)], 102, 2);
-  store.finishTransaction(first, 'reverted', 3);
-  store.registerTransaction(replacement, deployment.deploymentBlock);
-  store.pendingTransaction(replacement, [crateId(0)], 103, 4);
-  assert.deepEqual(rows('SELECT category,asset_id,crate_token_id,slot FROM assignments ORDER BY slot'), reserved);
-  assert.equal(store.summary().reserved, 20);
-  assert.deepEqual(store.frozen(ids(1)), []);
-  for (const hash of [first, replacement]) {
-    const response = store.transactionResponse(deployment, hash);
-    assert.deepEqual(response.artworks, []);
-    assert.equal(JSON.stringify(response).includes('wip.lil.org'), false);
-  }
-  assert.equal(store.claimPublications(10).length, 0);
-  conservation(database, 0);
-});
-
-test('frozen token assignments and bytes survive repeated receipts, reorganization and pending replays', t => {
-  const { database, store, rows } = fixture(t);
-  const first = observation(1);
-  store.reserve([crateId(0)]);
-  store.freeze(deployment, first, [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
-  const original = rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id');
-  store.freeze(deployment, first, [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 2);
-  store.finishTransaction(first.transactionHash, 'reverted', 3);
-  assert.deepEqual(rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id'), original);
-  assert.throws(() => database.exec("UPDATE assignments SET metadata_json='{}' WHERE token_id='1'"), /Frozen reveal cannot change/);
-  assert.throws(() => database.exec("DELETE FROM assignments WHERE token_id='1'"), /Frozen reveal cannot be deleted/);
-  store.reserve([crateId(0)]);
-  assert.equal(store.summary().reserved, 20);
-  store.freeze(deployment, observation(2, 102), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 4);
-  assert.equal(store.summary().reserved, 0);
-  assert.deepEqual(rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id'), original);
-  assert.equal(store.transactionResponse(deployment, first.transactionHash).status, 'revealed');
-  conservation(database, 20);
-});
-
 test('all 111111 assets remain unique through depletion, reordering, reused token IDs and reservation reclamation', { timeout: 120_000 }, t => {
   const { database, store, rows } = fixture(t);
   const crates = Array.from({ length: 5555 }, (_, index) => crateId(index));
@@ -210,233 +167,6 @@ test('all 111111 assets remain unique through depletion, reordering, reused toke
   assert.equal(store.frozen(['111111'])[0].tokenId, '111111');
 });
 
-test('partial token recovery does not request other crates until a transaction lookup explicitly upgrades it', t => {
-  const { store } = fixture(t);
-  const observed = observation(1);
-  store.freeze(deployment, observed, [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1, false);
-  assert.equal(store.transactionJob(observed.transactionHash)?.requested_all, 0);
-  assert.equal(store.transactionJob(observed.transactionHash)?.revealed_all, 0);
-  assert.equal(store.frozen(ids(21)).length, 0);
-  assert.equal(store.transactionResponse(deployment, observed.transactionHash).status, 'pending');
-  assert.deepEqual(store.transactionResponse(deployment, observed.transactionHash).artworks, []);
-  store.registerTransaction(observed.transactionHash, deployment.deploymentBlock, true);
-  assert.equal(store.transactionJob(observed.transactionHash)?.requested_all, 1);
-  assert.equal(store.transactionJob(observed.transactionHash)?.next_check_ms, 0);
-  store.freeze(deployment, observed, [{ crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) }], 2, true);
-  assert.equal(store.transactionResponse(deployment, observed.transactionHash).status, 'revealed');
-  assert.equal(store.transactionResponse(deployment, observed.transactionHash).artworks.length, 40);
-  assert.equal(store.transactionResponse(deployment, observed.transactionHash).retryAfterMs, 0);
-});
-
-test('full transaction polling wakes an incomplete historical result after its active lease ends', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store } = fixture(t);
-  const observed = observation(1);
-  store.freeze(deployment, observed, [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now, false);
-  now += 15_000;
-  assert.ok(store.claimTransaction(observed.transactionHash, now));
-  store.registerTransaction(observed.transactionHash, deployment.deploymentBlock);
-  assert.equal(store.claimTransaction(observed.transactionHash, now), null);
-  store.freeze(deployment, observed, [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now, false);
-  store.retryTransaction(observed.transactionHash, now, 86_400_000);
-  now += 2_000;
-  store.registerTransaction(observed.transactionHash, deployment.deploymentBlock);
-  assert.ok(store.claimTransaction(observed.transactionHash, now));
-});
-
-test('existing ledgers repair skipped cursors and incomplete requests once without changing frozen or private assignments', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { database, store, rows, reopen } = fixture(t);
-  const pending = observation(1).transactionHash;
-  store.registerTransaction(pending, deployment.deploymentBlock);
-  store.pendingTransaction(pending, [crateId(0)], 500, now);
-  store.replacementRanges(pending, [{ fromBlock: 301, toBlock: 500 }], 1000);
-  const observed = observation(2);
-  store.freeze(deployment, observed, [{ crateTokenId: crateId(1), tokenIds: ids(1) }], now, false);
-  store.registerTransaction(observed.transactionHash, deployment.deploymentBlock);
-  store.retryTransaction(observed.transactionHash, now, 86_400_000);
-  database.prepare('UPDATE transactions SET lease_until_ms=? WHERE hash=?').run(now + 30_000, observed.transactionHash);
-  const assignments = rows('SELECT * FROM assignments ORDER BY category,asset_id');
-  const publications = rows('SELECT * FROM publication ORDER BY token_id');
-  database.exec('DROP TABLE reveal_migrations');
-  const repaired = reopen();
-  assert.equal(repaired.transactionJob(pending)!.from_block, deployment.deploymentBlock);
-  assert.equal(repaired.transactionJob(pending)!.replacement_ranges_json, '[]');
-  assert.equal(repaired.transactionJob(observed.transactionHash)!.next_check_ms, now + 30_000);
-  assert.equal(repaired.claimTransaction(observed.transactionHash, now), null);
-  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), assignments);
-  assert.deepEqual(rows('SELECT * FROM publication ORDER BY token_id'), publications);
-  conservation(database, 20);
-  repaired.replacementRanges(pending, [], 700);
-  now += 30_000;
-  assert.ok(repaired.claimTransaction(observed.transactionHash, now));
-  const again = reopen();
-  assert.equal(again.transactionJob(pending)!.from_block, 700);
-  assert.equal(again.claimTransaction(observed.transactionHash, now), null);
-});
-
-test('existing ledgers replay skipped replacement discoveries once and retain candidate hashes across reopening', t => {
-  const { database, store, rows, reopen } = fixture(t);
-  const original = observation(1).transactionHash;
-  store.registerTransaction(original, deployment.deploymentBlock);
-  store.pendingTransaction(original, [crateId(0)], 500, 1);
-  store.replacementRanges(original, [{ fromBlock: 901, toBlock: 1000 }], 1000);
-  store.freeze(deployment, observation(2), [{ crateTokenId: crateId(1), tokenIds: ids(1) }], 2);
-  const assignments = rows('SELECT * FROM assignments ORDER BY category,asset_id');
-  const publications = rows('SELECT * FROM publication ORDER BY token_id');
-  database.exec("DROP TABLE replacement_candidates; DELETE FROM reveal_migrations WHERE name='replacement-candidates-v1'");
-  const upgraded = reopen();
-  assert.equal(upgraded.transactionJob(original)!.from_block, deployment.deploymentBlock);
-  assert.equal(upgraded.transactionJob(original)!.replacement_ranges_json, '[]');
-  assert.equal(upgraded.transactionJob(original)!.requested_all, 1);
-  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), assignments);
-  assert.deepEqual(rows('SELECT * FROM publication ORDER BY token_id'), publications);
-  upgraded.rememberReplacementCandidates(original, [
-    { transactionHash: observation(3).transactionHash, crateTokenIds: [crateId(0)] },
-    { transactionHash: observation(4).transactionHash, crateTokenIds: [crateId(0)] },
-  ]);
-  upgraded.replacementRanges(original, [], 700);
-  const restored = reopen();
-  assert.equal(restored.transactionJob(original)!.from_block, 700);
-  assert.equal(restored.replacementCandidates(original, [crateId(0)]).length, 2);
-  conservation(database, 20);
-});
-
-test('incomplete replacement scope checks unvisited candidates before repeatedly verifying completed crates', t => {
-  const { store } = fixture(t);
-  const original = observation(1).transactionHash, first = observation(2).transactionHash, second = observation(3).transactionHash;
-  store.registerTransaction(original, deployment.deploymentBlock);
-  store.rememberReplacementCandidates(original, [
-    { transactionHash: first, crateTokenIds: [crateId(0)] },
-    { transactionHash: second, crateTokenIds: [crateId(1)] },
-  ]);
-  store.recordReplacementCheck(original, first, [crateId(0)], 10);
-  assert.equal(store.replacementCandidates(original, [crateId(0), crateId(1)])[0].transactionHash, second);
-});
-
-test('partial freezes preserve every admitted crate across observations and later pending checks', t => {
-  const { store } = fixture(t);
-  const hash = observation(1).transactionHash;
-  store.registerTransaction(hash, 100);
-  store.pendingTransaction(hash, [crateId(0), crateId(1)], 100, 1);
-  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 2, false);
-  store.freeze(deployment, observation(1, 102), [{ crateTokenId: crateId(0), tokenIds: ids(21) }], 3, false);
-  store.pendingTransaction(hash, [crateId(0)], 103, 4);
-  assert.deepEqual(JSON.parse(store.transactionJob(hash)!.crates_json), [crateId(0), crateId(1)]);
-  assert.equal(store.transactionJob(hash)!.requested_all, 1);
-  assert.equal(store.transactionResponse(deployment, hash).status, 'pending');
-  assert.deepEqual(JSON.parse(store.transactionJob(hash)!.tokens_json).map((value: { tokenId: string }) => value.tokenId), ids(21));
-});
-
-test('replacement chunks persist independent cursors and reject stale generation commits', t => {
-  const { store, reopen } = fixture(t);
-  const hash = observation(1).transactionHash;
-  const crates = Array.from({ length: 31 }, (_, index) => crateId(index));
-  store.registerTransaction(hash, 100);
-  store.pendingTransaction(hash, crates, 100, 1);
-  const generation = store.transactionJob(hash)!.tracking_generation;
-  const first = store.replacementChunk(hash, generation, 10)!;
-  assert.equal(JSON.parse(first.crate_ids_json).length, 15);
-  store.replacementRanges(hash, [{ fromBlock: 101, toBlock: 200 }], 700, generation, first.chunk_index);
-  const restored = reopen();
-  const second = restored.replacementChunk(hash, generation, 20)!;
-  assert.equal(second.chunk_index, 1);
-  assert.equal(second.from_block, 100);
-  assert.equal(second.ranges_json, '[]');
-  assert.equal(restored.completeReplacementChunk(hash, second, new Set(crates.slice(15, 30))), true);
-  assert.equal(restored.replacementChunk(hash, generation, 30)!.chunk_index, 2);
-  const resumed = restored.replacementChunk(hash, generation, 40)!;
-  assert.equal(resumed.chunk_index, 0);
-  assert.equal(resumed.from_block, 700);
-  assert.deepEqual(JSON.parse(resumed.ranges_json), [{ fromBlock: 101, toBlock: 200 }]);
-  restored.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 50, false);
-  restored.replacementRanges(hash, [], 900, generation, first.chunk_index);
-  assert.equal(restored.completeReplacementChunk(hash, first, new Set(crates.slice(0, 15))), false);
-  assert.equal(restored.retireReplacedTransaction(hash, generation), false);
-  const fresh = restored.replacementChunk(hash, restored.transactionJob(hash)!.tracking_generation, 60)!;
-  assert.equal(fresh.from_block, 700);
-  assert.equal(fresh.completed, 0);
-});
-
-test('old-schema repair restores associated scope and wakes dormant jobs once without changing frozen bytes', t => {
-  const { database, store, rows, reopen } = fixture(t);
-  const hash = observation(1).transactionHash;
-  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) },
-    { crateTokenId: crateId(1), tokenIds: ids(21) }], 1);
-  store.reserve([crateId(3)]);
-  store.rememberReplacementCandidates(hash, [{ transactionHash: observation(2).transactionHash, crateTokenIds: [crateId(2)] }]);
-  database.prepare('UPDATE transactions SET crates_json=?,tokens_json=?,dormant=1,next_check_ms=900000 WHERE hash=?')
-    .run(JSON.stringify([crateId(0)]), JSON.stringify(ids(1).map(tokenId => ({ tokenId, crateTokenId: crateId(0) }))), hash);
-  const assignments = rows('SELECT * FROM assignments ORDER BY category,asset_id');
-  const publication = rows('SELECT * FROM publication ORDER BY token_id');
-  database.exec(`DROP TABLE replacement_chunks;
-    ALTER TABLE transactions DROP COLUMN tracking_generation;
-    ALTER TABLE transactions DROP COLUMN receipt_seen;
-    ALTER TABLE transactions DROP COLUMN failure_json;
-    DELETE FROM reveal_migrations WHERE name='tracking-scope-v2'`);
-  const upgraded = reopen();
-  assert.deepEqual(JSON.parse(upgraded.transactionJob(hash)!.crates_json), [crateId(0), crateId(1), crateId(2)]);
-  assert.equal(upgraded.transactionJob(hash)!.dormant, 0);
-  assert.equal(upgraded.transactionJob(hash)!.receipt_seen, 1);
-  assert.equal(upgraded.transactionJob(hash)!.next_check_ms, 0);
-  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), assignments);
-  assert.deepEqual(rows('SELECT * FROM publication ORDER BY token_id'), publication);
-  database.prepare('UPDATE transactions SET dormant=1,next_check_ms=1234 WHERE hash=?').run(hash);
-  const generation = upgraded.transactionJob(hash)!.tracking_generation;
-  const again = reopen();
-  assert.equal(again.transactionJob(hash)!.dormant, 1);
-  assert.equal(again.transactionJob(hash)!.next_check_ms, 1234);
-  assert.equal(again.transactionJob(hash)!.tracking_generation, generation);
-});
-
-for (const status of ['reverted', 'not_unpack'] as const) test(`recent ${status} receipts remain recoverable until a stable canonical failure`, t => {
-  const { store } = fixture(t);
-  const hash = observation(1).transactionHash;
-  let now = Date.now();
-  store.registerTransaction(hash, 100);
-  store.finishTransaction(hash, status, now, { observation: observation(1), confirmations: 1 });
-  assert.equal(store.transactionJob(hash)!.dormant, 0);
-  assert.equal(store.transactionJob(hash)!.receipt_seen, 1);
-  assert.equal(JSON.parse(store.transactionJob(hash)!.failure_json!).confirmations, 1);
-  now += 2 * 86_400_000;
-  store.retryTransaction(hash, now);
-  assert.equal(store.transactionJob(hash)!.dormant, 0);
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)!.status, 'pending');
-  assert.equal(store.transactionJob(hash)!.dormant, 0);
-  store.finishTransaction(hash, status, now, { observation: observation(1, 102), confirmations: 64 });
-  assert.equal(store.transactionJob(hash)!.dormant, 1);
-  const incompatible = observation(2).transactionHash;
-  store.registerTransaction(incompatible, 100);
-  store.finishTransaction(incompatible, 'not_unpack', now);
-  assert.equal(store.transactionJob(incompatible)!.dormant, 1);
-});
-
-test('scheduler indexes match numeric publication order and exclude dormant transaction history', t => {
-  const { database, store, queries } = fixture(t);
-  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
-  for (const index of [2, 3, 4]) store.registerTransaction(observation(index).transactionHash, 100);
-  database.exec('UPDATE transactions SET next_check_ms=1,lease_until_ms=0');
-  database.prepare('UPDATE transactions SET dormant=1 WHERE hash=?').run(observation(2).transactionHash);
-  database.prepare('UPDATE transactions SET lease_until_ms=1000 WHERE hash=?').run(observation(3).transactionHash);
-  assert.deepEqual(store.claimPublications(100, 8).map(job => job.token_id), ids(1, 8));
-  assert.deepEqual(store.dueTransactions(100).map(job => job.hash), [observation(1).transactionHash, observation(4).transactionHash]);
-  assert.equal(store.nextWake(100), 350);
-  const plans = [
-    { prefix: 'SELECT p.token_id', parameters: [100, 8], index: 'publication_due_numeric' },
-    { prefix: 'SELECT * FROM transactions WHERE next_check_ms', parameters: [100, 100, 8], index: 'transactions_active_due' },
-    { prefix: 'SELECT MIN(due)', parameters: [], index: 'transactions_active_due' },
-  ];
-  for (const { prefix, parameters, index } of plans) {
-    const query = queries().find(value => value.startsWith(prefix));
-    assert.ok(query);
-    const details = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all(...parameters).map(row => String(row.detail)).join('\n');
-    assert.ok(details.includes(index), details);
-    assert.doesNotMatch(details, /TEMP B-TREE/);
-  }
-});
 
 test('existing ledgers replace old scheduler indexes without changing rows', t => {
   const { database, store, rows, reopen } = fixture(t);
@@ -493,26 +223,6 @@ test('publication health clears after retry completion without changing frozen d
   assert.deepEqual(store.frozen(['1']), original);
 });
 
-test('token recovery jobs coalesce requests and retain unminted results without exposing assignments', t => {
-  const { store } = fixture(t);
-  store.requestRecovery(['1', '2', '3'], 100, 1);
-  store.requestRecovery(['1', '2'], 100, 2);
-  const jobs = store.dueRecovery(3);
-  assert.equal(jobs.length, 1);
-  assert.deepEqual(JSON.parse(jobs[0].token_ids_json), ['1', '2', '3']);
-  assert.equal(store.knownTokens(['1', '2'], 3), true);
-  const claimed = store.claimRecovery(jobs[0].id, 3)!;
-  assert.equal(claimed.attempts, 1);
-  assert.equal(store.claimRecovery(jobs[0].id, 3), null);
-  store.updateRecovery(jobs[0].id, [], [], ['1', '2', '3'], 4);
-  assert.equal(store.dueRecovery(100).length, 0);
-  assert.equal(store.tokenStatus('1'), 'unminted');
-  assert.equal(store.knownTokens(['1'], 100), true);
-  assert.equal(store.knownTokens(['1'], 3000), false);
-  assert.deepEqual(store.frozen(['1']), []);
-  store.requestRecovery(['1'], 100, 3000);
-  assert.equal(store.tokenStatus('1'), 'recovering');
-});
 
 test('invalid confirmed ranges roll back without partially revealing tokens', t => {
   const { database, store } = fixture(t);
@@ -527,269 +237,1074 @@ test('invalid confirmed ranges roll back without partially revealing tokens', t 
   conservation(database, 0);
 });
 
-test('transaction claims have exclusive leases and active clients cannot bypass their polling interval', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store } = fixture(t);
-  const hash = observation(1).transactionHash;
-  store.registerTransaction(hash, 100);
-  const first = store.claimTransaction(hash, now)!;
-  assert.equal(first.attempts, 1);
-  assert.equal(first.lease_until_ms, now + 30_000);
-  assert.equal(store.claimTransaction(hash, now), null);
-  now += 1_000;
-  store.registerTransaction(hash, 100);
-  assert.equal(store.claimTransaction(hash, now), null);
-  assert.equal(store.dueTransactions(now).length, 0);
-  store.pendingTransaction(hash, [crateId(0)], 101, now);
-  assert.equal(store.transactionJob(hash)?.lease_until_ms, 0);
-  now += 500;
-  store.registerTransaction(hash, 100);
-  assert.equal(store.claimTransaction(hash, now), null);
-  now += 500;
-  store.registerTransaction(hash, 100);
-  assert.equal(store.claimTransaction(hash, now)?.attempts, 2);
-  now += 30_000;
-  assert.equal(store.claimTransaction(hash, now)?.attempts, 3);
-});
 
-test('abandoned unknown hashes back off and expire before another client resumes them', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store } = fixture(t);
-  const hash = observation(1).transactionHash;
-  store.registerTransaction(hash, 100);
-  now += 30_000;
-  store.claimTransaction(hash, now);
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)?.next_check_ms, now + 4_000);
-  now += 4_000;
-  store.claimTransaction(hash, now);
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)?.next_check_ms, now + 8_000);
-  now += 86_400_000;
-  store.claimTransaction(hash, now);
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)?.dormant, 1);
-  store.cleanupTransactions(now);
-  assert.equal(store.transactionJob(hash), undefined);
-  assert.equal(store.nextWake(now), null);
-  assert.deepEqual(store.dueTransactions(now + 86_400_000), []);
-  store.registerTransaction(hash, 100);
-  assert.equal(store.transactionJob(hash)?.dormant, 0);
-  assert.equal(store.transactionJob(hash)?.last_requested_at_ms, now);
-  assert.ok(store.claimTransaction(hash, now));
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)?.next_check_ms, now + 2_000);
-});
+function pendingCrates(store: EthereumRevealStore, index: number, crates: string[], now: number) {
+  const hash = observation(index).transactionHash;
+  assert.equal(store.admitTransaction(hash, deployment.deploymentBlock, now), 'accepted');
+  const claim = store.claimReceipt(now, 'active', hash);
+  assert.ok(claim);
+  assert.equal(store.completeReceipt(deployment, claim, { status: 'pending', seen: true, crates, fromBlock: 500 }, now), true);
+  return hash;
+}
 
-test('known crate jobs keep reservations and continue bounded recovery after the client leaves', t => {
+function confirmed(index: number, crates = [{ crateTokenId: crateId(0), tokenIds: ids(1) }], confirmations = 1) {
+  return { status: 'confirmed' as const, observation: observation(index, 500), crates, confirmations };
+}
+
+function crateScan(claim: NonNullable<ReturnType<EthereumRevealStore['claimScan']>>, index?: number, blockNumber = 500) {
+  return { provenance: index === undefined ? [] : [{ ...observation(index, blockNumber), crateTokenIds: claim.crateTokenIds }],
+    scannedRange: { fromBlock: claim.range.fromBlock, toBlock: blockNumber }, remainingRanges: [],
+    observedBlock: { number: blockNumber, hash: observation(index ?? 1, blockNumber).blockHash } };
+}
+
+test('pending attempts share stable crate jobs and private reservations while retaining every hash', t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
-  const { store } = fixture(t);
-  const hash = observation(1).transactionHash;
-  store.registerTransaction(hash, 100);
-  store.claimTransaction(hash, now);
-  store.pendingTransaction(hash, [crateId(0)], 101, now);
-  now += 86_400_000;
-  store.claimTransaction(hash, now);
-  store.pendingTransaction(hash, undefined, undefined, now);
-  assert.equal(store.transactionJob(hash)?.dormant, 0);
-  assert.equal(store.transactionJob(hash)?.next_check_ms, now + 60_000);
+  const { database, store, rows, reopen } = fixture(t);
+  const hashes = Array.from({ length: 50 }, (_, index) => pendingCrates(store, index + 1, [crateId(0)], now));
+  assert.equal(rows('SELECT * FROM crate_recovery_jobs').length, 1);
+  assert.equal(rows('SELECT * FROM crate_candidates').length, hashes.length);
+  assert.equal(store.opaqueCount(), 0);
   assert.equal(store.summary().reserved, 20);
-  store.finishTransaction(hash, 'reverted', now);
-  assert.equal(store.transactionJob(hash)?.dormant, 0);
-  assert.equal(store.transactionJob(hash)?.lease_until_ms, 0);
-  assert.equal(store.transactionJob(hash)?.next_check_ms, now + 15_000);
+  for (const hash of hashes) {
+    const response = store.transactionResponse(deployment, hash);
+    assert.equal(response.status, 'pending');
+    assert.deepEqual(response.artworks, []);
+    assert.ok(!JSON.stringify(response).includes('wip.lil.org'));
+  }
+  const reserved = rows('SELECT * FROM assignments ORDER BY category,asset_id');
+  now += 2_000;
+  const claim = store.claimReceipt(now, 'active', hashes[0]);
+  assert.ok(claim);
+  store.completeReceipt(deployment, claim, { status: 'reverted', source: 'receipt', observation: observation(1), confirmations: 64 }, now);
+  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), reserved);
+  assert.equal(reopen().opaqueCount(), 0);
+  assert.equal(rows('SELECT * FROM crate_candidates').length, hashes.length);
+  conservation(database, 0);
 });
 
+test('frozen token assignments and bytes survive reorg checks, remints and pending replays', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows } = fixture(t);
+  const hash = pendingCrates(store, 1, [crateId(0)], now);
+  now += 2_000;
+  const first = store.claimReceipt(now, 'active', hash);
+  assert.ok(first);
+  store.completeReceipt(deployment, first, confirmed(1), now);
+  const original = rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id');
+  now += 15_000;
+  const reverted = store.claimReceipt(now, 'active', hash);
+  assert.ok(reverted);
+  store.completeReceipt(deployment, reverted, { status: 'reverted', source: 'receipt', observation: observation(1, 501), confirmations: 1 }, now);
+  assert.deepEqual(rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id'), original);
+  assert.throws(() => database.exec("UPDATE assignments SET metadata_json='{}' WHERE token_id='1'"), /Frozen reveal cannot change/);
+  assert.throws(() => database.exec("DELETE FROM assignments WHERE token_id='1'"), /Frozen reveal cannot be deleted/);
+  store.reserve([crateId(0)]);
+  assert.equal(store.summary().reserved, 20);
+  store.freeze(deployment, observation(2, 502), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+  assert.equal(store.summary().reserved, 0);
+  assert.deepEqual(rows('SELECT * FROM assignments WHERE token_id IS NOT NULL ORDER BY token_id'), original);
+  assert.equal(store.transactionResponse(deployment, hash).status, 'revealed');
+  conservation(database, 20);
+});
 
-test('stable reverted hashes go dormant and RPC failures cannot keep old unknown hashes runnable forever', t => {
+test('observed opaque transactions survive the unknown TTL, later missing results and restart until confirmation', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const fixtureState = fixture(t);
+  let store = fixtureState.store;
+  const hash = observation(1).transactionHash;
+  assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  const first = store.claimReceipt(now, 'active', hash);
+  assert.ok(first);
+  assert.equal(store.recordReceiptPresence(first, now), true);
+  assert.equal(store.failReceipt(first, now), true);
+  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 86_400_000;
+  store = fixtureState.reopen();
+  const missing = store.claimReceipt(now, 'background', hash);
+  assert.ok(missing);
+  assert.equal(store.completeReceipt(deployment, missing, { status: 'pending', seen: false }, now), true);
+  assert.equal(store.opaqueCount(), 1);
+  assert.equal(store.knownTransaction(hash), true);
+  assert.deepEqual(store.transactionResponse(deployment, hash).artworks, []);
+  now += 300_000;
+  const mined = store.claimReceipt(now, 'background', hash);
+  assert.ok(mined);
+  assert.equal(store.completeReceipt(deployment, mined, confirmed(1), now), true);
+  assert.equal(store.opaqueCount(), 0);
+  assert.equal(store.transactionResponse(deployment, hash).artworks.length, 20);
+  assert.equal(fixtureState.rows('SELECT * FROM crate_recovery_jobs').length, 1);
+});
+
+test('unknown expiry requires a fresh successful absence check and provider failures preserve admission', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, reopen } = fixture(t);
+  const hash = observation(1).transactionHash;
+  store.admitTransaction(hash, 100, now);
+  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
+  assert.equal(reopen().knownTransaction(hash), true);
+  const failed = store.claimReceipt(now, 'background', hash);
+  assert.ok(failed);
+  assert.equal(store.failReceipt(failed, now), true);
+  assert.equal(store.opaqueCount(), 1);
+  now += 300_000;
+  const absent = store.claimReceipt(now, 'background', hash);
+  assert.ok(absent);
+  assert.equal(store.completeReceipt(deployment, absent, { status: 'pending', seen: false }, now), true);
+  assert.equal(store.knownTransaction(hash), false);
+  assert.equal(store.opaqueCount(), 0);
+  assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  const replacement = store.claimReceipt(now, 'active', hash);
+  assert.ok(replacement);
+  assert.notEqual(replacement.claimId, absent.claimId);
+  assert.equal(store.recordReceiptPresence(absent, now), false);
+  assert.equal(store.completeReceipt(deployment, absent, confirmed(1), now), false);
+  assert.equal(store.completeReceipt(deployment, replacement, { status: 'pending', seen: true }, now), true);
+  assert.equal(store.opaqueCount(), 1);
+  assert.equal(store.summary().frozen, 0);
+});
+
+for (const status of ['reverted', 'not_unpack'] as const) test(`recent ${status} receipts remain observed and recoverable until stable evidence resolves the watch`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, reopen } = fixture(t);
+  const hash = observation(1).transactionHash;
+  store.admitTransaction(hash, 100, now);
+  const first = store.claimReceipt(now, 'active', hash);
+  assert.ok(first);
+  store.completeReceipt(deployment, first, { status, source: 'receipt', observation: observation(1), confirmations: 1 }, now);
+  assert.equal(store.opaqueCount(), 1);
+  assert.equal(store.transactionResponse(deployment, hash).status, status);
+  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
+  const restored = reopen();
+  const missing = restored.claimReceipt(now, 'background', hash);
+  assert.ok(missing);
+  restored.completeReceipt(deployment, missing, { status: 'pending', seen: false }, now);
+  assert.equal(restored.opaqueCount(), 1);
+  now += 300_000;
+  const stable = restored.claimReceipt(now, 'background', hash);
+  assert.ok(stable);
+  restored.completeReceipt(deployment, stable, { status, source: 'receipt', observation: observation(1), confirmations: 64 }, now);
+  assert.equal(restored.opaqueCount(), 0);
+  assert.equal(restored.claimReceipt(now + 86_400_000, 'background'), null);
+  assert.equal(restored.transactionResponse(deployment, hash).status, status);
+});
+
+test('opaque admission is capped at 10000 while confirmed and crate-validated bypasses remain durable', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, reopen } = fixture(t);
+  database.prepare(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
+    INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms)
+    SELECT printf('0x%064x',id),100,1,?,? FROM ids`).run(REVEAL_TRANSIENT_TRANSACTION_LIMIT, now, now);
+  database.prepare(`INSERT INTO receipt_work(hash,requested_all,observed,opaque,active_until_ms,created_at_ms)
+    SELECT hash,1,CAST(substr(hash,-1) AS INTEGER)%2,1,?,? FROM transactions`).run(now + 30_000, now);
+  const rejected = observation(20_001).transactionHash;
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(store.admitTransaction(rejected, 100, now), 'capacity');
+  assert.equal(store.transactionJob(rejected), undefined);
+  assert.equal(store.admitTransaction(observation(1).transactionHash, 100, now), 'accepted');
+  assert.equal(store.acceptVerified(deployment, rejected, { status: 'pending', seen: true }, now, now), false);
+  assert.equal(store.acceptVerified(deployment, rejected, confirmed(20_001), now, now), true);
+  assert.equal(store.transactionResponse(deployment, rejected).artworks.length, 20);
+  const pending = observation(20_002).transactionHash;
+  assert.equal(store.acceptVerified(deployment, pending, { status: 'pending', seen: true, crates: [crateId(1)], fromBlock: 500 }, now, now), true);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(store.summary().reserved, 20);
+  const restored = reopen();
+  assert.equal(restored.transactionResponse(deployment, rejected).artworks.length, 20);
+  assert.equal(restored.knownTransaction(pending), true);
+  assert.equal(restored.admitTransaction(observation(20_003).transactionHash, 100, now), 'capacity');
+});
+
+function fillOpaqueWatches(database: DatabaseSync, now: number) {
+  database.prepare(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
+    INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms)
+    SELECT printf('0x%064x',id),100,1,?,? FROM ids`).run(REVEAL_TRANSIENT_TRANSACTION_LIMIT, now, now);
+  database.prepare(`INSERT INTO receipt_work(hash,requested_all,opaque,active_until_ms,created_at_ms)
+    SELECT hash,1,1,?,? FROM transactions WHERE hash<=?`).run(now + 30_000, now, observation(REVEAL_TRANSIENT_TRANSACTION_LIMIT).transactionHash);
+}
+
+test('token-provenance work needs free opaque capacity before a full transaction upgrade', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows } = fixture(t);
+  store.admitTokens(['1'], 100, now);
+  const scan = store.claimScan(now, 'active', { tokenIds: ['1'] });
+  assert.ok(scan);
+  const observed = observation(20_000, 500);
+  store.completeTokenScan(scan, { provenance: [{ ...observed, tokenIds: ['1'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 20,
+    observedBlock: { number: 500, hash: observed.blockHash } }, now);
+  fillOpaqueWatches(database, now);
+  const hash = observed.transactionHash;
+  const before = ['transactions', 'receipt_work', 'receipt_token_interest'].map(table => rows(`SELECT * FROM ${table} WHERE hash='${hash}'`));
+  now += 1_000;
+  assert.equal(store.admitTransaction(hash, 100, now), 'capacity');
+  assert.equal(store.knownTransaction(hash), false);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.deepEqual(['transactions', 'receipt_work', 'receipt_token_interest'].map(table => rows(`SELECT * FROM ${table} WHERE hash='${hash}'`)), before);
+  const counted = observation(1).transactionHash;
+  assert.equal(store.admitTransaction(counted, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  const terminal = store.claimReceipt(now, 'active', counted);
+  assert.ok(terminal);
+  store.completeReceipt(deployment, terminal, { status: 'not_unpack', source: 'receipt', observation: observation(1), confirmations: 64 }, now);
+  assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(rows(`SELECT opaque FROM receipt_work WHERE hash='${hash}'`)[0].opaque, 1);
+  assert.equal(store.knownTransaction(hash), true);
+});
+
+test('scan-associated crate hashes upgrade their full response without entering the opaque pool', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows } = fixture(t);
+  pendingCrates(store, 20_000, [crateId(0)], now);
+  const scan = store.claimScan(now, 'active');
+  assert.ok(scan);
+  const observed = observation(20_001, 500);
+  store.completeCrateScan(scan, { provenance: [{ ...observed, crateTokenIds: [crateId(0)] }],
+    scannedRange: { fromBlock: scan.range.fromBlock, toBlock: 500 }, remainingRanges: [],
+    observedBlock: { number: 500, hash: observed.blockHash } }, now);
+  assert.equal(store.transactionJob(observed.transactionHash)!.crates_json, '[]');
+  fillOpaqueWatches(database, now);
+  now += 1_000;
+  assert.equal(store.admitTransaction(observed.transactionHash, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(rows(`SELECT opaque FROM receipt_work WHERE hash='${observed.transactionHash}'`)[0].opaque, 0);
+  assert.equal(store.knownTransaction(observed.transactionHash), true);
+  const receipt = store.claimReceipt(now, 'active', observed.transactionHash);
+  assert.ok(receipt);
+  store.completeReceipt(deployment, receipt, confirmed(20_001, [
+    { crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) },
+  ]), now);
+  assert.equal(store.transactionResponse(deployment, observed.transactionHash).artworks.length, 40);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+});
+
+test('reopening a resolved unscoped watch requires capacity again', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, store, rows } = fixture(t);
+  const hash = observation(20_000).transactionHash;
+  store.admitTransaction(hash, 100, now);
+  const first = store.claimReceipt(now, 'active', hash);
+  assert.ok(first);
+  store.completeReceipt(deployment, first, { status: 'reverted', source: 'receipt', observation: observation(20_000), confirmations: 64 }, now);
+  assert.equal(store.opaqueCount(), 0);
+  fillOpaqueWatches(database, now);
+  const before = rows(`SELECT * FROM receipt_work WHERE hash='${hash}'`);
+  now += 1_000;
+  assert.equal(store.admitTransaction(hash, 100, now), 'capacity');
+  assert.deepEqual(rows(`SELECT * FROM receipt_work WHERE hash='${hash}'`), before);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  const terminal = store.claimReceipt(now, 'active', observation(1).transactionHash);
+  assert.ok(terminal);
+  store.completeReceipt(deployment, terminal, { status: 'reverted', source: 'receipt', observation: observation(1), confirmations: 64 }, now);
+  assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(rows(`SELECT resolved FROM receipt_work WHERE hash='${hash}'`)[0].resolved, 0);
+});
+
+test('unmigrated legacy watches count toward opaque capacity without evicting accepted work', t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { database, reopen } = fixture(t);
+  database.prepare(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
+    INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms)
+    SELECT printf('0x%064x',id),100,1,?,? FROM ids`).run(REVEAL_TRANSIENT_TRANSACTION_LIMIT, now, now);
+  database.exec('DELETE FROM reveal_recovery_migration');
+  const store = reopen();
+  const existing = observation(1).transactionHash, rejected = observation(20_001).transactionHash;
+  assert.equal(store.migrationReady(), false);
+  assert.equal(store.admitTransaction(rejected, 100, now), 'capacity');
+  assert.equal(store.transactionJob(rejected), undefined);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(store.admitTransaction(existing, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  store.migrateChunk(now, 128);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(reopen().admitTransaction(rejected, 100, now), 'capacity');
+  while (!store.migrationReady()) store.migrateChunk(now, 128);
+  assert.equal(store.opaqueCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM transactions').get()!.count, REVEAL_TRANSIENT_TRANSACTION_LIMIT);
+  assert.equal(store.admitTransaction(rejected, 100, now), 'capacity');
+});
+
+test('receipt claims are exclusive and requests cannot bypass the per-hash cooldown', t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
   const { store } = fixture(t);
-  const reverted = observation(1).transactionHash;
-  store.registerTransaction(reverted, 100);
-  store.claimTransaction(reverted, now);
-  store.finishTransaction(reverted, 'reverted', now, { observation: observation(1), confirmations: 64 });
-  assert.equal(store.transactionJob(reverted)?.dormant, 1);
-  assert.equal(store.transactionJob(reverted)?.lease_until_ms, 0);
-  assert.deepEqual(store.dueTransactions(now + 86_400_000), []);
-  store.registerTransaction(reverted, 100);
-  assert.ok(store.claimTransaction(reverted, now));
-  store.finishTransaction(reverted, 'reverted', now, { observation: observation(1), confirmations: 64 });
-  const unavailable = observation(2).transactionHash;
-  store.registerTransaction(unavailable, 100);
-  store.claimTransaction(unavailable, now);
-  store.retryTransaction(unavailable, now);
-  assert.equal(store.transactionJob(unavailable)?.next_check_ms, now + 2_000);
-  now += 30_000;
-  store.claimTransaction(unavailable, now);
-  store.retryTransaction(unavailable, now);
-  assert.equal(store.transactionJob(unavailable)?.next_check_ms, now + 8_000);
+  const hash = observation(1).transactionHash;
+  store.admitTransaction(hash, 100, now);
+  const first = store.claimReceipt(now, 'active', hash);
+  assert.ok(first);
+  assert.equal(store.claimReceipt(now, 'active', hash), null);
+  store.admitTransaction(hash, 100, now + 1);
+  assert.equal(store.claimReceipt(now + 1, 'active', hash), null);
+  store.completeReceipt(deployment, first, { status: 'pending', seen: true }, now);
+  assert.equal(store.claimReceipt(now + 1_999, 'active', hash), null);
+  now += 2_000;
+  const second = store.claimReceipt(now, 'active', hash);
+  assert.ok(second);
+  now = second.leaseUntilMs;
+  assert.equal(store.failReceipt(second, now), false);
+  assert.equal(store.recordReceiptPresence(second, now), false);
+  const third = store.claimReceipt(now, 'background', hash);
+  assert.ok(third);
+  assert.notEqual(third.claimId, second.claimId);
+  assert.equal(store.completeReceipt(deployment, second, confirmed(1), now), false);
+  assert.equal(store.completeReceipt(deployment, third, confirmed(1), now), true);
+});
+
+test('background completion cannot renew the thirty-second active window and quiet work backs off', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = pendingCrates(store, 1, [crateId(0)], now);
+  const activeUntil = now + 30_000;
+  now += 20_000;
+  const active = store.claimReceipt(now, 'active', hash);
+  assert.ok(active);
+  now += 9_000;
+  store.completeReceipt(deployment, active, { status: 'pending', seen: true, crates: [crateId(0)], fromBlock: 500 }, now);
+  assert.equal(rows('SELECT active_until_ms FROM crate_recovery_jobs')[0].active_until_ms, activeUntil);
+  assert.equal(rows('SELECT active_until_ms FROM receipt_work')[0].active_until_ms, activeUntil);
+  now += 2_000;
+  assert.equal(store.claimReceipt(now, 'active', hash), null);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const quiet = store.claimReceipt(now, 'background', hash);
+    assert.ok(quiet);
+    store.completeReceipt(deployment, quiet, { status: 'pending', seen: true }, now);
+    const due = Number(rows('SELECT next_check_ms FROM receipt_work')[0].next_check_ms);
+    assert.ok(due > now && due <= now + 300_000);
+    assert.equal(rows('SELECT active_until_ms FROM crate_recovery_jobs')[0].active_until_ms, activeUntil);
+    now = due;
+  }
+  assert.equal(Number(rows('SELECT next_check_ms-last_checked_ms AS delay FROM receipt_work')[0].delay), 300_000);
+  store.admitTransaction(hash, 100, now);
+  assert.ok(store.claimReceipt(now, 'active', hash));
+});
+
+test('active and background claims remain separate and honor caller exclusions', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store } = fixture(t);
+  const quiet = observation(1).transactionHash, active = observation(2).transactionHash;
+  store.admitTransaction(quiet, 100, now);
+  now += 30_001;
+  store.admitTransaction(active, 100, now);
+  assert.equal(store.claimReceipt(now, 'active', undefined, [active]), null);
+  assert.equal(store.claimReceipt(now, 'active')?.hash, active);
+  assert.equal(store.claimReceipt(now, 'background')?.hash, quiet);
+});
+
+for (const resultKind of ['pending', 'confirmed'] as const) test(`new scan evidence survives an older ${resultKind} receipt completion`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = pendingCrates(store, 1, [crateId(0)], now);
+  now += 2_000;
+  const receipt = store.claimReceipt(now, 'active', hash);
+  assert.ok(receipt);
+  const scan = store.claimScan(now, 'active');
+  assert.ok(scan);
+  assert.equal(scan.kind, 'crate');
+  const discovered = crateScan(scan, 1, 501);
+  assert.equal(store.completeCrateScan(scan, discovered, now), true);
+  const before = rows(`SELECT * FROM crate_candidates WHERE hash='${hash}'`)[0];
+  assert.ok(Number(before.evidence_version) > Number(before.checked_version));
+  now += 1;
+  store.completeReceipt(deployment, receipt, resultKind === 'pending' ? { status: 'pending', seen: true } : confirmed(1, undefined, 64), now);
+  const after = rows(`SELECT * FROM crate_candidates WHERE hash='${hash}'`)[0];
+  assert.equal(after.evidence_key, discovered.provenance[0].blockHash);
+  assert.ok(Number(after.evidence_version) > Number(after.checked_version));
+  assert.equal(store.summary().frozen, resultKind === 'confirmed' ? 20 : 0);
+  now += 2_000;
+  assert.equal(store.claimReceipt(now, 'active')?.hash, hash);
+});
+
+test('identical log evidence does not continually refresh candidate priority and new blocks do', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = pendingCrates(store, 1, [crateId(0)], now);
+  const first = store.claimScan(now, 'active');
+  assert.ok(first);
+  store.completeCrateScan(first, crateScan(first, 1), now);
+  const version = Number(rows(`SELECT evidence_version FROM crate_candidates WHERE hash='${hash}'`)[0].evidence_version);
+  now += 2_000;
+  const receipt = store.claimReceipt(now, 'active', hash);
+  assert.ok(receipt);
+  store.completeReceipt(deployment, receipt, { status: 'pending', seen: true }, now);
+  const second = store.claimScan(now, 'active');
+  assert.ok(second);
+  store.completeCrateScan(second, crateScan(second, 1), now);
+  let row = rows(`SELECT * FROM crate_candidates WHERE hash='${hash}'`)[0];
+  assert.equal(row.evidence_version, version);
+  assert.ok(Number(row.checked_version) < version);
+  now += 2_000;
+  const third = store.claimScan(now, 'active');
+  assert.ok(third);
+  store.completeCrateScan(third, crateScan(third, 1, 501), now);
+  row = rows(`SELECT * FROM crate_candidates WHERE hash='${hash}'`)[0];
+  assert.equal(row.evidence_version, version + 1);
+  assert.ok(Number(row.checked_version) < version);
+});
+
+test('confirmed crate jobs preserve all candidate associations and recover after reorg without handoffs', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  const first = pendingCrates(store, 1, [crateId(0)], now), later = pendingCrates(store, 2, [crateId(0)], now);
+  now += 2_000;
+  const receipt = store.claimReceipt(now, 'active', first);
+  assert.ok(receipt);
+  store.completeReceipt(deployment, receipt, confirmed(1), now);
+  const frozen = store.frozen(ids(1));
+  assert.equal(rows('SELECT * FROM crate_recovery_jobs').length, 1);
+  assert.equal(rows('SELECT * FROM crate_candidates').length, 2);
+  now += 15_000;
+  const missing = store.claimReceipt(now, 'active', first);
+  assert.ok(missing);
+  store.completeReceipt(deployment, missing, { status: 'pending', seen: false }, now);
+  const restored = reopen();
+  now += 2_000;
+  const replacement = restored.claimReceipt(now, 'active');
+  assert.ok(replacement);
+  assert.equal(replacement.hash, later);
+  restored.completeReceipt(deployment, replacement, confirmed(2, [{ crateTokenId: crateId(0), tokenIds: ids(21) }]), now);
+  assert.deepEqual(restored.frozen(ids(1)), frozen);
+  assert.equal(restored.transactionResponse(deployment, later).artworks.length, 20);
+  assert.equal(rows('SELECT * FROM crate_recovery_jobs').length, 1);
+  assert.equal(rows('SELECT * FROM crate_candidates').length, 2);
+});
+
+test('a frozen observation fences stale scan progress while retaining its verified candidates', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  pendingCrates(store, 1, [crateId(0)], now);
+  const scan = store.claimScan(now, 'active');
+  assert.ok(scan);
+  store.freeze(deployment, observation(2), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+  const state = 'SELECT mode,observed_hash,from_block,ranges_json,scan_due_ms,scan_claim_id,scan_lease_until_ms FROM crate_recovery_jobs';
+  const before = rows(state);
+  assert.equal(store.completeCrateScan(scan, crateScan(scan, 3), now), false);
+  assert.equal(store.failScan(scan, now), false);
+  assert.deepEqual(rows(state), before);
+  assert.equal(rows(`SELECT * FROM crate_candidates WHERE hash='${observation(3).transactionHash}'`).length, 1);
+  assert.equal(store.claimReceipt(now, 'active')?.hash, observation(3).transactionHash);
+  assert.equal(store.frozen(ids(1)).length, 20);
+});
+
+test('crate scan ranges persist split work and resume after restart without skipping older segments', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, reopen } = fixture(t);
+  pendingCrates(store, 1, [crateId(0)], now);
+  const first = store.claimScan(now, 'active');
+  assert.ok(first);
+  const split = [{ fromBlock: 701, toBlock: 1000 }, { fromBlock: first.range.fromBlock, toBlock: 700 }];
+  store.completeCrateScan(first, { provenance: [], scannedRange: null, remainingRanges: split,
+    observedBlock: { number: 1000, hash: observation(1, 1000).blockHash } }, now);
+  const restored = reopen();
+  const upper = restored.claimScan(now, 'active');
+  assert.ok(upper);
+  assert.deepEqual(upper.range, split[0]);
+  restored.completeCrateScan(upper, { ...crateScan(upper, undefined, 1000), scannedRange: split[0] }, now);
+  const lower = restored.claimScan(now, 'active');
+  assert.ok(lower);
+  assert.deepEqual(lower.range, split[1]);
+  restored.completeCrateScan(lower, { ...crateScan(lower, undefined, 700), scannedRange: split[1] }, now);
+  now += 2_000;
+  const tail = restored.claimScan(now, 'active');
+  assert.ok(tail);
+  assert.equal(tail.range.fromBlock, 936);
+});
+
+test('five hundred token IDs use coalesced hundred-token jobs and retain an exact response partition', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const requested = ids(1, 500);
+  store.admitTokens(requested, 100, now);
+  store.admitTokens(requested, 100, now + 1);
+  const jobs = rows('SELECT token_ids_json FROM recovery_jobs');
+  assert.equal(jobs.length, 5);
+  assert.ok(jobs.every(row => JSON.parse(String(row.token_ids_json)).length === 100));
+  assert.equal(store.knownTokens(requested, now), true);
+  const first = store.claimScan(now, 'active', { tokenIds: ['1'] });
+  assert.ok(first);
+  assert.equal(first.kind, 'tokens');
+  store.completeTokenScan(first, { provenance: [], scannedRange: null, remainingRanges: [], mintedThrough: 0,
+    observedBlock: { number: 500, hash: observation(1, 500).blockHash } }, now);
+  const response = store.tokensResponse(deployment, requested);
+  assert.equal(response.artworks.length, 0);
+  assert.equal(response.unresolved.length, 500);
+  assert.equal(response.unresolved.filter(row => row.status === 'unminted').length, 100);
+  assert.equal(new Set(response.unresolved.map(row => row.tokenId)).size, 500);
+  assert.equal(store.knownTokens(['1'], now + 1_999), true);
+  assert.equal(store.knownTokens(['1'], now + 2_000), false);
+  now += 2_000;
+  store.admitTokens(['1'], 100, now);
+  assert.equal(store.tokensResponse(deployment, ['1']).unresolved[0].status, 'recovering');
+});
+
+test('token provenance reveals only its crate until a transaction request upgrades the full bundled response', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store } = fixture(t);
+  store.admitTokens(['1', '2', '100'], 100, now);
+  const scan = store.claimScan(now, 'active', { tokenIds: ['1'] });
+  assert.ok(scan);
+  const observed = observation(1, 500);
+  store.completeTokenScan(scan, { provenance: [{ ...observed, tokenIds: ['1', '2'] }],
+    scannedRange: { fromBlock: 100, toBlock: 500 }, remainingRanges: [], mintedThrough: 40,
+    observedBlock: { number: 500, hash: observed.blockHash } }, now);
+  const first = store.claimReceipt(now, 'active');
+  assert.ok(first);
+  assert.equal(first.hash, observed.transactionHash);
+  const result = confirmed(1, [{ crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) }]);
+  store.completeReceipt(deployment, first, result, now);
+  const partial = store.tokensResponse(deployment, ['1', '2', '100']);
+  assert.deepEqual(partial.artworks.map(row => row.tokenId), ['1', '2']);
+  assert.deepEqual(partial.unresolved, [{ tokenId: '100', status: 'unminted' }]);
+  assert.equal(store.frozen(ids(21)).length, 0);
+  assert.equal(store.transactionResponse(deployment, first.hash).status, 'pending');
+  assert.deepEqual(store.transactionResponse(deployment, first.hash).artworks, []);
+  store.admitTransaction(first.hash, 100, now);
+  now += 2_000;
+  const full = store.claimReceipt(now, 'active', first.hash);
+  assert.ok(full);
+  store.completeReceipt(deployment, full, result, now);
+  assert.equal(store.transactionResponse(deployment, first.hash).status, 'revealed');
+  assert.equal(store.transactionResponse(deployment, first.hash).artworks.length, 40);
+});
+
+test('publication ordering remains numeric and covered by its index', t => {
+  const { store, database, queries } = fixture(t);
+  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  assert.deepEqual(store.claimPublications(2, 8).map(job => job.token_id), ids(1, 8));
+  const query = queries().find(value => value.startsWith('SELECT p.token_id'));
+  assert.ok(query);
+  const plan = database.prepare(`EXPLAIN QUERY PLAN ${query}`).all(2, 8).map(row => String(row.detail)).join('\n');
+  assert.match(plan, /publication_due_numeric/);
+  assert.doesNotMatch(plan, /TEMP B-TREE/);
+});
+
+function prepareLegacyLedger(t: TestContext, prototype: boolean) {
+  const state = fixture(t);
+  const { database, store } = state;
+  store.freeze(deployment, observation(9_999), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], 1);
+  store.reserve([crateId(499)]);
+  store.publicationComplete('1');
+  store.publicationFailed('2', 2, 0);
+  const original = observation(1).transactionHash;
+  database.prepare(`INSERT INTO transactions(hash,crates_json,tokens_json,from_block,requested_all,created_at_ms,last_requested_at_ms,receipt_seen)
+    VALUES(?,?,?,?,1,1,1,1)`).run(original, JSON.stringify(Array.from({ length: 260 }, (_, index) => crateId(index + 1))),
+    JSON.stringify([{ tokenId: '21', crateTokenId: crateId(261) }]), 800);
+  database.prepare(`INSERT INTO transactions(hash,status,from_block,requested_all,created_at_ms,last_requested_at_ms,receipt_seen,failure_json)
+    VALUES(?,'reverted',100,1,1,1,1,?)`).run(observation(2).transactionHash,
+    JSON.stringify({ status: 'reverted', observation: observation(2), confirmations: 1 }));
+  database.prepare(`INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms)
+    VALUES(?,100,1,1,1)`).run(observation(3).transactionHash);
+  const candidate = database.prepare(`INSERT INTO replacement_candidates(original_hash,transaction_hash,crate_token_id,checked_at_ms,verified_at_ms,discovered_at_ms)
+    VALUES(?,?,?,11,12,13)`);
+  for (let index = 0; index < 80; index++) candidate.run(original, observation(2_000 + index).transactionHash, crateId(1_000 + index));
+  database.prepare(`INSERT INTO replacement_chunks(original_hash,chunk_index,crate_ids_json,from_block,ranges_json,generation,completed)
+    VALUES(?,0,?,900,'[]',3,0)`).run(original, JSON.stringify(Array.from({ length: 130 }, (_, index) => crateId(2_000 + index))));
+  database.prepare(`INSERT INTO recovery_jobs(id,token_ids_json,ranges_json,next_check_ms,attempts)
+    VALUES('old-token-job','["4001","4002"]','[{"fromBlock":100,"toBlock":500}]',20,2)`).run();
+  database.prepare(`INSERT INTO token_recovery(token_id,job_id,status,checked_at_ms) VALUES(?,'old-token-job','recovering',20)`).run('4001');
+  database.prepare(`INSERT INTO token_recovery(token_id,job_id,status,checked_at_ms) VALUES(?,'old-token-job','recovering',20)`).run('4002');
+  database.prepare(`INSERT INTO provenance(token_id,transaction_hash,block_number,block_hash) VALUES('4001',?,500,?)`)
+    .run(observation(4_001).transactionHash, observation(4_001, 500).blockHash);
+  if (prototype) database.prepare('INSERT INTO crate_recovery_trackers(crate_token_id,transaction_hash) VALUES(?,?)').run(crateId(1), original);
+  database.exec(`DROP TABLE receipt_claim_crates;
+    DROP TABLE receipt_claim_tokens;
+    DROP TABLE receipt_token_interest;
+    DROP TABLE crate_candidates;
+    DROP TABLE receipt_work;
+    DROP TABLE crate_recovery_jobs;
+    DROP TABLE reveal_recovery_migration`);
+  for (const column of ['active_until_ms', 'claim_id', 'lease_until_ms', 'generation', 'claimed_generation', 'served_ms']) {
+    database.exec(`ALTER TABLE recovery_jobs DROP COLUMN ${column}`);
+  }
+  if (!prototype) database.exec('DROP TABLE crate_recovery_trackers; ALTER TABLE replacement_candidates DROP COLUMN discovered_at_ms');
+  return state;
+}
+
+for (const prototype of [false, true]) test(`${prototype ? 'prototype' : 'HEAD'} migration is association-bounded and restartable without changing frozen, private or publication records`, t => {
+  const now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { rows, reopen, database } = prepareLegacyLedger(t, prototype);
+  const preservedTables = ['settings', 'pools', 'free_slots', 'crates', 'assignments', 'observations', 'publication',
+    'replacement_candidates', 'replacement_chunks', 'token_recovery', 'provenance'];
+  const before = preservedTables.map(table => createHash('sha256').update(JSON.stringify(rows(`SELECT * FROM ${table} ORDER BY rowid`))).digest('hex'));
+  const history = rows('SELECT * FROM transactions ORDER BY hash');
+  const tokenJobs = rows('SELECT id,token_ids_json,ranges_json,next_check_ms,attempts FROM recovery_jobs ORDER BY id');
+  let store = reopen();
+  assert.equal(store.migrationReady(), false);
+  assert.equal(store.claimReceipt(now, 'background'), null);
+  assert.equal(store.claimScan(now, 'background'), null);
+  assert.equal(store.frozen(ids(1)).length, 20);
+  let chunks = 0;
+  while (!store.migrationReady()) {
+    const associations = Number(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count);
+    const progress = store.migrateChunk(now, 128);
+    assert.ok(progress.processed <= 128);
+    assert.ok(Number(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count) - associations <= 128);
+    assert.ok(++chunks < 100);
+    const cursor = rows('SELECT * FROM reveal_recovery_migration');
+    store = reopen();
+    assert.deepEqual(rows('SELECT * FROM reveal_recovery_migration'), cursor);
+  }
+  assert.ok(chunks > 3);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_recovery_jobs')[0].count, 473);
+  const original = observation(1).transactionHash;
+  assert.equal(rows(`SELECT COUNT(*) AS count FROM crate_candidates WHERE hash='${original}'`)[0].count, 471);
+  for (const candidate of [observation(2_000).transactionHash, observation(2_079).transactionHash]) {
+    assert.equal(rows(`SELECT COUNT(*) AS count FROM crate_candidates WHERE hash='${candidate}'`)[0].count, 1);
+  }
+  assert.equal(rows("SELECT COUNT(*) AS count FROM receipt_token_interest WHERE token_id='4001'")[0].count, 1);
+  assert.equal(rows(`SELECT observed FROM receipt_work WHERE hash='${observation(2).transactionHash}'`)[0].observed, 1);
+  assert.equal(rows(`SELECT observed FROM receipt_work WHERE hash='${observation(3).transactionHash}'`)[0].observed, 0);
+  assert.deepEqual(preservedTables.map(table => createHash('sha256').update(JSON.stringify(rows(`SELECT * FROM ${table} ORDER BY rowid`))).digest('hex')), before);
+  for (const row of history) assert.deepEqual(rows(`SELECT * FROM transactions WHERE hash='${row.hash}'`)[0], row);
+  assert.deepEqual(rows('SELECT id,token_ids_json,ranges_json,next_check_ms,attempts FROM recovery_jobs ORDER BY id'), tokenJobs);
+  const migrated = rows('SELECT * FROM crate_candidates ORDER BY crate_token_id,hash');
+  assert.deepEqual(reopen().migrateChunk(now, 128), { ready: true, processed: 0 });
+  assert.deepEqual(rows('SELECT * FROM crate_candidates ORDER BY crate_token_id,hash'), migrated);
+  conservation(database, 20);
+});
+
+test('migration rolls back its associations and cursor together on a storage failure', t => {
+  const { database, rows, reopen } = prepareLegacyLedger(t, true);
+  const store = reopen();
+  const before = rows('SELECT * FROM reveal_recovery_migration');
+  database.exec(`CREATE TRIGGER reject_migration_candidate BEFORE INSERT ON crate_candidates
+    BEGIN SELECT RAISE(ABORT,'Migration storage unavailable'); END`);
+  assert.throws(() => store.migrateChunk(1_000_000, 128), /Migration storage unavailable/);
+  assert.deepEqual(rows('SELECT * FROM reveal_recovery_migration'), before);
+  assert.equal(rows('SELECT COUNT(*) AS count FROM crate_candidates')[0].count, 0);
+  database.exec('DROP TRIGGER reject_migration_candidate');
+  assert.equal(store.migrateChunk(1_000_000, 128).processed, 128);
+});
+
+for (const outcome of ['pending', 'confirmed'] as const) test(`same-tick unscoped ${outcome} evidence cannot replace a newer crate watcher`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const olderHash = observation(1).transactionHash, newerHash = observation(2).transactionHash;
+  store.admitTransaction(olderHash, deployment.deploymentBlock, now);
+  const older = store.claimReceipt(now, 'active', olderHash);
+  assert.ok(older);
+  store.admitTransaction(newerHash, deployment.deploymentBlock, now);
+  const newer = store.claimReceipt(now, 'active', newerHash);
+  assert.ok(newer);
+  store.completeReceipt(deployment, newer, { status: 'confirmed', observation: observation(2, 501),
+    crates: [{ crateTokenId: crateId(0), tokenIds: ids(1) }], confirmations: 1 }, now);
+  const watcher = rows('SELECT * FROM crate_recovery_jobs');
+  const frozen = store.frozen(ids(1));
+  assert.equal(watcher[0].mode, 'observed');
+  assert.equal(watcher[0].observed_hash, newerHash);
+  assert.equal(watcher[0].updated_at_ms, now);
+  const result = outcome === 'pending'
+    ? { status: 'pending' as const, seen: true, crates: [crateId(0)], fromBlock: 500 }
+    : { status: 'confirmed' as const, observation: observation(1, 500),
+      crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 64 };
+  assert.equal(store.completeReceipt(deployment, older, result, now), true);
+  const retained = rows('SELECT * FROM crate_recovery_jobs')[0];
+  assert.deepEqual({ ...retained, receipt_due_ms: watcher[0].receipt_due_ms }, { ...watcher[0] });
+  assert.deepEqual(store.frozen(ids(1)), frozen);
+  assert.equal(store.summary().reserved, 0);
+  assert.equal(store.frozen(ids(21)).length, outcome === 'confirmed' ? 20 : 0);
+
+  now += 2_000;
+  assert.equal(store.admitTransaction(olderHash, deployment.deploymentBlock, now), 'accepted');
+  const fresh = store.claimReceipt(now, 'active', olderHash);
+  assert.ok(fresh);
+  assert.equal(store.completeReceipt(deployment, fresh, { status: 'confirmed', observation: observation(1, 502),
+    crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+  const updated = rows('SELECT * FROM crate_recovery_jobs')[0];
+  assert.equal(updated.mode, 'observed');
+  assert.equal(updated.observed_hash, olderHash);
+  assert.ok(Number(updated.generation) > Number(watcher[0].generation));
+  assert.deepEqual(store.frozen(ids(1)), frozen);
+  assert.equal(store.frozen(ids(21)).length, 20);
+});
+
+for (const outcome of ['pending', 'confirmed', 'reverted'] as const) test(`new canonical evidence for another hash survives a late ${outcome} receipt`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const olderHash = pendingCrates(store, 1, [crateId(0)], now);
+  const replacementHash = observation(2).transactionHash;
+  now += 2_000;
+  const older = store.claimReceipt(now, 'active', olderHash);
+  assert.ok(older);
+  const split = store.claimScan(now, 'active');
+  assert.ok(split);
+  const low = { fromBlock: split.range.fromBlock, toBlock: 450 };
+  const high = { fromBlock: 451, toBlock: 501 };
+  assert.equal(store.completeCrateScan(split, { provenance: [], scannedRange: null, remainingRanges: [high, low],
+    observedBlock: { number: 501, hash: observation(2, 501).blockHash } }, now), true);
+  const scan = store.claimScan(now, 'active');
+  assert.ok(scan);
+  assert.deepEqual(scan.range, high);
+  now += 100;
+  assert.equal(store.completeCrateScan(scan, { provenance: [{ ...observation(2, 501), crateTokenIds: [crateId(0)] }],
+    scannedRange: high, remainingRanges: [], observedBlock: { number: 501, hash: observation(2, 501).blockHash } }, now), true);
+  const current = rows('SELECT * FROM crate_recovery_jobs')[0];
+  assert.deepEqual(JSON.parse(String(current.ranges_json)), [low]);
+  assert.ok(Number(current.generation) > 0);
+  now += 100;
+  const result = outcome === 'pending'
+    ? { status: 'pending' as const, seen: true, crates: [crateId(0)], fromBlock: 500 }
+    : outcome === 'confirmed'
+      ? { status: 'confirmed' as const, observation: observation(1, 500),
+        crates: [{ crateTokenId: crateId(0), tokenIds: ids(1) }], confirmations: 64 }
+      : { status: 'reverted' as const, source: 'receipt' as const, observation: observation(1, 500), confirmations: 64 };
+  assert.equal(store.completeReceipt(deployment, older, result, now), true);
+  const retained = rows('SELECT * FROM crate_recovery_jobs')[0];
+  assert.equal(retained.mode, 'recovering');
+  assert.equal(retained.generation, current.generation);
+  assert.equal(retained.updated_at_ms, current.updated_at_ms);
+  assert.deepEqual(JSON.parse(String(retained.ranges_json)), [low]);
+  const evidence = rows(`SELECT evidence_version,checked_version FROM crate_candidates WHERE hash='${replacementHash}'`)[0];
+  assert.ok(Number(evidence.evidence_version) > Number(evidence.checked_version));
+  const frozen = store.frozen(ids(1));
+  assert.equal(frozen.length, outcome === 'confirmed' ? 20 : 0);
+  const next = store.claimReceipt(now, 'active');
+  assert.ok(next);
+  assert.equal(next.hash, replacementHash);
+  assert.equal(store.completeReceipt(deployment, next, { status: 'confirmed', observation: observation(2, 501),
+    crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+  assert.equal(rows('SELECT observed_hash FROM crate_recovery_jobs')[0].observed_hash, replacementHash);
+  assert.equal(store.frozen(ids(21)).length, 20);
+  assert.deepEqual(store.frozen(ids(1)), frozen);
+});
+
+test('repeated identical scan evidence preserves the crate generation and remaining ranges', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  pendingCrates(store, 1, [crateId(0)], now);
+  const first = store.claimScan(now, 'active');
+  assert.ok(first);
+  const evidence = { ...observation(2, 501), crateTokenIds: [crateId(0)] };
+  assert.equal(store.completeCrateScan(first, { provenance: [evidence], scannedRange: { fromBlock: first.range.fromBlock, toBlock: 501 },
+    remainingRanges: [], observedBlock: { number: 501, hash: evidence.blockHash } }, now), true);
+  const generation = rows('SELECT generation FROM crate_recovery_jobs')[0].generation;
+  now += 2_000;
+  const repeat = store.claimScan(now, 'active');
+  assert.ok(repeat);
+  assert.equal(store.completeCrateScan(repeat, { provenance: [evidence], scannedRange: { fromBlock: repeat.range.fromBlock, toBlock: 502 },
+    remainingRanges: [], observedBlock: { number: 502, hash: observation(2, 502).blockHash } }, now), true);
+  assert.equal(rows('SELECT generation FROM crate_recovery_jobs')[0].generation, generation);
+  assert.equal(rows('SELECT ranges_json FROM crate_recovery_jobs')[0].ranges_json, '[]');
+});
+
+for (const order of ['scan-first', 'receipt-first'] as const) for (const sameHash of [false, true]) for (const sameTick of [false, true]) {
+  test(`receipt/scan merge retains evidence and authority: ${order}, sameHash=${sameHash}, sameTick=${sameTick}`, t => {
+    let now = 1_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const { store, rows, reopen } = fixture(t);
+    const original = pendingCrates(store, 1, [crateId(0)], now);
+    const replacement = observation(sameHash ? 1 : 2, 501);
+    now += 2_000;
+    const receipt = store.claimReceipt(now, 'active', original), scan = store.claimScan(now, 'active');
+    assert.ok(receipt && scan);
+    const evidence = crateScan(scan, sameHash ? 1 : 2, 501);
+    const finishReceipt = () => store.completeReceipt(deployment, receipt, confirmed(1, undefined, 64), now);
+    const finishScan = () => store.completeCrateScan(scan, evidence, now);
+    if (order === 'scan-first') {
+      assert.equal(finishScan(), true);
+      if (!sameTick) now += 100;
+      assert.equal(finishReceipt(), true);
+      assert.equal(rows('SELECT mode FROM crate_recovery_jobs')[0].mode, 'recovering');
+    } else {
+      assert.equal(finishReceipt(), true);
+      const state = 'SELECT mode,observed_hash,from_block,ranges_json,scan_due_ms,scan_claim_id,scan_lease_until_ms FROM crate_recovery_jobs';
+      const before = rows(state);
+      if (!sameTick) now += 100;
+      assert.equal(finishScan(), false);
+      assert.deepEqual(rows(state), before);
+    }
+    const candidate = rows(`SELECT * FROM crate_candidates WHERE hash='${replacement.transactionHash}'`)[0];
+    assert.equal(candidate.evidence_key, replacement.blockHash);
+    assert.ok(Number(candidate.evidence_version) > Number(candidate.checked_version));
+    const frozen = store.frozen(ids(1));
+    assert.equal(frozen.length, 20);
+    const restored = reopen();
+    now += 2_000;
+    const next = restored.claimReceipt(now, 'active');
+    assert.ok(next);
+    assert.equal(next.hash, replacement.transactionHash);
+    assert.equal(restored.completeReceipt(deployment, next, { status: 'confirmed', observation: replacement,
+      crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+    assert.deepEqual(restored.frozen(ids(1)), frozen);
+    assert.equal(restored.frozen(ids(21)).length, 20);
+    assert.equal(rows('SELECT observed_hash FROM crate_recovery_jobs')[0].observed_hash, replacement.transactionHash);
+  });
+}
+
+for (const path of ['normal', 'overflow'] as const) for (const outcome of ['pending', 'confirmed'] as const) {
+  for (const timing of ['before', 'same-tick', 'after'] as const) {
+    test(`unscoped ${path} ${outcome} uses inspection start ${timing} the current observation`, t => {
+      let now = 1_000_000;
+      t.mock.method(Date, 'now', () => now);
+      const { store, rows, reopen } = fixture(t);
+      const hash = observation(1).transactionHash;
+      if (timing === 'after') {
+        store.freeze(deployment, observation(2, 500), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+        now += 100;
+      }
+      const startedAtMs = now;
+      if (path === 'normal') store.admitTransaction(hash, deployment.deploymentBlock, now);
+      const claim = path === 'normal' ? store.claimReceipt(now, 'active', hash) : null;
+      if (path === 'normal') assert.ok(claim);
+      if (timing !== 'after') {
+        if (timing === 'before') now += 100;
+        store.freeze(deployment, observation(2, 500), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+      }
+      const frozen = store.frozen(ids(1));
+      now += 100;
+      const result = outcome === 'pending'
+        ? { status: 'pending' as const, seen: true, crates: [crateId(0)], fromBlock: 500 }
+        : { status: 'confirmed' as const, observation: observation(1, 501),
+          crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 64 };
+      assert.equal(claim ? store.completeReceipt(deployment, claim, result, now)
+        : store.acceptVerified(deployment, hash, result, startedAtMs, now), true);
+      const job = rows('SELECT * FROM crate_recovery_jobs')[0];
+      assert.equal(job.mode, timing === 'after' && outcome === 'pending' ? 'recovering' : 'observed');
+      assert.equal(job.observed_hash, timing === 'after' && outcome === 'confirmed' ? hash : observation(2).transactionHash);
+      assert.equal(store.summary().reserved, timing === 'after' && outcome === 'pending' ? 20 : 0);
+      assert.deepEqual(store.frozen(ids(1)), frozen);
+      if (timing !== 'after' || outcome === 'pending') {
+        const restored = reopen();
+        assert.ok(Number(restored.nextWake(now)) <= now + 2_000);
+        now += 2_000;
+        const next = restored.claimReceipt(now, 'active');
+        assert.ok(next);
+        assert.equal(next.hash, hash);
+        assert.equal(restored.completeReceipt(deployment, next, { status: 'confirmed', observation: observation(1, 501),
+          crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+        assert.equal(restored.frozen(ids(21)).length, 20);
+        assert.deepEqual(restored.frozen(ids(1)), frozen);
+      }
+    });
+  }
+}
+
+test('overflow completion cannot replace a receipt claim or a verification started later', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows } = fixture(t);
+  const hash = observation(1).transactionHash, startedAtMs = now;
+  store.admitTransaction(hash, deployment.deploymentBlock, now);
+  now += 100;
+  const claim = store.claimReceipt(now, 'active', hash);
+  assert.ok(claim);
+  const before = rows('SELECT * FROM receipt_work');
+  assert.equal(store.acceptVerified(deployment, hash, confirmed(1), startedAtMs, now), false);
+  assert.deepEqual(rows('SELECT * FROM receipt_work'), before);
+  assert.equal(store.completeReceipt(deployment, claim, confirmed(1), now), true);
+  const complete = rows('SELECT * FROM receipt_work');
+  now += 100;
+  assert.equal(store.acceptVerified(deployment, hash, confirmed(1), startedAtMs, now), false);
+  assert.deepEqual(rows('SELECT * FROM receipt_work'), complete);
+});
+
+for (const kind of ['crate', 'tokens'] as const) test(`expired ${kind} scans retain scoped evidence without releasing a newer scan lease`, t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  if (kind === 'crate') pendingCrates(store, 1, [crateId(0)], now);
+  else store.admitTokens(['1'], 100, now);
+  const old = store.claimScan(now, 'active');
+  assert.ok(old);
+  now += 60_001;
+  const current = store.claimScan(now, 'background');
+  assert.ok(current);
+  const projection = kind === 'crate'
+    ? 'SELECT mode,observed_hash,from_block,ranges_json,scan_claim_id,scan_lease_until_ms FROM crate_recovery_jobs'
+    : 'SELECT token_ids_json,ranges_json,claim_id,lease_until_ms FROM recovery_jobs';
+  const before = rows(projection);
+  const discovered = observation(2, 501);
+  const complete = () => kind === 'crate' ? store.completeCrateScan(old, crateScan(old, 2, 501), now)
+    : store.completeTokenScan(old, { provenance: [{ ...discovered, tokenIds: ['1', '21'] }],
+      scannedRange: { fromBlock: 100, toBlock: 501 }, remainingRanges: [], mintedThrough: 40,
+      observedBlock: { number: 501, hash: discovered.blockHash } }, now);
+  assert.equal(complete(), false);
+  assert.deepEqual(rows(projection), before);
+  assert.equal(complete(), false);
+  assert.deepEqual(rows(projection), before);
+  const restored = reopen();
+  const receipt = restored.claimReceipt(now, 'background');
+  assert.ok(receipt);
+  assert.equal(receipt.hash, discovered.transactionHash);
+  assert.equal(restored.completeReceipt(deployment, receipt, { status: 'confirmed', observation: discovered,
+    crates: [{ crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+  assert.equal(restored.frozen(ids(1)).length, 20);
+  assert.equal(restored.frozen(ids(21)).length, 0);
+});
+
+test('a late scoped confirmation retains distinct evidence without replacing a newer watcher', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  const hash = pendingCrates(store, 1, [crateId(0)], now);
+  now += 2_000;
+  const claim = store.claimReceipt(now, 'active', hash);
+  assert.ok(claim);
+  store.freeze(deployment, observation(2, 501), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+  const frozen = store.frozen(ids(1));
+  const result = { status: 'confirmed' as const, observation: observation(1, 502),
+    crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 64 };
+  assert.equal(store.completeReceipt(deployment, claim, result, now), true);
+  assert.equal(rows('SELECT observed_hash FROM crate_recovery_jobs')[0].observed_hash, observation(2).transactionHash);
+  const candidate = rows(`SELECT * FROM crate_candidates WHERE hash='${hash}'`)[0];
+  assert.equal(candidate.evidence_key, result.observation.blockHash);
+  assert.ok(Number(candidate.evidence_version) > Number(candidate.checked_version));
+  const restored = reopen();
+  now += 2_000;
+  const next = restored.claimReceipt(now, 'active');
+  assert.ok(next);
+  assert.equal(next.hash, hash);
+  assert.equal(restored.completeReceipt(deployment, next, result, now), true);
+  assert.equal(rows('SELECT observed_hash FROM crate_recovery_jobs')[0].observed_hash, hash);
+  assert.deepEqual(restored.frozen(ids(1)), frozen);
+  assert.equal(restored.frozen(ids(21)).length, 20);
+});
+
+for (const outcome of ['error', 'absent', 'pending', 'reverted', 'not_unpack'] as const) {
+  test(`fresh replacement evidence remains retryable after ${outcome} while another hash is observed`, t => {
+    let now = 1_000_000;
+    t.mock.method(Date, 'now', () => now);
+    const { store, rows, reopen } = fixture(t);
+    pendingCrates(store, 1, [crateId(0)], now);
+    const scan = store.claimScan(now, 'active');
+    assert.ok(scan);
+    store.freeze(deployment, observation(1, 500), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
+    const frozen = store.frozen(ids(1));
+    assert.equal(store.completeCrateScan(scan, crateScan(scan, 2, 501), now), false);
+    const first = store.claimReceipt(now, 'active');
+    assert.ok(first);
+    assert.equal(first.hash, observation(2).transactionHash);
+    if (outcome === 'error') assert.equal(store.failReceipt(first, now), true);
+    else assert.equal(store.completeReceipt(deployment, first,
+      outcome === 'reverted' || outcome === 'not_unpack'
+        ? { status: outcome, source: 'receipt', observation: observation(2, 501), confirmations: 1 }
+        : { status: 'pending', seen: outcome === 'pending' }, now), true);
+    const candidate = rows(`SELECT * FROM crate_candidates WHERE hash='${first.hash}'`)[0];
+    assert.ok(Number(candidate.evidence_version) > Number(candidate.checked_version));
+    const restored = reopen();
+    now += outcome === 'reverted' || outcome === 'not_unpack' ? 15_000 : outcome === 'error' ? 4_000 : 2_000;
+    const next = restored.claimReceipt(now, 'active');
+    assert.ok(next);
+    assert.equal(next.hash, first.hash);
+    assert.equal(restored.completeReceipt(deployment, next, { status: 'confirmed', observation: observation(2, 502),
+      crates: [{ crateTokenId: crateId(0), tokenIds: ids(21) }], confirmations: 1 }, now), true);
+    assert.equal(restored.frozen(ids(21)).length, 20);
+    assert.deepEqual(restored.frozen(ids(1)), frozen);
+    const checked = rows(`SELECT * FROM crate_candidates WHERE hash='${first.hash}'`)[0];
+    assert.equal(checked.checked_version, checked.evidence_version);
+  });
+}
+
+test('terminal non-unpack input releases opaque capacity without deleting its response history', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store, rows, reopen } = fixture(t);
+  const hash = observation(1).transactionHash;
+  assert.equal(store.admitTransaction(hash, 100, now), 'accepted');
+  assert.equal(store.opaqueCount(), 1);
+  const claim = store.claimReceipt(now, 'active', hash);
+  assert.ok(claim);
+  assert.equal(store.recordReceiptPresence(claim, now), true);
+  assert.equal(store.completeReceipt(deployment, claim, { status: 'not_unpack', source: 'input' }, now), true);
+  assert.equal(store.opaqueCount(), 0);
+  assert.deepEqual({ ...rows('SELECT observed,opaque,resolved FROM receipt_work')[0] }, { observed: 1, opaque: 0, resolved: 1 });
+  const response = store.transactionResponse(deployment, hash);
+  assert.equal(response.status, 'not_unpack');
+  assert.deepEqual(response.artworks, []);
   now += 86_400_000;
-  store.claimTransaction(unavailable, now);
-  store.retryTransaction(unavailable, now);
-  assert.equal(store.transactionJob(unavailable)?.dormant, 1);
-  store.cleanupTransactions(now);
-  assert.equal(store.nextWake(now), null);
-  store.registerTransaction(unavailable, 100);
-  assert.ok(store.claimTransaction(unavailable, now));
-  store.retryTransaction(unavailable, now);
-  assert.equal(store.transactionJob(unavailable)?.next_check_ms, now + 2_000);
+  const restored = reopen();
+  assert.equal(restored.claimReceipt(now, 'background'), null);
+  assert.equal(restored.nextWake(now), null);
+  assert.deepEqual(restored.transactionResponse(deployment, hash), response);
+  assert.equal(restored.knownTransaction(hash), true);
+  assert.equal(restored.admitTransaction(observation(2).transactionHash, 100, now), 'accepted');
+  assert.equal(restored.opaqueCount(), 1);
 });
 
-test('unproven admission has a fixed lifetime and finite capacity across polling and reopening', t => {
+for (const preferred of [false, true]) test(`polling an ineligible active association cannot strand a shared quiet receipt, preferred=${preferred}`, t => {
   let now = 1_000_000;
   t.mock.method(Date, 'now', () => now);
-  const { store, reopen } = fixture(t, () => 0, false);
-  for (let index = 1; index <= REVEAL_TRANSIENT_TRANSACTION_LIMIT; index++) {
-    assert.equal(store.registerTransaction(observation(index).transactionHash, 100), true);
+  const { store, rows, reopen } = fixture(t);
+  const shared = observation(1).transactionHash, replacement = observation(2).transactionHash;
+  const pending = pendingCrates(store, 3, [crateId(1)], now);
+  now += 100;
+  store.freeze(deployment, observation(1, 501), [
+    { crateTokenId: crateId(0), tokenIds: ids(1) }, { crateTokenId: crateId(1), tokenIds: ids(21) },
+  ], now);
+  now += 40_000;
+  const missing = store.claimReceipt(now, 'background', shared);
+  assert.ok(missing);
+  store.completeReceipt(deployment, missing, { status: 'pending', seen: false }, now);
+  now += 100;
+  store.admitTransaction(replacement, 100, now);
+  const confirmed = store.claimReceipt(now, 'active', replacement);
+  assert.ok(confirmed);
+  store.completeReceipt(deployment, confirmed, { status: 'confirmed', observation: observation(2, 502),
+    crates: [{ crateTokenId: crateId(1), tokenIds: ids(41) }], confirmations: 64 }, now);
+  const frozen = store.frozen(ids(1, 60));
+  now += 40_000;
+  for (let pass = 0; pass < 4; pass++) {
+    store.admitTransaction(pending, 100, now);
+    const requested = store.claimReceipt(now, 'active', pending);
+    assert.ok(requested);
+    store.completeReceipt(deployment, requested, { status: 'pending', seen: true }, now);
+    now += 2_001;
+    assert.equal(store.claimReceipt(now, 'active'), null);
+    const quiet = store.claimReceipt(now, 'background', preferred ? shared : undefined);
+    assert.ok(quiet);
+    assert.equal(quiet.hash, shared);
+    assert.equal(quiet.active, false);
+    assert.equal(store.claimReceipt(now, 'active', shared), null);
+    assert.equal(store.claimReceipt(now, 'background', shared), null);
+    store.completeReceipt(deployment, quiet, { status: 'pending', seen: false }, now);
+    assert.equal(rows(`SELECT observed_hash FROM crate_recovery_jobs WHERE crate_token_id='${crateId(1)}'`)[0].observed_hash, replacement);
+    now += 17_999;
   }
+  const restored = reopen();
+  const healthy = restored.claimReceipt(now, 'background', preferred ? shared : undefined);
+  assert.ok(healthy);
+  assert.equal(healthy.hash, shared);
+  restored.completeReceipt(deployment, healthy, { status: 'confirmed', observation: observation(1, 503), crates: [
+    { crateTokenId: crateId(0), tokenIds: ids(61) }, { crateTokenId: crateId(1), tokenIds: ids(81) },
+  ], confirmations: 1 }, now);
+  assert.deepEqual(restored.frozen(ids(1, 60)), frozen);
+  assert.equal(restored.frozen(ids(61, 40)).length, 40);
+});
+
+test('preferred hashes obey monitor due times until explicitly readmitted', t => {
+  let now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
+  const { store } = fixture(t);
   const hash = observation(1).transactionHash;
-  const first = store.transactionJob(hash)!;
-  assert.equal(first.admission_expires_at_ms, now + REVEAL_TRANSIENT_TRANSACTION_TTL_MS);
-  assert.equal(store.registerTransaction(observation(20_000).transactionHash, 100), false);
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS - 1;
-  assert.equal(store.registerTransaction(hash, 100), true);
-  assert.equal(store.transactionJob(hash)!.incarnation, first.incarnation);
-  assert.equal(store.transactionJob(hash)!.admission_expires_at_ms, first.admission_expires_at_ms);
-  const restored = reopen();
-  assert.equal(restored.transientTransactionCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
-  now += 2;
-  restored.cleanupTransactions(now);
-  assert.equal(restored.transientTransactionCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT - 128);
-  assert.equal(restored.transactionJob(hash), undefined);
-  assert.equal(restored.registerTransaction(hash, 100), true);
-  assert.notEqual(restored.transactionJob(hash)!.incarnation, first.incarnation);
-  assert.equal(restored.transientTransactionCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT - 127);
-});
-
-test('recent receipt failures count toward admission capacity until fresh stable evidence allows expiry', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store, database } = fixture(t, () => 0, false);
-  const hashes = [1, 2, 3, 4].map(value => observation(value).transactionHash);
-  hashes.forEach(hash => store.registerTransaction(hash, 100));
-  store.finishTransaction(hashes[0], 'reverted', now, { observation: observation(1), confirmations: 1 });
-  store.finishTransaction(hashes[1], 'not_unpack', now, { observation: observation(2), confirmations: 64 });
-  store.finishTransaction(hashes[2], 'not_unpack', now);
-  database.prepare("UPDATE transactions SET receipt_seen=1,status='not_unpack',failure_json='{}',observation_json='{}' WHERE hash=?").run(hashes[3]);
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
-  store.cleanupTransactions(now);
-  assert.equal(store.transientTransactionCount(), 1);
-  assert.equal(store.transactionJob(hashes[0])!.transient, 1);
-  hashes.slice(1).forEach(hash => assert.equal(store.transactionJob(hash), undefined));
-  store.pendingTransaction(hashes[0], undefined, undefined, now);
-  now += 60_000;
-  store.cleanupTransactions(now);
-  assert.ok(store.claimTransaction(hashes[0], now));
-  store.finishTransaction(hashes[0], 'not_unpack', now, { observation: observation(1, 102), confirmations: 64 });
-  now += 60_000;
-  store.cleanupTransactions(now);
-  assert.equal(store.transientTransactionCount(), 0);
-  assert.equal(store.transactionJob(hashes[0]), undefined);
-  assert.equal(store.nextWake(now), null);
-});
-
-test('expiry respects an active claim without allowing polling to renew claims beyond the original deadline', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store } = fixture(t, () => 0, false);
-  const hash = observation(1).transactionHash;
-  store.registerTransaction(hash, 100);
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS - 1;
-  const claim = store.claimTransaction(hash, now)!;
-  now += 2;
-  store.cleanupTransactions(now);
-  assert.equal(store.transactionJob(hash)!.admission_expires_at_ms, claim.lease_until_ms);
-  now = claim.lease_until_ms;
-  assert.equal(store.registerTransaction(hash, 100), true);
-  assert.equal(store.claimTransaction(hash, now), null);
-  store.cleanupTransactions(now);
-  assert.equal(store.transactionJob(hash), undefined);
-  assert.equal(store.transientTransactionCount(), 0);
-});
-
-test('existing over-cap ledgers drain in bounded indexed batches and reject new unproven admissions until below capacity', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store, database, reopen } = fixture(t, () => 0, false);
-  database.prepare(`WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<?)
-    INSERT INTO transactions(hash,from_block,created_at_ms,last_requested_at_ms,status,receipt_seen)
-    SELECT printf('0x%064x',id),100,?,?,'not_unpack',1 FROM ids`).run(REVEAL_TRANSIENT_TRANSACTION_LIMIT + 256, now, now);
-  const restored = reopen();
-  assert.equal(restored.transientTransactionCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT + 256);
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
-  for (const remaining of [REVEAL_TRANSIENT_TRANSACTION_LIMIT + 128, REVEAL_TRANSIENT_TRANSACTION_LIMIT]) {
-    restored.cleanupTransactions(now);
-    assert.equal(restored.transientTransactionCount(), remaining);
-    assert.equal(restored.registerTransaction(observation(20_000).transactionHash, 100), false);
-  }
-  restored.cleanupTransactions(now);
-  assert.equal(restored.transientTransactionCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT - 128);
-  assert.equal(restored.registerTransaction(observation(20_000).transactionHash, 100), true);
-  const plan = database.prepare(`EXPLAIN QUERY PLAN SELECT * FROM transactions WHERE transient=1 AND admission_expires_at_ms<=?
-    ORDER BY admission_expires_at_ms,hash LIMIT 128`).all(now).map(row => String(row.detail)).join('\n');
-  assert.match(plan, /transient_transactions_expiry/);
-  assert.doesNotMatch(plan, /TEMP B-TREE|SCAN transactions/);
-  assert.equal(store.transientTransactionCount(), restored.transientTransactionCount());
-});
-
-test('legacy classification preserves admitted crates, frozen metadata and both sides of replacement tracking', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store, database, rows, reopen } = fixture(t);
-  const hashes = [1, 2, 3, 4, 5].map(value => observation(value).transactionHash);
   store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
-  store.registerTransaction(hashes[1], 100);
-  store.pendingTransaction(hashes[1], [crateId(1)], 100, now);
-  store.registerTransaction(hashes[2], 100);
-  store.registerTransaction(hashes[3], 100);
-  store.rememberReplacementCandidates(hashes[2], [{ transactionHash: hashes[3], crateTokenIds: [crateId(2)] }]);
-  store.registerTransaction(hashes[4], 100);
-  database.prepare("UPDATE transactions SET crates_json='[]',tokens_json='[]',observation_json=NULL WHERE hash=?").run(hashes[0]);
-  database.exec('UPDATE transactions SET transient=1,admission_expires_at_ms=0');
-  const frozen = rows('SELECT * FROM assignments ORDER BY category,asset_id');
-  const publication = rows('SELECT * FROM publication ORDER BY token_id');
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
-  const restored = reopen();
-  restored.cleanupTransactions(now);
-  hashes.slice(0, 4).forEach(hash => assert.equal(restored.transactionJob(hash)!.transient, 0));
-  assert.equal(restored.transactionJob(hashes[4]), undefined);
-  assert.equal(restored.transientTransactionCount(), 0);
-  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), frozen);
-  assert.deepEqual(rows('SELECT * FROM publication ORDER BY token_id'), publication);
-});
-
-test('the old transaction schema gains bounded admission accounting without rewriting frozen data', t => {
-  let now = 1_000_000;
-  t.mock.method(Date, 'now', () => now);
-  const { store, database, rows, reopen } = fixture(t);
-  const frozenHash = observation(1).transactionHash;
-  const unknownHash = observation(2).transactionHash;
-  store.freeze(deployment, observation(1), [{ crateTokenId: crateId(0), tokenIds: ids(1) }], now);
-  store.registerTransaction(unknownHash, 100);
-  const frozen = rows('SELECT * FROM assignments ORDER BY category,asset_id');
-  database.exec(`DROP TRIGGER transient_transaction_insert;
-    DROP TRIGGER transient_transaction_delete;
-    DROP TRIGGER transient_transaction_update;
-    DROP INDEX transient_transactions_expiry;
-    DROP TABLE transaction_admission_count;
-    ALTER TABLE transactions DROP COLUMN incarnation;
-    ALTER TABLE transactions DROP COLUMN transient;
-    ALTER TABLE transactions DROP COLUMN admission_expires_at_ms;`);
-  const upgraded = reopen();
-  assert.equal(upgraded.transientTransactionCount(), 2);
-  assert.equal(upgraded.transactionJob(unknownHash)!.incarnation, '');
-  assert.equal(upgraded.transactionJob(frozenHash)!.transient, 1);
-  now += REVEAL_TRANSIENT_TRANSACTION_TTL_MS + 1;
-  upgraded.cleanupTransactions(now);
-  assert.equal(upgraded.transactionJob(unknownHash), undefined);
-  assert.equal(upgraded.transactionJob(frozenHash)!.transient, 0);
-  assert.equal(upgraded.transientTransactionCount(), 0);
-  assert.deepEqual(rows('SELECT * FROM assignments ORDER BY category,asset_id'), frozen);
-  assert.equal(upgraded.registerTransaction(unknownHash, 100), true);
-  assert.notEqual(upgraded.transactionJob(unknownHash)!.incarnation, '');
-  assert.equal(reopen().transientTransactionCount(), 1);
+  now += 2_000;
+  assert.equal(store.claimReceipt(now, 'background', hash), null);
+  store.admitTransaction(hash, 100, now);
+  assert.equal(store.claimReceipt(now, 'active', hash, [hash]), null);
+  const claim = store.claimReceipt(now, 'active', hash);
+  assert.ok(claim);
+  assert.equal(claim.hash, hash);
+  assert.equal(claim.active, true);
 });

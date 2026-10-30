@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, ETHEREUM_REVEAL_PATHS } from '../../../../shared/ethereum/reveal.js';
+import { ETHEREUM_REVEAL_MAX_TOKEN_IDS, ETHEREUM_REVEAL_PATHS, type EthereumRevealResult } from '../../../../shared/ethereum/reveal.js';
 import { readEthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { normalizeEthereumAddress, normalizeEthereumTokenId } from '../../../../shared/ethereum/protocol.js';
 import { limitEthereumRequest } from './ethereumAuth.js';
@@ -15,6 +15,7 @@ const transactionSchema = z.object({ ...scope, transactionHash: z.string().regex
 const tokensSchema = z.object({ ...scope, tokenIds: z.array(z.string().max(78)).min(1).max(ETHEREUM_REVEAL_MAX_TOKEN_IDS) }).strict();
 
 export async function ethereumReveal(request: Request, context: EthereumContext, path: string): Promise<unknown> {
+  const deadlineMs = Date.now() + 2_000;
   const transaction = path === ETHEREUM_REVEAL_PATHS.transaction;
   if (!transaction && path !== ETHEREUM_REVEAL_PATHS.tokens) throw new EthereumApiError('not-found', 'Reveal method not found.');
   await limitEthereumRequest(request, context, 'reveal-read',
@@ -38,18 +39,22 @@ export async function ethereumReveal(request: Request, context: EthereumContext,
       throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
     }
   };
-  const admit = async (known: boolean) => {
-    if (known) return;
-    if (deployment.state !== 'active') throw new EthereumApiError('failed-precondition', 'Reveal is not active for this collection.');
-    await admission();
+  const resolve = async <T>(operation: (admit: boolean) => Promise<EthereumRevealResult<T>>): Promise<T> => {
+    let result = await call(() => operation(false));
+    if (result.kind === 'admission') {
+      if (deployment.state !== 'active') throw new EthereumApiError('failed-precondition', 'Reveal is not active for this collection.');
+      await admission();
+      result = await call(() => operation(true));
+    }
+    if (result.kind === 'capacity') throw new EthereumApiError('resource-exhausted', 'Artwork recovery capacity is full. Try again later.');
+    if (result.kind !== 'ready') throw new EthereumApiError('unavailable', 'Reveal is temporarily unavailable.');
+    return result.value;
   };
   if ('transactionHash' in body) {
     const hash = body.transactionHash.toLowerCase();
-    await admit(await call(() => object.hasTransaction(deployment, hash)));
-    return call(() => object.revealTransaction(deployment, hash));
+    return resolve(admit => object.revealTransaction(deployment, hash, admit, deadlineMs));
   }
-  await admit(await call(() => object.hasTokens(deployment, ids)));
-  return call(() => object.revealTokens(deployment, ids));
+  return resolve(admit => object.revealTokens(deployment, ids, admit, deadlineMs));
 }
 
 export function applyEthereumRevealCors(request: Request, response: Response): Response {

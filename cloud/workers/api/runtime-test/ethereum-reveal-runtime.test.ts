@@ -11,8 +11,6 @@ import { ethereumHexQuantity, ETHEREUM_FUNCTIONS } from '../../../../shared/ethe
 import { ETHEREUM_REVEAL_PATHS, type EthereumRevealTokensResponse, type EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.ts';
 import { initializeLocalEthereumReveal, localEthereumRevealBindings } from '../../../../scripts/shared/ethereum111kLocalReveal.ts';
 
-const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
-const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
 const CONTRACT = `0x${'11'.repeat(20)}`;
 const WALLET = `0x${'22'.repeat(20)}`;
 const ZERO = `0x${'00'.repeat(20)}`;
@@ -166,22 +164,41 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       return value as T;
     }
+    async function revealedTransaction(transactionHash: string): Promise<EthereumRevealTransactionResponse> {
+      const deadline = performance.now() + 60_000;
+      let response: EthereumRevealTransactionResponse;
+      do {
+        response = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash });
+        if (response.status !== 'pending') return response;
+        await new Promise(done => setTimeout(done, 50));
+      } while (performance.now() < deadline);
+      throw new Error(`Reveal did not complete: ${transactionHash}`);
+    }
+    async function revealedTokens(tokenIds: string[]): Promise<EthereumRevealTokensResponse> {
+      const deadline = performance.now() + 60_000;
+      let response: EthereumRevealTokensResponse;
+      do {
+        response = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds });
+        if (!response.unresolved.length) return response;
+        await new Promise(done => setTimeout(done, 50));
+      } while (performance.now() < deadline);
+      throw new Error('Token recovery did not complete.');
+    }
+    async function quietRecovery(): Promise<void> {
+      const later = Date.now() + 86_400_000;
+      await storage.exec('UPDATE receipt_work SET next_check_ms=?', later);
+      await storage.exec('UPDATE crate_candidates SET next_check_ms=?', later);
+      await storage.exec('UPDATE crate_recovery_jobs SET receipt_due_ms=?,scan_due_ms=CASE WHEN scan_due_ms IS NULL THEN NULL ELSE ? END', later, later);
+      await storage.exec('UPDATE recovery_jobs SET next_check_ms=?', later);
+    }
     const baselineRpc = rpcCalls.length;
     const baselineStarted = performance.now();
-    const baseline = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: hash(1) });
+    const baseline = await revealedTransaction(hash(1));
     const singleCrateMs = performance.now() - baselineStarted;
     assert.equal(baseline.status, 'revealed');
     assert.equal(baseline.artworks.length, 20);
     const singleCrateRpcCalls = rpcCalls.length - baselineRpc;
     const tampered = '{"image":"https://example.invalid/tampered.webp"}\n';
-    const admittedAt = Date.now();
-    await storage.exec(`WITH RECURSIVE ids(id) AS (SELECT 100000 UNION ALL SELECT id+1 FROM ids WHERE id<?)
-      INSERT INTO transactions(hash,from_block,next_check_ms,created_at_ms,last_requested_at_ms,incarnation,transient,admission_expires_at_ms)
-      SELECT '0x' || printf('%064x',id),100,?,?,?,printf('load-%d',id),1,? FROM ids`,
-    100000 + REVEAL_TRANSIENT_TRANSACTION_LIMIT - 1, admittedAt + REVEAL_TRANSIENT_TRANSACTION_TTL_MS,
-    admittedAt, admittedAt, admittedAt + REVEAL_TRANSIENT_TRANSACTION_TTL_MS);
-    const transientCount = async () => (await storage.exec<{ count: number }>('SELECT count FROM transaction_admission_count WHERE id=1'))[0].count;
-    assert.equal(await transientCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
     const batchRpc = rpcCalls.length;
     const batchStarted = performance.now();
     const latencies: number[] = [];
@@ -190,9 +207,9 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       const response = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction,
         { transactionHash: hash(offset + 2) });
       latencies.push(performance.now() - started);
-      assert.equal(response.status, 'revealed');
-      assert.equal(response.artworks.length, 20);
-      assert.ok(response.artworks.every(artwork => artwork.crateTokenId === String(111113 + offset)));
+      assert.ok(response.status === 'pending' || response.status === 'revealed');
+      if (response.status === 'revealed') assert.equal(response.artworks.length, 20);
+      else assert.deepEqual(response.artworks, []);
       return response;
     }));
     const failures = outcomes.filter(result => result.status === 'rejected');
@@ -202,9 +219,23 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
           cause: result.reason instanceof Error ? String(result.reason.cause) : undefined })),
         logs: runtime.getLogs().filter(log => log.level === 'error').slice(0, 10) }));
     }
-    assert.equal(failures.length, 0, 'Every concurrent request must return its frozen artwork.');
-    const concurrent = outcomes.map(result => { assert.equal(result.status, 'fulfilled'); return result.value; });
+    assert.equal(failures.length, 0, 'Every concurrent request must durably admit work or return its artwork.');
+    const initial = outcomes.map(result => { assert.equal(result.status, 'fulfilled'); return result.value; });
     const concurrentTotalMs = performance.now() - batchStarted;
+    const revealDeadline = performance.now() + 60_000;
+    while (performance.now() < revealDeadline) {
+      const count = (await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM assignments WHERE token_id IS NOT NULL'))[0].count;
+      if (count === 4020) break;
+      await new Promise(done => setTimeout(done, 25));
+    }
+    const concurrent = await Promise.all(Array.from({ length: 200 }, (_, offset) =>
+      request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: hash(offset + 2) })));
+    for (const [offset, response] of concurrent.entries()) {
+      assert.equal(response.status, 'revealed');
+      assert.equal(response.artworks.length, 20);
+      assert.ok(response.artworks.every(artwork => artwork.crateTokenId === String(111113 + offset)));
+    }
+    const revealTotalMs = performance.now() - batchStarted;
     const concurrentRpcCalls = rpcCalls.length - batchRpc;
     const artworks = [baseline, ...concurrent].flatMap(response => response.artworks);
     assert.equal(artworks.length, 4020);
@@ -231,11 +262,7 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     await Promise.all(concurrent.map((expected, offset) => request<EthereumRevealTransactionResponse>(
       ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: hash(offset + 2) }).then(value => assert.deepEqual(value, expected))));
     const pollingTotalMs = performance.now() - pollingStarted;
-    assert.equal(await transientCount(), REVEAL_TRANSIENT_TRANSACTION_LIMIT);
-    assert.equal((await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM transactions WHERE transient=0'))[0].count, 201);
-    await storage.exec('DELETE FROM transactions WHERE transient=1 AND hash BETWEEN ? AND ?', hash(100000), hash(100000 + REVEAL_TRANSIENT_TRANSACTION_LIMIT - 1));
-    assert.equal(await transientCount(), 0);
-    await storage.exec('UPDATE transactions SET next_check_ms=?,lease_until_ms=0', Date.now() + 86_400_000);
+    await quietRecovery();
     await env.ETHEREUM_REVEAL_METADATA.put('111k-sepolia/21.json', tampered);
     await storage.exec("UPDATE publication SET status='pending',next_check_ms=0 WHERE token_id='21'");
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -250,18 +277,18 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       .bind(deployment.deploymentId).first<{ last_error: string }>())!.last_error, 'metadata-conflict');
     const conflicted = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['21'] });
     assert.deepEqual(conflicted.artworks, concurrent[0].artworks.slice(0, 1));
-    const partialResult = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['5001'] });
+    const partialResult = await revealedTokens(['5001']);
     assert.equal(partialResult.artworks.length, 1);
     assert.equal((await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM assignments WHERE token_id IS NOT NULL'))[0].count, 4040);
     assert.equal((await storage.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments WHERE token_id='5021'`))[0].count, 0);
-    const full = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: partial.transactionHash });
+    const full = await revealedTransaction(partial.transactionHash);
     assert.equal(full.status, 'revealed');
     assert.equal(full.artworks.length, 40);
     assert.deepEqual(full.artworks[0], partialResult.artworks[0]);
     assert.equal((await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM assignments WHERE token_id IS NOT NULL'))[0].count, 4060);
     assert.equal((await storage.exec<{ count: number }>(`SELECT COUNT(*) AS count FROM assignments WHERE CAST(token_id AS INTEGER)>=80001`))[0].count, 0);
     assert.equal((await storage.exec<{ count: number }>('SELECT COUNT(*) AS count FROM transactions WHERE hash=?', unasked.transactionHash))[0].count, 0);
-    await storage.exec('UPDATE transactions SET next_check_ms=?,lease_until_ms=0', Date.now() + 86_400_000);
+    await quietRecovery();
     await env.ETHEREUM_REVEAL_METADATA.delete('111k-sepolia/4020.json');
     await storage.exec("UPDATE publication SET status='pending',next_check_ms=? WHERE token_id='4020'", Date.now() + 60_000);
     await storage.exec(`UPDATE publication SET next_check_ms=? WHERE status='pending'`, Date.now() + 60_000);
@@ -274,9 +301,13 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     const warmStarted = performance.now();
     const restored = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: hash(1) });
     const restoredTokens = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '21', '4020', '5001', '5040'] });
+    const largeSnapshot = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens,
+      { tokenIds: Array.from({ length: 500 }, (_, index) => String(index + 1)) });
     const warmReadMs = performance.now() - warmStarted;
     assert.deepEqual(restored, baseline);
     assert.equal(restoredTokens.artworks.length, 5);
+    assert.equal(largeSnapshot.artworks.length, 500);
+    assert.deepEqual(largeSnapshot.unresolved, []);
     assert.equal(rpcCalls.length, warmRpc, 'Frozen reads after restart must not wait for an RPC request.');
     const warmRpcCalls = rpcCalls.length - warmRpc;
     assert.equal(await (await env.ETHEREUM_REVEAL_METADATA.get('111k-sepolia/21.json'))!.text(), tampered);
@@ -293,14 +324,14 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
     assert.equal((await recoveredPublication.json<{ image: string }>()).image, concurrent[199].artworks[19].image);
     const waitingHash = hash(9000);
     await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: waitingHash });
-    await storage.exec('UPDATE transactions SET next_check_ms=0 WHERE hash=?', waitingHash);
+    await storage.exec('UPDATE receipt_work SET next_check_ms=0,last_checked_ms=0 WHERE hash=?', waitingHash);
     blockedReceiptHash = waitingHash;
     const slowWatchdog = env.ETHEREUM_REVEAL.getByName(name).watchdog(deployment);
     await receiptStarted.promise;
     await slowWatchdog;
     const fresh = fixture(400);
     receipts.set(fresh.transactionHash, fresh);
-    const freshReveal = await request<EthereumRevealTransactionResponse>(ETHEREUM_REVEAL_PATHS.transaction, { transactionHash: fresh.transactionHash });
+    const freshReveal = await revealedTransaction(fresh.transactionHash);
     assert.equal(freshReveal.artworks.length, 20);
     let alarmPublished: R2ObjectBody | null = null;
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -317,16 +348,15 @@ test('native reveal handles concurrent unpacking, publication conflicts and dura
       singleCrate: { artworks: 20, apiMs: rounded(singleCrateMs), rpcCalls: singleCrateRpcCalls },
       concurrent: { requests: 200, artworks: 4000, totalMs: rounded(concurrentTotalMs), p50Ms: percentile(latencies, 0.5),
         p95Ms: percentile(latencies, 0.95), maxMs: rounded(Math.max(...latencies)), rpcCalls: concurrentRpcCalls, maximumRpcHandlerConcurrency: maximumRpc,
-        sameOriginAndIp: true, rateLimitedRequests: 0 },
+        sameOriginAndIp: true, rateLimitedRequests: 0, initiallyPending: initial.filter(value => value.status === 'pending').length, revealTotalMs: rounded(revealTotalMs) },
       publication: { artworks: publishedCount, totalMsFromAdmission: rounded(publicationTotalMs) },
       sameIpPolling: { requests: 200, totalMs: rounded(pollingTotalMs), rateLimitedRequests: 0 },
       sqlite: { ...counts, inspectionMs: rounded(sqliteInspectionMs) },
-      restartedFrozenReads: { requests: 2, totalMs: rounded(warmReadMs), rpcCalls: warmRpcCalls },
+      restartedFrozenReads: { requests: 3, maximumTokenBatch: 500, totalMs: rounded(warmReadMs), rpcCalls: warmRpcCalls },
       rpc: { total: rpcCalls.length, handlerP95Ms: percentile(rpcCalls.map(call => call.durationMs), 0.95),
         methods: Object.fromEntries([...new Set(rpcCalls.map(call => call.method))].map(method => [method, rpcCalls.filter(call => call.method === method).length])) },
       publicationConflictPreserved: true, publicationRecoveredAfterRestart: true, publicationContinuesDuringSlowRpc: true,
       partialThenFullTransaction: true, unrelatedHistoryUnrevealed: true,
-      fullTransientBudget: { queued: REVEAL_TRANSIENT_TRANSACTION_LIMIT, verifiedUnpacksAccepted: 200, rateLimitedRequests: 0 },
     };
     await mkdir(resolve('.cache'), { recursive: true });
     await writeFile(resolve('.cache/111k-reveal-runtime-results.json'), `${JSON.stringify(report, null, 2)}\n`);

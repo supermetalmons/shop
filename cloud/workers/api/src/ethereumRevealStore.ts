@@ -1,5 +1,8 @@
 import type { EthereumArtworkCategory, EthereumRevealedArtwork, EthereumRevealObservation,
   EthereumRevealTransactionResponse } from '../../../../shared/ethereum/reveal.js';
+import { EthereumRevealRecoveryStore, type RevealReceiptClaim, type RevealScanClaim, type RevealWorkLane } from './ethereumRevealRecoveryStore.js';
+import type { EthereumRevealCrateRecovery, EthereumRevealTokenRecovery, EthereumRevealTransactionInspection } from './ethereumRevealChain.js';
+export type { RevealReceiptClaim, RevealScanClaim, RevealWorkLane } from './ethereumRevealRecoveryStore.js';
 import type { EthereumRevealDeployment } from '../../../../shared/ethereum/revealDeployment.js';
 import { buildRevealedArtwork, REVEAL_ARTWORK_COUNT, REVEAL_CATEGORIES, REVEAL_CATEGORY_COUNTS,
   revealCrateSize, revealRandomInteger } from './ethereumRevealCatalog.js';
@@ -21,12 +24,6 @@ export type RevealPublicationJob = {
   token_id: string; metadata_json: string; placeholder_json: string; attempts: number;
 };
 export type RevealSearchRange = { fromBlock: number; toBlock?: number };
-export type RevealRecoveryJob = { id: string; token_ids_json: string; ranges_json: string; attempts: number; next_check_ms: number };
-type RevealReplacementChunk = { chunk_index: number; crate_ids_json: string; from_block: number;
-  ranges_json: string; generation: number; completed: number; checked_at_ms: number };
-
-const REVEAL_TRANSIENT_TRANSACTION_LIMIT = 10_000;
-const REVEAL_TRANSIENT_TRANSACTION_TTL_MS = 15 * 60_000;
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), deployment_json TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0)`,
@@ -68,9 +65,13 @@ const SCHEMA = [
     incarnation TEXT NOT NULL DEFAULT '', transient INTEGER NOT NULL DEFAULT 1, admission_expires_at_ms INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS transactions_active_due ON transactions(next_check_ms,hash) WHERE dormant=0`,
   `DROP INDEX IF EXISTS transactions_due`,
+  `CREATE TABLE IF NOT EXISTS crate_recovery_trackers (crate_token_id TEXT PRIMARY KEY,
+    transaction_hash TEXT NOT NULL REFERENCES transactions(hash))`,
+  `CREATE INDEX IF NOT EXISTS crate_recovery_tracker_transaction ON crate_recovery_trackers(transaction_hash)`,
   `CREATE TABLE IF NOT EXISTS replacement_candidates (original_hash TEXT NOT NULL REFERENCES transactions(hash),
     transaction_hash TEXT NOT NULL, crate_token_id TEXT NOT NULL, checked_at_ms INTEGER NOT NULL DEFAULT 0,
-    verified_at_ms INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(original_hash,transaction_hash,crate_token_id))`,
+    verified_at_ms INTEGER NOT NULL DEFAULT 0, discovered_at_ms INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(original_hash,transaction_hash,crate_token_id))`,
   `CREATE INDEX IF NOT EXISTS replacement_candidate_transaction ON replacement_candidates(transaction_hash)`,
   `CREATE TABLE IF NOT EXISTS replacement_chunks (original_hash TEXT NOT NULL REFERENCES transactions(hash),
     chunk_index INTEGER NOT NULL, crate_ids_json TEXT NOT NULL, from_block INTEGER NOT NULL,
@@ -98,37 +99,20 @@ function immutableDeployment(deployment: EthereumRevealDeployment): string {
     templateJson: deployment.templateJson, templateSha256: deployment.templateSha256 });
 }
 
-function parsedJson(value: string | null): unknown {
-  try { return value === null ? null : JSON.parse(value); } catch { return null; }
-}
-
-function isObservation(value: unknown, hash: string): boolean {
-  if (!value || typeof value !== 'object') return false;
-  const observation = value as Partial<EthereumRevealObservation>;
-  return observation.transactionHash === hash && typeof observation.blockHash === 'string' &&
-    /^0x[0-9a-f]{64}$/.test(observation.blockHash) && Number.isSafeInteger(observation.blockNumber) && observation.blockNumber! >= 0;
-}
-
-function hasRecentFailure(job: RevealTransactionJob): boolean {
-  const value = parsedJson(job.failure_json);
-  if (!value || typeof value !== 'object') return false;
-  const failure = value as { status?: string; confirmations?: number; observation?: unknown };
-  return (failure.status === 'reverted' || failure.status === 'not_unpack') && Number.isSafeInteger(failure.confirmations) &&
-    failure.confirmations! >= 1 && failure.confirmations! < 64 && isObservation(failure.observation, job.hash);
-}
-
-function hasRevealScope(job: RevealTransactionJob): boolean {
-  const crates = parsedJson(job.crates_json), mappings = parsedJson(job.tokens_json);
-  return Array.isArray(crates) && crates.some(id => typeof id === 'string' && /^\d+$/.test(id) &&
-    Number(id) >= 111_112 && Number(id) <= 116_666) ||
-    Array.isArray(mappings) && mappings.some(value => value && typeof value === 'object' &&
-      typeof value.tokenId === 'string' && /^[1-9]\d*$/.test(value.tokenId) && Number(value.tokenId) <= REVEAL_ARTWORK_COUNT) ||
-    isObservation(parsedJson(job.observation_json), job.hash);
-}
-
 export class EthereumRevealStore {
-  constructor(private readonly sql: RevealSql, private readonly transaction: <T>(action: () => T) => T,
+  private readonly transaction: <T>(action: () => T) => T;
+  private readonly recovery: EthereumRevealRecoveryStore;
+
+  constructor(private readonly sql: RevealSql, transaction: <T>(action: () => T) => T,
     private readonly randomInteger: (maximum: number) => number = revealRandomInteger) {
+    let depth = 0;
+    this.transaction = action => {
+      if (depth) return action();
+      return transaction(() => {
+        depth++;
+        try { return action(); } finally { depth--; }
+      });
+    };
     this.transaction(() => {
       for (const statement of SCHEMA) this.sql.exec(statement);
       const columns = new Set(this.sql.exec<{ name: string }>('PRAGMA table_info(transactions)').toArray().map(row => row.name));
@@ -137,41 +121,11 @@ export class EthereumRevealStore {
         ['transient', 'INTEGER NOT NULL DEFAULT 1'], ['admission_expires_at_ms', 'INTEGER NOT NULL DEFAULT 0']]) {
         if (!columns.has(name)) this.sql.exec(`ALTER TABLE transactions ADD COLUMN ${name} ${definition}`);
       }
-      this.sql.exec(`CREATE INDEX IF NOT EXISTS transient_transactions_expiry
-        ON transactions(admission_expires_at_ms,hash) WHERE transient=1`);
-      this.sql.exec('CREATE TABLE IF NOT EXISTS transaction_admission_count (id INTEGER PRIMARY KEY CHECK(id=1), count INTEGER NOT NULL CHECK(count>=0))');
-      if (!this.sql.exec('SELECT id FROM transaction_admission_count WHERE id=1').toArray().length) {
-        this.sql.exec('INSERT INTO transaction_admission_count(id,count) SELECT 1,COUNT(*) FROM transactions WHERE transient=1');
-      }
-      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS transient_transaction_insert AFTER INSERT ON transactions WHEN NEW.transient=1
-        BEGIN UPDATE transaction_admission_count SET count=count+1 WHERE id=1; END`);
-      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS transient_transaction_delete AFTER DELETE ON transactions WHEN OLD.transient=1
-        BEGIN UPDATE transaction_admission_count SET count=count-1 WHERE id=1; END`);
-      this.sql.exec(`CREATE TRIGGER IF NOT EXISTS transient_transaction_update AFTER UPDATE OF transient ON transactions WHEN OLD.transient!=NEW.transient
-        BEGIN UPDATE transaction_admission_count SET count=count+NEW.transient-OLD.transient WHERE id=1; END`);
-      const cursors = this.sql.exec(`INSERT OR IGNORE INTO reveal_migrations(name) VALUES('recovery-cursors-v1') RETURNING name`).toArray().length;
-      const candidates = this.sql.exec(`INSERT OR IGNORE INTO reveal_migrations(name) VALUES('replacement-candidates-v1') RETURNING name`).toArray().length;
-      if (cursors || candidates) {
-        this.sql.exec(`UPDATE transactions SET from_block=COALESCE((SELECT CAST(json_extract(deployment_json,'$.deploymentBlock') AS INTEGER)
-          FROM settings WHERE id=1),from_block),replacement_ranges_json='[]' WHERE crates_json!='[]'`);
-      }
-      if (cursors) {
-        this.sql.exec(`UPDATE transactions SET next_check_ms=MIN(next_check_ms,lease_until_ms)
-          WHERE requested_all=1 AND revealed_all=0 AND status='revealed'`);
-      }
-      if (this.sql.exec(`INSERT OR IGNORE INTO reveal_migrations(name) VALUES('tracking-scope-v2') RETURNING name`).toArray().length) {
-        this.sql.exec(`UPDATE transactions SET crates_json=(SELECT json_group_array(crate_token_id) FROM (
-          SELECT value AS crate_token_id FROM json_each(transactions.crates_json)
-          UNION SELECT crate_token_id FROM observations WHERE transaction_hash=transactions.hash
-          UNION SELECT crate_token_id FROM replacement_candidates WHERE original_hash=transactions.hash
-          UNION SELECT json_extract(value,'$.crateTokenId') FROM json_each(transactions.tokens_json)
-          ORDER BY crate_token_id))`);
-        this.sql.exec(`UPDATE transactions SET dormant=0,next_check_ms=MIN(next_check_ms,lease_until_ms),
-          tracking_generation=tracking_generation+1,receipt_seen=CASE WHEN status IN ('revealed','reverted','not_unpack') THEN 1 ELSE receipt_seen END,
-          from_block=COALESCE((SELECT CAST(json_extract(deployment_json,'$.deploymentBlock') AS INTEGER) FROM settings WHERE id=1),from_block),
-          replacement_ranges_json='[]' WHERE crates_json!='[]' OR status IN ('reverted','not_unpack')`);
-        this.sql.exec('DELETE FROM replacement_chunks');
-      }
+    });
+    this.recovery = new EthereumRevealRecoveryStore(sql, action => this.transaction(action), {
+      freeze: (deployment, observation, crates, now, allCrates) => this.freezeRecords(deployment, observation, crates, now, allCrates),
+      reserve: crates => this.reserve(crates),
+      frozen: ids => this.frozen(ids),
     });
   }
 
@@ -276,7 +230,7 @@ export class EthereumRevealStore {
     return tokenIds.flatMap(id => byId.has(id) ? [byId.get(id)!] : []);
   }
 
-  freeze(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
+  private freezeRecords(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
     allCrates = true): number {
     if (!this.ready()) throw new Error('Reveal inventory is not provisioned.');
     this.configure(deployment);
@@ -310,7 +264,8 @@ export class EthereumRevealStore {
         this.sql.exec(`INSERT OR IGNORE INTO observations(transaction_hash,block_hash,crate_token_id,block_number,token_ids_json)
           VALUES(?,?,?,?,?)`, observation.transactionHash, observation.blockHash, crate.crateTokenId, observation.blockNumber, JSON.stringify(crate.tokenIds));
       }
-      this.registerTransaction(observation.transactionHash, deployment.deploymentBlock, false);
+      this.sql.exec(`INSERT OR IGNORE INTO transactions(hash,from_block,created_at_ms,last_requested_at_ms,incarnation,transient)
+        VALUES(?,?,?,?,?,0)`, observation.transactionHash, deployment.deploymentBlock, now, now, crypto.randomUUID());
       const mappings = crates.flatMap(crate => crate.tokenIds.map(tokenId => ({ tokenId, crateTokenId: crate.crateTokenId })));
       const previous = this.transactionJob(observation.transactionHash)!;
       const sameObservation = previous.observation_json === JSON.stringify(observation);
@@ -327,50 +282,12 @@ export class EthereumRevealStore {
     });
   }
 
-  registerTransaction(hash: string, fromBlock: number, requestAll = true, verifiedCrates: string[] = []): boolean {
-    const now = Date.now();
-    const transient = requestAll && !verifiedCrates.length ? 1 : 0;
-    if (transient && !this.transactionJob(hash) && this.transientTransactionCount() >= REVEAL_TRANSIENT_TRANSACTION_LIMIT) return false;
-    this.sql.exec(`INSERT INTO transactions(hash,from_block,requested_all,created_at_ms,last_requested_at_ms,
-      incarnation,transient,admission_expires_at_ms,crates_json) VALUES(?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(hash) DO UPDATE SET requested_all=MAX(transactions.requested_all,excluded.requested_all),
-      tracking_generation=transactions.tracking_generation+CASE WHEN excluded.requested_all=1 AND
-        (transactions.requested_all=0 OR transactions.dormant=1) THEN 1 ELSE 0 END,
-      last_requested_at_ms=CASE WHEN excluded.requested_all=1 THEN excluded.last_requested_at_ms ELSE transactions.last_requested_at_ms END,
-      dormant=CASE WHEN excluded.requested_all=1 THEN 0 ELSE transactions.dormant END,
-      next_check_ms=CASE WHEN excluded.requested_all=1 AND transactions.lease_until_ms<=? AND
-        (transactions.requested_all=0 OR transactions.dormant=1 OR
-          (transactions.status='pending' OR transactions.status='revealed' AND transactions.revealed_all=0) AND transactions.checked_at_ms<=?)
-        THEN 0 ELSE transactions.next_check_ms END`, hash, fromBlock, requestAll ? 1 : 0, now, now,
-      crypto.randomUUID(), transient, transient ? now + REVEAL_TRANSIENT_TRANSACTION_TTL_MS : 0,
-      JSON.stringify(verifiedCrates), now, now - 2_000);
-    return true;
-  }
-
-  transientTransactionCount(): number {
-    return this.sql.exec<{ count: number }>('SELECT count FROM transaction_admission_count WHERE id=1').toArray()[0].count;
-  }
-
-  cleanupTransactions(now: number, limit = 128): void {
-    this.transaction(() => {
-      const jobs = this.sql.exec<RevealTransactionJob>(`SELECT * FROM transactions WHERE transient=1 AND admission_expires_at_ms<=?
-        ORDER BY admission_expires_at_ms,hash LIMIT ?`, now, limit).toArray();
-      for (const job of jobs) {
-        const tracked = hasRevealScope(job) || this.sql.exec(`SELECT 1 AS found WHERE
-            EXISTS(SELECT 1 FROM observations WHERE transaction_hash=?) OR
-            EXISTS(SELECT 1 FROM replacement_candidates WHERE original_hash=?) OR
-            EXISTS(SELECT 1 FROM replacement_candidates WHERE transaction_hash=?) OR
-            EXISTS(SELECT 1 FROM replacement_chunks WHERE original_hash=?)`, job.hash, job.hash, job.hash, job.hash).toArray().length > 0;
-        if (tracked) {
-          this.sql.exec('UPDATE transactions SET transient=0,admission_expires_at_ms=0 WHERE hash=?', job.hash);
-          continue;
-        }
-        const expiry = job.admission_expires_at_ms || job.created_at_ms + REVEAL_TRANSIENT_TRANSACTION_TTL_MS;
-        if (expiry > now || hasRecentFailure(job) || job.lease_until_ms > now) {
-          this.sql.exec('UPDATE transactions SET admission_expires_at_ms=? WHERE hash=?',
-            expiry > now ? expiry : Math.max(job.lease_until_ms, hasRecentFailure(job) ? now + 60_000 : 0), job.hash);
-        } else this.sql.exec('DELETE FROM transactions WHERE hash=?', job.hash);
-      }
+  freeze(deployment: EthereumRevealDeployment, observation: EthereumRevealObservation, crates: RevealCrate[], now: number,
+    allCrates = true): number {
+    return this.transaction(() => {
+      const generation = this.freezeRecords(deployment, observation, crates, now, allCrates);
+      this.recovery.seedConfirmed(deployment, observation, crates, now);
+      return generation;
     });
   }
 
@@ -392,232 +309,47 @@ export class EthereumRevealStore {
       ...(observation ? { observedBlock: { number: observation.blockNumber, hash: observation.blockHash } } : {}) };
   }
 
-  claimTransaction(hash: string, now: number): RevealTransactionJob | null {
-    const job = this.transactionJob(hash);
-    if (job?.transient && now >= job.created_at_ms + REVEAL_TRANSIENT_TRANSACTION_TTL_MS &&
-      !hasRecentFailure(job) && !hasRevealScope(job)) return null;
-    return this.sql.exec<RevealTransactionJob>(`UPDATE transactions SET next_check_ms=?,lease_until_ms=?,checked_at_ms=?,attempts=attempts+1
-      WHERE hash=? AND next_check_ms<=? AND lease_until_ms<=? AND dormant=0 RETURNING *`, now + 30_000, now + 30_000, now, hash, now, now).toArray()[0] || null;
+  migrationReady(): boolean { return this.recovery.migrationReady(); }
+  migrateChunk(now: number, limit = 128) { return this.recovery.migrateChunk(now, limit); }
+  knownTransaction(hash: string): boolean { return this.recovery.knownTransaction(hash); }
+  knownTokens(ids: string[], now: number): boolean { return this.recovery.knownTokens(ids, now); }
+  admitTransaction(hash: string, fromBlock: number, now: number) { return this.recovery.admitTransaction(hash, fromBlock, now); }
+  admitTokens(ids: string[], fromBlock: number, now: number): void { this.recovery.admitTokens(ids, fromBlock, now); }
+  tokensResponse(deployment: EthereumRevealDeployment, ids: string[]) { return this.recovery.tokensResponse(deployment, ids); }
+  opaqueCount(): number { return this.recovery.opaqueCount(); }
+  claimReceipt(now: number, lane: RevealWorkLane, preferredHash?: string, excludeHashes: string[] = []): RevealReceiptClaim | null {
+    return this.recovery.claimReceipt(now, lane, preferredHash, excludeHashes);
   }
-
-  pendingTransaction(hash: string, crateTokenIds: string[] | undefined, fromBlock: number | undefined, now: number,
-    generation = this.transactionJob(hash)!.tracking_generation): void {
-    const job = this.transactionJob(hash)!;
-    if (job.tracking_generation !== generation) return;
-    if (crateTokenIds?.length) this.reserve(crateTokenIds);
-    const admitted = [...new Set([...(JSON.parse(job.crates_json) as string[]), ...(crateTokenIds || [])])];
-    const knownCrates = admitted.length > 0;
-    const live = now - job.last_requested_at_ms < 30_000;
-    const delay = live ? 2_000 : knownCrates ? 60_000 : Math.min(3_600_000, 2_000 * 2 ** Math.min(job.attempts, 11));
-    const dormant = !knownCrates && !job.receipt_seen && !live && now - job.created_at_ms >= 86_400_000;
-    this.sql.exec(`UPDATE transactions SET crates_json=?,from_block=?,next_check_ms=?,lease_until_ms=0,dormant=?,
-      status=CASE WHEN status='revealed' THEN status ELSE 'pending' END,tracking_generation=tracking_generation+?,
-      transient=CASE WHEN ? THEN 0 ELSE transient END,
-      admission_expires_at_ms=CASE WHEN ? THEN 0 ELSE admission_expires_at_ms END WHERE hash=? AND tracking_generation=?`,
-      JSON.stringify(admitted),
-      fromBlock === undefined || job.crates_json !== '[]' ? job.from_block : Math.max(job.from_block, fromBlock),
-      now + delay, dormant ? 1 : 0, admitted.length > (JSON.parse(job.crates_json) as string[]).length ? 1 : 0,
-      knownCrates ? 1 : 0, knownCrates ? 1 : 0, hash, generation);
+  recordReceiptPresence(claim: RevealReceiptClaim, now: number): boolean { return this.recovery.recordReceiptPresence(claim, now); }
+  completeReceipt(deployment: EthereumRevealDeployment, claim: RevealReceiptClaim, result: EthereumRevealTransactionInspection, now: number): boolean {
+    return this.recovery.completeReceipt(deployment, claim, result, now);
   }
-
-  finishTransaction(hash: string, status: 'reverted' | 'not_unpack', now: number,
-    evidence?: { observation: EthereumRevealObservation; confirmations: number },
-    generation = this.transactionJob(hash)!.tracking_generation): void {
-    const job = this.transactionJob(hash)!;
-    const terminal = evidence ? evidence.confirmations >= 64 : status === 'not_unpack';
-    const dormant = job.crates_json === '[]' && terminal;
-    this.sql.exec(`UPDATE transactions SET status=?,next_check_ms=?,lease_until_ms=0,dormant=?,
-      receipt_seen=MAX(receipt_seen,?),failure_json=COALESCE(?,failure_json) WHERE hash=? AND tracking_generation=?`,
-      job.status === 'revealed' ? job.status : status, now + (terminal ? 60_000 : 15_000), dormant ? 1 : 0,
-      evidence || status === 'reverted' ? 1 : 0, evidence ? JSON.stringify({ status, ...evidence }) : null, hash, generation);
+  failReceipt(claim: RevealReceiptClaim, now: number): boolean { return this.recovery.failReceipt(claim, now); }
+  acceptVerified(deployment: EthereumRevealDeployment, hash: string, result: EthereumRevealTransactionInspection, startedAtMs: number, now: number): boolean {
+    return this.recovery.acceptVerified(deployment, hash, result, startedAtMs, now);
   }
-
-  retryTransaction(hash: string, now: number, delay?: number, generation = this.transactionJob(hash)!.tracking_generation): void {
-    const job = this.transactionJob(hash)!;
-    const unknown = job.crates_json === '[]' && job.status !== 'revealed';
-    const live = now - job.last_requested_at_ms < 30_000;
-    const dormant = unknown && !job.receipt_seen && !live && now - job.created_at_ms >= 86_400_000;
-    const interval = delay ?? (live ? 2_000 : unknown ? Math.min(3_600_000, 2_000 * 2 ** Math.min(job.attempts, 11)) : 10_000);
-    this.sql.exec('UPDATE transactions SET next_check_ms=?,lease_until_ms=0,dormant=? WHERE hash=? AND tracking_generation=?',
-      now + interval, dormant ? 1 : 0, hash, generation);
+  claimScan(now: number, lane: RevealWorkLane, scope?: { tokenIds?: string[] }): RevealScanClaim | null {
+    return this.recovery.claimScan(now, lane, scope);
   }
-
-  dueTransactions(now: number, limit = 8): RevealTransactionJob[] {
-    return this.sql.exec<RevealTransactionJob>(`SELECT * FROM transactions WHERE next_check_ms<=? AND lease_until_ms<=? AND dormant=0
-      ORDER BY next_check_ms,hash LIMIT ?`, now, now, limit).toArray();
+  completeCrateScan(claim: RevealScanClaim, result: EthereumRevealCrateRecovery, now: number): boolean {
+    return this.recovery.completeCrateScan(claim, result, now);
   }
-
-  replacementChunk(hash: string, generation: number, now: number, confirmedCrates: string[] = []): RevealReplacementChunk | null {
-    return this.transaction(() => {
-      const job = this.transactionJob(hash)!;
-      if (job.tracking_generation !== generation) return null;
-      const confirmed = new Set(confirmedCrates);
-      const crates = (JSON.parse(job.crates_json) as string[]).filter(crate => !confirmed.has(crate));
-      const existing = this.sql.exec<RevealReplacementChunk>(
-        'SELECT * FROM replacement_chunks WHERE original_hash=? ORDER BY chunk_index', hash).toArray();
-      const chunks = Array.from({ length: Math.ceil(crates.length / 15) }, (_, index) => JSON.stringify(crates.slice(index * 15, index * 15 + 15)));
-      if (existing.length !== chunks.length || chunks.some((chunk, index) => chunk !== existing[index]?.crate_ids_json)) {
-        this.sql.exec('DELETE FROM replacement_chunks WHERE original_hash=?', hash);
-        const deploymentBlock = this.identityDeploymentBlock();
-        chunks.forEach((chunk, index) => this.sql.exec(`INSERT INTO replacement_chunks
-          (original_hash,chunk_index,crate_ids_json,from_block,ranges_json,generation) VALUES(?,?,?,?,?,?)`,
-        hash, index, chunk, existing.length ? deploymentBlock : job.from_block,
-        !existing.length && chunks.length === 1 ? job.replacement_ranges_json : '[]', generation));
-      } else this.sql.exec(`UPDATE replacement_chunks SET generation=?,completed=0,checked_at_ms=0
-        WHERE original_hash=? AND generation!=?`, generation, hash, generation);
-      const chunk = this.sql.exec<RevealReplacementChunk>(`SELECT * FROM replacement_chunks WHERE original_hash=?
-        AND generation=? AND completed=0 ORDER BY checked_at_ms,chunk_index LIMIT 1`, hash, generation).toArray()[0];
-      if (!chunk) return null;
-      this.sql.exec('UPDATE replacement_chunks SET checked_at_ms=? WHERE original_hash=? AND chunk_index=?', now, hash, chunk.chunk_index);
-      return chunk;
-    });
+  completeTokenScan(claim: RevealScanClaim, result: EthereumRevealTokenRecovery, now: number): boolean {
+    return this.recovery.completeTokenScan(claim, result, now);
   }
-
-  private identityDeploymentBlock(): number {
-    return this.sql.exec<{ block: number }>(`SELECT CAST(json_extract(deployment_json,'$.deploymentBlock') AS INTEGER) AS block
-      FROM settings WHERE id=1`).toArray()[0].block;
-  }
-
-  replacementRanges(hash: string, ranges: RevealSearchRange[], fromBlock: number,
-    generation = this.transactionJob(hash)!.tracking_generation, chunkIndex = 0): void {
-    this.transaction(() => {
-      if (this.transactionJob(hash)!.tracking_generation !== generation) return;
-      this.sql.exec(`UPDATE replacement_chunks SET ranges_json=?,from_block=?
-        WHERE original_hash=? AND chunk_index=? AND generation=?`, JSON.stringify(ranges), fromBlock, hash, chunkIndex, generation);
-      if ((JSON.parse(this.transactionJob(hash)!.crates_json) as string[]).length <= 15) {
-        this.sql.exec('UPDATE transactions SET replacement_ranges_json=?,from_block=? WHERE hash=?', JSON.stringify(ranges), fromBlock, hash);
-      }
-    });
-  }
-
-  rememberReplacementCandidates(hash: string, candidates: Array<{ transactionHash: string; crateTokenIds: string[] }>): void {
-    this.transaction(() => {
-      for (const candidate of candidates) for (const crate of candidate.crateTokenIds) {
-        this.sql.exec(`INSERT OR IGNORE INTO replacement_candidates(original_hash,transaction_hash,crate_token_id) VALUES(?,?,?)`,
-          hash, candidate.transactionHash, crate);
-      }
-    });
-  }
-
-  replacementCandidates(hash: string, crateTokenIds: string[]): Array<{ transactionHash: string; crateTokenIds: string[] }> {
-    const selected = new Set(crateTokenIds);
-    const verified = new Set(this.sql.exec<{ crate_token_id: string }>(`SELECT DISTINCT crate_token_id FROM replacement_candidates
-      WHERE original_hash=? AND verified_at_ms>0`, hash).toArray().map(row => row.crate_token_id));
-    const complete = crateTokenIds.every(crate => verified.has(crate));
-    return this.sql.exec<{ transaction_hash: string; crates_json: string }>(`SELECT transaction_hash,json_group_array(crate_token_id) AS crates_json
-      FROM replacement_candidates WHERE original_hash=? GROUP BY transaction_hash
-      ORDER BY CASE WHEN ? THEN MAX(verified_at_ms) ELSE 0 END DESC,MIN(checked_at_ms),transaction_hash`, hash, complete ? 1 : 0).toArray().flatMap(row => {
-      const crates = (JSON.parse(row.crates_json) as string[]).filter(crate => selected.has(crate));
-      return crates.length ? [{ transactionHash: row.transaction_hash, crateTokenIds: crates }] : [];
-    });
-  }
-
-  recordReplacementCheck(hash: string, transactionHash: string, verifiedCrates: string[], now: number): void {
-    this.transaction(() => {
-      this.sql.exec(`UPDATE replacement_candidates SET checked_at_ms=?,verified_at_ms=0 WHERE original_hash=? AND transaction_hash=?`, now, hash, transactionHash);
-      for (const crate of verifiedCrates) this.sql.exec(`INSERT INTO replacement_candidates
-        (original_hash,transaction_hash,crate_token_id,checked_at_ms,verified_at_ms) VALUES(?,?,?,?,?)
-        ON CONFLICT(original_hash,transaction_hash,crate_token_id) DO UPDATE SET checked_at_ms=excluded.checked_at_ms,verified_at_ms=excluded.verified_at_ms`,
-      hash, transactionHash, crate, now, now);
-    });
-  }
-
-  completeReplacementChunk(hash: string, chunk: RevealReplacementChunk, coveredCrates: Set<string>): boolean {
-    if ((JSON.parse(chunk.crate_ids_json) as string[]).some(crate => !coveredCrates.has(crate))) return false;
-    return this.sql.exec<{ chunk_index: number }>(`UPDATE replacement_chunks SET completed=1
-      WHERE original_hash=? AND chunk_index=? AND generation=? AND EXISTS
-      (SELECT 1 FROM transactions WHERE hash=? AND tracking_generation=?) RETURNING chunk_index`,
-    hash, chunk.chunk_index, chunk.generation, hash, chunk.generation).toArray().length > 0;
-  }
-
-  replacementComplete(hash: string, generation: number): boolean {
-    return this.sql.exec<{ hash: string }>(`SELECT hash FROM transactions
-      WHERE hash=? AND tracking_generation=? AND crates_json!='[]'
-      AND EXISTS(SELECT 1 FROM replacement_chunks WHERE original_hash=transactions.hash AND generation=?)
-      AND NOT EXISTS(SELECT 1 FROM replacement_chunks WHERE original_hash=transactions.hash AND (generation!=? OR completed=0))`,
-    hash, generation, generation, generation).toArray().length > 0;
-  }
-
-  retireReplacedTransaction(hash: string, generation: number): boolean {
-    if (!this.replacementComplete(hash, generation)) return false;
-    return this.sql.exec<{ hash: string }>(`UPDATE transactions SET dormant=1,lease_until_ms=0
-      WHERE hash=? AND tracking_generation=? AND NOT(requested_all=1 AND status='revealed' AND revealed_all=0)
-      RETURNING hash`, hash, generation).toArray().length > 0;
-  }
-
-  knownTokens(tokenIds: string[], now: number): boolean {
-    const frozen = new Set(this.frozen(tokenIds).map(value => value.tokenId));
-    return tokenIds.every(id => frozen.has(id) || !!this.sql.exec<{ status: string; checked_at_ms: number }>(
-      'SELECT status,checked_at_ms FROM token_recovery WHERE token_id=?', id).toArray()
-      .find(row => row.status === 'recovering' || now - row.checked_at_ms < 2_000));
-  }
-
-  requestRecovery(tokenIds: string[], fromBlock: number, now: number): void {
-    this.transaction(() => {
-      const frozen = new Set(this.frozen(tokenIds).map(value => value.tokenId));
-      const missing = tokenIds.filter(id => {
-        if (frozen.has(id)) return false;
-        const row = this.sql.exec<{ status: string; checked_at_ms: number }>('SELECT status,checked_at_ms FROM token_recovery WHERE token_id=?', id).toArray()[0];
-        return !row || row.status !== 'recovering' && now - row.checked_at_ms >= 2_000;
-      });
-      for (let offset = 0; offset < missing.length; offset += 100) {
-        const ids = missing.slice(offset, offset + 100);
-        const id = crypto.randomUUID();
-        this.sql.exec('INSERT INTO recovery_jobs(id,token_ids_json,ranges_json) VALUES(?,?,?)', id, JSON.stringify(ids), JSON.stringify([{ fromBlock }]));
-        for (const tokenId of ids) this.sql.exec(`INSERT INTO token_recovery(token_id,job_id,status,checked_at_ms) VALUES(?,?,'recovering',?)
-          ON CONFLICT(token_id) DO UPDATE SET job_id=excluded.job_id,status='recovering',checked_at_ms=excluded.checked_at_ms`, tokenId, id, now);
-      }
-    });
-  }
-
-  tokenStatus(tokenId: string): 'unminted' | 'recovering' {
-    return this.sql.exec<{ status: string }>('SELECT status FROM token_recovery WHERE token_id=?', tokenId).toArray()[0]?.status === 'unminted'
-      ? 'unminted' : 'recovering';
-  }
-
-  dueRecovery(now: number, limit = 4): RevealRecoveryJob[] {
-    return this.sql.exec<RevealRecoveryJob>('SELECT * FROM recovery_jobs WHERE next_check_ms<=? ORDER BY next_check_ms,id LIMIT ?', now, limit).toArray();
-  }
-
-  claimRecovery(id: string, now: number): RevealRecoveryJob | null {
-    return this.sql.exec<RevealRecoveryJob>(`UPDATE recovery_jobs SET next_check_ms=?,attempts=attempts+1 WHERE id=? AND next_check_ms<=? RETURNING *`,
-      now + 30_000, id, now).toArray()[0] || null;
-  }
-
-  saveProvenance(observation: EthereumRevealObservation, tokenIds: string[]): void {
-    this.transaction(() => {
-      for (const tokenId of tokenIds) this.sql.exec(`INSERT INTO provenance(token_id,transaction_hash,block_number,block_hash) VALUES(?,?,?,?)
-        ON CONFLICT(token_id) DO UPDATE SET transaction_hash=excluded.transaction_hash,block_number=excluded.block_number,block_hash=excluded.block_hash`,
-      tokenId, observation.transactionHash, observation.blockNumber, observation.blockHash);
-    });
-  }
+  failScan(claim: RevealScanClaim, now: number): boolean { return this.recovery.failScan(claim, now); }
 
   provenance(tokenIds: string[]): EthereumRevealObservation[] {
     const values = new Map<string, EthereumRevealObservation>();
-    for (const tokenId of tokenIds) {
-      const row = this.sql.exec<{ transaction_hash: string; block_number: number; block_hash: string }>('SELECT * FROM provenance WHERE token_id=?', tokenId).toArray()[0];
-      if (row) values.set(row.transaction_hash, { transactionHash: row.transaction_hash, blockNumber: row.block_number, blockHash: row.block_hash });
+    for (let offset = 0; offset < tokenIds.length; offset += 100) {
+      const ids = tokenIds.slice(offset, offset + 100);
+      for (const row of this.sql.exec<{ transaction_hash: string; block_number: number; block_hash: string }>(
+        `SELECT transaction_hash,block_number,block_hash FROM provenance WHERE token_id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()) {
+        values.set(row.transaction_hash, { transactionHash: row.transaction_hash, blockNumber: row.block_number, blockHash: row.block_hash });
+      }
     }
     return [...values.values()];
   }
-
-  discardProvenance(observation: EthereumRevealObservation): void {
-    this.sql.exec('DELETE FROM provenance WHERE transaction_hash=? AND block_hash=?', observation.transactionHash, observation.blockHash);
-  }
-
-  updateRecovery(id: string, remainingIds: string[], ranges: RevealSearchRange[], unmintedIds: string[], now: number, delay = 0): void {
-    this.transaction(() => {
-      for (const tokenId of unmintedIds) this.sql.exec(`UPDATE token_recovery SET status='unminted',job_id=NULL,checked_at_ms=?
-        WHERE token_id=? AND job_id=?`, now, tokenId, id);
-      if (!remainingIds.length) {
-        this.sql.exec('DELETE FROM token_recovery WHERE job_id=?', id);
-        this.sql.exec('DELETE FROM recovery_jobs WHERE id=?', id);
-      } else this.sql.exec('UPDATE recovery_jobs SET token_ids_json=?,ranges_json=?,next_check_ms=? WHERE id=?',
-        JSON.stringify(remainingIds), JSON.stringify(ranges), now + delay, id);
-    });
-  }
-
-  retryRecovery(id: string, now: number): void { this.sql.exec('UPDATE recovery_jobs SET next_check_ms=? WHERE id=?', now + 10_000, id); }
 
   claimPublications(now: number, limit = 8): RevealPublicationJob[] {
     return this.transaction(() => {
@@ -646,12 +378,10 @@ export class EthereumRevealStore {
   }
 
   nextWake(now: number): number | null {
-    const rows = this.sql.exec<{ due: number | null }>(`SELECT MIN(due) AS due FROM (
-      SELECT MIN(next_check_ms) AS due FROM transactions WHERE dormant=0 UNION ALL
-      SELECT MIN(next_check_ms) AS due FROM recovery_jobs UNION ALL
-      SELECT MIN(next_check_ms) AS due FROM publication WHERE status='pending' UNION ALL
-      SELECT MIN(admission_expires_at_ms) AS due FROM transactions WHERE transient=1)`).toArray();
-    return rows[0]?.due == null ? null : Math.max(now + 250, rows[0].due);
+    const recovery = this.recovery.nextWake(now);
+    const publication = this.sql.exec<{ due: number | null }>("SELECT MIN(next_check_ms) AS due FROM publication WHERE status='pending'").toArray()[0]?.due;
+    const times = [recovery, publication].filter((value): value is number => value != null);
+    return times.length ? Math.max(now + 250, Math.min(...times)) : null;
   }
 
   summary() {
@@ -660,6 +390,6 @@ export class EthereumRevealStore {
     const publication = this.sql.exec<{ status: string; count: number }>('SELECT status,COUNT(*) AS count FROM publication GROUP BY status').toArray();
     return { ready: this.ready(), seeded: this.pools().reduce((sum, pool) => sum + pool.seeded, 0),
       available: this.pools().reduce((sum, pool) => sum + pool.available, 0), ...row,
-      publication: Object.fromEntries(publication.map(value => [value.status, value.count])) };
+      publication: Object.fromEntries(publication.map(value => [value.status, value.count])), recovery: this.recovery.summary() };
   }
 }

@@ -46,6 +46,8 @@ Other statuses have empty `artworks`. Non-pending responses use `retryAfterMs: 0
 
 Requests are idempotent. Resume pending hashes after reload; submit replacement hashes when provided by the wallet. Bundled transactions can include several wallets' unpacks. For a wallet's gallery, save its intended crate IDs and show only artworks with matching `crateTokenId`, regardless of current ownership.
 
+Available results are read from the reveal ledger. When verification is needed, the request waits for up to two seconds of chain work before returning the current result. This is an inline work budget, not a network latency guarantee. Admitted work continues in the background after the response or a disconnect. Once RPC has confirmed that a pending transaction exists, including a wrapped transaction, it has no tracking expiry merely because it remains pending.
+
 ## 2. Recover artwork by token ID
 
 Use this when the unpack hash is unavailable or inventory still shows the placeholder:
@@ -76,7 +78,7 @@ The response contains available `artworks` and an `unresolved` array:
 - `recovering`: retry this ID after `retryAfterMs`.
 - `unminted`: no mint has been established. Recheck after a mint or inventory update; do not loop immediately when `retryAfterMs` is `0`.
 
-Display successful results immediately and retry only unresolved IDs.
+Display successful results immediately and retry only unresolved IDs. Token recovery uses the same bounded inline wait and continues in the background; a slow lookup must not prevent displaying artwork already returned.
 
 ## Response fields and media
 
@@ -119,7 +121,9 @@ Errors contain `error.code` and `error.message`. For normal polling, follow `ret
 | `403` | Check `Origin` and `X-Mons-CSRF`. |
 | `404` | Confirm the chain and contract with Mons. |
 | `409` | New reveal admission is paused or unavailable. Previously admitted work continues. |
-| `429` | Wait for `Retry-After` (seconds) before sending more requests. |
+| `429` | Rate or tracking capacity was reached. Wait for `Retry-After` (seconds), then retry the same request. |
 | `5xx` / network error | Retry with exponential backoff, capped at 30 seconds. |
 
 Limits: **10,000 new admissions / 120,000 total requests per minute** per origin/IP pair, approximately per Cloudflare location. A token batch counts as one request. Keep successful results when another request fails.
+
+There is also a separate collection limit of **10,000 unresolved transaction hashes whose crate scope is not yet known**. A new hash refused at this limit is not queued. Previously admitted work continues; retry the same hash after `Retry-After` rather than submitting another wallet transaction.

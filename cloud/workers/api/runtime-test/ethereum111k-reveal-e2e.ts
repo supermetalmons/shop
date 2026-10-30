@@ -49,7 +49,13 @@ export async function runEthereumRevealE2E(input: {
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       return value as T;
     }
-    const unminted = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '111111'] });
+    let unminted: EthereumRevealTokensResponse | undefined;
+    for (let attempt = 0; attempt < 80; attempt++) {
+      unminted = await request<EthereumRevealTokensResponse>(ETHEREUM_REVEAL_PATHS.tokens, { tokenIds: ['1', '111111'] });
+      if (unminted.unresolved.every(value => value.status === 'unminted')) break;
+      await new Promise(done => setTimeout(done, 100));
+    }
+    assert.ok(unminted);
     assert.deepEqual(unminted.artworks, []);
     assert.deepEqual(unminted.unresolved, [{ tokenId: '1', status: 'unminted' }, { tokenId: '111111', status: 'unminted' }]);
     const snapshot = await input.rpc<string>('evm_snapshot');

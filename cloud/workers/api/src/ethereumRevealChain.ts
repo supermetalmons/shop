@@ -24,7 +24,7 @@ type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 
 export type EthereumRevealCrate = { crateTokenId: string; tokenIds: string[] };
 export type EthereumRevealTransactionInspection =
-  | { status: 'pending'; crates?: string[]; fromBlock?: number }
+  | { status: 'pending'; seen: boolean; crates?: string[]; fromBlock?: number }
   | { status: 'confirmed'; observation: EthereumRevealObservation; crates: EthereumRevealCrate[]; confirmations: number }
   | { status: 'reverted' | 'not_unpack'; source: 'receipt'; observation: EthereumRevealObservation; confirmations: number }
   | { status: 'not_unpack'; source: 'input' };
@@ -169,20 +169,22 @@ function pendingCrateIds(input: string): string[] | null {
   return ids.map(String);
 }
 
-async function inspectPending(rpc: Rpc, deployment: RevealChainDeployment, hash: string): Promise<EthereumRevealTransactionInspection> {
+async function inspectPending(rpc: Rpc, deployment: RevealChainDeployment, hash: string,
+  onSeen?: () => void | Promise<void>): Promise<EthereumRevealTransactionInspection> {
   const raw = await rpc('eth_getTransactionByHash', [hash]);
-  if (raw === null) return { status: 'pending' };
+  if (raw === null) return { status: 'pending', seen: false };
   const row = record(raw);
   if (normalizedHash(row.hash) !== hash || typeof row.from !== 'string' || !ADDRESS.test(row.from) ||
     typeof row.to !== 'string' && row.to !== null || typeof row.to === 'string' && !ADDRESS.test(row.to) ||
     row.chainId !== undefined && rpcInteger(row.chainId) !== deployment.chainId) throw unavailable();
-  if (typeof row.to !== 'string' || row.to.toLowerCase() !== deployment.contractAddress) return { status: 'pending' };
+  await onSeen?.();
+  if (typeof row.to !== 'string' || row.to.toLowerCase() !== deployment.contractAddress) return { status: 'pending', seen: true };
   const input = row.input ?? row.data;
   if (typeof input !== 'string' || !BYTES.test(input) || typeof row.value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(row.value)) throw unavailable();
   let ids: string[] | null;
-  try { ids = pendingCrateIds(input.toLowerCase()); } catch { return { status: 'pending' }; }
+  try { ids = pendingCrateIds(input.toLowerCase()); } catch { return { status: 'pending', seen: true }; }
   if (!ids || BigInt(row.value) !== 0n) return { status: 'not_unpack', source: 'input' };
-  if (row.blockNumber !== null && row.blockNumber !== undefined) return { status: 'pending' };
+  if (row.blockNumber !== null && row.blockNumber !== undefined) return { status: 'pending', seen: true };
   const block = parseBlock(await rpc('eth_getBlockByNumber', ['latest', false]));
   const result = await rpc('eth_call', [{ to: deployment.contractAddress,
     data: encodeCall(ETHEREUM_FUNCTIONS.tokenInfos, ['uint256[]'], [ids]) }, { blockHash: block.hash, requireCanonical: true }]);
@@ -191,10 +193,10 @@ async function inspectPending(rpc: Rpc, deployment: RevealChainDeployment, hash:
   if (infos.length !== ids.length) throw unavailable();
   const owned = infos.every(([kind, displayId, owner], index) => kind === 2n &&
     displayId === BigInt(ids![index]) - 111_111n && owner === String(row.from).toLowerCase() && owner !== ZERO);
-  if (!owned) return { status: 'pending', fromBlock: block.number };
+  if (!owned) return { status: 'pending', seen: true, fromBlock: block.number };
   const canonical = parseBlock(await rpc('eth_getBlockByNumber', [ethereumHexQuantity(block.number), false]));
-  if (canonical.hash !== block.hash) return { status: 'pending' };
-  return { status: 'pending', crates: ids, fromBlock: block.number };
+  if (canonical.hash !== block.hash) return { status: 'pending', seen: true };
+  return { status: 'pending', seen: true, crates: ids, fromBlock: block.number };
 }
 
 function confirmedCrates(logs: ChainLog[], deployment: RevealChainDeployment, observation: EthereumRevealObservation): EthereumRevealCrate[] {
@@ -249,20 +251,22 @@ function confirmedCrates(logs: ChainLog[], deployment: RevealChainDeployment, ob
 }
 
 export async function inspectRevealTransaction(env: RevealChainEnvironment, deployment: RevealChainDeployment,
-  transactionHash: string, signal: AbortSignal, providerFetch: typeof fetch = fetch): Promise<EthereumRevealTransactionInspection> {
+  transactionHash: string, signal: AbortSignal, providerFetch: typeof fetch = fetch,
+  onSeen?: () => void | Promise<void>): Promise<EthereumRevealTransactionInspection> {
   const hash = normalizedHash(transactionHash);
   const rpc = createRpc(env, deployment, signal, providerFetch);
   const [, raw] = await Promise.all([verifyChain(rpc, deployment), rpc('eth_getTransactionReceipt', [hash])]);
-  if (raw === null) return inspectPending(rpc, deployment, hash);
+  if (raw === null) return inspectPending(rpc, deployment, hash, onSeen);
   const row = record(raw);
   if (normalizedHash(row.transactionHash) !== hash || !Array.isArray(row.logs) ||
     row.status !== '0x0' && row.status !== '0x1') throw unavailable();
   const observation = { transactionHash: hash, blockNumber: rpcInteger(row.blockNumber), blockHash: normalizedHash(row.blockHash) };
+  await onSeen?.();
   const [headRaw, canonicalRaw] = await Promise.all([rpc('eth_blockNumber', []), rpc('eth_getBlockByNumber', [ethereumHexQuantity(observation.blockNumber), false])]);
-  if (canonicalRaw === null) return { status: 'pending' };
+  if (canonicalRaw === null) return { status: 'pending', seen: true };
   const canonical = parseBlock(canonicalRaw);
   const head = rpcInteger(headRaw);
-  if (canonical.hash !== observation.blockHash || canonical.number !== observation.blockNumber || head < observation.blockNumber) return { status: 'pending' };
+  if (canonical.hash !== observation.blockHash || canonical.number !== observation.blockNumber || head < observation.blockNumber) return { status: 'pending', seen: true };
   const evidence = { source: 'receipt' as const, observation, confirmations: head - observation.blockNumber + 1 };
   if (observation.blockNumber < deployment.deploymentBlock) return { status: 'not_unpack', ...evidence };
   if (row.status === '0x0') return { status: 'reverted', ...evidence };

@@ -109,7 +109,7 @@ test('reveal distinguishes reverted, unrelated, and noncanonical receipts withou
     const { state, providerFetch } = fixture();
     state.receipt = { ...state.receipt, ...change };
     assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), expected === 'pending'
-      ? { status: expected } : { status: expected, source: 'receipt', confirmations: 1,
+      ? { status: expected, seen: true } : { status: expected, source: 'receipt', confirmations: 1,
         observation: { transactionHash: HASH, blockNumber: 500, blockHash: BLOCK_HASH } });
   }
   const { state, providerFetch } = fixture();
@@ -146,16 +146,16 @@ test('pending allocation accepts only validated direct unbox calldata and curren
   state.transaction = { hash: HASH, from: WALLET, to: CONTRACT, value: '0x0', blockNumber: null,
     input: encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[111112, 116666]]) };
   assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch),
-    { status: 'pending', crates: ['111112', '116666'], fromBlock: 500 });
+    { status: 'pending', seen: true, crates: ['111112', '116666'], fromBlock: 500 });
   state.owners.set('111112', OTHER);
-  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', fromBlock: 500 });
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', seen: true, fromBlock: 500 });
   state.owners.clear();
   state.transaction.input = encodeCall(ETHEREUM_FUNCTIONS.unboxCrates, ['uint256[]'], [[111112, 111112]]);
   assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'not_unpack', source: 'input' });
   state.transaction.to = OTHER;
-  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending' });
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', seen: true });
   state.transaction = null;
-  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending' });
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', seen: false });
 });
 
 test('pending allocations are withheld when the ownership snapshot reorganizes', async () => {
@@ -164,7 +164,7 @@ test('pending allocations are withheld when the ownership snapshot reorganizes',
   state.transaction = { hash: HASH, from: WALLET, to: CONTRACT, value: '0x0', blockNumber: null,
     input: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112]) };
   state.afterCall = method => { if (method === 'eth_call') state.canonical = OTHER_BLOCK_HASH; };
-  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending' });
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', seen: true });
 });
 
 test('failed canonical receipts include their observation and confirmation depth', async () => {
@@ -183,12 +183,119 @@ test('pending inspection distinguishes incompatible inputs from incomplete ABI d
   state.receipt = null;
   state.transaction = { hash: HASH, from: WALLET, to: CONTRACT, value: '0x0', blockNumber: null,
     input: encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, [], []) };
-  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending' });
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'pending', seen: true });
   state.transaction.input = `${encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112])}abcd`;
   assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch),
-    { status: 'pending', crates: ['111112'], fromBlock: 500 });
+    { status: 'pending', seen: true, crates: ['111112'], fromBlock: 500 });
   state.transaction.input = encodeCall('baseURI()', [], []);
   assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch), { status: 'not_unpack', source: 'input' });
+});
+
+test('pending wrapped and contract-creation hashes report chain presence without allocating crates', async () => {
+  for (const to of [OTHER, null]) {
+    const { state, providerFetch } = fixture();
+    state.receipt = null;
+    state.transaction = { hash: HASH, from: WALLET, to, value: '0x0', blockNumber: null, input: '0x1234', chainId: '0xaa36a7' };
+    let seen = 0;
+    const result = await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch, () => { seen++; });
+    assert.deepEqual(result, { status: 'pending', seen: true });
+    assert.equal(seen, 1);
+    assert.ok(!state.calls.some(call => call.method === 'eth_call' || call.method === 'eth_getBlockByNumber'));
+  }
+});
+
+test('unseen hashes and invalid chain identities never record transaction presence', async () => {
+  const missing = fixture();
+  missing.state.receipt = null;
+  let seen = 0;
+  const onSeen = () => { seen++; };
+  assert.deepEqual(await inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), missing.providerFetch, onSeen),
+    { status: 'pending', seen: false });
+  for (const change of [{ hash: OTHER_BLOCK_HASH }, { from: 'invalid' }, { to: 'invalid' }, { chainId: '0x1' }]) {
+    const { state, providerFetch } = fixture();
+    state.receipt = null;
+    state.transaction = { hash: HASH, from: WALLET, to: OTHER, value: '0x0', blockNumber: null, input: '0x1234', ...change };
+    await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch, onSeen));
+  }
+  for (const change of [{ transactionHash: OTHER_BLOCK_HASH }, { blockNumber: null }, { status: 'invalid' }]) {
+    const { state, providerFetch } = fixture();
+    state.receipt = { ...state.receipt, ...change };
+    await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch, onSeen));
+  }
+  const wrongChain = fixture();
+  wrongChain.state.chain = 1;
+  await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), wrongChain.providerFetch, onSeen));
+  assert.equal(seen, 0);
+});
+
+test('pending presence is persisted before malformed calldata or ownership verification can fail', async () => {
+  for (const malformed of [false, true]) {
+    const { state, providerFetch } = fixture();
+    state.receipt = null;
+    state.transaction = { hash: HASH, from: WALLET, to: CONTRACT, value: '0x0', blockNumber: null,
+      input: malformed ? '0xzz' : encodeCall(ETHEREUM_FUNCTIONS.unboxCrate, ['uint256'], [111112]) };
+    let seen = 0;
+    const failingFetch: typeof fetch = async (input, init) => {
+      const { method } = JSON.parse(String(init?.body));
+      if (method === 'eth_call') {
+        assert.equal(seen, 1);
+        return Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Ownership lookup unavailable' } });
+      }
+      return providerFetch(input, init);
+    };
+    await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), failingFetch, async () => { seen++; }));
+    assert.equal(seen, 1);
+  }
+});
+
+test('receipt presence is awaited before canonical checks even for failed or unrelated receipts', async () => {
+  for (const outcome of ['unpack', 'reverted', 'not_unpack'] as const) {
+    const { state, providerFetch } = fixture();
+    state.receipt = { ...state.receipt, status: outcome === 'reverted' ? '0x0' : '0x1',
+      logs: outcome === 'unpack' ? crateLogs() : [] };
+    const entered = Promise.withResolvers<void>(), persisted = Promise.withResolvers<void>();
+    let seen = 0;
+    const failingFetch: typeof fetch = async (input, init) => {
+      const { method } = JSON.parse(String(init?.body));
+      if (method === 'eth_blockNumber' || method === 'eth_getBlockByNumber') {
+        assert.equal(seen, 1);
+        return Response.json({ jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Canonical block unavailable' } });
+      }
+      return providerFetch(input, init);
+    };
+    const inspecting = inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), failingFetch, async () => {
+      entered.resolve();
+      await persisted.promise;
+      seen++;
+    });
+    await entered.promise;
+    try {
+      assert.deepEqual(state.calls.map(call => call.method).sort(), ['eth_chainId', 'eth_getTransactionReceipt']);
+      persisted.resolve();
+      await assert.rejects(inspecting);
+      assert.equal(seen, 1);
+    } finally { persisted.resolve(); await inspecting.catch(() => undefined); }
+  }
+});
+
+test('receipt presence alone never authorizes reveal when canonical or unpack evidence is invalid', async () => {
+  for (const noncanonical of [false, true]) {
+    const { state, providerFetch } = fixture();
+    let seen = 0;
+    if (noncanonical) state.canonical = OTHER_BLOCK_HASH;
+    else state.receipt = { ...state.receipt, logs: crateLogs().slice(1) };
+    const inspecting = inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch, () => { seen++; });
+    if (noncanonical) assert.deepEqual(await inspecting, { status: 'pending', seen: true });
+    else await assert.rejects(inspecting);
+    assert.equal(seen, 1);
+  }
+});
+
+test('a presence persistence failure stops inspection before further RPC', async () => {
+  const { state, providerFetch } = fixture();
+  const failure = new Error('Presence storage unavailable');
+  await assert.rejects(inspectRevealTransaction(ENV, DEPLOYMENT, HASH, signal(), providerFetch, async () => { throw failure; }), error => error === failure);
+  assert.deepEqual(state.calls.map(call => call.method).sort(), ['eth_chainId', 'eth_getTransactionReceipt']);
 });
 
 test('recovery uses indexed mint provenance and does not classify partially searched minted tokens as unminted', async () => {

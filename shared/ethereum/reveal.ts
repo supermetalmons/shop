@@ -48,3 +48,7 @@ export type EthereumRevealTokensResponse = EthereumRevealScope & {
   unresolved: Array<{ tokenId: string; status: 'recovering' | 'unminted' }>;
   retryAfterMs: number;
 };
+export type EthereumRevealResult<T> =
+  | { kind: 'ready'; value: T }
+  | { kind: 'admission' }
+  | { kind: 'capacity' };
