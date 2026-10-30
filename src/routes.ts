@@ -59,6 +59,7 @@ type AppRouteKind =
   | 'nfc'
   | 'fulfillment'
   | 'notify'
+  | 'direct-payment'
   | 'wip';
 
 export type ResolvedAppRoute = {
@@ -135,6 +136,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
+  if (path === '/111111') return createRoute('direct-payment', path, replacementHref);
   if (path === '/checkout' || path.startsWith('/checkout/')) {
     return createRoute('checkout', path, replacementHref, {
       checkoutId: path === '/checkout' ? undefined : path.slice('/checkout/'.length),

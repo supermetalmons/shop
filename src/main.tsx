@@ -15,6 +15,7 @@ import { WalletContextProvider } from './wallet/WalletContext';
 import './styles.css';
 
 const DrifApp = React.lazy(() => import('./DrifApp'));
+const DirectPaymentPage = React.lazy(() => import('./ethereum/DirectPaymentPage'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
 const CheckoutPage = React.lazy(() => import('./checkout/CheckoutPage'));
 
@@ -22,7 +23,7 @@ function RoutedApp() {
   const route = useAppRoute();
 
   React.useEffect(() => {
-    if (route.kind === 'notify') return;
+    if (route.kind === 'notify' || route.kind === 'direct-payment') return;
     document.body.classList.remove('drif-body');
   }, [route.kind]);
 
@@ -34,6 +35,13 @@ type RoutedContentProps = {
 };
 
 function RoutedContent({ route }: RoutedContentProps) {
+  if (route.kind === 'direct-payment') {
+    return (
+      <React.Suspense key={route.kind} fallback={null}>
+        <DirectPaymentPage />
+      </React.Suspense>
+    );
+  }
   if (route.kind === 'checkout') {
     return (
       <React.Suspense fallback={null}>

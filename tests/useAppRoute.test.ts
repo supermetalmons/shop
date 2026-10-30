@@ -15,6 +15,37 @@ beforeEach(() => window.history.replaceState(null, '', '/'));
 afterEach(cleanup);
 after(() => dom.window.close());
 
+test('direct payment loads and remounts at its standalone route without URL replacement', () => {
+  const href = 'https://mons.shop/111111/?from=direct#artwork';
+  window.history.replaceState({ retained: true }, '', href);
+  for (let load = 0; load < 2; load += 1) {
+    const view = renderHook(useAppRoute);
+    assert.equal(view.result.current.kind, 'direct-payment');
+    assert.equal(view.result.current.path, '/111111');
+    assert.equal(view.result.current.drop, null);
+    assert.equal(view.result.current.ethereumDropId, undefined);
+    assert.equal(view.result.current.replacementHref, null);
+    assert.equal(window.location.href, href);
+    assert.deepEqual(window.history.state, { retained: true });
+    view.unmount();
+  }
+});
+
+test('navigation can enter and leave the direct payment route', () => {
+  const view = renderHook(useAppRoute);
+  act(() => navigate('/111111'));
+  assert.equal(view.result.current.kind, 'direct-payment');
+  act(() => navigate('/notify_me'));
+  assert.equal(view.result.current.kind, 'notify');
+  act(() => {
+    window.history.replaceState(null, '', '/111111');
+    window.dispatchEvent(new dom.window.PopStateEvent('popstate'));
+  });
+  assert.equal(view.result.current.kind, 'direct-payment');
+  act(() => navigate('/'));
+  assert.equal(view.result.current.kind, 'home');
+});
+
 test('checkout entries and sessions remain standalone and track query and history changes', () => {
   const firstId = '78f6e575-2779-43be-9829-03e8df204532';
   const secondId = 'e630e5e4-77f3-494a-abfd-6b59883e6e1c';
