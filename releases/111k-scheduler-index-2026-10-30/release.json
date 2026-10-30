@@ -1,0 +1,68 @@
+{
+  "verifiedAt": "2026-10-30T13:14:48.255Z",
+  "sourceCommit": "7f77643ffe26edea43f92a2319273b0cb9dda0e8",
+  "apiVersion": "6aa97d33-259c-4fef-a88c-be3e24c3d643",
+  "deploymentId": "82e29b2c-d392-40e5-b159-4a12b8d46152",
+  "trafficPercentage": 100,
+  "worker": "mons-shop-api",
+  "apiBaseUrl": "https://api.mons.shop",
+  "change": "Add receipt_unresolved_due so receipt scheduling and next-wake queries exclude resolved history.",
+  "validation": {
+    "apiTests": 2819,
+    "nativeRuntimeTests": 42,
+    "generatedSchemas": "passed",
+    "apiTypes": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "productionDatabaseIntegrity": "passed",
+    "schedulerQueryPlans": "passed",
+    "existingLedgerIndexUpgrade": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "durableObjectIndex": "created automatically when each object initializes"
+  },
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "frozenToken": {
+      "tokenId": "260",
+      "status": 200,
+      "identicalToBaseline": true,
+      "responseSha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66"
+    },
+    "transaction": {
+      "transactionHash": "0x08fe2f87f6498eba24df0c8bc35137f853cd743840e7df8d016fdb9d013aa293",
+      "status": 200,
+      "artworkCount": 20,
+      "identicalToBaseline": true,
+      "responseSha256": "c23ece611ef9feca90c5f95a7e1ee4d2ec4082f5c62afc75382456f7a08ed532"
+    },
+    "metadata": {
+      "tokenId": "260",
+      "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48",
+      "identicalToBaseline": true
+    },
+    "cors": {
+      "allowedOrigins": [
+        "https://vvv.so",
+        "https://www.vvv.so"
+      ],
+      "preflightStatus": 204,
+      "deniedOriginStatus": 403
+    }
+  },
+  "frontendDeploymentRequired": false,
+  "onchainDeploymentRequired": false,
+  "historicalBackfill": false
+}
