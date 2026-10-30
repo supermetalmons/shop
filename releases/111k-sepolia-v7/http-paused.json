@@ -1,0 +1,43 @@
+{
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v7/",
+    "deploymentBlock": 12029091,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": false,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "reliquaryPriceWei": "8800000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "owner": null,
+    "allocatedCrates": 0,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": false,
+    "remainingCrates": 5555,
+    "remainingWarehouses": 505,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "reliquariesMinted": 0,
+    "reliquaryPriceWei": "8800000000000000",
+    "remainingReliquaries": 30
+  },
+  "checkedAt": "2026-10-30T20:54:26.125Z"
+}

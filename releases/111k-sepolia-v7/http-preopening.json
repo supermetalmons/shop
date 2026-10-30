@@ -1,0 +1,110 @@
+{
+  "config": {
+    "dropId": "111k_devnet",
+    "chainId": 11155111,
+    "chainName": "Sepolia",
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "metadataBaseUri": "https://cdn.mons.shop/111k-sepolia/v7/",
+    "deploymentBlock": 12029091,
+    "explorerUrl": "https://sepolia.etherscan.io",
+    "walletRpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
+    "enabled": true,
+    "testnet": true,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "reliquaryPriceWei": "8800000000000000",
+    "deliveryFeeWei": "100000000000000",
+    "confirmationBlocks": 3,
+    "maxMintQuantity": 15,
+    "maxUnboxQuantity": 15,
+    "maxDeliveryItems": 50
+  },
+  "stats": {
+    "chainId": 11155111,
+    "contractAddress": "0xc7571e9dc4b1cd646d092d51cfa89a76a6461fec",
+    "owner": null,
+    "allocatedCrates": 0,
+    "warehousesMinted": 0,
+    "artworksMinted": 0,
+    "cratePriceWei": "100000000000000",
+    "warehousePriceWei": "1100000000000000",
+    "saleActive": false,
+    "remainingCrates": 5555,
+    "remainingWarehouses": 505,
+    "discountMerkleRoot": "0x8f11db52cdc1977aaf2417edf0e40f2ac9e4adebef100b84aeda2bb705790f3b",
+    "discountCratePriceWei": "50000000000000",
+    "discountAllowance": 1,
+    "discountUsed": 0,
+    "reliquariesMinted": 0,
+    "reliquaryPriceWei": "8800000000000000",
+    "remainingReliquaries": 30
+  },
+  "samples": [
+    {
+      "kind": "artwork",
+      "displayId": 1,
+      "metadata": {
+        "name": "1",
+        "image": "https://wip.lil.org/111k/artwork_placeholder.png",
+        "description": "",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "artwork",
+      "displayId": 111111,
+      "metadata": {
+        "name": "111111",
+        "image": "https://wip.lil.org/111k/artwork_placeholder.png",
+        "description": "",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "painting"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "artwork_receipt",
+      "displayId": 222222,
+      "metadata": {
+        "name": "Receipt #222222",
+        "image": "https://wip.lil.org/111k/artwork_placeholder_receipt.webp",
+        "description": "",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "receipt"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "reliquary",
+      "displayId": 30,
+      "metadata": {
+        "name": "Reliquary #30",
+        "image": "https://wip.lil.org/111k/monuments/30.webp",
+        "description": "",
+        "attributes": [
+          {
+            "trait_type": "type",
+            "value": "reliquary"
+          }
+        ]
+      }
+    }
+  ],
+  "inventory": {
+    "items": [],
+    "nextCursor": null,
+    "observedBlock": 12029239
+  },
+  "checkedAt": "2026-10-30T21:04:46.196Z"
+}

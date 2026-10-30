@@ -1,0 +1,22 @@
+{
+  "api": {
+    "id": "d510e0a6-3d68-4ab7-a22c-7ed51d5cda81",
+    "createdAt": "2026-10-30T20:52:38.113496Z",
+    "versions": [
+      {
+        "version_id": "10232484-7006-4d94-91eb-9402e3aff703",
+        "percentage": 100
+      }
+    ]
+  },
+  "frontend": {
+    "id": "4fd9bb54-101a-40b0-bca4-c7840866e4ec",
+    "createdAt": "2026-10-30T20:54:33.106033Z",
+    "versions": [
+      {
+        "version_id": "0012fdc6-4c6e-45cb-a899-554aefe2504b",
+        "percentage": 100
+      }
+    ]
+  }
+}

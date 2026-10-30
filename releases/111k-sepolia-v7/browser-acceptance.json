@@ -1,0 +1,17 @@
+{
+  "url": "https://mons.shop/111k_devnet",
+  "reliquarySelectorPresent": true,
+  "allThreeContainerKindsPresent": true,
+  "closedSaleObserved": true,
+  "publicMintEnabledObserved": true,
+  "reliquariesRemainingObserved": 30,
+  "reliquaryPriceEth": "0.0088",
+  "walletConnected": false,
+  "mintButtonClicked": false,
+  "liveQaMints": 0,
+  "screenshots": [
+    "storefront-paused.jpg",
+    "storefront-open.jpg"
+  ],
+  "checkedAt": "2026-10-30T21:16:18.086Z"
+}

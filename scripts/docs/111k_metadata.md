@@ -1,6 +1,6 @@
 # 111K offchain metadata
 
-The [minimal metadata release](../../releases/111k-minimal-metadata/README.md) records the existing publication, application compatibility, verification, and rollback evidence. The [reliquary metadata preparation](../../releases/111k-reliquaries/metadata-validation.json) records the regenerated collection for the next deployment.
+The [v7 release](../../releases/111k-sepolia-v7/README.md) records the live Sepolia collection and its complete publication at `https://cdn.mons.shop/111k-sepolia/v7/`. That registered prefix is now owned by its reveal publisher. The [reliquary metadata preparation](../../releases/111k-reliquaries/metadata-validation.json) records the generated six-kind baseline; the [minimal metadata release](../../releases/111k-minimal-metadata/README.md) remains historical publication evidence.
 
 All 30 reliquary JSONs (`117172.json`–`117201.json`) are published and verified as previews under `https://cdn.mons.shop/111k-sepolia/reliquaries-v1/` and `https://cdn.mons.shop/111k/reliquaries-v1/`. The [publication report](../../releases/111k-reliquaries/publication.json) records this selected-object upload; neither prefix contains a complete collection. Deployment IDs are globally unique across networks, so future deployments use distinct IDs such as `v7` and `mainnet-reliquaries-v1`, with matching prefix suffixes. Publish and verify all 344978 objects at each new prefix before deployment and registration. The existing reveal-managed Sepolia prefix remains associated with its original deployment.
 
@@ -52,6 +52,8 @@ The image filenames above are rooted at `https://wip.lil.org/111k/`. Names are J
 The API, storefront, checkout, and fulfillment readers accept absolute HTTPS image URLs from any host, without embedded credentials. Existing SVG data images remain supported. A future image-host change requires updating the templates and publishing again; it does not require changing a host allowlist. Images used in fulfillment PNG exports must permit anonymous cross-origin reads. Check image responses and a real export before publishing a new host or media format.
 
 ## Generate and publish
+
+The `v7` commands below document its initial publication. For a later replacement, choose a new globally unique deployment ID and substitute its prefix before running upload or registration; do not republish the registered `v7` prefix.
 
 After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
 
