@@ -1,0 +1,227 @@
+{
+  "verifiedAt": "2026-10-30T16:37:10.118929Z",
+  "sourceCommit": "813963b3766d46035239267f4629bae411b9bcf8",
+  "apiVersion": "7d09aa94-cdc0-48c3-a48a-b7bd100da389",
+  "trafficPercentage": 100,
+  "worker": "mons-shop-api",
+  "apiBaseUrl": "https://api.mons.shop",
+  "deploymentId": "e97b6579-e739-4834-b3e3-c96ee3284d4f",
+  "deployedAt": "2026-10-30T16:33:46.337915Z",
+  "validation": {
+    "apiTests": 2867,
+    "nativeRuntimeTests": 42,
+    "generatedSchemas": "passed",
+    "apiTypes": "passed",
+    "apiBundle": "passed",
+    "apiStartup": "passed",
+    "productionDatabaseIntegrity": "passed"
+  },
+  "migrations": {
+    "data": "already-current",
+    "ops": "already-current",
+    "commerce": "already-current",
+    "durableObjectMigrationTag": "ethereum-reveal-publisher-v1",
+    "coordinatorMigrationReady": true
+  },
+  "bindings": [
+    {
+      "class_name": "EthereumRevealObject",
+      "name": "ETHEREUM_REVEAL",
+      "namespace_id": "3069209712b34c9095def4ef9c2c1a90",
+      "type": "durable_object_namespace"
+    },
+    {
+      "class_name": "EthereumRevealPublisherObject",
+      "name": "ETHEREUM_REVEAL_PUBLISHER",
+      "namespace_id": "d59b98aded804535b10bdfae5dee53fd",
+      "type": "durable_object_namespace"
+    },
+    {
+      "class_name": "EthereumRevealVerifierObject",
+      "name": "ETHEREUM_REVEAL_VERIFIER",
+      "namespace_id": "512e7afa473642e78e817a21adf1e7dc",
+      "type": "durable_object_namespace"
+    }
+  ],
+  "registry": {
+    "deploymentId": "sepolia-8b4044db",
+    "state": "active",
+    "revision": 3,
+    "lastError": null
+  },
+  "apiSmoke": {
+    "verifiedAt": "2026-10-30T16:34:49.347Z",
+    "phase": "verify",
+    "scope": {
+      "chainId": 11155111,
+      "contractAddress": "0x8b4044dbd10c05d84d067208980de58e9d5fe915"
+    },
+    "transactionHash": "0x08fe2f87f6498eba24df0c8bc35137f853cd743840e7df8d016fdb9d013aa293",
+    "passed": true,
+    "samples": {
+      "frozenToken": {
+        "status": 200,
+        "durationMs": 1564,
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "bodySha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "identicalToBaseline": true
+      },
+      "transaction": {
+        "status": 200,
+        "durationMs": 2155,
+        "sha256": "c23ece611ef9feca90c5f95a7e1ee4d2ec4082f5c62afc75382456f7a08ed532",
+        "bodySha256": "c23ece611ef9feca90c5f95a7e1ee4d2ec4082f5c62afc75382456f7a08ed532",
+        "identicalToBaseline": true
+      },
+      "tokenBatch": {
+        "status": 200,
+        "durationMs": 2430,
+        "sha256": "8bdac2eb7a8164c7d56a93eac2c2deeb7c5326af1e989fa7da933d841bdae1d6",
+        "bodySha256": "8bdac2eb7a8164c7d56a93eac2c2deeb7c5326af1e989fa7da933d841bdae1d6",
+        "identicalToBaseline": true
+      },
+      "repeatedToken": {
+        "status": 200,
+        "durationMs": 823,
+        "sha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "bodySha256": "8a0f1a9683c46a3649d2d33a31561d01cbce9ec2324bdd59a9a44e32b81f8a66",
+        "identicalToBaseline": true
+      },
+      "frozenMetadata": {
+        "status": 200,
+        "durationMs": 455,
+        "sha256": "ac0375d3b16ce9345d8525706d6a82ad2df9a9c62e7f094ed538449bf0510e48",
+        "bodySha256": "79e00fb1b1072d91bc32cc5684e23016b8df801114c1bbd944b84300608c7809",
+        "identicalToBaseline": true
+      },
+      "historicalMetadata": {
+        "status": 200,
+        "durationMs": 470,
+        "sha256": "ee3d3f43808a2bcfb82c1897e7fd4e53a4fe0d89c7f0ad6f533437ba1f8b43f4",
+        "bodySha256": "00870f4695d80e329a7e87fb3fb2cadf3204a725719a09e6fc32aa02eefc0dda",
+        "identicalToBaseline": true
+      },
+      "frozenMetadataApi": {
+        "status": 200,
+        "durationMs": 2830,
+        "sha256": "1fb2b88b8955697c46705086072869b5a2f63f7aaa3eaa813065addd7a211457",
+        "bodySha256": "1fb2b88b8955697c46705086072869b5a2f63f7aaa3eaa813065addd7a211457",
+        "identicalToBaseline": true
+      },
+      "historicalMetadataApi": {
+        "status": 200,
+        "durationMs": 3244,
+        "sha256": "76632e77e58dbaebcb0c07085873522d641e4e3bc6e14d705c94764ba2a70b28",
+        "bodySha256": "76632e77e58dbaebcb0c07085873522d641e4e3bc6e14d705c94764ba2a70b28",
+        "identicalToBaseline": true
+      }
+    },
+    "artworkCount": 20,
+    "transactionMatchesTokens": true,
+    "unminted": [
+      {
+        "tokenId": "111111",
+        "status": "recovering"
+      }
+    ],
+    "unmintedAttempts": 25,
+    "unmintedResolved": false,
+    "warnings": [
+      "Token 111111 remains recovering after bounded polling. This was observed before deployment."
+    ],
+    "historicalToken1StillUnrevealed": true,
+    "metadataApi": {
+      "matchesCdn": true,
+      "chainRequestsMeasured": false,
+      "verificationLimit": "Live responses verify metadata behavior; chain-free execution is covered by source and local tests, not live RPC instrumentation."
+    },
+    "cors": {
+      "allowedOrigins": [
+        "https://vvv.so",
+        "https://www.vvv.so"
+      ],
+      "preflightStatus": 204,
+      "wwwPreflightStatus": 204,
+      "deniedOriginStatus": 403
+    },
+    "completedAt": "2026-10-30T16:35:54.762Z"
+  },
+  "recoveryHealth": {
+    "scriptVersion": {
+      "id": "7d09aa94-cdc0-48c3-a48a-b7bd100da389"
+    },
+    "outcome": "ok",
+    "health": {
+      "event": "ethereum_reveal_recovery_health",
+      "deploymentId": "sepolia-8b4044db",
+      "ready": true,
+      "seeded": 111111,
+      "available": 110871,
+      "reserved": 0,
+      "frozen": 240,
+      "publication": {
+        "published": 240
+      },
+      "recovery": {
+        "migrationReady": true,
+        "migration": {
+          "phase": "ready",
+          "cursor": "",
+          "rowKey": null,
+          "offset": 0
+        },
+        "opaque": 0,
+        "opaqueCapacity": {
+          "used": 0,
+          "limit": 10000,
+          "available": 10000
+        },
+        "crates": {
+          "observed": 12
+        },
+        "due": {
+          "active": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          },
+          "background": {
+            "receiptJobs": 0,
+            "scanJobs": 0,
+            "oldestDueAgeMs": 0
+          }
+        },
+        "dispatch": {
+          "limit": 64,
+          "inFlight": 0,
+          "active": 0,
+          "background": 0,
+          "pauseUntilMs": 0,
+          "nextRecoveryMs": null,
+          "earliestLeaseUntilMs": null
+        }
+      }
+    }
+  },
+  "knownPreexistingObservation": {
+    "tokenId": "111111",
+    "beforeDeployment": [
+      {
+        "tokenId": "111111",
+        "status": "recovering"
+      }
+    ],
+    "afterDeployment": [
+      {
+        "tokenId": "111111",
+        "status": "recovering"
+      }
+    ],
+    "beforeAttempts": 15,
+    "afterAttempts": 25,
+    "details": "The token lookup stayed recovering through bounded polling before and after deployment. No artwork was disclosed for this token. This rollout does not establish its recovery completion."
+  },
+  "frontendDeploymentRequired": false,
+  "onchainDeploymentRequired": false,
+  "historicalBackfill": false
+}

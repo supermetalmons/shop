@@ -37,7 +37,17 @@ Metadata URIs now come from the validated deployment prefix and decimal token ID
 
 Validation passed 2,867 API unit tests, 42 native-runtime tests, 5,004 application tests, frontend worker/client checks, type/generated-schema checks, API dry-run/startup checks, browser bundle validation, and dead-code checks. [validation.json](validation.json) records the environments, the configuration-test recheck, and Anvil results. The full application checks use the workspace Node 26 runtime; the benchmark uses the same pinned Node 22 runtime for both implementations.
 
-Wrangler and Miniflare are pinned together to support `durable_object_io_tasks_prevent_eviction`. The verifier and publisher namespace migrations are additive; existing collection ledgers and frozen metadata remain in place. The coordinator adds dispatch and publication-claim fields on initialization. No new D1 migration or contract change is required. These changes have been validated locally and have not been deployed.
+Wrangler and Miniflare are pinned together to support `durable_object_io_tasks_prevent_eviction`. The verifier and publisher namespace migrations are additive; existing collection ledgers and frozen metadata remain in place. The coordinator adds dispatch and publication-claim fields on initialization. No new D1 migration or contract change is required. The API rollout is verified below; no frontend or contract deployment was required.
+
+## Production rollout
+
+Source commit `813963b3766d46035239267f4629bae411b9bcf8` is deployed at `api.mons.shop` as version `7d09aa94-cdc0-48c3-a48a-b7bd100da389`, serving 100% of traffic. [release.json](release.json) records the deployment, live checks, namespaces, and health snapshot.
+
+The release workflow passed all 2,867 API tests, 42 native-runtime tests, generated-schema/type/bundle/startup checks, and production database integrity checks. D1 migrations were already current. Both new Durable Object namespaces are present, and the coordinator reports migration ready, a 64-inspection ceiling, and all 240 existing frozen artworks published.
+
+Live transaction and token responses still agree on all 20 known artworks. Repeated reads, metadata API responses, and token 260's CDN checksum are unchanged. Token 1 remains a placeholder. Both VVV origins and preflights pass; an unrelated origin is rejected. No historical reveal backfill was performed.
+
+A pre-existing observation remains: token 111111 returned `recovering` throughout bounded polling both before deployment (15 attempts) and afterward (25 attempts over approximately 65 seconds). Its response disclosed no artwork. The rollout does not claim that lookup completed; the observation is retained explicitly in the release record.
 
 ## Reproduce
 
