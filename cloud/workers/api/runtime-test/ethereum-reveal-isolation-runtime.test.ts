@@ -298,12 +298,25 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
       const beforeObjects = await objects();
       const future = Date.now() + 86_400_000;
       for (const scope of SCOPES) {
+        await (await storage(scope)).exec('UPDATE reveal_dispatch_control SET pause_until_ms=? WHERE id=1', future);
+      }
+      await waitFor('Recovery claims did not drain before restart', async () => {
+        const claims = await Promise.all(SCOPES.map(async scope => (await (await storage(scope)).exec<{ count: number }>(
+          `SELECT (SELECT COUNT(*) FROM receipt_work WHERE claim_id IS NOT NULL AND lease_until_ms>?)
+            +(SELECT COUNT(*) FROM recovery_jobs WHERE claim_id IS NOT NULL AND lease_until_ms>?)
+            +(SELECT COUNT(*) FROM crate_recovery_jobs WHERE scan_claim_id IS NOT NULL AND scan_lease_until_ms>?) AS count`,
+          Date.now(), Date.now(), Date.now()))[0].count));
+        return claims.every(count => count === 0);
+      });
+      for (const scope of SCOPES) {
         const db = await storage(scope);
-        await db.exec('UPDATE receipt_work SET next_check_ms=?,active_until_ms=0 WHERE claim_id IS NULL', future);
+        await db.exec('UPDATE receipt_work SET next_check_ms=?,active_until_ms=0', future);
         await db.exec('UPDATE crate_candidates SET next_check_ms=?', future);
         await db.exec('UPDATE crate_recovery_jobs SET receipt_due_ms=?,scan_due_ms=NULL,active_until_ms=0', future);
+        await db.exec('UPDATE recovery_jobs SET next_check_ms=?,active_until_ms=0', future);
         await db.exec("UPDATE publication SET status='pending',next_check_ms=? WHERE token_id IN ('1','20')", future);
         await env.ETHEREUM_REVEAL_METADATA.delete(metadataKey(scope, 20));
+        await db.exec('UPDATE reveal_dispatch_control SET pause_until_ms=0 WHERE id=1');
       }
       await runtime.update({ root: directory, workers: [{ config: { ...config,
         vars: { ...config.vars, LOCAL_ISOLATION_RESTART: '1' } } }] });
@@ -320,7 +333,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
         assert.deepEqual(current.assignments, before[index].assignments);
         assert.deepEqual(current.pools, before[index].pools);
       }
-      assert.equal(rpcCalls.length, callsBefore);
+      assert.equal(rpcCalls.length, callsBefore, JSON.stringify(rpcCalls.slice(callsBefore)));
       await Promise.all(SCOPES.map(async scope => {
         await (await storage(scope)).exec("UPDATE publication SET next_check_ms=0 WHERE status='pending'");
         await env.ETHEREUM_REVEAL.getByName(objectName(scope)).watchdog(deployments.get(scope.deploymentId)!);
@@ -329,7 +342,7 @@ test('native reveal isolates old Sepolia, replacement Sepolia and mainnet with o
       await assertMetadata([40, 40, 40]);
       const afterObjects = await objects();
       for (const [key, value] of Object.entries(beforeObjects)) assert.deepEqual(afterObjects[key], value);
-      assert.equal(rpcCalls.length, callsBefore);
+      assert.equal(rpcCalls.length, callsBefore, JSON.stringify(rpcCalls.slice(callsBefore)));
     });
     assert.deepEqual(rpcErrors, []);
     t.diagnostic(JSON.stringify({ runtime: 'native-workerd', deployments: 3, overlappingTokenId: '1', overlappingCrateId: '111112',
