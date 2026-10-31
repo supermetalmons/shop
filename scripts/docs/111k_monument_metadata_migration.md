@@ -6,6 +6,8 @@ Use the existing R2 credentials accepted by `ethereum:metadata`, plus Cloudflare
 
 Run the migration before publishing or registering another namespace. Discovery includes both roots, every canonical child namespace returned by paginated R2 listing, and all registered mainnet/Sepolia prefixes. A changed namespace set, object-key coverage, or immutable deployment identity invalidates the saved plan.
 
+Read-only namespace and inventory scans use sixteen concurrent lexicographic ranges with roughly 10,000 canonical filenames per range. The first range has no lower bound and the final range has no upper bound, so unexpected keys and namespaces remain discoverable. Inventory checksums consume the results in lexical order regardless of request completion order. Each completed range reports progress.
+
 ```sh
 npm run ethereum:metadata:rename-monuments -- plan --directory .cache/111k-metadata/monument-wording-v1
 npm run ethereum:metadata:rename-monuments -- apply --directory .cache/111k-metadata/monument-wording-v1 --write

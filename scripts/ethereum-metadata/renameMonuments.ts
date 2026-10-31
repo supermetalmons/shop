@@ -6,11 +6,12 @@ import { pathToFileURL } from 'node:url';
 import { parseEthereumRevealDeployment, type EthereumRevealDeployment } from '../../shared/ethereum/revealDeployment.ts';
 import { createAsyncD1MaintenanceQuery } from '../shared/asyncD1MaintenanceQuery.ts';
 import type { CommerceAuthorityQuery } from '../shared/commerceD1Maintenance.ts';
+import { metadataIdentities } from './catalog.ts';
 import { withMetadataLock } from './lock.ts';
 import { acquireMetadataPublicationLease, type MetadataPublicationLease } from './publicationLease.ts';
 import {
   environmentStorage, metadataMd5, metadataPrefix, uploadWithConcurrency,
-  type MetadataNamespaceStorage, type MetadataNetwork, type RemoteObject, type UploadDestination,
+  type MetadataListRange, type MetadataNamespaceStorage, type MetadataNetwork, type RemoteObject, type UploadDestination,
 } from './storage.ts';
 
 const ROOTS = ['111k/', '111k-sepolia/'];
@@ -19,6 +20,9 @@ const LAST_LEGACY_TOKEN = 117_201;
 const MAX_BYTES = 128 * 1024;
 const REGISTRY_SQL = 'SELECT * FROM ethereum_reveal_deployments WHERE chain_id IN (1, 11155111) ORDER BY metadata_base_uri';
 const MIGRATION = 'monument-wording-v1';
+const SCAN_CONCURRENCY = 16;
+const SCAN_BOUNDARIES = Array.from(metadataIdentities(), object => object.file).sort()
+  .filter((_, index, files) => (index + 1) % 10_000 === 0 || index === files.length - 1);
 type RegistryIdentity = Pick<EthereumRevealDeployment, 'deploymentId' | 'chainId' | 'contractAddress' |
   'metadataBaseUri' | 'deploymentBlock' | 'catalogVersion' | 'templateJson' | 'templateSha256'>;
 type BodySnapshot = { body: string; bytes: number; md5: string; sha256: string };
@@ -91,37 +95,62 @@ function registryIdentity(value: EthereumRevealDeployment): RegistryIdentity {
     templateJson: value.templateJson, templateSha256: value.templateSha256 };
 }
 
+function scanRanges(prefix: string): MetadataListRange[] {
+  return [...SCAN_BOUNDARIES.map((file, index) => ({
+    ...(index ? { startAfter: prefix + SCAN_BOUNDARIES[index - 1] } : {}), endAt: prefix + file,
+  })), { startAfter: prefix + SCAN_BOUNDARIES[SCAN_BOUNDARIES.length - 1] }];
+}
+
 async function discover(deps: Dependencies): Promise<Array<Pick<Scope, 'prefix' | 'network' | 'deployment'>>> {
   const registry = (await deps.query(REGISTRY_SQL)).map(row => registryIdentity(parseEthereumRevealDeployment(row)));
   const deployments = new Map(registry.map(row => [new URL(row.metadataBaseUri).pathname.slice(1), row]));
   if (deployments.size !== registry.length) throw new Error('Duplicate metadata prefix in reveal registry');
   const prefixes = new Set(ROOTS);
   for (const root of ROOTS) {
-    for await (const prefix of deps.storage.prefixes(root)) {
-      if (!prefix.startsWith(root) || prefix === root) throw new Error('Invalid discovered metadata prefix');
-      networkForPrefix(prefix);
-      prefixes.add(prefix);
-    }
+    const ranges = scanRanges(root);
+    let completed = 0;
+    await uploadWithConcurrency(ranges, SCAN_CONCURRENCY, async range => {
+      for await (const prefix of deps.storage.prefixes(root, range)) {
+        if (!prefix.startsWith(root) || prefix === root || range.startAfter !== undefined && prefix <= range.startAfter ||
+          range.endAt !== undefined && prefix > range.endAt) throw new Error('Invalid discovered metadata prefix');
+        networkForPrefix(prefix);
+        prefixes.add(prefix);
+      }
+      deps.progress({ phase: 'discovery-range', prefix: root, completed: ++completed, total: ranges.length });
+    });
   }
   for (const prefix of deployments.keys()) { networkForPrefix(prefix); prefixes.add(prefix); }
   return [...prefixes].sort().map(prefix => ({ prefix, network: networkForPrefix(prefix), deployment: deployments.get(prefix) ?? null }));
 }
 
-async function inventory(storage: MetadataNamespaceStorage, prefix: string) {
+async function inventory(deps: Dependencies, prefix: string) {
   let objectCount = 0;
-  let previous = '';
   const hash = createHash('sha256');
   const objects: RemoteObject[] = [];
-  for await (const object of storage.list(prefix)) {
-    const file = object.key.slice(prefix.length);
-    if (!object.key.startsWith(prefix) || !/^[1-9]\d*\.json$/.test(file) || object.key <= previous) {
-      throw new Error(`Unexpected metadata inventory key: ${object.key}`);
+  const ranges = scanRanges(prefix);
+  const chunks: Array<{ keys: string[]; objects: RemoteObject[] }> = new Array(ranges.length);
+  let completed = 0;
+  await uploadWithConcurrency(ranges.entries(), SCAN_CONCURRENCY, async ([index, range]) => {
+    const chunk = { keys: [] as string[], objects: [] as RemoteObject[] };
+    let previous = range.startAfter ?? '';
+    for await (const object of deps.storage.list(prefix, range)) {
+      const file = object.key.slice(prefix.length);
+      if (!object.key.startsWith(prefix) || !/^[1-9]\d*\.json$/.test(file) || object.key <= previous ||
+        range.endAt !== undefined && object.key > range.endAt) {
+        throw new Error(`Unexpected metadata inventory key: ${object.key}`);
+      }
+      previous = object.key;
+      chunk.keys.push(object.key);
+      const tokenId = Number(file.slice(0, -5));
+      if (tokenId >= FIRST_LEGACY_TOKEN && tokenId <= LAST_LEGACY_TOKEN) chunk.objects.push(object);
     }
-    previous = object.key;
-    hash.update(`${object.key}\n`);
-    objectCount++;
-    const tokenId = Number(file.slice(0, -5));
-    if (tokenId >= FIRST_LEGACY_TOKEN && tokenId <= LAST_LEGACY_TOKEN) objects.push(object);
+    chunks[index] = chunk;
+    deps.progress({ phase: 'inventory-range', prefix, completed: ++completed, total: ranges.length });
+  });
+  for (const chunk of chunks) {
+    for (const key of chunk.keys) hash.update(`${key}\n`);
+    objectCount += chunk.keys.length;
+    objects.push(...chunk.objects);
   }
   return { objectCount, keysSha256: hash.digest('hex'), objects };
 }
@@ -159,7 +188,7 @@ async function checkScopes(plan: MigrationPlan, deps: Dependencies): Promise<voi
   const expected = plan.scopes.map(({ prefix, network, deployment }) => ({ prefix, network, deployment }));
   if (!same(current, expected)) throw new Error('Metadata namespaces or immutable registry identities changed; create a new migration plan');
   for (const scope of plan.scopes) {
-    const observed = await inventory(deps.storage, scope.prefix);
+    const observed = await inventory(deps, scope.prefix);
     if (observed.objectCount !== scope.objectCount || observed.keysSha256 !== scope.keysSha256 ||
       !same(observed.objects.map(object => object.key), scope.objects.map(object => object.key))) {
       throw new Error(`Metadata object coverage changed: ${scope.prefix}`);
@@ -186,7 +215,7 @@ async function createPlan(directory: string, deps: Dependencies) {
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const plan: MigrationPlan = { version: 1, migration: MIGRATION, destination: deps.storage.destination, createdAt: new Date().toISOString(), scopes: [] };
   for (const scope of await discover(deps)) {
-    const observed = await inventory(deps.storage, scope.prefix);
+    const observed = await inventory(deps, scope.prefix);
     const objects: PlannedObject[] = [];
     await uploadWithConcurrency(observed.objects, 8, async object => {
       const before = await deps.storage.get(object.key);
@@ -307,7 +336,7 @@ export function parseMonumentMigrationArgs(argv: string[]): CliArgs {
 
 export async function runMonumentMigration(argv: string[], options: Options = {}) {
   const args = parseMonumentMigrationArgs(argv);
-  const storage = options.storage ?? environmentStorage(8);
+  const storage = options.storage ?? environmentStorage(SCAN_CONCURRENCY);
   if (storage.destination.bucket !== 'cdn-mons-shop') throw new Error('Monument metadata migration requires cdn-mons-shop');
   const query = options.query ?? createAsyncD1MaintenanceQuery('ops');
   const deps: Dependencies = { storage, query, acquireLease: options.acquireLease ?? (uri => acquireMetadataPublicationLease(uri, { query })),

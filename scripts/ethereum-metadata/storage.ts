@@ -17,7 +17,7 @@ export interface MetadataStorage {
 }
 
 export interface MetadataNamespaceStorage extends MetadataStorage {
-  prefixes(root: string): AsyncIterable<string>;
+  prefixes(root: string, range?: MetadataListRange): AsyncIterable<string>;
 }
 
 export function metadataPrefix(network: MetadataNetwork, prefix?: string): string {
@@ -64,21 +64,40 @@ export function metadataMd5(body: Uint8Array): string {
 export class S3MetadataStorage implements MetadataNamespaceStorage {
   constructor(readonly destination: UploadDestination, private readonly client: S3Client) {}
 
-  async *prefixes(root: string): AsyncGenerator<string> {
+  async *prefixes(root: string, range: MetadataListRange = {}): AsyncGenerator<string> {
     if (!['111k/', '111k-sepolia/'].includes(root)) throw new Error('Invalid metadata namespace root');
+    if ((range.startAfter !== undefined && !range.startAfter.startsWith(root)) ||
+      (range.endAt !== undefined && !range.endAt.startsWith(root)) ||
+      (range.startAfter !== undefined && range.endAt !== undefined && range.startAfter >= range.endAt)) {
+      throw new Error('Invalid R2 namespace listing range');
+    }
     let cursor: string | undefined;
+    let previousObject = range.startAfter;
+    let previousNamespace = range.startAfter;
     const seen = new Set<string>();
     do {
       const page = await this.client.send(new ListObjectsV2Command({ Bucket: this.destination.bucket,
-        Prefix: root, Delimiter: '/', MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : {}),
+        Prefix: root, Delimiter: '/', MaxKeys: 1000, ...(cursor ? { ContinuationToken: cursor } : { StartAfter: range.startAfter }),
       }), { abortSignal: AbortSignal.timeout(30_000) });
+      for (const object of page.Contents ?? []) {
+        if (!object.Key?.startsWith(root) || previousObject !== undefined && object.Key <= previousObject) {
+          throw new Error('Invalid R2 namespace object order');
+        }
+        previousObject = object.Key;
+      }
       for (const namespace of page.CommonPrefixes ?? []) {
         const prefix = namespace.Prefix;
         if (!prefix?.startsWith(root) || !/^[a-z0-9][a-z0-9-]{0,63}\/$/.test(prefix.slice(root.length))) {
           throw new Error(`Invalid nested metadata namespace: ${prefix ?? '(missing prefix)'}`);
         }
+        if (range.startAfter !== undefined && prefix <= range.startAfter) throw new Error('Invalid R2 namespace lower bound');
+        if (!seen.has(prefix) && previousNamespace !== undefined && prefix <= previousNamespace) throw new Error('Invalid R2 namespace order');
+        previousNamespace = prefix;
+        if (range.endAt !== undefined && prefix > range.endAt) continue;
         if (!seen.has(prefix)) { seen.add(prefix); yield prefix; }
       }
+      if (range.endAt !== undefined && [...(page.Contents ?? []).map(object => object.Key),
+        ...(page.CommonPrefixes ?? []).map(namespace => namespace.Prefix)].some(key => key !== undefined && key >= range.endAt!)) return;
       if (!page.IsTruncated) break;
       if (!page.NextContinuationToken || page.NextContinuationToken === cursor) throw new Error('Invalid R2 listing continuation');
       cursor = page.NextContinuationToken;

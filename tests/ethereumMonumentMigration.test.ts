@@ -8,7 +8,7 @@ import test, { type TestContext } from 'node:test';
 import type { S3Client } from '@aws-sdk/client-s3';
 import { parseMonumentMigrationArgs, renamedMonumentBody, runMonumentMigration } from '../scripts/ethereum-metadata/renameMonuments.ts';
 import { acquireMetadataPublicationLease, type MetadataPublicationLease, type MetadataWriteFence } from '../scripts/ethereum-metadata/publicationLease.ts';
-import { metadataMd5, S3MetadataStorage, type MetadataNamespaceStorage } from '../scripts/ethereum-metadata/storage.ts';
+import { metadataMd5, S3MetadataStorage, type MetadataListRange, type MetadataNamespaceStorage } from '../scripts/ethereum-metadata/storage.ts';
 
 const sha256 = (body: string | Buffer) => createHash('sha256').update(body).digest('hex');
 const bodyFor = (number: number, renamed = false) => Buffer.from(JSON.stringify({
@@ -24,18 +24,20 @@ class MemoryStorage implements MetadataNamespaceStorage {
   writes: Array<{ key: string; etag: string; fenced: boolean }> = [];
   beforePut?: (key: string) => void;
   afterPut?: (key: string) => void;
-  async *prefixes(root: string) {
+  async *prefixes(root: string, range: MetadataListRange = {}) {
     const found = new Set<string>();
     for (const key of [...this.values.keys()].sort()) {
       if (!key.startsWith(root)) continue;
       const parts = key.slice(root.length).split('/');
       if (parts.length > 1) found.add(root + parts[0] + '/');
     }
-    yield* [...found].sort();
+    yield* [...found].sort().filter(prefix => (range.startAfter === undefined || prefix > range.startAfter) &&
+      (range.endAt === undefined || prefix <= range.endAt));
   }
-  async *list(prefix: string) {
+  async *list(prefix: string, range: MetadataListRange = {}) {
     for (const key of [...this.values.keys()].sort()) {
-      if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/')) continue;
+      if (!key.startsWith(prefix) || key.slice(prefix.length).includes('/') ||
+        range.startAfter !== undefined && key <= range.startAfter || range.endAt !== undefined && key > range.endAt) continue;
       const body = this.values.get(key)!;
       yield { key, bytes: body.length, md5: metadataMd5(body) };
     }
@@ -144,6 +146,37 @@ test('plan discovers both roots, unknown previews and registry-only prefixes wit
   assert.equal(sample.before.md5, metadataMd5(Buffer.from(sample.before.body)));
   assert.equal(sample.after.sha256, sha256(sample.after.body));
   await assert.rejects(f.run('plan'), /already exists/);
+});
+
+test('parallel scans retain numeric namespaces, outer boundaries and the sequential key digest', async t => {
+  const f = await fixture(t);
+  for (const prefix of ['111k/0-first/', '111k/1/', '111k/1111111/', '111k/z-last/']) {
+    f.storage.values.set(prefix + '1.json', Buffer.from('{}'));
+  }
+  f.storage.values.set('111k/999999999.json', Buffer.from('{}'));
+  let active = 0;
+  let maximum = 0;
+  const list = f.storage.list.bind(f.storage);
+  f.storage.list = async function* (prefix, range) {
+    active++; maximum = Math.max(maximum, active);
+    try {
+      await new Promise(resolve => setTimeout(resolve, range?.startAfter ? 1 : 5));
+      yield* list(prefix, range);
+    } finally { active--; }
+  };
+  await f.run('plan');
+  assert.equal(maximum, 16);
+  assert.equal(active, 0);
+  const plan = JSON.parse(await readFile(join(f.directory, 'plan.json'), 'utf8'));
+  for (const scope of plan.scopes) {
+    const keys = [...f.storage.values.keys()].filter(key => key.startsWith(scope.prefix) && !key.slice(scope.prefix.length).includes('/')).sort();
+    assert.equal(scope.objectCount, keys.length);
+    assert.equal(scope.keysSha256, sha256(keys.map(key => `${key}\n`).join('')));
+  }
+  for (const prefix of ['111k/0-first/', '111k/1/', '111k/1111111/', '111k/z-last/']) {
+    assert.ok(plan.scopes.some((scope: any) => scope.prefix === prefix));
+  }
+  assert.equal(f.storage.writes.length, 0);
 });
 
 test('apply preserves coverage, frozen artwork and registry while leasing previews and conditionally renaming every legacy container', async t => {
@@ -282,4 +315,34 @@ test('namespace discovery paginates past direct root objects and validates neste
     const invalid = new S3MetadataStorage(storage.destination, { send: async () => response, destroy() {} } as unknown as S3Client);
     await assert.rejects(async () => { for await (const _prefix of invalid.prefixes('111k/')) {} }, /Invalid/);
   }
+});
+
+test('ranged namespace discovery includes boundaries once, filters the following namespace and stops pagination', async () => {
+  const root = '111k/';
+  const entries = ['111k/0-first/', '111k/1000000.json', '111k/1000000/', '111k/1111111/',
+    '111k/117189.json', '111k/117189/', '111k/99999.json', '111k/z-last/'];
+  const calls: Array<{ StartAfter?: string; ContinuationToken?: string }> = [];
+  const client = { async send(command: { input: { StartAfter?: string; ContinuationToken?: string } }) {
+    const input = command.input; calls.push(input);
+    const start = input.ContinuationToken ? Number(input.ContinuationToken) : entries.findIndex(key => key > (input.StartAfter ?? ''));
+    const selected = start < 0 ? [] : entries.slice(start, start + 2);
+    const next = start + selected.length;
+    return { Contents: selected.filter(key => key.endsWith('.json')).map(Key => ({ Key })),
+      CommonPrefixes: selected.filter(key => key.endsWith('/')).map(Prefix => ({ Prefix })),
+      IsTruncated: next < entries.length, ...(next < entries.length ? { NextContinuationToken: String(next) } : {}) };
+  }, destroy() {} } as unknown as S3Client;
+  const storage = new S3MetadataStorage({ endpoint: 'https://example.invalid', bucket: 'cdn-mons-shop' }, client);
+  const ranges = [{ endAt: '111k/1000000.json' }, { startAfter: '111k/1000000.json', endAt: '111k/117189/' },
+    { startAfter: '111k/117189/' }];
+  const found: string[] = [];
+  for (const range of ranges) for await (const prefix of storage.prefixes(root, range)) found.push(prefix);
+  assert.deepEqual(found, entries.filter(key => key.endsWith('/')));
+  assert.equal(calls.length, 4);
+  assert.equal(calls.filter(call => call.ContinuationToken).length, 1);
+  assert.ok(calls.filter(call => call.ContinuationToken).every(call => call.StartAfter === undefined));
+  for (const range of [{ startAfter: 'other/1' }, { endAt: 'other/1' }, { startAfter: '111k/z', endAt: '111k/a' }]) {
+    await assert.rejects(async () => { for await (const _prefix of storage.prefixes(root, range)) {} }, /Invalid R2 namespace listing range/);
+  }
+  const bad = new S3MetadataStorage(storage.destination, { send: async () => ({ CommonPrefixes: [{ Prefix: '111k/a/' }], IsTruncated: false }), destroy() {} } as unknown as S3Client);
+  await assert.rejects(async () => { for await (const _prefix of bad.prefixes(root, { startAfter: '111k/a/' })) {} }, /lower bound/);
 });
