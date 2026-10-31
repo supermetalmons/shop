@@ -19,25 +19,34 @@ const RPC_ENV_FILES = [new URL('../../.env.local', import.meta.url), new URL('..
 type Args = { command: 'status' | 'register' | 'activate' | 'pause'; write: boolean; deploymentId?: string; expectedRevision?: number; manifest?: string };
 
 export function parseEthereumRevealControlArgs(argv: string[]): Args {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+  const { values, positionals, tokens } = parseArgs({ args: argv, allowPositionals: true, tokens: true, options: {
     write: { type: 'boolean', default: false }, manifest: { type: 'string' }, 'deployment-id': { type: 'string' }, 'expected-revision': { type: 'string' },
   } });
   const command = positionals[0] as Args['command'];
   if (positionals.length !== 1 || !['status', 'register', 'activate', 'pause'].includes(command)) {
-    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause> [--manifest FILE] [--deployment-id ID --expected-revision N] [--write]');
+    throw new Error('Usage: ethereumRevealControl.ts <status|register|activate|pause> [--manifest FILE | --deployment-id ID] [--expected-revision N] [--write]');
+  }
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (token.kind !== 'option') continue;
+    if (seen.has(token.name)) throw new Error(`Duplicate option --${token.name}.`);
+    seen.add(token.name);
   }
   const deploymentId = values['deployment-id'];
   const expectedRevision = values['expected-revision'] === undefined ? undefined : Number(values['expected-revision']);
   if (deploymentId !== undefined && !ETHEREUM_REVEAL_DEPLOYMENT_ID.test(deploymentId)) throw new Error('Invalid deployment ID.');
-  if (command === 'status' && (values.write || values.manifest || expectedRevision !== undefined)) throw new Error('Status only accepts --deployment-id.');
+  if (values.manifest !== undefined && !values.manifest.trim()) throw new Error('Invalid manifest path.');
+  if (values.manifest !== undefined && deploymentId !== undefined) throw new Error('Choose either --manifest or --deployment-id, not both.');
+  if (command === 'status' && (values.write || expectedRevision !== undefined)) throw new Error('Status only accepts --manifest or --deployment-id.');
   if (command === 'register' && (!values.manifest || deploymentId || expectedRevision !== undefined)) throw new Error('Register requires only --manifest and optional --write.');
-  if ((command === 'activate' || command === 'pause') && (!deploymentId || values.manifest || !Number.isSafeInteger(expectedRevision) || expectedRevision! < 1)) {
-    throw new Error('A transition requires --deployment-id and --expected-revision.');
+  if ((command === 'activate' || command === 'pause') && ((!deploymentId && !values.manifest) || !Number.isSafeInteger(expectedRevision) || expectedRevision! < 1)) {
+    throw new Error('A transition requires --manifest or --deployment-id, and --expected-revision.');
   }
   return { command, write: values.write, deploymentId, expectedRevision, manifest: values.manifest };
 }
 
 type Registration = Omit<EthereumRevealDeployment, 'state' | 'revision' | 'createdAtMs' | 'updatedAtMs' | 'activatedAtMs' | 'provisionedAtMs' | 'lastError'>;
+type RegistrationIdentity = Omit<Registration, 'templateJson' | 'templateSha256'>;
 
 export async function ethereumRevealRegistrationRpcKey(env: Readonly<Record<string, string | undefined>> = process.env,
   files: readonly (string | URL)[] = RPC_ENV_FILES): Promise<string> {
@@ -59,7 +68,7 @@ async function verifyRegistrationDeployment(value: Registration): Promise<void> 
     value, AbortSignal.timeout(15_000));
 }
 
-async function loadRegistrationInput(path: string): Promise<{ deployment: Registration; publicationDirectory?: string }> {
+async function loadManifestIdentity(path: string): Promise<{ row: Record<string, unknown>; identity: RegistrationIdentity }> {
   const input: unknown = JSON.parse(await readFile(path, 'utf8'));
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid reveal registration manifest.');
   const row = input as Record<string, unknown>;
@@ -74,6 +83,13 @@ async function loadRegistrationInput(path: string): Promise<{ deployment: Regist
   if (metadataBaseUri !== `https://cdn.mons.shop/${prefix}/${row.deploymentId}/` && metadataBaseUri !== `https://cdn.mons.shop/${prefix}/`) {
     throw new Error('The metadata prefix must use the deployment ID.');
   }
+  return { row, identity: { deploymentId: row.deploymentId, dropId: row.dropId, chainId: row.chainId,
+    contractAddress: address, metadataBaseUri, deploymentBlock: Number(row.deploymentBlock),
+    catalogVersion: ETHEREUM_REVEAL_CATALOG_VERSION } };
+}
+
+async function loadRegistrationInput(path: string): Promise<{ deployment: Registration; publicationDirectory?: string }> {
+  const { row, identity } = await loadManifestIdentity(path);
   if (row.publicationDirectory !== undefined && (typeof row.publicationDirectory !== 'string' || !row.publicationDirectory.trim())) {
     throw new Error('Invalid publicationDirectory.');
   }
@@ -89,8 +105,7 @@ async function loadRegistrationInput(path: string): Promise<{ deployment: Regist
   const rendered = JSON.stringify(template).replaceAll('{{tokenId}}', '1').replaceAll('{{displayId}}', '1');
   if (/\{\{|\}\}/.test(rendered)) throw new Error('Unsupported metadata template substitution.');
   const templateJson = JSON.stringify(template);
-  return { publicationDirectory, deployment: { deploymentId: row.deploymentId, dropId: row.dropId, chainId: row.chainId, contractAddress: address, metadataBaseUri,
-    deploymentBlock: Number(row.deploymentBlock), catalogVersion: ETHEREUM_REVEAL_CATALOG_VERSION,
+  return { publicationDirectory, deployment: { ...identity,
     templateJson, templateSha256: createHash('sha256').update(templateJson).digest('hex') } };
 }
 
@@ -132,7 +147,6 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
 } = {}) {
   const args = parseEthereumRevealControlArgs(argv);
   const query = overrides.query ?? createAsyncD1MaintenanceQuery('ops');
-  if (args.command === 'status') return { deployments: (await query(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL}${args.deploymentId ? ` WHERE deployment_id = ${sqlString(args.deploymentId)}` : ''} ORDER BY created_at_ms, deployment_id`)).map(parseEthereumRevealDeployment) };
   if (args.command === 'register') {
     const { deployment: value, publicationDirectory } = await loadRegistrationInput(args.manifest!);
     const existing = await query(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id = ${sqlString(value.deploymentId)}`);
@@ -159,9 +173,18 @@ export async function runEthereumRevealControl(argv: string[], overrides: {
       return { deployment: parseEthereumRevealDeployment(rows[0]) };
     } finally { await lease.close(); }
   }
-  const rows = await query(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL} WHERE deployment_id = ${sqlString(args.deploymentId!)}`);
-  if (rows.length !== 1) throw new Error('Reveal deployment not found.');
-  const current = parseEthereumRevealDeployment(rows[0]);
+  const target = args.manifest ? (await loadManifestIdentity(args.manifest)).identity : undefined;
+  const deploymentId = target?.deploymentId ?? args.deploymentId;
+  const selector = deploymentId ? ` WHERE deployment_id = ${sqlString(deploymentId)}` : '';
+  const order = args.command === 'status' ? ' ORDER BY created_at_ms, deployment_id' : '';
+  const deployments = (await query(`${ETHEREUM_REVEAL_DEPLOYMENTS_SQL}${selector}${order}`)).map(parseEthereumRevealDeployment);
+  if (target && deployments.some(deployment => !Object.entries(target)
+    .every(([key, value]) => deployment[key as keyof RegistrationIdentity] === value))) {
+    throw new Error('The manifest identity does not match the registered deployment.');
+  }
+  if (args.command === 'status') return { deployments };
+  if (deployments.length !== 1) throw new Error('Reveal deployment not found.');
+  const current = deployments[0];
   const sql = buildEthereumRevealTransition(args.command, current, args.expectedRevision!);
   if (!args.write) return { dryRun: true, command: args.command, deployment: current, sql };
   const updated = await query(sql);

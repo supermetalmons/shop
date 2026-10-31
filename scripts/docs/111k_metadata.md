@@ -55,7 +55,7 @@ The API, storefront, checkout, and fulfillment readers accept absolute HTTPS ima
 
 ## Generate and publish
 
-The commands below use the `v8` publication. Once it is registered, use a new globally unique deployment ID for later replacements; do not republish a registered prefix.
+Choose a new metadata revision directory and a globally unique deployment ID for the next replacement. The currently registered publication is historical input, not an upload destination; do not republish a registered prefix.
 
 After a metadata prefix is registered using the [reveal operations runbook](111k_reveal_ops.md), the reveal publisher owns it permanently. Generic upload and restore refuse all mutations to that prefix. Use a fresh deployment prefix for replacement collections; never reset revealed JSONs to placeholders. Remote mutations require access to the OPS registry and its publication leases.
 
@@ -68,23 +68,28 @@ Generation and publishing share an owner-tracked lock that recovers interrupted 
 After editing the templates, generate and validate a new revision:
 
 ```sh
-metadata_dir=.cache/111k-metadata/monuments-v9
+metadata_revision='<new-metadata-revision>'
+metadata_dir=".cache/111k-metadata/${metadata_revision}"
 npm run ethereum:metadata -- generate --directory "$metadata_dir"
 npm run ethereum:metadata -- validate --directory "$metadata_dir"
 ```
 
 Generation writes deterministic, formatted JSON with a trailing newline, a template snapshot, `objects.jsonl`, and `manifest.json`. The manifest records template hashes, object counts, total bytes, and object-list checksums. Validation checks all 344984 identities, safe numeric filenames, generated contents, sizes, and checksums. Each JSON must fit the readers' 128 KiB limit. Generated files, snapshots, and journals stay in ignored local storage; do not commit hundreds of thousands of JSON files. Monument display IDs 1–18 generate files `117172.json`–`117189.json` with images `monuments/1.webp`–`monuments/18.webp`.
 
-A completed `.cache/111k-metadata/monuments-v9` revision can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
+A completed revision directory can be reused for both networks after validation. Do not rerun generation into a completed directory. A shared generated revision does not imply a shared deployment ID.
 
 Authenticate with `R2_ENDPOINT` or `CLOUDFLARE_ACCOUNT_ID`, and either `R2_ACCESS_KEY_ID` plus `R2_SECRET_ACCESS_KEY`, or `R2_ACCESS_KEY_ID`/`CLOUDFLARE_API_TOKEN_ID` plus `CLOUDFLARE_API_TOKEN`. The latter derives the S3 secret in memory using Cloudflare's documented SHA-256 conversion. Optional `R2_SESSION_TOKEN` supports temporary S3 credentials. The destination bucket is restricted to `cdn-mons-shop`; other `R2_BUCKET` values are rejected. Supply secrets through the environment, never command arguments, tracked files, or reports. See [R2 authentication](https://developers.cloudflare.com/r2/api/tokens/).
 
 Choose a globally unique deployment ID for each network. The examples below use deployment-specific prefixes:
 
 ```sh
-sepolia_prefix=111k-sepolia/v9/
-mainnet_prefix=111k/mainnet-monuments-v1/
+sepolia_deployment_id='<new-sepolia-deployment-id>'
+mainnet_deployment_id='<new-mainnet-deployment-id>'
+sepolia_prefix="111k-sepolia/${sepolia_deployment_id}/"
+mainnet_prefix="111k/${mainnet_deployment_id}/"
 ```
+
+Use the chosen ID and derived prefix in that network's registration manifest. Use the same manifest for registration, status, and activation in the [reveal runbook](111k_reveal_ops.md#registration-and-credentials).
 
 An optional representative sample includes all seven kinds and both monument boundaries:
 
@@ -154,7 +159,7 @@ Unit and native-runtime tests remain offline using small, explicitly synthetic H
 Before remote publication, exercise the monument collection in the Anvil test using the generated metadata directory:
 
 ```sh
-ETHEREUM_111K_E2E_METADATA_DIRECTORY=.cache/111k-metadata/monuments-v9 npm run test:ethereum:e2e
+ETHEREUM_111K_E2E_METADATA_DIRECTORY="$metadata_dir" npm run test:ethereum:e2e
 ```
 
 That test adapter serves the selected generated metadata to the isolated test. Normal local development continues to read the configured CDN. After publication, `ETHEREUM_111K_E2E_METADATA_BASE_URI` selects the new live namespace for the end-to-end test.

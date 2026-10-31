@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { S3Client } from '@aws-sdk/client-s3';
 import test, { type TestContext } from 'node:test';
 import { encodeAbi } from '../shared/ethereum/abi.ts';
+import { checksumEthereumAddress } from '../shared/ethereum/crypto.ts';
 import { ethereumMetadataBaseUri } from '../shared/ethereum/config.ts';
 import { parseEthereumRevealDeployment, readEthereumRevealDeployment } from '../shared/ethereum/revealDeployment.ts';
 import { buildEthereumRevealRegistration, buildEthereumRevealTransition, ethereumRevealRegistrationRpcKey, loadEthereumRevealRegistration, parseEthereumRevealControlArgs, runEthereumRevealControl } from '../scripts/ops/ethereumRevealControl.ts';
@@ -30,6 +31,19 @@ async function fixture(t: TestContext) {
   t.after(() => database.close());
   const query = (sql: string) => database.prepare(sql).all();
   return { database, query, register: () => parseEthereumRevealDeployment(query(buildEthereumRevealRegistration(registration))[0]) };
+}
+
+function registrationIdentity(value = registration) {
+  const { templateJson: _template, templateSha256: _hash, ...identity } = value;
+  return identity;
+}
+
+async function controlManifest(t: TestContext, value: Record<string, unknown>): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'reveal-control-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const manifest = join(directory, 'deployment.json');
+  await writeFile(manifest, JSON.stringify(value));
+  return manifest;
 }
 
 test('reveal registration permanently binds deployment, scope, prefix and template', async t => {
@@ -123,6 +137,158 @@ test('registration reads an unrevealed immutable template and control arguments 
   assert.equal(parseEthereumRevealControlArgs(['register', '--manifest', manifest]).write, false);
   assert.throws(() => parseEthereumRevealControlArgs(['activate', '--deployment-id', registration.deploymentId]), /expected-revision/);
   assert.throws(() => parseEthereumRevealControlArgs(['status', '--write']), /only accepts/);
+});
+
+test('control arguments accept exactly one manifest or deployment ID target', () => {
+  assert.equal(parseEthereumRevealControlArgs(['status']).deploymentId, undefined);
+  assert.equal(parseEthereumRevealControlArgs(['status', '--manifest', 'deployment.json']).manifest, 'deployment.json');
+  assert.equal(parseEthereumRevealControlArgs(['status', '--deployment-id', 'v9']).deploymentId, 'v9');
+  for (const command of ['activate', 'pause']) {
+    for (const target of [['--manifest', 'deployment.json'], ['--deployment-id', 'v9']]) {
+      const parsed = parseEthereumRevealControlArgs([command, ...target, '--expected-revision', '2']);
+      assert.equal(parsed.expectedRevision, 2);
+      assert.equal(parsed.write, false);
+      assert.throws(() => parseEthereumRevealControlArgs([command, ...target]), /expected-revision/);
+      for (const revision of ['0', '-1', '1.5', 'NaN', '9007199254740992']) {
+        assert.throws(() => parseEthereumRevealControlArgs([command, ...target, '--expected-revision', revision]), /expected-revision/);
+      }
+    }
+    assert.throws(() => parseEthereumRevealControlArgs([command, '--expected-revision', '2']), /requires/);
+  }
+  for (const command of ['status', 'register', 'activate', 'pause']) {
+    assert.throws(() => parseEthereumRevealControlArgs([command, '--manifest', 'deployment.json', '--deployment-id', 'v8']), /either|both/);
+    for (const path of ['', '   ']) assert.throws(() => parseEthereumRevealControlArgs([command, '--manifest', path]), /manifest path/);
+  }
+  assert.throws(() => parseEthereumRevealControlArgs(['status', '--manifest', 'deployment.json', '--write']), /only accepts/);
+  assert.throws(() => parseEthereumRevealControlArgs(['status', '--manifest', 'deployment.json', '--expected-revision', '2']), /only accepts/);
+  assert.throws(() => parseEthereumRevealControlArgs(['register', '--manifest', 'deployment.json', '--expected-revision', '2']), /requires only/);
+  for (const argv of [
+    ['status', '--manifest', 'old.json', '--manifest', 'new.json'],
+    ['status', '--deployment-id', 'v8', '--deployment-id', 'v9'],
+    ['register', '--manifest', 'deployment.json', '--write', '--write'],
+    ['activate', '--manifest', 'deployment.json', '--expected-revision', '2', '--expected-revision', '3'],
+  ]) assert.throws(() => parseEthereumRevealControlArgs(argv), /Duplicate option/);
+});
+
+test('one manifest targets status and transitions without loading registration resources or touching the older deployment', async t => {
+  const { database, query } = await fixture(t);
+  const older = { ...registration, deploymentId: 'v8', contractAddress: `0x${'cd'.repeat(20)}`,
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v8/' };
+  const newer = { ...registration, deploymentId: 'v9', metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/v9/' };
+  for (const value of [older, newer]) query(buildEthereumRevealRegistration(value));
+  database.exec("UPDATE ethereum_reveal_deployments SET state = CASE deployment_id WHEN 'v8' THEN 'paused' ELSE 'ready' END, provisioned_at_ms = 1, revision = 3");
+  const oldRow = query("SELECT * FROM ethereum_reveal_deployments WHERE deployment_id = 'v8'")[0];
+  const manifest = await controlManifest(t, { ...registrationIdentity(newer),
+    publicationDirectory: './missing-publication', templateFile: './missing-template.json' });
+  const statements: string[] = [];
+  const overrides = { query: (sql: string) => { statements.push(sql); return query(sql); },
+    verifyPublication: async () => assert.fail('Targeting must not verify a publication'),
+    verifyDeployment: async () => assert.fail('Targeting must not verify the chain') };
+  t.mock.method(globalThis, 'fetch', async () => assert.fail('Targeting must not make network requests'));
+  const status = await runEthereumRevealControl(['status', '--manifest', manifest], overrides);
+  assert.ok('deployments' in status);
+  assert.deepEqual(status.deployments.map(value => [value.deploymentId, value.state, value.revision]), [['v9', 'ready', 3]]);
+  const preview = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '3'], overrides);
+  assert.ok('dryRun' in preview && preview.dryRun);
+  assert.ok(statements.every(sql => sql.startsWith('SELECT ')));
+  assert.equal(query("SELECT state FROM ethereum_reveal_deployments WHERE deployment_id = 'v9'")[0].state, 'ready');
+  for (const [command, revision, expectedState] of [['activate', 3, 'active'], ['pause', 4, 'paused'], ['activate', 5, 'active']] as const) {
+    const result = await runEthereumRevealControl([command, '--manifest', manifest, '--expected-revision', String(revision), '--write'], overrides);
+    assert.ok('deployment' in result && 'state' in result.deployment && 'revision' in result.deployment);
+    assert.equal(result.deployment.deploymentId, 'v9');
+    assert.equal(result.deployment.state, expectedState);
+    assert.equal(result.deployment.revision, revision + 1);
+    assert.deepEqual(query("SELECT * FROM ethereum_reveal_deployments WHERE deployment_id = 'v8'")[0], oldRow);
+  }
+  const oldStatus = await runEthereumRevealControl(['status', '--deployment-id', 'v8'], overrides);
+  assert.ok('deployments' in oldStatus);
+  assert.deepEqual(oldStatus.deployments.map(value => value.deploymentId), ['v8']);
+  const allStatus = await runEthereumRevealControl(['status'], overrides);
+  assert.ok('deployments' in allStatus);
+  assert.deepEqual(allStatus.deployments.map(value => value.deploymentId).sort(), ['v8', 'v9']);
+  assert.equal(query('SELECT COUNT(*) AS count FROM ethereum_metadata_publication_leases')[0].count, 0);
+});
+
+test('manifest identity mismatches are rejected before any transition writes', async t => {
+  const { database, query, register } = await fixture(t);
+  register();
+  const older = { ...registration, deploymentId: 'older', contractAddress: `0x${'cd'.repeat(20)}`,
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/older/' };
+  query(buildEthereumRevealRegistration(older));
+  database.exec("UPDATE ethereum_reveal_deployments SET state = 'ready', provisioned_at_ms = 1, revision = 2");
+  const manifest = await controlManifest(t, registrationIdentity());
+  const variants = [
+    { deploymentId: older.deploymentId, metadataBaseUri: older.metadataBaseUri },
+    { dropId: 'another_drop' },
+    { chainId: 1, metadataBaseUri: `https://cdn.mons.shop/111k/${registration.deploymentId}/` },
+    { contractAddress: older.contractAddress },
+    { metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/' },
+    { deploymentBlock: registration.deploymentBlock + 1 },
+    { catalogVersion: 'another-catalog' },
+  ];
+  for (const changed of variants) {
+    await writeFile(manifest, JSON.stringify({ ...registrationIdentity(), ...changed }));
+    for (const command of ['status', 'activate', 'pause']) {
+      const statements: string[] = [];
+      await assert.rejects(runEthereumRevealControl([command, '--manifest', manifest,
+        ...(command === 'status' ? [] : ['--expected-revision', '2', '--write'])], {
+        query: sql => { statements.push(sql); return query(sql); },
+      }), 'catalogVersion' in changed ? /Invalid.*identity/ : /manifest.*registered deployment/);
+      assert.ok(statements.every(sql => sql.startsWith('SELECT ')));
+    }
+  }
+  assert.deepEqual(query('SELECT state, revision FROM ethereum_reveal_deployments').map(row => [row.state, row.revision]), [['ready', 2], ['ready', 2]]);
+});
+
+test('an unregistered manifest returns empty status and cannot transition another deployment', async t => {
+  const { query, register } = await fixture(t);
+  register();
+  const manifest = await controlManifest(t, { ...registrationIdentity(), deploymentId: 'unregistered',
+    metadataBaseUri: 'https://cdn.mons.shop/111k-sepolia/unregistered/' });
+  const statements: string[] = [];
+  const overrides = { query: (sql: string) => { statements.push(sql); return query(sql); } };
+  assert.deepEqual(await runEthereumRevealControl(['status', '--manifest', manifest], overrides), { deployments: [] });
+  for (const command of ['activate', 'pause']) {
+    await assert.rejects(runEthereumRevealControl([command, '--manifest', manifest, '--expected-revision', '1', '--write'], overrides), /not found/);
+  }
+  assert.ok(statements.every(sql => sql.startsWith('SELECT ') && sql.includes("deployment_id = 'unregistered'")));
+});
+
+test('manifest targeting accepts checksum addresses, default catalog versions and registered legacy root prefixes', async t => {
+  const { database, query } = await fixture(t);
+  for (const [chainId, deploymentId, metadataBaseUri] of [
+    [11155111, 'legacy-sepolia', 'https://cdn.mons.shop/111k-sepolia/'],
+    [1, 'legacy-mainnet', 'https://cdn.mons.shop/111k/'],
+  ] as const) {
+    const value = { ...registration, chainId, deploymentId, metadataBaseUri };
+    query(buildEthereumRevealRegistration(value));
+    database.prepare("UPDATE ethereum_reveal_deployments SET state = 'ready', provisioned_at_ms = 1, revision = 2 WHERE deployment_id = ?").run(deploymentId);
+    const { catalogVersion: _catalog, ...identity } = registrationIdentity(value);
+    const manifest = await controlManifest(t, { ...identity, contractAddress: checksumEthereumAddress(scope.contractAddress) });
+    const status = await runEthereumRevealControl(['status', '--manifest', manifest], { query });
+    assert.ok('deployments' in status);
+    assert.equal(status.deployments[0].contractAddress, scope.contractAddress);
+    assert.equal(status.deployments[0].catalogVersion, registration.catalogVersion);
+    const active = await runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '2', '--write'], { query });
+    assert.ok('deployment' in active && 'state' in active.deployment);
+    assert.equal(active.deployment.deploymentId, deploymentId);
+    assert.equal(active.deployment.state, 'active');
+  }
+});
+
+test('manifest transitions retain revision validation and reject a concurrent state change', async t => {
+  const { database, query, register } = await fixture(t);
+  register();
+  database.exec("UPDATE ethereum_reveal_deployments SET state = 'ready', provisioned_at_ms = 1, revision = 2");
+  const manifest = await controlManifest(t, registrationIdentity());
+  await assert.rejects(runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '1', '--write'], { query }), /state or revision/);
+  await assert.rejects(runEthereumRevealControl(['activate', '--manifest', manifest, '--expected-revision', '2', '--write'], {
+    query: sql => {
+      if (sql.startsWith('UPDATE ethereum_reveal_deployments')) database.exec('UPDATE ethereum_reveal_deployments SET revision = revision + 1');
+      return query(sql);
+    },
+  }), /transition was not confirmed/);
+  assert.deepEqual(query('SELECT state, revision FROM ethereum_reveal_deployments').map(row => [row.state, row.revision]), [['ready', 3]]);
 });
 
 
